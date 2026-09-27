@@ -249,10 +249,11 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    order included. Terminal
  *                                                    on purpose: a skip would
  *                                                    prune on the NEXT run, once
- *                                                    the squatted directory's
- *                                                    own released record has
- *                                                    retired and no witness of
- *                                                    the squat remains
+ *                                                    the squatted path's own
+ *                                                    record has gone, released
+ *                                                    or pruned in this one, and
+ *                                                    no witness of the squat
+ *                                                    remains
  *   a SHARED relocation, unforced         SKIPPED    both kinds. The claim
  *                                                    projects at a different
  *                                                    filesystem path now, in a

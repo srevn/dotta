@@ -178,8 +178,8 @@ typedef enum {
  * with its reach
  *
  * A directory is squatted when a claim says a directory belongs at the path and
- * the load's look found something else standing there — or, where only a record
- * remembers the path, when a link stands there that a record beneath it would
+ * the load's look found something else standing there — or, where the view claims
+ * no directory there, when a link stands there that a record beneath it would
  * be looked at through. **Nothing beneath a squatter is looked at.** A look there
  * would answer for the occupant — a symlink to a directory answers for the link's
  * target, so a child would read clean, present, modified or new about a tree
@@ -187,13 +187,13 @@ typedef enum {
  * so a child would read absence caused by the squatter as the user's own deletion
  * to propagate. No such answer is the path's, and one act would be read as an
  * intent per path beneath it. So the ask comes before every look the load takes
- * (squatted_ancestor): beneath a squatter the row or the record is an item as
- * the partition made it, DEPLOYED- or ORPHANED-shaped, occupant UNKNOWN, with
- * no path bit and nothing owed the record. Every displaced active item is therefore
- * DEPLOYED with no path bit — a file row's blob bit rides, Git's and no look's
- * — which is what lets a consumer that forgets this field do nothing rather than
- * something wrong: the absence arms are never reached beneath a squatter, so
- * none of them needs a clause.
+ * (workspace_squatter_above): beneath a squatter the row or the record is an
+ * item as the partition made it, DEPLOYED- or ORPHANED-shaped, occupant UNKNOWN,
+ * with no path bit and nothing owed the record. Every displaced active item is
+ * therefore DEPLOYED with no path bit — a file row's blob bit rides, Git's and
+ * no look's — which is what lets a consumer that forgets this field do nothing
+ * rather than something wrong: the absence arms are never reached beneath a
+ * squatter, so none of them needs a clause.
  *
  * Two authorities can make the claim, and they reach differently — the reach rule:
  *
@@ -201,14 +201,15 @@ typedef enum {
  *                       class (core/manifest.h): nothing beneath it is looked
  *                       at, a row's or a record's. A view claim displaces
  *                       everything beneath it.
- *   RECORD              only a record remembers the path — the view lacks it —
- *                       and no directory stands there: a record of a directory
- *                       with another kind of node in its place, or a record of
- *                       anything with a link there and a record beneath it, the
- *                       link being the one node a key beneath resolves through.
- *                       The orphans beneath it, the ORPHANED and RELEASED items,
- *                       are not looked at, and nothing else is. A view row beneath
- *                       such a path is a deliberate through-capture: its profile's
+ *   RECORD              only a record remembers a directory there — the view
+ *                       claims none — and none stands there: a record of a
+ *                       directory with another kind of node in its place, or a
+ *                       link at a path the load looks at, a record's or a row's
+ *                       of another kind, with a record beneath it, the link being
+ *                       the one node a key beneath resolves through. The orphans
+ *                       beneath it, the ORPHANED and RELEASED items, are not
+ *                       looked at, and nothing else is. A view row beneath such
+ *                       a path is a deliberate through-capture: its profile's
  *                       derivation met the non-directory and claimed no rung
  *                       there (core/metadata.h), so the arrangement predates
  *                       the row and the look is the row's own. A record's memory
@@ -221,8 +222,8 @@ typedef enum {
  *
  * Noted by the look that found the squatter, and written by every look it withholds
  * (workspace.c workspace_look), which asks the same scan before it takes one
- * (squatted_ancestor) — so the class is total, and both halves of the fact are
- * one function: an item that carries one is an item with nothing measured.
+ * (workspace_squatter_above) — so the class is total, and both halves of the
+ * fact are one function: an item that carries one is an item with nothing measured.
  *
  * The words on screen, so the sentences cannot drift apart again: the directory
  * another kind stands at is *squatted*, the path beneath it is *displaced* —
@@ -1137,14 +1138,14 @@ const workspace_item_t *workspace_find(
  * A claim says a directory belongs at the path and the load's look found another
  * kind standing there (workspace_displaced_t: the words, and the reach the claim's
  * class decides). One producer for both authorities of the reach rule: the look
- * that found the squatter (workspace.c workspace_look), over a view row whose
- * class names the claim, or over a record no row stands at — a directory's another
- * kind of node stands in the place of, or any record's a link stands in the place
- * of with an orphan beneath it — noted where it was found, so the claim is the
- * producer's and is never re-derived: an item the squatted directory reaches
- * carries it as its displaced class — the outermost's, where two reach the item
- * — and a caller holding a path is lent the element itself
- * (workspace_squatted_ancestor).
+ * that found the squatter (workspace.c workspace_look), over a view directory
+ * row whose class names the claim, over a directory record no row stands at that
+ * another kind of node stands in the place of, or over any path it looks at — a
+ * record's or a row's — where a link stands with an orphan beneath it, noted
+ * where it was found, so the claim is the producer's and is never re-derived:
+ * an item the squatted directory reaches carries it as its displaced class —
+ * the outermost's, where two reach the item — and a caller holding a path is
+ * lent the element itself (workspace_squatted_ancestor).
  *
  * The workspace's own list element, lent: the list is one arena block, sized by
  * the partition for every item that could note one and never grown, so a pointer

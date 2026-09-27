@@ -35,43 +35,6 @@
 #include "utils/hooks.h"
 
 /**
- * Validate command options
- */
-static error_t *remove_validate(const cmd_remove_options_t *opts) {
-    CHECK_NULL(opts);
-
-    /* If deleting profile, paths are optional */
-    if (opts->delete_profile) {
-        if (opts->paths && opts->path_count > 0) {
-            return ERROR(
-                ERR_INVALID_ARG,
-                "Cannot specify paths when using --delete-profile"
-            );
-        }
-        return NULL;
-    }
-
-    /* If not deleting profile, paths are required */
-    if (!opts->paths || opts->path_count == 0) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "At least one path is required (or use --delete-profile)"
-        );
-    }
-
-    /* Interactive mode requires a terminal for user prompts — refused at entry,
-     * before any hook fires or any work begins */
-    if (opts->interactive && !isatty(STDIN_FILENO)) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Interactive mode requires a terminal (stdin is not a TTY)"
-        );
-    }
-
-    return NULL;
-}
-
-/**
  * One claim of the profile branch: a tracked path in storage terms, either kind
  * — a tree blob (FILE) or a metadata directory item (DIRECTORY).
  *
@@ -1841,15 +1804,18 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
-    /* Validate options */
-    error_t *err = remove_validate(opts);
-    if (err) {
-        return err;
-    }
-
     /* Branch: delete a profile, or remove paths from one */
     if (opts->delete_profile) {
         return remove_profile(ctx, opts);
+    }
+
+    /* Interactive mode requires a terminal for user prompts — refused at entry,
+     * before any hook fires or any work begins */
+    if (opts->interactive && !isatty(STDIN_FILENO)) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Interactive mode requires a terminal (stdin is not a TTY)"
+        );
     }
 
     return remove_paths(ctx, opts);
@@ -1860,9 +1826,8 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Route the raw positional bucket into `profile` and `paths[]`.
- *
- * Legacy-compatible rules:
+ * Route the raw positional bucket into `profile` and `paths[]` — the one place
+ * the arguments' shape is judged, which cmd_remove trusts:
  *   1. -p/--profile was given: every positional is a path.
  *   2. -p not given: first positional is the profile, rest are paths.
  *   3. --delete-profile: paths must be empty (mutually exclusive).

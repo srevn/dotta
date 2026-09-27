@@ -172,19 +172,6 @@ typedef struct {
 } receipt_t;
 
 /**
- * Validate command options
- */
-static error_t *add_validate(const cmd_add_options_t *opts) {
-    CHECK_NULL(opts);
-
-    if (!opts->files || opts->file_count == 0) {
-        return ERROR(ERR_INVALID_ARG, "At least one path is required");
-    }
-
-    return NULL;
-}
-
-/**
  * Is this argument the target, or beneath it?
  *
  * Asked one folded prefix at a time — "/", "/a", "/a/b", … — until a prefix is
@@ -1503,6 +1490,7 @@ cleanup:
  */
 error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     CHECK_NULL(ctx);
+    CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
     const char *repo_path = ctx->run.repo_path;
@@ -1510,10 +1498,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    error_t *err = add_validate(opts);
-    if (err) return err;
-
     /* Initialize all resources to NULL for safe cleanup */
+    error_t *err = NULL;
     ignore_rules_t *ignore_rules = NULL;
     const gitignore_ruleset_t *profile_rules = NULL;
     source_filter_t *source_filter = NULL;
@@ -2771,9 +2757,8 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Route the raw positional bucket into `profile` and `files[]`.
- *
- * Two legacy-compatible cases:
+ * Route the raw positional bucket into `profile` and `files[]` — the one place
+ * the arguments' shape is judged, which cmd_add trusts:
  *   1. -p/--profile was given: every positional is a file path.
  *   2. -p not given: first positional is the profile, rest are files.
  *

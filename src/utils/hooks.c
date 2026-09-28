@@ -299,7 +299,7 @@ static const char *cmd_name(hook_cmd_t cmd) {
         case HOOK_CMD_UPDATE: return "update";
         case HOOK_CMD_SYNC:   return "sync";
     }
-    return "unknown";
+    CHECK_ARG(false, "a hook command no enumerator names");
 }
 
 static hook_type_t pre_type_for(hook_cmd_t cmd) {
@@ -310,7 +310,7 @@ static hook_type_t pre_type_for(hook_cmd_t cmd) {
         case HOOK_CMD_UPDATE: return HOOK_PRE_UPDATE;
         case HOOK_CMD_SYNC:   return HOOK_PRE_SYNC;
     }
-    return HOOK_PRE_ADD;
+    CHECK_ARG(false, "a hook command no enumerator names");
 }
 
 static hook_type_t post_type_for(hook_cmd_t cmd) {
@@ -321,7 +321,7 @@ static hook_type_t post_type_for(hook_cmd_t cmd) {
         case HOOK_CMD_UPDATE: return HOOK_POST_UPDATE;
         case HOOK_CMD_SYNC:   return HOOK_POST_SYNC;
     }
-    return HOOK_POST_ADD;
+    CHECK_ARG(false, "a hook command no enumerator names");
 }
 
 static void print_hook_output(

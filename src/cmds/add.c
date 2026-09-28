@@ -1738,18 +1738,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
                 case PATH_KEY_FILESYSTEM:
                     /* The shape predicate above dispatched here, so the resolver
-                     * answered one of the two storage keys and never this one:
-                     * a filesystem spelling is add's own grammar and reaches
-                     * add_spell instead. Said, as mount_resolve and
-                     * profile_discover_claims say theirs, so a fourth key is a
-                     * decision at this head rather than a read of the member
-                     * the tag does not name. */
-                    err = ERROR(
-                        ERR_INTERNAL,
-                        "add's storage head read '%s' as a filesystem path",
-                        file
-                    );
-                    goto cleanup;
+                     * answered the storage key and never this one: a filesystem
+                     * spelling is add's own grammar and reaches add_spell instead.
+                     * Said, so a third key is a decision at this head rather
+                     * than a read of the member the tag does not name. */
+                    CHECK_ARG(false, "add's storage head was handed a filesystem path");
             }
 
             /* Where the claim stands, through the table: home/ and root/ resolve

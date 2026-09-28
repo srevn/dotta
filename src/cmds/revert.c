@@ -1339,7 +1339,7 @@ static error_t *revert_post_parse(
         o->commit = args[2];
     } else {
         /* Max=3 is enforced by POSITIONAL_RAW; this branch is unreachable. */
-        return ERROR(ERR_INTERNAL, "revert: too many positionals");
+        CHECK_ARG(false, "POSITIONAL_RAW bounds revert's positionals at three");
     }
 
     /* A commit is required by the command; file_path is guaranteed set by

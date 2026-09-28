@@ -910,10 +910,10 @@ static error_t *view_loop(
         }
     }
 
+    /* The one exit that errs hands its cause out (INTERACTIVE_EXIT_ERROR) */
     if (result == INTERACTIVE_EXIT_ERROR) {
-        return loop_err
-            ? loop_err
-            : ERROR(ERR_INTERNAL, "interactive mode exited with error");
+        CHECK_NULL(loop_err);
+        return loop_err;
     }
     return NULL;
 }

@@ -741,7 +741,7 @@ error_t *gitops_resolve_remote_branch_oid(
  * rule; this is for the other shapes.
  *
  * @param buffer Output buffer for the reference name (must not be NULL)
- * @param buffer_size Size of output buffer
+ * @param buffer_size Size of output buffer (at least one byte)
  * @param format Printf-style format string (must not be NULL)
  * @param ... Format arguments
  * @return Error or NULL on success

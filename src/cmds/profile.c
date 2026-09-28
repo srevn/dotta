@@ -1601,40 +1601,16 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
     }
 
     /* Dispatch to subcommand */
-    error_t *result = NULL;
     switch (opts->subcommand) {
-        case PROFILE_LIST:
-            result = profile_list(ctx, opts);
-            break;
-
-        case PROFILE_FETCH:
-            result = profile_fetch(ctx, opts);
-            break;
-
-        case PROFILE_ENABLE:
-            result = profile_enable(ctx, opts);
-            break;
-
-        case PROFILE_DISABLE:
-            result = profile_disable(ctx, opts);
-            break;
-
-        case PROFILE_REORDER:
-            result = profile_reorder(ctx, opts);
-            break;
-
-        case PROFILE_VALIDATE:
-            result = profile_validate(ctx, opts);
-            break;
-
-        default:
-            result = ERROR(
-                ERR_INVALID_ARG, "Unknown subcommand"
-            );
-            break;
+        case PROFILE_LIST:     return profile_list(ctx, opts);
+        case PROFILE_FETCH:    return profile_fetch(ctx, opts);
+        case PROFILE_ENABLE:   return profile_enable(ctx, opts);
+        case PROFILE_DISABLE:  return profile_disable(ctx, opts);
+        case PROFILE_REORDER:  return profile_reorder(ctx, opts);
+        case PROFILE_VALIDATE: return profile_validate(ctx, opts);
     }
 
-    return result;
+    CHECK_ARG(false, "a profile subcommand no enumerator names");
 }
 
 /* ══════════════════════════════════════════════════════════════════

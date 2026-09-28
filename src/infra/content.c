@@ -257,11 +257,7 @@ static error_t *get_plaintext_from_blob(
         }
     }
 
-    /* Unreachable: classify_entry returns one of three values. */
-    return ERROR(
-        ERR_INTERNAL,
-        "Unknown content kind %d for '%s'", (int) kind, storage_path
-    );
+    CHECK_ARG(false, "a content kind no enumerator names");
 }
 
 error_t *content_get_from_blob_oid(
@@ -325,15 +321,12 @@ error_t *content_rebind(
     }
 
     /* Bytes are authoritative here as everywhere: only a sealed blob has a name
-     * bound into it, and only it has anything to move. */
-    if (content_classify_bytes((const uint8_t *) view.data, view.size)
-        == CONTENT_PLAINTEXT) {
-        gitops_blob_view_close(&view);
-        return ERROR(
-            ERR_INTERNAL, "content_rebind received unbound content at '%s'",
-            from_storage_path
-        );
-    }
+     * bound into it, and only it has anything to move — the domain the caller
+     * read for its own claim (the header). */
+    CHECK_ARG(
+        content_classify_bytes((const uint8_t *) view.data, view.size)
+        != CONTENT_PLAINTEXT, "content_rebind was handed unbound content"
+    );
 
     /* A content entry by the domain (the header): a link never reaches here. */
     buffer_t plaintext = BUFFER_INIT;

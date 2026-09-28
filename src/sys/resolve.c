@@ -298,13 +298,9 @@ error_t *resolve_execute(
 
         case RESOLVE_STRATEGY_THEIRS:
             return resolve_theirs(ctx, out_oid);
-
-        default:
-            return ERROR(
-                ERR_INVALID_ARG, "Unknown divergence strategy: %d",
-                ctx->strategy
-            );
     }
+
+    CHECK_ARG(false, "a divergence strategy no enumerator names");
 }
 
 /**

@@ -25,7 +25,7 @@
  *
  * Design principles:
  * - A blob's two spellings and a link are the whole domain: a mode outside them
- *   is the caller's error, refused by both ladders before the disk is touched
+ *   is the caller's bug, which dies in both ladders before the disk is touched
  * - A look is the caller's to take: the pair is handed one and takes none
  * - The disk copy is wiped before it is freed, by whichever of the two callers
  *   took it: for an encrypted row it is the plaintext, the twin of the buffer

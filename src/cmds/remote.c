@@ -467,10 +467,9 @@ error_t *cmd_remote(const dotta_ctx_t *ctx, const cmd_remote_options_t *opts) {
 
         case REMOTE_SHOW:
             return remote_show(repo, out, opts->name);
-
-        default:
-            return ERROR(ERR_INVALID_ARG, "Unknown remote subcommand");
     }
+
+    CHECK_ARG(false, "a remote subcommand no enumerator names");
 }
 
 /* ══════════════════════════════════════════════════════════════════

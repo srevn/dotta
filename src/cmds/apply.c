@@ -2040,11 +2040,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Planning deployment...\n");
 
-    err = deploy_plan_build(ws, scope, opts->skip_existing, ctx->arena, &deploy_plan);
-    if (err) {
-        err = error_wrap(err, "Failed to plan deployment");
-        goto cleanup;
-    }
+    deploy_plan = deploy_plan_build(ctx->arena, ws, scope, opts->skip_existing);
 
     /* Per-item trace of the work the planner skipped, by reason: -e for both
      * kinds, --skip-existing for files. output_print gates on the verbosity level,
@@ -2655,7 +2651,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Build hook invocation with the scope's profiles */
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_APPLY,
-        .profile    = string_array_join(ctx->arena, scope_profiles(scope), " "),
+        .profile    = string_array_join(ctx->arena,scope_profiles(scope),  " "),
         .files      = NULL,
         .file_count = 0,
         .dry_run    = opts->dry_run,

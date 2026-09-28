@@ -861,7 +861,7 @@ static error_t *show_post_parse(
     }
 
     /* Max=3 is enforced by POSITIONAL_RAW; this branch is unreachable. */
-    return ERROR(ERR_INTERNAL, "show: too many positionals");
+    CHECK_ARG(false, "POSITIONAL_RAW bounds show's positionals at three");
 }
 
 /**

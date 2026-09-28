@@ -346,29 +346,13 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
     /* Dispatch to appropriate action. Each handler reads the borrowed
      * ctx->run.keymgr (NULL when encryption is disabled — each handler
      * short-circuits on that via its own config->encryption_enabled check). */
-    error_t *err = NULL;
     switch (opts->action) {
-        case KEY_ACTION_SET:
-            err = cmd_key_set(ctx);
-            break;
-
-        case KEY_ACTION_CLEAR:
-            err = cmd_key_clear(ctx);
-            break;
-
-        case KEY_ACTION_STATUS:
-            err = cmd_key_status(ctx);
-            break;
-
-        default:
-            err = ERROR(
-                ERR_INVALID_ARG, "Invalid key action: %d",
-                opts->action
-            );
-            break;
+        case KEY_ACTION_SET:    return cmd_key_set(ctx);
+        case KEY_ACTION_CLEAR:  return cmd_key_clear(ctx);
+        case KEY_ACTION_STATUS: return cmd_key_status(ctx);
     }
 
-    return err;
+    CHECK_ARG(false, "a key action no enumerator names");
 }
 
 /* ══════════════════════════════════════════════════════════════════

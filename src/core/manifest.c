@@ -568,9 +568,7 @@ static error_t *manifest_ascend(
      * for a caller's bug. */
     const char *tail = NULL;
     const mount_root_t *root = mount_root_above(n->mounts, n->profile, filesystem_path, &tail);
-    if (!root) {
-        return ERROR(ERR_INTERNAL, "No root encloses '%s'", filesystem_path);
-    }
+    CHECK_ARG(root != NULL, "a name is asked of an absolute path");
 
     char *rung = arena_strdup(n->arena, filesystem_path);
     size_t len = strlen(rung);

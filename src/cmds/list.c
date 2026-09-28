@@ -859,8 +859,6 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
 
     output_t *out = ctx->out;
 
-    error_t *err = NULL;
-
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
@@ -871,18 +869,15 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
         output_warning(out, OUTPUT_NORMAL, "--remote only applies when listing profiles");
     }
 
-    /* Dispatch to appropriate list function based on mode */
-    if (opts->mode == LIST_PROFILES) {
-        err = list_profiles(ctx, opts);
-    } else if (opts->mode == LIST_FILES) {
-        err = list_files(ctx, opts);
-    } else if (opts->mode == LIST_FILE_HISTORY) {
-        err = list_file_history(ctx, opts);
-    } else {
-        err = ERROR(ERR_INVALID_ARG, "Invalid list mode");
+    /* Dispatch to appropriate list function based on mode — every mode
+     * list_post_parse sets */
+    switch (opts->mode) {
+        case LIST_PROFILES:     return list_profiles(ctx, opts);
+        case LIST_FILES:        return list_files(ctx, opts);
+        case LIST_FILE_HISTORY: return list_file_history(ctx, opts);
     }
 
-    return err;
+    CHECK_ARG(false, "a list mode no enumerator names");
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -958,7 +953,7 @@ static error_t *list_post_parse(
     }
 
     /* Max=2 enforced by POSITIONAL_RAW — unreachable. */
-    return ERROR(ERR_INTERNAL, "list: too many positionals");
+    CHECK_ARG(false, "POSITIONAL_RAW bounds list's positionals at two");
 }
 
 /**

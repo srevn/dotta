@@ -111,8 +111,9 @@ static char *get_date_local(void) {
  *
  * Every action, and no default arm: -Wswitch names this function and its past
  * tense the day a sixth action lands, where a default would have rendered the
- * new one "Unknown" into a commit nobody re-reads. The return past the switch
- * is for a value no enumerator names, which only a cast can produce.
+ * new one "Unknown" into a commit nobody re-reads. What falls past the switch
+ * is a value no enumerator names, which only a cast can produce, and it dies
+ * rather than name itself "Unknown" there (base/error.h CHECK_ARG).
  */
 const char *commit_action_name(commit_action_t action) {
     switch (action) {
@@ -122,7 +123,7 @@ const char *commit_action_name(commit_action_t action) {
         case COMMIT_ACTION_SYNC:   return "Sync";
         case COMMIT_ACTION_REVERT: return "Revert";
     }
-    return "Unknown";
+    CHECK_ARG(false, "a commit action no enumerator names");
 }
 
 /**
@@ -136,7 +137,7 @@ const char *commit_action_name_past(commit_action_t action) {
         case COMMIT_ACTION_SYNC:   return "Synced";
         case COMMIT_ACTION_REVERT: return "Reverted";
     }
-    return "Unknown";
+    CHECK_ARG(false, "a commit action no enumerator names");
 }
 
 /**

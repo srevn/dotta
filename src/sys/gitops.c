@@ -1742,19 +1742,15 @@ error_t *gitops_build_refname(
 ) {
     CHECK_NULL(buffer);
     CHECK_NULL(format);
+    CHECK_ARG(buffer_size > 0, "buffer_size holds at least the terminator");
 
-    if (buffer_size == 0) {
-        return ERROR(ERR_INVALID_ARG, "Buffer size must be greater than 0");
-    }
-
+    /* The format is its writer's, so one that cannot be formatted is a caller's
+     * bug; a name the buffer cannot hold is the user's, and refused. */
     va_list args;
     va_start(args, format);
     int written = vsnprintf(buffer, buffer_size, format, args);
     va_end(args);
-
-    if (written < 0) {
-        return ERROR(ERR_INTERNAL, "Failed to format reference name");
-    }
+    CHECK_ARG(written >= 0, "the reference format cannot be formatted");
 
     if ((size_t) written >= buffer_size) {
         return ERROR(
@@ -1768,7 +1764,7 @@ error_t *gitops_build_refname(
         int valid = 0;
         int ret = git_reference_name_is_valid(&valid, buffer);
         if (ret < 0) {
-            return ERROR(ERR_INTERNAL, "Failed to validate reference name");
+            return error_from_git(ret);
         }
         if (!valid) {
             return ERROR(

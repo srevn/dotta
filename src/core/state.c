@@ -599,8 +599,7 @@ static const char *state_sql(statement_t statement) {
             return "UPDATE path_records SET ordered_at = ?2 WHERE filesystem_path = ?1;";
     }
 
-    /* Unreachable once every enum value is handled */
-    return NULL;
+    CHECK_ARG(false, "a statement no enumerator names");
 }
 
 /**

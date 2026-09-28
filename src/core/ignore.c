@@ -483,7 +483,7 @@ const char *ignore_origin_describe(ignore_origin_t origin) {
         case IGNORE_ORIGIN_CONFIG:   return "config file patterns";
         case IGNORE_ORIGIN_CLI:      return "CLI --exclude patterns";
     }
-    return "unknown";
+    CHECK_ARG(false, "an ignore origin no enumerator names");
 }
 
 const char *ignore_baseline_defaults(void) {

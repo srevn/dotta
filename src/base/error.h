@@ -208,6 +208,15 @@ __attribute__((format(printf, 1, 2)));
  * What a user's word or data can falsify — a name typed, a file read, a
  * configuration — is a refusal, returned as an error the user can act on, and
  * never checked here: a contract a user can reach is a crash they can cause.
+ *
+ * The tail past a switch that names every value of its enum is the same kind of
+ * condition: -Wswitch fails the build the day a value is added, so what reaches
+ * the tail is a value no enumerator names, which only a caller's cast can make.
+ * It dies, CHECK_ARG(false, "…"), unless the function has an answer that makes
+ * its caller do nothing — a predicate's false over an action it would skip, a
+ * NULL for no text — which it may give instead. Never a default arm, which hides
+ * the next value from -Wswitch, and never a made-up answer — a name, a decision,
+ * a success — which the caller would act on.
  */
 #define CHECK_ARG(cond, msg) do { \
     if (!(cond)) error_die("BUG: %s:%d: %s", __FILE__, __LINE__, (msg)); \

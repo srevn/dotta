@@ -43,8 +43,9 @@
  * arm masks it either way.
  *
  * The planner walks the active items, so the three states an orphan or a discovery
- * takes never reach this; their arms name the owner that does handle them and
- * keep -Wswitch quiet.
+ * takes never reach this: their arms name the owner that does handle them, keep
+ * -Wswitch quiet, and die with the tail — answered false, the item would fall
+ * to the clean bucket, which adoption reads.
  *
  * @param item An active item, the verdict on it (must not be NULL)
  * @return true when deploy must act on the path
@@ -100,36 +101,23 @@ static bool deploy_needs_work(const workspace_item_t *item) {
                    (item->divergence & ~DIVERGENCE_ENCRYPTION) != DIVERGENCE_NONE;
 
         case WORKSPACE_STATE_ORPHANED:
-            /* A record whose path the view lacks.
-             *
-             * Not reachable from the planner: it walks the active items, and an
-             * orphan is a record whose path the view lacks.
-             *
-             * Never deployment — cleanup owns orphan removal. */
-            return false;
-
+        /* A record whose path the view lacks. Never deployment — cleanup owns
+         * orphan removal. */
         case WORKSPACE_STATE_UNTRACKED:
-            /* File exists on filesystem in a tracked directory but not in Git.
-             *
-             * Architectural invariant: Untracked files should NOT appear among
-             * the active items (made from the view's rows, not filesystem scans).
-             * If we reach here, it's a programming error.
-             *
-             * Defensive: Return false (don't deploy untracked files, user must
-             * 'add' them). */
-            return false;
-
+        /* A file in a tracked directory that Git does not hold: the user adds
+         * it. Never among the active items, which are made from the view's rows,
+         * not filesystem scans. */
         case WORKSPACE_STATE_RELEASED:
             /* The path left its profile in Git (an external commit, a pulled
              * removal, a vanished branch), or dotta never deployed it, and it
              * was released from management. Never needs deployment — cleanup
              * reports it and apply's record phase retires its record. */
-            return false;
+            break;
     }
 
-    /* Unreachable once every enum value is handled — defensive against a value
-     * from outside the enum. */
-    return false;
+    /* An item the planner cannot hand in: one of the three above, or a value no
+     * enumerator names. */
+    CHECK_ARG(false, "deploy_needs_work was handed an item that is not active");
 }
 
 /**
@@ -170,9 +158,8 @@ typedef enum {
  * @param part Partition for the item's kind (must not be NULL)
  * @param item An active item in scope, borrowed (must not be NULL)
  * @param skip Why the item's work is skipped, if it is
- * @return Error or NULL on success
  */
-static error_t *deploy_classify(
+static void deploy_classify(
     deploy_partition_t *part,
     const workspace_item_t *item,
     skip_reason_t skip
@@ -180,30 +167,27 @@ static error_t *deploy_classify(
     if (!deploy_needs_work(item)) {
         /* Excluded: neither work nor apply's to own */
         if (skip != SKIP_EXCLUDED) ptr_array_push(&part->clean, item);
-        return NULL;
+        return;
     }
 
     switch (skip) {
-        case SKIP_NONE:     ptr_array_push(&part->pending, item); return NULL;
-        case SKIP_EXCLUDED: ptr_array_push(&part->excluded, item); return NULL;
-        case SKIP_EXISTING: ptr_array_push(&part->skipped_existing, item); return NULL;
+        case SKIP_NONE:     ptr_array_push(&part->pending, item); return;
+        case SKIP_EXCLUDED: ptr_array_push(&part->excluded, item); return;
+        case SKIP_EXISTING: ptr_array_push(&part->skipped_existing, item); return;
     }
 
-    /* Unreachable once every enum value is handled */
-    return ERROR(ERR_INTERNAL, "Unknown skip reason %d", (int) skip);
+    CHECK_ARG(false, "a skip reason no enumerator names");
 }
 
 /**
  * Build the deployment plan
  */
-error_t *deploy_plan_build(
-    const workspace_t *ws, const scope_t *scope, bool skip_existing,
-    arena_t *arena, deploy_plan_t **out
+deploy_plan_t *deploy_plan_build(
+    arena_t *arena, const workspace_t *ws, const scope_t *scope, bool skip_existing
 ) {
+    CHECK_NULL(arena);
     CHECK_NULL(ws);
     CHECK_NULL(scope);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
 
     /* The plan and its eight buckets are the arena's, beside the items they borrow:
      * each bucket is made in it, and nothing frees a plan. */
@@ -245,12 +229,11 @@ error_t *deploy_plan_build(
 
         /* No SKIP_EXISTING arm: --skip-existing does not reach tracked directories
          * (see deploy_partition_t). */
-        error_t *err = deploy_classify(
+        deploy_classify(
             &plan->directories, item,
             scope_is_excluded(scope, item->storage_path, PATH_KIND_DIRECTORY)
                 ? SKIP_EXCLUDED : SKIP_NONE
         );
-        if (err) return error_wrap(err, "Failed to build deploy plan");
     }
 
     workspace_items_t files = workspace_files(ws);
@@ -282,12 +265,10 @@ error_t *deploy_plan_build(
             skip = SKIP_EXISTING;
         }
 
-        error_t *err = deploy_classify(&plan->files, item, skip);
-        if (err) return error_wrap(err, "Failed to build deploy plan");
+        deploy_classify(&plan->files, item, skip);
     }
 
-    *out = plan;
-    return NULL;
+    return plan;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -448,10 +429,7 @@ static bool nearest_ancestor(
     size_t i = strlen(scratch);
     for (;;) {
         do {
-            if (i == 0) {
-                errno = EINVAL;                 /* not absolute — cannot happen */
-                return false;
-            }
+            CHECK_ARG(i > 0, "the planned path is absolute");
         } while (scratch[--i] != '/');
 
         fs_occupant_t occ = probe_ancestor(scratch, i, out_is_dir, out_st);
@@ -1696,7 +1674,7 @@ static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
         case FS_OCCUPANT_UNKNOWN:
             /* Not a verdict: preflight turned it into a skip, and a skip never
              * enters the verdict arrays. Said here rather than unlinked. */
-            return ERROR(ERR_INTERNAL, "No verdict for '%s' (occupant unknown)", path);
+            CHECK_ARG(false, "a look that failed never enters the verdicts");
 
         case FS_OCCUPANT_REGULAR:
         case FS_OCCUPANT_SYMLINK:

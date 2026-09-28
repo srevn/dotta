@@ -81,24 +81,24 @@ static error_t *judge(
  *
  * A blob's two spellings and a link: what a file row's type becomes
  * (core/manifest.h path_type_to_git_filemode). A tree — which that same function
- * returns for a directory row — or a mode from nowhere is the caller's error,
- * refused by both ladders before either touches the disk: read as a blob, a
- * directory would be opened and judged, and mode_stands below would ask a regular
- * file's question about it.
+ * returns for a directory row — or a mode from nowhere is the caller's bug, and
+ * dies in both ladders before either touches the disk: read as a blob, a directory
+ * would be opened and judged, and mode_stands below would ask a regular file's
+ * question about it. Every caller maps a file row's type, and a tree entry's
+ * filemode reaches none: the view keys a blob's type off its entry (core/manifest.c
+ * manifest_claim_blob) and a gitlink claims nothing there.
  *
  * Asked first in both ladders, so one caller error has one answer wherever it
  * is made. It used to sit after the pair's own stat, where an unsupported mode
  * at an absent path read CMP_MISSING and the same mode at a live one was refused
  * — one mistake, answered by what happened to stand at the path.
  */
-static error_t *validate_mode(git_filemode_t expected_mode) {
-    if (expected_mode != GIT_FILEMODE_LINK &&
-        expected_mode != GIT_FILEMODE_BLOB &&
-        expected_mode != GIT_FILEMODE_BLOB_EXECUTABLE) {
-        return ERROR(ERR_INTERNAL, "Unsupported git filemode: %d", expected_mode);
-    }
-
-    return NULL;
+static void validate_mode(git_filemode_t expected_mode) {
+    CHECK_ARG(
+        expected_mode == GIT_FILEMODE_LINK || expected_mode == GIT_FILEMODE_BLOB ||
+        expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE,
+        "a comparison is defined over a blob's two modes and a link's"
+    );
 }
 
 /**
@@ -228,7 +228,7 @@ static error_t *compare_reference_to_disk(
     const reference_t *ref, const char *disk_path, git_filemode_t expected_mode,
     const struct stat *st, compare_result_t *result
 ) {
-    RETURN_IF_ERROR(validate_mode(expected_mode));
+    validate_mode(expected_mode);
 
     /* Does disk hold the kind the expected mode names? Off the look, no syscall. */
     if (!mode_stands(st, expected_mode)) {
@@ -434,7 +434,7 @@ error_t *compare_generate_diff(
 
     *out = (file_diff_t){ 0 };
 
-    RETURN_IF_ERROR(validate_mode(mode));
+    validate_mode(mode);
 
     /* The look, then the verdict off it and the read of what it found. */
     struct stat st;

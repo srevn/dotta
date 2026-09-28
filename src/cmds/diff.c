@@ -49,6 +49,14 @@ static bool should_show_item_for_direction(
     const workspace_item_t *item,
     diff_direction_t direction
 ) {
+    /* DIFF_BOTH is always decomposed into two explicit calls by the caller before
+     * reaching this function, and post_parse resolves an unset one: a direction
+     * is one of the two. */
+    CHECK_ARG(
+        direction == DIFF_UPSTREAM || direction == DIFF_DOWNSTREAM,
+        "a diff item is shown for one direction, never both or none"
+    );
+
     if (direction == DIFF_UPSTREAM) {
         /* Upstream: What differs that apply could act on? A comparison question,
          * not a verb route, so the bits are read directly. Show: undeployed,
@@ -79,24 +87,18 @@ static bool should_show_item_for_direction(
                workspace_reassigned(item->row, item->record, item->occupant);
     }
 
-    if (direction == DIFF_DOWNSTREAM) {
-        /* Downstream: What would update do? The route answers verbatim
-         * (workspace_item_route — the same table update's filter reads), so this
-         * cannot promise a commit update refuses (STALE, CONFLICT, KIND) or hide
-         * one it would take (a TYPE the copy can commit, ENCRYPTION, OWNERSHIP).
-         * UNVERIFIABLE is the one refusal shown: the row's status says update
-         * skips it, where a listing that left it out would say "no local changes"
-         * over a file nobody could read. */
-        if (item->state == WORKSPACE_STATE_DELETED) return true;
-        if (item->state != WORKSPACE_STATE_DEPLOYED) return false;
-        workspace_route_t route = workspace_item_route(item);
-        return route == WORKSPACE_ROUTE_CAPTURE ||
-               route == WORKSPACE_ROUTE_UNVERIFIABLE;
-    }
-
-    /* DIFF_BOTH is always decomposed into two explicit calls by the caller before
-     * reaching this function — it should never arrive here. */
-    return false;
+    /* Downstream: What would update do? The route answers verbatim
+     * (workspace_item_route — the same table update's filter reads), so this
+     * cannot promise a commit update refuses (STALE, CONFLICT, KIND) or hide
+     * one it would take (a TYPE the copy can commit, ENCRYPTION, OWNERSHIP).
+     * UNVERIFIABLE is the one refusal shown: the row's status says update skips
+     * it, where a listing that left it out would say "no local changes" over a
+     * file nobody could read. */
+    if (item->state == WORKSPACE_STATE_DELETED) return true;
+    if (item->state != WORKSPACE_STATE_DEPLOYED) return false;
+    workspace_route_t route = workspace_item_route(item);
+    return route == WORKSPACE_ROUTE_CAPTURE ||
+           route == WORKSPACE_ROUTE_UNVERIFIABLE;
 }
 
 /**
@@ -1458,8 +1460,7 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
             return diff_workspace(ctx, scope, opts);
     }
 
-    /* Unreachable once every enum value is handled */
-    return NULL;
+    CHECK_ARG(false, "a diff mode no enumerator names");
 }
 
 /* ══════════════════════════════════════════════════════════════════

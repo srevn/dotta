@@ -1165,8 +1165,6 @@ error_t *epoch_resolve(
             return decide_divergence(repo, out_decision);
     }
 
-    /* inspect_remote_epoch yields exactly one of three statuses; fold any
-     * hypothetical out-of-range value to the best-effort skip. */
-    *out_decision = EPOCH_RECONCILE_UNREACHABLE;
-    return NULL;
+    /* inspect_remote_epoch yields exactly one of three statuses */
+    CHECK_ARG(false, "a remote epoch status no enumerator names");
 }

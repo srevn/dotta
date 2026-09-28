@@ -291,13 +291,12 @@ error_t *content_get_from_blob_oid(
  * object — and the caller stores what it gets.
  *
  * Domain: bytes that carry a binding. A blob content_classify calls PLAINTEXT
- * is refused (ERR_INTERNAL) rather than copied — an unbound blob's id travels
- * unchanged, and the caller that reads the kind for its own claim already knows
- * which it holds, the way content_capture_file refuses everything but a regular
- * file and content_capture_link everything but a link. UNSUPPORTED_VERSION is
- * refused in get_plaintext_from_blob's own words: this build cannot open the
- * bytes, so it cannot seal them under another name, and entering them under one
- * would leave a claim no key will ever read.
+ * is a caller's bug and dies (base/error.h CHECK_ARG) rather than being copied
+ * — an unbound blob's id travels unchanged, and the caller that reads the kind
+ * for its own claim already knows which it holds. UNSUPPORTED_VERSION is refused
+ * in get_plaintext_from_blob's own words: this build cannot open the bytes, so
+ * it cannot seal them under another name, and entering them under one would leave
+ * a claim no key will ever read.
  *
  * A link is not content and never reaches here: its bytes are a target path,
  * and Git's filemode is the authority on that at every boundary
@@ -331,8 +330,6 @@ error_t *content_get_from_blob_oid(
  * - ERR_LOCKED / ERR_CRYPTO: the read's own ladder, unwrapped (see
  *   content_get_from_blob_oid), and the encrypt's under "Cannot encrypt '<to>'"
  * - ERR_NOT_FOUND / ERR_GIT: the blob could not be loaded
- * - ERR_INTERNAL: the blob carries no binding, so nothing here had anything to
- *   move — the caller read the wrong fact
  *
  * Reader: a revert whose name changed between the commit and the branch's tip
  * (cmds/revert.c).

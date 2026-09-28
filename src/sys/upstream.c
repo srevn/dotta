@@ -125,8 +125,8 @@ const char *upstream_state_symbol(upstream_state_t state) {
         case UPSTREAM_DIVERGED:     return "↕";
         case UPSTREAM_NO_REMOTE:    return "•";
         case UPSTREAM_UNKNOWN:      return "?";
-        default:                    return "?";
     }
+    CHECK_ARG(false, "an upstream state no enumerator names");
 }
 
 /**

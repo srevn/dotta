@@ -585,6 +585,7 @@ typedef struct {
  * on its ancestor's account, Coherent Scope, and converges on the next apply
  * that covers it.
  *
+ * @param arena Arena the plan and its buckets live in (must not be NULL)
  * @param ws Workspace with divergence analysis (must not be NULL)
  * @param scope Operation scope (must not be NULL; read at plan time alone —
  *        everything else a fate carries is workspace vocabulary)
@@ -594,16 +595,13 @@ typedef struct {
  *        all see one answer. Not overridden by --force: --force also overrides
  *        cleanup's skip reasons and the confirmation prompt, so the combination
  *        is meaningful and the narrower flag keeps its promise.
- * @param arena Arena the plan and its buckets live in (must not be NULL)
- * @param out Plan (must not be NULL)
- * @return Error or NULL on success
+ * @return The plan
  */
-error_t *deploy_plan_build(
+deploy_plan_t *deploy_plan_build(
+    arena_t *arena,
     const workspace_t *ws,
     const scope_t *scope,
-    bool skip_existing,
-    arena_t *arena,
-    deploy_plan_t **out
+    bool skip_existing
 );
 
 /**

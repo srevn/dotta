@@ -39,17 +39,14 @@ error_t terminal_init(terminal_t **out) {
         );
     }
 
-    /* Allocate terminal state */
-    terminal_t *term = heap_calloc(1, sizeof(terminal_t));
-
     /* Save original terminal settings */
-    if (tcgetattr(STDIN_FILENO, &term->orig_termios) < 0) {
-        free(term);
+    struct termios orig;
+    if (tcgetattr(STDIN_FILENO, &orig) < 0) {
         return error_from_errno(errno, "failed to get terminal attributes");
     }
 
     /* Configure raw mode */
-    struct termios raw = term->orig_termios;
+    struct termios raw = orig;
 
     /* Input flags:
      * - BRKINT: disable break conditions
@@ -82,16 +79,18 @@ error_t terminal_init(terminal_t **out) {
     raw.c_cc[VTIME] = 0;
 
     /* Armed before raw mode goes on: a terminating signal from here puts the
-     * original settings back (terminal_arm). */
-    terminal_arm(&term->orig_termios);
+     * original settings back (terminal_arm, which keeps a copy). */
+    terminal_arm(&orig);
 
-    /* Apply raw mode settings */
+    /* Apply raw mode settings. A refusal disarms, which moves no errno. */
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) {
         terminal_disarm();
-        free(term);
         return error_from_errno(errno, "failed to enable raw mode");
     }
 
+    /* The state, made once raw mode is on: nothing before it had to be undone */
+    terminal_t *term = heap_calloc(1, sizeof(terminal_t));
+    term->orig_termios = orig;
     term->raw_mode_enabled = true;
     *out = term;
     return NULL;

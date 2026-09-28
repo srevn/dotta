@@ -103,7 +103,7 @@ typedef enum {
  *
  * Always call terminal_restore() when done, even on errors.
  *
- * @param out Terminal state (must not be NULL, caller must free)
+ * @param out Terminal state, released by terminal_restore (must not be NULL)
  * @return Error or NULL on success
  */
 error_t terminal_init(terminal_t **out);
@@ -112,7 +112,8 @@ error_t terminal_init(terminal_t **out);
  * Restore terminal to original state
  *
  * Restores settings saved by terminal_init(), and disarms them once they are
- * back. Safe to call multiple times.
+ * back, then releases the state: once per terminal_init, and a NULL state is a
+ * no-op.
  *
  * @param term Terminal state (can be NULL)
  */

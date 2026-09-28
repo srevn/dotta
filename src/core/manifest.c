@@ -1659,9 +1659,10 @@ size_t manifest_holders(
  * the record by path for the departure split (state_find_record). Nothing is
  * written; the rule for what a departure means for apply is the record's presence
  * and ownership at the path, the same fact the workspace reads when it meets
- * the orphan.
+ * the orphan. Nothing here can fail: the one thing a caller can get wrong, a
+ * profile named twice, is its bug.
  */
-error_t *manifest_diff(
+void manifest_diff(
     const manifest_t *before,
     const manifest_t *after,
     const state_record_t *records,
@@ -1673,32 +1674,24 @@ error_t *manifest_diff(
     CHECK_NULL(profiles);
     CHECK_NULL(out_stats);
 
-    error_t *err = NULL;
-
     /* Stats attribution index. Maps profile name → its out_stats slot (the caller's
      * array, sized before the map is built — the pointers are stable). Keys are
      * borrowed from profiles; the caller keeps it alive for the duration of this
-     * call. The index is the call's alone, in a frame freed at its one exit:
-     * the answer is the caller's array. */
+     * call. The index is the call's alone, in a frame freed at its end: the answer
+     * is the caller's array. */
     arena_t *frame = arena_create(0);
-    hashmap_t *stats_map = hashmap_borrow(
-        frame, profiles->count > 0 ? profiles->count * 2 : 16
-    );
+    hashmap_t *stats_map = hashmap_borrow(frame, profiles->count);
     for (size_t i = 0; i < profiles->count; i++) {
         const char *name = profiles->entries[i];
 
         /* Duplicate profile names would silently collapse: hashmap_set overwrites,
          * so the later occurrence's slot would receive all attribution and the
-         * earlier slot would stay zero-filled. Fail loudly instead — this is a
-         * caller-side contract violation. */
-        if (hashmap_has(stats_map, name)) {
-            err = ERROR(
-                ERR_INVALID_ARG,
-                "manifest_diff: duplicate profile '%s' in profiles",
-                name
-            );
-            goto cleanup;
-        }
+         * earlier slot would stay zero-filled. Every caller hands in a set —
+         * the enabled set, or a request deduplicated as it was read — so a
+         * duplicate is the caller's bug, named here rather than counted wrong. */
+        CHECK_ARG(
+            !hashmap_has(stats_map, name), "a diff was asked to count one profile twice"
+        );
 
         memset(&out_stats[i], 0, sizeof(out_stats[i]));
         out_stats[i].profile = name;
@@ -1767,7 +1760,5 @@ error_t *manifest_diff(
         }
     }
 
-cleanup:
     arena_free(frame);
-    return err;
 }

@@ -2044,11 +2044,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             ctx->arena, enabled->count, sizeof(*stats)
         );
 
-        err = manifest_diff(before, after, records, record_count, enabled, stats);
-        if (err) {
-            err = error_wrap(err, "Failed to diff manifest across sync");
-            goto cleanup;
-        }
+        manifest_diff(before, after, records, record_count, enabled, stats);
 
         for (size_t i = 0; i < enabled->count; i++) {
             const manifest_diff_stats_t *s = &stats[i];

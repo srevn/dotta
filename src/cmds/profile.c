@@ -883,10 +883,7 @@ static error_t *profile_enable(
             ctx->arena, to_enable_validated.count, sizeof(*stats)
         );
 
-        err = manifest_diff(
-            before, after, records, record_count, &to_enable_validated, stats
-        );
-        if (err) return error_wrap(err, "Failed to diff manifest across enable");
+        manifest_diff(before, after, records, record_count, &to_enable_validated, stats);
 
         /* Phase 4: The save, then per-profile feedback — the retarget's line
          * names its verb. Each line says what the save made true, so none is
@@ -1175,10 +1172,9 @@ static error_t *profile_disable(
 
             stats = arena_calloc(ctx->arena, to_disable_validated.count, sizeof(*stats));
 
-            err = manifest_diff(
+            manifest_diff(
                 before, after, records, record_count, &to_disable_validated, stats
             );
-            if (err) return error_wrap(err, "Failed to diff manifest across disable");
         }
 
         /* Phase 5: The save, then per-profile feedback (no stats when the receipt

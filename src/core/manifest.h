@@ -1076,8 +1076,8 @@ typedef struct {
  * `after` is then added and nothing departed.
  *
  * Preconditions:
- *   - profiles' entries are pairwise unique (duplicates return ERR_INVALID_ARG
- *     — two slots would silently collapse into one)
+ *   - profiles' entries are pairwise unique: two slots would silently collapse
+ *     into one, so a duplicate is the caller's bug, a death
  *   - out_stats points to an array of length profiles->count; it is zero-filled
  *     here with each profile's name set, so a caller reads the counts without
  *     asking whether anything changed: all-zero means "nothing for apply to do
@@ -1093,9 +1093,8 @@ typedef struct {
  * @param record_count Number of records
  * @param profiles Profiles to attribute to (must not be NULL)
  * @param out_stats Parallel array (length profiles->count; must not be NULL)
- * @return Error or NULL on success
  */
-error_t *manifest_diff(
+void manifest_diff(
     const manifest_t *before,
     const manifest_t *after,
     const state_record_t *records,

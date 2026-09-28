@@ -194,8 +194,8 @@ static error_t stats_walk(
 
     git_err = git_revwalk_push(walker, &head_oid);
     if (git_err < 0) {
-        git_revwalk_free(walker);
-        return error_from_git(git_err);
+        err = error_from_git(git_err);
+        goto cleanup;
     }
 
     /* Sort by time (newest first) */
@@ -330,14 +330,8 @@ static error_t stats_walk(
         git_commit_free(commit);
     }
 
-    /* Success */
-    git_revwalk_free(walker);
-    return NULL;
-
 cleanup:
-    if (walker) {
-        git_revwalk_free(walker);
-    }
+    git_revwalk_free(walker);
     return err;
 }
 

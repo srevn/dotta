@@ -783,9 +783,9 @@ static bool stands_as_directory(
  * ignore --test foo.log` reads it against the working directory, as add's grammar
  * does — and path_input_resolve refuses one, its callers' first positional being
  * a profile. What the shape dispatches to *is* the resolver for a storage spelling,
- * which sheds the directory slash; the filesystem arm is the normalizer alone,
- * whose answer is what the view's rows are keyed by too (infra/mount.h). Both
- * are read before the view is built, so a refusal is a plain return.
+ * which sheds the directory slash; the filesystem arm is the argument's door
+ * alone, whose answer is what the view's rows are keyed by too (infra/mount.h).
+ * Both are read before the view is built, so a refusal is a plain return.
  *
  * The path need not exist: a trailing slash on one that does not is the directory
  * hint, so directory-only patterns (`cache/`) can be tested. The rules are

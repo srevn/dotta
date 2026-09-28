@@ -21,7 +21,7 @@
 error_t mount_validate_target(const char *target) {
     CHECK_NULL(target);
 
-    /* The shape: absolute and folded, as the normalizer spells every argument
+    /* The shape: absolute and folded, as the argument's door spells every one
      * (infra/path.h), so of the binders' input only the interactive save's raw
      * text — kept as typed where a resolve refused it — can fail here; the sentence
      * names the whole rule for it. "/" is included: a target at the root is a

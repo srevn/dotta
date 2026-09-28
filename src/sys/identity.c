@@ -237,8 +237,8 @@ error_t identity_init(arena_t *arena) {
 
     /* HOME as the kernel spells it — what getcwd hands back beneath a HOME reached
      * through a link — for the one reader that spells a working directory back
-     * under HOME (infra/path.c working_directory). After the drop, so the look
-     * is any other read of the run's: the invoker's, root's on a refusal
+     * under HOME (infra/path.c path_working_directory). After the drop, so the
+     * look is any other read of the run's: the invoker's, root's on a refusal
      * (sys/filesystem's tier). A HOME that does not stand has one spelling: a
      * fact about the run, not a failure of it — whether the directory exists is
      * not this module's question (the HOME rule). */

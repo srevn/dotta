@@ -52,8 +52,8 @@
  * other read of the run's, and published as home_physical for one reader and
  * one question: a relative argument's working directory, which the shell spelled
  * under HOME or the kernel spelled physically, is spelled back under HOME
- * (infra/path.h path_input_normalize). Nothing composes a path from it, and nothing
- * else reads it. A HOME that does not stand has one spelling.
+ * (infra/path.h path_input_filesystem_path). Nothing composes a path from it,
+ * and nothing else reads it. A HOME that does not stand has one spelling.
  *
  * The answer is published back into the environment, on every run and not only
  * a sudo'd one: $HOME becomes the ruled, normalised spelling, and USER and LOGNAME

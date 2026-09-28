@@ -49,9 +49,9 @@
  * (mount_same_target — one directory under two spellings is one binding, and
  * the row keeps the spelling it has), which add's path completion asks once more
  * so its offer stands under the spelling the command will read its arguments
- * under (cmds/completion.c), and the normalizer's working directory (infra/path.h).
- * And where acting on a string alone would duplicate or destroy: the scan's roots
- * and its leaf probe, and cleanup's guard (core/workspace.c).
+ * under (cmds/completion.c), and the argument's door's working directory
+ * (infra/path.h). And where acting on a string alone would duplicate or destroy:
+ * the scan's roots and its leaf probe, and cleanup's guard (core/workspace.c).
  *
  * Every root's spelling is absolute and folded (sys/filesystem.h fs_is_folded),
  * each established where it is made: the sentinel's is the literal "/", HOME's
@@ -164,13 +164,13 @@ error_t mount_validate_target(const char *target);
  * through a link standing at it — mount_validate_target — so a binding means
  * that directory). One that does not stand — a stale row, its directory gone —
  * is named by its spelling, and a differing one is a move. One of the two places
- * identity is read where a spelling is made (the other is the normalizer's working
- * directory, infra/path.h); the two CLI binders say at NORMAL which spelling
- * they kept (cmds/profile.c, cmds/add.c), the interactive save, which has no
- * line to say it in, puts the kept spelling back on the item its next screen
- * renders (cmds/interactive.c plan_classify), and add's path completion, which
- * has none either, lists under it (cmds/completion.c completion_paths_under) so
- * the offer and the capture read one spelling.
+ * identity is read where a spelling is made (the other is the argument's door's
+ * working directory, infra/path.h); the two CLI binders say at NORMAL which
+ * spelling they kept (cmds/profile.c, cmds/add.c), the interactive save, which
+ * has no line to say it in, puts the kept spelling back on the item its next
+ * screen renders (cmds/interactive.c plan_classify), and add's path completion,
+ * which has none either, lists under it (cmds/completion.c completion_paths_under)
+ * so the offer and the capture read one spelling.
  *
  * Readers: add's pre-flight, profile enable's retarget arm, the interactive save's
  * classify, add's path completion.
@@ -276,14 +276,14 @@ error_t mount_table_build(
  * One of the asker's roots, as the table holds it.
  *
  * `filesystem_path` is where the root stands: every reader prints it, compares
- * it to an argument the normalizer spelled, or measures a rung against it — and
- * the one root that is its own separator, "/", is spelled so here like any other
- * (the table's paragraph above). `profile` is the whole of whose a root is —
- * the one that bound it: the build refuses a binding that names none (mount_t),
- * so NULL reads as "the machine's own word" — HOME, `/` — and never as "unknown".
- * A name composed beneath a root a profile bound is this machine's arrangement,
- * which the next machine re-binds where it likes; one composed beneath a root
- * the machine placed is portable and re-mounts by the word. Not the *file*
+ * it to an argument the door spelled (infra/path.h), or measures a rung against
+ * it — and the one root that is its own separator, "/", is spelled so here like
+ * any other (the table's paragraph above). `profile` is the whole of whose a
+ * root is — the one that bound it: the build refuses a binding that names none
+ * (mount_t), so NULL reads as "the machine's own word" — HOME, `/` — and never
+ * as "unknown". A name composed beneath a root a profile bound is this machine's
+ * arrangement, which the next machine re-binds where it likes; one composed beneath
+ * a root the machine placed is portable and re-mounts by the word. Not the *file*
  * ownership every claim carries beside its group (core/manifest.h manifest_row_t,
  * core/metadata.h) — that one is a system identity, and this one a profile name.
  *

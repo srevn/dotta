@@ -130,7 +130,7 @@ bool path_input_announces_path(const char *input);
  *
  * A storage shape is the name as typed, the directory spelling shed (the UI's
  * listings print directory claims slash-marked, and the filesystem arm sheds
- * its own inside the normalizer; the two surface forms resolve alike): a name
+ * its own inside the door's fold; the two surface forms resolve alike): a name
  * beneath a label, or the word alone, which is the namespace's own directory
  * and a key like any name. A filesystem shape is read through the argument's
  * door (path_input_filesystem_path: tilde, the working directory, `.`/`..`/`//`
@@ -201,46 +201,6 @@ error_t path_input_resolve(const char *input, arena_t *arena, path_input_t *out)
 /**
  * The filesystem path a filesystem-shaped argument names, in the arena
  *
- * path_input_normalize's reading, copied once into the arena the caller keys
- * from: the one door this key is read through from an argument, standing beside
- * mount_resolve's join (infra/mount.h, the four producers of one). `*out` is
- * the path on success and NULL after an error, so a reader that ignores the error
- * meets a NULL rather than a stale string.
- *
- * One grammar, not three: every input is read as a filesystem spelling, so `home/x`
- * is the working directory's `home/x` and never a name, and a bare `config` is
- * the working directory's too where path_input_resolve refuses it. Which door a
- * verb reads through is its own positional grammar's answer — one whose first
- * positional may be a profile reads the key, and one that has ruled the storage
- * vocabulary out already, or never had one, reads the path here — so a name handed
- * to this door comes back as a filesystem reading of itself, which is the whole
- * reason the two are named apart.
- *
- * Readers, and what makes each one this door's — a reader not on this list is a
- * bug:
- *
- *   - path_input_resolve's own filesystem arm: this is that arm.
- *   - add's argument grammar (cmds/add.c add_spell) and `ignore --test`'s
- *     filesystem arm (cmds/ignore.c): both dispatched on the storage shape
- *     themselves, and both read a bare name as a path where the resolver will not.
- *   - the two binders' --target (cmds/add.c, cmds/profile.c) and the root the
- *     completion offers beneath (cmds/completion.c): a target names a directory
- *     on this machine and has no storage vocabulary to dispatch on.
- *   - a glob's anchor (infra/pathspec.c compile_rule): the components before
- *     the first metacharacter, which that rule's own gate has already made a
- *     filesystem spelling.
- *
- * @param input User-provided path (filesystem or tilde; must not be NULL)
- * @param arena Arena that owns the answer (must not be NULL)
- * @param out   The filesystem path: absolute, folded, the arena's (must not be
- *              NULL)
- * @return Error or NULL on success
- */
-error_t path_input_filesystem_path(const char *input, arena_t *arena, const char **out);
-
-/**
- * Normalize a CLI filesystem-path argument to an absolute path
- *
  * The shell's reading, with the working directory spelled for a key: a tilde
  * path expands under $HOME, an absolute one stands, and a relative one — `./x`,
  * `../x`, a dotfile's `.x`, `path/to/file` — is the working directory's, which
@@ -269,26 +229,49 @@ error_t path_input_filesystem_path(const char *input, arena_t *arena, const char
  *   home/../c   (in HOME's parent, spelled physically)
  *                             -> <parent>/c    (the tail is the user's)
  *
- * The reading every filesystem key is made by: path_input_filesystem_path is
- * this function and a copy, and everything that keys from an argument — the
- * resolver's own filesystem arm, add's grammar, the two binders, `ignore --test`,
- * the completion, a glob's anchor — goes through that door. A target given as
- * an absolute or tilde path is the user's own; one given relatively is spelled
- * by the rule above like any other relative argument. Storage-path inputs ("home/",
- * "root/", "custom/") are not this function's — they are validated and placed
- * at the call site (infra/label.h label_validate_storage, infra/mount.h
- * mount_resolve). add's re-rooting under --target is add's own grammar, spelled
- * around the door (cmds/add.c, add_spell).
+ * The one door this key is read through from an argument, standing beside
+ * mount_resolve's join (infra/mount.h, the four producers of one). `*out` is
+ * the path on success and NULL after an error, so a reader that ignores the error
+ * meets a NULL rather than a stale string.
  *
- * The answer is malloc's, and one reader wants it that way: the interactive save's
- * per-edit target (cmds/interactive.c), replaced on every commit of the prompt
- * and freed with the item it is on — which an arena cannot do. A reader that
- * keys from the answer is path_input_filesystem_path's, not this function's.
+ * One grammar, not three: every input is read as a filesystem spelling, so `home/x`
+ * is the working directory's `home/x` and never a name, and a bare `config` is
+ * the working directory's too where path_input_resolve refuses it. Which door a
+ * verb reads through is its own positional grammar's answer — one whose first
+ * positional may be a profile reads the key, and one that has ruled the storage
+ * vocabulary out already, or never had one, reads the path here — so a name handed
+ * to this door comes back as a filesystem reading of itself, which is the whole
+ * reason the two are named apart. Storage-path inputs ("home/", "root/", "custom/")
+ * are not this door's — they are validated and placed at the call site
+ * (infra/label.h label_validate_storage, infra/mount.h mount_resolve). add's
+ * re-rooting under --target is add's own grammar, spelled around the door
+ * (cmds/add.c, add_spell). A target given as an absolute or tilde path is the
+ * user's own; one given relatively is spelled by the rule above like any other
+ * relative argument.
  *
- * @param input User-provided path (filesystem or tilde; must not be NULL)
- * @param out   Normalized absolute path (caller must free, must not be NULL)
+ * Readers, and what makes each one this door's — a reader not on this list is a
+ * bug:
+ *
+ *   - path_input_resolve's own filesystem arm: this is that arm.
+ *   - add's argument grammar (cmds/add.c add_spell) and `ignore --test`'s
+ *     filesystem arm (cmds/ignore.c): both dispatched on the storage shape
+ *     themselves, and both read a bare name as a path where the resolver will not.
+ *   - the three binders' targets — the two --target flags (cmds/add.c,
+ *     cmds/profile.c) and the target the editor captures (cmds/interactive.c
+ *     handle_key_prompt) — and the root the completion offers beneath
+ *     (cmds/completion.c): a target names a directory on this machine and has
+ *     no storage vocabulary to dispatch on.
+ *   - a glob's anchor (infra/pathspec.c compile_rule): the components before
+ *     the first metacharacter, which that rule's own gate has already made a
+ *     filesystem spelling.
+ *
+ * @param input User-provided path (filesystem or tilde; must not be NULL; the
+ *              empty string is refused)
+ * @param arena Arena that owns the answer (must not be NULL)
+ * @param out   The filesystem path: absolute, folded, the arena's (must not be
+ *              NULL)
  * @return Error or NULL on success
  */
-error_t path_input_normalize(const char *input, char **out);
+error_t path_input_filesystem_path(const char *input, arena_t *arena, const char **out);
 
 #endif /* DOTTA_PATH_H */

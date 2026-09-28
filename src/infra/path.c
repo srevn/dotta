@@ -9,15 +9,12 @@
  *                             verb that takes a path from the command line
  *
  *   path_input_filesystem_path
- *                           - that key alone, in the arena: the same reading,
- *                             for a caller whose grammar has no storage arm to
- *                             dispatch to (add, the binders' --target, ignore
+ *                           - that key alone, in the arena: filesystem path ->
+ *                             absolute filesystem path, a relative one's working
+ *                             directory spelled under HOME, for a caller whose
+ *                             grammar has no storage arm to dispatch to (add,
+ *                             the binders' --target, the editor's target, ignore
  *                             --test, the completion, a glob's anchor)
- *
- *   path_input_normalize    - filesystem path -> absolute filesystem path, a
- *                             relative one's working directory spelled under
- *                             HOME; malloc's, for the one reader that replaces
- *                             and frees what it holds (the interactive save)
  *
  *   path_input_announces_path
  *                           - the grammars' question, asked of a positional whose
@@ -67,8 +64,8 @@ error_t path_input_resolve(
 
     *out = (path_input_t){ 0 };
 
-    /* The same sentence the normalizer gives, said here because the storage arm
-     * below never reaches the normalizer at all. */
+    /* The same sentence the door gives, said here because the storage arm below
+     * never reaches the door at all. */
     if (input[0] == '\0') {
         return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
     }
@@ -125,23 +122,6 @@ error_t path_input_resolve(
     return path_input_filesystem_path(input, arena, &out->filesystem_path);
 }
 
-error_t path_input_filesystem_path(const char *input, arena_t *arena, const char **out) {
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
-
-    *out = NULL;
-
-    /* `input` is the normalizer's to check: a NULL one is its contract and an
-     * empty one its refusal, so a guard here would spell either twice. */
-    char *normalized = NULL;
-    RETURN_IF_ERROR(path_input_normalize(input, &normalized));
-
-    *out = arena_strdup(arena, normalized);
-    free(normalized);
-
-    return NULL;
-}
-
 /**
  * The working directory a relative argument is read from: the shell's spelling
  * (fs_working_directory), spelled back under HOME where it lies beneath HOME's
@@ -165,7 +145,7 @@ error_t path_input_filesystem_path(const char *input, arena_t *arena, const char
  * is a link to its own descendant, which the kernel refuses as a loop. In each,
  * the directory stands as the shell spelled it.
  */
-static error_t working_directory(char **out) {
+static error_t path_working_directory(char **out) {
     char *cwd = NULL;
     RETURN_IF_ERROR(fs_working_directory(&cwd));
     *out = cwd;
@@ -190,8 +170,9 @@ static error_t working_directory(char **out) {
     return NULL;
 }
 
-error_t path_input_normalize(const char *input, char **out) {
+error_t path_input_filesystem_path(const char *input, arena_t *arena, const char **out) {
     CHECK_NULL(input);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     *out = NULL;
@@ -216,15 +197,20 @@ error_t path_input_normalize(const char *input, char **out) {
         absolute = expanded;
     } else {
         char *cwd = NULL;
-        err = working_directory(&cwd);
+        err = path_working_directory(&cwd);
         if (!err) err = fs_path_join(cwd, expanded, &absolute);
         free(cwd);
         free(expanded);
         if (err) return err;
     }
 
-    err = fs_normalize_path(absolute, out);
+    char *normalized = NULL;
+    err = fs_normalize_path(absolute, &normalized);
     free(absolute);
+    if (err) return err;
 
-    return err;
+    *out = arena_strdup(arena, normalized);
+    free(normalized);
+
+    return NULL;
 }

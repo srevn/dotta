@@ -13,7 +13,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "base/arena.h"
@@ -21,7 +20,6 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
-#include "base/heap.h"
 #include "base/output.h"
 #include "base/terminal.h"
 #include "core/manifest.h"
@@ -54,22 +52,23 @@
 /* --- Types --- */
 
 typedef struct {
-    char *name;            /* Owned profile name */
-    char *target;          /* Owned deployment target: the row's, or this session's; NULL when unset */
+    const char *name;      /* Profile name, the listing's */
+    const char *target;    /* Deployment target — the row's, or this session's; NULL when unset */
     bool enabled;          /* Selected for save; toggled by space, persisted by save_order */
     bool needs_target;     /* A claim of the branch needs a binding (core/profiles.h) */
     bool unreadable;       /* The branch would not read: the seed absorbed it, the row says so */
 } item_t;
 
 typedef struct {
-    buffer_t buffer;       /* The input typed so far (owned; NUL-terminated) */
+    buffer_t buffer;       /* The input typed so far: the heap's, given back at the session's end */
     size_t item_index;     /* Row anchor (view->items index) the prompt is over */
     bool active;           /* True while the prompt overlay is open */
     bool enable;           /* True iff opened by space on a row that needs a target (commit flips enabled) */
 } prompt_t;
 
 typedef struct {
-    item_t *items;         /* Owned array of profile rows */
+    arena_t *arena;        /* The command arena: the view, its rows and every target the session sets */
+    item_t *items;         /* Profile rows */
     size_t item_count;     /* Number of valid entries in items */
     size_t cursor;         /* Selected row (0..item_count-1; valid iff item_count > 0) */
     bool modified;         /* Unsaved edits pending; cleared by a successful save_order */
@@ -93,15 +92,6 @@ typedef struct {
 } plan_t;
 
 /* --- Items --- */
-
-static void free_items(item_t *items, size_t count) {
-    if (!items) return;
-    for (size_t i = 0; i < count; i++) {
-        free(items[i].name);
-        free(items[i].target);
-    }
-    free(items);
-}
 
 static void swap_items(item_t *items, size_t i, size_t j) {
     item_t tmp = items[i];
@@ -138,20 +128,14 @@ static void prompt_open_edit(prompt_t *p, size_t item_index, const char *current
 /* --- View lifecycle --- */
 
 /* Allocate view->items and populate name/enabled. */
-static error_t build_items(
-    git_repository *repo, state_t *deploy_state, arena_t *arena, view_t *view
-) {
-    error_t err = NULL;
-    string_array_t all_profiles;
-    bool *used = NULL;
-    size_t item_idx = 0;
+static error_t build_items(git_repository *repo, state_t *deploy_state, view_t *view) {
+    arena_t *arena = view->arena;
 
-    err = gitops_list_branches(repo, arena, &all_profiles);
-    if (err) goto cleanup;
+    string_array_t all_profiles;
+    RETURN_IF_ERROR(gitops_list_branches(repo, arena, &all_profiles));
 
     if (all_profiles.count == 0) {
-        err = error_create(ERR_NOT_FOUND, "no profiles found in repository");
-        goto cleanup;
+        return error_create(ERR_NOT_FOUND, "no profiles found in repository");
     }
 
     /* First-run case: a handle whose underlying DB doesn't exist holds a load
@@ -168,35 +152,33 @@ static error_t build_items(
         hashmap_set(profile_map, all_profiles.entries[i], (void *) (uintptr_t) i);
     }
 
-    used = heap_calloc(all_profiles.count, sizeof(bool));
-    view->items = heap_calloc(all_profiles.count, sizeof(item_t));
+    /* The rows, and which listed names an enabled row took. Every name is the
+     * listing's, the view's arena's as the rows are — never the state's row cache,
+     * which a save replaces while the session goes on. */
+    bool *used = arena_calloc(arena, all_profiles.count, sizeof(*used));
+    view->items = arena_calloc(arena, all_profiles.count, sizeof(*view->items));
 
     /* Pass A: enabled profiles in their saved order. */
     for (size_t i = 0; i < enabled_profiles.count; i++) {
-        const char *name = enabled_profiles.entries[i].name;
-        void *idx = NULL;
-        if (!hashmap_find(profile_map, name, &idx)) {
+        void *found = NULL;
+        if (!hashmap_find(profile_map, enabled_profiles.entries[i].name, &found)) {
             /* Persisted name no longer exists locally — drop silently. */
             continue;
         }
-        used[(size_t) (uintptr_t) idx] = true;
-        view->items[item_idx].name = heap_strdup(name);
-        view->items[item_idx].enabled = true;
-        item_idx++;
+        size_t at = (size_t) (uintptr_t) found;
+        used[at] = true;
+        view->items[view->item_count++] = (item_t){
+            .name = all_profiles.entries[at], .enabled = true
+        };
     }
 
     /* Pass B: remaining profiles, disabled, in list order. */
     for (size_t i = 0; i < all_profiles.count; i++) {
         if (used[i]) continue;
-        view->items[item_idx].name = heap_strdup(all_profiles.entries[i]);
-        view->items[item_idx].enabled = false;
-        item_idx++;
+        view->items[view->item_count++] = (item_t){ .name = all_profiles.entries[i] };
     }
 
-cleanup:
-    view->item_count = item_idx;
-    free(used);
-    return err;
+    return NULL;
 }
 
 /* Pass two, the target column of every row: the binding an enabled row holds
@@ -208,8 +190,8 @@ cleanup:
  * The binding first, and it cannot fail: the row's target is the store's fact
  * whatever the branch says, so a branch that will not read keeps its arrow. It
  * borrows from state_target's row cache, whose lifetime ends at the next
- * state_enable/disable/reorder; save runs those much later, so the copy crosses
- * the boundary now.
+ * state_enable/disable/reorder; save runs those much later, so the copy — the
+ * view's arena's — crosses the boundary now.
  *
  * The need is absorbed, not propagated: the editor is the way out of an enabled
  * set the next load cannot build. A sheet this build refuses on one enabled branch
@@ -217,9 +199,7 @@ cleanup:
  * over the post-mutation set — the door tests/test-claims.sh pins for `profile
  * disable`, and a strict seed would close it. The row says what the seed could
  * not, and is not gated: we do not know, so we do not prompt. */
-static void read_targets(
-    git_repository *repo, state_t *deploy_state, view_t *view
-) {
+static void read_targets(git_repository *repo, state_t *deploy_state, view_t *view) {
     for (size_t i = 0; i < view->item_count; i++) {
         item_t *it = &view->items[i];
 
@@ -228,7 +208,7 @@ static void read_targets(
         const char *bound = it->enabled
             ? state_target(deploy_state, it->name) : NULL;
         if (bound) {
-            it->target = heap_strdup(bound);
+            it->target = arena_strdup(view->arena, bound);
         }
 
         /* The need, absorbed (above): the error is dropped, one per row whose
@@ -240,37 +220,19 @@ static void read_targets(
     }
 }
 
-static void view_free(view_t *view) {
-    if (!view) return;
-    free_items(view->items, view->item_count);
-    buffer_deinit(&view->prompt.buffer);
-    free(view);
-}
-
-static inline void view_cleanup(view_t **v) {
-    if (v && *v) {
-        view_free(*v);
-        *v = NULL;
-    }
-}
-#define VIEW_AUTO __attribute__((cleanup(view_cleanup)))
-
+/* The view, made in `arena` and remembering it: its rows, their names and every
+ * target the session sets live there, and nothing frees one. An edit is
+ * human-paced, so a target the session replaces is abandoned in the arena — one
+ * string per committed prompt. The prompt's text is the heap's, the one part
+ * the session gives back (interactive_run). */
 static error_t view_create(
     git_repository *repo, state_t *deploy_state, arena_t *arena, view_t **out
 ) {
-    view_t *view = heap_calloc(1, sizeof(view_t));
+    view_t *view = arena_calloc(arena, 1, sizeof(*view));
+    view->arena = arena;
 
-    error_t err = build_items(repo, deploy_state, arena, view);
-    if (err) {
-        view_free(view);
-        return err;
-    }
-
+    RETURN_IF_ERROR(build_items(repo, deploy_state, view));
     read_targets(repo, deploy_state, view);
-
-    /* Pre-allocate the prompt buffer so the keystroke handler stays alloc-free
-     * on the common typing path. */
-    buffer_reserve(&view->prompt.buffer, PROMPT_INITIAL_CAP);
 
     *out = view;
     return NULL;
@@ -320,9 +282,10 @@ static void plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
  * the borrows are live: needs_enable (additions, plus retained rows whose target
  * names another directory), removal_names (arena-strdup'd so they outlive the
  * slice), and the spelling a retained binding keeps, copied onto the item that
- * offered another for it. */
+ * offered another for it — into the view's arena, where the item lives, and not
+ * the plan's. */
 static void plan_classify(
-    arena_t *arena, state_t *deploy_state, plan_t *plan
+    arena_t *arena, state_t *deploy_state, view_t *view, plan_t *plan
 ) {
     state_profiles_t persisted = state_profiles(deploy_state);
 
@@ -385,11 +348,10 @@ static void plan_classify(
          * and seed the next prompt with it. It takes the row's instead. Not a
          * reconciliation with the store: what is put back is this save's own
          * decision, which is why a NULL (no offer) and an equal string (nothing
-         * declined) are both left alone. The copy is the heap's and not the
-         * arena's, because free_items frees these with free(). */
+         * declined) are both left alone. The spelling it replaces is abandoned
+         * in the view's arena. */
         if (!plan->needs_enable[i] && strcmp(it->target, persisted_target) != 0) {
-            free(it->target);
-            it->target = heap_strdup(persisted_target);
+            it->target = arena_strdup(view->arena, persisted_target);
         }
     }
 }
@@ -469,10 +431,11 @@ static error_t plan_check(
 
 /* Save orchestrator. Holds a scoped write transaction for the diff window only;
  * declaring WRITE at the spec level would hold BEGIN IMMEDIATE for the whole
- * session, blocking other dotta processes. */
-static error_t save_order(
-    git_repository *repo, state_t *deploy_state, arena_t *arena, view_t *view
-) {
+ * session, blocking other dotta processes. The plan and the view it checks are
+ * built in the view's arena. */
+static error_t save_order(git_repository *repo, state_t *deploy_state, view_t *view) {
+    arena_t *arena = view->arena;
+
     plan_t plan = { 0 };
     plan_collect(arena, view, &plan);
 
@@ -487,7 +450,7 @@ static error_t save_order(
     error_t err = state_begin(deploy_state);
     if (err) return err;
 
-    plan_classify(arena, deploy_state, &plan);
+    plan_classify(arena, deploy_state, view, &plan);
 
     err = plan_validate(&plan);
     if (err) goto rollback;
@@ -512,7 +475,6 @@ static error_t save_order(
      * what it happened to hold. */
     for (size_t i = 0; i < view->item_count; i++) {
         if (view->items[i].enabled) continue;
-        free(view->items[i].target);
         view->items[i].target = NULL;
     }
     view->modified = false;
@@ -675,15 +637,14 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
              * stores. One that cannot be resolved is kept as typed, for
              * plan_validate to refuse at save with the message, the way it refuses
              * a bad path today; its error is dropped, one per such Enter. */
-            char *captured = NULL;
-            error_t err = path_input_normalize(p->buffer.data, &captured);
+            const char *captured = NULL;
+            error_t err = path_input_filesystem_path(p->buffer.data, view->arena, &captured);
             if (err) {
-                captured = heap_strdup(p->buffer.data);
+                captured = arena_strdup(view->arena, p->buffer.data);
             }
-            item_t *it = &view->items[p->item_index];
             /* Replace whatever target was on the item (NULL for capture, the
-             * prior string for edit). free(NULL) is safe. */
-            free(it->target);
+             * prior string for edit, which the view's arena keeps: abandoned) */
+            item_t *it = &view->items[p->item_index];
             it->target = captured;
             if (p->enable) {
                 /* Capture path: the prompt was the gate guarding OFF→ON. */
@@ -720,8 +681,8 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
 }
 
 static interactive_result_t handle_key_normal(
-    view_t *view, git_repository *repo, state_t *deploy_state,
-    arena_t *arena, int key, error_t *out_err
+    view_t *view, git_repository *repo, state_t *deploy_state, int key,
+    error_t *out_err
 ) {
     switch (key) {
         case TERM_KEY_UP:
@@ -805,7 +766,7 @@ static interactive_result_t handle_key_normal(
             if (!view->modified) {
                 return INTERACTIVE_CONTINUE;
             }
-            error_t err = save_order(repo, deploy_state, arena, view);
+            error_t err = save_order(repo, deploy_state, view);
             if (err) {
                 *out_err = err;
                 return INTERACTIVE_EXIT_ERROR;
@@ -826,8 +787,8 @@ static interactive_result_t handle_key_normal(
 }
 
 static interactive_result_t view_handle_key(
-    view_t *view, git_repository *repo, state_t *deploy_state,
-    arena_t *arena, int key, error_t *out_err
+    view_t *view, git_repository *repo, state_t *deploy_state, int key,
+    error_t *out_err
 ) {
     *out_err = NULL;
 
@@ -846,7 +807,7 @@ static interactive_result_t view_handle_key(
     if (view->prompt.active) {
         return handle_key_prompt(view, key);
     }
-    return handle_key_normal(view, repo, deploy_state, arena, key, out_err);
+    return handle_key_normal(view, repo, deploy_state, key, out_err);
 }
 
 /* --- Run --- */
@@ -891,8 +852,7 @@ static error_t check_screen(const view_t *view) {
 }
 
 static error_t view_loop(
-    view_t *view, git_repository *repo, state_t *deploy_state,
-    arena_t *arena, int initial_lines
+    view_t *view, git_repository *repo, state_t *deploy_state, int initial_lines
 ) {
     int lines_drawn = initial_lines;
     interactive_result_t result = INTERACTIVE_CONTINUE;
@@ -900,9 +860,7 @@ static error_t view_loop(
 
     while (result == INTERACTIVE_CONTINUE) {
         int key = terminal_read_key();
-        result = view_handle_key(
-            view, repo, deploy_state, arena, key, &loop_err
-        );
+        result = view_handle_key(view, repo, deploy_state, key, &loop_err);
         if (result == INTERACTIVE_CONTINUE) {
             terminal_cursor_up(lines_drawn - 1);
             lines_drawn = view_render(view);
@@ -928,7 +886,7 @@ static error_t interactive_run(
     error_t err = terminal_init(&term);
     if (err) return err;
 
-    view_t *view VIEW_AUTO = NULL;
+    view_t *view = NULL;
     err = view_create(repo, deploy_state, arena, &view);
     if (err) return err;
 
@@ -938,11 +896,16 @@ static error_t interactive_run(
     terminal_cursor_hide();
     int lines = view_render(view);
 
-    err = view_loop(view, repo, deploy_state, arena, lines);
+    /* The prompt's text is the user's typing: a buffer, reserved so the keystroke
+     * handler stays alloc-free on the common typing path, and given back when
+     * the loop ends — the session's one exit past it. */
+    buffer_reserve(&view->prompt.buffer, PROMPT_INITIAL_CAP);
+    err = view_loop(view, repo, deploy_state, lines);
+    buffer_deinit(&view->prompt.buffer);
 
     /* Always move past the UI before terminal_restore brings the cursor back,
-     * regardless of whether the loop exited cleanly or with an error. VIEW_AUTO
-     * and TERMINAL_CLEANUP handle the rest. */
+     * regardless of whether the loop exited cleanly or with an error.
+     * TERMINAL_CLEANUP handles the rest. */
     fprintf(stdout, "\r\n");
     fflush(stdout);
     return err;

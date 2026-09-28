@@ -404,8 +404,6 @@ static error_t *update_profile(
     string_array_init(&commit->pruned, ctx->arena);
     string_array_init(&commit->retired, ctx->arena);
 
-    if (item_count == 0 && row_count == 0) return NULL;
-
     /* Initialize all resources to NULL for goto cleanup */
     metadata_t *metadata = NULL;
     const char **storage_paths = NULL;

@@ -53,8 +53,6 @@ static void status_print_profiles(
     manifest_unbound_t unbound,
     manifest_unkept_t unkept
 ) {
-    if (!out || !profiles) return;
-
     /* Show enabled profiles */
     output_section(out, OUTPUT_NORMAL, "Enabled profiles");
 

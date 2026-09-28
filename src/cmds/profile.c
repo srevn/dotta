@@ -45,7 +45,7 @@ static void profile_print_enable_stats(
     const char *profile,
     const manifest_diff_stats_t *stats
 ) {
-    if (!stats || stats->claimed == 0) return;
+    if (stats->claimed == 0) return;
 
     size_t staged = stats->added + stats->updated;
 

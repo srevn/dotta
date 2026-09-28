@@ -280,7 +280,7 @@ static error_t *bootstrap_show(
     }
 
     /* Display content */
-    if (out && content.size > 0) {
+    if (content.size > 0) {
         output_print(
             out, OUTPUT_NORMAL, "%.*s",
             (int) content.size, (const char *) content.data
@@ -304,8 +304,6 @@ static void bootstrap_list(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
-
-    if (!out) return;
 
     output_section(out, OUTPUT_NORMAL, "Bootstrap scripts");
 

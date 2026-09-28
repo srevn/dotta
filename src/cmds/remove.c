@@ -639,7 +639,7 @@ static void remove_print_overlaps(
     const char *current_profile,
     bool delete_files
 ) {
-    if (!out || overlaps->count == 0) return;
+    if (overlaps->count == 0) return;
 
     output_section(out, OUTPUT_NORMAL, "Multi-profile path warning");
     output_warning(
@@ -735,8 +735,6 @@ static bool remove_confirm_paths(
     const config_t *config,
     output_t *out
 ) {
-    if (!claims || !opts || !out) return false;
-
     /* Skip confirmation if --force */
     if (opts->force) return true;
 
@@ -792,8 +790,6 @@ static bool remove_confirm_profile(
     const config_t *config,
     output_t *out
 ) {
-    if (!profile || !out) return false;
-
     /* Skip confirmation if --force */
     if (opts->force) return true;
 
@@ -813,11 +809,9 @@ static bool remove_confirm_profile(
             "         Deployed paths will be released from management."
         );
     }
-    bool confirmed = output_confirm_destructive(
-        out, config ? config->confirm_destructive : true, "Continue?", opts->force
+    return output_confirm_destructive(
+        out, config->confirm_destructive, "Continue?", opts->force
     );
-
-    return confirmed;
 }
 
 /**

@@ -452,7 +452,9 @@ static error_t *list_files(
             err = NULL;
         }
 
-        err = stats_build_file_commit_map(repo, opts->profile, tree, &commit_map);
+        err = stats_build_file_commit_map(
+            repo, opts->profile, tree, ctx->arena, &commit_map
+        );
         if (err) {
             /* Non-fatal: continue without commit info */
             output_warning(
@@ -533,7 +535,7 @@ static error_t *list_files(
                  * and the count of what the branch holds refuses outright over
                  * the same failure (core/profiles.h profile_get_tree_stats). */
                 size_t size = 0;
-                error_t *size_err = stats_get_blob_size(
+                error_t *size_err = stats_blob_size(
                     repo, git_tree_entry_id(entry), &size
                 );
                 if (!size_err) {
@@ -598,9 +600,6 @@ static error_t *list_files(
     }
 
     /* Cleanup */
-    if (commit_map) {
-        stats_free_file_commit_map(commit_map);
-    }
     metadata_free(metadata);
     git_tree_free(tree);
 
@@ -691,8 +690,8 @@ static error_t *list_file_history(
          * standing there whatever its name. A name keys within one profile, so
          * the view may hold it once (home/, root/, or one binding), or once per
          * binding under custom/ — and then no profile is the answer, and each
-         * holder is named with the path that tells them apart. The rows are the
-         * arena's; only the index is released here. */
+         * holder is named with the path that tells them apart. The view is the
+         * arena's. */
         manifest_t *manifest = NULL;
         err = manifest_build(repo, state, ctx->arena, &manifest);
         if (err) return err;
@@ -720,12 +719,10 @@ static error_t *list_file_history(
                 output_hintline(
                     out, OUTPUT_NORMAL, "  dotta list -p <profile> %s", arg.storage_path
                 );
-                manifest_free(manifest);
                 return ERROR(ERR_INVALID_ARG, "Ambiguous path '%s'", arg.storage_path);
             }
         }
         if (!row) {
-            manifest_free(manifest);
             return ERROR(
                 ERR_NOT_FOUND, "File '%s' not found in enabled profiles\n"
                 "Hint: Use 'dotta list -p <profile> %s' to specify a profile",
@@ -737,7 +734,6 @@ static error_t *list_file_history(
          * up again in its branch. */
         profile = row->profile;
         storage_path = row->storage_path;
-        manifest_free(manifest);
 
         err = gitops_load_branch_tree(repo, profile, &tree, NULL);
         if (err) {
@@ -777,8 +773,8 @@ static error_t *list_file_history(
     }
 
     /* Get file history */
-    file_history_t *history = NULL;
-    err = stats_get_file_history(repo, profile, storage_path, &history);
+    file_history_t history;
+    err = stats_file_history(repo, profile, storage_path, ctx->arena, &history);
     if (err) {
         return error_wrap(
             err, "Failed to get history for '%s' in profile '%s'",
@@ -796,8 +792,8 @@ static error_t *list_file_history(
     /* Calculate max message length for alignment (oneline mode only) */
     size_t max_msg_len = 0;
     if (!verbose) {
-        for (size_t i = 0; i < history->count; i++) {
-            size_t len = strlen(history->commits[i].summary);
+        for (size_t i = 0; i < history.count; i++) {
+            size_t len = strlen(history.commits[i].summary);
             if (len > max_msg_len) max_msg_len = len;
         }
 
@@ -808,8 +804,8 @@ static error_t *list_file_history(
     }
 
     /* Print commits */
-    for (size_t i = 0; i < history->count; i++) {
-        commit_info_t *commit = &history->commits[i];
+    for (size_t i = 0; i < history.count; i++) {
+        const commit_info_t *commit = &history.commits[i];
 
         if (verbose) {
             /* Verbose: Full commit format */
@@ -850,9 +846,6 @@ static error_t *list_file_history(
             );
         }
     }
-
-    /* Cleanup */
-    stats_free_file_history(history);
 
     return NULL;
 }

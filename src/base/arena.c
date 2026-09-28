@@ -24,8 +24,8 @@
 /* AddressSanitizer sees into a block only as the arena tells it: every block is
  * poisoned when made, each allocation unpoisoned as it is made — its own bytes,
  * so the alignment's padding stays poisoned — and followed by a redzone, and
- * what a growth leaves behind or a reset drops is poisoned again. Without the
- * sanitizer the two are the header's no-ops, and there is no redzone. */
+ * what a growth or a caller abandons, or a reset drops, is poisoned again. Without
+ * the sanitizer the two are the header's no-ops, and there is no redzone. */
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer)
 #define ARENA_ASAN 1
@@ -210,11 +210,30 @@ void *arena_grow(
     void *larger = arena_alloc(arena, arena_bytes(grown, size));
     if (*capacity > 0) {
         memcpy(larger, entries, *capacity * size);
-        ASAN_POISON_MEMORY_REGION(entries, *capacity * size);
+        arena_abandon(arena, entries, *capacity * size);
     }
 
     *capacity = grown;
     return larger;
+}
+
+void arena_abandon(arena_t *arena, void *region, size_t size) {
+    CHECK_NULL(arena);
+    CHECK_NULL(region);
+
+    /* One block's used bytes hold the whole region, or it is not this arena's.
+     * Compared as addresses: the blocks are distinct objects, and a relational
+     * test between pointers into two of them says nothing. */
+    uintptr_t at = (uintptr_t) region;
+    const arena_block_t *b = arena->current;
+    while (b) {
+        uintptr_t base = (uintptr_t) b->data;
+        if (at >= base && at - base <= b->used && size <= b->used - (at - base)) break;
+        b = b->next;
+    }
+    CHECK_ARG(b != NULL, "the region is not one this arena holds");
+
+    ASAN_POISON_MEMORY_REGION(region, size);
 }
 
 arena_mark_t arena_mark(const arena_t *arena) {

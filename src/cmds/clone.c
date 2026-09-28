@@ -200,7 +200,6 @@ static error_t *initialize_state(
             state_free(state);
             return err;
         }
-        manifest_free(view);
     }
 
     /* Commit transaction */

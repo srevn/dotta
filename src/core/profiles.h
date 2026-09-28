@@ -560,7 +560,7 @@ error_t *profile_needs_target(
  *
  * `mounts` is the table the rows are placed by, and the path keys against them
  * by strcmp (infra/mount.h). The answer is the arena's — the view's own row string,
- * or the namer's — and outlives the view this call builds and frees.
+ * or the namer's — as the view this call builds is.
  *
  * Cost: one tree walk and one sheet load, every call. Its other face: a profile
  * whose sheet will not load refuses a path where the name its caller answers
@@ -683,8 +683,8 @@ error_t *profile_discover_claims(
  * Directory claims are indexed like any row — the branch claims the directory,
  * and a caller asking who else is at a place is owed it.
  *
- * The map borrows its keys — a row's own path string, the arena's — and its values
- * are the arena's: free the map alone, hashmap_free(index, NULL).
+ * The map, its keys — each a row's own path string — and its values are the
+ * arena's: nothing frees the index.
  *
  * Complete or an error, like its sibling: a short index is an "also in" a user
  * reads as complete. What a failure means is the caller's, and remove's is advisory
@@ -695,14 +695,14 @@ error_t *profile_discover_claims(
  * Cost: one view per branch — a tree walk and a sheet load each — then O(T log
  * T) over T placed rows for the runs.
  *
- * Reader: remove's overlap analysis.
+ * Reader: cmds/remove.c remove_overlaps.
  *
  * @param repo Repository (must not be NULL)
  * @param mounts This machine's mount table (must not be NULL)
  * @param exclude A branch to leave out, or NULL for every one of them
- * @param arena Arena that owns the claims (must not be NULL)
+ * @param arena Arena the index, its keys and its claims live in (must not be NULL)
  * @param out_index filesystem path (const char *) -> profile_claims_t * (must
- *        not be NULL; free with hashmap_free(index, NULL))
+ *        not be NULL)
  * @return Error or NULL on success
  */
 error_t *profile_build_filesystem_index(

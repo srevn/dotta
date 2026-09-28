@@ -294,12 +294,12 @@ static inline git_filemode_t path_type_to_git_filemode(path_type_t type) {
 /**
  * Manifest (opaque)
  *
- * Rows and their strings live in the arena the builder was given; the path index
- * is heap-allocated and released by manifest_free. A view built over the enabled
- * set borrows nothing else — not the state's row cache it was read from — so it
- * stands across the mutations that replace the cache, for the arena's lifetime.
- * A tree view borrows the one thing its caller handed it, the mount table, and
- * lends it back (manifest_mounts).
+ * A value of the arena the builder was given — its rows, their strings and its
+ * indexes — and nothing frees one. A view built over the enabled set borrows
+ * nothing else — not the state's row cache it was read from — so it stands across
+ * the mutations that replace the cache, for the arena's lifetime. A tree view
+ * borrows the one thing its caller handed it, the mount table, and lends it back
+ * (manifest_mounts).
  */
 typedef struct manifest manifest_t;
 
@@ -354,16 +354,15 @@ typedef struct manifest manifest_t;
  *     the enabled_profiles mutations that replace the cache — a `before` built
  *     ahead of a profile enable reads the same after it, and the view after is
  *     the builder called again.
- *   - index hashmap: heap-allocated; on success the caller releases it with
- *     manifest_free. On error, the hashmap (if allocated) is freed here and *out
- *     is NULL.
+ *   - the indexes: the arena's too, so nothing frees a view. On error *out is
+ *     NULL, and what the build made stays the arena's bytes.
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle the enabled set and targets are read from (must not
  *              be NULL; borrowed, only the row cache is consulted)
  * @param arena Arena backing every allocation produced by the call (must not be
  *              NULL)
- * @param out Manifest (must not be NULL; caller frees with manifest_free)
+ * @param out Manifest (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *manifest_build(
@@ -415,7 +414,7 @@ error_t *manifest_build(
  * manifest_build_branch, which loads one and calls this.
  *
  * Memory: same contract as manifest_build — every allocation produced by the
- * call lives in the caller's arena; the index is manifest_free's.
+ * call lives in the caller's arena.
  *
  * @param repo Git repository the tree's blobs (the sheet among them) are read
  *             from (must not be NULL)
@@ -425,7 +424,7 @@ error_t *manifest_build(
  * @param mounts Per-machine mount table (must not be NULL)
  * @param arena Arena backing every allocation produced by the call (must not be
  *              NULL)
- * @param out Manifest (must not be NULL; caller frees with manifest_free)
+ * @param out Manifest (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *manifest_build_tree(
@@ -462,7 +461,7 @@ error_t *manifest_build_tree(
  * @param mounts Per-machine mount table (must not be NULL)
  * @param arena Arena backing every allocation produced by the call (must not be
  *              NULL)
- * @param out Manifest (must not be NULL; caller frees with manifest_free)
+ * @param out Manifest (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *manifest_build_branch(
@@ -1007,16 +1006,6 @@ error_t *manifest_name(
     arena_t *arena,
     const char **out_storage
 );
-
-/**
- * Free a manifest — the heap indexes only; rows are the arena's
- *
- * The view's own index, and each contribution's two. A build that failed partway
- * has as many contributions as it registered, so this frees exactly what it made.
- *
- * No-op on NULL.
- */
-void manifest_free(manifest_t *manifest);
 
 /**
  * Per-profile statistics from a view-to-view diff

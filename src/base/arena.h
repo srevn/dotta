@@ -109,10 +109,10 @@ __attribute__((format(printf, 2, 0)));
  * — eight at least, and `want` where that is more — is allocated from the arena,
  * and the old one's *capacity entries are copied into it: at a push the old array
  * is full, so that is every entry it holds. An arena has no realloc, so the old
- * array stays the arena's until the arena is freed — poisoned under
- * AddressSanitizer, so a pointer still aimed at it traps. The one growth an array
- * in an arena has: a push asks for count + 1, a reserve for the capacity it names.
- * A byte count no memory could hold is exhaustion.
+ * array is abandoned to it (arena_abandon): a pointer still aimed at it traps
+ * under AddressSanitizer. The one growth an array in an arena has: a push asks
+ * for count + 1, a reserve for the capacity it names. A byte count no memory
+ * could hold is exhaustion.
  *
  * @param arena    Arena the array lives in (must not be NULL)
  * @param entries  The array: one this arena allocated, *capacity entries long, or
@@ -125,6 +125,23 @@ __attribute__((format(printf, 2, 0)));
 void *arena_grow(
     arena_t *arena, void *entries, size_t *capacity, size_t want, size_t size
 );
+
+/**
+ * Give up a region of the arena: its bytes stay the arena's until the arena is
+ * freed, and nothing reads or writes them again
+ *
+ * Under AddressSanitizer the region is poisoned, so a pointer still aimed at it
+ * traps as one into a freed heap block would. The way a container that outgrows
+ * a region it cannot extend in place says so: arena_grow's old array, a hash
+ * map's old slots (base/hashmap.c). A region this arena does not hold is a caller's
+ * bug.
+ *
+ * @param arena  Arena the region was allocated from (must not be NULL)
+ * @param region The region: an allocation of this arena, or part of one (must
+ *               not be NULL)
+ * @param size   The region's bytes
+ */
+void arena_abandon(arena_t *arena, void *region, size_t size);
 
 /**
  * A position in an arena, for arena_reset to return to

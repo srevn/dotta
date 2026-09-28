@@ -32,7 +32,7 @@
  *   buffer_deinit(&content);  // Caller owns buffer
  *
  * Cached API (batch operations):
- *   content_cache_t *cache = content_cache_create(repo, keymgr);
+ *   content_cache_t *cache = content_cache_create(repo, keymgr, arena);
  *   for (each file) {
  *       const buffer_t *content;  // Note: const
  *       content_cache_get_from_blob_oid(cache, &oid, mode, path, profile, &content);
@@ -425,14 +425,19 @@ error_t *content_compare_blob_to_disk(
  *
  * Creates a cache for batch content operations. Cache should live for the duration
  * of one logical operation (e.g., one status command, one workspace analysis).
+ * A handle: the cache and the plaintext it holds are the heap's, released by
+ * content_cache_free; its map and the map's keys are `arena`'s, which must outlive
+ * the cache.
  *
  * @param repo Git repository (borrowed reference, must not be NULL)
  * @param keymgr Key manager (borrowed reference, can be NULL)
+ * @param arena Arena the cache's map lives in (must not be NULL)
  * @return Content cache (caller frees via content_cache_free)
  */
 content_cache_t *content_cache_create(
     git_repository *repo,
-    keymgr *keymgr
+    keymgr *keymgr,
+    arena_t *arena
 );
 
 /**

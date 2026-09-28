@@ -590,7 +590,6 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     output_t *out = ctx->out;
 
     error_t *err = NULL;
-    manifest_t *manifest = NULL;
     git_tree *tree = NULL;
     git_commit *source = NULL;
     const char *profile = opts->profile;
@@ -710,6 +709,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
      * view may hold it once (home/, root/, or one binding), or once per binding
      * under custom/ — and then no profile is the answer, and each holder is named
      * with the path that tells them apart. */
+    manifest_t *manifest = NULL;
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 
@@ -773,7 +773,6 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 cleanup:
     git_commit_free(source);
     git_tree_free(tree);
-    manifest_free(manifest);
 
     return err;
 }

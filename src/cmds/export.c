@@ -837,11 +837,10 @@ static error_t *collect_filesystem(
             ? "\nHint: some of this profile's paths have no deployment target on "
             "this machine and stand nowhere; export them by name (custom/...)"
             : "";
-        err = ERROR(
+        return ERROR(
             ERR_NOT_FOUND, "Profile '%s'%s places nothing at '%s'%s",
             profile, commit_suffix, filesystem_path, hint
         );
-        goto cleanup;
     }
 
     if (at && at->type != PATH_TYPE_DIRECTORY) {
@@ -855,7 +854,7 @@ static error_t *collect_filesystem(
                     first = row;
                 }
             }
-            err = ERROR(
+            return ERROR(
                 ERR_CONFLICT,
                 "Cannot export '%s': '%s' is a %s in profile '%s' and '%s' stands "
                 "beneath it — one filesystem cannot hold both",
@@ -863,13 +862,12 @@ static error_t *collect_filesystem(
                 at->type == PATH_TYPE_SYMLINK ? "symlink" : "file",
                 profile, first->storage_path
             );
-            goto cleanup;
         }
 
         export_entry_t e = entry_from_row(at);
         e.rel_path = list->basename;
         entry_list_append(list, arena, &e);
-        goto cleanup;
+        return NULL;
     }
 
     append_root(
@@ -881,15 +879,13 @@ static error_t *collect_filesystem(
         const manifest_row_t *row = beneath.entries[i];
         export_entry_t e = entry_from_row(row);
         /* Past the base and its separator — borrowed from the row, whose string
-         * is the arena's and outlives the view. For the filesystem root the base
-         * is "" and the '+ 1' steps over the leading slash. */
+         * is the arena's. For the filesystem root the base is "" and the '+ 1'
+         * steps over the leading slash. */
         e.rel_path = row->filesystem_path + base_len + 1;
         entry_list_append(list, arena, &e);
     }
 
-cleanup:
-    manifest_free(view);
-    return err;
+    return NULL;
 }
 
 /**
@@ -920,7 +916,7 @@ cleanup:
  * prefixes were the climb that supplied it.
  */
 static error_t *complete_directories(export_entry_list_t *list, arena_t *arena) {
-    hashmap_t *standing = hashmap_borrow(list->count);
+    hashmap_t *standing = hashmap_borrow(arena, list->count);
     for (size_t i = 0; i < list->count; i++) {
         hashmap_set(standing, list->items[i].rel_path, (void *) (uintptr_t) (i + 1));
     }
@@ -968,7 +964,6 @@ static error_t *complete_directories(export_entry_list_t *list, arena_t *arena) 
         free(rung);
     }
 
-    hashmap_free(standing, NULL);
     return err;
 }
 

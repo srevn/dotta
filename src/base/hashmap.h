@@ -2,7 +2,7 @@
  * hashmap.h - Open-addressed hash table with Robin Hood probing
  *
  * String-keyed hash map using Robin Hood hashing with backward-shift deletion.
- * Keys are strings (duplicated internally), values are void pointers.
+ * Keys are strings, values are void pointers.
  *
  * Robin Hood probing bounds probe-sequence variance: entries that hashed far
  * from their ideal slot "steal" from entries closer to theirs, keeping all chains
@@ -10,19 +10,23 @@
  * degrades over insert/remove cycles.
  *
  * Memory ownership:
- * - Default: map owns keys (duplicates on insert, frees on remove/destroy)
- * - Borrowing mode: map stores key pointers directly (no strdup/free)
- * - Caller owns values (map only stores pointers)
- * - Optional free_value callback for cleanup on clear/free
+ * - A map lives in the arena it was made in — the struct, its slots and every
+ *   key it copies — and goes with it: nothing frees a map. A rehash carves new
+ *   slots and abandons the old to the arena (base/arena.h arena_abandon).
+ * - Owning mode (hashmap_create): a key is copied into the map's arena once,
+ *   when an insert takes a slot for it — never on an update or a probe.
+ * - Borrowing mode (hashmap_borrow): the map stores the caller's key pointer.
+ * - Caller owns values (map only stores pointers); a value that holds something
+ *   to release is torn down by hashmap_clear's callback
  *
  * Performance:
  * - Average O(1) insert, lookup, delete with excellent cache locality
  * - Automatic growth when load factor exceeds 75%
  * - No tombstones — backward-shift keeps the table clean
  *
- * A map is the heap's, so growth cannot fail: a create, a set or a put succeeds
- * or the run dies of exhaustion (base/heap.h), and none of them answers anything
- * — a table no memory could hold is exhaustion too.
+ * Growth cannot fail: a create, a set or a put succeeds or the run dies of
+ * exhaustion (base/arena.h), and none of them answers anything — a table no memory
+ * could hold is exhaustion too.
  */
 
 #ifndef DOTTA_HASHMAP_H
@@ -31,6 +35,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <types.h>
 
 /* Forward declarations */
 typedef struct hashmap hashmap_t;
@@ -38,7 +43,7 @@ typedef struct hashmap hashmap_t;
 /**
  * Value destructor callback
  *
- * Called when removing entries or destroying the map.
+ * Called by hashmap_clear on every value it empties out of the map.
  *
  * @param value The value to free
  */
@@ -49,10 +54,7 @@ typedef void (*hashmap_free_fn)(void *value);
  *
  * Stack-allocated. Initialize with hashmap_iter_init(), advance with
  * hashmap_iter_next(). Iteration order is undefined but deterministic for a given
- * map state.
- *
- * SAFETY: If the map is modified after init, hashmap_iter_next() detects this
- * and returns false.
+ * map state. A map modified between the init and a next is a caller's bug.
  */
 typedef struct hashmap_iter {
     const hashmap_t *map;
@@ -61,8 +63,12 @@ typedef struct hashmap_iter {
 } hashmap_iter_t;
 
 /**
- * Create new hash map (owning mode — keys are strdup'd on insert, freed on remove)
+ * Create a hash map in `arena`, owning its keys
  *
+ * A key is copied into the arena when an insert takes a slot for it, so the
+ * caller's key may change or go once the insert returns.
+ *
+ * @param arena Arena the map, its slots and its keys live in (must not be NULL)
  * @param expected Number of entries the caller expects to hold (0 = no expectation,
  *                 giving 16 slots). The map allocates the slots those entries
  *                 need in order to fit without a resize — more slots than entries,
@@ -70,39 +76,33 @@ typedef struct hashmap_iter {
  *                 and rounded up to a power of two.
  * @return New hash map; never NULL
  */
-hashmap_t *hashmap_create(size_t expected);
+hashmap_t *hashmap_create(arena_t *arena, size_t expected);
 
 /**
- * Create hash map in borrowing mode — keys stored by reference, not copied.
+ * Create a hash map in `arena`, borrowing its keys — stored by reference, not
+ * copied
  *
  * The caller MUST guarantee:
  * - All key strings outlive the hashmap
  * - Keys are not modified after insertion
- * - Keys are not freed before the hashmap is freed/cleared
  *
- * hashmap_remove() will NOT free the key — the original owner is responsible.
- *
+ * @param arena Arena the map and its slots live in (must not be NULL)
  * @param expected Entries the caller expects to hold, read exactly as
  *                 hashmap_create reads it.
  * @return New hash map; never NULL
  */
-hashmap_t *hashmap_borrow(size_t expected);
+hashmap_t *hashmap_borrow(arena_t *arena, size_t expected);
 
 /**
- * Remove all entries without freeing the map itself
+ * Remove all entries; the map's room stays
+ *
+ * The way to release what the values hold: `free_fn` is handed each non-NULL
+ * value as it leaves. The keys and the slots are the arena's.
  *
  * @param map Hash map (NULL is a no-op)
  * @param free_fn Optional callback to free each value, or NULL
  */
 void hashmap_clear(hashmap_t *map, hashmap_free_fn free_fn);
-
-/**
- * Free hash map and all entries
- *
- * @param map Hash map (NULL is a no-op)
- * @param free_fn Optional callback to free each value, or NULL
- */
-void hashmap_free(hashmap_t *map, hashmap_free_fn free_fn);
 
 /**
  * Insert or update a key-value pair
@@ -112,8 +112,8 @@ void hashmap_free(hashmap_t *map, hashmap_free_fn free_fn);
  * or use hashmap_put for old-value retrieval).
  *
  * @param map Hash map (must not be NULL)
- * @param key Key string (duplicated in owning mode, stored directly in borrowing
- *            mode; must not be NULL)
+ * @param key Key string (copied into the map's arena in owning mode, stored
+ *            directly in borrowing mode; must not be NULL)
  * @param value Value pointer (map does not take ownership)
  */
 void hashmap_set(hashmap_t *map, const char *key, void *value);
@@ -125,8 +125,8 @@ void hashmap_set(hashmap_t *map, const char *key, void *value);
  * the key is new, *out_prev is set to NULL.
  *
  * @param map Hash map (must not be NULL)
- * @param key Key string (duplicated in owning mode, stored directly in borrowing
- *            mode; must not be NULL)
+ * @param key Key string (copied into the map's arena in owning mode, stored
+ *            directly in borrowing mode; must not be NULL)
  * @param value New value pointer
  * @param out_prev Receives the previous value, or NULL if key was new
  */
@@ -156,7 +156,7 @@ bool hashmap_has(const hashmap_t *map, const char *key);
 /**
  * Remove a key-value pair
  *
- * Uses backward-shift deletion (no tombstones).
+ * Uses backward-shift deletion (no tombstones). An owned key stays the arena's.
  *
  * @param map Hash map (NULL returns false)
  * @param key Key to remove (NULL returns false)
@@ -191,8 +191,8 @@ bool hashmap_is_empty(const hashmap_t *map);
 /**
  * Initialize an iterator
  *
- * Takes a snapshot of the map's modification counter. If the map is modified
- * after this call, hashmap_iter_next() will return false.
+ * Takes a snapshot of the map's modification counter: a map modified after this
+ * call dies at the next hashmap_iter_next, naming the mistake.
  *
  * @param iter Iterator to initialize (must not be NULL)
  * @param map  Map to iterate (NULL produces an empty iteration)
@@ -205,7 +205,7 @@ void hashmap_iter_init(hashmap_iter_t *iter, const hashmap_t *map);
  * @param iter Iterator (must not be NULL)
  * @param out_key Receives key pointer (can be NULL to skip)
  * @param out_value Receives value pointer (can be NULL to skip)
- * @return true if an entry was retrieved, false at end or on stale iterator
+ * @return true if an entry was retrieved, false at the end
  */
 bool hashmap_iter_next(hashmap_iter_t *iter, const char **out_key, void **out_value);
 

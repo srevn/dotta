@@ -265,10 +265,10 @@ typedef enum dotta_crypto_mode {
  * cache, the dispatcher carries no information by distinguishing "needs keymgr"
  * from "needs keymgr and cache" — it would just be a hint about whether the handler
  * iterates blobs in batch. Single-blob handlers (`add`, `show`, `revert`, `key`)
- * tolerate an unused empty cache (one calloc plus a 64-entry hashmap, freed in
- * LIFO teardown) in exchange for a uniform handle shape across every crypto-aware
- * command. If a second cache primitive ever lands, this rationale is the place
- * to revisit the split.
+ * tolerate an unused empty cache (one calloc freed in LIFO teardown, and a 64-entry
+ * map in the command arena) in exchange for a uniform handle shape across every
+ * crypto-aware command. If a second cache primitive ever lands, this rationale
+ * is the place to revisit the split.
  *
  * Disabled-encryption semantics: when `config->encryption_enabled == false`,
  * `run.keymgr` stays NULL regardless of the need; the cache is still created
@@ -361,17 +361,16 @@ typedef struct dotta_needs {
  *   - `keymgr != NULL` implies `config->encryption_enabled`. `content_cache`
  *     carries a borrowed pointer to it (NULL when encryption is disabled) and
  *     is torn down before it.
- *   - `manifest` is the view over the enabled set as it stands at dispatch —
- *     its rows in the command arena, its index released by the dispatcher after
- *     the handler returns. Never reassigned: a command that moves Git (a commit,
- *     a pull) or the enabled set builds the post-mutation view itself and frees
- *     it itself, and `run.manifest` stays the view before — which is exactly
- *     what the receipts diff against (`manifest_diff(ctx->run.manifest, after,
- *     …)`).
+ *   - `manifest` is the view over the enabled set as it stands at dispatch — a
+ *     value of the command arena, rows and indexes alike, which nothing frees.
+ *     Never reassigned: a command that moves Git (a commit, a pull) or the enabled
+ *     set builds the post-mutation view itself, and `run.manifest` stays the
+ *     view before — which is exactly what the receipts diff against
+ *     (`manifest_diff(ctx->run.manifest, after, …)`).
  *
- * Owning-typed pointers where `close_run` frees (`manifest_t *`, `content_cache_t
- * *`, `keymgr *`, `state_t *`, `git_repository *`); `const` where nothing does
- * (`mounts` and `repo_path` are the arena's). Below the dispatcher the contract
+ * Owning-typed pointers where `close_run` frees (`content_cache_t *`, `keymgr
+ * *`, `state_t *`, `git_repository *`); `const` where nothing does (`mounts`,
+ * `manifest` and `repo_path` are the arena's). Below the dispatcher the contract
  * is `const dotta_ctx_t *`: the pointers are `T *const`, the pointees live —
  * state takes transactions, the cache fills.
  *
@@ -405,7 +404,7 @@ typedef struct dotta_run {
     const mount_table_t *mounts;        /* needs->mounts; this machine's topology at dispatch */
     keymgr *keymgr;                     /* needs->crypto != NONE, and only if encryption is on */
     content_cache_t *content_cache;     /* needs->crypto != NONE */
-    manifest_t *manifest;               /* needs->manifest; the view at dispatch */
+    const manifest_t *manifest;         /* needs->manifest; the view at dispatch */
 } dotta_run_t;
 
 /**

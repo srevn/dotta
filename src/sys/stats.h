@@ -28,11 +28,12 @@
 /**
  * Commit information
  *
- * Lightweight commit metadata suitable for display.
+ * Lightweight commit metadata suitable for display, a value of the arena its
+ * producer was given.
  */
 typedef struct {
     git_oid oid;         /* Commit OID */
-    char *summary;       /* First line of commit message (caller must free) */
+    const char *summary; /* First line of the message, trailing whitespace trimmed */
     git_time_t time;     /* Commit timestamp (seconds since epoch) */
 } commit_info_t;
 
@@ -42,7 +43,8 @@ typedef struct {
  * Maps each file path to its most recent commit. Optimized for the use case:
  * "for each file in current tree, get last commit"
  *
- * Internal implementation is opaque. Use accessor functions.
+ * Internal implementation is opaque. Use accessor functions. The map, its keys
+ * and every commit it holds are the arena's it was built in: nothing frees one.
  */
 typedef struct file_commit_map file_commit_map_t;
 
@@ -53,34 +55,34 @@ typedef struct file_commit_map file_commit_map_t;
  * order (newest first).
  */
 typedef struct {
-    commit_info_t *commits;  /* Array of commits (caller must free with stats_free_file_history) */
+    commit_info_t *commits;  /* The commits, the arena's */
     size_t count;            /* Number of commits */
 } file_history_t;
 
 /**
- * Get blob size efficiently
+ * A blob's size, read efficiently
  *
  * Reads only object metadata using git_odb_read_header (no decompression). This
  * is 10-50x faster than git_blob_lookup for size-only queries.
  *
  * Acquires an ODB handle per call. A caller reading many sizes in one pass takes
- * the handle itself and uses stats_get_blob_size_with_odb below.
+ * the handle itself and uses stats_blob_size_with_odb below.
  *
  * @param repo Repository (required)
  * @param blob_oid Blob OID (required)
  * @param out Size in bytes (required, filled by function)
  * @return Error or NULL on success
  */
-error_t *stats_get_blob_size(
+error_t *stats_blob_size(
     git_repository *repo,
     const git_oid *blob_oid,
     size_t *out
 );
 
 /**
- * Get blob size through a caller-held ODB handle
+ * A blob's size, through a caller-held ODB handle
  *
- * The batch form of stats_get_blob_size: same metadata-only read, with the object
+ * The batch form of stats_blob_size: same metadata-only read, with the object
  * database acquired once by the caller (git_repository_odb) and reused across
  * the pass. The one place a blob's size is read without inflating it.
  *
@@ -89,7 +91,7 @@ error_t *stats_get_blob_size(
  * @param out Size in bytes (required, filled by function)
  * @return Error or NULL on success
  */
-error_t *stats_get_blob_size_with_odb(
+error_t *stats_blob_size_with_odb(
     git_odb *odb,
     const git_oid *blob_oid,
     size_t *out
@@ -106,26 +108,28 @@ error_t *stats_get_blob_size_with_odb(
  * case).
  *
  * Performance: O(commits_needed × files_per_commit) - with early termination
- * Memory: O(files_in_tree) - one commit_info per file
+ * Memory: O(files_in_tree) - one slot per file, and one commit_info per commit
+ * that maps a file, shared by every file it maps
  *
  * Note: This is expensive (history walk). Use only in verbose mode.
  *
  * @param repo Repository (required)
  * @param branch_name Branch name (required, e.g., "global")
  * @param tree Tree containing files to track (required)
- * @param out File→commit map (required, caller must free with
- *            stats_free_file_commit_map)
+ * @param arena Arena the map, its keys and its commits live in (required)
+ * @param out File→commit map (required; left as it was on a failure)
  * @return Error or NULL on success
  */
 error_t *stats_build_file_commit_map(
     git_repository *repo,
     const char *branch_name,
     git_tree *tree,
+    arena_t *arena,
     file_commit_map_t **out
 );
 
 /**
- * Get file history
+ * The commits that touched one file
  *
  * Returns all commits that modified the specified file, in reverse chronological
  * order (newest first).
@@ -139,14 +143,16 @@ error_t *stats_build_file_commit_map(
  * @param repo Repository (required)
  * @param branch_name Branch name (required)
  * @param file_path File path within tree (required)
- * @param out File history (required, caller must free with stats_free_file_history)
- * @return Error or NULL on success
+ * @param arena Arena the commits and their summaries live in (required)
+ * @param out File history (required; left as it was on a failure)
+ * @return Error or NULL on success; ERR_NOT_FOUND when no commit touched the file
  */
-error_t *stats_get_file_history(
+error_t *stats_file_history(
     git_repository *repo,
     const char *branch_name,
     const char *file_path,
-    file_history_t **out
+    arena_t *arena,
+    file_history_t *out
 );
 
 /**
@@ -159,36 +165,11 @@ error_t *stats_get_file_history(
  *
  * @param map File→commit map (required)
  * @param file_path File path (required)
- * @return Commit info (borrowed pointer, valid until map is freed) or NULL if
- *         not found
+ * @return Commit info (the map's arena's) or NULL if not found
  */
 const commit_info_t *stats_file_commit_map_get(
     const file_commit_map_t *map,
     const char *file_path
 );
-
-/**
- * Free commit info
- *
- * Generic callback signature for use with containers (e.g., hashmap_free). Accepts
- * void* to match standard C cleanup callback pattern.
- *
- * @param ptr Commit info to free (NULL safe)
- */
-void stats_free_commit_info(void *ptr);
-
-/**
- * Free file→commit map
- *
- * @param map Map to free (NULL safe)
- */
-void stats_free_file_commit_map(file_commit_map_t *map);
-
-/**
- * Free file history
- *
- * @param history History to free (NULL safe)
- */
-void stats_free_file_history(file_history_t *history);
 
 #endif /* DOTTA_STATS_H */

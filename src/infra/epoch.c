@@ -764,13 +764,14 @@ static int epoch_walk_cb(
 static error_t *walk_ciphertext(
     git_repository *repo, epoch_ciphertext_fn fn, void *payload
 ) {
-    /* The branches, in a frame of the walk's own: a listing read inside the loop
-     * and dropped with it */
+    /* The branches and the trees already seen, in a frame of the walk's own:
+     * each read inside the loop and dropped with it. The set owns its keys, so
+     * one built on the stack is copied into the frame only as it takes a slot. */
     arena_t *frame = arena_create(0);
     string_array_t branches = { 0 };
     error_t *err = gitops_list_branches(repo, frame, &branches);
 
-    hashmap_t *seen = hashmap_create(0);
+    hashmap_t *seen = hashmap_create(frame, 0);
 
     epoch_walk_t walk = {
         .repo = repo, .seen = seen, .fn = fn, .payload = payload,
@@ -872,7 +873,6 @@ cleanup:
     if (walker) {
         git_revwalk_free(walker);
     }
-    hashmap_free(seen, NULL);
     arena_free(frame);
     return err;
 }

@@ -1518,7 +1518,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     /* Declare all resources, initialized to NULL. */
     error_t *err = NULL;
     workspace_t *ws = NULL;
-    manifest_t *after = NULL;                  /* The view after the Git phase (owned) */
+    manifest_t *after = NULL;                  /* The view after the Git phase */
     scope_t *scope = NULL;
     sync_results_t *results = NULL;
     const char *remote_name = NULL;
@@ -2228,9 +2228,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 cleanup:
     /* Free resources in reverse order of allocation. state is borrowed from the
      * dispatcher and sync opens no transaction of its own (the flush scopes its
-     * own; nothing else writes). `before` is the dispatcher's view — not freed
-     * here. */
-    manifest_free(after);
+     * own; nothing else writes). */
     if (xfer) transfer_context_free(xfer);
     if (results) sync_results_free(results);
 

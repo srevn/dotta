@@ -143,7 +143,6 @@ static error_t *build_items(
 ) {
     error_t *err = NULL;
     string_array_t all_profiles;
-    hashmap_t *profile_map = NULL;
     bool *used = NULL;
     size_t item_idx = 0;
 
@@ -162,9 +161,9 @@ static error_t *build_items(
      * (core/state.h state_profiles). */
     state_profiles_t enabled_profiles = state_profiles(deploy_state);
 
-    /* Hash map for O(1) lookups. Store (i + 1) so index 0 doesn't collide with
-     * the "not found" NULL return. */
-    profile_map = hashmap_borrow(0);
+    /* Hash map for O(1) lookups, the arena's. Store (i + 1) so index 0 doesn't
+     * collide with the "not found" NULL return. */
+    hashmap_t *profile_map = hashmap_borrow(arena, all_profiles.count);
     for (size_t i = 0; i < all_profiles.count; i++) {
         hashmap_set(profile_map, all_profiles.entries[i], (void *) (uintptr_t) (i + 1));
     }
@@ -197,7 +196,6 @@ static error_t *build_items(
 
 cleanup:
     view->item_count = item_idx;
-    hashmap_free(profile_map, NULL);
     free(used);
     return err;
 }
@@ -466,7 +464,6 @@ static error_t *plan_check(
     if (err) {
         return error_wrap(err, "Failed to build manifest with new scope");
     }
-    manifest_free(view);
     return NULL;
 }
 

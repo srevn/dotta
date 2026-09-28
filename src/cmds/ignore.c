@@ -843,7 +843,6 @@ static error_t *test_path_ignore(
 
     /* What the cleanup releases, established before the first goto so the label
      * never reads an uninitialised one. */
-    manifest_t *view = NULL;
     source_filter_t *source_filter = NULL;
 
     /* The key the user named, fixed for every asker: the resolver's sum, its
@@ -857,6 +856,7 @@ static error_t *test_path_ignore(
     path_input_t arg;                         /* the key: a name or a path */
     const char *argument_subject = NULL;      /* a name's tail, what the rules see */
     bool argument_is_directory = false;       /* a path's kind, observed there once */
+    manifest_t *view = NULL;                  /* a path's: where each asker names it */
 
     if (label_prefixes(test_path)) {
         /* A storage shape, read by the one resolver that reads input shapes — a
@@ -890,10 +890,7 @@ static error_t *test_path_ignore(
             /* Each asker names the path from its own claims and its own roots,
              * so a view is built and the table the rows were placed by is the
              * view's from here on — the named profile's arm hands in the very
-             * table this lends back (core/manifest.h manifest_mounts). Both
-             * builders free their own partial view and leave *out NULL, so this
-             * returns; from the build on, the view is owned and every failure
-             * leaves by cleanup. */
+             * table this lends back (core/manifest.h manifest_mounts). */
             if (specific_profile) {
                 err = manifest_build_branch(
                     repo, specific_profile, mounts, ctx->arena, &view
@@ -1056,7 +1053,6 @@ static error_t *test_path_ignore(
 
 cleanup:
     source_filter_free(source_filter);
-    manifest_free(view);
     return err;
 }
 

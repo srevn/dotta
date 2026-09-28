@@ -239,16 +239,18 @@ static error_t *open_run(
             if (err) goto done;
         }
 
-        run->content_cache = content_cache_create(run->repo, run->keymgr);
+        run->content_cache = content_cache_create(run->repo, run->keymgr, arena);
     }
 
     /* The view over the enabled set as it stands. The builder's error is returned
      * as it is: it names the profile and, for a custom/ path under a profile
-     * with no target, the repair. The rows land in the command arena; the index
-     * is close_run's to release. */
+     * with no target, the repair. A value of the command arena, rows and indexes
+     * alike: nothing for close_run. */
     if (needs->manifest) {
-        err = manifest_build(run->repo, run->state, arena, &run->manifest);
+        manifest_t *view = NULL;
+        err = manifest_build(run->repo, run->state, arena, &view);
         if (err) goto done;
+        run->manifest = view;
     }
 
     /* The mount table — the topology at dispatch, for placing the storage paths
@@ -280,16 +282,14 @@ done:
 /**
  * Close the run: LIFO over what open_run opened.
  *
- * The view's index first (its rows are the arena's), then the content cache (holds
- * a borrowed keymgr pointer but does not dereference it at teardown), then the
- * keymgr, then state (state_free auto-rolls-back any uncommitted transaction
- * per state.h's contract), then the repository. The mount table and the repository
- * path are the arena's. Every dotta primitive is NULL-safe, so a run that opened
- * partway — an acquisition error, or a tolerant open that stopped early — closes
- * the same way as a whole one.
+ * The content cache first (holds a borrowed keymgr pointer but does not dereference
+ * it at teardown), then the keymgr, then state (state_free auto-rolls-back any
+ * uncommitted transaction per state.h's contract), then the repository. The view,
+ * the mount table and the repository path are the arena's. Every dotta primitive
+ * is NULL-safe, so a run that opened partway — an acquisition error, or a tolerant
+ * open that stopped early — closes the same way as a whole one.
  */
 static void close_run(dotta_run_t *run) {
-    manifest_free(run->manifest);
     content_cache_free(run->content_cache);
     keymgr_free(run->keymgr);
     state_free(run->state);

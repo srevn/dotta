@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/arena.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/heap.h"
@@ -22,14 +23,12 @@
 /* Configuration constants */
 #define PATH_BUFFER_SIZE 1024
 #define HASHMAP_INITIAL_SIZE 256
-#define COMMITS_INITIAL_CAPACITY 16
-#define COMMITS_MAX_CAPACITY (SIZE_MAX / sizeof(commit_info_t) / 2)
 
 /**
  * File -> commit map (opaque type)
  */
 struct file_commit_map {
-    hashmap_t *map;  /* path (string) -> commit_info_t* */
+    hashmap_t *map;  /* path (string) -> commit_info_t*, both the arena's */
 };
 
 /**
@@ -41,12 +40,13 @@ typedef enum {
 } walk_mode_t;
 
 /**
- * Context for unified commit walker
+ * The unified commit walker's state
  */
 typedef struct {
     /* Input configuration */
     walk_mode_t mode;
     const char *target_path;      /* File path (for HISTORY mode), NULL for MAP mode */
+    arena_t *arena;               /* Where every commit info, its summary and the history live */
 
     /* Output destinations (one will be populated based on mode) */
     hashmap_t *map;               /* For MAP mode: path -> commit_info_t* */
@@ -57,51 +57,26 @@ typedef struct {
     /* State tracking (for early termination in MAP mode) */
     size_t files_found;           /* Number of files found so far */
     size_t files_needed;          /* Total files in current tree */
-} walk_ctx_t;
+} walk_t;
 
 /**
- * Extract first line of commit message
+ * A commit's info, its summary copied into `arena`
  *
- * Trims trailing whitespace and returns empty string for empty commits.
+ * The summary is the message's first line with its trailing whitespace trimmed,
+ * and empty for a commit with no message.
  */
-static char *extract_commit_summary(const char *message) {
-    if (!message) {
-        return heap_strdup("");
-    }
-
-    /* Find first newline */
-    const char *newline = strchr(message, '\n');
-    size_t len = newline ? (size_t) (newline - message) : strlen(message);
-
-    /* Trim trailing whitespace */
-    while (len > 0 && isspace((unsigned char) message[len - 1])) {
-        len--;
-    }
-
-    /* Allocate and return */
-    return heap_strndup(message, len);
-}
-
-/**
- * Create commit info from git commit
- */
-static commit_info_t *stats_create_commit_info(git_commit *commit) {
-    CHECK_NULL(commit);
-
-    commit_info_t *info = heap_calloc(1, sizeof(commit_info_t));
-
-    /* Copy OID */
-    git_oid_cpy(&info->oid, git_commit_id(commit));
-
-    /* Extract summary */
+static commit_info_t stats_commit_info(arena_t *arena, const git_commit *commit) {
     const char *message = git_commit_message(commit);
-    info->summary = extract_commit_summary(message);
+    if (!message) message = "";
 
-    /* Get timestamp (use libgit2 native type) */
-    const git_signature *author = git_commit_author(commit);
-    info->time = author->when.time;
+    size_t len = strcspn(message, "\n");
+    while (len > 0 && isspace((unsigned char) message[len - 1])) len--;
 
-    return info;
+    return (commit_info_t){
+        .oid = *git_commit_id(commit),
+        .summary = arena_strndup(arena, message, len),
+        .time = git_commit_author(commit)->when.time,
+    };
 }
 
 /**
@@ -192,18 +167,20 @@ static error_t *populate_tree_paths(
  *   must be pre-populated with current-tree paths (NULL values) to ensure only
  *   valid files are mapped and early termination is correct.
  * - HISTORY mode: Collects all commits that modified a specific file.
+ *
+ * Every info it makes is the walk's arena's, so a walk that fails partway leaves
+ * nothing to release but the revwalk.
  */
-static error_t *walk_commits(
+static error_t *stats_walk(
     git_repository *repo,
     const char *branch_name,
-    walk_ctx_t *ctx
+    walk_t *walk
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(branch_name);
-    CHECK_NULL(ctx);
+    CHECK_NULL(walk);
 
     git_revwalk *walker = NULL;
-    commit_info_t *current_commit_info = NULL;
 
     /* Resolve the branch head. The walk needs the OID, not the reference that
      * carries it — git_revwalk_push copies what it is given. */
@@ -239,7 +216,7 @@ static error_t *walk_commits(
         }
 
         /* Early termination for MAP mode */
-        if (ctx->mode == WALK_MODE_MAP && ctx->files_found >= ctx->files_needed) {
+        if (walk->mode == WALK_MODE_MAP && walk->files_found >= walk->files_needed) {
             break;  /* All files found! */
         }
 
@@ -250,15 +227,10 @@ static error_t *walk_commits(
             goto cleanup;
         }
 
-        /* Create commit info for this commit */
-        current_commit_info = stats_create_commit_info(commit);
-
         /* Get commit tree */
         git_tree *tree = NULL;
         git_err = git_commit_tree(&tree, commit);
         if (git_err < 0) {
-            stats_free_commit_info(current_commit_info);
-            current_commit_info = NULL;
             git_commit_free(commit);
             err = error_from_git(git_err);
             goto cleanup;
@@ -273,8 +245,6 @@ static error_t *walk_commits(
                 git_err = git_commit_tree(&parent_tree, parent);
                 git_commit_free(parent);
                 if (git_err < 0) {
-                    stats_free_commit_info(current_commit_info);
-                    current_commit_info = NULL;
                     git_tree_free(tree);
                     git_commit_free(commit);
                     err = error_from_git(git_err);
@@ -293,16 +263,17 @@ static error_t *walk_commits(
         git_tree_free(tree);
 
         if (git_err < 0) {
-            stats_free_commit_info(current_commit_info);
-            current_commit_info = NULL;
             git_commit_free(commit);
             err = error_from_git(git_err);
             goto cleanup;
         }
 
         /* Process diff based on mode */
-        if (ctx->mode == WALK_MODE_MAP) {
-            /* MAP mode: Add file -> commit mappings */
+        if (walk->mode == WALK_MODE_MAP) {
+            /* MAP mode: Add file -> commit mappings. The commit's info is made
+             * at the first file it maps and shared by the rest: nothing frees
+             * an info, so one copy serves every file of the commit. */
+            commit_info_t *info = NULL;
             size_t num_deltas = git_diff_num_deltas(diff);
             for (size_t i = 0; i < num_deltas; i++) {
                 const git_diff_delta *delta = git_diff_get_delta(diff, i);
@@ -315,20 +286,17 @@ static error_t *walk_commits(
                  * pre-populated with current-tree paths (NULL values). Skip paths
                  * not in the tree (deleted files, old renames) and paths already
                  * mapped (non-NULL value). */
-                if (!hashmap_has(ctx->map, path) || hashmap_get(ctx->map, path)) {
+                if (!hashmap_has(walk->map, path) || hashmap_get(walk->map, path)) {
                     continue;
                 }
 
-                /* Duplicate commit info for this file */
-                commit_info_t *info = heap_calloc(1, sizeof(commit_info_t));
-                git_oid_cpy(&info->oid, &current_commit_info->oid);
-                info->summary = heap_strdup(current_commit_info->summary);
-                info->time = current_commit_info->time;
+                if (!info) {
+                    info = arena_calloc(walk->arena, 1, sizeof(*info));
+                    *info = stats_commit_info(walk->arena, commit);
+                }
+                hashmap_set(walk->map, path, info);
 
-                /* Add to map */
-                hashmap_set(ctx->map, path, info);
-
-                ctx->files_found++;
+                walk->files_found++;
             }
 
         } else { /* WALK_MODE_HISTORY */
@@ -341,48 +309,25 @@ static error_t *walk_commits(
                 const char *path = delta->new_file.path ? delta->new_file.path
                                                         : delta->old_file.path;
 
-                if (path && strcmp(path, ctx->target_path) == 0) {
+                if (path && strcmp(path, walk->target_path) == 0) {
                     found = true;
                     break;
                 }
             }
 
+            /* The history grows in the arena, abandoning each spine it outgrows */
             if (found) {
-                /* Grow array if needed */
-                if (ctx->commits_count >= ctx->commits_capacity) {
-                    size_t new_capacity;
-
-                    if (ctx->commits_capacity == 0) {
-                        new_capacity = COMMITS_INITIAL_CAPACITY;
-                    } else if (ctx->commits_capacity >= COMMITS_MAX_CAPACITY) {
-                        /* Its double's bytes would wrap: no memory could hold
-                         * them, and that is exhaustion. */
-                        heap_die(SIZE_MAX);
-                    } else {
-                        new_capacity = ctx->commits_capacity * 2;
-                        if (new_capacity > COMMITS_MAX_CAPACITY) {
-                            new_capacity = COMMITS_MAX_CAPACITY;
-                        }
-                    }
-
-                    ctx->commits = heap_realloc(
-                        ctx->commits, new_capacity * sizeof(commit_info_t)
-                    );
-                    ctx->commits_capacity = new_capacity;
-                }
-
-                /* Copy commit info to array */
-                commit_info_t *info = &ctx->commits[ctx->commits_count];
-                git_oid_cpy(&info->oid, &current_commit_info->oid);
-                info->summary = heap_strdup(current_commit_info->summary);
-                info->time = current_commit_info->time;
-                ctx->commits_count++;
+                walk->commits = arena_grow(
+                    walk->arena, walk->commits, &walk->commits_capacity,
+                    walk->commits_count + 1, sizeof(*walk->commits)
+                );
+                walk->commits[walk->commits_count++] = stats_commit_info(
+                    walk->arena, commit
+                );
             }
         }
 
         git_diff_free(diff);
-        stats_free_commit_info(current_commit_info);
-        current_commit_info = NULL;
         git_commit_free(commit);
     }
 
@@ -391,9 +336,6 @@ static error_t *walk_commits(
     return NULL;
 
 cleanup:
-    if (current_commit_info) {
-        stats_free_commit_info(current_commit_info);
-    }
     if (walker) {
         git_revwalk_free(walker);
     }
@@ -401,9 +343,9 @@ cleanup:
 }
 
 /**
- * Get blob size
+ * A blob's size
  */
-error_t *stats_get_blob_size(
+error_t *stats_blob_size(
     git_repository *repo,
     const git_oid *blob_oid,
     size_t *out
@@ -417,15 +359,15 @@ error_t *stats_get_blob_size(
     int git_err = git_repository_odb(&odb, repo);
     if (git_err < 0) return error_from_git(git_err);
 
-    error_t *err = stats_get_blob_size_with_odb(odb, blob_oid, out);
+    error_t *err = stats_blob_size_with_odb(odb, blob_oid, out);
     git_odb_free(odb);
     return err;
 }
 
 /**
- * Get blob size through a caller-held ODB handle
+ * A blob's size, through a caller-held ODB handle
  */
-error_t *stats_get_blob_size_with_odb(
+error_t *stats_blob_size_with_odb(
     git_odb *odb,
     const git_oid *blob_oid,
     size_t *out
@@ -454,36 +396,31 @@ error_t *stats_build_file_commit_map(
     git_repository *repo,
     const char *branch_name,
     git_tree *tree,
+    arena_t *arena,
     file_commit_map_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(branch_name);
     CHECK_NULL(tree);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
-
-    /* Allocate map structure */
-    file_commit_map_t *map = heap_calloc(1, sizeof(file_commit_map_t));
-
-    /* Create hashmap */
-    map->map = hashmap_create(HASHMAP_INITIAL_SIZE);
 
     /* Pre-populate map with all current-tree file paths (NULL values). This ensures
      * the commit walker only maps files that actually exist in the current tree,
      * preventing spurious entries from deleted/renamed files and fixing premature
-     * early termination. */
+     * early termination. The map owns its keys, so a path built on the walk's
+     * stack is copied into the arena as it takes its slot. */
+    hashmap_t *paths = hashmap_create(arena, HASHMAP_INITIAL_SIZE);
     size_t files_needed;
-    error_t *err = populate_tree_paths(tree, map->map, &files_needed);
-    if (err) {
-        hashmap_free(map->map, NULL);
-        free(map);
-        return err;
-    }
+    error_t *err = populate_tree_paths(tree, paths, &files_needed);
+    if (err) return err;
 
     /* Initialize walk context */
-    walk_ctx_t ctx = {
+    walk_t walk = {
         .mode             = WALK_MODE_MAP,
         .target_path      = NULL,
-        .map              = map->map,
+        .arena            = arena,
+        .map              = paths,
         .commits          = NULL,
         .commits_count    = 0,
         .commits_capacity = 0,
@@ -492,38 +429,37 @@ error_t *stats_build_file_commit_map(
     };
 
     /* Walk commits to build map */
-    err = walk_commits(repo, branch_name, &ctx);
-    if (err) {
-        hashmap_free(map->map, stats_free_commit_info);
-        free(map);
-        return err;
-    }
+    err = stats_walk(repo, branch_name, &walk);
+    if (err) return err;
+
+    file_commit_map_t *map = arena_calloc(arena, 1, sizeof(*map));
+    map->map = paths;
 
     *out = map;
     return NULL;
 }
 
 /**
- * Get file history
+ * The commits that touched one file
  */
-error_t *stats_get_file_history(
+error_t *stats_file_history(
     git_repository *repo,
     const char *branch_name,
     const char *file_path,
-    file_history_t **out
+    arena_t *arena,
+    file_history_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(branch_name);
     CHECK_NULL(file_path);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    /* Allocate history */
-    file_history_t *history = heap_calloc(1, sizeof(file_history_t));
-
     /* Initialize walk context */
-    walk_ctx_t ctx = {
+    walk_t walk = {
         .mode             = WALK_MODE_HISTORY,
         .target_path      = file_path,
+        .arena            = arena,
         .map              = NULL,
         .commits          = NULL,
         .commits_count    = 0,
@@ -532,32 +468,20 @@ error_t *stats_get_file_history(
         .files_needed     = 0
     };
 
-    /* Walk commits to collect history */
-    error_t *err = walk_commits(repo, branch_name, &ctx);
-    if (err) {
-        /* Free any partially collected commits */
-        for (size_t i = 0; i < ctx.commits_count; i++) {
-            free(ctx.commits[i].summary);
-        }
-        free(ctx.commits);
-        free(history);
-        return err;
-    }
+    /* Walk commits to collect history: what a failed walk collected is the arena's
+     * bytes */
+    error_t *err = stats_walk(repo, branch_name, &walk);
+    if (err) return err;
 
     /* Check if we found any commits */
-    if (ctx.commits_count == 0) {
-        free(history);
+    if (walk.commits_count == 0) {
         return ERROR(
             ERR_NOT_FOUND, "No history found for file '%s' in branch '%s'",
             file_path, branch_name
         );
     }
 
-    /* Fill history */
-    history->commits = ctx.commits;
-    history->count = ctx.commits_count;
-
-    *out = history;
+    *out = (file_history_t){ walk.commits, walk.commits_count };
     return NULL;
 }
 
@@ -571,46 +495,4 @@ const commit_info_t *stats_file_commit_map_get(
     if (!map || !file_path) return NULL;
 
     return (const commit_info_t *) hashmap_get(map->map, file_path);
-}
-
-/**
- * Free commit info
- *
- * Generic callback signature for use with containers (e.g., hashmap_free). Accepts
- * void* to match standard C cleanup callback pattern.
- */
-void stats_free_commit_info(void *ptr) {
-    commit_info_t *info = ptr;
-    if (!info) {
-        return;
-    }
-    free(info->summary);
-    free(info);
-}
-
-/**
- * Free file -> commit map
- */
-void stats_free_file_commit_map(file_commit_map_t *map) {
-    if (!map) {
-        return;
-    }
-    if (map->map) {
-        hashmap_free(map->map, stats_free_commit_info);
-    }
-    free(map);
-}
-
-/**
- * Free file history
- */
-void stats_free_file_history(file_history_t *history) {
-    if (!history) {
-        return;
-    }
-    for (size_t i = 0; i < history->count; i++) {
-        free(history->commits[i].summary);
-    }
-    free(history->commits);
-    free(history);
 }

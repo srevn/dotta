@@ -30,7 +30,7 @@
 struct content_cache {
     git_repository *repo;     /* Borrowed reference */
     keymgr *keymgr;           /* Borrowed reference (can be NULL) */
-    hashmap_t *cache_map;     /* binding and mode (profile:path@oid:mode) -> buffer_t* (owned) */
+    hashmap_t *cache_map;     /* binding and mode (profile:path@oid:mode) -> buffer_t* (owned); the map and its keys the arena's */
 };
 
 /**
@@ -53,7 +53,7 @@ struct content_cache {
  * other side and drops the test; the two are a style apart, not a disagreement
  * about what the primitive does.
  *
- * @param ptr Buffer to free (cast from void* for hashmap_free compatibility)
+ * @param ptr Buffer to free (cast from void* for hashmap_clear compatibility)
  */
 static void content_secure_free(void *ptr) {
     buffer_t *buf = ptr;
@@ -365,16 +365,21 @@ error_t *content_rebind(
     return NULL;
 }
 
-content_cache_t *content_cache_create(git_repository *repo, keymgr *keymgr) {
+content_cache_t *content_cache_create(
+    git_repository *repo, keymgr *keymgr, arena_t *arena
+) {
     CHECK_NULL(repo);
+    CHECK_NULL(arena);
 
     content_cache_t *cache = heap_calloc(1, sizeof(content_cache_t));
 
     cache->repo = repo;
     cache->keymgr = keymgr;
 
-    /* Initial capacity: 64 entries */
-    cache->cache_map = hashmap_create(64);
+    /* Initial capacity: 64 entries. The map owns its keys — each is built on
+     * the stack per lookup, and copied into the arena once, when its entry
+     * lands. */
+    cache->cache_map = hashmap_create(arena, 64);
 
     return cache;
 }
@@ -515,11 +520,9 @@ void content_cache_free(content_cache_t *cache) {
 
     /* Free all cached buffers with secure cleanup
      * SECURITY: content_secure_free() zeroes plaintext memory before freeing.
-     * The cache contains decrypted sensitive data that must not linger in
-     * memory. */
-    if (cache->cache_map) {
-        hashmap_free(cache->cache_map, content_secure_free);
-    }
+     * The cache contains decrypted sensitive data that must not linger in memory.
+     * The map and its keys are the arena's. */
+    hashmap_clear(cache->cache_map, content_secure_free);
 
     free(cache);
 }

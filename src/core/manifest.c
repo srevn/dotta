@@ -62,8 +62,8 @@
  * on it is ever rewritten: a name that lost the path and a derived claim an
  * explicit one retook stay in the arena and simply leave the slice.
  *
- * Both indexes are heap-allocated and released by manifest_free with the view's
- * own; their keys borrow the arena-backed path each row carries.
+ * Both indexes are the build's arena's, as the view's own is; their keys borrow
+ * the arena-backed path each row carries.
  */
 typedef struct {
     const char *profile;           /* Arena-backed; the same pointer every row of it carries */
@@ -680,7 +680,7 @@ static error_t *manifest_settle(
     /* The index of the groups, allocated where the first one is about to exist:
      * a contribution with no contender never has one, and the readers test the
      * pointer rather than a count. */
-    c->contested = hashmap_borrow(8);
+    c->contested = hashmap_borrow(arena, 8);
 
     /* What every question below is asked under: this contribution, and no claim
      * beyond it — the settle reads the branch as it arrived. */
@@ -958,12 +958,12 @@ static error_t *manifest_contribute(
 ) {
     /* Register the contribution before anything can fail into it: the name is
      * arena-backed so the view never depends on the state's row cache, and the
-     * index is allocated before profile_count counts the slot, so manifest_free
-     * over a build that stopped partway frees exactly what was made. */
+     * index is the arena's too, so a build that stops partway leaves nothing
+     * behind but the arena's bytes. */
     contribution_t *c = &manifest->contributions[manifest->profile_count];
 
     c->profile = arena_strdup(arena, profile);
-    c->index = hashmap_borrow(128);
+    c->index = hashmap_borrow(arena, 128);
     manifest->profiles[manifest->profile_count++] = c->profile;
 
     /* This profile's claim sheet, read from the tree already open rather than
@@ -996,7 +996,7 @@ static error_t *manifest_contribute(
     ptr_array_init(&placed, arena);
     ptr_array_init(&contenders, arena);
 
-    hashmap_t *contradicted = hashmap_borrow(8);
+    hashmap_t *contradicted = hashmap_borrow(arena, 8);
 
     /* The blobs, in one walk (manifest_claim_blob). The table is the view's,
      * and bindings are keyed by profile — which the callback feeds verbatim into
@@ -1141,7 +1141,6 @@ static error_t *manifest_contribute(
     }
 
 cleanup:
-    hashmap_free(contradicted, NULL);
     metadata_free(metadata);
     return err;
 }
@@ -1224,7 +1223,7 @@ static manifest_t *manifest_allocate(
         );
     }
 
-    manifest->index = hashmap_borrow(index_capacity);
+    manifest->index = hashmap_borrow(arena, index_capacity);
 
     return manifest;
 }
@@ -1324,10 +1323,9 @@ error_t *manifest_build(
         bool exists = false;
         err = gitops_branch_exists(repo, profile, &exists);
         if (err) {
-            err = error_wrap(
+            return error_wrap(
                 err, "Failed to look up branch for profile '%s'", profile
             );
-            goto cleanup;
         }
         if (!exists) continue;
 
@@ -1335,10 +1333,9 @@ error_t *manifest_build(
         git_tree *tree = NULL;
         err = gitops_load_branch_tree(repo, profile, &tree, NULL);
         if (err) {
-            err = error_wrap(
+            return error_wrap(
                 err, "Failed to load tree for profile '%s'", profile
             );
-            goto cleanup;
         }
 
         /* The profile's claims: its own sheet, read by the step from the tree
@@ -1348,19 +1345,13 @@ error_t *manifest_build(
         err = manifest_contribute(manifest, repo, tree, profile, arena);
         git_tree_free(tree);
 
-        if (err) goto cleanup;
+        if (err) return err;
     }
 
     manifest_layer(manifest, arena);
 
     *out = manifest;
     return NULL;
-
-cleanup:
-    /* The view's spine, rows and strings are arena-abandoned; only the
-     * heap-allocated index needs explicit free on the error path. */
-    manifest_free(manifest);
-    return err;
 }
 
 /**
@@ -1392,17 +1383,12 @@ error_t *manifest_build_tree(
 
     /* One contribution, settled and layered like any other, so a tree view answers
      * manifest_lookup_claim and manifest_name exactly as an enabled view does. */
-    error_t *err = manifest_contribute(manifest, repo, tree, profile, arena);
-    if (err) goto cleanup;
+    RETURN_IF_ERROR(manifest_contribute(manifest, repo, tree, profile, arena));
 
     manifest_layer(manifest, arena);
 
     *out = manifest;
     return NULL;
-
-cleanup:
-    manifest_free(manifest);
-    return err;
 }
 
 /**
@@ -1666,33 +1652,6 @@ size_t manifest_holders(
 }
 
 /**
- * Free a manifest
- *
- * Every heap index the build made: one per registered contribution, then the
- * view's own. A build that stopped partway registered as many contributions as
- * it counted, and each index is allocated before its slot is counted, so this
- * frees exactly what was made.
- */
-void manifest_free(manifest_t *manifest) {
-    if (!manifest) return;
-    for (size_t i = 0; i < manifest->profile_count; i++) {
-        if (manifest->contributions[i].index) {
-            hashmap_free(manifest->contributions[i].index, NULL);
-            manifest->contributions[i].index = NULL;
-        }
-        if (manifest->contributions[i].contested) {
-            hashmap_free(manifest->contributions[i].contested, NULL);
-            manifest->contributions[i].contested = NULL;
-        }
-    }
-    if (manifest->index) {
-        hashmap_free(manifest->index, NULL);
-        manifest->index = NULL;
-    }
-    /* The struct, the spines and the rows are the arena's. */
-}
-
-/**
  * Attribute the transition between two views to profiles
  *
  * Two passes — every row of `after` for the gain side, every row of `before`
@@ -1719,8 +1678,12 @@ error_t *manifest_diff(
     /* Stats attribution index. Maps profile name → its out_stats slot (the caller's
      * array, sized before the map is built — the pointers are stable). Keys are
      * borrowed from profiles; the caller keeps it alive for the duration of this
-     * call. */
-    hashmap_t *stats_map = hashmap_borrow(profiles->count > 0 ? profiles->count * 2 : 16);
+     * call. The index is the call's alone, in a frame freed at its one exit:
+     * the answer is the caller's array. */
+    arena_t *frame = arena_create(0);
+    hashmap_t *stats_map = hashmap_borrow(
+        frame, profiles->count > 0 ? profiles->count * 2 : 16
+    );
     for (size_t i = 0; i < profiles->count; i++) {
         const char *name = profiles->entries[i];
 
@@ -1805,6 +1768,6 @@ error_t *manifest_diff(
     }
 
 cleanup:
-    hashmap_free(stats_map, NULL);
+    arena_free(frame);
     return err;
 }

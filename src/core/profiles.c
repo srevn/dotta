@@ -480,7 +480,7 @@ static int stats_walk_callback(
     }
 
     size_t size = 0;
-    error_t *err = stats_get_blob_size_with_odb(
+    error_t *err = stats_blob_size_with_odb(
         data->odb, git_tree_entry_id(entry), &size
     );
     if (err) {
@@ -739,8 +739,8 @@ error_t *profile_holds(
  * Does this profile's branch need a deployment target?
  *
  * The table binds nothing on purpose — HOME and the sentinel alone — so a custom/
- * claim has nowhere to go and is recorded, which is the answer. The view is built
- * to read one count off it and freed before the arena that holds it.
+ * claim has nowhere to go and is recorded, which is the answer. The view is a
+ * frame's, built to read one count off it.
  */
 error_t *profile_needs_target(
     git_repository *repo,
@@ -753,16 +753,15 @@ error_t *profile_needs_target(
 
     *needs_target = false;
 
-    arena_t *scratch = arena_create(0);
+    arena_t *frame = arena_create(0);
 
     mount_table_t *mounts = NULL;
     manifest_t *view = NULL;
-    error_t *err = mount_table_build(scratch, NULL, 0, &mounts);
-    if (!err) err = manifest_build_branch(repo, profile, mounts, scratch, &view);
+    error_t *err = mount_table_build(frame, NULL, 0, &mounts);
+    if (!err) err = manifest_build_branch(repo, profile, mounts, frame, &view);
     if (!err) *needs_target = manifest_unbound(view).count > 0;
 
-    manifest_free(view);                 /* reads the arena: before it is freed */
-    arena_free(scratch);
+    arena_free(frame);
     return err;
 }
 
@@ -806,33 +805,31 @@ error_t *profile_build_filesystem_index(
     if (err) return err;
 
     /* Every placed row of every branch, gathered before any of it is keyed: the
-     * rows are the arena's and outlive the views they came from, and so is the
-     * list of them. */
+     * rows are the arena's, as the views they came from are, and so is the list
+     * of them. */
     ptr_array_t rows;
     ptr_array_init(&rows, arena);
-    for (size_t i = 0; i < branches.count && !err; i++) {
+    for (size_t i = 0; i < branches.count; i++) {
         if (exclude && strcmp(branches.entries[i], exclude) == 0) continue;
 
         manifest_t *view = NULL;
         err = manifest_build_branch(
             repo, branches.entries[i], mounts, arena, &view
         );
-        if (err) break;
+        if (err) return err;
 
         manifest_rows_t placed = manifest_rows(view);
         for (size_t j = 0; j < placed.count; j++) {
             ptr_array_push(&rows, placed.entries[j]);
         }
-        manifest_free(view);
     }
-    if (err) return err;
 
     /* The runs, typed once: a ptr_array holds void *, and every read below is a
      * row's path, its profile or its name. */
     const manifest_row_t **sorted = (const manifest_row_t **) rows.entries;
     qsort(sorted, rows.count, sizeof(*sorted), index_order);
 
-    hashmap_t *index = hashmap_borrow(rows.count);
+    hashmap_t *index = hashmap_borrow(arena, rows.count);
 
     for (size_t i = 0; i < rows.count;) {
         const char *filesystem_path = sorted[i]->filesystem_path;
@@ -851,7 +848,7 @@ error_t *profile_build_filesystem_index(
         *claims = (profile_claims_t){ entries, n };
 
         /* The key is the row's own string — hashmap_borrow keeps the pointer
-         * and compares by content, and the row outlives the map. */
+         * and compares by content, and the row lives as long as the map. */
         hashmap_set(index, filesystem_path, claims);
         i += n;
     }
@@ -890,17 +887,15 @@ error_t *profile_claim_name(
     /* The claim standing there, before the name one would take: a derived claim
      * is held and names nothing, so the ascent climbs past it and would answer
      * a name the branch never held. Else the name the profile would give the
-     * place — its label's word at a root of its own. Either answer is the arena's
-     * and outlives the view freed here, as claim_by_filesystem_path's is. */
+     * place — its label's word at a root of its own. Either answer is the arena's,
+     * as the view is. */
     const manifest_row_t *row = manifest_lookup_claim(view, profile, filesystem_path);
     if (row) {
         *out_storage = row->storage_path;
-    } else {
-        err = manifest_name(view, profile, filesystem_path, NULL, arena, out_storage);
+        return NULL;
     }
-    manifest_free(view);
 
-    return err;
+    return manifest_name(view, profile, filesystem_path, NULL, arena, out_storage);
 }
 
 /**
@@ -912,8 +907,7 @@ error_t *profile_claim_name(
  * will not load is this branch's error, which is the whole cost a path argument
  * carries over a name the tree answers.
  *
- * The answer is the row's own string, the arena's, and outlives the view freed
- * here.
+ * The answer is the row's own string, the arena's, as the view is.
  */
 static error_t *claim_by_filesystem_path(
     git_repository *repo,
@@ -930,11 +924,8 @@ static error_t *claim_by_filesystem_path(
     if (err) return err;
 
     const manifest_row_t *row = manifest_lookup_claim(view, branch, filesystem_path);
-    if (row) {
-        *out_storage = row->storage_path;
-    }
+    if (row) *out_storage = row->storage_path;
 
-    manifest_free(view);
     return NULL;
 }
 

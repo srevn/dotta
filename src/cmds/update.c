@@ -896,7 +896,6 @@ static error_t *update_write_record(
     const mount_table_t *mounts = ctx->run.mounts;
     output_t *out = ctx->out;
 
-    manifest_t *manifest = NULL;
     size_t synced = 0, removed = 0, fallbacks = 0;   /* The split, said once the commit lands */
 
     /* The lock, and every decision below made under it (state_begin) */
@@ -904,6 +903,7 @@ static error_t *update_write_record(
     if (err) return err;
 
     /* The post-commit view, once */
+    manifest_t *manifest = NULL;
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 
@@ -995,7 +995,6 @@ cleanup:
     /* The transaction ends here either way: a refused one is rolled back, and a
      * committed one has already ended (state_rollback finds none to end) */
     state_rollback(state);
-    manifest_free(manifest);
 
     return err;
 }

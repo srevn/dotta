@@ -226,6 +226,9 @@ typedef struct metadata metadata_t;
 /**
  * Create empty metadata collection
  *
+ * The sheet is a handle whose lifetime is its own, so it owns an arena: the
+ * collection, its spine and its index live there; its items are the heap's.
+ *
  * @return The collection (caller frees with metadata_free)
  */
 metadata_t *metadata_create_empty(void);
@@ -233,7 +236,8 @@ metadata_t *metadata_create_empty(void);
 /**
  * Free metadata structure
  *
- * Frees every item it holds and the structure itself.
+ * Frees every item it holds, then the sheet's arena — the structure, its spine
+ * and its index with it.
  *
  * @param metadata Metadata to free (can be NULL)
  */

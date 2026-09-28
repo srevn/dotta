@@ -166,8 +166,6 @@ void completion_files(
             path_kind_suffix(path_type_kind(row->type)), row->profile
         );
     }
-
-    manifest_free(manifest);
 }
 
 /**

@@ -9,17 +9,16 @@
  *   key == NULL  →  empty
  *
  * Hash: FNV-1a (64-bit compute, XOR-folded to 32-bit for compact slots). Capacity:
- * always a power of two for fast masking. The slots and every owned key are the
- * heap's, which dies rather than answer NULL (base/heap.h).
+ * always a power of two for fast masking. The map, its slots and every owned
+ * key are its arena's, which dies rather than answer NULL (base/arena.h).
  */
 
 #include "base/hashmap.h"
 
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
+#include "base/arena.h"
 #include "base/error.h"
 #include "base/heap.h"
 
@@ -34,19 +33,20 @@
 
 /* Slot */
 typedef struct {
-    char *key;          /* NULL = empty slot; owned or borrowed per map->borrow_keys */
+    char *key;          /* NULL = empty slot; the arena's or borrowed per map->borrow_keys */
     void *value;
     uint32_t hash;      /* Cached XOR-folded 32 bits of FNV-1a */
 } hashmap_slot_t;
 
 /* Map */
 struct hashmap {
+    arena_t *arena;             /* Where the map, its slots and its owned keys live */
     hashmap_slot_t *slots;
     size_t capacity;            /* Always power of 2 */
     size_t count;               /* Number of occupied slots */
     size_t grow_at;             /* count threshold triggering resize */
     uint64_t mod_count;         /* Mutation counter for iterator safety */
-    bool borrow_keys;           /* If true: keys stored by reference, not strdup'd */
+    bool borrow_keys;           /* If true: keys stored by reference, not copied */
 };
 
 /* FNV-1a hash function for strings */
@@ -115,10 +115,11 @@ static void insert_for_resize(
 }
 
 /* Internal: grow. The capacity's slots stand in memory, so its double cannot
- * wrap; the double's bytes can, and the heap judges them. */
+ * wrap; the double's bytes can, and the arena judges them. The old slots are
+ * abandoned to the arena once every entry has moved. */
 static void hashmap_grow(hashmap_t *map) {
     size_t new_cap = map->capacity * 2;
-    hashmap_slot_t *new_slots = heap_calloc(new_cap, sizeof(hashmap_slot_t));
+    hashmap_slot_t *new_slots = arena_calloc(map->arena, new_cap, sizeof(hashmap_slot_t));
 
     hashmap_slot_t *old_slots = map->slots;
     size_t old_cap = map->capacity;
@@ -139,7 +140,7 @@ static void hashmap_grow(hashmap_t *map) {
         }
     }
 
-    free(old_slots);
+    arena_abandon(map->arena, old_slots, old_cap * sizeof(hashmap_slot_t));
     map->mod_count++;
 }
 
@@ -147,7 +148,7 @@ static void hashmap_grow(hashmap_t *map) {
  * Shared insert/update implementation.
  *
  * @param map       Target map
- * @param key       Caller's key (const — will be strdup'd if needed)
+ * @param key       Caller's key (const — copied into the arena if needed)
  * @param value     Value to store
  * @param out_prev  If non-NULL, receives the previous value when updating
  *                  an existing key (set to NULL when inserting a new key).
@@ -181,7 +182,7 @@ static void hashmap_insert(
         /* Empty slot — insert */
         if (!slot->key) {
             if (!carry_key) {
-                carry_key = map->borrow_keys ? (char *) key : heap_strdup(key);
+                carry_key = map->borrow_keys ? (char *) key : arena_strdup(map->arena, key);
             }
             slot->key = carry_key;
             slot->value = carry_val;
@@ -203,7 +204,7 @@ static void hashmap_insert(
         size_t existing = probe_dist(pos, slot->hash, mask);
         if (dist > existing) {
             if (!carry_key) {
-                carry_key = map->borrow_keys ? (char *) key : heap_strdup(key);
+                carry_key = map->borrow_keys ? (char *) key : arena_strdup(map->arena, key);
             }
 
             /* Swap our entry into this slot, carry the displaced one */
@@ -232,7 +233,7 @@ static void hashmap_insert(
  * Returns pointer to the occupied slot, or NULL if absent. Uses Robin Hood early
  * termination: if our probe distance exceeds the slot's, the key cannot be present.
  */
-static const hashmap_slot_t *hashmap_find(
+static const hashmap_slot_t *hashmap_slot(
     const hashmap_t *map,
     const char *key,
     uint32_t h
@@ -302,11 +303,14 @@ static size_t slots_for(size_t expected) {
 }
 
 /* Create new hash map */
-hashmap_t *hashmap_create(size_t expected) {
+hashmap_t *hashmap_create(arena_t *arena, size_t expected) {
+    CHECK_NULL(arena);
+
     size_t cap = slots_for(expected);
 
-    hashmap_t *map = heap_calloc(1, sizeof(hashmap_t));
-    map->slots = heap_calloc(cap, sizeof(hashmap_slot_t));
+    hashmap_t *map = arena_calloc(arena, 1, sizeof(hashmap_t));
+    map->arena = arena;
+    map->slots = arena_calloc(arena, cap, sizeof(hashmap_slot_t));
     map->capacity = cap;
     map->grow_at = cap * HASHMAP_LOAD_PERCENT / 100;
 
@@ -314,14 +318,14 @@ hashmap_t *hashmap_create(size_t expected) {
 }
 
 /* Create hash map with borrowed keys (caller must ensure key lifetimes) */
-hashmap_t *hashmap_borrow(size_t expected) {
-    hashmap_t *map = hashmap_create(expected);
+hashmap_t *hashmap_borrow(arena_t *arena, size_t expected) {
+    hashmap_t *map = hashmap_create(arena, expected);
     map->borrow_keys = true;
 
     return map;
 }
 
-/* Remove all entries without freeing the map itself */
+/* Remove all entries; the keys and the slots are the arena's */
 void hashmap_clear(hashmap_t *map, hashmap_free_fn free_fn) {
     if (!map) return;
 
@@ -330,22 +334,12 @@ void hashmap_clear(hashmap_t *map, hashmap_free_fn free_fn) {
         if (slot->key) {
             if (free_fn && slot->value)
                 free_fn(slot->value);
-            if (!map->borrow_keys) free(slot->key);
             *slot = (hashmap_slot_t){ 0 };
         }
     }
 
     map->count = 0;
     map->mod_count++;
-}
-
-/* Free hash map and all entries */
-void hashmap_free(hashmap_t *map, hashmap_free_fn free_fn) {
-    if (!map) return;
-
-    hashmap_clear(map, free_fn);
-    free(map->slots);
-    free(map);
 }
 
 /* Insert or update a key-value pair */
@@ -368,7 +362,7 @@ void hashmap_put(hashmap_t *map, const char *key, void *value, void **out_prev) 
 /** Get value for key */
 void *hashmap_get(const hashmap_t *map, const char *key) {
     if (!map || !key || map->count == 0) return NULL;
-    const hashmap_slot_t *slot = hashmap_find(map, key, hash_key(key));
+    const hashmap_slot_t *slot = hashmap_slot(map, key, hash_key(key));
 
     return slot ? slot->value : NULL;
 }
@@ -377,7 +371,7 @@ void *hashmap_get(const hashmap_t *map, const char *key) {
 bool hashmap_has(const hashmap_t *map, const char *key) {
     if (!map || !key || map->count == 0) return false;
 
-    return hashmap_find(map, key, hash_key(key)) != NULL;
+    return hashmap_slot(map, key, hash_key(key)) != NULL;
 }
 
 /* Remove key-value pair */
@@ -406,9 +400,8 @@ bool hashmap_remove(hashmap_t *map, const char *key, void **out_old) {
         dist++;
     }
 
-    /* Harvest value and free key */
+    /* Harvest value; an owned key stays the arena's */
     if (out_old) *out_old = map->slots[pos].value;
-    if (!map->borrow_keys) free(map->slots[pos].key);
 
     /*
      * Backward-shift deletion: pull subsequent displaced entries back one slot
@@ -465,11 +458,9 @@ bool hashmap_iter_next(
     if (!iter || !iter->map) return false;
 
     const hashmap_t *map = iter->map;
-
-    if (map->mod_count != iter->snapshot_mod_count) {
-        fprintf(stderr, "warning: hashmap modified during iteration\n");
-        return false;
-    }
+    CHECK_ARG(
+        map->mod_count == iter->snapshot_mod_count, "a map was modified while it was iterated"
+    );
 
     while (iter->index < map->capacity) {
         const hashmap_slot_t *slot = &map->slots[iter->index++];

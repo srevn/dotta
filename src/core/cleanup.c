@@ -411,8 +411,10 @@ cleanup_preflight_result_t *cleanup_preflight(
     /* The fate of every present planned item, in one set: the directory pass
      * asks it about every entry it meets. Borrowed keys, all workspace-owned;
      * the values are fate_t, never NULL, so hashmap_get's NULL is "outside the
-     * plan". */
-    hashmap_t *fates = hashmap_borrow(plan->files.count + plan->directories.count);
+     * plan". The set is the arena's, as the verdicts are. */
+    hashmap_t *fates = hashmap_borrow(
+        arena, plan->files.count + plan->directories.count
+    );
 
     /* One verdict per file, read off the item, then one probe for the ones it
      * cleared. An absent file joins neither the prune count nor the fate set:
@@ -537,8 +539,6 @@ cleanup_preflight_result_t *cleanup_preflight(
             hashmap_set(fates, path, (void *) (uintptr_t) fate);
         }
     }
-
-    hashmap_free(fates, NULL);
 
     return verdicts;
 }

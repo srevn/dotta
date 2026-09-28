@@ -37,15 +37,20 @@
  * An item is stable from the moment it is created — only the spine is ever
  * reallocated — so the index stores item pointers directly and metadata_items
  * hands the spine out as the public slice. The index borrows each item's own
- * key (hashmap_borrow), which is why it is freed before the items are — and why
- * metadata_add_item's update arm must adopt the standing key before it overwrites
- * the slot: the key-adoption dance is the borrow's cost.
+ * key (hashmap_borrow), which is why metadata_add_item's update arm must adopt
+ * the standing key before it overwrites the slot: the key-adoption dance is the
+ * borrow's cost.
+ *
+ * The sheet is a handle whose lifetime is its own, so it owns an arena: the struct,
+ * the spine and the index live and go with it. The items are the heap's, each
+ * freed by metadata_free before the arena goes.
  *
  * The schema version is the document's, not the collection's: metadata_to_json
  * writes METADATA_VERSION and metadata_from_json refuses anything else, so there
  * is nothing here for a version field to say.
  */
 struct metadata {
+    arena_t *arena;             /* The sheet's own: the struct, the spine, the index */
     metadata_item_t **items;    /* Spine of stable items, in insertion order */
     size_t count;               /* Items held */
     size_t capacity;            /* Spine slots allocated */
@@ -56,16 +61,16 @@ struct metadata {
  * Create empty metadata collection
  */
 metadata_t *metadata_create_empty(void) {
-    metadata_t *metadata = heap_calloc(1, sizeof(metadata_t));
-
-    /* Allocate the item spine */
-    metadata->items = heap_calloc(INITIAL_CAPACITY, sizeof(*metadata->items));
-
-    /* Create unified hashmap for O(1) lookups */
-    metadata->index = hashmap_borrow(INITIAL_CAPACITY);
-
-    metadata->count = 0;
-    metadata->capacity = INITIAL_CAPACITY;
+    /* The sheet's own arena, and the sheet in it: the spine is made there — room
+     * at once, so metadata_items answers an array for an empty sheet too — and
+     * so is the index, for O(1) lookups */
+    arena_t *arena = arena_create(0);
+    metadata_t *metadata = arena_calloc(arena, 1, sizeof(*metadata));
+    metadata->arena = arena;
+    metadata->items = arena_grow(
+        arena, NULL, &metadata->capacity, INITIAL_CAPACITY, sizeof(*metadata->items)
+    );
+    metadata->index = hashmap_borrow(arena, INITIAL_CAPACITY);
 
     return metadata;
 }
@@ -86,21 +91,19 @@ void metadata_item_free(metadata_item_t *item) {
 /**
  * Free metadata structure
  *
- * Frees every item it holds and the structure itself.
+ * Frees every item it holds, then the sheet's arena — the structure, the spine
+ * and the index with it.
  */
 void metadata_free(metadata_t *metadata) {
     if (!metadata) return;
 
-    /* Free index first — it borrows the key pointer of every item */
-    hashmap_free(metadata->index, NULL);
-
-    /* Free all items (files, directories, and symlinks) */
+    /* Free all items (files, directories, and symlinks). The index borrows their
+     * keys, and nothing reads it again before its arena goes below. */
     for (size_t i = 0; i < metadata->count; i++) {
         metadata_item_free(metadata->items[i]);
     }
 
-    free(metadata->items);
-    free(metadata);
+    arena_free(metadata->arena);
 }
 
 /**
@@ -205,35 +208,6 @@ void metadata_item_claim(
 }
 
 /**
- * Grow the item spine if it is full
- *
- * Doubles the spine when it fills. Only the spine moves — the items it points
- * at stay where they were created — so the index needs no maintenance here.
- *
- * @param metadata Metadata structure (must not be NULL)
- */
-static void metadata_ensure_capacity(metadata_t *metadata) {
-    CHECK_NULL(metadata);
-
-    if (metadata->count < metadata->capacity) {
-        return; /* No need to grow */
-    }
-
-    /* The spine's bytes stand in memory, so its double cannot wrap; the double's
-     * bytes can, and that is exhaustion. */
-    size_t new_capacity = metadata->capacity * 2;
-    if (new_capacity > SIZE_MAX / sizeof(*metadata->items)) {
-        heap_die(SIZE_MAX);
-    }
-
-    metadata->items = heap_realloc(
-        metadata->items,
-        new_capacity * sizeof(*metadata->items)
-    );
-    metadata->capacity = new_capacity;
-}
-
-/**
  * Add or update metadata item, transferring ownership
  *
  * Works for every kind. If an item with the same key exists it is replaced in
@@ -283,8 +257,13 @@ void metadata_add_item(
         return;
     }
 
-    /* APPEND NEW ITEM */
-    metadata_ensure_capacity(metadata);
+    /* APPEND NEW ITEM. Room for it grows in the sheet's arena; only the spine
+     * moves — the items it points at stay where they were created — so the index
+     * needs no maintenance here. */
+    metadata->items = arena_grow(
+        metadata->arena, metadata->items, &metadata->capacity, metadata->count + 1,
+        sizeof(*metadata->items)
+    );
 
     hashmap_set(metadata->index, incoming->key, incoming);
 

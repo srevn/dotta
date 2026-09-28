@@ -145,23 +145,21 @@ static error_t *remove_settle(
     /* The settle's one moment: every order it places carries it (state_order_prune) */
     time_t now = time(NULL);
 
-    error_t *err = NULL;
-    for (size_t i = 0; !err && i < count; i++) {
+    for (size_t i = 0; i < count; i++) {
         const candidate_t *candidate = &candidates[i];
 
         if (manifest_lookup(after, candidate->path)) {
             settlement->fallback++;
         } else if (delete_files && (candidate->named || candidate->record->deployed_at > 0)) {
-            err = state_order_prune(ctx->run.state, candidate->path, now);
-            if (!err) settlement->ordered++;
+            RETURN_IF_ERROR(state_order_prune(ctx->run.state, candidate->path, now));
+            settlement->ordered++;
         } else {
-            err = state_retire(ctx->run.state, candidate->path);
-            if (!err) settlement->released++;
+            RETURN_IF_ERROR(state_retire(ctx->run.state, candidate->path));
+            settlement->released++;
         }
     }
 
-    manifest_free(after);
-    return err;
+    return NULL;
 }
 
 /**
@@ -621,9 +619,6 @@ static error_t *remove_overlaps(
             provided_by_other = true;
         }
     }
-
-    manifest_free(view);
-    hashmap_free(index, NULL);
 
     *out = (overlaps_t){ overlaps, count, provided_by_other };
 

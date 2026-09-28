@@ -617,9 +617,6 @@ static error_t *profile_enable(
     const manifest_t *before = ctx->run.manifest;
     output_t *out = ctx->out;
 
-    /* Resource tracking for cleanup */
-    hashmap_t *seen_set = NULL;
-    manifest_t *after = NULL;
     const char *target = NULL; /* --target, absolute: what the row stores */
     error_t *err = NULL;
 
@@ -638,8 +635,9 @@ static error_t *profile_enable(
      * profiles decided-about within this command pass, so duplicate args like
      * `enable foo foo` are silently deduped instead of producing two rows in
      * to_enable_validated (and, downstream, two "Enabled foo" lines with split
-     * stats attribution). */
-    seen_set = hashmap_borrow(0);
+     * stats attribution). Its keys are borrowed from to_enable, the command arena's
+     * as the set is. */
+    hashmap_t *seen_set = hashmap_borrow(ctx->arena, 0);
 
     /* Resolve the request set (--all → list of local branches; args → verbatim).
      * Both paths deposit into to_enable; Phase 1's filter loop decides which
@@ -652,19 +650,15 @@ static error_t *profile_enable(
          * this list has. Named profiles keep the order typed; a row that exists
          * keeps its slot. */
         err = gitops_list_branches(repo, ctx->arena, &to_enable);
-        if (err) {
-            err = error_wrap(err, "Failed to list branches");
-            goto cleanup;
-        }
+        if (err) return error_wrap(err, "Failed to list branches");
         profile_order(&to_enable);
     } else {
         /* Enable specified profiles */
         if (opts->profile_count == 0) {
-            err = ERROR(
+            return ERROR(
                 ERR_INVALID_ARG, "No profiles specified\n"
                 "Hint: Use 'dotta profile enable <name>' or '--all'"
             );
-            goto cleanup;
         }
 
         string_array_init_cap(&to_enable, ctx->arena, opts->profile_count);
@@ -685,8 +679,7 @@ static error_t *profile_enable(
                 to_enable.entries[i]
             );
         }
-        err = ERROR(ERR_INVALID_ARG, "Ambiguous --target usage");
-        goto cleanup;
+        return ERROR(ERR_INVALID_ARG, "Ambiguous --target usage");
     }
 
     /* Fatal up-front: the target itself. A target is a filesystem-shaped argument
@@ -699,10 +692,7 @@ static error_t *profile_enable(
     if (opts->target) {
         err = path_input_filesystem_path(opts->target, ctx->arena, &target);
         if (!err) err = mount_validate_target(target);
-        if (err) {
-            err = error_wrap(err, "Invalid --target value");
-            goto cleanup;
-        }
+        if (err) return error_wrap(err, "Invalid --target value");
     }
 
     /* Filter: already-enabled, missing-branch and needs-a-target are per-profile
@@ -757,7 +747,7 @@ static error_t *profile_enable(
          * that was here. */
         bool exists = false;
         err = gitops_branch_exists(repo, profile, &exists);
-        if (err) goto cleanup;
+        if (err) return err;
         if (!exists) {
             output_warning(
                 out, OUTPUT_NORMAL, "Profile '%s' doesn't exist locally", profile
@@ -782,7 +772,7 @@ static error_t *profile_enable(
          * a run that enabled nothing ends in the error below. */
         bool needs_target = false;
         err = profile_needs_target(repo, profile, &needs_target);
-        if (err) goto cleanup;
+        if (err) return err;
         if (needs_target && !target) {
             output_warning(
                 out, OUTPUT_NORMAL,
@@ -800,7 +790,7 @@ static error_t *profile_enable(
 
     /* Dry-run: preview what a live run would do, skip every state mutation. Dry-run
      * owns its complete UX below — the live-path summary is unreachable on this
-     * branch (goto cleanup bypasses it). */
+     * branch, which returns before it. */
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
 
@@ -850,14 +840,14 @@ static error_t *profile_enable(
         /* Mirror the live-path terminal: if nothing would be enabled because
          * every requested profile was missing or needs a target, surface the
          * same error a live run would produce. Idempotent cases (all already
-         * enabled) fall through to cleanup with err == NULL. */
+         * enabled) succeed. */
         if (to_enable_validated.count == 0 && (not_found > 0 || no_target > 0)) {
-            err = ERROR(
+            return ERROR(
                 not_found > 0 ? ERR_NOT_FOUND : ERR_INVALID_ARG,
                 "No profiles were enabled"
             );
         }
-        goto cleanup;
+        return NULL;
     }
 
     /* Phases 2–4 share the "we have work to do" precondition. Wrapping them
@@ -871,26 +861,23 @@ static error_t *profile_enable(
 
             err = state_enable_profile(state, profile, target);
             if (err) {
-                err = error_wrap(
+                return error_wrap(
                     err, "Failed to enable profile '%s' in state", profile
                 );
-                goto cleanup;
             }
         }
 
         /* Phase 3: The view after, and the diff. The builder reads the rows as
          * the loop above left them — any --target supplied for the new entries,
          * and the retargeted row's new binding, included. */
+        manifest_t *after = NULL;
         err = manifest_build(repo, state, ctx->arena, &after);
-        if (err) {
-            err = error_wrap(err, "Failed to build manifest after enable");
-            goto cleanup;
-        }
+        if (err) return error_wrap(err, "Failed to build manifest after enable");
 
         state_record_t *records = NULL;
         size_t record_count = 0;
         err = state_records(state, ctx->arena, &records, &record_count);
-        if (err) goto cleanup;
+        if (err) return err;
 
         manifest_diff_stats_t *stats = arena_calloc(
             ctx->arena, to_enable_validated.count, sizeof(*stats)
@@ -899,10 +886,7 @@ static error_t *profile_enable(
         err = manifest_diff(
             before, after, records, record_count, &to_enable_validated, stats
         );
-        if (err) {
-            err = error_wrap(err, "Failed to diff manifest across enable");
-            goto cleanup;
-        }
+        if (err) return error_wrap(err, "Failed to diff manifest across enable");
 
         /* Phase 4: The save, then per-profile feedback — the retarget's line
          * names its verb. Each line says what the save made true, so none is
@@ -910,10 +894,7 @@ static error_t *profile_enable(
          * where a full disk meets the transaction (core/state.h state_commit),
          * and a line above it would stand over the refusal. */
         err = state_save(state);
-        if (err) {
-            err = error_wrap(err, "Failed to save state");
-            goto cleanup;
-        }
+        if (err) return error_wrap(err, "Failed to save state");
 
         for (size_t i = 0; i < to_enable_validated.count; i++) {
             const char *name = to_enable_validated.entries[i];
@@ -932,8 +913,8 @@ static error_t *profile_enable(
     }
 
     /* Live summary — only runs on non-dry-run, non-error completion. Any failure
-     * in Phases 2-4, the save's included, sets err and jumps to cleanup, skipping
-     * the summary; dry-run owns its own messaging above. */
+     * in Phases 2-4, the save's included, returns before it; dry-run owns its
+     * own messaging above. */
     output_gap(out, OUTPUT_NORMAL);
 
     {
@@ -978,22 +959,15 @@ static error_t *profile_enable(
     /* Terminal: error only if the user's inputs produced zero validated profiles
      * AND at least one was genuinely missing or needs a target — the code names
      * which, for the reader; every error exits the same. Pure idempotent cases
-     * (all already-enabled, or --all on an empty repo) fall through to cleanup
-     * with err == NULL. */
+     * (all already-enabled, or --all on an empty repo) succeed. */
     if (to_enable_validated.count == 0 && (not_found > 0 || no_target > 0)) {
-        err = ERROR(
+        return ERROR(
             not_found > 0 ? ERR_NOT_FOUND : ERR_INVALID_ARG,
             "No profiles were enabled"
         );
     }
 
-cleanup:
-    /* Cleanup all resources. seen_set borrows its keys from to_enable, the command
-     * arena's, which outlives us. */
-    manifest_free(after);
-    if (seen_set) hashmap_free(seen_set, NULL);
-
-    return err;
+    return NULL;
 }
 
 /**
@@ -1032,10 +1006,6 @@ static error_t *profile_disable(
     state_t *state = ctx->run.state;
     output_t *out = ctx->out;
 
-    /* Resource tracking for cleanup */
-    hashmap_t *seen_set = NULL;
-    manifest_t *before = NULL;
-    manifest_t *after = NULL;
     error_t *err = NULL;
 
     /* Phase 1 observation — tallied during explicit-args validation. */
@@ -1056,15 +1026,16 @@ static error_t *profile_disable(
         if (!opts->quiet) {
             output_info(out, OUTPUT_NORMAL, "No enabled profiles to disable");
         }
-        goto cleanup;  /* err is NULL — idempotent success */
+        return NULL;
     }
 
     /* Whether a named profile is enabled is the handle's to answer, from the
      * same rows (state_enabled). seen_set tracks profiles decided-about within
      * this command pass, so duplicate args (`disable foo foo`) are silently deduped
      * and don't produce two rows in to_disable_validated. Only the explicit-args
-     * path consults it; --all iterates the unique enabled set. */
-    seen_set = hashmap_borrow(0);
+     * path consults it; --all iterates the unique enabled set. Its keys are
+     * borrowed from opts->profiles, which outlive it. */
+    hashmap_t *seen_set = hashmap_borrow(ctx->arena, 0);
     string_array_t to_disable_validated;
     string_array_init(&to_disable_validated, ctx->arena);
 
@@ -1076,11 +1047,10 @@ static error_t *profile_disable(
     } else {
         /* Disable specified profiles */
         if (opts->profile_count == 0) {
-            err = ERROR(
+            return ERROR(
                 ERR_INVALID_ARG, "No profiles specified\n"
                 "Hint: Use 'dotta profile disable <name>' or '--all'"
             );
-            goto cleanup;
         }
 
         for (size_t i = 0; i < opts->profile_count; i++) {
@@ -1119,7 +1089,7 @@ static error_t *profile_disable(
 
     /* Dry-run: preview what a live run would do, skip every state mutation. Dry-run
      * owns its complete UX below — the live-path summary is unreachable on this
-     * branch (goto cleanup bypasses it). */
+     * branch, which returns before it. */
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
 
@@ -1151,7 +1121,7 @@ static error_t *profile_disable(
                 not_enabled, not_enabled == 1 ? "" : "s"
             );
         }
-        goto cleanup;
+        return NULL;
     }
 
     /* Phases 2–5 share the "we have work to do" precondition. Wrapping them
@@ -1167,6 +1137,7 @@ static error_t *profile_disable(
          * whose metadata.json will not parse, a branch that will not load), and
          * that set is exactly the one this build fails on. The message names
          * the profile; warn with it and disable without the receipt. */
+        manifest_t *before = NULL;
         err = manifest_build(repo, state, ctx->arena, &before);
         if (err) {
             output_warning(
@@ -1180,11 +1151,10 @@ static error_t *profile_disable(
         for (size_t i = 0; i < to_disable_validated.count; i++) {
             err = state_disable_profile(state, to_disable_validated.entries[i]);
             if (err) {
-                err = error_wrap(
+                return error_wrap(
                     err, "Failed to remove profile '%s' from state",
                     to_disable_validated.entries[i]
                 );
-                goto cleanup;
             }
         }
 
@@ -1194,26 +1164,21 @@ static error_t *profile_disable(
          * profiles at the same HEADs. */
         manifest_diff_stats_t *stats = NULL;
         if (before) {
+            manifest_t *after = NULL;
             err = manifest_build(repo, state, ctx->arena, &after);
-            if (err) {
-                err = error_wrap(err, "Failed to build manifest after disable");
-                goto cleanup;
-            }
+            if (err) return error_wrap(err, "Failed to build manifest after disable");
 
             state_record_t *records = NULL;
             size_t record_count = 0;
             err = state_records(state, ctx->arena, &records, &record_count);
-            if (err) goto cleanup;
+            if (err) return err;
 
             stats = arena_calloc(ctx->arena, to_disable_validated.count, sizeof(*stats));
 
             err = manifest_diff(
                 before, after, records, record_count, &to_disable_validated, stats
             );
-            if (err) {
-                err = error_wrap(err, "Failed to diff manifest across disable");
-                goto cleanup;
-            }
+            if (err) return error_wrap(err, "Failed to diff manifest across disable");
         }
 
         /* Phase 5: The save, then per-profile feedback (no stats when the receipt
@@ -1221,10 +1186,7 @@ static error_t *profile_disable(
          * are. The target the row carried went with it; the line says so and
          * names the command that puts it back. */
         err = state_save(state);
-        if (err) {
-            err = error_wrap(err, "Failed to save state");
-            goto cleanup;
-        }
+        if (err) return error_wrap(err, "Failed to save state");
 
         for (size_t i = 0; i < to_disable_validated.count; i++) {
             const char *name = to_disable_validated.entries[i];
@@ -1270,14 +1232,7 @@ static error_t *profile_disable(
         );
     }
 
-cleanup:
-    /* Cleanup all resources. seen_set borrows its keys from opts->profiles,
-     * caller-owned, which outlives us. */
-    manifest_free(after);
-    manifest_free(before);
-    if (seen_set) hashmap_free(seen_set, NULL);
-
-    return err;
+    return NULL;
 }
 
 /**
@@ -1447,11 +1402,9 @@ static error_t *profile_validate(
     state_t *state = ctx->run.state;
     output_t *out = ctx->out;
 
-    /* Resource tracking for cleanup */
-    hashmap_t *probed = NULL;
     error_t *err = NULL;
 
-    /* State for reporting (not cleaned up) */
+    /* State for reporting */
     bool has_issues = false;
     bool fixed_enabled_profiles = false;  /* Track what we actually fixed */
     bool has_orphaned_files = false;      /* Track issues we can't fix */
@@ -1542,7 +1495,7 @@ static error_t *profile_validate(
 
     string_array_t deleted;
     string_array_init(&deleted, ctx->arena);
-    probed = hashmap_borrow(16);   /* profile → (void *) 1 exists, (void *) 2 deleted */
+    hashmap_t *probed = hashmap_borrow(ctx->arena, 16);   /* profile → (void *) 1 exists, (void *) 2 deleted */
 
     for (size_t i = 0; i < record_count; i++) {
         const char *profile = records[i].profile;
@@ -1589,8 +1542,6 @@ cleanup:
     /* Cleanup all resources. state_rollback is a no-op if no transaction is active,
      * so it's safe to call unconditionally on the borrowed handle */
     state_rollback(state);
-
-    if (probed) hashmap_free(probed, NULL);
 
     /* If there's an error, return it now */
     if (err) return err;

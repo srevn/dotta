@@ -1240,7 +1240,6 @@ static error_t *add_write_record(
     state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE) */
 
     error_t *err = NULL;
-    manifest_t *manifest = NULL;
 
     *receipt = (receipt_t){ 0 };
 
@@ -1282,6 +1281,7 @@ static error_t *add_write_record(
      * re-bound — so a path under the just-bound target is a custom/ row here. A
      * disabled profile contributes no rows, and that is the build the settle
      * wants: its guard asks what the view still claims without this profile. */
+    manifest_t *manifest = NULL;
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 
@@ -1434,8 +1434,6 @@ cleanup:
      * the save landed, the ones this phase began with where it did not
      * (state_rollback). */
     state_rollback(state);
-
-    manifest_free(manifest);
 
     return err;
 }
@@ -1703,7 +1701,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     walk.source_filter = source_filter;
     walk.admission = admission;
     walk.sheet = metadata;
-    walk.listing = hashmap_borrow(0);
+    walk.listing = hashmap_borrow(ctx->arena, 0);
     ptr_array_init(&walk.files, ctx->arena);
     ptr_array_init(&walk.directories, ctx->arena);
 
@@ -2663,12 +2661,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     error_free(record_err);
 
 cleanup:
-    /* Free resources in reverse order of allocation. The listing's keys and values
-     * are the arena's, and so is every row the view points at: only the heap
-     * indexes are freed here. */
+    /* Free resources in reverse order of allocation. The listing and the view
+     * are the arena's. */
     if (metadata) metadata_free(metadata);
-    hashmap_free(walk.listing, NULL);
-    manifest_free(view);
     stage_admission_free(admission);
     stage_free(stage);
     source_filter_free(source_filter);

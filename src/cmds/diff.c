@@ -927,7 +927,6 @@ static error_t *diff_commit_to_workspace(
     git_commit *commit = NULL;
     const char *profile = NULL;  /* borrowed from the enabled set */
     git_tree *tree = NULL;
-    manifest_t *historical = NULL;
 
     /* Step 1: Resolve commit to find which profile contains it. The search is
      * the enabled set's and answers for every profile ahead of the holder, so a
@@ -975,9 +974,9 @@ static error_t *diff_commit_to_workspace(
      * sheet that will not load refuses the diff instead of showing Git's defaults
      * as though nothing had been claimed.
      *
-     * Rows and their strings are allocated into the borrowed command arena; they
-     * outlive every reader below, then live until command end. Only the view's
-     * index is released, at cleanup. */
+     * The view is allocated into the borrowed command arena; it outlives every
+     * reader below, then lives until command end. */
+    manifest_t *historical = NULL;
     err = manifest_build_tree(
         repo, tree, profile, mounts, arena, &historical
     );
@@ -1012,9 +1011,6 @@ static error_t *diff_commit_to_workspace(
     }
 
 cleanup:
-    /* The view's rows and strings are the borrowed command arena's, reclaimed
-     * at command end; only its index is freed here. */
-    manifest_free(historical);
     git_tree_free(tree);
     git_commit_free(commit);
 

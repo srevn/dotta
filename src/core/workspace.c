@@ -1970,9 +1970,10 @@ static void workspace_analyze_orphans(workspace_t *ws) {
         return;
     }
 
-    /* profile → authority_cache_t for this pass. Keys borrow the records'
-     * arena-backed profile strings, which outlive it. */
-    hashmap_t *authority_cache = hashmap_borrow(8);
+    /* profile → authority_cache_t for this pass, in the workspace's arena. Keys
+     * borrow the records' arena-backed profile strings; each value holds a tree
+     * and a sheet, and is released whole when the pass is done. */
+    hashmap_t *authority_cache = hashmap_borrow(ws->arena, 8);
 
     /* The walk cannot fail: a folded error is not the walk's — the probe's failures
      * are the orphan's hold and the measure's are its bit, and each is consumed
@@ -2141,7 +2142,7 @@ static void workspace_analyze_orphans(workspace_t *ws) {
         workspace_measure(ws, item);
     }
 
-    hashmap_free(authority_cache, authority_cache_free);
+    hashmap_clear(authority_cache, authority_cache_free);
 
     /* Every orphan analyzed, by a walk that cannot fail: the diverged items list
      * them from here (workspace_list). */

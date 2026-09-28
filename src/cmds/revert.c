@@ -138,10 +138,9 @@ static error_t *select_profile(
  * The claim `profile` stands at `filesystem_path` in `tree`, or NULL when it
  * stands none
  *
- * One contribution of the tree, asked for the row at the path and freed
- * (core/manifest.h manifest_build_tree, manifest_lookup_claim). The row is the
- * arena's and outlives the view — manifest_free releases the heap indexes and
- * nothing else — so the answer survives this call.
+ * One contribution of the tree, asked for the row at the path (core/manifest.h
+ * manifest_build_tree, manifest_lookup_claim). The row is the arena's, as the
+ * view is, so the answer survives this call.
  *
  * The row and not its name, because this file asks it two ways: the read takes
  * any claim, and the write's name takes the claim standing there whatever it is
@@ -186,7 +185,6 @@ static error_t *claim_standing(
     if (err) return err;
 
     *out_row = manifest_lookup_claim(view, profile, filesystem_path);  /* the arena's */
-    manifest_free(view);
 
     return NULL;
 }
@@ -194,12 +192,11 @@ static error_t *claim_standing(
 /**
  * Refuse a typed name that would give the profile a second name for one path
  *
- * The tip's own contribution, asked two questions while it is alive: the claim
- * standing where the name resolves, and whether the profile holds the typed name
- * at all (core/manifest.h manifest_holds_name). Both readings are the
- * contribution's, so they are asked of one build rather than of a row that outlived
- * it — the second reads the names the settle recorded against the standing one,
- * which no row carries.
+ * The tip's own contribution, asked two questions: the claim standing where the
+ * name resolves, and whether the profile holds the typed name at all
+ * (core/manifest.h manifest_holds_name). Both readings are the contribution's,
+ * so they are asked of one build rather than of a row alone — the second reads
+ * the names the settle recorded against the standing one, which no row carries.
  *
  * A name the profile already holds is a re-capture and authors nothing, whether
  * it is the name standing at the path or one the settle did not keep. Only a
@@ -257,7 +254,7 @@ static error_t *refuse_second_name(
          * refspec_looks_like_commit whether the second one is a commit — the
          * two-positional form reads a tag or a branch name as a profile and refuses
          * the command it was offered as. */
-        err = ERROR(
+        return ERROR(
             ERR_INVALID_ARG,
             "Profile '%s' names '%s' as '%s'\n\n"
             "'%s' would be a second name for it, and a profile names a path once.\n"
@@ -268,9 +265,7 @@ static error_t *refuse_second_name(
         );
     }
 
-    manifest_free(view);
-
-    return err;
+    return NULL;
 }
 
 /**

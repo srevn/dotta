@@ -315,7 +315,6 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
         for (size_t i = 0; i < rows.count; i++) {
             if (rows.entries[i]->encrypted) encrypted_count++;
         }
-        manifest_free(manifest);
 
         output_print(
             out, OUTPUT_NORMAL, "  Encrypted files in current profiles: %zu\n",

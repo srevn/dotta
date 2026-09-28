@@ -868,44 +868,33 @@ error_t fs_create_dir_exclusive(
 /**
  * A directory and everything beneath it, in one walk of fs_remove_dir
  *
- * Each frame lists its directory into the walk's scratch above a mark and returns
- * the scratch to it once its entries are gone, so the scratch holds the listings
- * of the directories from the walk's root down to this one, never the whole tree's;
- * an entry's path stands above a second mark, gone at the next entry. A failure
- * leaves the scratch as it stands: the walk's driver frees it whole.
+ * A frame per directory, each over a listing in the walk's scratch (fs_listing_t).
+ * A failure leaves the scratch as it stands: the walk's driver frees it whole.
  */
 static error_t fs_remove_subtree(arena_t *scratch, const char *path) {
-    const arena_mark_t frame = arena_mark(scratch);
+    fs_listing_t listing;
+    RETURN_IF_ERROR(fs_listing_init(&listing, scratch, path));
 
-    string_array_t listing;
-    RETURN_IF_ERROR(fs_list_dir(path, scratch, &listing));
-
-    const arena_mark_t entry = arena_mark(scratch);
-    for (size_t i = 0; i < listing.count; i++) {
-        arena_reset(scratch, entry);
-        const char *full_path = str_path_join(scratch, path, listing.entries[i]);
-
+    for (const char *full_path; (full_path = fs_listing_next(&listing)) != NULL;) {
         /* Use lstat to determine type WITHOUT following symlinks. This prevents
          * symlink-traversal attacks where a symlink inside the tree points to a
          * directory outside it - using stat() would follow the symlink and
          * recursively delete the target directory's contents. */
-        error_t err = NULL;
         struct stat st;
         if (fs_lstat(full_path, &st) < 0) {
-            /* If lstat fails, try unlink as fallback */
-            err = (errno != ENOENT) ? error_from_errno(
-                errno, "Failed to stat '%s'", full_path
-                ) : NULL;
-        } else if (S_ISDIR(st.st_mode)) {
-            err = fs_remove_subtree(scratch, full_path);
+            /* Gone since the listing, it leaves nothing to remove; any other
+             * refusal ends the walk. */
+            if (errno == ENOENT) continue;
+            return error_from_errno(errno, "Failed to stat '%s'", full_path);
+        }
+
+        if (S_ISDIR(st.st_mode)) {
+            RETURN_IF_ERROR(fs_remove_subtree(scratch, full_path));
         } else {
             /* Regular file, symlink, or any other type: unlink */
-            err = fs_remove_file(full_path);
+            RETURN_IF_ERROR(fs_remove_file(full_path));
         }
-        if (err) return err;
     }
-
-    arena_reset(scratch, frame);
 
     /* Remove directory itself */
     if (fs_rmdir(path) < 0) {
@@ -1168,6 +1157,43 @@ error_t fs_list_dir(const char *path, arena_t *arena, string_array_t *out) {
     closedir(dir);
     *out = names;
     return NULL;
+}
+
+error_t fs_listing_init(fs_listing_t *listing, arena_t *scratch, const char *directory) {
+    CHECK_NULL(listing);
+
+    /* The mark before the names, so a listing that fails part-way leaves nothing
+     * it read behind it. */
+    const arena_mark_t frame = arena_mark(scratch);
+    string_array_t names;
+    error_t err = fs_list_dir(directory, scratch, &names);
+    if (err) {
+        arena_reset(scratch, frame);
+        return err;
+    }
+
+    *listing = (fs_listing_t){
+        .scratch = scratch,
+        .directory = directory,
+        .names = names,
+        .frame = frame,
+        .entry = arena_mark(scratch),
+    };
+    return NULL;
+}
+
+const char *fs_listing_next(fs_listing_t *listing) {
+    CHECK_NULL(listing);
+
+    if (listing->next == listing->names.count) {
+        arena_reset(listing->scratch, listing->frame);
+        return NULL;
+    }
+
+    arena_reset(listing->scratch, listing->entry);
+    return str_path_join(
+        listing->scratch, listing->directory, listing->names.entries[listing->next++]
+    );
 }
 
 /**

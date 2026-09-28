@@ -57,6 +57,8 @@
 #include <types.h>
 #include <unistd.h>
 
+#include "base/arena.h"
+
 /**
  * The kernel's calls on managed paths
  *
@@ -540,6 +542,63 @@ error_t fs_remove_empty_dir(const char *path);
  * @return Error or NULL on success
  */
 error_t fs_list_dir(const char *path, arena_t *arena, string_array_t *out);
+
+/**
+ * One directory's entries, each joined onto it, for a walk's frame to read in turn
+ *
+ * The listing lives in a scratch the walk owns, whole — the stream closed with
+ * it, so a walk holds one descriptor however deep it goes — and each entry's
+ * path is joined there as it is read (base/string.h str_path_join: the root joins
+ * as every directory does). Reading an entry first returns the scratch to where
+ * the entry before it began, so that entry's path goes with everything the walk
+ * made in the scratch for it since, a child's whole frame included; past the
+ * last entry the listing gives the scratch back as it found it. The scratch holds
+ * the listings from the walk's root down to the frame reading one, and one entry's
+ * strings — never the tree's.
+ *
+ * So what outlives an entry is copied out of the scratch by the walk, and no
+ * container grows in it: a return to a mark drops a growth after it (base/arena.h
+ * arena_mark). A frame that leaves before its last entry — a failure — leaves
+ * the scratch as it stands, for the walk's driver, which made it, to free whole.
+ *
+ * A value its frame holds, and nothing frees one. Readers: sys/filesystem.c
+ * fs_remove_subtree.
+ */
+typedef struct {
+    arena_t *scratch;       /* The walk's: every listing, path and string it makes */
+    const char *directory;  /* Every entry's prefix; the frame's own */
+    string_array_t names;   /* The entries, in readdir's order, above `frame` */
+    arena_mark_t frame;     /* The scratch as the listing found it */
+    arena_mark_t entry;     /* Above the names: where each entry's strings begin */
+    size_t next;            /* The next name's index */
+} fs_listing_t;
+
+/**
+ * List a directory for a walk's frame
+ *
+ * The whole listing, in `scratch`, above a mark the listing returns it to once
+ * its entries run out. A listing that fails leaves the scratch as it was found,
+ * and the error is fs_list_dir's, naming the directory.
+ *
+ * @param listing   The frame's listing (must not be NULL)
+ * @param scratch   The walk's scratch (must not be NULL)
+ * @param directory The directory, every entry's prefix (must not be NULL; borrowed
+ *                  for the listing's life)
+ * @return Error or NULL on success
+ */
+error_t fs_listing_init(fs_listing_t *listing, arena_t *scratch, const char *directory);
+
+/**
+ * The next entry's path, or NULL past the last
+ *
+ * The scratch goes back first to where the entry before began: its path, and
+ * whatever the walk made in the scratch since, go. Past the last entry it goes
+ * back to where the listing found it.
+ *
+ * @param listing A listing fs_listing_init made (must not be NULL)
+ * @return The entry's path, the scratch's until the next call; NULL past the last
+ */
+const char *fs_listing_next(fs_listing_t *listing);
 
 /* The depth a recursive walk of this filesystem is bounded to. The directory a
  * walk starts at is depth 0, frames 0 through 127 enumerate, and a frame at depth

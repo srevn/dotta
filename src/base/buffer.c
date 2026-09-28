@@ -102,8 +102,7 @@ buffer_t *buffer_create(size_t capacity) {
     return buf;
 }
 
-void buffer_free(void *ptr) {
-    buffer_t *buf = ptr;
+void buffer_free(buffer_t *buf) {
     if (!buf) {
         return;
     }

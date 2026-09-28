@@ -78,11 +78,9 @@ buffer_t *buffer_create(size_t capacity);
 /**
  * Free buffer data and the struct itself
  *
- * Accepts void* so it can release a map's values (hashmap_clear).
- *
- * @param ptr Buffer to free (can be NULL)
+ * @param buf Buffer to free (can be NULL)
  */
-void buffer_free(void *ptr);
+void buffer_free(buffer_t *buf);
 
 /**
  * Reserve room for alloc content bytes, allocated exactly

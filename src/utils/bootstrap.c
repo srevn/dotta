@@ -114,9 +114,8 @@ static error_t run_live(
     char *temp_path = NULL;
     arena_t *frame = NULL;
     process_result_t result = { 0 };
-    error_t err = NULL;
 
-    err = bootstrap_extract_to_temp(repo, profile, &temp_path);
+    error_t err = bootstrap_extract_to_temp(repo, profile, &temp_path);
     if (err) {
         err = error_wrap(err, "Failed to extract bootstrap script");
         goto cleanup;

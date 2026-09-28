@@ -203,7 +203,7 @@ static error_t hook_execute(
         .stream_fd         = -1,
         .work_dir          = NULL,
         .work_dir_fallback = NULL,
-        .timeout_seconds   = config->hook_timeout > 0 ? config->hook_timeout : 0,
+        .timeout_seconds   = config->hook_timeout,
         .pgrp_policy       = PROCESS_PGRP_NEW,
     };
 

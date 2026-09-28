@@ -205,18 +205,16 @@ error_t repo_open(const config_t *config, git_repository **repo_out) {
     bool declared = false;
     err = repo_is_store(repo, &declared);
     if (err) {
-        err = error_wrap(err, "Cannot open the repository at: %s", repo_path);
         git_repository_free(repo);
-        return err;
+        return error_wrap(err, "Cannot open the repository at: %s", repo_path);
     }
     if (!declared) {
-        err = ERROR(
+        git_repository_free(repo);
+        return ERROR(
             ERR_NOT_FOUND, "The repository at %s is not a dotta store\n\n"
             "Run 'dotta init' to make it one, or point DOTTA_REPO_DIR at your "
             "store%s%s", repo_path, env_note, env_value
         );
-        git_repository_free(repo);
-        return err;
     }
 
     *repo_out = repo;

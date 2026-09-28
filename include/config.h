@@ -2,8 +2,9 @@
  * config.h - Configuration type definition
  *
  * Defines the config struct layout. Include this header when you need to access
- * config fields directly. For config lifecycle functions (load, free), include
- * "utils/config.h" instead.
+ * config fields directly. For the load, include "utils/config.h" instead. The
+ * configuration is a value of the process's arena (main's): nothing frees one,
+ * and no field says where it lives.
  */
 
 #ifndef DOTTA_CONFIG_DEF_H
@@ -88,9 +89,6 @@ struct config {
 
     /* Key cache timeout in seconds */
     int32_t session_timeout;                         /* default: 3600, 0 = always prompt, -1 = never expire */
-
-    /* The configuration's own, for the process (include/runtime.h) */
-    arena_t *arena;                                  /* backs this struct and all it holds */
 };
 
 #endif /* DOTTA_CONFIG_DEF_H */

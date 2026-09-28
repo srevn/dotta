@@ -36,23 +36,26 @@
  * compiled here, auto_encrypt whether or not encryption is enabled: a list that
  * is no array, and an entry that is no string, holds a NUL or makes no rule
  * (base/gitignore.h), refuse the load, the entry named by its line and column.
+ *
+ * @param arena The arena the configuration lives in — the process's, main's
+ *              (include/runtime.h); a refused load leaves its parts there (must
+ *              not be NULL)
+ * @param out   The configuration (must not be NULL)
+ * @return Error or NULL on success
  */
-error_t config_load(config_t **out);
+error_t config_load(arena_t *arena, config_t **out);
 
 /**
  * The configuration with every key at its default
  *
- * Made in an arena of its own, which holds the struct, every value config_load
- * reads into it and both compiled rulesets; a default is a literal.
+ * Made in `arena`, which then holds the struct, every value config_load reads
+ * into it and both compiled rulesets; a default is a literal. Nothing frees a
+ * configuration: it goes with its arena.
  *
+ * @param arena The arena it lives in (must not be NULL)
  * @return The configuration; never NULL
  */
-config_t *config_create_default(void);
-
-/**
- * Free the configuration: its arena, and with it everything it holds (NULL-safe)
- */
-void config_free(config_t *config);
+config_t *config_create_default(arena_t *arena);
 
 /**
  * DOTTA_REPO_DIR as the environment sets it, or NULL

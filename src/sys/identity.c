@@ -24,8 +24,8 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/error.h"
-#include "base/heap.h"
 #include "sys/filesystem.h"
 
 static identity_t self;
@@ -127,7 +127,9 @@ static error_t drop_to_invoker(void) {
     return NULL;
 }
 
-error_t identity_init(void) {
+error_t identity_init(arena_t *arena) {
+    CHECK_NULL(arena);
+
     uid_t ruid = getuid();
     uid_t euid = geteuid();
     self.privileged = (euid == 0);
@@ -188,7 +190,7 @@ error_t identity_init(void) {
     if (pw) {
         self.gid = pw->pw_gid;
         if (pw->pw_name && *pw->pw_name) {
-            self.name = heap_strdup(pw->pw_name);
+            self.name = arena_strdup(arena, pw->pw_name);
         }
     } else {
         self.gid = getgid();
@@ -210,9 +212,12 @@ error_t identity_init(void) {
         );
     }
 
+    /* The normalised spelling, the arena's: the lexical fold answers on the heap
+     * (sys/filesystem.h fs_normalize_path), copied once and let go. */
     char *normalized = NULL;
     RETURN_IF_ERROR(fs_normalize_path(home, &normalized));
-    self.home = normalized;
+    self.home = arena_strdup(arena, normalized);
+    free(normalized);
 
     /* The drop, where root was obtained for a user, and before the groups are
      * read: the list below is what the kernel checks the invoker's chown against,
@@ -224,7 +229,7 @@ error_t identity_init(void) {
      * identity_may_chown then answers no where the kernel might say yes. */
     int n = getgroups(0, NULL);
     if (n > 0) {
-        gid_t *groups = heap_calloc((size_t) n, sizeof(*groups));
+        gid_t *groups = arena_calloc(arena, (size_t) n, sizeof(*groups));
         self.ngroups = getgroups(n, groups);
         if (self.ngroups < 0) self.ngroups = 0;
         self.groups = groups;
@@ -239,7 +244,7 @@ error_t identity_init(void) {
      * not this module's question (the HOME rule). */
     char physical[PATH_MAX];
     if (fs_realpath(self.home, physical)) {
-        self.home_physical = heap_strdup(physical);
+        self.home_physical = arena_strdup(arena, physical);
     }
 
     /* The environment the identity implies, for libgit2 — which reads $HOME at

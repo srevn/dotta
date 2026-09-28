@@ -21,9 +21,10 @@
  * Ruleset ownership:
  *   The compiled auto-encrypt ruleset lives on the config handle
  *   (config->auto_encrypt_ruleset), compiled once at config_load whether or not
- *   encryption is enabled, and freed by config_free. Policy calls read it directly
- *   from config, and only when encryption is enabled — callers never build, thread,
- *   or free the compiled form themselves.
+ *   encryption is enabled, in the process's arena with the rest of the
+ *   configuration. Policy calls read it directly from config, and only when
+ *   encryption is enabled — callers never build, thread, or free the compiled
+ *   form themselves.
  */
 
 #ifndef DOTTA_POLICY_H

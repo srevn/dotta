@@ -203,13 +203,12 @@ static error_t read_patterns(
     return NULL;
 }
 
-config_t *config_create_default(void) {
+config_t *config_create_default(arena_t *arena) {
+    CHECK_NULL(arena);
+
     /* The configuration is its arena's: the struct, every value read into it
-     * and both compiled rulesets, gone at once with config_free. A default is a
-     * literal. */
-    arena_t *arena = arena_create(0);
+     * and both compiled rulesets. A default is a literal. */
     config_t *config = arena_calloc(arena, 1, sizeof(*config));
-    config->arena = arena;
 
     /* Set defaults */
     config->repo_dir = DEFAULT_REPO_DIR;
@@ -263,13 +262,6 @@ config_t *config_create_default(void) {
     return config;
 }
 
-void config_free(config_t *config) {
-    /* The struct is the arena's too: one free, and nothing freed by field. */
-    if (config) {
-        arena_free(config->arena);
-    }
-}
-
 /**
  * The configuration file's path: $DOTTA_CONFIG_FILE when it is set, else the
  * default location.
@@ -297,10 +289,9 @@ static error_t config_get_path(char **out) {
  * never ignored.
  */
 static error_t read_key(
-    toml_datum_t value, const char *section, const char *key, config_t *config
+    toml_datum_t value, const char *section, const char *key, config_t *config,
+    arena_t *arena
 ) {
-    arena_t *arena = config->arena;
-
     if (strcmp(section, "core") == 0) {
         if (strcmp(key, "repo_dir") == 0)
             return read_path(value, section, key, arena, &config->repo_dir);
@@ -381,7 +372,7 @@ static error_t read_key(
  * fails the read, named by its section and key. The document is the parse's,
  * alive for this call and no longer (read_file).
  */
-static error_t read_sections(toml_datum_t top, config_t *config) {
+static error_t read_sections(toml_datum_t top, config_t *config, arena_t *arena) {
     static const char *const sections[] = {
         "core",   "hooks",  "security", "ignore",
         "output", "commit", "sync",     "encryption", NULL
@@ -416,7 +407,7 @@ static error_t read_sections(toml_datum_t top, config_t *config) {
                     section
                 );
             }
-            RETURN_IF_ERROR(read_key(table.u.tab.value[k], section, key, config));
+            RETURN_IF_ERROR(read_key(table.u.tab.value[k], section, key, config, arena));
         }
     }
     return NULL;
@@ -433,7 +424,7 @@ static error_t read_sections(toml_datum_t top, config_t *config) {
  * as long as the read of its sections, and every result is freed with toml_free,
  * as the library documents — a failed parse's too.
  */
-static error_t read_file(const char *path, config_t *config) {
+static error_t read_file(const char *path, config_t *config, arena_t *arena) {
     buffer_t text = BUFFER_INIT;
     error_t err = fs_read_file(path, &text);
     if (error_code(err) == ERR_NOT_FOUND) {
@@ -448,13 +439,14 @@ static error_t read_file(const char *path, config_t *config) {
     buffer_deinit(&text);
 
     err = result.ok
-        ? read_sections(result.toptab, config)
+        ? read_sections(result.toptab, config, arena)
         : ERROR(ERR_INVALID_ARG, "%s", result.errmsg);
     toml_free(result);
     return err;
 }
 
-error_t config_load(config_t **out) {
+error_t config_load(arena_t *arena, config_t **out) {
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     *out = NULL;
@@ -463,16 +455,16 @@ error_t config_load(config_t **out) {
     RETURN_IF_ERROR(config_get_path(&path));
 
     /* Start with defaults */
-    config_t *config = config_create_default();
+    config_t *config = config_create_default(arena);
 
     /* The file over the defaults: each key it names is checked as it is read
      * (read_key), so nothing is left to check after. */
-    error_t err = read_file(path, config);
+    error_t err = read_file(path, config, arena);
 
     /* Every failure is wrapped once, with the file: the chain beneath it names
-     * what in the file, and why. */
+     * what in the file, and why. A refused configuration's parts stay in the
+     * arena, which its owner frees whole. */
     if (err) {
-        config_free(config);
         err = error_wrap(err, "Failed to load configuration '%s'", path);
     } else {
         *out = config;

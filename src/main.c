@@ -504,21 +504,33 @@ int main(int argc, char **argv) {
     toml_option.mem_free = free;
     toml_set_option(toml_option);
 
+    /* The process's own arena: the identity of the run and the configuration,
+     * made before identity_init and freed after everything, on every exit — the
+     * command arena's parent, as main is run_spec's (include/runtime.h). */
+    arena_t *process = arena_create(0);
+
     /* The identity of the run, before anything reads HOME: libgit2 guesses its
      * global config path from $HOME at init, and the config path below is resolved
      * from the same fact (sys/identity.h). Under sudo this is also the drop:
      * from here on the process is the invoker's, and root is held for the syscalls
-     * that need it. */
-    error_t id_err = identity_init();
-    if (id_err) {
-        error_print(id_err, stderr);
-        return 1;
-    }
-
-    /* libgit2, and the configuration dotta gives it (sys/gitops). */
-    error_t git_err = gitops_init();
-    if (git_err) {
-        error_print(git_err, stderr);
+     * that need it.
+     *
+     * Then the configuration, loaded once for the entire process, and libgit2
+     * with the configuration dotta gives it (sys/gitops): neither reads the other,
+     * so the process's own facts come first and the library last, and a failure
+     * of any of the three owes the arena alone. config_load handles the
+     * missing-config-file case internally (returns defaults with no error). Any
+     * error returned is a real failure — a file that cannot be read, or one the
+     * schema refuses (utils/config.h says what) — and must surface, not fall
+     * back silently to defaults that hide the user's mistake. Every failure here
+     * renders the chain whole: the file, what in it, and the rule it broke. */
+    config_t *config = NULL;
+    error_t err = identity_init(process);
+    if (!err) err = config_load(process, &config);
+    if (!err) err = gitops_init();
+    if (err) {
+        error_print(err, stderr);
+        arena_free(process);
         return 1;
     }
 
@@ -554,22 +566,6 @@ int main(int argc, char **argv) {
      * that closes early). */
     signal(SIGPIPE, SIG_IGN);
 
-    /* Load configuration once for entire process.
-     *
-     * config_load handles the missing-config-file case internally (returns defaults
-     * with no error). Any error returned here is a real failure — a file that
-     * cannot be read, or one the schema refuses (utils/config.h says what) —
-     * and must surface, not fall back silently to defaults that hide the user's
-     * mistake. It renders as every failure here does, the chain whole: the file,
-     * what in it, and the rule it broke. */
-    config_t *config = NULL;
-    error_t cfg_err = config_load(&config);
-    if (cfg_err) {
-        error_print(cfg_err, stderr);
-        gitops_shutdown();
-        return 1;
-    }
-
     /* Create output context once from config settings. All commands share this
      * context and may override verbosity via CLI flags. */
     output_t *out = output_create(stdout, config->verbosity, config->color);
@@ -578,7 +574,7 @@ int main(int argc, char **argv) {
 
     gitops_shutdown();
     output_free(out);
-    config_free(config);
+    arena_free(process);
 
     return ret;
 }

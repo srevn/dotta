@@ -121,8 +121,8 @@
  * The identity of the run
  *
  * Written once by identity_init, borrowed for the life of the process. The strings
- * and the group list are heap allocations that live as long as the process does:
- * nothing frees them, and nothing needs to.
+ * and the group list are the process arena's (main's, include/runtime.h), which
+ * lives as long as the process does.
  */
 typedef struct identity {
     uid_t uid;                 /* The invoker */
@@ -149,12 +149,14 @@ typedef struct identity {
  * it), and the environment the rules below answered. The drop is the one step a
  * run can skip.
  *
+ * @param arena The process's arena, which the identity's strings and group list
+ *              live in (must not be NULL)
  * @return Error when no home directory can be named for the invoker (no $HOME,
  *         no passwd entry), when the one named is not absolute, when a drop the
  *         run owes cannot be made, or when the environment cannot be set; NULL
  *         on success
  */
-error_t identity_init(void);
+error_t identity_init(arena_t *arena);
 
 /**
  * The identity of the run — borrowed, immutable

@@ -431,14 +431,16 @@ typedef struct dotta_run {
  * the layers as a parameter and one of which never leaves the function that made
  * it:
  *
- *   - Process-scope. `config->arena` holds the configuration — the struct, every
- *     value read into it and its two compiled pattern rulesets — made by
- *     config_create_default, read-only once config_load returns, and freed whole
- *     by config_free. Lives the whole process; outlives every dispatch. The errors
- *     are a second instance of it, not a fourth lifetime: `base/error.c`'s own
- *     arena, made at the first error and never freed, because an error is made
- *     before the command's arena exists and rendered after it is gone (base/error.h
- *     "Lifetime").
+ *   - Process-scope. `main`'s arena, made before identity_init and freed after
+ *     everything, on every exit: the identity of the run (sys/identity.h) and
+ *     the configuration — the struct, every value read into it and its two compiled
+ *     pattern rulesets, read-only once config_load returns. Lives the whole
+ *     process; outlives every dispatch, and is the command arena's parent as
+ *     main is run_spec's. The errors are a second instance of it, not a fourth
+ *     lifetime: `base/error.c`'s own arena, made at the first error and never
+ *     freed, because an error is made before the command's arena exists and
+ *     rendered after it is gone (base/error.h "Lifetime"), and base sees no
+ *     composition root to be handed main's.
  *
  *   - Command-scope. `ctx->arena` is the dispatch-wide bump allocator, created
  *     and freed by `run_spec`. Handlers allocate into it directly or thread it

@@ -928,24 +928,19 @@ static error_t *test_path_ignore(
      * no profile — which names through the shared roots and meets the baseline
      * and config layers alone. `askers` starts at the parameter itself, an array
      * of one that is both the named-profile and the nothing-enabled case; the
-     * enabled set replaces it when there is one, and profile_resolve_enabled
-     * never answers success with an empty one, so `enabled` is also what the
-     * preamble and the summary key on. */
+     * enabled set replaces it when it holds any, and so does what the preamble
+     * and the summary key on. */
     const char *const *askers = &specific_profile;
     size_t asker_count = 1;
 
     if (!specific_profile) {
         err = profile_resolve_enabled(repo, state, &enabled);
         if (err) {
-            if (error_code(err) != ERR_NOT_FOUND) {
-                err = error_wrap(err, "Failed to load profiles");
-                goto cleanup;
-            }
-            error_free(err);
-            err = NULL;
+            err = error_wrap(err, "Failed to load profiles");
+            goto cleanup;
         }
 
-        if (enabled) {
+        if (enabled->count > 0) {
             askers = (const char *const *) enabled->items;
             asker_count = enabled->count;
             output_info(out, OUTPUT_NORMAL, "Testing path: %s", test_path);
@@ -1047,7 +1042,7 @@ static error_t *test_path_ignore(
         }
     }
 
-    if (enabled) {
+    if (enabled && enabled->count > 0) {
         output_gap(out, OUTPUT_NORMAL);
         if (any_ignored) {
             output_info(

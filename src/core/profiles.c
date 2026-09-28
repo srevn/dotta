@@ -178,15 +178,6 @@ string_array_t *profile_detect(const string_array_t *available_branches) {
 
 /**
  * Resolve enabled profile names from state database
- *
- * Lightweight name-only resolution — no Git ref resolution or tree loading. Reads
- * the enabled rows the borrowed state handle holds, keeps each whose branch still
- * exists, and returns their names. Warns on stderr about missing profiles.
- *
- * @param repo Repository (must not be NULL)
- * @param state Borrowed state handle (must not be NULL)
- * @param out Validated profile names (must not be NULL, caller frees)
- * @return Error (ERR_NOT_FOUND if no enabled profiles) or NULL on success
  */
 error_t *profile_resolve_enabled(
     git_repository *repo,
@@ -200,9 +191,6 @@ error_t *profile_resolve_enabled(
     /* The enabled rows, where the handle holds them: nothing below moves them
      * (core/state.h state_profiles) */
     state_profiles_t enabled_profiles = state_profiles(state);
-    if (enabled_profiles.count == 0) {
-        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
-    }
 
     error_t *err = NULL;
     string_array_t *valid_profiles = string_array_new(0);
@@ -241,13 +229,6 @@ error_t *profile_resolve_enabled(
         );
     }
 
-    /* No valid profiles after filtering */
-    if (valid_profiles->count == 0) {
-        err = ERROR(ERR_NOT_FOUND, "No enabled profiles found");
-        goto cleanup;
-    }
-
-    /* Success */
     string_array_free(missing_profiles);
     *out = valid_profiles;
 

@@ -394,16 +394,13 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
     } else {
         /* Use enabled profiles from state */
         err = profile_resolve_enabled(repo, state, &profiles);
-        if (err) {
-            if (error_code(err) == ERR_NOT_FOUND) {
-                /* No profiles enabled — expected case, show guidance */
-                output_info(out, OUTPUT_NORMAL, "No enabled profiles found.");
-                output_hint(out, OUTPUT_NORMAL, "Enable profiles first:");
-                output_hintline(out, OUTPUT_NORMAL, "  dotta profile enable <name>");
-                error_free(err);
-                err = NULL;
-            }
-            /* Other errors (corrupted state, permission, etc.) propagate */
+        if (err) goto cleanup;
+
+        /* No profiles enabled — expected case, show guidance */
+        if (profiles->count == 0) {
+            output_info(out, OUTPUT_NORMAL, "No enabled profiles found.");
+            output_hint(out, OUTPUT_NORMAL, "Enable profiles first:");
+            output_hintline(out, OUTPUT_NORMAL, "  dotta profile enable <name>");
             goto cleanup;
         }
     }

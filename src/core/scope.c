@@ -42,29 +42,6 @@ struct scope {
 /* Construction                                                         */
 /* -------------------------------------------------------------------- */
 
-/**
- * Resolve the enabled set, converting ERR_NOT_FOUND to an empty array.
- *
- * profile_resolve_enabled returns ERR_NOT_FOUND on zero enabled profiles;
- * scope_build's contract is "empty enabled is not an error". This helper smooths
- * that boundary.
- */
-static error_t *resolve_enabled_lenient(
-    git_repository *repo, const state_t *state, string_array_t **out_enabled
-) {
-    error_t *err = profile_resolve_enabled(repo, state, out_enabled);
-    if (!err) return NULL;
-
-    if (err->code != ERR_NOT_FOUND) {
-        return error_wrap(err, "Failed to resolve enabled profiles");
-    }
-
-    error_free(err);
-    *out_enabled = string_array_new(0);
-
-    return NULL;
-}
-
 error_t *scope_build(
     git_repository *repo, const state_t *state, const scope_inputs_t *in,
     arena_t *arena, scope_t **out
@@ -80,9 +57,13 @@ error_t *scope_build(
     scope_t *s = heap_calloc(1, sizeof(*s));
     error_t *err = NULL;
 
-    /* 1. Resolve enabled (empty-on-ERR_NOT_FOUND). */
-    err = resolve_enabled_lenient(repo, state, &s->enabled);
-    if (err) goto fail;
+    /* 1. The enabled set, which may be empty: an empty scope is not an error
+     *    ("Empty-enabled policy", scope.h). */
+    err = profile_resolve_enabled(repo, state, &s->enabled);
+    if (err) {
+        err = error_wrap(err, "Failed to resolve enabled profiles");
+        goto fail;
+    }
 
     /* 2. The CLI filter: every name must be enabled here. That is the one question
      *    — the enabled set was checked against the branches on the way in, so a

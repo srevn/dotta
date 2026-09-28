@@ -108,8 +108,8 @@ typedef struct scope_inputs {
  * Build a scope from resolved repo+state and raw CLI inputs.
  *
  * Steps performed (in order):
- *   1. Resolve enabled profile names from state (catches ERR_NOT_FOUND and converts
- *      to empty set — see "Empty-enabled policy" above).
+ *   1. Resolve the enabled profile names from state, which may be none (see
+ *      "Empty-enabled policy" above).
  *   2. If in->profile_count > 0, check every CLI filter name against the enabled
  *      set: one not in it is refused, whether it is a disabled profile (the hint
  *      names `profile enable`) or no profile here at all (the hint names the

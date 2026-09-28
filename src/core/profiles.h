@@ -110,7 +110,8 @@ void profile_order(string_array_t *names);
  * Lightweight name-only resolution: reads the enabled rows the handle holds
  * (core/state.h state_profiles), keeps each whose branch is here, and returns
  * their names in the rows' order. Warns on stderr about profiles referenced in
- * state that no longer exist.
+ * state that no longer exist. None enabled, or none of them here, is an empty
+ * answer and not an error: every reader decides what an empty set means to it.
  *
  * Does NOT resolve Git references or load profile trees.
  *
@@ -118,8 +119,9 @@ void profile_order(string_array_t *names);
  * @param state State handle (must not be NULL; borrowed, not freed). Nothing is
  *              executed on it — the rows are the handle's own — so a handle in
  *              any shape serves.
- * @param out Validated profile names (must not be NULL, caller must free)
- * @return Error (ERR_NOT_FOUND if no enabled profiles) or NULL on success
+ * @param out Validated profile names, possibly none (must not be NULL, caller
+ *            must free)
+ * @return Error or NULL on success
  */
 error_t *profile_resolve_enabled(
     git_repository *repo,

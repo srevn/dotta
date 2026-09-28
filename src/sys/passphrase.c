@@ -28,7 +28,7 @@
  * echo — and teardown order — restore echo → disarm — keep a terminating signal
  * in either window harmless: armed, it puts back settings that are already back.
  */
-error_t *passphrase_prompt(
+error_t passphrase_prompt(
     const char *prompt,
     char **out_passphrase,
     size_t *out_len
@@ -182,7 +182,7 @@ error_t *passphrase_prompt(
  * @param out_passphrase Passphrase (caller must free and zero)
  * @param out_len Passphrase length
  */
-error_t *passphrase_from_env(
+error_t passphrase_from_env(
     char **out_passphrase,
     size_t *out_len
 ) {

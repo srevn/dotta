@@ -15,7 +15,7 @@
 /**
  * Initialize divergence context
  */
-error_t *resolve_init(
+error_t resolve_init(
     resolve_context_t *ctx,
     git_repository *repo,
     const char *remote_name,
@@ -29,7 +29,7 @@ error_t *resolve_init(
 
     /* Get current branch OID for rollback */
     git_oid saved_oid;
-    error_t *err = gitops_resolve_branch_head_oid(repo, branch_name, &saved_oid);
+    error_t err = gitops_resolve_branch_head_oid(repo, branch_name, &saved_oid);
     if (err) return err;
 
     /* Initialize context */
@@ -45,7 +45,7 @@ error_t *resolve_init(
 /**
  * Resolve with rebase strategy (in-memory)
  */
-static error_t *resolve_rebase_inmemory(
+static error_t resolve_rebase_inmemory(
     resolve_context_t *ctx,
     git_oid *out_oid
 ) {
@@ -53,7 +53,7 @@ static error_t *resolve_rebase_inmemory(
 
     /* Get remote commit OID (local OID already captured in ctx->saved_oid) */
     git_oid remote_oid;
-    error_t *err = gitops_resolve_remote_branch_oid(
+    error_t err = gitops_resolve_remote_branch_oid(
         ctx->repo, ctx->remote_name, ctx->branch_name, &remote_oid
     );
     if (err) return err;
@@ -98,7 +98,7 @@ static error_t *resolve_rebase_inmemory(
 /**
  * Resolve with merge strategy (tree-based merge)
  */
-static error_t *resolve_merge_trees(
+static error_t resolve_merge_trees(
     resolve_context_t *ctx,
     git_oid *out_oid
 ) {
@@ -106,7 +106,7 @@ static error_t *resolve_merge_trees(
 
     /* Get remote commit OID (local OID already captured in ctx->saved_oid) */
     git_oid remote_oid;
-    error_t *err = gitops_resolve_remote_branch_oid(
+    error_t err = gitops_resolve_remote_branch_oid(
         ctx->repo, ctx->remote_name, ctx->branch_name, &remote_oid
     );
     if (err) return err;
@@ -221,7 +221,7 @@ static error_t *resolve_merge_trees(
  * This strategy doesn't modify the local branch - it stays at saved_oid. The
  * actual force push to remote is handled by the caller.
  */
-static error_t *resolve_ours(resolve_context_t *ctx, git_oid *out_oid) {
+static error_t resolve_ours(resolve_context_t *ctx, git_oid *out_oid) {
     CHECK_NULL(ctx);
 
     /* Local branch remains unchanged at its current position */
@@ -236,12 +236,12 @@ static error_t *resolve_ours(resolve_context_t *ctx, git_oid *out_oid) {
 /**
  * Resolve with "theirs" strategy (reset to remote)
  */
-static error_t *resolve_theirs(resolve_context_t *ctx, git_oid *out_oid) {
+static error_t resolve_theirs(resolve_context_t *ctx, git_oid *out_oid) {
     CHECK_NULL(ctx);
 
     /* Get remote commit OID */
     git_oid remote_oid;
-    error_t *err = gitops_resolve_remote_branch_oid(
+    error_t err = gitops_resolve_remote_branch_oid(
         ctx->repo, ctx->remote_name, ctx->branch_name, &remote_oid
     );
     if (err) return err;
@@ -275,7 +275,7 @@ static error_t *resolve_theirs(resolve_context_t *ctx, git_oid *out_oid) {
 /**
  * Resolve branch divergence using specified strategy
  */
-error_t *resolve_execute(
+error_t resolve_execute(
     resolve_context_t *ctx,
     git_oid *out_oid
 ) {
@@ -305,7 +305,7 @@ error_t *resolve_execute(
 /**
  * Rollback divergence resolution to saved state
  */
-error_t *resolve_rollback(resolve_context_t *ctx) {
+error_t resolve_rollback(resolve_context_t *ctx) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
     CHECK_NULL(ctx->branch_name);
@@ -321,7 +321,7 @@ error_t *resolve_rollback(resolve_context_t *ctx) {
 /**
  * Verify divergence was resolved
  */
-error_t *resolve_verify(
+error_t resolve_verify(
     resolve_context_t *ctx,
     size_t *out_ahead,
     size_t *out_behind
@@ -333,7 +333,7 @@ error_t *resolve_verify(
 
     /* Analyze current branch state */
     upstream_info_t info;
-    error_t *err = upstream_analyze_profile(
+    error_t err = upstream_analyze_profile(
         ctx->repo, ctx->remote_name, ctx->branch_name, &info
     );
     if (err) {

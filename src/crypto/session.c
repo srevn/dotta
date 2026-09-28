@@ -189,7 +189,7 @@ static void derive_cache_key(
     crypto_wipe(&ctx, sizeof(ctx));
 }
 
-error_t *session_save(
+error_t session_save(
     const uint8_t master_key[KDF_KEY_SIZE],
     const kdf_epoch_t *epoch,
     time_t expires_at
@@ -206,7 +206,7 @@ error_t *session_save(
     /* The one caller that makes the directory. Always-call form: tightens a
      * pre-existing dir with a weaker mode to 0700 instead of leaving it alone.
      * The parent ~/.cache gets the default 0755. */
-    error_t *err = fs_create_dir_with_mode(cache_dir, 0700, true);
+    error_t err = fs_create_dir_with_mode(cache_dir, 0700, true);
     if (err) {
         err = error_wrap(err, "Failed to ensure session cache directory");
         goto cleanup;
@@ -305,7 +305,7 @@ cleanup:
     return err;
 }
 
-error_t *session_load(
+error_t session_load(
     uint8_t out_master_key[KDF_KEY_SIZE],
     const kdf_epoch_t *epoch,
     time_t *out_expires_at
@@ -323,7 +323,7 @@ error_t *session_load(
      * place) from ERR_CRYPTO / expired ERR_NOT_FOUND (the file is unrecoverable
      * from this build's perspective — delete it so the next call starts fresh). */
     bool unlink_on_fail = false;
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* Open with O_NOFOLLOW so a symlink-swapped path returns ELOOP rather than
      * reading the unintended file. ENOENT is the "no cache yet" path — distinct

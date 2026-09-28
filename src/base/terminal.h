@@ -106,7 +106,7 @@ typedef enum {
  * @param out Terminal state (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *terminal_init(terminal_t **out);
+error_t terminal_init(terminal_t **out);
 
 /**
  * Restore terminal to original state
@@ -159,7 +159,7 @@ void terminal_restore_armed(void);
  * @param out Size (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *terminal_get_size(terminal_size_t *out);
+error_t terminal_get_size(terminal_size_t *out);
 
 /**
  * Check if stdin is a TTY

@@ -129,7 +129,7 @@ typedef enum {
  * @param result Comparison result (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *compare_buffer_to_disk(
+error_t compare_buffer_to_disk(
     const buffer_t *content,
     const char *disk_path,
     git_filemode_t expected_mode,
@@ -147,7 +147,7 @@ error_t *compare_buffer_to_disk(
  * @param result Comparison result (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *compare_oid_to_disk(
+error_t compare_oid_to_disk(
     const git_oid *blob_oid,
     const char *disk_path,
     git_filemode_t expected_mode,
@@ -212,7 +212,7 @@ typedef struct {
  *            way)
  * @return Error or NULL on success
  */
-error_t *compare_generate_diff(
+error_t compare_generate_diff(
     const buffer_t *content,
     const char *disk_path,
     const char *path_label,

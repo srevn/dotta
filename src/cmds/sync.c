@@ -54,7 +54,7 @@ typedef struct {
     size_t ahead;
     size_t behind;
     sync_outcome_t outcome;
-    error_t *error;                 /* Borrowed; set by mark_result_failed */
+    error_t error;                 /* Borrowed; set by mark_result_failed */
 } profile_sync_result_t;
 
 /**
@@ -95,7 +95,7 @@ static void sync_results_free(sync_results_t *results) {
  */
 static void mark_result_failed(
     profile_sync_result_t *result,
-    error_t *err
+    error_t err
 ) {
     result->outcome = SYNC_OUTCOME_FAILED;
     result->error = err;
@@ -104,7 +104,7 @@ static void mark_result_failed(
 /**
  * Pull branch with fast-forward only Returns true if branch was updated
  */
-static error_t *pull_branch_ff(
+static error_t pull_branch_ff(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -120,7 +120,7 @@ static error_t *pull_branch_ff(
     /* Get local and remote refs */
     char local_refname[DOTTA_REFNAME_MAX];
     char remote_refname[DOTTA_REFNAME_MAX];
-    error_t *err;
+    error_t err;
 
     err = gitops_branch_refname(
         local_refname, sizeof(local_refname), branch_name
@@ -211,7 +211,7 @@ static error_t *pull_branch_ff(
  * profile. Precedence-adjacent work (push phase) still uses the full enabled
  * set — different role, different accessor.
  */
-static error_t *sync_fetch_phase(
+static error_t sync_fetch_phase(
     const dotta_ctx_t *ctx,
     const char *remote_name,
     const scope_t *scope,
@@ -258,7 +258,7 @@ static error_t *sync_fetch_phase(
     string_array_t branch_names;
     string_array_init(&branch_names, ctx->arena);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     for (size_t i = 0; i < profiles->count; i++) {
         char remote_refname[DOTTA_REFNAME_MAX];
         err = gitops_build_refname(
@@ -358,7 +358,7 @@ static void sync_analyze_phase(
 
         /* Analyze state */
         upstream_info_t info;
-        error_t *err = upstream_analyze_profile(
+        error_t err = upstream_analyze_profile(
             repo, remote_name, profiles->entries[i], &info
         );
 
@@ -379,13 +379,13 @@ static void sync_analyze_phase(
  * Returns critical error if rollback itself fails (caller must propagate). Returns
  * NULL and prints informational message on successful rollback.
  */
-static error_t *attempt_rollback(
+static error_t attempt_rollback(
     resolve_context_t *resolve,
     const char *profile,
     const char *failure_reason,
     output_t *out
 ) {
-    error_t *err = resolve_rollback(resolve);
+    error_t err = resolve_rollback(resolve);
     if (err) {
         output_styled(
             out, OUTPUT_NORMAL,
@@ -447,7 +447,7 @@ static void handle_remote_ahead(
     );
 
     bool pulled = false;
-    error_t *err = pull_branch_ff(repo, remote_name, result->profile, &pulled);
+    error_t err = pull_branch_ff(repo, remote_name, result->profile, &pulled);
     if (err) {
         output_styled(
             out, OUTPUT_NORMAL,
@@ -491,7 +491,7 @@ static void handle_remote_ahead(
  * Returns critical error only on rollback failure (caller must propagate). All
  * other failures are recorded in result/results and return NULL.
  */
-static error_t *resolve_and_push_divergence(
+static error_t resolve_and_push_divergence(
     git_repository *repo,
     const char *remote_name,
     profile_sync_result_t *result,
@@ -516,7 +516,7 @@ static error_t *resolve_and_push_divergence(
 
     /* Initialize divergence context (saves current state for rollback) */
     resolve_context_t resolve;
-    error_t *err = resolve_init(
+    error_t err = resolve_init(
         &resolve, repo, remote_name, result->profile, strategy
     );
     if (err) {
@@ -641,7 +641,7 @@ static void handle_diverged_ours(
     }
 
     /* Force push local to remote (local branch stays unchanged) */
-    error_t *err = gitops_force_push_branch(repo, remote_name, result->profile, xfer);
+    error_t err = gitops_force_push_branch(repo, remote_name, result->profile, xfer);
     if (err) {
         output_styled(
             out, OUTPUT_NORMAL,
@@ -694,7 +694,7 @@ static void handle_diverged_theirs(
 
     /* Initialize divergence context (saves current state for rollback) */
     resolve_context_t resolve;
-    error_t *err = resolve_init(
+    error_t err = resolve_init(
         &resolve, repo, remote_name, result->profile, RESOLVE_STRATEGY_THEIRS
     );
     if (err) {
@@ -751,7 +751,7 @@ static void handle_diverged_theirs(
  *
  * Returns critical error only on rollback failure (from rebase/merge).
  */
-static error_t *handle_diverged(
+static error_t handle_diverged(
     git_repository *repo,
     const char *remote_name,
     profile_sync_result_t *result,
@@ -828,7 +828,7 @@ static error_t *handle_diverged(
  * else; what that did to the view is read off once, for every enabled profile,
  * in cmd_sync's manifest block after this loop returns.
  */
-static error_t *sync_push_phase(
+static error_t sync_push_phase(
     git_repository *repo,
     const char *remote_name,
     sync_results_t *results,
@@ -908,7 +908,7 @@ static error_t *sync_push_phase(
                     result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                 );
 
-                error_t *err = gitops_push_branch(repo, remote_name, result->profile, xfer);
+                error_t err = gitops_push_branch(repo, remote_name, result->profile, xfer);
                 if (err) {
                     output_styled(
                         out, OUTPUT_NORMAL,
@@ -945,7 +945,7 @@ static error_t *sync_push_phase(
                     result->profile
                 );
 
-                error_t *err = gitops_push_branch(repo, remote_name, result->profile, xfer);
+                error_t err = gitops_push_branch(repo, remote_name, result->profile, xfer);
                 if (err) {
                     output_styled(
                         out, OUTPUT_NORMAL,
@@ -1011,7 +1011,7 @@ static error_t *sync_push_phase(
                     result->outcome = SYNC_OUTCOME_DIVERGED;
                     break;
                 }
-                error_t *err = handle_diverged(
+                error_t err = handle_diverged(
                     repo, remote_name, result, out, diverged_strategy, xfer,
                     confirm_destructive, no_push
                 );
@@ -1260,7 +1260,7 @@ static void sync_render_summary(
  * it happened. The message carries the one fact the receipt does not — how much
  * of the run the failures were.
  */
-static error_t *sync_failure(const sync_results_t *results) {
+static error_t sync_failure(const sync_results_t *results) {
     size_t failed = 0;
     for (size_t i = 0; i < results->profile_count; i++) {
         if (results->profiles[i].outcome == SYNC_OUTCOME_FAILED) failed++;
@@ -1357,7 +1357,7 @@ static void epoch_reconcile(
     output_t *out = ctx->out;
 
     epoch_reconcile_t decision;
-    error_t *err = epoch_resolve(repo, remote_name, xfer, &decision);
+    error_t err = epoch_resolve(repo, remote_name, xfer, &decision);
     if (err) {
         /* The census could not finish, so no absence was proved and the verdict
          * is the one a found ciphertext gets: no git op. Sync is the only place
@@ -1498,7 +1498,7 @@ static void epoch_reconcile(
 /**
  * Sync command implementation
  */
-error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
+error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -1511,7 +1511,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     output_t *out = ctx->out;
 
     /* Declare all resources, initialized to NULL. */
-    error_t *err = NULL;
+    error_t err = NULL;
     workspace_t *ws = NULL;
     manifest_t *after = NULL;                  /* The view after the Git phase */
     scope_t *scope = NULL;
@@ -2252,7 +2252,7 @@ static args_want_t sync_complete(
     return ARGS_WANT_NONE;
 }
 
-static error_t *sync_dispatch(const void *ctx_v, void *opts_v) {
+static error_t sync_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_sync(ctx, (const cmd_sync_options_t *) opts_v);
 }

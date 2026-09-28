@@ -59,7 +59,7 @@
  *
  * @return Error or NULL on success
  */
-error_t *gitops_init(void);
+error_t gitops_init(void);
 
 /**
  * Release this process's libgit2
@@ -85,7 +85,7 @@ void gitops_shutdown(void);
  * @param repo Repository (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_get_signature(git_signature **out, git_repository *repo);
+error_t gitops_get_signature(git_signature **out, git_repository *repo);
 
 /**
  * Open git repository at path
@@ -107,7 +107,7 @@ error_t *gitops_get_signature(git_signature **out, git_repository *repo);
  * @param path Repository path (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_open_repository(git_repository **out, const char *path);
+error_t gitops_open_repository(git_repository **out, const char *path);
 
 /**
  * Create a bare repository at path, or open the one that stands there
@@ -133,7 +133,7 @@ error_t *gitops_open_repository(git_repository **out, const char *path);
  * @param path Repository path (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_init_repository(git_repository **out, const char *path);
+error_t gitops_init_repository(git_repository **out, const char *path);
 
 /**
  * Close repository and free resources
@@ -159,7 +159,7 @@ void gitops_close_repository(git_repository *repo);
  * @param exists Output boolean (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_reference_exists(
+error_t gitops_reference_exists(
     git_repository *repo, const char *refname, bool *exists
 );
 
@@ -174,7 +174,7 @@ error_t *gitops_reference_exists(
  * @param exists Output boolean (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exists);
+error_t gitops_branch_exists(git_repository *repo, const char *name, bool *exists);
 
 /**
  * Find the existing branch that blocks a name
@@ -202,7 +202,7 @@ error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exis
  * @param size    The buffer's size: DOTTA_REFNAME_MAX holds any branch name
  * @return Error or NULL on success
  */
-error_t *gitops_branch_blocker(
+error_t gitops_branch_blocker(
     git_repository *repo, const char *name, char *blocker, size_t size
 );
 
@@ -232,7 +232,7 @@ error_t *gitops_branch_blocker(
  * @param out The names beneath it (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_list_refs(
+error_t gitops_list_refs(
     git_repository *repo, const char *namespace, arena_t *arena, string_array_t *out
 );
 
@@ -246,7 +246,7 @@ error_t *gitops_list_refs(
  * @param out The branch names (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_list_branches(git_repository *repo, arena_t *arena, string_array_t *out);
+error_t gitops_list_branches(git_repository *repo, arena_t *arena, string_array_t *out);
 
 /**
  * List all remote tracking branches
@@ -262,7 +262,7 @@ error_t *gitops_list_branches(git_repository *repo, arena_t *arena, string_array
  * @param out The branch names (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_list_remote_tracking(
+error_t gitops_list_remote_tracking(
     git_repository *repo,
     const char *remote_name,
     arena_t *arena,
@@ -286,7 +286,7 @@ error_t *gitops_list_remote_tracking(
  * @param name Branch name (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_delete_branch(git_repository *repo, const char *name);
+error_t gitops_delete_branch(git_repository *repo, const char *name);
 
 /**
  * Load tree from reference
@@ -296,7 +296,7 @@ error_t *gitops_delete_branch(git_repository *repo, const char *name);
  * @param out Tree object (must not be NULL, caller must free with git_tree_free)
  * @return Error or NULL on success
  */
-error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree **out);
+error_t gitops_load_tree(git_repository *repo, const char *ref_name, git_tree **out);
 
 /**
  * Load tree from a branch by name, optionally capturing the peeled HEAD OID
@@ -312,7 +312,7 @@ error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree *
  * @param out_oid Peeled HEAD OID (can be NULL to skip)
  * @return Error or NULL on success
  */
-error_t *gitops_load_branch_tree(
+error_t gitops_load_branch_tree(
     git_repository *repo,
     const char *branch_name,
     git_tree **out_tree,
@@ -327,7 +327,7 @@ error_t *gitops_load_branch_tree(
  * @param payload User data passed to callback
  * @return Error or NULL on success
  */
-error_t *gitops_tree_walk(
+error_t gitops_tree_walk(
     const git_tree *tree,
     git_treewalk_cb callback,
     void *payload
@@ -364,7 +364,7 @@ typedef struct {
  * @param out View handle (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_blob_view_open(
+error_t gitops_blob_view_open(
     git_repository *repo,
     const git_oid *oid,
     gitops_blob_view_t *out
@@ -396,7 +396,7 @@ void gitops_blob_view_close(gitops_blob_view_t *view);
  * @param out_size Content size in bytes (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_read_blob_content(
+error_t gitops_read_blob_content(
     git_repository *repo,
     const git_oid *oid,
     void **out_content,
@@ -412,7 +412,7 @@ error_t *gitops_read_blob_content(
  *            git_commit_free)
  * @return Error or NULL on success
  */
-error_t *gitops_get_commit(
+error_t gitops_get_commit(
     git_repository *repo,
     const char *ref_name,
     git_commit **out
@@ -459,7 +459,7 @@ error_t *gitops_get_commit(
  *                   with git_commit_free)
  * @return Error or NULL on success
  */
-error_t *gitops_resolve_commit_in_branch(
+error_t gitops_resolve_commit_in_branch(
     git_repository *repo,
     const char *branch_name,
     const char *commit_ref,
@@ -486,7 +486,7 @@ typedef struct transfer_context_s transfer_context_t;
  * @param xfer Transfer context for credentials and progress (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_fetch_remote(
+error_t gitops_fetch_remote(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer
@@ -501,7 +501,7 @@ error_t *gitops_fetch_remote(
  * @param xfer Transfer context for credentials and progress (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_fetch_branch(
+error_t gitops_fetch_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -520,7 +520,7 @@ error_t *gitops_fetch_branch(
  * @param xfer Transfer context for credentials and progress (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_fetch_branches(
+error_t gitops_fetch_branches(
     git_repository *repo,
     const char *remote_name,
     const string_array_t *branches,
@@ -536,7 +536,7 @@ error_t *gitops_fetch_branches(
  * @param xfer Transfer context for credentials and progress (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_push_branch(
+error_t gitops_push_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -556,7 +556,7 @@ error_t *gitops_push_branch(
  * @param xfer Transfer context for credentials and progress (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_force_push_branch(
+error_t gitops_force_push_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -572,7 +572,7 @@ error_t *gitops_force_push_branch(
  * @param xfer Transfer context for credentials and progress (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_delete_remote_branch(
+error_t gitops_delete_remote_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -596,7 +596,7 @@ error_t *gitops_delete_remote_branch(
  * @param out Branch names on remote (must not be NULL; left as it was on a failure)
  * @return Error or NULL on success
  */
-error_t *gitops_list_remote_branches(
+error_t gitops_list_remote_branches(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer,
@@ -614,7 +614,7 @@ error_t *gitops_list_remote_branches(
  * @param out_url URL string (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *gitops_get_remote_url(
+error_t gitops_get_remote_url(
     git_repository *repo,
     const char *remote_name,
     char **out_url
@@ -650,7 +650,7 @@ error_t *gitops_get_remote_url(
  * @param out_url  Optional URL out-param (NULL skips URL lookup)
  * @return Error or NULL on success
  */
-error_t *gitops_resolve_default_remote(
+error_t gitops_resolve_default_remote(
     git_repository *repo,
     arena_t *arena,
     const char **out_name,
@@ -666,7 +666,7 @@ error_t *gitops_resolve_default_remote(
  * @param force Overwrite if exists
  * @return Error or NULL on success
  */
-error_t *gitops_create_reference(
+error_t gitops_create_reference(
     git_repository *repo,
     const char *name,
     const git_oid *oid,
@@ -685,7 +685,7 @@ error_t *gitops_create_reference(
  * @param out Target OID (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_resolve_reference_oid(
+error_t gitops_resolve_reference_oid(
     git_repository *repo,
     const char *ref_name,
     git_oid *out
@@ -702,7 +702,7 @@ error_t *gitops_resolve_reference_oid(
  * @param out Target OID (must not be NULL)
  * @return Error or NULL on success (ERR_NOT_FOUND if branch missing)
  */
-error_t *gitops_resolve_branch_head_oid(
+error_t gitops_resolve_branch_head_oid(
     git_repository *repo,
     const char *branch_name,
     git_oid *out
@@ -721,7 +721,7 @@ error_t *gitops_resolve_branch_head_oid(
  * @param out Target OID (must not be NULL)
  * @return Error or NULL on success (ERR_NOT_FOUND if remote branch missing)
  */
-error_t *gitops_resolve_remote_branch_oid(
+error_t gitops_resolve_remote_branch_oid(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -746,7 +746,7 @@ error_t *gitops_resolve_remote_branch_oid(
  * @param ... Format arguments
  * @return Error or NULL on success
  */
-error_t *gitops_build_refname(
+error_t gitops_build_refname(
     char *buffer, size_t buffer_size, const char *format, ...
 );
 
@@ -772,7 +772,7 @@ error_t *gitops_build_refname(
  * @return NULL, or ERR_INVALID_ARG naming the name ("Branch name cannot be empty"
  *         for none); the builder's length refusal
  */
-error_t *gitops_branch_refname(
+error_t gitops_branch_refname(
     char *buffer, size_t buffer_size, const char *name
 );
 
@@ -787,7 +787,7 @@ error_t *gitops_branch_refname(
  *                 git_tree_free)
  * @return Error or NULL on success
  */
-error_t *gitops_get_tree_from_commit(
+error_t gitops_get_tree_from_commit(
     git_repository *repo,
     const git_oid *commit_oid,
     git_tree **out_tree
@@ -807,7 +807,7 @@ error_t *gitops_get_tree_from_commit(
  *                 git_diff_free)
  * @return Error or NULL on success
  */
-error_t *gitops_diff_trees(
+error_t gitops_diff_trees(
     git_repository *repo,
     git_tree *old_tree,
     git_tree *new_tree,
@@ -825,7 +825,7 @@ error_t *gitops_diff_trees(
  *                  git_diff_stats_free)
  * @return Error or NULL on success
  */
-error_t *gitops_diff_get_stats(
+error_t gitops_diff_get_stats(
     git_diff *diff,
     git_diff_stats **out_stats
 );
@@ -841,7 +841,7 @@ error_t *gitops_diff_get_stats(
  * @param out_oid Merge base commit OID (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_find_merge_base(
+error_t gitops_find_merge_base(
     git_repository *repo,
     const git_oid *one,
     const git_oid *two,
@@ -862,7 +862,7 @@ error_t *gitops_find_merge_base(
  *                  with git_index_free)
  * @return Error or NULL on success
  */
-error_t *gitops_merge_trees_safe(
+error_t gitops_merge_trees_safe(
     git_repository *repo,
     const git_oid *ancestor_oid,
     const git_oid *our_oid,
@@ -883,7 +883,7 @@ error_t *gitops_merge_trees_safe(
  * @param out_oid Created commit OID (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_create_merge_commit(
+error_t gitops_create_merge_commit(
     git_repository *repo,
     git_index *index,
     git_commit *our_commit,
@@ -904,7 +904,7 @@ error_t *gitops_create_merge_commit(
  * @param out_oid Final rebased commit OID (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_rebase_inmemory_safe(
+error_t gitops_rebase_inmemory_safe(
     git_repository *repo,
     const git_oid *branch_oid,
     const git_oid *onto_oid,
@@ -922,7 +922,7 @@ error_t *gitops_rebase_inmemory_safe(
  * @param reflog_msg Reflog message (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_update_branch_reference(
+error_t gitops_update_branch_reference(
     git_repository *repo,
     const char *branch_name,
     const git_oid *new_oid,

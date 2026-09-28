@@ -18,7 +18,7 @@
 #include "sys/filesystem.h"
 #include "sys/identity.h"
 
-error_t *mount_validate_target(const char *target) {
+error_t mount_validate_target(const char *target) {
     CHECK_NULL(target);
 
     /* The shape: absolute and folded, as the normalizer spells every argument
@@ -185,7 +185,7 @@ const mount_root_t *mount_root_above(
     return winner;
 }
 
-error_t *mount_table_build(
+error_t mount_table_build(
     arena_t *arena, const mount_t *mounts, size_t mount_count, mount_table_t **out
 ) {
     CHECK_NULL(arena);

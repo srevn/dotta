@@ -86,7 +86,7 @@ typedef struct {
  *     STDOUT_FILENO, so interleaving is correct only when `out` also routes to
  *     stdout.
  */
-error_t *bootstrap_fire(
+error_t bootstrap_fire(
     output_t *out,
     const bootstrap_spec_t *spec
 );

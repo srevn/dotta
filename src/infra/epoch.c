@@ -52,7 +52,7 @@
 
 /* The local-ciphertext census (defined with the reconcile machinery below);
  * epoch_init gates every fresh mint on it. */
-static error_t *local_has_ciphertext(
+static error_t local_has_ciphertext(
     git_repository *repo, const uint8_t *local_fp, bool *out_found
 );
 
@@ -63,7 +63,7 @@ static error_t *local_has_ciphertext(
  * diagnostic. Caller is responsible for freeing `*out_tree` via `git_tree_free`
  * on success.
  */
-static error_t *resolve_epoch_tree(
+static error_t resolve_epoch_tree(
     git_repository *repo, git_tree **out_tree
 ) {
     *out_tree = NULL;
@@ -113,7 +113,7 @@ static error_t *resolve_epoch_tree(
  * shape, not an uninitialized repository. `epoch_init` reads exactly that
  * distinction to decide whether there is a ref to delete before it mints.
  */
-static error_t *read_epoch_blob(
+static error_t read_epoch_blob(
     git_repository *repo, git_tree *tree, const char *name,
     size_t size, uint8_t *out
 ) {
@@ -164,10 +164,10 @@ static error_t *read_epoch_blob(
  * discards a failed read whole. The pair is validated here — the boundary it
  * enters at — with `kdf_validate_params`.
  */
-static error_t *read_epoch_tree(
+static error_t read_epoch_tree(
     git_repository *repo, git_tree *tree, kdf_epoch_t *out
 ) {
-    error_t *err = read_epoch_blob(
+    error_t err = read_epoch_blob(
         repo, tree, EPOCH_SALT_BLOB, KDF_SALT_SIZE, out->salt
     );
     if (err) return err;
@@ -197,7 +197,7 @@ static error_t *read_epoch_tree(
  * holds whatever it held. An object that is not a commit, or a commit whose tree
  * or blobs the transfer did not carry, refuses here — before anything points at it.
  */
-static error_t *read_epoch_commit(
+static error_t read_epoch_commit(
     git_repository *repo, const git_oid *oid, kdf_epoch_t *out
 ) {
     git_commit *commit = NULL;
@@ -217,18 +217,18 @@ static error_t *read_epoch_commit(
         );
     }
 
-    error_t *err = read_epoch_tree(repo, tree, out);
+    error_t err = read_epoch_tree(repo, tree, out);
     git_tree_free(tree);
 
     return err;
 }
 
-error_t *epoch_load(git_repository *repo, kdf_epoch_t *out) {
+error_t epoch_load(git_repository *repo, kdf_epoch_t *out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
     git_tree *tree = NULL;
-    error_t *err = resolve_epoch_tree(repo, &tree);
+    error_t err = resolve_epoch_tree(repo, &tree);
     if (!err) {
         err = read_epoch_tree(repo, tree, out);
         git_tree_free(tree);
@@ -240,7 +240,7 @@ error_t *epoch_load(git_repository *repo, kdf_epoch_t *out) {
     return err;
 }
 
-error_t *epoch_init(
+error_t epoch_init(
     git_repository *repo, uint16_t memory_mib, uint8_t passes,
     kdf_epoch_t *out, bool *out_repaired
 ) {
@@ -255,7 +255,7 @@ error_t *epoch_init(
      * and hand that epoch back. A user re-running `dotta init` on an existing
      * repo must not regenerate the epoch — that would silently invalidate every
      * encrypted blob in the repo. */
-    error_t *probe_err = epoch_load(repo, out);
+    error_t probe_err = epoch_load(repo, out);
     if (probe_err == NULL) {
         return NULL;  /* already initialized */
     }
@@ -266,7 +266,7 @@ error_t *epoch_init(
      * by what the ref held, and minting over it would orphan that ciphertext
      * permanently. One census answers both because it is one danger. */
     bool any_ciphertext = false;
-    error_t *cerr = local_has_ciphertext(repo, NULL, &any_ciphertext);
+    error_t cerr = local_has_ciphertext(repo, NULL, &any_ciphertext);
     if (cerr) {
         /* No absence was proved, so the verdict is the found-ciphertext verdict
          * — do not mint — but the reason is not that reason, and the census's
@@ -334,7 +334,7 @@ error_t *epoch_init(
 
     /* Mint: a fresh salt beside the pair given. entropy_fill scrubs the buffer
      * to zeros on any failure, so a half-populated salt cannot leak out. */
-    error_t *err = entropy_fill(out->salt, KDF_SALT_SIZE);
+    error_t err = entropy_fill(out->salt, KDF_SALT_SIZE);
     if (err) {
         memset(out, 0, sizeof(*out));
         return error_wrap(err, "Failed to generate repository salt");
@@ -377,7 +377,7 @@ error_t *epoch_init(
     return NULL;
 }
 
-error_t *epoch_push(
+error_t epoch_push(
     git_repository *repo, const char *remote_name, transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
@@ -388,7 +388,7 @@ error_t *epoch_push(
      * init` populates it but a `dotta sync` on a freshly-cloned encryption-disabled
      * repo may not have one yet. */
     bool exists = false;
-    error_t *err = gitops_reference_exists(repo, EPOCH_REF, &exists);
+    error_t err = gitops_reference_exists(repo, EPOCH_REF, &exists);
     if (err) return err;
     if (!exists) return NULL;
 
@@ -449,7 +449,7 @@ error_t *epoch_push(
  * Returns NULL with `*out_present` set; never surfaces "ref missing" as an error
  * code (that is the load-bearing return value of this predicate).
  */
-static error_t *probe_remote_epoch(
+static error_t probe_remote_epoch(
     git_remote *remote, transfer_context_t *xfer, bool *out_present,
     git_oid *out_oid
 ) {
@@ -484,7 +484,7 @@ static error_t *probe_remote_epoch(
     return NULL;
 }
 
-error_t *epoch_fetch(
+error_t epoch_fetch(
     git_repository *repo, const char *remote_name, transfer_context_t *xfer,
     kdf_epoch_t *out
 ) {
@@ -505,7 +505,7 @@ error_t *epoch_fetch(
      * for the one that was judged. */
     bool present = false;
     git_oid advertised;
-    error_t *err = probe_remote_epoch(remote, xfer, &present, &advertised);
+    error_t err = probe_remote_epoch(remote, xfer, &present, &advertised);
     if (err) {
         git_remote_free(remote);
         return err;
@@ -627,13 +627,13 @@ typedef bool (*epoch_ciphertext_fn)(const epoch_ciphertext_t *ct, void *payload)
 
 /* The walk's own payload, shared across every branch. */
 typedef struct {
-    git_repository *repo;       /* borrowed; for blob loads */
-    hashmap_t *seen;            /* borrowed; visited (object, branch, path) */
-    epoch_ciphertext_fn fn;     /* the asker */
-    void *payload;              /* the asker's, carried untouched */
-    const char *branch;         /* the branch under walk */
-    bool stopped;               /* the asker stopped the walk */
-    error_t *error;             /* the walk could not prove anything (borrowed) */
+    git_repository *repo;      /* borrowed; for blob loads */
+    hashmap_t *seen;           /* borrowed; visited (object, branch, path) */
+    epoch_ciphertext_fn fn;    /* the asker */
+    void *payload;             /* the asker's, carried untouched */
+    const char *branch;        /* the branch under walk */
+    bool stopped;              /* the asker stopped the walk */
+    error_t error;             /* the walk could not prove anything (borrowed) */
 } epoch_walk_t;
 
 /*
@@ -695,7 +695,7 @@ static int epoch_walk_cb(
      * ciphertext, whatever they begin with (infra/content.h). */
     content_kind_t kind;
     uint8_t fp[KDF_EPOCH_FP_SIZE];
-    error_t *err = content_classify(
+    error_t err = content_classify(
         walk->repo, oid, git_tree_entry_filemode(entry), &kind, fp
     );
     if (err) {
@@ -746,7 +746,7 @@ static int epoch_walk_cb(
  * The anchor is walked like any branch — one empty tree — until it goes; the
  * epoch ref lives outside refs/heads and is never walked.
  */
-static error_t *walk_ciphertext(
+static error_t walk_ciphertext(
     git_repository *repo, epoch_ciphertext_fn fn, void *payload
 ) {
     /* The branches and the trees already seen, in a frame of the walk's own:
@@ -754,7 +754,7 @@ static error_t *walk_ciphertext(
      * one built on the stack is copied into the frame only as it takes a slot. */
     arena_t *frame = arena_create(0);
     string_array_t branches = { 0 };
-    error_t *err = gitops_list_branches(repo, frame, &branches);
+    error_t err = gitops_list_branches(repo, frame, &branches);
 
     hashmap_t *seen = hashmap_create(frame, 0);
 
@@ -827,7 +827,7 @@ static error_t *walk_ciphertext(
                 goto cleanup;
             }
 
-            error_t *walk_err = gitops_tree_walk(tree, epoch_walk_cb, &walk);
+            error_t walk_err = gitops_tree_walk(tree, epoch_walk_cb, &walk);
             git_tree_free(tree);
 
             /* The payload speaks first: behind the callback's own error and behind
@@ -896,14 +896,14 @@ static bool epoch_census_cb(const epoch_ciphertext_t *ct, void *payload) {
  * can name the subject — and the `false` written on that path is a courtesy,
  * not an answer. Failing closed is their policy, not the walk's.
  */
-static error_t *local_has_ciphertext(
+static error_t local_has_ciphertext(
     git_repository *repo, const uint8_t *local_fp, bool *out_found
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(out_found);
 
     epoch_census_t census = { .local_fp = local_fp };
-    error_t *err = walk_ciphertext(repo, epoch_census_cb, &census);
+    error_t err = walk_ciphertext(repo, epoch_census_cb, &census);
     *out_found = !err && census.found;
     return err;
 }
@@ -942,7 +942,7 @@ static bool epoch_find_cb(const epoch_ciphertext_t *ct, void *payload) {
     return find->accepted;
 }
 
-error_t *epoch_find_ciphertext(
+error_t epoch_find_ciphertext(
     git_repository *repo, const kdf_epoch_t *epoch, keymgr_opens_fn accept,
     void *self, bool *out_accepted
 ) {
@@ -954,7 +954,7 @@ error_t *epoch_find_ciphertext(
     epoch_find_t find = { .accept = accept, .self = self };
     kdf_epoch_fingerprint(epoch, find.fp);
 
-    error_t *err = walk_ciphertext(repo, epoch_find_cb, &find);
+    error_t err = walk_ciphertext(repo, epoch_find_cb, &find);
     *out_accepted = !err && find.accepted;
     return err;
 }
@@ -985,11 +985,11 @@ error_t *epoch_find_ciphertext(
  * The rationale for each row, and for the row that runs no census, is at
  * `epoch_resolve` in the header; it is the caller's contract, not an internal.
  */
-static error_t *decide_divergence(
+static error_t decide_divergence(
     git_repository *repo, epoch_reconcile_t *out_decision
 ) {
     kdf_epoch_t local;
-    error_t *lerr = epoch_load(repo, &local);
+    error_t lerr = epoch_load(repo, &local);
     /* The epoch is public — no wipe. */
 
     if (error_code(lerr) == ERR_NOT_FOUND) {
@@ -1008,7 +1008,7 @@ static error_t *decide_divergence(
          * at all. Its own cause has nothing to add to either verdict: what the
          * blob is wrong about does not change whether something is sealed. */
         bool any = false;
-        error_t *cerr = local_has_ciphertext(repo, NULL, &any);
+        error_t cerr = local_has_ciphertext(repo, NULL, &any);
         if (cerr) return cerr;
         *out_decision = any ? EPOCH_RECONCILE_DAMAGED : EPOCH_RECONCILE_ADOPT;
         return NULL;
@@ -1019,7 +1019,7 @@ static error_t *decide_divergence(
     kdf_epoch_fingerprint(&local, fp);
 
     bool keyed = false;
-    error_t *cerr = local_has_ciphertext(repo, fp, &keyed);
+    error_t cerr = local_has_ciphertext(repo, fp, &keyed);
     if (cerr) return cerr;
     *out_decision = keyed ? EPOCH_RECONCILE_CONFLICT : EPOCH_RECONCILE_ADOPT;
     return NULL;
@@ -1044,7 +1044,7 @@ typedef enum {
  * folds to UNREACHABLE); a remote that simply lacks the ref is ABSENT, never an
  * error.
  */
-static error_t *inspect_remote_epoch(
+static error_t inspect_remote_epoch(
     git_repository *repo, const char *remote_name, transfer_context_t *xfer,
     epoch_remote_status_t *out_status
 ) {
@@ -1059,7 +1059,7 @@ static error_t *inspect_remote_epoch(
 
     bool present = false;
     git_oid remote_oid;
-    error_t *err = probe_remote_epoch(remote, xfer, &present, &remote_oid);
+    error_t err = probe_remote_epoch(remote, xfer, &present, &remote_oid);
     git_remote_free(remote);
     if (err) {
         /* Transport failure — propagate so the caller can skip epoch reconciliation
@@ -1090,7 +1090,7 @@ static error_t *inspect_remote_epoch(
     return NULL;
 }
 
-error_t *epoch_resolve(
+error_t epoch_resolve(
     git_repository *repo, const char *remote_name, transfer_context_t *xfer,
     epoch_reconcile_t *out_decision
 ) {
@@ -1100,7 +1100,7 @@ error_t *epoch_resolve(
     CHECK_NULL(out_decision);
 
     epoch_remote_status_t status;
-    error_t *err = inspect_remote_epoch(repo, remote_name, xfer, &status);
+    error_t err = inspect_remote_epoch(repo, remote_name, xfer, &status);
     if (err) {
         /* Transport / lookup failure folds to UNREACHABLE: the caller skips epoch
          * reconciliation best-effort, and the fetch phase carries the authoritative
@@ -1120,7 +1120,7 @@ error_t *epoch_resolve(
              * epoch, has nothing to publish — distinguish the two so the caller
              * never claims an establish it cannot perform (the establish guard). */
             kdf_epoch_t scratch;
-            error_t *lerr = epoch_load(repo, &scratch);
+            error_t lerr = epoch_load(repo, &scratch);
             *out_decision = lerr ? EPOCH_RECONCILE_NO_LOCAL_EPOCH
                                  : EPOCH_RECONCILE_ESTABLISH;
 

@@ -32,7 +32,7 @@
 /**
  * Helper: Validate path argument
  */
-static inline error_t *validate_path(const char *path) {
+static inline error_t validate_path(const char *path) {
     CHECK_NULL(path);
     if (path[0] == '\0') {
         return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
@@ -263,7 +263,7 @@ bool fs_is_os_metadata_file(const char *filename) {
 /**
  * File operations
  */
-error_t *fs_read_fd(int fd, buffer_t *out) {
+error_t fs_read_fd(int fd, buffer_t *out) {
     CHECK_NULL(out);
 
     *out = (buffer_t){ 0 };
@@ -325,7 +325,7 @@ error_t *fs_read_fd(int fd, buffer_t *out) {
     return NULL;
 }
 
-error_t *fs_read_file(const char *path, buffer_t *out) {
+error_t fs_read_file(const char *path, buffer_t *out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
@@ -338,7 +338,7 @@ error_t *fs_read_file(const char *path, buffer_t *out) {
         return error_from_errno(errno, "Failed to open '%s'", path);
     }
 
-    error_t *err = fs_read_fd(fd, out);
+    error_t err = fs_read_fd(fd, out);
     close(fd);
     if (err) {
         return error_wrap(err, "Failed to read '%s'", path);
@@ -367,7 +367,7 @@ error_t *fs_read_file(const char *path, buffer_t *out) {
  * @param out_st Optional: the descriptor's fstat after the last mutation
  * @return Error or NULL on success
  */
-static error_t *write_and_close_fd(
+static error_t write_and_close_fd(
     int fd,
     const char *path,
     const unsigned char *data,
@@ -460,7 +460,7 @@ static error_t *write_and_close_fd(
     return NULL;
 }
 
-error_t *fs_write_file_raw(
+error_t fs_write_file_raw(
     const char *path,
     const unsigned char *data,
     size_t size,
@@ -474,7 +474,7 @@ error_t *fs_write_file_raw(
 
     /* Ensure parent directory exists */
     char *parent = NULL;
-    error_t *err = fs_get_parent_dir(path, &parent);
+    error_t err = fs_get_parent_dir(path, &parent);
     if (err) return err;
 
     if (parent && !fs_exists(parent)) {
@@ -504,7 +504,7 @@ error_t *fs_write_file_raw(
      * every mkstemp errno, ENOSPC included. A write that cannot be atomic is
      * reported, not attempted. */
     int fd = -1;
-    error_t *tmp_err = NULL;
+    error_t tmp_err = NULL;
 
     if (n < 0 || (size_t) n >= sizeof(tmp_path)) {
         tmp_err = ERROR(ERR_FS, "Path too long for atomic write of '%s'", path);
@@ -540,7 +540,7 @@ error_t *fs_write_file_raw(
     return NULL;
 }
 
-error_t *fs_write_file(const char *path, const buffer_t *content) {
+error_t fs_write_file(const char *path, const buffer_t *content) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(content);
 
@@ -555,7 +555,7 @@ error_t *fs_write_file(const char *path, const buffer_t *content) {
     );
 }
 
-error_t *fs_copy_file(const char *src, const char *dst) {
+error_t fs_copy_file(const char *src, const char *dst) {
     RETURN_IF_ERROR(validate_path(src));
     RETURN_IF_ERROR(validate_path(dst));
 
@@ -566,7 +566,7 @@ error_t *fs_copy_file(const char *src, const char *dst) {
 
     /* Get source permissions */
     mode_t mode;
-    error_t *err = fs_get_permissions(src, &mode);
+    error_t err = fs_get_permissions(src, &mode);
     if (err) return err;
 
     /* Read source */
@@ -591,7 +591,7 @@ error_t *fs_copy_file(const char *src, const char *dst) {
     return NULL;
 }
 
-error_t *fs_remove_file(const char *path) {
+error_t fs_remove_file(const char *path) {
     RETURN_IF_ERROR(validate_path(path));
 
     if (fs_unlink(path) < 0) {
@@ -620,7 +620,7 @@ bool fs_file_exists(const char *path) {
 /**
  * Directory operations
  */
-error_t *fs_create_dir(const char *path, bool parents) {
+error_t fs_create_dir(const char *path, bool parents) {
     RETURN_IF_ERROR(validate_path(path));
 
     /* Already exists? */
@@ -631,7 +631,7 @@ error_t *fs_create_dir(const char *path, bool parents) {
     if (parents) {
         /* Create parent first */
         char *parent = NULL;
-        error_t *err = fs_get_parent_dir(path, &parent);
+        error_t err = fs_get_parent_dir(path, &parent);
         if (err) return err;
 
         if (parent && !fs_is_directory(parent)) {
@@ -654,7 +654,7 @@ error_t *fs_create_dir(const char *path, bool parents) {
     return NULL;
 }
 
-error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
+error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
     RETURN_IF_ERROR(validate_path(path));
 
     /* Validate mode */
@@ -670,7 +670,7 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
         /* Create parent directories if requested */
         if (parents) {
             char *parent = NULL;
-            error_t *err = fs_get_parent_dir(path, &parent);
+            error_t err = fs_get_parent_dir(path, &parent);
             if (err) return err;
 
             if (parent && !fs_is_directory(parent)) {
@@ -721,7 +721,7 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
     return NULL;
 }
 
-error_t *fs_create_dir_with_ownership(
+error_t fs_create_dir_with_ownership(
     const char *path,
     mode_t mode,
     uid_t uid,
@@ -828,7 +828,7 @@ apply_metadata:
     return NULL;
 }
 
-error_t *fs_create_dir_exclusive(
+error_t fs_create_dir_exclusive(
     const char *path,
     mode_t mode,
     uid_t uid,
@@ -908,7 +908,7 @@ error_t *fs_create_dir_exclusive(
  * of the directories from the walk's root down to this one, never the whole tree's.
  * A failure leaves the scratch as it stands: the walk's driver frees it whole.
  */
-static error_t *fs_remove_subtree(arena_t *scratch, const char *path) {
+static error_t fs_remove_subtree(arena_t *scratch, const char *path) {
     const arena_mark_t frame = arena_mark(scratch);
 
     string_array_t listing;
@@ -922,7 +922,7 @@ static error_t *fs_remove_subtree(arena_t *scratch, const char *path) {
          * symlink-traversal attacks where a symlink inside the tree points to a
          * directory outside it - using stat() would follow the symlink and
          * recursively delete the target directory's contents. */
-        error_t *err = NULL;
+        error_t err = NULL;
         struct stat st;
         if (fs_lstat(full_path, &st) < 0) {
             /* If lstat fails, try unlink as fallback */
@@ -953,7 +953,7 @@ static error_t *fs_remove_subtree(arena_t *scratch, const char *path) {
     return NULL;
 }
 
-error_t *fs_remove_dir(const char *path) {
+error_t fs_remove_dir(const char *path) {
     RETURN_IF_ERROR(validate_path(path));
 
     if (!fs_is_directory(path)) {
@@ -962,13 +962,13 @@ error_t *fs_remove_dir(const char *path) {
 
     /* The walk's one scratch, freed here whatever the walk met */
     arena_t *scratch = arena_create(0);
-    error_t *err = fs_remove_subtree(scratch, path);
+    error_t err = fs_remove_subtree(scratch, path);
     arena_free(scratch);
 
     return err;
 }
 
-error_t *fs_clear_path(const char *path) {
+error_t fs_clear_path(const char *path) {
     RETURN_IF_ERROR(validate_path(path));
 
     struct stat st;
@@ -1028,7 +1028,7 @@ static bool entry_is_removable_metadata(const char *dir, const char *name) {
     /* Not metadata when it cannot be named: the join's error is dropped, one
      * per entry it refuses — an empty name, which no metadata name is. */
     char *child = NULL;
-    error_t *err = fs_path_join(dir, name, &child);
+    error_t err = fs_path_join(dir, name, &child);
     if (err) {
         return false;
     }
@@ -1092,7 +1092,7 @@ fs_emptiness_t fs_directory_emptiness(
          * reasons about paths, not about basenames. */
         if (vouch) {
             char *child = NULL;
-            error_t *err = fs_path_join(path, entry->d_name, &child);
+            error_t err = fs_path_join(path, entry->d_name, &child);
             if (err) {
                 /* Cannot name it, so cannot let the caller vouch for it — and
                  * an entry nobody could be asked about is not an entry nobody
@@ -1132,7 +1132,7 @@ static inline bool errno_means_not_empty(int code) {
     return code == ENOTEMPTY || code == EEXIST;
 }
 
-error_t *fs_remove_empty_dir(const char *path) {
+error_t fs_remove_empty_dir(const char *path) {
     RETURN_IF_ERROR(validate_path(path));
 
     /* The whole story for a directory that is empty by the kernel's definition,
@@ -1150,7 +1150,7 @@ error_t *fs_remove_empty_dir(const char *path) {
      * judged and gone. */
     arena_t *frame = arena_create(0);
     string_array_t listing = { 0 };
-    error_t *err = fs_list_dir(path, frame, &listing);
+    error_t err = fs_list_dir(path, frame, &listing);
 
     /* Two passes: refuse before touching anything. A directory refused here keeps
      * every entry it had, metadata included — the caller reports "not empty",
@@ -1185,7 +1185,7 @@ error_t *fs_remove_empty_dir(const char *path) {
     return NULL;
 }
 
-error_t *fs_list_dir(const char *path, arena_t *arena, string_array_t *out) {
+error_t fs_list_dir(const char *path, arena_t *arena, string_array_t *out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -1240,7 +1240,7 @@ static bool pwd_is_here(const char *pwd) {
            named.st_dev == here.st_dev && named.st_ino == here.st_ino;
 }
 
-error_t *fs_working_directory(char **out) {
+error_t fs_working_directory(char **out) {
     CHECK_NULL(out);
 
     /* The shell's spelling where it set one that stands, the kernel's otherwise. */
@@ -1258,7 +1258,7 @@ error_t *fs_working_directory(char **out) {
     return NULL;
 }
 
-error_t *fs_make_absolute(const char *path, char **out) {
+error_t fs_make_absolute(const char *path, char **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
@@ -1269,13 +1269,13 @@ error_t *fs_make_absolute(const char *path, char **out) {
 
     char *cwd = NULL;
     RETURN_IF_ERROR(fs_working_directory(&cwd));
-    error_t *err = fs_path_join(cwd, path, out);
+    error_t err = fs_path_join(cwd, path, out);
     free(cwd);
 
     return err;
 }
 
-error_t *fs_canonicalize_path(const char *path, char **out) {
+error_t fs_canonicalize_path(const char *path, char **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
@@ -1289,7 +1289,7 @@ error_t *fs_canonicalize_path(const char *path, char **out) {
     return NULL;
 }
 
-error_t *fs_normalize_path(const char *path, char **out) {
+error_t fs_normalize_path(const char *path, char **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
@@ -1365,7 +1365,7 @@ bool fs_is_folded(const char *path) {
     return true;
 }
 
-error_t *fs_get_parent_dir(const char *path, char **out) {
+error_t fs_get_parent_dir(const char *path, char **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
@@ -1403,7 +1403,7 @@ error_t *fs_get_parent_dir(const char *path, char **out) {
     return NULL;
 }
 
-error_t *fs_path_join(const char *base, const char *component, char **out) {
+error_t fs_path_join(const char *base, const char *component, char **out) {
     RETURN_IF_ERROR(validate_path(base));
     RETURN_IF_ERROR(validate_path(component));
     CHECK_NULL(out);
@@ -1448,7 +1448,7 @@ error_t *fs_path_join(const char *base, const char *component, char **out) {
     return NULL;
 }
 
-error_t *fs_expand_tilde(const char *path, char **out) {
+error_t fs_expand_tilde(const char *path, char **out) {
     CHECK_NULL(path);
     CHECK_NULL(out);
 
@@ -1476,7 +1476,7 @@ error_t *fs_expand_tilde(const char *path, char **out) {
 /**
  * Symlink operations
  */
-error_t *fs_create_symlink(
+error_t fs_create_symlink(
     const char *target, const char *linkpath,
     uid_t uid, gid_t gid
 ) {
@@ -1500,7 +1500,7 @@ error_t *fs_create_symlink(
     return NULL;
 }
 
-error_t *fs_read_symlink(const char *linkpath, char **out) {
+error_t fs_read_symlink(const char *linkpath, char **out) {
     RETURN_IF_ERROR(validate_path(linkpath));
     CHECK_NULL(out);
 
@@ -1528,7 +1528,7 @@ error_t *fs_read_symlink(const char *linkpath, char **out) {
 /**
  * Permission operations
  */
-error_t *fs_get_permissions(const char *path, mode_t *out) {
+error_t fs_get_permissions(const char *path, mode_t *out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
@@ -1541,7 +1541,7 @@ error_t *fs_get_permissions(const char *path, mode_t *out) {
     return NULL;
 }
 
-error_t *fs_set_permissions(const char *path, mode_t mode) {
+error_t fs_set_permissions(const char *path, mode_t mode) {
     RETURN_IF_ERROR(validate_path(path));
 
     if (fs_chmod(path, mode) < 0) {
@@ -1614,7 +1614,7 @@ const char *fs_stat_noun(const struct stat *st) {
 /**
  * Ensure parent directories exist
  */
-error_t *fs_ensure_parent_dirs(const char *path) {
+error_t fs_ensure_parent_dirs(const char *path) {
     RETURN_IF_ERROR(validate_path(path));
 
     /* Get parent directory */
@@ -1634,7 +1634,7 @@ error_t *fs_ensure_parent_dirs(const char *path) {
     }
 
     /* Create parent directories recursively */
-    error_t *err = fs_create_dir(parent, true);  /* true = recursive */
+    error_t err = fs_create_dir(parent, true);  /* true = recursive */
     free(path_copy);
 
     if (err) {

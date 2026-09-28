@@ -160,7 +160,7 @@ static void profile_print_disable_stats(
  *
  * Shows enabled vs available profiles with clear visual distinction.
  */
-static error_t *profile_list(
+static error_t profile_list(
     const dotta_ctx_t *ctx,
     const cmd_profile_options_t *opts
 ) {
@@ -176,7 +176,7 @@ static error_t *profile_list(
     const char *remote_name = NULL;
     const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* The enabled rows, where the handle holds them: a listing moves none of
      * them (core/state.h state_profiles) */
@@ -209,7 +209,7 @@ static error_t *profile_list(
             const state_profile_entry_t *entry = &enabled_profiles.entries[i];
             const char *profile = entry->name;
             profile_stats_t stats = { 0 };
-            error_t *row_err = profile_get_stats(repo, profile, &stats);
+            error_t row_err = profile_get_stats(repo, profile, &stats);
 
             /* Name what the branch holds where it reads, otherwise say so: the
              * row's error is dropped, one per unreadable branch */
@@ -253,7 +253,7 @@ static error_t *profile_list(
             const char *profile = available.entries[i];
             profile_stats_t stats = { 0 };
             bool needs_target = false;
-            error_t *row_err = profile_get_stats(repo, profile, &stats);
+            error_t row_err = profile_get_stats(repo, profile, &stats);
             if (!row_err) row_err = profile_needs_target(repo, profile, &needs_target);
 
             /* Name what the branch holds where it reads, otherwise say so: the
@@ -281,7 +281,7 @@ static error_t *profile_list(
 
     /* Show remote profiles if requested */
     if (opts->show_remote) {
-        error_t *remote_err = gitops_resolve_default_remote(
+        error_t remote_err = gitops_resolve_default_remote(
             repo, ctx->arena, &remote_name, &remote_url
         );
         if (remote_err) {
@@ -345,7 +345,7 @@ cleanup:
  *
  * Downloads profiles without enabling them.
  */
-static error_t *profile_fetch(
+static error_t profile_fetch(
     const dotta_ctx_t *ctx,
     const cmd_profile_options_t *opts
 ) {
@@ -359,7 +359,7 @@ static error_t *profile_fetch(
     const char *remote_name = NULL;
     const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* Counters for summary (not cleaned up) */
     size_t fetched_count = 0;
@@ -400,7 +400,7 @@ static error_t *profile_fetch(
 
             /* A branch that fails is named and counted, its error dropped — at
              * most one per branch */
-            error_t *fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, xfer);
+            error_t fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, xfer);
             if (fetch_err) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  {red}✗{reset} Failed to fetch %s: %s\n",
@@ -488,7 +488,7 @@ static error_t *profile_fetch(
 
             /* A profile that fails is named and counted, its error dropped — at
              * most one per profile */
-            error_t *fetch_err = gitops_fetch_branch(repo, remote_name, profile, xfer);
+            error_t fetch_err = gitops_fetch_branch(repo, remote_name, profile, xfer);
             if (fetch_err) {
                 output_styled(
                     out, OUTPUT_NORMAL,
@@ -603,7 +603,7 @@ cleanup:
  *      the lines that say what it made true: iterate the validated targets to
  *      preserve per-profile output (the retarget's line says so).
  */
-static error_t *profile_enable(
+static error_t profile_enable(
     const dotta_ctx_t *ctx,
     const cmd_profile_options_t *opts
 ) {
@@ -616,7 +616,7 @@ static error_t *profile_enable(
     output_t *out = ctx->out;
 
     const char *target = NULL; /* --target, absolute: what the row stores */
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* Phase 1 observations — tallied during the validation loop. retarget names
      * the one already-enabled profile whose binding this run updates (borrowed
@@ -990,7 +990,7 @@ static error_t *profile_enable(
  *      the way back, so `disable --all` then `enable --all` is a copy-paste per
  *      line.
  */
-static error_t *profile_disable(
+static error_t profile_disable(
     const dotta_ctx_t *ctx,
     const cmd_profile_options_t *opts
 ) {
@@ -1001,7 +1001,7 @@ static error_t *profile_disable(
     state_t *state = ctx->run.state;
     output_t *out = ctx->out;
 
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* Phase 1 observation — tallied during explicit-args validation. */
     size_t not_enabled = 0;
@@ -1235,7 +1235,7 @@ static error_t *profile_disable(
  * set permuted — no name twice, every name enabled, the counts equal — and the
  * state's own boundary refuses the same (state_reorder_profiles).
  */
-static error_t *profile_reorder(
+static error_t profile_reorder(
     const dotta_ctx_t *ctx,
     const cmd_profile_options_t *opts
 ) {
@@ -1345,7 +1345,7 @@ static error_t *profile_reorder(
     for (size_t i = 0; i < opts->profile_count; i++) {
         string_array_push(&order, opts->profiles[i]);
     }
-    error_t *err = state_reorder_profiles(state, &order);
+    error_t err = state_reorder_profiles(state, &order);
     if (err) {
         return error_wrap(err, "Failed to update state");
     }
@@ -1383,7 +1383,7 @@ static error_t *profile_reorder(
  *
  * Checks state consistency and offers to fix issues.
  */
-static error_t *profile_validate(
+static error_t profile_validate(
     const dotta_ctx_t *ctx,
     const cmd_profile_options_t *opts
 ) {
@@ -1394,7 +1394,7 @@ static error_t *profile_validate(
     state_t *state = ctx->run.state;
     output_t *out = ctx->out;
 
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* State for reporting */
     bool has_issues = false;
@@ -1582,7 +1582,7 @@ cleanup:
 /**
  * Profile command dispatcher
  */
-error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) {
+error_t cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -1619,7 +1619,7 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
  * Each sub's `init_defaults` already set the `subcommand` discriminator, so
  * `cmd_profile`'s switch routes the call.
  */
-static error_t *profile_dispatch(const void *ctx_v, void *opts_v) {
+static error_t profile_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_profile(ctx, (const cmd_profile_options_t *) opts_v);
 }

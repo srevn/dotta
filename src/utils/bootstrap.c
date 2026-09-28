@@ -72,7 +72,7 @@ static void bootstrap_env(
  * exec_failed takes precedence (child-side errno captures "bad shebang" / "ENOENT
  * interpreter"), then timeout, then signal, then non-zero exit.
  */
-static error_t *script_error(const process_result_t *r) {
+static error_t script_error(const process_result_t *r) {
     if (r->exec_failed) {
         return ERROR(
             ERR_INTERNAL, "exec failed: %s", strerror(r->exec_errno)
@@ -105,7 +105,7 @@ static error_t *script_error(const process_result_t *r) {
  * temp file unconditionally. The extracted file exists only between
  * bootstrap_extract_to_temp and the exec — the window is tight by design.
  */
-static error_t *run_live(
+static error_t run_live(
     git_repository *repo,
     const char *profile,
     const char *repo_dir,
@@ -114,7 +114,7 @@ static error_t *run_live(
     char *temp_path = NULL;
     arena_t *frame = NULL;
     process_result_t result = { 0 };
-    error_t *err = NULL;
+    error_t err = NULL;
 
     err = bootstrap_extract_to_temp(repo, profile, &temp_path);
     if (err) {
@@ -164,9 +164,9 @@ cleanup:
  * Dry-run: read the script into memory, validate its shebang, free. No temp file,
  * no subprocess, no environment build.
  */
-static error_t *run_dry(git_repository *repo, const char *profile) {
+static error_t run_dry(git_repository *repo, const char *profile) {
     buffer_t content = BUFFER_INIT;
-    error_t *err = bootstrap_read(repo, profile, &content);
+    error_t err = bootstrap_read(repo, profile, &content);
     if (err) {
         buffer_deinit(&content);
         return err;
@@ -179,7 +179,7 @@ static error_t *run_dry(git_repository *repo, const char *profile) {
     return err;
 }
 
-error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
+error_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
     CHECK_NULL(out);
     CHECK_NULL(spec);
     CHECK_NULL(spec->repo);
@@ -206,7 +206,7 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
     const char *all_profiles = string_array_join(frame, profiles, " ");
     string_array_t failed;
     string_array_init(&failed, frame);
-    error_t *err = NULL;
+    error_t err = NULL;
 
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->entries[i];
@@ -221,7 +221,7 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
          * raw writes ahead of our stdio-buffered line. */
         fflush(out->stream);
 
-        error_t *step_err = spec->dry_run
+        error_t step_err = spec->dry_run
             ? run_dry(spec->repo, profile)
             : run_live(
             spec->repo, profile, spec->repo_dir, all_profiles

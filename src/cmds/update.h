@@ -49,7 +49,7 @@ typedef struct {
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts);
+error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts);
 
 /**
  * Spec-engine command specification for `dotta update`.

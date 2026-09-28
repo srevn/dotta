@@ -51,7 +51,7 @@ typedef struct {
  * @param strategy Resolution strategy
  * @return Error or NULL on success
  */
-error_t *resolve_init(
+error_t resolve_init(
     resolve_context_t *ctx,
     git_repository *repo,
     const char *remote_name,
@@ -71,7 +71,7 @@ error_t *resolve_init(
  * @param out_oid Final commit OID after resolution (can be NULL if not needed)
  * @return Error or NULL on success
  */
-error_t *resolve_execute(
+error_t resolve_execute(
     resolve_context_t *ctx,
     git_oid *out_oid
 );
@@ -86,7 +86,7 @@ error_t *resolve_execute(
  * @param ctx Divergence context (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *resolve_rollback(resolve_context_t *ctx);
+error_t resolve_rollback(resolve_context_t *ctx);
 
 /**
  * Verify divergence was resolved
@@ -99,7 +99,7 @@ error_t *resolve_rollback(resolve_context_t *ctx);
  * @param out_behind Commits behind remote (can be NULL)
  * @return Error or NULL on success
  */
-error_t *resolve_verify(
+error_t resolve_verify(
     resolve_context_t *ctx,
     size_t *out_ahead,
     size_t *out_behind

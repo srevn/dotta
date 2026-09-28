@@ -247,7 +247,7 @@ static void record_error(
 
 static void record_error_from_err(
     args_errors_t *errors, arena_t *arena, int token_index,
-    const args_opt_t *opt, const error_t *err
+    const args_opt_t *opt, error_t err
 ) {
     record_error(errors, arena, token_index, opt, "%s", error_message(err));
 }
@@ -256,7 +256,7 @@ static void record_error_from_err(
  * Typed int parser (public — also used by hooks)
  * ══════════════════════════════════════════════════════════════════ */
 
-error_t *args_parse_long(const char *text, long min, long max, long *out) {
+error_t args_parse_long(const char *text, long min, long max, long *out) {
     CHECK_NULL(text);
     CHECK_NULL(out);
     if (*text == '\0') {
@@ -414,7 +414,7 @@ static void apply_value_opt(
             /* A refused value is its message in the collector, and the error is
              * dropped: one per integer token that does not parse. */
             long parsed = 0;
-            error_t *err = args_parse_long(v, opt->int_min, opt->int_max, &parsed);
+            error_t err = args_parse_long(v, opt->int_min, opt->int_max, &parsed);
             if (err != NULL) {
                 record_error_from_err(errors, arena, tok_idx, opt, err);
                 return;
@@ -961,7 +961,7 @@ args_outcome_t args_parse(
     /* Hook: interpret positional buckets, parse refspecs, reject what the rows
      * cannot express. */
     if (leaf->post_parse != NULL) {
-        error_t *err = leaf->post_parse(opts_out, arena, leaf);
+        error_t err = leaf->post_parse(opts_out, arena, leaf);
         if (err != NULL) {
             record_error_from_err(errors_out, arena, -1, NULL, err);
             return ARGS_FAILED;
@@ -1468,7 +1468,7 @@ static bool fish_word_ok(const char *s, size_t len) {
  *
  * @return NULL, or an error naming the first offender.
  */
-static error_t *check_command_names(const args_command_t *cmd) {
+static error_t check_command_names(const args_command_t *cmd) {
     const char *owner = cmd->name ? cmd->name : "?";
     const char *name;
     size_t len;
@@ -1510,13 +1510,13 @@ static error_t *check_command_names(const args_command_t *cmd) {
                 }
             }
             if (s->command != NULL) {
-                error_t *err = check_command_names(s->command);
+                error_t err = check_command_names(s->command);
                 if (err != NULL) return err;
             }
         }
     }
     if (cmd->default_subcommand != NULL) {
-        error_t *err = check_command_names(cmd->default_subcommand);
+        error_t err = check_command_names(cmd->default_subcommand);
         if (err != NULL) return err;
     }
     return NULL;
@@ -1850,7 +1850,7 @@ static const char fish_candidates_tail[] =
     "end\n"
     "\n";
 
-error_t *args_export_completion_fish(
+error_t args_export_completion_fish(
     FILE *out,
     const args_command_t *const *commands,
     const char *prog,
@@ -1872,7 +1872,7 @@ error_t *args_export_completion_fish(
                 "command name '%s' cannot stand as a fish word", name
             );
         }
-        error_t *err = check_command_names(c);
+        error_t err = check_command_names(c);
         if (err != NULL) return err;
     }
 

@@ -36,8 +36,14 @@
 
 /**
  * Forward declarations
+ *
+ * error_t is the one handle that is a pointer: an immutable error, NULL for
+ * success, borrowed by every reader (base/error.h "Lifetime"). It is must-check
+ * by its type: an error a call answers and nobody reads does not compile under
+ * the build's -Werror, called directly, through a function pointer or from any
+ * producer. A deliberate discard is spelled `(void) f()`.
  */
-typedef struct error error_t;
+typedef const struct error *error_t __attribute__((warn_unused_result));
 typedef struct arena arena_t;
 typedef struct config config_t;
 typedef struct output output_t;

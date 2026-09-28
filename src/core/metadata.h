@@ -488,7 +488,7 @@ bool metadata_remove_item(
  *               (must not be NULL; given its arena by string_array_init)
  * @return Error or NULL on success
  */
-error_t *metadata_prune_ancestors(
+error_t metadata_prune_ancestors(
     metadata_t *metadata,
     git_index *index,
     string_array_t *pruned
@@ -553,7 +553,7 @@ const metadata_item_t *const *metadata_items(
  *            Set to NULL if the capture claims nothing (not an error)
  * @return Error or NULL on success
  */
-error_t *metadata_capture_file(
+error_t metadata_capture_file(
     const char *storage_path,
     const struct stat *st,
     bool encrypted,
@@ -588,7 +588,7 @@ error_t *metadata_capture_file(
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
  */
-error_t *metadata_capture_directory(
+error_t metadata_capture_directory(
     const char *storage_path,
     const struct stat *st,
     bool tracked,
@@ -654,7 +654,7 @@ error_t *metadata_capture_directory(
  *                (must not be NULL; given its arena by string_array_init)
  * @return Error or NULL on success
  */
-error_t *metadata_capture_ancestors(
+error_t metadata_capture_ancestors(
     metadata_t *metadata,
     const mount_table_t *mounts,
     const char *profile,
@@ -677,7 +677,7 @@ error_t *metadata_capture_ancestors(
  * @param out Metadata (must not be NULL, caller must free with metadata_free)
  * @return Error or NULL on success
  */
-error_t *metadata_load_from_branch(
+error_t metadata_load_from_branch(
     git_repository *repo,
     const char *branch_name,
     metadata_t **out
@@ -723,7 +723,7 @@ error_t *metadata_load_from_branch(
  * @param out Metadata (must not be NULL, caller must free with metadata_free)
  * @return Error or NULL on success
  */
-error_t *metadata_load_from_tree(
+error_t metadata_load_from_tree(
     git_repository *repo,
     const git_tree *tree,
     const char *profile,
@@ -753,7 +753,7 @@ buffer_t metadata_to_json(const metadata_t *metadata);
  * @param out Metadata (must not be NULL, caller must free with metadata_free)
  * @return Error or NULL on success
  */
-error_t *metadata_from_json(
+error_t metadata_from_json(
     const char *json_str,
     metadata_t **out
 );
@@ -775,7 +775,7 @@ error_t *metadata_from_json(
  * @param metadata Metadata to save (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *metadata_save_to_stage(
+error_t metadata_save_to_stage(
     stage_t *stage,
     const metadata_t *metadata
 );

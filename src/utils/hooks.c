@@ -90,7 +90,7 @@ static bool hook_is_enabled(const config_t *config, hook_type_t type) {
 /**
  * Get hook script path
  */
-static error_t *hook_get_path(
+static error_t hook_get_path(
     const config_t *config, hook_type_t type, char **out
 ) {
     CHECK_NULL(config);
@@ -103,7 +103,7 @@ static error_t *hook_get_path(
 
     /* Get hooks directory */
     char *hooks_dir = NULL;
-    error_t *err = fs_expand_tilde(config->hooks_dir, &hooks_dir);
+    error_t err = fs_expand_tilde(config->hooks_dir, &hooks_dir);
     if (err) {
         return error_wrap(err, "Failed to resolve hooks directory");
     }
@@ -165,7 +165,7 @@ static void hook_env(const hook_context_t *context, arena_t *arena, string_array
  * the hook fails (exec, timeout, exit-code, signal) or if the primitive itself
  * failed.
  */
-static error_t *hook_execute(
+static error_t hook_execute(
     const config_t *config,
     hook_type_t type,
     const hook_context_t *context,
@@ -180,7 +180,7 @@ static error_t *hook_execute(
 
     char *hook_path = NULL;
     arena_t *frame = NULL;
-    error_t *err = NULL;
+    error_t err = NULL;
 
     err = hook_get_path(config, type, &hook_path);
     if (err) goto cleanup;
@@ -348,7 +348,7 @@ static void print_hook_output(
  * stack-allocates `out_result` and is responsible for calling
  * process_result_deinit() on every path.
  */
-static error_t *hook_fire(
+static error_t hook_fire(
     const config_t *config,
     const char *repo_dir,
     const hook_invocation_t *inv,
@@ -368,7 +368,7 @@ static error_t *hook_fire(
     return hook_execute(config, type, &ctx, out_result);
 }
 
-error_t *hook_fire_pre(
+error_t hook_fire_pre(
     const config_t *config,
     output_t *out,
     const char *repo_dir,
@@ -378,7 +378,7 @@ error_t *hook_fire_pre(
     CHECK_NULL(inv);
 
     process_result_t result = { 0 };
-    error_t *err = hook_fire(
+    error_t err = hook_fire(
         config, repo_dir, inv, pre_type_for(inv->cmd), &result
     );
 
@@ -403,7 +403,7 @@ void hook_fire_post(
     if (inv->dry_run) return;
 
     process_result_t result = { 0 };
-    error_t *err = hook_fire(
+    error_t err = hook_fire(
         config, repo_dir, inv, post_type_for(inv->cmd), &result
     );
 

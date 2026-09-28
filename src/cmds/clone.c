@@ -73,7 +73,7 @@ static void land_profiles(
         /* The local branch: created at the remote's commit, or already here (the
          * same name given twice) and left where it stands. A name that fails is
          * warned about and skipped, its error dropped, one per such name. */
-        error_t *err = upstream_ensure_tracking_branch(repo, remote_name, profile);
+        error_t err = upstream_ensure_tracking_branch(repo, remote_name, profile);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to create local branch '%s': %s",
@@ -96,7 +96,7 @@ static void land_profiles(
  * @param landed Output: the profile names made local (left as it was on a failure)
  * @return Error or NULL on success
  */
-static error_t *land_all_profiles(
+static error_t land_all_profiles(
     git_repository *repo,
     const char *remote_name,
     output_t *out,
@@ -112,7 +112,7 @@ static error_t *land_all_profiles(
 
     /* Every branch the one fetch brought */
     string_array_t all_branches;
-    error_t *err = gitops_list_remote_tracking(
+    error_t err = gitops_list_remote_tracking(
         repo, remote_name, arena, &all_branches
     );
     if (err) {
@@ -153,7 +153,7 @@ static error_t *land_all_profiles(
  * @param out Output context
  * @return Error or NULL on success
  */
-static error_t *initialize_state(
+static error_t initialize_state(
     git_repository *repo,
     arena_t *arena,
     const string_array_t *profiles,
@@ -166,7 +166,7 @@ static error_t *initialize_state(
 
     /* Create state database (with or without profiles) */
     state_t *state = NULL;
-    error_t *err = state_open(repo, &state);
+    error_t err = state_open(repo, &state);
     if (err) {
         return error_wrap(err, "Failed to initialize state database");
     }
@@ -238,7 +238,7 @@ static void rollback_clone_dir(
     const char *path,
     bool path_preexisted
 ) {
-    error_t *err = NULL;
+    error_t err = NULL;
 
     if (path_preexisted) {
         string_array_t listing;
@@ -272,7 +272,7 @@ static void rollback_clone_dir(
 /**
  * Clone command implementation
  */
-error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
+error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
     CHECK_NULL(opts->url);
@@ -280,7 +280,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    error_t *err = NULL;
+    error_t err = NULL;
     git_repository *repo = NULL;
     char *local_path = NULL;
     char *elsewhere = NULL;
@@ -376,7 +376,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
              * a ref-bearing one is simply not dotta's. On a listing failure fall
              * through to the foreign diagnostic. */
             string_array_t remote_refs;
-            error_t *list_err = gitops_list_remote_tracking(
+            error_t list_err = gitops_list_remote_tracking(
                 repo, "origin", ctx->arena, &remote_refs
             );
             if (!list_err && remote_refs.count == 0) {
@@ -700,7 +700,7 @@ cleanup:
  * Mutual exclusion: `--all` and `-p/--profile` cannot both constrain the fetch
  * set. Everything else — the URL required, the path optional — is the rows'.
  */
-static error_t *clone_post_parse(
+static error_t clone_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) arena;
@@ -732,7 +732,7 @@ static args_want_t clone_complete(
     return o->url != NULL && o->path == NULL ? ARGS_WANT_DIRS : ARGS_WANT_NONE;
 }
 
-static error_t *clone_dispatch(const void *ctx_v, void *opts_v) {
+static error_t clone_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_clone(ctx, (const cmd_clone_options_t *) opts_v);
 }

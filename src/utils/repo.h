@@ -59,7 +59,7 @@
  * @param out Resolved repository path (caller must free)
  * @return Error or NULL on success
  */
-error_t *resolve_repo_path(const config_t *config, char **out);
+error_t resolve_repo_path(const config_t *config, char **out);
 
 /**
  * Where a create-style command puts the repository
@@ -95,7 +95,7 @@ error_t *resolve_repo_path(const config_t *config, char **out);
  *                      it, NULL otherwise (can be NULL; caller frees)
  * @return Error or NULL on success
  */
-error_t *repo_create_target(
+error_t repo_create_target(
     const config_t *config,
     const char *explicit_path,
     char **out_path,
@@ -116,7 +116,7 @@ error_t *repo_create_target(
  * @param repo Repository (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *repo_declare_store(git_repository *repo);
+error_t repo_declare_store(git_repository *repo);
 
 /**
  * Is this repository declared dotta's store?
@@ -136,7 +136,7 @@ error_t *repo_declare_store(git_repository *repo);
  * @param out Output boolean (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *repo_is_store(git_repository *repo, bool *out);
+error_t repo_is_store(git_repository *repo, bool *out);
 
 /**
  * Open dotta's store
@@ -184,6 +184,6 @@ error_t *repo_is_store(git_repository *repo, bool *out);
  * @param path_out Optional resolved path (can be NULL, caller must free if set)
  * @return Error or NULL on success
  */
-error_t *repo_open(const config_t *config, git_repository **repo_out, char **path_out);
+error_t repo_open(const config_t *config, git_repository **repo_out, char **path_out);
 
 #endif /* DOTTA_REPO_H */

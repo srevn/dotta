@@ -37,7 +37,7 @@
  * is no array, and an entry that is no string, holds a NUL or makes no rule
  * (base/gitignore.h), refuse the load, the entry named by its line and column.
  */
-error_t *config_load(config_t **out);
+error_t config_load(config_t **out);
 
 /**
  * The configuration with every key at its default
@@ -72,7 +72,7 @@ const char *config_repo_dir_from_env(void);
  *   2. Config file repo_dir
  *   3. Default: ~/.local/share/dotta/repo
  */
-error_t *config_get_repo_dir(const config_t *config, char **out);
+error_t config_get_repo_dir(const config_t *config, char **out);
 
 /**
  * The divergence strategies, by the word [sync] diverged_strategy and `sync
@@ -104,6 +104,6 @@ extern const config_strategy_t config_strategies[CONFIG_STRATEGY_COUNT];
  * @param out  The strategy (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *config_parse_strategy(const char *word, sync_strategy_t *out);
+error_t config_parse_strategy(const char *word, sync_strategy_t *out);
 
 #endif /* DOTTA_CONFIG_H */

@@ -122,7 +122,7 @@ typedef enum {
  * Errors:
  * - ERR_VALIDATION: --encrypt on a meta-file, or --no-encrypt over ciphertext
  */
-error_t *encryption_policy_should_encrypt(
+error_t encryption_policy_should_encrypt(
     const config_t *config,
     const char *storage_path,
     encryption_request_t request,

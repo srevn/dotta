@@ -340,7 +340,7 @@ static workspace_fault_t workspace_code_fault(error_code_t code) {
  * workspace_analyze_file and workspace_analyze_directory at their lstat,
  * workspace_measure at its own and at a directory's access check.
  */
-static workspace_fault_t workspace_error_fault(error_t *err) {
+static workspace_fault_t workspace_error_fault(error_t err) {
     if (!err) return WORKSPACE_FAULT_NONE;
 
     return workspace_code_fault(error_code(error_root(err)));
@@ -659,7 +659,7 @@ static void workspace_analyze_claim(workspace_item_t *item) {
  * @param out The verdict, set wherever NULL is returned
  * @return The read's error, or NULL
  */
-static error_t *workspace_compare_base(
+static error_t workspace_compare_base(
     workspace_t *ws,
     const workspace_item_t *item,
     compare_result_t *out
@@ -940,7 +940,7 @@ static void workspace_analyze_file(
          * content_cache_get_from_blob_oid). That is why this arm reads through
          * the memo where the base question, whose key no reader can name, does not.
          */
-        error_t *err = NULL;
+        error_t err = NULL;
 
         /* The row's own filemode, the kind both reads below are put under: the
          * ladder's expected kind for the plaintext read, one part of the memo's
@@ -1065,7 +1065,7 @@ static void workspace_analyze_file(
          * most one per path. */
         if (git_moved && (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
             compare_result_t at_base;
-            error_t *verify_err = workspace_compare_base(ws, item, &at_base);
+            error_t verify_err = workspace_compare_base(ws, item, &at_base);
 
             disk_at_base = !verify_err && at_base == CMP_EQUAL;
         }
@@ -1181,7 +1181,7 @@ static void workspace_analyze_file(
  *             so a failed look leaves it as it came
  * @return The look's error when the compare could not be made; NULL otherwise
  */
-static error_t *workspace_compare_orphan(workspace_t *ws, workspace_item_t *item) {
+static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item) {
     const state_record_t *record = item->record;
 
     /* Step 1: Content and type comparison
@@ -1194,7 +1194,7 @@ static error_t *workspace_compare_orphan(workspace_t *ws, workspace_item_t *item
      * non-zero blob, and the store holds none of another size (CHECK).
      */
     compare_result_t cmp_result;
-    error_t *err = workspace_compare_base(ws, item, &cmp_result);
+    error_t err = workspace_compare_base(ws, item, &cmp_result);
     if (err) {
         /* Cannot classify, load, decrypt, or compare — no key in reach, a blob
          * a held key refuses, an unsupported cipher version, an I/O error, a
@@ -1376,7 +1376,7 @@ static orphan_authority_t compute_orphan_authority(
          * not a tree load — a profile whose branch is gone answers here, and
          * every later row reads the cached answer. */
         bool exists = false;
-        error_t *err = gitops_branch_exists(repo, profile, &exists);
+        error_t err = gitops_branch_exists(repo, profile, &exists);
         if (err) {
             return ORPHAN_AUTHORITY_UNVERIFIED;
         }
@@ -1399,7 +1399,7 @@ static orphan_authority_t compute_orphan_authority(
          * for the pass. Stored on success alone, so a failed load is retried by
          * the next row instead of condemning the whole profile. */
         git_tree *tree = NULL;
-        error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+        error_t err = gitops_load_branch_tree(repo, profile, &tree, NULL);
         if (err) {
             return ORPHAN_AUTHORITY_UNVERIFIED;
         }
@@ -1442,7 +1442,7 @@ static orphan_authority_t compute_orphan_authority(
          * like the tree. A tree without one loads as an empty sheet — a settled
          * "no claims", not a failure — so every error here is a failure to look. */
         metadata_t *metadata = NULL;
-        error_t *err = metadata_load_from_tree(repo, cached->tree, profile, &metadata);
+        error_t err = metadata_load_from_tree(repo, cached->tree, profile, &metadata);
         if (err) {
             return ORPHAN_AUTHORITY_UNVERIFIED;
         }
@@ -2364,7 +2364,7 @@ typedef struct {
  * @param depth     Frames beneath the tracked directory the driver started at
  * @return Error or NULL on success
  */
-static error_t *scan_directory_for_untracked(
+static error_t scan_directory_for_untracked(
     const scan_t *scan, const char *directory, size_t depth
 ) {
     CHECK_NULL(scan);
@@ -2395,7 +2395,7 @@ static error_t *scan_directory_for_untracked(
      * descriptor per level, and pays for the names instead. */
     arena_t *scratch = arena_create(0);
     string_array_t listing;
-    error_t *err = fs_list_dir(directory, scratch, &listing);
+    error_t err = fs_list_dir(directory, scratch, &listing);
     if (err) {
         switch (error_code(err)) {
             case ERR_NOT_FOUND:  /* it left between the look that found it and this listing */
@@ -2584,7 +2584,7 @@ cleanup:
  * The driver enumerates the view's tracked directories, one scan each, and the
  * walk descends only into directories the view does not track (scan_root_t).
  */
-static error_t *workspace_analyze_untracked(
+static error_t workspace_analyze_untracked(
     workspace_t *ws,
     const config_t *config
 ) {
@@ -2643,7 +2643,7 @@ static error_t *workspace_analyze_untracked(
     }
     if (root_count == 0) return NULL;
 
-    error_t *err = NULL;
+    error_t err = NULL;
     source_filter_t *source_filter = NULL;
 
     /* Source-tree .gitignore filter — built once for the whole scan so the
@@ -2898,7 +2898,7 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
  * Performance: O(M log M + A log M) — one sort, and a search per record; no Git,
  * no probes.
  */
-static error_t *workspace_partition(workspace_t *ws) {
+static error_t workspace_partition(workspace_t *ws) {
     manifest_rows_t view = manifest_rows(ws->manifest);
 
     /* The active items, one block, their count the view's and known before the
@@ -2943,7 +2943,7 @@ static error_t *workspace_partition(workspace_t *ws) {
      * an orphan. */
     state_record_t *records = NULL;
     size_t record_count = 0;
-    error_t *err = state_records(ws->state, ws->arena, &records, &record_count);
+    error_t err = state_records(ws->state, ws->arena, &records, &record_count);
     if (err) return err;
 
     ws->orphans = arena_calloc(ws->arena, record_count, sizeof(*ws->orphans));
@@ -3033,7 +3033,7 @@ static void workspace_list(workspace_t *ws) {
 /**
  * Load workspace from repository
  */
-error_t *workspace_load(
+error_t workspace_load(
     git_repository *repo,
     state_t *state,
     const config_t *config,
@@ -3077,7 +3077,7 @@ error_t *workspace_load(
      * workspace_files), and the item at a path (workspace_find). The view was
      * computed from Git at dispatch, so it is current by construction — nothing
      * upstream repairs anything. */
-    error_t *err = workspace_partition(ws);
+    error_t err = workspace_partition(ws);
     if (err) return error_wrap(err, "Failed to partition workspace");
 
     /* The join, one walk over the active items in their order
@@ -3732,7 +3732,7 @@ static state_record_t workspace_learning(
  * The rule is the header's. Here: one allocation, the record built, the write,
  * and the item pointed at what it wrote.
  */
-error_t *workspace_anchor(
+error_t workspace_anchor(
     workspace_t *ws,
     const workspace_item_t *item,
     state_stat_t stat,
@@ -3750,7 +3750,7 @@ error_t *workspace_anchor(
     record->stat = stat;
     record->deployed_at = now;
 
-    error_t *err = state_write(ws->state, record);
+    error_t err = state_write(ws->state, record);
     if (err) return err;
 
     /* The item holds the record the statement wrote — cast here, where its pointer
@@ -3766,7 +3766,7 @@ error_t *workspace_anchor(
  * one allocation, the record built from the item's, the write, and the item pointed
  * at what it wrote.
  */
-error_t *workspace_learn(
+error_t workspace_learn(
     workspace_t *ws,
     const workspace_item_t *item,
     divergence_type_t axes
@@ -3783,7 +3783,7 @@ error_t *workspace_learn(
     state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
     *record = workspace_learning(*item->record, item, axes);
 
-    error_t *err = state_write(ws->state, record);
+    error_t err = state_write(ws->state, record);
     if (err) return err;
 
     /* The item holds the record the statement wrote — cast here, where its pointer
@@ -3802,7 +3802,7 @@ error_t *workspace_learn(
  * then the publication, once the store holds them. Across paths the order is
  * free, every statement keyed by its own path and reading no other.
  */
-error_t *workspace_flush(workspace_t *ws) {
+error_t workspace_flush(workspace_t *ws) {
     CHECK_NULL(ws);
 
     const size_t active_count = ws->dir_count + ws->file_count;
@@ -3812,7 +3812,7 @@ error_t *workspace_flush(workspace_t *ws) {
      * flush takes, status's, diff's, sync's, update's and a preview's, whose
      * failures are then the flush's own, from the first (below) */
     const bool scoped = !state_locked(ws->state);
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* 1. What the load owes: the record each owed item's write makes — a learning
      *    — held beside the item by its place among the active items, NULL where

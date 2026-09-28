@@ -55,7 +55,7 @@ typedef struct {
  * @param out Upstream info (must not be NULL; populated on success)
  * @return Error or NULL on success
  */
-error_t *upstream_analyze_profile(
+error_t upstream_analyze_profile(
     git_repository *repo,
     const char *remote_name,
     const char *profile_name,
@@ -112,7 +112,7 @@ output_color_t upstream_state_color(upstream_state_t state);
  *            left as it was on a failure)
  * @return Error or NULL on success
  */
-error_t *upstream_discover_branches(
+error_t upstream_discover_branches(
     git_repository *repo,
     const char *remote_name,
     arena_t *arena,
@@ -137,7 +137,7 @@ error_t *upstream_discover_branches(
  * @param branch_name Branch name
  * @return Error or NULL on success
  */
-error_t *upstream_ensure_tracking_branch(
+error_t upstream_ensure_tracking_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name

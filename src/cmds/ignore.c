@@ -67,9 +67,9 @@ static bool pattern_exists(const char *content, const char *pattern, size_t span
  * "no changes" — are refused in its words, which quote the argument where its
  * words are the reason. The flag is named here.
  */
-static error_t *require_patterns(const char *flag, char **patterns, size_t count) {
+static error_t require_patterns(const char *flag, char **patterns, size_t count) {
     for (size_t i = 0; i < count; i++) {
-        error_t *err = gitignore_validate_pattern(patterns[i]);
+        error_t err = gitignore_validate_pattern(patterns[i]);
         if (err) {
             return error_wrap(err, "Invalid %s pattern", flag);
         }
@@ -87,7 +87,7 @@ static error_t *require_patterns(const char *flag, char **patterns, size_t count
  * Every span is nonzero here, since require_patterns refused the rest, and the
  * rule is quoted as written — its span, the spelling a verdict reports it under.
  */
-static error_t *require_disjoint(
+static error_t require_disjoint(
     char **add_patterns,
     size_t add_count,
     char **remove_patterns,
@@ -323,7 +323,7 @@ static char *remove_patterns_from_content(
  * @param out_size    Receives byte count of result (excludes NUL)
  * @return Error or NULL on success
  */
-static error_t *edit_content_via_editor(
+static error_t edit_content_via_editor(
     const char *seed,
     size_t seed_size,
     char **out_content,
@@ -360,7 +360,7 @@ static error_t *edit_content_via_editor(
     }
     close(fd);
 
-    error_t *err = editor_launch_with_env(tmpfile);
+    error_t err = editor_launch_with_env(tmpfile);
     if (err) {
         unlink(tmpfile);
         free(tmpfile);
@@ -406,7 +406,7 @@ typedef struct {
  * .dottaignore every other reader refuses — one holding a NUL — opens as it stands,
  * to be mended. The write refuses what those readers would.
  */
-static error_t *edit_dottaignore(
+static error_t edit_dottaignore(
     git_repository *repo,
     const dottaignore_scope_t *scope,
     output_t *out
@@ -416,7 +416,7 @@ static error_t *edit_dottaignore(
 
     char *existing_content = NULL;
     size_t existing_size = 0;
-    error_t *err = ignore_blob_read(
+    error_t err = ignore_blob_read(
         repo, scope->refname, &existing_content, &existing_size
     );
     if (err) {
@@ -501,7 +501,7 @@ static error_t *edit_dottaignore(
  * changed, which is what lets this function get by with one variable and no
  * pointer-identity comparisons.
  */
-static error_t *modify_dottaignore(
+static error_t modify_dottaignore(
     git_repository *repo,
     const dottaignore_scope_t *scope,
     char **add_patterns,
@@ -514,7 +514,7 @@ static error_t *modify_dottaignore(
     CHECK_NULL(scope);
 
     char *owned = NULL;
-    error_t *err = ignore_blob_text(repo, scope->refname, &owned);
+    error_t err = ignore_blob_text(repo, scope->refname, &owned);
     if (err) {
         return error_wrap(
             err, "Failed to load %s .dottaignore", scope->display_label
@@ -664,7 +664,7 @@ static bool source_gitignore_matches(
     if (!filter || !abs_path || abs_path[0] != '/') return false;
 
     bool excluded = false;
-    error_t *err = source_filter_is_excluded(filter, abs_path, is_directory, &excluded);
+    error_t err = source_filter_is_excluded(filter, abs_path, is_directory, &excluded);
     if (err) {
         /* Surfaced (above): its error is dropped once warned — one per asker no
          * layer decided, only while the source repository will not read
@@ -813,7 +813,7 @@ static bool stands_as_directory(
  * filesystem argument, as it refuses status, apply and list. The named profile's
  * arm is insulated by construction, and a storage argument builds nothing.
  */
-static error_t *test_path_ignore(
+static error_t test_path_ignore(
     const dotta_ctx_t *ctx,
     const char *test_path,
     const char *specific_profile
@@ -837,7 +837,7 @@ static error_t *test_path_ignore(
 
     /* The profile named must be here before anything is read under it: the view
      * below is its branch, and the refusal names both ways out. */
-    error_t *err = NULL;
+    error_t err = NULL;
     if (specific_profile) {
         err = profile_require(repo, specific_profile);
         if (err) return err;
@@ -1060,7 +1060,7 @@ cleanup:
 /**
  * Main command implementation
  */
-error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
+error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -1119,7 +1119,7 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     char refname[DOTTA_REFNAME_MAX];
     char *profile_label = NULL;
     dottaignore_scope_t scope;
-    error_t *err = NULL;
+    error_t err = NULL;
     if (opts->profile) {
         err = profile_require(repo, opts->profile);
         if (err) {
@@ -1202,7 +1202,7 @@ static args_want_t ignore_complete(
     return ARGS_WANT_NONE;
 }
 
-static error_t *ignore_dispatch(const void *ctx_v, void *opts_v) {
+static error_t ignore_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_ignore(ctx, (const cmd_ignore_options_t *) opts_v);
 }

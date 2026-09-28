@@ -421,7 +421,7 @@ static bool tracked_beneath(
  * pass that acts. string_array_push copies each key into the array's own arena,
  * so the prune pass operates on strings the removals cannot free.
  */
-error_t *metadata_prune_ancestors(
+error_t metadata_prune_ancestors(
     metadata_t *metadata, git_index *index, string_array_t *pruned
 ) {
     CHECK_NULL(metadata);
@@ -542,7 +542,7 @@ const metadata_item_t *const *metadata_items(
  * Errors:
  * - ERR_NOT_FOUND: the UID or the GID has no name on this system
  */
-static error_t *metadata_capture_ownership(
+static error_t metadata_capture_ownership(
     metadata_item_t *item,
     const char *storage_path,
     const struct stat *st
@@ -602,7 +602,7 @@ static error_t *metadata_capture_ownership(
  * — a link claims no mode, and when it has no ownership to claim either, no item
  * is authored.
  */
-error_t *metadata_capture_file(
+error_t metadata_capture_file(
     const char *storage_path,
     const struct stat *st,
     bool encrypted,
@@ -630,7 +630,7 @@ error_t *metadata_capture_file(
     /* Ownership, where absence would misstate it (metadata_capture_ownership).
      * The lstat needs no privilege, so the claim is authored by whoever can read
      * the path. */
-    error_t *err = metadata_capture_ownership(item, storage_path, st);
+    error_t err = metadata_capture_ownership(item, storage_path, st);
     if (err) {
         metadata_item_free(item);
         return err;
@@ -661,7 +661,7 @@ error_t *metadata_capture_file(
  *
  * This function creates a metadata_item_t with kind=DIRECTORY.
  */
-error_t *metadata_capture_directory(
+error_t metadata_capture_directory(
     const char *storage_path,
     const struct stat *st,
     bool tracked,
@@ -681,7 +681,7 @@ error_t *metadata_capture_directory(
     metadata_item_t *item = metadata_item_create_directory(storage_path, mode, tracked);
 
     /* Ownership, by the file capture's rule (metadata_capture_ownership) */
-    error_t *err = metadata_capture_ownership(item, storage_path, st);
+    error_t err = metadata_capture_ownership(item, storage_path, st);
     if (err) {
         metadata_item_free(item);
         return err;
@@ -712,7 +712,7 @@ error_t *metadata_capture_directory(
  * @param retired Receives the key when the rung's claim goes (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *capture_ancestor(
+static error_t capture_ancestor(
     metadata_t *metadata, const mount_table_t *mounts, const char *profile,
     const char *storage_path, arena_t *arena, size_t *captured,
     string_array_t *retired
@@ -770,7 +770,7 @@ static error_t *capture_ancestor(
     }
 
     metadata_item_t *item = NULL;
-    error_t *err = metadata_capture_directory(storage_path, &st, false, &item);
+    error_t err = metadata_capture_directory(storage_path, &st, false, &item);
     if (err) {
         /* A name this host cannot spell is the same silence as a path it cannot
          * see: a directory capture that fails loses a claim and nothing else,
@@ -807,7 +807,7 @@ static error_t *capture_ancestor(
  *
  * The climb: this names every rung, capture_ancestor decides each one.
  */
-error_t *metadata_capture_ancestors(
+error_t metadata_capture_ancestors(
     metadata_t *metadata, const mount_table_t *mounts, const char *profile,
     const char *storage_path, arena_t *arena, size_t *captured,
     string_array_t *retired
@@ -832,7 +832,7 @@ error_t *metadata_capture_ancestors(
      * written, so the cut is an offset into it. */
     char *rung = heap_strdup(storage_path);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     for (const char *sep = first; sep; sep = strchr(sep + 1, '/')) {
         size_t cut = (size_t) (sep - storage_path);
 
@@ -959,7 +959,7 @@ buffer_t metadata_to_json(const metadata_t *metadata) {
  * Parses octal mode string (e.g., "0600", "0644", "0755") to mode_t. Validates
  * that mode is within valid range (0000-0777).
  */
-static error_t *parse_mode(const char *mode_str, mode_t *out) {
+static error_t parse_mode(const char *mode_str, mode_t *out) {
     CHECK_NULL(mode_str);
     CHECK_NULL(out);
 
@@ -996,7 +996,7 @@ static error_t *parse_mode(const char *mode_str, mode_t *out) {
  * not here. A present mode, owner or group is a value of its kind or a refusal
  * all the same: a mode that parses, a name.
  */
-error_t *metadata_from_json(const char *json_str, metadata_t **out) {
+error_t metadata_from_json(const char *json_str, metadata_t **out) {
     CHECK_NULL(json_str);
     CHECK_NULL(out);
 
@@ -1006,7 +1006,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
      * two in order: the refusal is built while the tree still stands, and the
      * tree is deleted once, after it. `item` is the loop's scratch and the tail's
      * too, so an iteration that gives up midway leaves nothing behind. */
-    error_t *err = NULL;
+    error_t err = NULL;
     cJSON *root = NULL;
     metadata_t *metadata = NULL;
     metadata_item_t *item = NULL;
@@ -1237,7 +1237,7 @@ cleanup:
  * the tree loader says; a missing branch is the tree loader's failure (ERR_GIT),
  * never a sheet with nothing in it.
  */
-error_t *metadata_load_from_branch(
+error_t metadata_load_from_branch(
     git_repository *repo,
     const char *branch_name,
     metadata_t **out
@@ -1247,7 +1247,7 @@ error_t *metadata_load_from_branch(
     CHECK_NULL(out);
 
     git_tree *tree = NULL;
-    error_t *err = gitops_load_branch_tree(repo, branch_name, &tree, NULL);
+    error_t err = gitops_load_branch_tree(repo, branch_name, &tree, NULL);
     if (err) {
         return error_wrap(err, "Failed to load tree of branch '%s'", branch_name);
     }
@@ -1265,7 +1265,7 @@ error_t *metadata_load_from_branch(
  * absent-entry arm is the one producer of that answer, so no reader folds a
  * not-found into a collection of its own.
  */
-error_t *metadata_load_from_tree(
+error_t metadata_load_from_tree(
     git_repository *repo,
     const git_tree *tree,
     const char *profile,
@@ -1276,7 +1276,7 @@ error_t *metadata_load_from_tree(
     CHECK_NULL(profile);
     CHECK_NULL(out);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     git_tree_entry *entry = NULL;
     char *json_str = NULL;
     metadata_t *metadata = NULL;
@@ -1328,7 +1328,7 @@ cleanup:
  *
  * The sheet serialized, then put at .dotta/metadata.json as a regular blob.
  */
-error_t *metadata_save_to_stage(
+error_t metadata_save_to_stage(
     stage_t *stage,
     const metadata_t *metadata
 ) {
@@ -1337,7 +1337,7 @@ error_t *metadata_save_to_stage(
 
     buffer_t json = metadata_to_json(metadata);
 
-    error_t *err = stage_put(
+    error_t err = stage_put(
         stage, METADATA_FILE_PATH, json.data, json.size, GIT_FILEMODE_BLOB, NULL
     );
     buffer_deinit(&json);

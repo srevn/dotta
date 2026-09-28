@@ -79,7 +79,7 @@ typedef struct {
  * so callers borrow the string rather than re-resolving. NULL suppresses the
  * DOTTA_REPO_DIR export.
  */
-error_t *hook_fire_pre(
+error_t hook_fire_pre(
     const config_t *config,
     output_t *out,
     const char *repo_dir,

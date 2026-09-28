@@ -61,7 +61,7 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
      * the keyboard's signals while it runs; the child is the invoker's, so `sudo
      * dotta git` runs git as the user on the user's repository. */
     process_result_t result;
-    error_t *err = process_foreground(argv, &result);
+    error_t err = process_foreground(argv, &result);
     free(argv);
     if (err) {
         fprintf(stderr, "Error: %s\n", error_message(err));
@@ -101,12 +101,11 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
  *
  * Exit-code preservation: `cmd_git` returns git's own status (0, 1, 2, 128+n).
  * That status IS the user-visible contract — `git diff --exit-code`, merge-base
- * probes, CI scripts all branch on it. We can't funnel it through `error_t *`
- * (which collapses to 0 or 1), so we write through `*ctx->exit_code`; `run_spec`
- * honors that when dispatch returns NULL. See `struct args_ctx` docs for the
- * channel.
+ * probes, CI scripts all branch on it. We can't funnel it through `error_t` (which
+ * collapses to 0 or 1), so we write through `*ctx->exit_code`; `run_spec` honors
+ * that when dispatch returns NULL. See `struct args_ctx` docs for the channel.
  */
-static error_t *git_dispatch(const void *ctx_v, void *opts_v) {
+static error_t git_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     (void) opts_v;
     cmd_git_options_t opts = {

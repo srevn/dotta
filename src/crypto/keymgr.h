@@ -202,7 +202,7 @@ typedef bool (*keymgr_opens_fn)(void *self, const keymgr_witness_t *witness);
  * rather than with the file count — and KEYMGR_ATTEMPTS multiplies it at a
  * terminal. The right passphrase opens the first witness and stops.
  */
-typedef error_t *(*keymgr_witness_source_fn)(
+typedef error_t (*keymgr_witness_source_fn)(
     struct git_repository *repo,
     const kdf_epoch_t *epoch,
     keymgr_opens_fn accept,
@@ -243,7 +243,7 @@ typedef error_t *(*keymgr_witness_source_fn)(
  * @param out             Key manager (caller frees with keymgr_free)
  * @return Error or NULL on success
  */
-error_t *keymgr_create(
+error_t keymgr_create(
     int32_t session_timeout,
     const kdf_epoch_t *epoch,
     keymgr_reach_t reach,
@@ -276,7 +276,7 @@ error_t *keymgr_create(
  * @param out_ciphertext Output buffer (caller frees with buffer_deinit)
  * @return Error or NULL on success
  */
-error_t *keymgr_encrypt(
+error_t keymgr_encrypt(
     keymgr *km,
     const char *profile,
     const char *storage_path,
@@ -309,7 +309,7 @@ error_t *keymgr_encrypt(
  *         ERR_CRYPTO when a held master does not open this blob or no master
  *         here ever could (the codes paragraph above)
  */
-error_t *keymgr_decrypt(
+error_t keymgr_decrypt(
     keymgr *km,
     const char *profile,
     const char *storage_path,
@@ -342,7 +342,7 @@ error_t *keymgr_decrypt(
  *         usable was obtained, or the passphrase opened nothing; a walk or a
  *         derivation that failed keeps its own code), or the save's
  */
-error_t *keymgr_set(keymgr *km);
+error_t keymgr_set(keymgr *km);
 
 /**
  * The witness the kept master opened, if any.

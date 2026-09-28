@@ -29,7 +29,7 @@
  * about a key the file holds: one the file leaves out keeps its default.
  */
 
-static error_t *read_bool(
+static error_t read_bool(
     toml_datum_t value, const char *section, const char *key, bool *out
 ) {
     if (value.type != TOML_BOOLEAN) {
@@ -44,7 +44,7 @@ static error_t *read_bool(
 
 /* An integer within [min, max]: the range is the key's domain, and the refusal
  * names it. */
-static error_t *read_int(
+static error_t read_int(
     toml_datum_t value, const char *section, const char *key, int32_t min,
     int32_t max, int32_t *out
 ) {
@@ -68,7 +68,7 @@ static error_t *read_int(
  * a C string ends at its first NUL: one inside would cut the value short, in
  * silence, wherever it is read — so it is refused here, where the length is still
  * in hand. The string is the parse's, alive while the parse is. */
-static error_t *read_text(
+static error_t read_text(
     toml_datum_t value, const char *section, const char *key, const char **out
 ) {
     if (value.type != TOML_STRING) {
@@ -89,7 +89,7 @@ static error_t *read_text(
 
 /* A string, copied into the configuration's arena over the default — a literal,
  * which nothing frees. */
-static error_t *read_string(
+static error_t read_string(
     toml_datum_t value, const char *section, const char *key, arena_t *arena,
     const char **out
 ) {
@@ -103,7 +103,7 @@ static error_t *read_string(
 
 /* A path: a string, and not an empty one — leaving the key out is how the default
  * is asked for. */
-static error_t *read_path(
+static error_t read_path(
     toml_datum_t value, const char *section, const char *key, arena_t *arena,
     const char **out
 ) {
@@ -120,33 +120,33 @@ static error_t *read_path(
 
 /* The three settings of a few words, each read as the value its word names by
  * the owner of the words (utils/config.h), whose refusal the key's name wraps. */
-static error_t *read_verbosity(
+static error_t read_verbosity(
     toml_datum_t value, const char *section, const char *key, output_verbosity_t *out
 ) {
     const char *word = NULL;
     RETURN_IF_ERROR(read_text(value, section, key, &word));
 
-    error_t *err = output_parse_verbosity(word, out);
+    error_t err = output_parse_verbosity(word, out);
     return err ? error_wrap(err, "Invalid [%s] %s", section, key) : NULL;
 }
 
-static error_t *read_color(
+static error_t read_color(
     toml_datum_t value, const char *section, const char *key, output_color_mode_t *out
 ) {
     const char *word = NULL;
     RETURN_IF_ERROR(read_text(value, section, key, &word));
 
-    error_t *err = output_parse_color_mode(word, out);
+    error_t err = output_parse_color_mode(word, out);
     return err ? error_wrap(err, "Invalid [%s] %s", section, key) : NULL;
 }
 
-static error_t *read_strategy(
+static error_t read_strategy(
     toml_datum_t value, const char *section, const char *key, sync_strategy_t *out
 ) {
     const char *word = NULL;
     RETURN_IF_ERROR(read_text(value, section, key, &word));
 
-    error_t *err = config_parse_strategy(word, out);
+    error_t err = config_parse_strategy(word, out);
     return err ? error_wrap(err, "Invalid [%s] %s", section, key) : NULL;
 }
 
@@ -163,7 +163,7 @@ static error_t *read_strategy(
  * [ignore] layer where it composes it, and auto_encrypt reads no attribution.
  * Published only whole.
  */
-static error_t *read_patterns(
+static error_t read_patterns(
     toml_datum_t value, const char *section, const char *key, arena_t *arena,
     const gitignore_ruleset_t **out
 ) {
@@ -190,7 +190,7 @@ static error_t *read_patterns(
                 "holds a NUL byte", section, key, entry.lineno, entry.colno
             );
         }
-        error_t *err = gitignore_ruleset_append_pattern(rules, entry.u.s, 0);
+        error_t err = gitignore_ruleset_append_pattern(rules, entry.u.s, 0);
         if (err) {
             return error_wrap(
                 err, "Invalid [%s] %s: the entry at line %d, column %d",
@@ -274,7 +274,7 @@ void config_free(config_t *config) {
  * The configuration file's path: $DOTTA_CONFIG_FILE when it is set, else the
  * default location.
  */
-static error_t *config_get_path(char **out) {
+static error_t config_get_path(char **out) {
     /* Check environment variable */
     const char *env_path = getenv("DOTTA_CONFIG_FILE");
     if (env_path && env_path[0] != '\0') {
@@ -283,7 +283,7 @@ static error_t *config_get_path(char **out) {
 
     /* Use default location */
     char *config_dir = NULL;
-    error_t *err = fs_expand_tilde(DEFAULT_CONFIG_DIR, &config_dir);
+    error_t err = fs_expand_tilde(DEFAULT_CONFIG_DIR, &config_dir);
     if (err) return err;
 
     err = fs_path_join(config_dir, DEFAULT_CONFIG_FILE, out);
@@ -296,7 +296,7 @@ static error_t *config_get_path(char **out) {
  * key is named, typed and bounded. A key the schema does not name is refused,
  * never ignored.
  */
-static error_t *read_key(
+static error_t read_key(
     toml_datum_t value, const char *section, const char *key, config_t *config
 ) {
     arena_t *arena = config->arena;
@@ -381,7 +381,7 @@ static error_t *read_key(
  * fails the read, named by its section and key. The document is the parse's,
  * alive for this call and no longer (read_file).
  */
-static error_t *read_sections(toml_datum_t top, config_t *config) {
+static error_t read_sections(toml_datum_t top, config_t *config) {
     static const char *const sections[] = {
         "core",   "hooks",  "security", "ignore",
         "output", "commit", "sync",     "encryption", NULL
@@ -433,9 +433,9 @@ static error_t *read_sections(toml_datum_t top, config_t *config) {
  * as long as the read of its sections, and every result is freed with toml_free,
  * as the library documents — a failed parse's too.
  */
-static error_t *read_file(const char *path, config_t *config) {
+static error_t read_file(const char *path, config_t *config) {
     buffer_t text = BUFFER_INIT;
-    error_t *err = fs_read_file(path, &text);
+    error_t err = fs_read_file(path, &text);
     if (error_code(err) == ERR_NOT_FOUND) {
         /* No config file - every key keeps its default */
         return NULL;
@@ -454,7 +454,7 @@ static error_t *read_file(const char *path, config_t *config) {
     return err;
 }
 
-error_t *config_load(config_t **out) {
+error_t config_load(config_t **out) {
     CHECK_NULL(out);
 
     *out = NULL;
@@ -467,7 +467,7 @@ error_t *config_load(config_t **out) {
 
     /* The file over the defaults: each key it names is checked as it is read
      * (read_key), so nothing is left to check after. */
-    error_t *err = read_file(path, config);
+    error_t err = read_file(path, config);
 
     /* Every failure is wrapped once, with the file: the chain beneath it names
      * what in the file, and why. */
@@ -486,7 +486,7 @@ const char *config_repo_dir_from_env(void) {
     return (dir && dir[0] != '\0') ? dir : NULL;
 }
 
-error_t *config_get_repo_dir(const config_t *config, char **out) {
+error_t config_get_repo_dir(const config_t *config, char **out) {
     CHECK_NULL(out);
 
     /* Priority 1: Environment variable */
@@ -512,7 +512,7 @@ const config_strategy_t config_strategies[CONFIG_STRATEGY_COUNT] = {
     [SYNC_STRATEGY_THEIRS] = { "theirs", "Keep remote, reset the local branch"    },
 };
 
-error_t *config_parse_strategy(const char *word, sync_strategy_t *out) {
+error_t config_parse_strategy(const char *word, sync_strategy_t *out) {
     CHECK_NULL(word);
     CHECK_NULL(out);
 

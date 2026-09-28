@@ -58,7 +58,7 @@ static const char *filemode_type_str(git_filemode_t mode) {
  * closed pipe with SIGPIPE ignored) surface as a non-zero exit instead of vanishing
  * at process teardown.
  */
-static error_t *write_stdout(const buffer_t *content) {
+static error_t write_stdout(const buffer_t *content) {
     if (content->size > 0 &&
         fwrite(content->data, 1, content->size, stdout) != content->size) {
         return ERROR(ERR_FS, "Failed to write content to stdout");
@@ -91,7 +91,7 @@ static error_t *write_stdout(const buffer_t *content) {
  * entry exists to carry exactly that. Symlinks show their target, binary files
  * their size without dumping content, encrypted files that decryption occurred.
  */
-static error_t *print_blob_content(
+static error_t print_blob_content(
     const dotta_ctx_t *ctx,
     const git_oid *blob_oid,
     const char *storage_path,
@@ -121,7 +121,7 @@ static error_t *print_blob_content(
     bool encrypted = item && item->encrypted;
 
     buffer_t content = BUFFER_INIT;
-    error_t *err = content_get_from_blob_oid(
+    error_t err = content_get_from_blob_oid(
         repo, blob_oid, filemode, storage_path, profile, keymgr, &content
     );
     if (err) {
@@ -215,7 +215,7 @@ static error_t *print_blob_content(
  * what the profile holds now and has no provenance to announce. Both are the
  * caller's to free.
  */
-static error_t *show_source(
+static error_t show_source(
     const dotta_ctx_t *ctx,
     const char *profile,
     const char *commit_ref,
@@ -233,7 +233,7 @@ static error_t *show_source(
     *out_commit = NULL;
 
     if (!commit_ref) {
-        error_t *err = gitops_load_branch_tree(repo, profile, out_tree, NULL);
+        error_t err = gitops_load_branch_tree(repo, profile, out_tree, NULL);
         if (err) {
             return error_wrap(err, "Failed to load tree for profile '%s'", profile);
         }
@@ -241,7 +241,7 @@ static error_t *show_source(
     }
 
     git_commit *commit = NULL;
-    error_t *err = gitops_resolve_commit_in_branch(
+    error_t err = gitops_resolve_commit_in_branch(
         repo, profile, commit_ref, &commit
     );
     if (err) return err;
@@ -326,7 +326,7 @@ static void show_provenance(output_t *out, const git_commit *commit) {
  * — is refused as the directory it is, because the profile does hold it and "not
  * found" would be the wrong word. Only a name neither document holds is not found.
  */
-static error_t *show_file(
+static error_t show_file(
     const dotta_ctx_t *ctx,
     const char *profile,
     const char *storage_path,
@@ -342,7 +342,7 @@ static error_t *show_file(
      * about the encryption state, and about a directory claim below. Handed to
      * the read below, so the name is answered from the sheet as this verb read
      * it, and the sheet is read once. */
-    error_t *err = metadata_load_from_tree(repo, tree, profile, &metadata);
+    error_t err = metadata_load_from_tree(repo, tree, profile, &metadata);
     if (err) {
         metadata = metadata_create_empty();
     }
@@ -447,7 +447,7 @@ static int print_diff_line_cb(
  * the absence a search reads as "try the next profile" (core/profiles.h
  * profile_resolve_commit). Both are borrowed — the commit is the caller's to free.
  */
-static error_t *show_commit(
+static error_t show_commit(
     git_repository *repo,
     const git_commit *commit,
     const char *profile,
@@ -458,7 +458,7 @@ static error_t *show_commit(
     CHECK_NULL(profile);
     CHECK_NULL(out);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     git_tree *commit_tree = NULL;
     git_tree *parent_tree = NULL;
     git_diff *diff = NULL;
@@ -578,7 +578,7 @@ cleanup:
 /**
  * Show command implementation
  */
-error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
+error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -588,7 +588,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     const mount_table_t *mounts = ctx->run.mounts;
     output_t *out = ctx->out;
 
-    error_t *err = NULL;
+    error_t err = NULL;
     git_tree *tree = NULL;
     git_commit *source = NULL;
     const char *profile = opts->profile;
@@ -788,7 +788,7 @@ cleanup:
  * pointers borrow argv. cmd_show does not free any of these pointers — the engine's
  * arena owns their lifetime.
  */
-static error_t *show_post_parse(
+static error_t show_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) cmd;
@@ -817,7 +817,7 @@ static error_t *show_post_parse(
         /* File mode: parse [profile:]file[@commit] into arena. */
         o->mode = SHOW_FILE;
         refspec_t rs = { 0 };
-        error_t *err = parse_refspec(arena, arg, &rs);
+        error_t err = parse_refspec(arena, arg, &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse file specification");
         }
@@ -841,7 +841,7 @@ static error_t *show_post_parse(
         /* <profile> <file[@commit]> — refspec profile wins if present. */
         o->profile = args[0];
         refspec_t rs = { 0 };
-        error_t *err = parse_refspec(arena, args[1], &rs);
+        error_t err = parse_refspec(arena, args[1], &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse file specification");
         }
@@ -905,7 +905,7 @@ static args_want_t show_complete(
     return ARGS_WANT_NONE;
 }
 
-static error_t *show_dispatch(const void *ctx_v, void *opts_v) {
+static error_t show_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_show(ctx, (const cmd_show_options_t *) opts_v);
 }

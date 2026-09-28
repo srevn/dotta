@@ -71,7 +71,7 @@
  * @param out The capture (must not be NULL; cleared here before the policy can
  *            refuse, so freeing it is correct on every path)
  */
-static error_t *update_capture(
+static error_t update_capture(
     const dotta_ctx_t *ctx,
     stage_t *stage,
     const workspace_item_t *item,
@@ -102,7 +102,7 @@ static error_t *update_capture(
      * its bytes and its mode, and no entry at all for a file new to the profile.
      * A blob that cannot be read is an error, not "not encrypted": a sniff that
      * defaulted would flip the policy silently. */
-    error_t *err = NULL;
+    error_t err = NULL;
     const git_index_entry *prior = git_index_get_bypath(
         stage_index(stage), storage_path, 0
     );
@@ -376,7 +376,7 @@ static void update_partition(
  *                      never this count's (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *update_profile(
+static error_t update_profile(
     const dotta_ctx_t *ctx,
     stage_t *stage,
     const char *profile,
@@ -408,7 +408,7 @@ static error_t *update_profile(
     metadata_t *metadata = NULL;
     const char **storage_paths = NULL;
     char *message = NULL;
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* The one metadata load: the sheet in the tree the stage opened at — the
      * branch's own bytes — mutated as the walk goes, saved once. */
@@ -880,7 +880,7 @@ cleanup:
  * @param commit_count Number of commits
  * @return Error or NULL on success
  */
-static error_t *update_write_record(
+static error_t update_write_record(
     const dotta_ctx_t *ctx,
     const commit_t *commits,
     size_t commit_count
@@ -898,7 +898,7 @@ static error_t *update_write_record(
     size_t synced = 0, removed = 0, fallbacks = 0;   /* The split, said once the commit lands */
 
     /* The lock, and every decision below made under it (state_begin) */
-    error_t *err = state_begin(state);
+    error_t err = state_begin(state);
     if (err) return err;
 
     /* The post-commit view, once */
@@ -1035,7 +1035,7 @@ cleanup:
  *                         NULL)
  * @return Error or NULL on success
  */
-static error_t *update_execute(
+static error_t update_execute(
     const dotta_ctx_t *ctx,
     const string_array_t *enabled,
     const workspace_item_t **update_items,
@@ -1067,7 +1067,7 @@ static error_t *update_execute(
 
     commit_t *commits = NULL;
     size_t commit_count = 0;
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* One bookkeeping slot per enabled profile — an upper bound; only landed
      * commits fill one. */
@@ -1433,7 +1433,7 @@ static void update_print_preview(
 /**
  * Update command implementation
  */
-error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
+error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -1446,12 +1446,12 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     output_t *out = ctx->out;
 
     /* Declare all resources at top, initialized to NULL */
-    error_t *err = NULL;
+    error_t err = NULL;
     workspace_t *ws = NULL;
     scope_t *scope = NULL;
     partition_t partition = { 0 };
     size_t total_updated = 0;
-    error_t *record_err = NULL;   /* The record phase's fate: non-fatal, read by the stop and the summary */
+    error_t record_err = NULL;   /* The record phase's fate: non-fatal, read by the stop and the summary */
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1923,7 +1923,7 @@ cleanup:
  * positional profile appends onto that list. Files go into a fresh arena-backed
  * array.
  */
-static error_t *update_post_parse(
+static error_t update_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) cmd;
@@ -1997,9 +1997,9 @@ static args_want_t update_complete(
     return ARGS_WANT_FILES;
 }
 
-static error_t *update_dispatch(const void *ctx_v, void *opts_v) {
+static error_t update_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
-    error_t *err = cmd_update(ctx, (const cmd_update_options_t *) opts_v);
+    error_t err = cmd_update(ctx, (const cmd_update_options_t *) opts_v);
 
     /* A refusal the invoker met reading a source (add_dispatch has the list and
      * the argument) ends the update before its commit; a run that holds root

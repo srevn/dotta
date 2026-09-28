@@ -139,7 +139,7 @@ static int populate_tree_paths_callback(
  * Walks the tree once, adding all blob paths as keys with NULL values. Returns
  * the total file count for early termination tracking.
  */
-static error_t *populate_tree_paths(
+static error_t populate_tree_paths(
     git_tree *tree,
     hashmap_t *map,
     size_t *out_count
@@ -171,7 +171,7 @@ static error_t *populate_tree_paths(
  * Every info it makes is the walk's arena's, so a walk that fails partway leaves
  * nothing to release but the revwalk.
  */
-static error_t *stats_walk(
+static error_t stats_walk(
     git_repository *repo,
     const char *branch_name,
     walk_t *walk
@@ -185,7 +185,7 @@ static error_t *stats_walk(
     /* Resolve the branch head. The walk needs the OID, not the reference that
      * carries it — git_revwalk_push copies what it is given. */
     git_oid head_oid;
-    error_t *err = gitops_resolve_branch_head_oid(repo, branch_name, &head_oid);
+    error_t err = gitops_resolve_branch_head_oid(repo, branch_name, &head_oid);
     if (err) return err;
 
     /* Create revwalker */
@@ -345,7 +345,7 @@ cleanup:
 /**
  * A blob's size
  */
-error_t *stats_blob_size(
+error_t stats_blob_size(
     git_repository *repo,
     const git_oid *blob_oid,
     size_t *out
@@ -359,7 +359,7 @@ error_t *stats_blob_size(
     int git_err = git_repository_odb(&odb, repo);
     if (git_err < 0) return error_from_git(git_err);
 
-    error_t *err = stats_blob_size_with_odb(odb, blob_oid, out);
+    error_t err = stats_blob_size_with_odb(odb, blob_oid, out);
     git_odb_free(odb);
     return err;
 }
@@ -367,7 +367,7 @@ error_t *stats_blob_size(
 /**
  * A blob's size, through a caller-held ODB handle
  */
-error_t *stats_blob_size_with_odb(
+error_t stats_blob_size_with_odb(
     git_odb *odb,
     const git_oid *blob_oid,
     size_t *out
@@ -392,7 +392,7 @@ error_t *stats_blob_size_with_odb(
 /**
  * Build file -> commit map
  */
-error_t *stats_build_file_commit_map(
+error_t stats_build_file_commit_map(
     git_repository *repo,
     const char *branch_name,
     git_tree *tree,
@@ -412,7 +412,7 @@ error_t *stats_build_file_commit_map(
      * stack is copied into the arena as it takes its slot. */
     hashmap_t *paths = hashmap_create(arena, HASHMAP_INITIAL_SIZE);
     size_t files_needed;
-    error_t *err = populate_tree_paths(tree, paths, &files_needed);
+    error_t err = populate_tree_paths(tree, paths, &files_needed);
     if (err) return err;
 
     /* Initialize walk context */
@@ -442,7 +442,7 @@ error_t *stats_build_file_commit_map(
 /**
  * The commits that touched one file
  */
-error_t *stats_file_history(
+error_t stats_file_history(
     git_repository *repo,
     const char *branch_name,
     const char *file_path,
@@ -470,7 +470,7 @@ error_t *stats_file_history(
 
     /* Walk commits to collect history: what a failed walk collected is the arena's
      * bytes */
-    error_t *err = stats_walk(repo, branch_name, &walk);
+    error_t err = stats_walk(repo, branch_name, &walk);
     if (err) return err;
 
     /* Check if we found any commits */

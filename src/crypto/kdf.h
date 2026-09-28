@@ -121,7 +121,7 @@ typedef struct kdf_epoch {
  * @param passes     Argon2 pass count
  * @return Error or NULL on success
  */
-error_t *kdf_validate_params(uint16_t memory_mib, uint8_t passes);
+error_t kdf_validate_params(uint16_t memory_mib, uint8_t passes);
 
 /**
  * Encode / decode the Argon2id pair as the ref's params blob.
@@ -193,7 +193,7 @@ void kdf_epoch_fingerprint(
  * @param out_master_key Output buffer for 32-byte master key
  * @return Error or NULL on success
  */
-error_t *kdf_master_key(
+error_t kdf_master_key(
     const uint8_t *passphrase,
     size_t passphrase_len,
     const kdf_epoch_t *epoch,

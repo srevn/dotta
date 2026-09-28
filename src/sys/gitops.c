@@ -23,7 +23,7 @@
 #include "sys/identity.h"
 #include "sys/transfer.h"
 
-error_t *gitops_init(void) {
+error_t gitops_init(void) {
     /* The one git failure error_from_git cannot read: git_error_last answers
      * out of a thread-local the runtime sets up, and an init that failed leaves
      * the count at zero, so libgit2's own reply is the static "you must call
@@ -65,7 +65,7 @@ void gitops_shutdown(void) {
     git_libgit2_shutdown();
 }
 
-error_t *gitops_get_signature(git_signature **out, git_repository *repo) {
+error_t gitops_get_signature(git_signature **out, git_repository *repo) {
     if (git_signature_default(out, repo) == 0) {
         return NULL;
     }
@@ -106,7 +106,7 @@ error_t *gitops_get_signature(git_signature **out, git_repository *repo) {
  * the filesystem, which is the authority on presence. Everything else keeps
  * libgit2's own message.
  */
-error_t *gitops_open_repository(git_repository **out, const char *path) {
+error_t gitops_open_repository(git_repository **out, const char *path) {
     CHECK_NULL(out);
     CHECK_NULL(path);
 
@@ -125,7 +125,7 @@ error_t *gitops_open_repository(git_repository **out, const char *path) {
     return NULL;
 }
 
-error_t *gitops_init_repository(git_repository **out, const char *path) {
+error_t gitops_init_repository(git_repository **out, const char *path) {
     CHECK_NULL(out);
     CHECK_NULL(path);
 
@@ -148,7 +148,7 @@ void gitops_close_repository(git_repository *repo) {
 /**
  * Branch/Reference operations
  */
-error_t *gitops_reference_exists(
+error_t gitops_reference_exists(
     git_repository *repo, const char *refname, bool *exists
 ) {
     CHECK_NULL(repo);
@@ -169,7 +169,7 @@ error_t *gitops_reference_exists(
     return NULL;
 }
 
-error_t *gitops_branch_exists(
+error_t gitops_branch_exists(
     git_repository *repo, const char *name, bool *exists
 ) {
     CHECK_NULL(repo);
@@ -182,7 +182,7 @@ error_t *gitops_branch_exists(
     return gitops_reference_exists(repo, refname, exists);
 }
 
-error_t *gitops_branch_blocker(
+error_t gitops_branch_blocker(
     git_repository *repo, const char *name, char *blocker, size_t size
 ) {
     CHECK_NULL(repo);
@@ -201,7 +201,7 @@ error_t *gitops_branch_blocker(
      * it into the caller's buffer before it goes. */
     arena_t *frame = arena_create(0);
     string_array_t branches;
-    error_t *err = gitops_list_branches(repo, frame, &branches);
+    error_t err = gitops_list_branches(repo, frame, &branches);
 
     size_t len = strlen(name);
     for (size_t i = 0; !err && i < branches.count; i++) {
@@ -264,7 +264,7 @@ typedef struct {
  * already — and a scan of the listing per ref: tens of branches, well under a
  * millisecond.
  */
-static error_t *walk_loose_refs(const loose_walk_t *walk, const char *dir) {
+static error_t walk_loose_refs(const loose_walk_t *walk, const char *dir) {
     DIR *d = fs_opendir(dir);
     if (!d) {
         if (errno == ENOENT) return NULL;
@@ -272,7 +272,7 @@ static error_t *walk_loose_refs(const loose_walk_t *walk, const char *dir) {
     }
 
     /* errno cleared before every readdir: a NULL is the end, or the error it names */
-    error_t *err = NULL;
+    error_t err = NULL;
     struct dirent *entry;
     for (errno = 0; (entry = readdir(d)) != NULL; errno = 0) {
         const char *name = entry->d_name;
@@ -334,7 +334,7 @@ static error_t *walk_loose_refs(const loose_walk_t *walk, const char *dir) {
     return err;
 }
 
-error_t *gitops_list_refs(
+error_t gitops_list_refs(
     git_repository *repo, const char *namespace, arena_t *arena, string_array_t *out
 ) {
     CHECK_NULL(repo);
@@ -360,7 +360,7 @@ error_t *gitops_list_refs(
     string_array_t names;
     string_array_init(&names, arena);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     for (;;) {
         /* Classified, not compared: GIT_ITEROVER is the enumeration finished,
          * and a negative code one that never did. */
@@ -402,7 +402,7 @@ error_t *gitops_list_refs(
     return NULL;
 }
 
-error_t *gitops_list_branches(git_repository *repo, arena_t *arena, string_array_t *out) {
+error_t gitops_list_branches(git_repository *repo, arena_t *arena, string_array_t *out) {
     CHECK_NULL(repo);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -410,7 +410,7 @@ error_t *gitops_list_branches(git_repository *repo, arena_t *arena, string_array
     return gitops_list_refs(repo, "refs/heads", arena, out);
 }
 
-error_t *gitops_list_remote_tracking(
+error_t gitops_list_remote_tracking(
     git_repository *repo, const char *remote_name, arena_t *arena, string_array_t *out
 ) {
     CHECK_NULL(repo);
@@ -419,7 +419,7 @@ error_t *gitops_list_remote_tracking(
     CHECK_NULL(out);
 
     char namespace[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(
+    error_t err = gitops_build_refname(
         namespace, sizeof(namespace), "refs/remotes/%s", remote_name
     );
     if (err) return err;
@@ -435,7 +435,7 @@ error_t *gitops_list_remote_tracking(
     return NULL;
 }
 
-error_t *gitops_delete_branch(git_repository *repo, const char *name) {
+error_t gitops_delete_branch(git_repository *repo, const char *name) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
 
@@ -486,7 +486,7 @@ error_t *gitops_delete_branch(git_repository *repo, const char *name) {
  * matches the OID that the old profile_load captured via the same
  * git_reference_peel(ANY) path, ensuring staleness detection consistency.
  */
-static error_t *resolve_ref_to_tree(
+static error_t resolve_ref_to_tree(
     git_repository *repo, const char *ref_name, git_tree **out_tree,
     git_oid *out_oid
 ) {
@@ -541,7 +541,7 @@ static error_t *resolve_ref_to_tree(
     return NULL;
 }
 
-error_t *gitops_load_tree(
+error_t gitops_load_tree(
     git_repository *repo, const char *ref_name, git_tree **out
 ) {
     CHECK_NULL(repo);
@@ -552,7 +552,7 @@ error_t *gitops_load_tree(
     return resolve_ref_to_tree(repo, ref_name, out, NULL);
 }
 
-error_t *gitops_load_branch_tree(
+error_t gitops_load_branch_tree(
     git_repository *repo, const char *branch_name, git_tree **out_tree,
     git_oid *out_oid
 ) {
@@ -561,7 +561,7 @@ error_t *gitops_load_branch_tree(
     CHECK_NULL(out_tree);
 
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_branch_refname(
+    error_t err = gitops_branch_refname(
         refname, sizeof(refname), branch_name
     );
     if (err) return err;
@@ -569,7 +569,7 @@ error_t *gitops_load_branch_tree(
     return resolve_ref_to_tree(repo, refname, out_tree, out_oid);
 }
 
-error_t *gitops_tree_walk(
+error_t gitops_tree_walk(
     const git_tree *tree, git_treewalk_cb callback, void *payload
 ) {
     CHECK_NULL(tree);
@@ -584,7 +584,7 @@ error_t *gitops_tree_walk(
 /**
  * Commit operations
  */
-error_t *gitops_get_commit(
+error_t gitops_get_commit(
     git_repository *repo, const char *ref_name, git_commit **out
 ) {
     CHECK_NULL(repo);
@@ -614,7 +614,7 @@ error_t *gitops_get_commit(
 /**
  * Remote operations
  */
-error_t *gitops_fetch_remote(
+error_t gitops_fetch_remote(
     git_repository *repo, const char *remote_name, transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
@@ -641,7 +641,7 @@ error_t *gitops_fetch_remote(
     return NULL;
 }
 
-error_t *gitops_fetch_branch(
+error_t gitops_fetch_branch(
     git_repository *repo, const char *remote_name, const char *branch_name,
     transfer_context_t *xfer
 ) {
@@ -665,7 +665,7 @@ error_t *gitops_fetch_branch(
     );
 
     char refspec[DOTTA_REFSPEC_MAX];
-    error_t *err_build = gitops_build_refname(
+    error_t err_build = gitops_build_refname(
         refspec, sizeof(refspec), "%s:refs/remotes/%s/%s",
         refname, remote_name, branch_name
     );
@@ -689,7 +689,7 @@ error_t *gitops_fetch_branch(
     return NULL;
 }
 
-error_t *gitops_fetch_branches(
+error_t gitops_fetch_branches(
     git_repository *repo, const char *remote_name, const string_array_t *branches,
     transfer_context_t *xfer
 ) {
@@ -708,7 +708,7 @@ error_t *gitops_fetch_branches(
     char **refspecs = heap_calloc(branches->count, sizeof(char *));
 
     /* Construct refspecs for each branch */
-    error_t *err_result = NULL;
+    error_t err_result = NULL;
     for (size_t i = 0; i < branches->count; i++) {
         /* Each refspec's source is its branch's ref, spelled where every one is. */
         char refname[DOTTA_REFNAME_MAX];
@@ -721,7 +721,7 @@ error_t *gitops_fetch_branches(
         refspecs[i] = heap_alloc(DOTTA_REFSPEC_MAX);
 
         /* Build refspec: refs/heads/branch:refs/remotes/origin/branch */
-        error_t *err_build = gitops_build_refname(
+        error_t err_build = gitops_build_refname(
             refspecs[i], DOTTA_REFSPEC_MAX, "%s:refs/remotes/%s/%s",
             refname, remote_name, branches->entries[i]
         );
@@ -763,7 +763,7 @@ cleanup:
     return err_result;
 }
 
-error_t *gitops_push_branch(
+error_t gitops_push_branch(
     git_repository *repo, const char *remote_name, const char *branch_name,
     transfer_context_t *xfer
 ) {
@@ -787,7 +787,7 @@ error_t *gitops_push_branch(
     );
 
     char refspec[DOTTA_REFSPEC_MAX];
-    error_t *err_build = gitops_build_refname(
+    error_t err_build = gitops_build_refname(
         refspec, sizeof(refspec), "%s:%s", refname, refname
     );
     if (err_build) {
@@ -810,7 +810,7 @@ error_t *gitops_push_branch(
     return NULL;
 }
 
-error_t *gitops_force_push_branch(
+error_t gitops_force_push_branch(
     git_repository *repo, const char *remote_name, const char *branch_name,
     transfer_context_t *xfer
 ) {
@@ -835,7 +835,7 @@ error_t *gitops_force_push_branch(
 
     /* Force push refspec ('+' prefix accepts non-fast-forward update) */
     char refspec[DOTTA_REFSPEC_MAX];
-    error_t *err_build = gitops_build_refname(
+    error_t err_build = gitops_build_refname(
         refspec, sizeof(refspec), "+%s:%s", refname, refname
     );
     if (err_build) {
@@ -858,7 +858,7 @@ error_t *gitops_force_push_branch(
     return NULL;
 }
 
-error_t *gitops_delete_remote_branch(
+error_t gitops_delete_remote_branch(
     git_repository *repo, const char *remote_name, const char *branch_name,
     transfer_context_t *xfer
 ) {
@@ -883,7 +883,7 @@ error_t *gitops_delete_remote_branch(
 
     /* Delete remote branch using empty refspec: :refs/heads/branch */
     char refspec[DOTTA_REFSPEC_MAX];
-    error_t *err_build = gitops_build_refname(
+    error_t err_build = gitops_build_refname(
         refspec, sizeof(refspec), ":%s", refname
     );
     if (err_build) {
@@ -906,7 +906,7 @@ error_t *gitops_delete_remote_branch(
     return NULL;
 }
 
-error_t *gitops_list_remote_branches(
+error_t gitops_list_remote_branches(
     git_repository *repo, const char *remote_name, transfer_context_t *xfer,
     arena_t *arena, string_array_t *out
 ) {
@@ -974,7 +974,7 @@ error_t *gitops_list_remote_branches(
     return NULL;
 }
 
-error_t *gitops_get_remote_url(
+error_t gitops_get_remote_url(
     git_repository *repo, const char *remote_name, char **out_url
 ) {
     CHECK_NULL(repo);
@@ -1000,7 +1000,7 @@ error_t *gitops_get_remote_url(
     return NULL;
 }
 
-error_t *gitops_resolve_default_remote(
+error_t gitops_resolve_default_remote(
     git_repository *repo, arena_t *arena, const char **out_name,
     const char **out_url
 ) {
@@ -1068,7 +1068,7 @@ error_t *gitops_resolve_default_remote(
 /**
  * Reference operations
  */
-error_t *gitops_create_reference(
+error_t gitops_create_reference(
     git_repository *repo, const char *name, const git_oid *oid,
     bool force
 ) {
@@ -1085,7 +1085,7 @@ error_t *gitops_create_reference(
     return NULL;
 }
 
-error_t *gitops_resolve_reference_oid(
+error_t gitops_resolve_reference_oid(
     git_repository *repo, const char *ref_name, git_oid *out
 ) {
     CHECK_NULL(repo);
@@ -1109,7 +1109,7 @@ error_t *gitops_resolve_reference_oid(
     return NULL;
 }
 
-error_t *gitops_resolve_branch_head_oid(
+error_t gitops_resolve_branch_head_oid(
     git_repository *repo, const char *branch_name, git_oid *out
 ) {
     CHECK_NULL(repo);
@@ -1117,7 +1117,7 @@ error_t *gitops_resolve_branch_head_oid(
     CHECK_NULL(out);
 
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_branch_refname(
+    error_t err = gitops_branch_refname(
         refname, sizeof(refname), branch_name
     );
     if (err) return err;
@@ -1125,7 +1125,7 @@ error_t *gitops_resolve_branch_head_oid(
     return gitops_resolve_reference_oid(repo, refname, out);
 }
 
-error_t *gitops_resolve_remote_branch_oid(
+error_t gitops_resolve_remote_branch_oid(
     git_repository *repo,
     const char *remote_name, const char *branch_name, git_oid *out
 ) {
@@ -1135,7 +1135,7 @@ error_t *gitops_resolve_remote_branch_oid(
     CHECK_NULL(out);
 
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(
+    error_t err = gitops_build_refname(
         refname, sizeof(refname), "refs/remotes/%s/%s",
         remote_name, branch_name
     );
@@ -1152,7 +1152,7 @@ error_t *gitops_resolve_remote_branch_oid(
 /**
  * Open a zero-copy view onto a blob
  */
-error_t *gitops_blob_view_open(
+error_t gitops_blob_view_open(
     git_repository *repo, const git_oid *oid, gitops_blob_view_t *out
 ) {
     CHECK_NULL(repo);
@@ -1185,7 +1185,7 @@ void gitops_blob_view_close(gitops_blob_view_t *view) {
 /**
  * Read blob content by OID
  */
-error_t *gitops_read_blob_content(
+error_t gitops_read_blob_content(
     git_repository *repo, const git_oid *oid, void **out_content,
     size_t *out_size
 ) {
@@ -1195,7 +1195,7 @@ error_t *gitops_read_blob_content(
     CHECK_NULL(out_size);
 
     gitops_blob_view_t view;
-    error_t *err = gitops_blob_view_open(repo, oid, &view);
+    error_t err = gitops_blob_view_open(repo, oid, &view);
     if (err) return err;
 
     void *content = heap_alloc(view.size + 1);
@@ -1215,7 +1215,7 @@ error_t *gitops_read_blob_content(
 /**
  * Resolve commit reference within a branch
  */
-error_t *gitops_resolve_commit_in_branch(
+error_t gitops_resolve_commit_in_branch(
     git_repository *repo, const char *branch_name, const char *commit_ref,
     git_commit **out_commit
 ) {
@@ -1226,7 +1226,7 @@ error_t *gitops_resolve_commit_in_branch(
 
     /* Build the branch refname. */
     char ref_name[DOTTA_REFNAME_MAX];
-    error_t *err_build = gitops_branch_refname(
+    error_t err_build = gitops_branch_refname(
         ref_name, sizeof(ref_name), branch_name
     );
     if (err_build) return err_build;
@@ -1366,7 +1366,7 @@ error_t *gitops_resolve_commit_in_branch(
 /**
  * Get tree from commit OID
  */
-error_t *gitops_get_tree_from_commit(
+error_t gitops_get_tree_from_commit(
     git_repository *repo, const git_oid *commit_oid,
     git_tree **out_tree
 ) {
@@ -1390,7 +1390,7 @@ error_t *gitops_get_tree_from_commit(
 /**
  * Find merge base between two commits
  */
-error_t *gitops_find_merge_base(
+error_t gitops_find_merge_base(
     git_repository *repo, const git_oid *one, const git_oid *two,
     git_oid *out_oid
 ) {
@@ -1415,7 +1415,7 @@ error_t *gitops_find_merge_base(
 /**
  * Merge trees without modifying HEAD or working directory
  */
-error_t *gitops_merge_trees_safe(
+error_t gitops_merge_trees_safe(
     git_repository *repo, const git_oid *ancestor_oid, const git_oid *our_oid,
     const git_oid *their_oid, git_index **out_index
 ) {
@@ -1429,7 +1429,7 @@ error_t *gitops_merge_trees_safe(
     git_tree *our_tree = NULL;
     git_tree *their_tree = NULL;
     git_index *index = NULL;
-    error_t *err = NULL;
+    error_t err = NULL;
     int git_err;
 
     /* Get tree from ancestor commit */
@@ -1474,7 +1474,7 @@ error_t *gitops_merge_trees_safe(
 /**
  * Create merge commit from index
  */
-error_t *gitops_create_merge_commit(
+error_t gitops_create_merge_commit(
     git_repository *repo, git_index *index, git_commit *our_commit,
     git_commit *their_commit, const char *message, git_oid *out_oid
 ) {
@@ -1509,7 +1509,7 @@ error_t *gitops_create_merge_commit(
 
     /* Get signature with fallback */
     git_signature *sig = NULL;
-    error_t *sig_err = gitops_get_signature(&sig, repo);
+    error_t sig_err = gitops_get_signature(&sig, repo);
     if (sig_err) {
         git_tree_free(tree);
         return sig_err;
@@ -1535,7 +1535,7 @@ error_t *gitops_create_merge_commit(
 /**
  * Perform in-memory rebase without modifying HEAD
  */
-error_t *gitops_rebase_inmemory_safe(
+error_t gitops_rebase_inmemory_safe(
     git_repository *repo, const git_oid *branch_oid, const git_oid *onto_oid,
     git_oid *out_oid
 ) {
@@ -1548,7 +1548,7 @@ error_t *gitops_rebase_inmemory_safe(
     git_annotated_commit *onto_commit = NULL;
     git_rebase *rebase = NULL;
     git_signature *sig = NULL;
-    error_t *err = NULL;
+    error_t err = NULL;
     int git_err;
 
     /* Create annotated commits for rebase */
@@ -1641,7 +1641,7 @@ error_t *gitops_rebase_inmemory_safe(
 /**
  * Update branch reference to new commit
  */
-error_t *gitops_update_branch_reference(
+error_t gitops_update_branch_reference(
     git_repository *repo, const char *branch_name, const git_oid *new_oid,
     const char *reflog_msg
 ) {
@@ -1652,7 +1652,7 @@ error_t *gitops_update_branch_reference(
 
     /* Build reference name */
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_branch_refname(refname, sizeof(refname), branch_name);
+    error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
     if (err) return err;
 
     /* Lookup existing reference */
@@ -1676,7 +1676,7 @@ error_t *gitops_update_branch_reference(
 /**
  * Diff operations
  */
-error_t *gitops_diff_trees(
+error_t gitops_diff_trees(
     git_repository *repo, git_tree *old_tree, git_tree *new_tree,
     const git_diff_options *opts, git_diff **out_diff
 ) {
@@ -1693,7 +1693,7 @@ error_t *gitops_diff_trees(
     return NULL;
 }
 
-error_t *gitops_diff_get_stats(
+error_t gitops_diff_get_stats(
     git_diff *diff, git_diff_stats **out_stats
 ) {
     CHECK_NULL(diff);
@@ -1708,7 +1708,7 @@ error_t *gitops_diff_get_stats(
 /**
  * A branch name to its reference, or Git's refusal
  */
-error_t *gitops_branch_refname(
+error_t gitops_branch_refname(
     char *buffer, size_t buffer_size, const char *name
 ) {
     CHECK_NULL(buffer);
@@ -1736,7 +1736,7 @@ error_t *gitops_branch_refname(
 /**
  * Validate and build a Git reference name
  */
-error_t *gitops_build_refname(
+error_t gitops_build_refname(
     char *buffer, size_t buffer_size, const char *format,
     ...
 ) {

@@ -138,10 +138,10 @@ static void prompt_open_edit(prompt_t *p, size_t item_index, const char *current
 /* --- View lifecycle --- */
 
 /* Allocate view->items and populate name/enabled. */
-static error_t *build_items(
+static error_t build_items(
     git_repository *repo, state_t *deploy_state, arena_t *arena, view_t *view
 ) {
-    error_t *err = NULL;
+    error_t err = NULL;
     string_array_t all_profiles;
     bool *used = NULL;
     size_t item_idx = 0;
@@ -234,7 +234,7 @@ static void read_targets(
 
         /* The need, absorbed (above): the error is dropped, one per row whose
          * branch will not read. */
-        error_t *err = profile_needs_target(repo, it->name, &it->needs_target);
+        error_t err = profile_needs_target(repo, it->name, &it->needs_target);
         if (err) {
             it->unreadable = true;
         }
@@ -256,12 +256,12 @@ static inline void view_cleanup(view_t **v) {
 }
 #define VIEW_AUTO __attribute__((cleanup(view_cleanup)))
 
-static error_t *view_create(
+static error_t view_create(
     git_repository *repo, state_t *deploy_state, arena_t *arena, view_t **out
 ) {
     view_t *view = heap_calloc(1, sizeof(view_t));
 
-    error_t *err = build_items(repo, deploy_state, arena, view);
+    error_t err = build_items(repo, deploy_state, arena, view);
     if (err) {
         view_free(view);
         return err;
@@ -402,13 +402,13 @@ static void plan_classify(
  * manifest_unbound) — the OFF→ON prompt asks for a target, a row already enabled
  * without one keeps that, and nothing downstream refuses either. No second guard
  * here. */
-static error_t *plan_validate(const plan_t *plan) {
+static error_t plan_validate(const plan_t *plan) {
     for (size_t i = 0; i < plan->new_order.count; i++) {
         if (!plan->needs_enable[i]) continue;
         const item_t *it = plan->new_order_items[i];
         if (!it->target) continue;
 
-        error_t *err = mount_validate_target(it->target);
+        error_t err = mount_validate_target(it->target);
         if (err) {
             return error_wrap(
                 err, "Invalid deployment target for profile '%s'", it->name
@@ -422,19 +422,19 @@ static error_t *plan_validate(const plan_t *plan) {
  * runs), removals next, reorder last over the post-diff set. Each enable/disable
  * re-reads the row cache after its write, so reorder's precondition reads the
  * post-diff set. */
-static error_t *plan_apply(state_t *deploy_state, const plan_t *plan) {
+static error_t plan_apply(state_t *deploy_state, const plan_t *plan) {
     for (size_t i = 0; i < plan->new_order.count; i++) {
         if (!plan->needs_enable[i]) continue;
         const item_t *it = plan->new_order_items[i];
 
-        error_t *err = state_enable_profile(deploy_state, it->name, it->target);
+        error_t err = state_enable_profile(deploy_state, it->name, it->target);
         if (err) {
             return error_wrap(err, "Failed to enable profile '%s'", it->name);
         }
     }
 
     for (size_t i = 0; i < plan->removal_count; i++) {
-        error_t *err = state_disable_profile(deploy_state, plan->removal_names[i]);
+        error_t err = state_disable_profile(deploy_state, plan->removal_names[i]);
         if (err) {
             return error_wrap(
                 err, "Failed to disable profile '%s'", plan->removal_names[i]
@@ -442,7 +442,7 @@ static error_t *plan_apply(state_t *deploy_state, const plan_t *plan) {
         }
     }
 
-    error_t *err = state_reorder_profiles(deploy_state, &plan->new_order);
+    error_t err = state_reorder_profiles(deploy_state, &plan->new_order);
     if (err) {
         return error_wrap(err, "Failed to apply new profile order");
     }
@@ -457,11 +457,11 @@ static error_t *plan_apply(state_t *deploy_state, const plan_t *plan) {
  * — the build is total over a custom/ claim whose profile has no binding, which
  * contributes no row and is recorded for the health channel to say (core/manifest.h
  * manifest_unbound) — so an unbound row saves here as a clone's and a sync's do. */
-static error_t *plan_check(
+static error_t plan_check(
     git_repository *repo, state_t *deploy_state, arena_t *arena
 ) {
     manifest_t *view = NULL;
-    error_t *err = manifest_build(repo, deploy_state, arena, &view);
+    error_t err = manifest_build(repo, deploy_state, arena, &view);
     if (err) {
         return error_wrap(err, "Failed to build manifest with new scope");
     }
@@ -471,7 +471,7 @@ static error_t *plan_check(
 /* Save orchestrator. Holds a scoped write transaction for the diff window only;
  * declaring WRITE at the spec level would hold BEGIN IMMEDIATE for the whole
  * session, blocking other dotta processes. */
-static error_t *save_order(
+static error_t save_order(
     git_repository *repo, state_t *deploy_state, arena_t *arena, view_t *view
 ) {
     plan_t plan = { 0 };
@@ -485,7 +485,7 @@ static error_t *save_order(
         return error_create(ERR_INVALID_ARG, "no profiles enabled");
     }
 
-    error_t *err = state_begin(deploy_state);
+    error_t err = state_begin(deploy_state);
     if (err) return err;
 
     plan_classify(arena, deploy_state, &plan);
@@ -677,7 +677,7 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
              * plan_validate to refuse at save with the message, the way it refuses
              * a bad path today; its error is dropped, one per such Enter. */
             char *captured = NULL;
-            error_t *err = path_input_normalize(p->buffer.data, &captured);
+            error_t err = path_input_normalize(p->buffer.data, &captured);
             if (err) {
                 captured = heap_strdup(p->buffer.data);
             }
@@ -722,7 +722,7 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
 
 static interactive_result_t handle_key_normal(
     view_t *view, git_repository *repo, state_t *deploy_state,
-    arena_t *arena, int key, error_t **out_err
+    arena_t *arena, int key, error_t *out_err
 ) {
     switch (key) {
         case TERM_KEY_UP:
@@ -806,7 +806,7 @@ static interactive_result_t handle_key_normal(
             if (!view->modified) {
                 return INTERACTIVE_CONTINUE;
             }
-            error_t *err = save_order(repo, deploy_state, arena, view);
+            error_t err = save_order(repo, deploy_state, arena, view);
             if (err) {
                 *out_err = err;
                 return INTERACTIVE_EXIT_ERROR;
@@ -828,7 +828,7 @@ static interactive_result_t handle_key_normal(
 
 static interactive_result_t view_handle_key(
     view_t *view, git_repository *repo, state_t *deploy_state,
-    arena_t *arena, int key, error_t **out_err
+    arena_t *arena, int key, error_t *out_err
 ) {
     *out_err = NULL;
 
@@ -860,9 +860,9 @@ static interactive_result_t view_handle_key(
  * than that, but it is user data and its visual overflow is allowed to wrap rather
  * than block startup. Same logic applies to the mid-session "Target: <buffer>"
  * overlay. */
-static error_t *check_screen(const view_t *view) {
+static error_t check_screen(const view_t *view) {
     terminal_size_t size;
-    error_t *err = terminal_get_size(&size);
+    error_t err = terminal_get_size(&size);
     if (err) return err;
 
     int required_lines = view_required_lines(view);
@@ -891,13 +891,13 @@ static error_t *check_screen(const view_t *view) {
     return NULL;
 }
 
-static error_t *view_loop(
+static error_t view_loop(
     view_t *view, git_repository *repo, state_t *deploy_state,
     arena_t *arena, int initial_lines
 ) {
     int lines_drawn = initial_lines;
     interactive_result_t result = INTERACTIVE_CONTINUE;
-    error_t *loop_err = NULL;
+    error_t loop_err = NULL;
 
     while (result == INTERACTIVE_CONTINUE) {
         int key = terminal_read_key();
@@ -918,7 +918,7 @@ static error_t *view_loop(
     return NULL;
 }
 
-static error_t *interactive_run(
+static error_t interactive_run(
     git_repository *repo, state_t *deploy_state, arena_t *arena
 ) {
     if (!terminal_is_tty()) {
@@ -926,7 +926,7 @@ static error_t *interactive_run(
     }
 
     terminal_t *term TERMINAL_CLEANUP = NULL;
-    error_t *err = terminal_init(&term);
+    error_t err = terminal_init(&term);
     if (err) return err;
 
     view_t *view VIEW_AUTO = NULL;
@@ -953,7 +953,7 @@ static error_t *interactive_run(
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
 
-static error_t *interactive_dispatch(const void *ctx_v, void *opts_v) {
+static error_t interactive_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     (void) opts_v;
     return interactive_run(ctx->run.repo, ctx->run.state, ctx->arena);

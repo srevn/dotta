@@ -197,7 +197,7 @@ typedef struct {
  * The caller stack-allocates and zero-initializes:
  *
  *     process_result_t result = {0};
- *     error_t *err = process_run(&spec, &result);
+ *     error_t err = process_run(&spec, &result);
  *     // ... inspect result.exit_code / result.timed_out / result.output ...
  *     process_result_deinit(&result);
  *
@@ -254,7 +254,7 @@ typedef struct {
  *   - the child timed out and was killed (result->timed_out is true),
  *   - exec failed in the child (result->exec_failed + exec_errno).
  *
- * Returns a non-NULL error_t* only for failures the primitive itself encountered:
+ * Returns a non-NULL error_t only for failures the primitive itself encountered:
  *   - invalid spec (argv[0] missing or empty, etc.)           → ERR_INVALID_ARG
  *   - pipe(), fork(), or clock_gettime() failed                → ERR_FS
  *   - select()/read()/waitpid() returned an unrecoverable error → ERR_FS
@@ -263,7 +263,7 @@ typedef struct {
  * Caller composes the user-facing error message from result fields plus its own
  * context (script name, hook name, etc.).
  */
-error_t *process_run(const process_spec_t *spec, process_result_t *result);
+error_t process_run(const process_spec_t *spec, process_result_t *result);
 
 /**
  * Release any heap-allocated fields in result and zero the struct.
@@ -306,6 +306,6 @@ void process_result_deinit(process_result_t *result);
  * @param result Outcome (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *process_foreground(char *const argv[], process_result_t *result);
+error_t process_foreground(char *const argv[], process_result_t *result);
 
 #endif /* DOTTA_PROCESS_H */

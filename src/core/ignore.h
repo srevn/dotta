@@ -136,7 +136,7 @@ typedef enum {
  * @param out      The layer; NULL when count is 0 (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *ignore_excludes_compile(
+error_t ignore_excludes_compile(
     char *const *patterns,
     size_t count,
     arena_t *arena,
@@ -184,7 +184,7 @@ error_t *ignore_excludes_compile(
  * @param out       Output handle (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *ignore_rules_create(
+error_t ignore_rules_create(
     git_repository *repo,
     const config_t *config,
     const gitignore_ruleset_t *cli_rules,
@@ -211,7 +211,7 @@ error_t *ignore_rules_create(
  * @param out     Output ruleset pointer (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *ignore_rules_for_profile(
+error_t ignore_rules_for_profile(
     ignore_rules_t *rules,
     const char *profile,
     const gitignore_ruleset_t **out
@@ -256,7 +256,7 @@ const char *ignore_origin_describe(ignore_origin_t origin);
  * @param out_size    Output size in bytes (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *ignore_blob_read(
+error_t ignore_blob_read(
     git_repository *repo,
     const char *refname,
     char **out_content,
@@ -283,7 +283,7 @@ error_t *ignore_blob_read(
  *                 be NULL); NULL when absent
  * @return Error or NULL on success
  */
-error_t *ignore_blob_text(
+error_t ignore_blob_text(
     git_repository *repo,
     const char *refname,
     char **out_text
@@ -309,7 +309,7 @@ error_t *ignore_blob_text(
  * @param commit_msg Commit message (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *ignore_blob_write(
+error_t ignore_blob_write(
     git_repository *repo,
     const char *refname,
     const char *content,
@@ -337,7 +337,7 @@ error_t *ignore_blob_write(
  * @param repo Repository (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *ignore_seed_baseline(git_repository *repo);
+error_t ignore_seed_baseline(git_repository *repo);
 
 /**
  * Default baseline `.dottaignore` content.

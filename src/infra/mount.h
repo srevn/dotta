@@ -147,7 +147,7 @@
  * @param target Deployment target to validate (must not be NULL)
  * @return Error or NULL when valid
  */
-error_t *mount_validate_target(const char *target);
+error_t mount_validate_target(const char *target);
 
 /**
  * Do two target spellings name one directory?
@@ -265,7 +265,7 @@ typedef struct {
  * @param out         Output handle (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *mount_table_build(
+error_t mount_table_build(
     arena_t *arena,
     const mount_t *mounts,
     size_t mount_count,

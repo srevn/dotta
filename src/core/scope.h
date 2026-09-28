@@ -127,7 +127,7 @@ typedef struct scope_inputs {
  * @param out    Scope (must not be NULL; left as it was on a refusal)
  * @return Error or NULL on success
  */
-error_t *scope_build(
+error_t scope_build(
     git_repository *repo,
     const state_t *state,
     const scope_inputs_t *in,

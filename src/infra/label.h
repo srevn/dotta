@@ -264,7 +264,7 @@ const char *label_tail(const char *storage_path);
  * @param storage_path Path to validate (must not be NULL)
  * @return Error or NULL when valid
  */
-error_t *label_validate_storage(const char *storage_path);
+error_t label_validate_storage(const char *storage_path);
 
 /**
  * The name a label and a tail spell: "<word>/<tail>", or "<word>" alone.

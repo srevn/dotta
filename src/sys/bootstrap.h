@@ -55,7 +55,7 @@ bool bootstrap_exists(git_repository *repo, const char *profile);
  * @return NULL on success; ERR_NOT_FOUND if the profile has no script; a Git
  *         error otherwise
  */
-error_t *bootstrap_read(
+error_t bootstrap_read(
     git_repository *repo,
     const char *profile,
     buffer_t *out_content
@@ -82,7 +82,7 @@ error_t *bootstrap_read(
  * @return NULL on success; ERR_NOT_FOUND if the profile has no script; wrapped
  *         error on validation, Git, or filesystem failure
  */
-error_t *bootstrap_extract_to_temp(
+error_t bootstrap_extract_to_temp(
     git_repository *repo,
     const char *profile,
     char **out_temp_path
@@ -104,6 +104,6 @@ error_t *bootstrap_extract_to_temp(
  * @param size    Number of bytes in content
  * @return NULL if valid; ERR_INVALID_ARG with a descriptive message otherwise
  */
-error_t *bootstrap_validate(const unsigned char *content, size_t size);
+error_t bootstrap_validate(const unsigned char *content, size_t size);
 
 #endif /* DOTTA_BOOTSTRAP_H */

@@ -631,7 +631,7 @@ cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts) {
             continue;
         }
 
-        error_t *remove_err = fs_remove_file(path);
+        error_t remove_err = fs_remove_file(path);
         if (remove_err) {
             /* The item's own outcome; the cause already names its subject */
             cleanup_outcome_t *o = &result->failed.entries[result->failed.count++];
@@ -672,7 +672,7 @@ cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts) {
                 continue;
         }
 
-        error_t *remove_err = fs_remove_empty_dir(path);
+        error_t remove_err = fs_remove_empty_dir(path);
         if (!remove_err) {
             result->pruned_dirs.entries[result->pruned_dirs.count++].item = item;
             continue;

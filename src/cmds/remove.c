@@ -128,7 +128,7 @@ typedef struct {
  * Fates are counted as they enter the transaction; on error the caller rolls
  * back and zeroes its settlement — the rollback takes the writes with it.
  */
-static error_t *remove_settle(
+static error_t remove_settle(
     const dotta_ctx_t *ctx,
     const candidate_t *candidates,
     size_t count,
@@ -180,7 +180,7 @@ static error_t *remove_settle(
  * Asked twice by its one caller (remove_paths): before the lock, whether there
  * is anything to settle, and under it, what the settle acts on.
  */
-static error_t *remove_paths_candidates(
+static error_t remove_paths_candidates(
     const dotta_ctx_t *ctx,
     const char *profile,
     const claim_t *claims,
@@ -250,7 +250,7 @@ static error_t *remove_paths_candidates(
  * preview and whether there is anything to settle, and under the lock, what the
  * settle acts on.
  */
-static error_t *remove_profile_candidates(
+static error_t remove_profile_candidates(
     const dotta_ctx_t *ctx,
     const char *profile,
     candidate_t **out,
@@ -316,7 +316,7 @@ static error_t *remove_profile_candidates(
  * @param claims_out The claims the arguments took, borrowed from ctx->arena (do
  *            not free)
  */
-static error_t *remove_resolve(
+static error_t remove_resolve(
     const dotta_ctx_t *ctx,
     const git_tree *tree,
     const char *profile,
@@ -341,7 +341,7 @@ static error_t *remove_resolve(
     output_t *out = ctx->out;
 
     /* Initialize all resources to NULL for safe cleanup */
-    error_t *err = NULL;
+    error_t err = NULL;
     metadata_t *metadata = NULL;
 
     /* The branch's claims, off the tree: its blobs, then the metadata's directory
@@ -562,7 +562,7 @@ typedef struct {
  * index is not tolerant — a short index is an "also in" a user reads as complete
  * — and its failure is the caller's to weigh.
  */
-static error_t *remove_overlaps(
+static error_t remove_overlaps(
     const dotta_ctx_t *ctx,
     const claim_t *claims,
     size_t claim_count,
@@ -577,7 +577,7 @@ static error_t *remove_overlaps(
     *out = (overlaps_t){ 0 };
 
     hashmap_t *index = NULL;
-    error_t *err = profile_build_filesystem_index(
+    error_t err = profile_build_filesystem_index(
         ctx->run.repo, ctx->run.mounts, current_profile, ctx->arena, &index
     );
     if (err) return err;
@@ -807,7 +807,7 @@ static bool remove_confirm_profile(
 /**
  * Remove paths from a profile
  */
-static error_t *remove_paths(
+static error_t remove_paths(
     const dotta_ctx_t *ctx,
     const cmd_remove_options_t *opts
 ) {
@@ -821,7 +821,7 @@ static error_t *remove_paths(
     output_t *out = ctx->out;
 
     /* Initialize all resources to NULL for safe cleanup */
-    error_t *err = NULL;
+    error_t err = NULL;
     stage_t *stage = NULL;              /* the branch's tip, tree and index; the commit's */
     claim_t *claims = NULL;             /* arena — the resolver's */
     size_t claim_count = 0;
@@ -1089,7 +1089,7 @@ static error_t *remove_paths(
      * (remove_profile). */
     candidate_t *candidates = NULL;
     size_t candidate_count = 0;
-    error_t *record_err = remove_paths_candidates(
+    error_t record_err = remove_paths_candidates(
         ctx, opts->profile, claims, claim_count, &pruned_dirs, &candidates, &candidate_count
     );
 
@@ -1129,7 +1129,7 @@ static error_t *remove_paths(
                 settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
             } else {
                 /* Commit transaction */
-                error_t *commit_err = state_commit(state);
+                error_t commit_err = state_commit(state);
                 if (commit_err) {
                     output_warning(
                         out, OUTPUT_NORMAL, "Failed to save record updates: %s",
@@ -1203,7 +1203,7 @@ cleanup:
 /**
  * Delete a profile
  */
-static error_t *remove_profile(
+static error_t remove_profile(
     const dotta_ctx_t *ctx,
     const cmd_remove_options_t *opts
 ) {
@@ -1218,7 +1218,7 @@ static error_t *remove_profile(
     output_t *out = ctx->out;
 
     /* Initialize all resources to NULL */
-    error_t *err = NULL;
+    error_t err = NULL;
     const char *remote_name = NULL;
     const char *remote_url = NULL;
     bool performed = false;
@@ -1282,7 +1282,7 @@ static error_t *remove_profile(
     char counts[64];
     {
         profile_stats_t stats = { 0 };
-        error_t *stats_err = profile_get_stats(repo, opts->profile, &stats);
+        error_t stats_err = profile_get_stats(repo, opts->profile, &stats);
         if (stats_err) {
             snprintf(counts, sizeof(counts), "counts unavailable");
         } else {
@@ -1367,7 +1367,7 @@ static error_t *remove_profile(
     size_t deployed_count = 0;
     settlement_t settlement = { 0 };
     {
-        error_t *read_err = remove_profile_candidates(
+        error_t read_err = remove_profile_candidates(
             ctx, opts->profile, &candidates, &candidate_count
         );
         if (read_err) {
@@ -1447,7 +1447,7 @@ static error_t *remove_profile(
     string_array_clone(&files, ctx->arena, &hook_storage);
 
     metadata_t *branch_metadata = NULL;
-    error_t *meta_err = metadata_load_from_branch(
+    error_t meta_err = metadata_load_from_branch(
         repo, opts->profile, &branch_metadata
     );
     if (!meta_err) {
@@ -1532,7 +1532,7 @@ static error_t *remove_profile(
      * write is an orphan the next apply reads, asks Git about, finds the branch
      * gone, and releases. */
     if (candidate_count > 0 || state_enabled(state, opts->profile)) {
-        error_t *delete_err = state_begin(state);
+        error_t delete_err = state_begin(state);
         if (!delete_err) {
             /* The row and the record as the lock holds them: state_begin read
              * the rows inside it, and the candidates are read here */
@@ -1665,7 +1665,7 @@ cleanup:
 /**
  * Remove command implementation
  */
-error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
+error_t cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -1698,7 +1698,7 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
  *   3. --delete-profile: paths must be empty (mutually exclusive).
  *   4. Without --delete-profile: at least one path is required.
  */
-static error_t *remove_post_parse(
+static error_t remove_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) arena;
@@ -1772,7 +1772,7 @@ static args_want_t remove_complete(
     return ARGS_WANT_NONE;
 }
 
-static error_t *remove_dispatch(const void *ctx_v, void *opts_v) {
+static error_t remove_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_remove(ctx, (const cmd_remove_options_t *) opts_v);
 }

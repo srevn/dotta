@@ -178,7 +178,7 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * - ERR_GIT: Failed to load blob (corruption, missing object)
  * - ERR_CRYPTO: out_epoch_fp requested but the encrypted header is truncated
  */
-error_t *content_classify(
+error_t content_classify(
     git_repository *repo,
     const git_oid *blob_oid,
     git_filemode_t mode,
@@ -271,7 +271,7 @@ typedef struct content_cache content_cache_t;
  *   path mismatch), a foreign epoch, or a version this build does not read
  * - ERR_NOT_FOUND / ERR_GIT: the blob could not be loaded
  */
-error_t *content_get_from_blob_oid(
+error_t content_get_from_blob_oid(
     git_repository *repo,
     const git_oid *blob_oid,
     git_filemode_t mode,
@@ -334,7 +334,7 @@ error_t *content_get_from_blob_oid(
  * Reader: a revert whose name changed between the commit and the branch's tip
  * (cmds/revert.c).
  */
-error_t *content_rebind(
+error_t content_rebind(
     git_repository *repo,
     const git_oid *blob,
     const char *from_storage_path,
@@ -406,7 +406,7 @@ error_t *content_rebind(
  * - ERR_NOT_FOUND / ERR_GIT: the blob could not be loaded
  * - ERR_IO / ERR_PERMISSION: the disk copy could not be read
  */
-error_t *content_compare_blob_to_disk(
+error_t content_compare_blob_to_disk(
     content_cache_t *cache,
     const git_oid *blob_oid,
     const char *filesystem_path,
@@ -477,7 +477,7 @@ content_cache_t *content_cache_create(
  * @param out_content Output buffer (BORROWED - cache owns, don't free)
  * @return Error or NULL on success
  */
-error_t *content_cache_get_from_blob_oid(
+error_t content_cache_get_from_blob_oid(
     content_cache_t *cache,
     const git_oid *blob_oid,
     git_filemode_t mode,
@@ -516,7 +516,7 @@ void content_cache_free(content_cache_t *cache);
  * @param storage_path The path the seal was for (must not be NULL)
  * @return ERR_LOCKED under the path, or NULL when a seal can be attempted
  */
-error_t *content_require_encryption(
+error_t content_require_encryption(
     const keymgr *keymgr,
     const char *storage_path
 );
@@ -623,7 +623,7 @@ typedef struct {
  * - ERR_CRYPTO: Encryption failed
  * - ERR_INVALID_ARG: The path is not a regular file
  */
-error_t *content_capture_file(
+error_t content_capture_file(
     const char *filesystem_path,
     const char *storage_path,
     const char *profile,
@@ -669,7 +669,7 @@ error_t *content_capture_file(
  * - ERR_NOT_FOUND / ERR_PERMISSION / ERR_FS: The look or the read, by its errno
  *   (a target too long to read whole is ENAMETOOLONG)
  */
-error_t *content_capture_link(
+error_t content_capture_link(
     const char *filesystem_path,
     content_capture_t *out
 );

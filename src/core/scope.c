@@ -36,7 +36,7 @@ struct scope {
 /* Construction                                                         */
 /* -------------------------------------------------------------------- */
 
-error_t *scope_build(
+error_t scope_build(
     git_repository *repo, const state_t *state, const scope_inputs_t *in,
     arena_t *arena, scope_t **out
 ) {
@@ -52,7 +52,7 @@ error_t *scope_build(
 
     /* 1. The enabled set, which may be empty: an empty scope is not an error
      *    ("Empty-enabled policy", scope.h). */
-    error_t *err = profile_resolve_enabled(repo, state, arena, &s->enabled);
+    error_t err = profile_resolve_enabled(repo, state, arena, &s->enabled);
     if (err) return error_wrap(err, "Failed to resolve enabled profiles");
     s->profiles = &s->enabled;
 

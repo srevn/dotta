@@ -81,6 +81,6 @@ typedef struct {
  * @param out   Parsed components. Untouched on error.
  * @return Error or NULL on success.
  */
-error_t *parse_refspec(arena_t *arena, const char *input, refspec_t *out);
+error_t parse_refspec(arena_t *arena, const char *input, refspec_t *out);
 
 #endif /* DOTTA_REFSPEC_H */

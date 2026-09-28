@@ -116,7 +116,7 @@ const args_command_t *const *dotta_registry(void) {
  * `close_run`. Under `tolerant` the same failure ends the open silently: what
  * opened stays, the rest is NULL, and the handler runs with that shape.
  */
-static error_t *open_run(
+static error_t open_run(
     dotta_run_t *run,
     const args_command_t *spec,
     const void *opts,
@@ -149,7 +149,7 @@ static error_t *open_run(
         "Spec declares manifest without state"
     );
 
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* The repository, in the declared shape. OPEN opens it and gets the path
      * opening it resolved; PATH resolves the path and opens nothing, which is
@@ -388,7 +388,7 @@ static int run_spec(
         .exit_code = &exit_override,
     };
 
-    error_t *err = open_run(&ctx.run, resolved, opts, config, arena);
+    error_t err = open_run(&ctx.run, resolved, opts, config, arena);
     if (err == NULL) err = resolved->dispatch(&ctx, opts);
 
     close_run(&ctx.run);
@@ -509,14 +509,14 @@ int main(int argc, char **argv) {
      * from the same fact (sys/identity.h). Under sudo this is also the drop:
      * from here on the process is the invoker's, and root is held for the syscalls
      * that need it. */
-    error_t *id_err = identity_init();
+    error_t id_err = identity_init();
     if (id_err) {
         error_print(id_err, stderr);
         return 1;
     }
 
     /* libgit2, and the configuration dotta gives it (sys/gitops). */
-    error_t *git_err = gitops_init();
+    error_t git_err = gitops_init();
     if (git_err) {
         error_print(git_err, stderr);
         return 1;
@@ -563,7 +563,7 @@ int main(int argc, char **argv) {
      * mistake. It renders as every failure here does, the chain whole: the file,
      * what in it, and the rule it broke. */
     config_t *config = NULL;
-    error_t *cfg_err = config_load(&config);
+    error_t cfg_err = config_load(&config);
     if (cfg_err) {
         error_print(cfg_err, stderr);
         gitops_shutdown();

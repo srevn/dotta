@@ -14,6 +14,10 @@
  * first error; a wrap holds its cause, two wraps of one cause share it, and no
  * reader can reach back into one.
  *
+ * The handle is const, so nothing a reader holds can edit one, and must-check
+ * (include/types.h): an error dropped on purpose is `(void) f()`, and one dropped
+ * by accident does not compile.
+ *
  * What that costs is the pressure the shape is for: an error is minted on a failure
  * path only. One made per row on a path that continues is an answer spelled as
  * an error, and every one of them stays for the run — so an answer
@@ -68,7 +72,7 @@
  * @param ... Format arguments
  * @return The error, the process's
  */
-error_t *error_create(error_code_t code, const char *fmt, ...)
+error_t error_create(error_code_t code, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
@@ -82,7 +86,7 @@ __attribute__((format(printf, 2, 3)));
  * @param ... Format arguments
  * @return New error wrapping the original, or NULL for a NULL cause
  */
-error_t *error_wrap(error_t *cause, const char *fmt, ...)
+error_t error_wrap(error_t cause, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
@@ -91,7 +95,7 @@ __attribute__((format(printf, 2, 3)));
  * @param git_error_code Git error code (from libgit2)
  * @return The error, the process's
  */
-error_t *error_from_git(int git_error_code);
+error_t error_from_git(int git_error_code);
 
 /**
  * The error code an errno names
@@ -123,7 +127,7 @@ error_code_t error_code_from_errno(int errno_val);
  * @param ... Format arguments
  * @return The error, the process's
  */
-error_t *error_from_errno(int errno_val, const char *fmt, ...)
+error_t error_from_errno(int errno_val, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
@@ -132,7 +136,7 @@ __attribute__((format(printf, 2, 3)));
  * @param err Error
  * @return Error message
  */
-const char *error_message(const error_t *err);
+const char *error_message(error_t err);
 
 /**
  * Get error code
@@ -140,7 +144,7 @@ const char *error_message(const error_t *err);
  * @param err Error
  * @return Error code
  */
-error_code_t error_code(const error_t *err);
+error_code_t error_code(error_t err);
 
 /**
  * Get the cause — the error this one wraps
@@ -151,7 +155,7 @@ error_code_t error_code(const error_t *err);
  * @param err Error
  * @return The wrapped error, or NULL at the root and for NULL
  */
-const error_t *error_cause(const error_t *err);
+error_t error_cause(error_t err);
 
 /**
  * Get the root cause — the deepest error in the chain
@@ -165,7 +169,7 @@ const error_t *error_cause(const error_t *err);
  * @param err Error
  * @return The deepest cause — err itself when nothing is wrapped
  */
-const error_t *error_root(const error_t *err);
+error_t error_root(error_t err);
 
 /**
  * Print error to stream
@@ -175,7 +179,7 @@ const error_t *error_root(const error_t *err);
  * @param err Error
  * @param stream Output stream (e.g., stderr)
  */
-void error_print(const error_t *err, FILE *stream);
+void error_print(error_t err, FILE *stream);
 
 /**
  * End the run: the report flushed, the terminal given back, one line, abort(3)
@@ -207,7 +211,7 @@ __attribute__((format(printf, 1, 2)));
 
 /* Return if expression produces error */
 #define RETURN_IF_ERROR(expr) do { \
-    error_t *_err = (expr); \
+    error_t _err = (expr); \
     if (_err != NULL) return _err; \
 } while(0)
 

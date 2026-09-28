@@ -110,7 +110,7 @@ static content_kind_t classify_entry(
         : content_classify_bytes(data, size);
 }
 
-error_t *content_classify(
+error_t content_classify(
     git_repository *repo,
     const git_oid *blob_oid,
     git_filemode_t mode,
@@ -123,7 +123,7 @@ error_t *content_classify(
 
     /* Loaded whatever the mode: the load is the proof the object is there. */
     gitops_blob_view_t view;
-    error_t *err = gitops_blob_view_open(repo, blob_oid, &view);
+    error_t err = gitops_blob_view_open(repo, blob_oid, &view);
     if (err) {
         return error_wrap(err, "Failed to load blob for classification");
     }
@@ -201,7 +201,7 @@ static const char ENCRYPTION_DISABLED[] =
  * @param out_content Output buffer (caller owns)
  * @return Error or NULL on success
  */
-static error_t *get_plaintext_from_blob(
+static error_t get_plaintext_from_blob(
     const uint8_t *blob_data, size_t blob_size, git_filemode_t mode,
     const char *storage_path, const char *profile, keymgr *keymgr,
     buffer_t *out_content
@@ -227,14 +227,14 @@ static error_t *get_plaintext_from_blob(
         case CONTENT_ENCRYPTED: {
             if (!keymgr) {
                 /* The feature off is the locked root. */
-                error_t *err = ERROR(ERR_LOCKED, "%s", ENCRYPTION_DISABLED);
+                error_t err = ERROR(ERR_LOCKED, "%s", ENCRYPTION_DISABLED);
                 return error_wrap(err, "Cannot decrypt '%s'", storage_path);
             }
 
             /* The keymgr's ladder decides (fetches the profile key, decrypts,
              * zeroes the key buffer; raw key material never leaves the crypto
              * layer), and its refusal is the root. */
-            error_t *err = keymgr_decrypt(
+            error_t err = keymgr_decrypt(
                 keymgr, profile, storage_path, blob_data, blob_size, out_content
             );
             if (err) {
@@ -248,7 +248,7 @@ static error_t *get_plaintext_from_blob(
              * large enough to carry the version byte at offset CIPHER_MAGIC_SIZE,
              * so reading it here is safe. The version pair is the root, in the
              * words the cipher's own header gate uses for the same fact. */
-            error_t *err = ERROR(
+            error_t err = ERROR(
                 ERR_CRYPTO,
                 "Unsupported encryption version 0x%02X (this build reads 0x%02X)",
                 (unsigned) blob_data[CIPHER_MAGIC_SIZE], (unsigned) CIPHER_VERSION
@@ -260,7 +260,7 @@ static error_t *get_plaintext_from_blob(
     CHECK_ARG(false, "a content kind no enumerator names");
 }
 
-error_t *content_get_from_blob_oid(
+error_t content_get_from_blob_oid(
     git_repository *repo,
     const git_oid *blob_oid,
     git_filemode_t mode,
@@ -281,7 +281,7 @@ error_t *content_get_from_blob_oid(
 
     /* Open zero-copy view onto the blob */
     gitops_blob_view_t view;
-    error_t *err = gitops_blob_view_open(repo, blob_oid, &view);
+    error_t err = gitops_blob_view_open(repo, blob_oid, &view);
     if (err) {
         return error_wrap(err, "Failed to load blob for '%s'", storage_path);
     }
@@ -296,7 +296,7 @@ error_t *content_get_from_blob_oid(
     return err;
 }
 
-error_t *content_rebind(
+error_t content_rebind(
     git_repository *repo,
     const git_oid *blob,
     const char *from_storage_path,
@@ -315,7 +315,7 @@ error_t *content_rebind(
     *out_bytes = (buffer_t){ 0 };
 
     gitops_blob_view_t view;
-    error_t *err = gitops_blob_view_open(repo, blob, &view);
+    error_t err = gitops_blob_view_open(repo, blob, &view);
     if (err) {
         return error_wrap(err, "Failed to load blob for '%s'", from_storage_path);
     }
@@ -377,7 +377,7 @@ content_cache_t *content_cache_create(
     return cache;
 }
 
-error_t *content_cache_get_from_blob_oid(
+error_t content_cache_get_from_blob_oid(
     content_cache_t *cache,
     const git_oid *blob_oid,
     git_filemode_t mode,
@@ -430,7 +430,7 @@ error_t *content_cache_get_from_blob_oid(
 
     /* Open zero-copy view onto the blob */
     gitops_blob_view_t view;
-    error_t *err = gitops_blob_view_open(cache->repo, blob_oid, &view);
+    error_t err = gitops_blob_view_open(cache->repo, blob_oid, &view);
     if (err) {
         return error_wrap(err, "Failed to load blob for '%s'", storage_path);
     }
@@ -458,7 +458,7 @@ error_t *content_cache_get_from_blob_oid(
     return NULL;
 }
 
-error_t *content_compare_blob_to_disk(
+error_t content_compare_blob_to_disk(
     content_cache_t *cache,
     const git_oid *blob_oid,
     const char *filesystem_path,
@@ -483,7 +483,7 @@ error_t *content_compare_blob_to_disk(
      * header). The reader is the cache's, not its memo: a base is judged once,
      * and an entry for it would be written where nothing can ask for it. */
     buffer_t plaintext = BUFFER_INIT;
-    error_t *err = content_get_from_blob_oid(
+    error_t err = content_get_from_blob_oid(
         cache->repo, blob_oid, expected_mode, storage_path, profile,
         cache->keymgr, &plaintext
     );
@@ -520,7 +520,7 @@ void content_cache_free(content_cache_t *cache) {
     free(cache);
 }
 
-error_t *content_require_encryption(const keymgr *keymgr, const char *storage_path) {
+error_t content_require_encryption(const keymgr *keymgr, const char *storage_path) {
     CHECK_NULL(storage_path);
 
     if (keymgr) return NULL;
@@ -531,7 +531,7 @@ error_t *content_require_encryption(const keymgr *keymgr, const char *storage_pa
     );
 }
 
-error_t *content_capture_file(
+error_t content_capture_file(
     const char *filesystem_path,
     const char *storage_path,
     const char *profile,
@@ -604,7 +604,7 @@ error_t *content_capture_file(
      * plaintext path we rely on fs_read_fd's own bounds and libgit2's blob handling
      * rather than duplicating the policy here. */
     buffer_t bytes = BUFFER_INIT;
-    error_t *err = fs_read_fd(fd, &bytes);
+    error_t err = fs_read_fd(fd, &bytes);
     close(fd);
     if (err) {
         return error_wrap(err, "Failed to read file '%s'", filesystem_path);
@@ -663,7 +663,7 @@ error_t *content_capture_file(
     return NULL;
 }
 
-error_t *content_capture_link(const char *filesystem_path, content_capture_t *out) {
+error_t content_capture_link(const char *filesystem_path, content_capture_t *out) {
     CHECK_NULL(filesystem_path);
     CHECK_NULL(out);
 

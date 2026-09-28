@@ -113,7 +113,7 @@ gitignore_ruleset_t *gitignore_ruleset_create(arena_t *arena);
  * @param origin  Caller-chosen origin tag
  * @return Error or NULL on success
  */
-error_t *gitignore_ruleset_append_file(
+error_t gitignore_ruleset_append_file(
     gitignore_ruleset_t *ruleset,
     const char *content,
     gitignore_origin_t origin
@@ -150,7 +150,7 @@ const char *gitignore_file_lines(const char *content);
  * @param origin  Caller-chosen origin tag
  * @return Error or NULL on success
  */
-error_t *gitignore_ruleset_append_pattern(
+error_t gitignore_ruleset_append_pattern(
     gitignore_ruleset_t *ruleset,
     const char *pattern,
     gitignore_origin_t origin
@@ -176,7 +176,7 @@ error_t *gitignore_ruleset_append_pattern(
  * @param origin  Caller-chosen origin tag applied to every copy
  * @return Error or NULL on success
  */
-error_t *gitignore_ruleset_append_rules(
+error_t gitignore_ruleset_append_rules(
     gitignore_ruleset_t *ruleset,
     const gitignore_ruleset_t *from,
     gitignore_origin_t origin
@@ -321,7 +321,7 @@ typedef struct gitignore_rule gitignore_rule_t;
  * @param pattern One pattern (must not be NULL)
  * @return Error (ERR_VALIDATION), or NULL when the pattern is one rule
  */
-error_t *gitignore_validate_pattern(const char *pattern);
+error_t gitignore_validate_pattern(const char *pattern);
 
 /**
  * Parse one pattern into a rule of its own.
@@ -336,7 +336,7 @@ error_t *gitignore_validate_pattern(const char *pattern);
  * @param out     The rule; NULL on a refusal (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitignore_rule_parse(
+error_t gitignore_rule_parse(
     arena_t *arena,
     const char *pattern,
     gitignore_rule_t **out

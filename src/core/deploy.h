@@ -495,9 +495,9 @@ typedef struct {
  * the result before the preflight result.
  */
 typedef struct {
-    const deploy_verdict_t *verdict;    /* Borrowed (preflight-result lifetime) */
-    state_stat_t stat;                  /* The write's stat; UNSET where it authored none */
-    error_t *error;                     /* The failed bucket's cause; NULL elsewhere (borrowed) */
+    const deploy_verdict_t *verdict;   /* Borrowed (preflight-result lifetime) */
+    state_stat_t stat;                 /* The write's stat; UNSET where it authored none */
+    error_t error;                     /* The failed bucket's cause; NULL elsewhere (borrowed) */
 } deploy_outcome_t;
 
 /**
@@ -755,7 +755,7 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * @return Error or NULL on success (a skip is not an error; a strict_ownership
  *         failure is)
  */
-error_t *deploy_preflight(
+error_t deploy_preflight(
     const workspace_t *ws,
     const deploy_plan_t *plan,
     const deploy_options_t *opts,
@@ -830,7 +830,7 @@ error_t *deploy_preflight(
  * @param out Deployment results (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *deploy_execute(
+error_t deploy_execute(
     git_repository *repo,
     const workspace_t *ws,
     const deploy_preflight_result_t *verdicts,

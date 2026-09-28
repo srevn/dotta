@@ -38,7 +38,7 @@ const char *editor_get_from_env(void) {
  *
  * More secure than system() - no shell interpretation, better error handling.
  */
-error_t *editor_launch(const char *editor, const char *file_path) {
+error_t editor_launch(const char *editor, const char *file_path) {
     CHECK_NULL(editor);
     CHECK_NULL(file_path);
 
@@ -88,7 +88,7 @@ error_t *editor_launch(const char *editor, const char *file_path) {
  *
  * Convenience function that combines editor_get_from_env() and editor_launch().
  */
-error_t *editor_launch_with_env(const char *file_path) {
+error_t editor_launch_with_env(const char *file_path) {
     CHECK_NULL(file_path);
 
     return editor_launch(editor_get_from_env(), file_path);

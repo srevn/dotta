@@ -36,7 +36,7 @@ const char *editor_get_from_env(void);
  * @return Error or NULL on success: the program could not be run (ERR_NOT_FOUND
  *         when no PATH entry holds it), it was killed, or it exited non-zero
  */
-error_t *editor_launch(const char *editor, const char *file_path);
+error_t editor_launch(const char *editor, const char *file_path);
 
 /**
  * Launch editor for a file with environment-based selection
@@ -46,6 +46,6 @@ error_t *editor_launch(const char *editor, const char *file_path);
  * @param file_path Path to file to edit (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *editor_launch_with_env(const char *file_path);
+error_t editor_launch_with_env(const char *file_path);
 
 #endif /* DOTTA_EDITOR_H */

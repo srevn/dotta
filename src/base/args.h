@@ -112,9 +112,10 @@
 #include <stdio.h>
 
 /* Local forward declarations of base-layer types. Defined as typedefs in <types.h>;
- * we re-declare here (compatible since the struct tags match) so args.h has zero
- * domain dependencies and can compile as a standalone parser engine. */
-typedef struct error error_t;
+ * we re-declare here (compatible since the types are identical, the error handle's
+ * must-check attribute included) so args.h has zero domain dependencies and can
+ * compile as a standalone parser engine. */
+typedef const struct error *error_t __attribute__((warn_unused_result));
 typedef struct arena arena_t;
 
 /* Forward declarations for types fully defined below. */
@@ -221,7 +222,7 @@ typedef void (*args_defaults)(void *opts);
  * Allocations may use `arena`. Returning a non-NULL error aborts dispatch; the
  * error's message is copied into the error collector.
  */
-typedef error_t *(*args_postparse)(
+typedef error_t (*args_postparse)(
     void *opts, arena_t *arena,
     const args_command_t *command
 );
@@ -276,7 +277,7 @@ typedef args_want_t (*args_complete)(
  * `ctx` to its expected type on the first line. `opts` points to the parsed options
  * struct.
  */
-typedef error_t *(*args_dispatch)(const void *ctx, void *opts);
+typedef error_t (*args_dispatch)(const void *ctx, void *opts);
 
 /* ══════════════════════════════════════════════════════════════════
  * Core structures
@@ -659,7 +660,7 @@ void args_render_errors(
  *                   an error naming the first name that cannot stand as a fish
  *                   word.
  */
-error_t *args_export_completion_fish(
+error_t args_export_completion_fish(
     FILE *out,
     const args_command_t *const *commands,
     const char *prog,
@@ -679,7 +680,7 @@ error_t *args_export_completion_fish(
  *
  * @return NULL on success; the error on failure.
  */
-error_t *args_parse_long(const char *text, long min, long max, long *out);
+error_t args_parse_long(const char *text, long min, long max, long *out);
 
 /**
  * The bool a FLAG row targets, in a parsed options buffer

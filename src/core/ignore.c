@@ -190,7 +190,7 @@ struct ignore_rules {
  *
  * `profile` is the canonicalised key ("" means baseline-only).
  */
-static error_t *build_profile_ruleset(
+static error_t build_profile_ruleset(
     ignore_rules_t *r, const char *profile, gitignore_ruleset_t **out
 ) {
     gitignore_ruleset_t *rs = gitignore_ruleset_create(r->arena);
@@ -210,7 +210,7 @@ static error_t *build_profile_ruleset(
         RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), profile));
 
         char *content = NULL;
-        error_t *err = ignore_blob_text(r->repo, refname, &content);
+        error_t err = ignore_blob_text(r->repo, refname, &content);
         if (err) {
             return error_wrap(
                 err, "Failed to load .dottaignore for profile '%s'", profile
@@ -248,7 +248,7 @@ static error_t *build_profile_ruleset(
     return NULL;
 }
 
-error_t *ignore_blob_read(
+error_t ignore_blob_read(
     git_repository *repo, const char *refname, char **out_content, size_t *out_size
 ) {
     CHECK_NULL(repo);
@@ -279,7 +279,7 @@ error_t *ignore_blob_read(
 
     void *content = NULL;
     size_t size = 0;
-    error_t *err = gitops_read_blob_content(
+    error_t err = gitops_read_blob_content(
         repo, git_tree_entry_id(entry), &content, &size
     );
     git_tree_free(tree);
@@ -306,7 +306,7 @@ error_t *ignore_blob_read(
     return NULL;
 }
 
-error_t *ignore_blob_text(
+error_t ignore_blob_text(
     git_repository *repo, const char *refname, char **out_text
 ) {
     size_t size = 0;
@@ -328,7 +328,7 @@ error_t *ignore_blob_text(
     return NULL;
 }
 
-error_t *ignore_blob_write(
+error_t ignore_blob_write(
     git_repository *repo, const char *refname, const char *content,
     size_t size, const char *commit_msg
 ) {
@@ -354,7 +354,7 @@ error_t *ignore_blob_write(
     stage_t *stage = NULL;
     RETURN_IF_ERROR(stage_open(repo, refname, &stage));
 
-    error_t *err = stage_put(
+    error_t err = stage_put(
         stage, ".dottaignore", content, size, GIT_FILEMODE_BLOB, NULL
     );
     if (!err) {
@@ -364,7 +364,7 @@ error_t *ignore_blob_write(
     return err;
 }
 
-error_t *ignore_excludes_compile(
+error_t ignore_excludes_compile(
     char *const *patterns, size_t count, arena_t *arena,
     const gitignore_ruleset_t **out
 ) {
@@ -377,7 +377,7 @@ error_t *ignore_excludes_compile(
     gitignore_ruleset_t *rules = gitignore_ruleset_create(arena);
 
     for (size_t i = 0; i < count; i++) {
-        error_t *err = gitignore_ruleset_append_pattern(
+        error_t err = gitignore_ruleset_append_pattern(
             rules, patterns[i], (gitignore_origin_t) IGNORE_ORIGIN_CLI
         );
         if (err) {
@@ -389,7 +389,7 @@ error_t *ignore_excludes_compile(
     return NULL;
 }
 
-error_t *ignore_rules_create(
+error_t ignore_rules_create(
     git_repository *repo, const config_t *config,
     const gitignore_ruleset_t *cli_rules, arena_t *arena, ignore_rules_t **out
 ) {
@@ -410,7 +410,7 @@ error_t *ignore_rules_create(
     gitignore_ruleset_t *baseline = gitignore_ruleset_create(arena);
 
     char *blob = NULL;
-    error_t *err = ignore_blob_text(repo, BASELINE_REF, &blob);
+    error_t err = ignore_blob_text(repo, BASELINE_REF, &blob);
     if (err) {
         return error_wrap(err, "Failed to load baseline .dottaignore");
     }
@@ -438,7 +438,7 @@ error_t *ignore_rules_create(
     return NULL;
 }
 
-error_t *ignore_rules_for_profile(
+error_t ignore_rules_for_profile(
     ignore_rules_t *r, const char *profile, const gitignore_ruleset_t **out
 ) {
     CHECK_NULL(r);
@@ -494,7 +494,7 @@ const char *ignore_profile_template(void) {
     return PROFILE_DOTTAIGNORE;
 }
 
-error_t *ignore_seed_baseline(git_repository *repo) {
+error_t ignore_seed_baseline(git_repository *repo) {
     CHECK_NULL(repo);
 
     /* The ref's presence is the seed. It is made here and nowhere else, and once
@@ -508,7 +508,7 @@ error_t *ignore_seed_baseline(git_repository *repo) {
     /* A root commit on an orphan's stage. A ref that appeared since the look —
      * two inits racing — is refused at the open or at the commit. */
     stage_t *stage = NULL;
-    error_t *err = stage_orphan(repo, BASELINE_REF, &stage);
+    error_t err = stage_orphan(repo, BASELINE_REF, &stage);
     if (!err) {
         err = stage_put(
             stage, ".dottaignore", DEFAULT_DOTTAIGNORE,

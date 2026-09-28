@@ -196,7 +196,7 @@ bool path_input_announces_path(const char *input);
  * @param out   The key and its name (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *path_input_resolve(const char *input, arena_t *arena, path_input_t *out);
+error_t path_input_resolve(const char *input, arena_t *arena, path_input_t *out);
 
 /**
  * The filesystem path a filesystem-shaped argument names, in the arena
@@ -236,7 +236,7 @@ error_t *path_input_resolve(const char *input, arena_t *arena, path_input_t *out
  *              NULL)
  * @return Error or NULL on success
  */
-error_t *path_input_filesystem_path(const char *input, arena_t *arena, const char **out);
+error_t path_input_filesystem_path(const char *input, arena_t *arena, const char **out);
 
 /**
  * Normalize a CLI filesystem-path argument to an absolute path
@@ -289,6 +289,6 @@ error_t *path_input_filesystem_path(const char *input, arena_t *arena, const cha
  * @param out   Normalized absolute path (caller must free, must not be NULL)
  * @return Error or NULL on success
  */
-error_t *path_input_normalize(const char *input, char **out);
+error_t path_input_normalize(const char *input, char **out);
 
 #endif /* DOTTA_PATH_H */

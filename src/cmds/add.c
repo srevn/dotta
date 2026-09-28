@@ -298,7 +298,7 @@ static bool add_inside(const char *input, const char *target, arena_t *arena) {
  * @param out    Normalized absolute path, the arena's; NULL after an error
  * @return Error or NULL on success
  */
-static error_t *add_spell(
+static error_t add_spell(
     const char *input, const char *target, arena_t *arena, const char **out
 ) {
     *out = NULL;
@@ -328,7 +328,7 @@ static error_t *add_spell(
      * nothing here outlives the call — which is what lets the refusal below simply
      * return, where a malloc'd answer had to be freed and nulled first. */
     const char *spelled = NULL;
-    error_t *err = path_input_filesystem_path(composed ? composed : input, arena, &spelled);
+    error_t err = path_input_filesystem_path(composed ? composed : input, arena, &spelled);
     free(composed);
     if (err) return err;
 
@@ -405,7 +405,7 @@ static bool add_excluded(
 
     if (walk->source_filter) {
         bool excluded = false;
-        error_t *err = source_filter_is_excluded(
+        error_t err = source_filter_is_excluded(
             walk->source_filter, filesystem_path, is_directory, &excluded
         );
         if (err) {
@@ -478,7 +478,7 @@ static void add_list(
  * it as an error, the walk prints it and skips the subtree. Anything else is
  * the run failing to decide, which is never a verdict about the path.
  */
-static error_t *add_admit(
+static error_t add_admit(
     const walk_t *walk, const char *storage_path, path_kind_t kind
 ) {
     if (kind == PATH_KIND_DIRECTORY) {
@@ -534,7 +534,7 @@ static error_t *add_admit(
  *
  * On error the lists keep what was collected, in the command arena.
  */
-static error_t *add_collect(
+static error_t add_collect(
     walk_t *walk, const char *directory, size_t depth
 ) {
     CHECK_NULL(walk);
@@ -567,7 +567,7 @@ static error_t *add_collect(
      * and those are the command arena's. */
     arena_t *frame = arena_create(0);
     string_array_t children;
-    error_t *err = fs_list_dir(directory, frame, &children);
+    error_t err = fs_list_dir(directory, frame, &children);
     if (err) goto cleanup;
 
     for (size_t i = 0; i < children.count; i++) {
@@ -734,7 +734,7 @@ cleanup:
  * Not liftable by --force: --force overwrites bytes under a name the profile
  * holds, which is not what abandoning a name is.
  */
-static error_t *add_refuse_moves(const walk_t *walk) {
+static error_t add_refuse_moves(const walk_t *walk) {
     manifest_unkept_t unkept = manifest_unkept(walk->view);
 
     for (size_t i = 0; i < unkept.count; i++) {
@@ -742,7 +742,7 @@ static error_t *add_refuse_moves(const walk_t *walk) {
         const char *kept = unkept.entries[i].kept;
 
         const char *next = NULL;
-        error_t *err = manifest_name(
+        error_t err = manifest_name(
             walk->view, walk->profile, filesystem_path, walk->listing,
             walk->ctx->arena, &next
         );
@@ -951,7 +951,7 @@ static void add_print_labels(const walk_t *walk) {
  * @param metadata The sheet the claim goes onto (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *add_capture(
+static error_t add_capture(
     const dotta_ctx_t *ctx,
     stage_t *stage,
     const char *profile,
@@ -980,7 +980,7 @@ static error_t *add_capture(
      * the look stays readable for the claim and the record below. */
     content_capture_t capture = { 0 };
     git_oid blob;
-    error_t *err = NULL;
+    error_t err = NULL;
     if (path->occupant == FS_OCCUPANT_SYMLINK) {
         err = content_capture_link(filesystem_path, &capture);
     } else {
@@ -1070,7 +1070,7 @@ static error_t *add_capture(
  *                      already holds moves nothing (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *add_commit(
+static error_t add_commit(
     const walk_t *walk,
     stage_t *stage,
     const cmd_add_options_t *opts,
@@ -1111,7 +1111,7 @@ static error_t *add_commit(
     char *message = commit_message(walk->ctx->config, &msg_ctx);
 
     /* Create commit */
-    error_t *err = stage_commit(stage, message, out_committed);
+    error_t err = stage_commit(stage, message, out_committed);
     free(message);
 
     if (err) {
@@ -1218,7 +1218,7 @@ static error_t *add_commit(
  * @param receipt What the phase did, zeroed first (must not be NULL)
  * @return Error or NULL on success (non-fatal - caller treats as warning)
  */
-static error_t *add_write_record(
+static error_t add_write_record(
     const dotta_ctx_t *ctx,
     const mount_table_t *mounts,
     const char *profile,
@@ -1240,7 +1240,7 @@ static error_t *add_write_record(
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE) */
 
-    error_t *err = NULL;
+    error_t err = NULL;
 
     *receipt = (receipt_t){ 0 };
 
@@ -1439,7 +1439,7 @@ cleanup:
 /**
  * Add command implementation
  */
-error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
+error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -1450,7 +1450,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     output_t *out = ctx->out;
 
     /* Initialize all resources to NULL for safe cleanup */
-    error_t *err = NULL;
+    error_t err = NULL;
     ignore_rules_t *ignore_rules = NULL;
     const gitignore_ruleset_t *profile_rules = NULL;
     source_filter_t *source_filter = NULL;
@@ -2459,7 +2459,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      */
     receipt_t receipt = { 0 };
 
-    error_t *record_err = add_write_record(
+    error_t record_err = add_write_record(
         ctx, mounts, opts->profile, target, profile_created,
         &walk.files, &walk.directories, &ancestry_retired, &receipt
     );
@@ -2667,7 +2667,7 @@ cleanup:
  * The count check lives here, after the routing, so the error message can reference
  * the effective invariant rather than a raw count.
  */
-static error_t *add_post_parse(
+static error_t add_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) arena;
@@ -2729,9 +2729,9 @@ static args_want_t add_complete(
         ? ARGS_WANT_NONE : ARGS_WANT_FILES;
 }
 
-static error_t *add_dispatch(const void *ctx_v, void *opts_v) {
+static error_t add_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
-    error_t *err = cmd_add(ctx, (const cmd_add_options_t *) opts_v);
+    error_t err = cmd_add(ctx, (const cmd_add_options_t *) opts_v);
 
     /* A refusal the invoker met reading a source — the walk's listing and lstat,
      * the open behind the capture (infra/content), the existence check — ends

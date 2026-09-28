@@ -21,7 +21,7 @@
  * without a hidden size ceiling. */
 #define ENTROPY_CHUNK_MAX 256
 
-error_t *entropy_fill(uint8_t *out, size_t len) {
+error_t entropy_fill(uint8_t *out, size_t len) {
     if (len == 0) {
         return NULL;
     }

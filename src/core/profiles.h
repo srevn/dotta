@@ -125,7 +125,7 @@ void profile_order(string_array_t *names);
  *            it was on a failure)
  * @return Error or NULL on success
  */
-error_t *profile_resolve_enabled(
+error_t profile_resolve_enabled(
     git_repository *repo,
     const state_t *state,
     arena_t *arena,
@@ -170,7 +170,7 @@ error_t *profile_resolve_enabled(
  *                    `enabled_profiles`, valid for as long as it is)
  * @return Error (ERR_NOT_FOUND when no profile holds it) or NULL on success
  */
-error_t *profile_resolve_commit(
+error_t profile_resolve_commit(
     git_repository *repo,
     const string_array_t *enabled_profiles,
     const char *commit_ref,
@@ -205,7 +205,7 @@ error_t *profile_resolve_commit(
  * @param name Profile name (must not be NULL)
  * @return NULL when the branch is here; else the refusal, or Git's error
  */
-error_t *profile_require(git_repository *repo, const char *name);
+error_t profile_require(git_repository *repo, const char *name);
 
 /**
  * What a profile branch holds
@@ -285,7 +285,7 @@ typedef struct {
  * @param out Statistics (must not be NULL; written on success, untouched otherwise)
  * @return Error or NULL on success
  */
-error_t *profile_get_tree_stats(
+error_t profile_get_tree_stats(
     git_repository *repo,
     const git_tree *tree,
     const char *profile,
@@ -304,7 +304,7 @@ error_t *profile_get_tree_stats(
  * @param out Statistics (must not be NULL; written on success, untouched otherwise)
  * @return Error or NULL on success
  */
-error_t *profile_get_stats(
+error_t profile_get_stats(
     git_repository *repo,
     const char *profile,
     profile_stats_t *out
@@ -414,7 +414,7 @@ typedef struct {
  * @param out The answer (must not be NULL; written on success alone)
  * @return Error or NULL on success
  */
-error_t *profile_holds(
+error_t profile_holds(
     git_repository *repo,
     const git_tree *tree,
     const metadata_t *sheet,
@@ -442,7 +442,7 @@ error_t *profile_holds(
  * @param out The storage paths (must not be NULL; left as it was on a failure)
  * @return Error or NULL on success
  */
-error_t *profile_list_tree_files(
+error_t profile_list_tree_files(
     const git_tree *tree,
     arena_t *arena,
     string_array_t *out
@@ -461,7 +461,7 @@ error_t *profile_list_tree_files(
  * @param out The storage paths (must not be NULL; left as it was on a failure)
  * @return Error or NULL on success
  */
-error_t *profile_list_files(
+error_t profile_list_files(
     git_repository *repo,
     const char *profile,
     arena_t *arena,
@@ -521,7 +521,7 @@ error_t *profile_list_files(
  *                     be NULL)
  * @return Error or NULL on success
  */
-error_t *profile_needs_target(
+error_t profile_needs_target(
     git_repository *repo,
     const char *profile,
     bool *needs_target
@@ -585,7 +585,7 @@ error_t *profile_needs_target(
  *                    be NULL)
  * @return Error or NULL on success
  */
-error_t *profile_claim_name(
+error_t profile_claim_name(
     git_repository *repo,
     const git_tree *tree,
     const mount_table_t *mounts,
@@ -664,7 +664,7 @@ typedef struct {
  * @param out The claims, at least one (must not be NULL; zeroed after an error)
  * @return Error (ERR_NOT_FOUND when no branch holds it) or NULL on success
  */
-error_t *profile_discover_claims(
+error_t profile_discover_claims(
     git_repository *repo,
     const mount_table_t *mounts,
     const path_input_t *arg,
@@ -705,7 +705,7 @@ error_t *profile_discover_claims(
  *        not be NULL)
  * @return Error or NULL on success
  */
-error_t *profile_build_filesystem_index(
+error_t profile_build_filesystem_index(
     git_repository *repo,
     const mount_table_t *mounts,
     const char *exclude,

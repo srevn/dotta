@@ -71,7 +71,7 @@ bool refspec_looks_like_commit(const char *token) {
     return false;
 }
 
-error_t *parse_refspec(arena_t *arena, const char *input, refspec_t *out) {
+error_t parse_refspec(arena_t *arena, const char *input, refspec_t *out) {
     CHECK_NULL(arena);
     CHECK_NULL(input);
     CHECK_NULL(out);

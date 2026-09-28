@@ -1102,7 +1102,7 @@ static void status_print_workspace(
  * By default shows only enabled profiles for consistency with workspace status.
  * Use show_all_profiles to report on every branch in the repository.
  */
-static error_t *status_print_remote(
+static error_t status_print_remote(
     const dotta_ctx_t *ctx,
     const string_array_t *profiles,
     bool show_all_profiles,
@@ -1120,7 +1120,7 @@ static error_t *status_print_remote(
      * below). Both outputs are arena-borrowed for the call's lifetime. */
     const char *remote_name = NULL;
     const char *remote_url = NULL;
-    error_t *err = gitops_resolve_default_remote(
+    error_t err = gitops_resolve_default_remote(
         repo, ctx->arena, &remote_name, no_fetch ? NULL : &remote_url
     );
     if (err) {
@@ -1167,7 +1167,7 @@ static error_t *status_print_remote(
         }
 
         /* Perform batched fetch — single network op for all branches */
-        error_t *fetch_err = gitops_fetch_branches(
+        error_t fetch_err = gitops_fetch_branches(
             repo, remote_name, check, xfer
         );
 
@@ -1284,11 +1284,11 @@ static error_t *status_print_remote(
              * line, its error dropped — at most two per profile, the local and
              * the remote. */
             char local_ref[DOTTA_REFNAME_MAX];
-            error_t *local_ref_err = gitops_branch_refname(
+            error_t local_ref_err = gitops_branch_refname(
                 local_ref, sizeof(local_ref), profile
             );
             git_commit *local_commit = NULL;
-            error_t *commit_err = local_ref_err ? local_ref_err
+            error_t commit_err = local_ref_err ? local_ref_err
                                 : gitops_get_commit(repo, local_ref, &local_commit);
 
             /* Status line — always shown regardless of commit loading */
@@ -1317,7 +1317,7 @@ static error_t *status_print_remote(
             /* Remote commit info — guaranteed reachable per the enclosing filter
              * above. */
             char remote_ref[DOTTA_REFNAME_MAX];
-            error_t *remote_ref_err = gitops_build_refname(
+            error_t remote_ref_err = gitops_build_refname(
                 remote_ref, sizeof(remote_ref), "refs/remotes/%s/%s",
                 remote_name, profile
             );
@@ -1375,7 +1375,7 @@ static error_t *status_print_remote(
 /**
  * Status command implementation
  */
-error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
+error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -1418,7 +1418,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             .analyze_orphans   = true,
             .analyze_untracked = config->auto_detect_new_files
         };
-        error_t *err = workspace_load(
+        error_t err = workspace_load(
             repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
         );
         if (err) return error_wrap(err, "Failed to load workspace");
@@ -1474,7 +1474,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
  * default: both true when neither flag given. Explicit flags reduce to their
  * own scope; giving both is identical to the default.
  */
-static error_t *status_post_parse(
+static error_t status_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) arena;
@@ -1505,7 +1505,7 @@ static args_want_t status_complete(
     return ARGS_WANT_NONE;
 }
 
-static error_t *status_dispatch(const void *ctx_v, void *opts_v) {
+static error_t status_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_status(ctx, (const cmd_status_options_t *) opts_v);
 }

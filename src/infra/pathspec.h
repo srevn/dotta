@@ -94,7 +94,7 @@ typedef struct {
  * @param out    Pathspec or NULL when inputs were empty (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *pathspec_create(
+error_t pathspec_create(
     char *const *inputs, size_t count, arena_t *arena, pathspec_t **out
 );
 

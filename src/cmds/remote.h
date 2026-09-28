@@ -27,8 +27,8 @@ typedef enum {
 /**
  * Remote command options
  *
- * `subcommand` is set by the subcommand's `init_defaults`; the operands are
- * its positional rows.
+ * `subcommand` is set by the subcommand's `init_defaults`; the operands are its
+ * positional rows.
  */
 typedef struct {
     remote_subcommand_t subcommand;
@@ -47,14 +47,14 @@ typedef struct {
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_remote(const dotta_ctx_t *ctx, const cmd_remote_options_t *opts);
+error_t cmd_remote(const dotta_ctx_t *ctx, const cmd_remote_options_t *opts);
 
 /**
- * Spec-engine command specification for `dotta remote`: a tree of `list`
- * (the default), `add`, `remove`, `set-url`, `rename` and `show`.
+ * Spec-engine command specification for `dotta remote`: a tree of `list` (the
+ * default), `add`, `remove`, `set-url`, `rename` and `show`.
  *
- * Registered in main.c's static `dotta_commands[]`; defined in remote.c
- * beside the subcommand specs and the dispatch wrapper.
+ * Registered in main.c's static `dotta_commands[]`; defined in remote.c beside
+ * the subcommand specs and the dispatch wrapper.
  */
 extern const args_command_t spec_remote;
 

@@ -389,7 +389,7 @@ typedef struct state state_t;
  * @param out State structure (must not be NULL, caller must free with state_free)
  * @return Error or NULL on success
  */
-error_t *state_load(git_repository *repo, state_t **out);
+error_t state_load(git_repository *repo, state_t **out);
 
 /**
  * Load state for update (whole-dispatch transaction held)
@@ -407,7 +407,7 @@ error_t *state_load(git_repository *repo, state_t **out);
  * @param out State structure (must not be NULL, caller must free with state_free)
  * @return Error or NULL on success
  */
-error_t *state_open(git_repository *repo, state_t **out);
+error_t state_open(git_repository *repo, state_t **out);
 
 /**
  * Save state
@@ -429,7 +429,7 @@ error_t *state_open(git_repository *repo, state_t **out);
  * @param state State to save (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_save(state_t *state);
+error_t state_save(state_t *state);
 
 /**
  * Begin an explicit transaction on a state handle
@@ -466,7 +466,7 @@ error_t *state_save(state_t *state);
  * @param state State (must not be NULL, must not be in transaction)
  * @return Error or NULL on success
  */
-error_t *state_begin(state_t *state);
+error_t state_begin(state_t *state);
 
 /**
  * Commit a transaction started by state_begin()
@@ -491,7 +491,7 @@ error_t *state_begin(state_t *state);
  * @param state State (must not be NULL, must be in transaction)
  * @return Error or NULL on success
  */
-error_t *state_commit(state_t *state);
+error_t state_commit(state_t *state);
 
 /**
  * Take the write lock only where the store stands as this handle last knew it
@@ -522,7 +522,7 @@ error_t *state_commit(state_t *state);
  * @param state State (must not be NULL, must not be in transaction)
  * @return Error or NULL on success
  */
-error_t *state_resume(state_t *state);
+error_t state_resume(state_t *state);
 
 /**
  * Roll back a transaction started by state_begin()
@@ -604,7 +604,7 @@ void state_free(state_t *state);
  * @param target The binding to write, or NULL to keep the row's
  * @return Error or NULL on success
  */
-error_t *state_enable_profile(
+error_t state_enable_profile(
     state_t *state,
     const char *profile,
     const char *target
@@ -629,7 +629,7 @@ error_t *state_enable_profile(
  * @param profile Profile name (must not be NULL)
  * @return Error or NULL on success (not found is OK)
  */
-error_t *state_disable_profile(
+error_t state_disable_profile(
     state_t *state,
     const char *profile
 );
@@ -670,7 +670,7 @@ error_t *state_disable_profile(
  * @param profiles The enabled names in the desired order (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_reorder_profiles(state_t *state, const string_array_t *profiles);
+error_t state_reorder_profiles(state_t *state, const string_array_t *profiles);
 
 /**
  * Check if a profile is enabled
@@ -792,7 +792,7 @@ const char *state_target(
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_records(
+error_t state_records(
     const state_t *state,
     arena_t *arena,
     state_record_t **out,
@@ -860,7 +860,7 @@ const state_record_t *state_find_record(
  * @param record The record to write (must not be NULL); read, never written
  * @return Error or NULL on success; a refusal names the path
  */
-error_t *state_write(state_t *state, const state_record_t *record);
+error_t state_write(state_t *state, const state_record_t *record);
 
 /**
  * Retire a managed path's record
@@ -883,7 +883,7 @@ error_t *state_write(state_t *state, const state_record_t *record);
  * @param filesystem_path Path whose record retires (must not be NULL)
  * @return Error or NULL on success (not found is OK)
  */
-error_t *state_retire(state_t *state, const char *filesystem_path);
+error_t state_retire(state_t *state, const char *filesystem_path);
 
 /**
  * Order a managed path's deployed copy pruned
@@ -911,6 +911,6 @@ error_t *state_retire(state_t *state, const char *filesystem_path);
  * @param now The order's moment (must be > 0)
  * @return Error or NULL on success (no record is OK)
  */
-error_t *state_order_prune(state_t *state, const char *filesystem_path, time_t now);
+error_t state_order_prune(state_t *state, const char *filesystem_path, time_t now);
 
 #endif /* DOTTA_STATE_H */

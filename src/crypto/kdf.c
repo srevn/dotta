@@ -57,7 +57,7 @@ const kdf_preset_t kdf_presets[KDF_PRESET_COUNT] = {
     { "paranoid", 1024, 4 },  /* ~4–6 s; slow but firm */
 };
 
-error_t *kdf_validate_params(uint16_t memory_mib, uint8_t passes) {
+error_t kdf_validate_params(uint16_t memory_mib, uint8_t passes) {
     if (memory_mib < KDF_ARGON2_MEMORY_MIB_MIN
         || memory_mib > KDF_ARGON2_MEMORY_MIB_MAX) {
         return ERROR(
@@ -118,7 +118,7 @@ void kdf_epoch_fingerprint(
     crypto_blake2b_final(&ctx, out_fp);
 }
 
-error_t *kdf_master_key(
+error_t kdf_master_key(
     const uint8_t *passphrase,
     size_t passphrase_len,
     const kdf_epoch_t *epoch,

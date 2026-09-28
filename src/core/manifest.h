@@ -365,7 +365,7 @@ typedef struct manifest manifest_t;
  * @param out Manifest (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *manifest_build(
+error_t manifest_build(
     git_repository *repo,
     const state_t *state,
     arena_t *arena,
@@ -427,7 +427,7 @@ error_t *manifest_build(
  * @param out Manifest (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *manifest_build_tree(
+error_t manifest_build_tree(
     git_repository *repo,
     const git_tree *tree,
     const char *profile,
@@ -464,7 +464,7 @@ error_t *manifest_build_tree(
  * @param out Manifest (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *manifest_build_branch(
+error_t manifest_build_branch(
     git_repository *repo,
     const char *branch,
     const mount_table_t *mounts,
@@ -574,7 +574,7 @@ const mount_table_t *manifest_mounts(const manifest_t *manifest);
  * @param out Output handle (must not be NULL; lifetime tracks arena)
  * @return Error or NULL on success
  */
-error_t *manifest_mount_table(
+error_t manifest_mount_table(
     const state_t *state,
     const mount_t *binding,
     arena_t *arena,
@@ -998,7 +998,7 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  *                    be NULL; NULL after an error)
  * @return Error or NULL on success
  */
-error_t *manifest_name(
+error_t manifest_name(
     const manifest_t *manifest,
     const char *profile,
     const char *filesystem_path,

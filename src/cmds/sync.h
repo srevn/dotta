@@ -41,7 +41,7 @@ typedef struct {
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts);
+error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts);
 
 /**
  * Spec-engine command specification for `dotta sync`.

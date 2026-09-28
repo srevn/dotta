@@ -1610,7 +1610,7 @@ static void apply_print_cleanup_refused(
  *                     it wrote stands
  * @return Error or NULL on success (non-fatal: the caller warns)
  */
-static error_t *apply_write_record(
+static error_t apply_write_record(
     const dotta_ctx_t *ctx,
     workspace_t *ws,
     const cleanup_preflight_result_t *cleanup_verdicts,
@@ -1626,7 +1626,7 @@ static error_t *apply_write_record(
     CHECK_NULL(acknowledged);
 
     state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE) */
-    error_t *err = NULL;
+    error_t err = NULL;
 
     *acknowledged = 0;
 
@@ -1815,7 +1815,7 @@ cleanup:
 /**
  * Apply command implementation
  */
-error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
+error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -1828,7 +1828,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     output_t *out = ctx->out;
 
     /* Declare all resources at the top, initialized to NULL/zero */
-    error_t *err = NULL;
+    error_t err = NULL;
     scope_t *scope = NULL;
     workspace_t *ws = NULL;
     deploy_plan_t *deploy_plan = NULL;                 /* Items borrow from ws */
@@ -2789,7 +2789,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * wrote — whole or not at all (apply_write_record). A record the store
          * refused is said beneath the receipts, with what it left standing; one
          * that landed says only the reassignments it acknowledged, at the tail. */
-        error_t *record_err = apply_write_record(
+        error_t record_err = apply_write_record(
             ctx, ws, cleanup_verdicts, cleanup_result, deploy_result, now, &acknowledged_count
         );
         if (record_err) {
@@ -2938,7 +2938,7 @@ static args_want_t apply_complete(
     return ARGS_WANT_FILES;
 }
 
-static error_t *apply_dispatch(const void *ctx_v, void *opts_v) {
+static error_t apply_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_apply(ctx, (const cmd_apply_options_t *) opts_v);
 }

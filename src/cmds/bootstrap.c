@@ -74,14 +74,14 @@ static const char *const BOOTSTRAP_TEMPLATE =
  * working-tree write). Fails if the profile is missing or if a bootstrap script
  * already exists for it.
  */
-static error_t *bootstrap_create_template(
+static error_t bootstrap_create_template(
     git_repository *repo,
     const char *profile
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
 
-    error_t *err = profile_require(repo, profile);
+    error_t err = profile_require(repo, profile);
     if (err) return err;
 
     /* Check if script already exists in Git */
@@ -137,7 +137,7 @@ static error_t *bootstrap_create_template(
  * the edited content, and commits the result back to Git. If the profile has no
  * script yet, one is created from the template first.
  */
-static error_t *bootstrap_edit(
+static error_t bootstrap_edit(
     git_repository *repo,
     const char *profile,
     output_t *out
@@ -145,7 +145,7 @@ static error_t *bootstrap_edit(
     CHECK_NULL(repo);
     CHECK_NULL(profile);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     char *temp_path = NULL;
     buffer_t content_buf = BUFFER_INIT;
     char *commit_msg = NULL;
@@ -257,7 +257,7 @@ cleanup:
  *
  * Reads the script from Git and writes its bytes to `out`.
  */
-static error_t *bootstrap_show(
+static error_t bootstrap_show(
     git_repository *repo,
     const char *profile,
     output_t *out
@@ -274,7 +274,7 @@ static error_t *bootstrap_show(
 
     /* Read content from Git blob */
     buffer_t content = BUFFER_INIT;
-    error_t *err = bootstrap_read(repo, profile, &content);
+    error_t err = bootstrap_read(repo, profile, &content);
     if (err) {
         return error_wrap(err, "Failed to read bootstrap script");
     }
@@ -332,7 +332,7 @@ static void bootstrap_list(
 /**
  * Execute bootstrap command
  */
-error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opts) {
+error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -341,7 +341,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
     state_t *state = ctx->run.state;
     output_t *out = ctx->out;
 
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* Handle --edit flag */
     if (opts->edit) {
@@ -520,7 +520,7 @@ static args_want_t bootstrap_complete(
     return ARGS_WANT_NONE;
 }
 
-static error_t *bootstrap_dispatch(const void *ctx_v, void *opts_v) {
+static error_t bootstrap_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_bootstrap(ctx, (const cmd_bootstrap_options_t *) opts_v);
 }

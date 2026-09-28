@@ -100,7 +100,7 @@ typedef struct output {
  * @param out  The verbosity (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *output_parse_verbosity(const char *word, output_verbosity_t *out);
+error_t output_parse_verbosity(const char *word, output_verbosity_t *out);
 
 /**
  * The color mode a word names: "auto", "always" or "never".
@@ -113,7 +113,7 @@ error_t *output_parse_verbosity(const char *word, output_verbosity_t *out);
  * @param out  The color mode (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *output_parse_color_mode(const char *word, output_color_mode_t *out);
+error_t output_parse_color_mode(const char *word, output_color_mode_t *out);
 
 /**
  * Create output context

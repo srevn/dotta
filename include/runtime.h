@@ -489,9 +489,9 @@ typedef struct dotta_run {
  *
  * Exit-code override
  * ------------------
- * Dispatch returns `error_t *` — dotta's native failure channel. For native
- * commands a non-NULL error collapses to process exit `1` and a NULL error
- * collapses to `0`; the single bit is enough.
+ * Dispatch returns `error_t` — dotta's native failure channel. For native commands
+ * a non-NULL error collapses to process exit `1` and a NULL error collapses to
+ * `0`; the single bit is enough.
  *
  * Pass-through commands (e.g. `dotta git`) run an external tool whose *exact*
  * exit status is the contract users rely on (`git diff --exit-code` returns 1

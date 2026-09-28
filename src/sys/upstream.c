@@ -14,7 +14,7 @@
 /**
  * Analyze upstream state for a single profile
  */
-error_t *upstream_analyze_profile(
+error_t upstream_analyze_profile(
     git_repository *repo,
     const char *remote_name,
     const char *profile_name,
@@ -31,7 +31,7 @@ error_t *upstream_analyze_profile(
     /* Build reference names */
     char local_refname[DOTTA_REFNAME_MAX];
     char remote_refname[DOTTA_REFNAME_MAX];
-    error_t *err;
+    error_t err;
 
     err = gitops_branch_refname(
         local_refname, sizeof(local_refname), profile_name
@@ -147,7 +147,7 @@ output_color_t upstream_state_color(upstream_state_t state) {
 /**
  * Discover remote branches that don't exist locally
  */
-error_t *upstream_discover_branches(
+error_t upstream_discover_branches(
     git_repository *repo,
     const char *remote_name,
     arena_t *arena,
@@ -181,7 +181,7 @@ error_t *upstream_discover_branches(
 /**
  * Make a remote branch local, or leave the local one where it stands
  */
-error_t *upstream_ensure_tracking_branch(
+error_t upstream_ensure_tracking_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name
@@ -212,7 +212,7 @@ error_t *upstream_ensure_tracking_branch(
 
     /* Get remote ref */
     git_oid target_oid;
-    error_t *err = gitops_resolve_remote_branch_oid(
+    error_t err = gitops_resolve_remote_branch_oid(
         repo, remote_name, branch_name, &target_oid
     );
     if (err) return err;

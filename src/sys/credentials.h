@@ -54,7 +54,7 @@ typedef struct {
  *            Caller releases it with credential_url_deinit.
  * @return Error or NULL on success. On failure, *out is left zero-initialized.
  */
-error_t *credential_url_parse(const char *url, credential_url_t *out);
+error_t credential_url_parse(const char *url, credential_url_t *out);
 
 /**
  * Release resources owned by a parsed URL.
@@ -133,7 +133,7 @@ int credential_make_default(git_credential **out);
  * @param out_pass          Output (initialized to NULL)
  * @return Error or NULL.
  */
-error_t *credential_helper_fill(
+error_t credential_helper_fill(
     const credential_url_t *u,
     const char *username_from_url,
     char **out_user,
@@ -147,7 +147,7 @@ error_t *credential_helper_fill(
  * helper that doesn't implement approve is NOT an error — many helpers are
  * query-only by design. Returns an error only for exec failure or timeout.
  */
-error_t *credential_helper_approve(
+error_t credential_helper_approve(
     const credential_url_t *u, const char *user, const char *pass
 );
 
@@ -156,7 +156,7 @@ error_t *credential_helper_approve(
  *
  * Same semantics as credential_helper_approve.
  */
-error_t *credential_helper_reject(
+error_t credential_helper_reject(
     const credential_url_t *u, const char *user, const char *pass
 );
 

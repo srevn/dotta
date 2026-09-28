@@ -130,7 +130,7 @@ struct state {
  * @param out Output path (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-static error_t *get_db_path(git_repository *repo, char **out) {
+static error_t get_db_path(git_repository *repo, char **out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
@@ -157,10 +157,10 @@ static error_t *get_db_path(git_repository *repo, char **out) {
  *            arguments where the refusal is a path's
  * @return Error object
  */
-static error_t *state_error(sqlite3 *db, const char *fmt, ...)
+static error_t state_error(sqlite3 *db, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
-static error_t *state_error(sqlite3 *db, const char *fmt, ...) {
+static error_t state_error(sqlite3 *db, const char *fmt, ...) {
     const char *message = sqlite3_errmsg(db);
     int code = sqlite3_errcode(db);
 
@@ -284,7 +284,7 @@ static fs_occupant_t state_kind_from_text(const char *text) {
  * @param db Connection to the private file (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *state_initialize(sqlite3 *db) {
+static error_t state_initialize(sqlite3 *db) {
     CHECK_NULL(db);
 
     char *errmsg = NULL;
@@ -406,7 +406,7 @@ static error_t *state_initialize(sqlite3 *db) {
     /* Execute schema SQL */
     rc = sqlite3_exec(db, schema_sql, NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(
+        error_t err = ERROR(
             ERR_STATE_INVALID, "Failed to initialize schema: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
         );
@@ -430,7 +430,7 @@ static error_t *state_initialize(sqlite3 *db) {
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *state_verify(sqlite3 *db) {
+static error_t state_verify(sqlite3 *db) {
     CHECK_NULL(db);
 
     /* Whether the header marks the file dotta's, whether it marks this schema,
@@ -449,7 +449,7 @@ static error_t *state_verify(sqlite3 *db) {
     /* A read that could not happen keeps SQLite's own cause — a file that is
      * not a database is refused here, by it — and is no verdict about the
      * header. */
-    error_t *err = NULL;
+    error_t err = NULL;
     if (rc != SQLITE_ROW) {
         err = state_error(db, "Failed to read the database's header");
     } else if (!sqlite3_column_int(stmt, 0)) {
@@ -489,7 +489,7 @@ static error_t *state_verify(sqlite3 *db) {
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *state_configure(sqlite3 *db) {
+static error_t state_configure(sqlite3 *db) {
     CHECK_NULL(db);
 
     char *errmsg = NULL;
@@ -498,7 +498,7 @@ static error_t *state_configure(sqlite3 *db) {
     /* 1. Fast synchronization (safe on crash, fast on commit) */
     rc = sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(
+        error_t err = ERROR(
             ERR_STATE_INVALID, "Failed to set synchronous mode: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
         );
@@ -515,7 +515,7 @@ static error_t *state_configure(sqlite3 *db) {
      * under this. */
     rc = sqlite3_exec(db, "PRAGMA cache_size=10000;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(
+        error_t err = ERROR(
             ERR_STATE_INVALID, "Failed to set cache size: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
         );
@@ -615,7 +615,7 @@ static const char *state_sql(statement_t statement) {
  * @param state State (must not be NULL, its db open)
  * @return Error or NULL on success
  */
-static error_t *state_prepare(state_t *state) {
+static error_t state_prepare(state_t *state) {
     for (statement_t statement = 0; statement < STATEMENT_COUNT; statement++) {
         int rc = sqlite3_prepare_v3(
             state->db, state_sql(statement), -1, SQLITE_PREPARE_PERSISTENT,
@@ -703,7 +703,7 @@ static void state_deinit_profiles(profiles_t *profiles) {
  * are released, unless the open transaction began with them — those are its
  * rollback's (state_rollback).
  */
-static error_t *state_read_profiles(state_t *state) {
+static error_t state_read_profiles(state_t *state) {
     CHECK_NULL(state);
     CHECK_NULL(state->db);
 
@@ -727,7 +727,7 @@ static error_t *state_read_profiles(state_t *state) {
         rows.entries = heap_calloc(rows.count, sizeof(*rows.entries));
     }
 
-    error_t *err = NULL;
+    error_t err = NULL;
     size_t i = 0;
     while (rc == SQLITE_ROW && i < rows.count) {
         /* The name is NOT NULL, so a NULL is its conversion failing to allocate.
@@ -837,7 +837,7 @@ bool state_enabled(const state_t *state, const char *profile) {
 /**
  * Enable profile with optional deployment target
  */
-error_t *state_enable_profile(
+error_t state_enable_profile(
     state_t *state,
     const char *profile,
     const char *target
@@ -867,7 +867,7 @@ error_t *state_enable_profile(
 /**
  * Disable profile
  */
-error_t *state_disable_profile(
+error_t state_disable_profile(
     state_t *state,
     const char *profile
 ) {
@@ -909,7 +909,7 @@ error_t *state_disable_profile(
  * @param profiles Profile names in desired order (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_reorder_profiles(
+error_t state_reorder_profiles(
     state_t *state,
     const string_array_t *profiles
 ) {
@@ -959,7 +959,7 @@ error_t *state_reorder_profiles(
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "DELETE FROM enabled_profiles;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(
+        error_t err = ERROR(
             ERR_STATE_INVALID, "Failed to clear profiles: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
         );
@@ -1012,12 +1012,12 @@ error_t *state_reorder_profiles(
  * rows; state_commit, before its COMMIT; and state_resume, once the lock is taken
  * back.
  */
-static error_t *state_data_version(state_t *state, int64_t *out) {
+static error_t state_data_version(state_t *state, int64_t *out) {
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(state->db, "PRAGMA data_version;", -1, &stmt, NULL);
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     if (rc == SQLITE_ROW) {
         *out = sqlite3_column_int64(stmt, 0);
     } else {
@@ -1052,11 +1052,11 @@ static error_t *state_data_version(state_t *state, int64_t *out) {
  * @param state Handle whose db_path names the file (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *state_admit(state_t *state) {
+static error_t state_admit(state_t *state) {
     CHECK_NULL(state);
     CHECK_NULL(state->db_path);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     int rc = sqlite3_open_v2(state->db_path, &state->db, SQLITE_OPEN_READWRITE, NULL);
     if (rc != SQLITE_OK) {
         /* CANTOPEN says only that the open failed; the OS's errno says why, where
@@ -1140,7 +1140,7 @@ fail:
  * @param db_path Where the store's database stands (must not be NULL)
  * @return Error or NULL on success — something stands at the path either way
  */
-static error_t *state_create(const char *db_path) {
+static error_t state_create(const char *db_path) {
     CHECK_NULL(db_path);
 
     char temp[PATH_MAX];
@@ -1163,7 +1163,7 @@ static error_t *state_create(const char *db_path) {
     }
     close(fd);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     sqlite3 *db = NULL;
     sqlite3_stmt *stmt = NULL;
 
@@ -1223,14 +1223,14 @@ done:
  * @param out State structure (must not be NULL, caller must free with state_free)
  * @return Error or NULL on success
  */
-error_t *state_load(git_repository *repo, state_t **out) {
+error_t state_load(git_repository *repo, state_t **out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
     *out = NULL;
 
     state_t *state = heap_calloc(1, sizeof(*state));
 
-    error_t *err = get_db_path(repo, &state->db_path);
+    error_t err = get_db_path(repo, &state->db_path);
     if (err) {
         state_free(state);
         return err;
@@ -1267,13 +1267,13 @@ error_t *state_load(git_repository *repo, state_t **out) {
  * @param out State structure (must not be NULL, caller must free with state_free)
  * @return Error or NULL on success
  */
-error_t *state_open(git_repository *repo, state_t **out) {
+error_t state_open(git_repository *repo, state_t **out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
     *out = NULL;
 
     state_t *state = NULL;
-    error_t *err = state_load(repo, &state);
+    error_t err = state_load(repo, &state);
     if (err) return err;
 
     /* A promotion that fails disposes of the handle the one way a handle is
@@ -1300,7 +1300,7 @@ error_t *state_open(git_repository *repo, state_t **out) {
  * @param state State to save (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_save(state_t *state) {
+error_t state_save(state_t *state) {
     CHECK_NULL(state);
 
     return state->in_transaction ? state_commit(state) : NULL;
@@ -1314,7 +1314,7 @@ error_t *state_save(state_t *state) {
  * store published (state_create) and admitted (state_admit) — which is what makes
  * state_open this call over a fresh load.
  */
-error_t *state_begin(state_t *state) {
+error_t state_begin(state_t *state) {
     CHECK_NULL(state);
 
     if (state->in_transaction) {
@@ -1350,7 +1350,7 @@ error_t *state_begin(state_t *state) {
      * readers must see its own snapshot. A read that fails releases the lock
      * the caller never got, and is returned: the read replaced nothing, so the
      * handle keeps the rows it held. */
-    error_t *err = state_read_profiles(state);
+    error_t err = state_read_profiles(state);
     if (err) {
         sqlite3_exec(state->db, "ROLLBACK;", NULL, NULL, NULL);
         return err;
@@ -1368,7 +1368,7 @@ error_t *state_begin(state_t *state) {
 /**
  * Commit a transaction started by state_begin()
  */
-error_t *state_commit(state_t *state) {
+error_t state_commit(state_t *state) {
     CHECK_NULL(state);
     CHECK_NULL(state->db);
 
@@ -1386,7 +1386,7 @@ error_t *state_commit(state_t *state) {
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "COMMIT;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(
+        error_t err = ERROR(
             ERR_STATE_INVALID, "Failed to commit transaction: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
         );
@@ -1412,7 +1412,7 @@ error_t *state_commit(state_t *state) {
 /**
  * Take the write lock back where this handle's last commit left the store
  */
-error_t *state_resume(state_t *state) {
+error_t state_resume(state_t *state) {
     CHECK_NULL(state);
 
     RETURN_IF_ERROR(state_begin(state));
@@ -1421,7 +1421,7 @@ error_t *state_resume(state_t *state) {
      * commit since this handle's last one moved the version off the one that
      * commit kept. */
     int64_t data_version = 0;
-    error_t *err = state_data_version(state, &data_version);
+    error_t err = state_data_version(state, &data_version);
     if (!err && data_version != state->data_version) {
         err = ERROR(
             ERR_CONFLICT, "Another process wrote to the database since this one last did"
@@ -1503,7 +1503,7 @@ void state_free(state_t *state) {
  * table's size, so the arena allocation is exact and the count and the rows are
  * one snapshot (state_read_profiles).
  */
-error_t *state_records(
+error_t state_records(
     const state_t *state,
     arena_t *arena,
     state_record_t **out,
@@ -1644,7 +1644,7 @@ const state_record_t *state_find_record(
  * run with that parameter NULL and write an owner the record names as none. A
  * NULL pointer binds NULL (SQLite's contract), so each nullable column is one call.
  */
-error_t *state_write(state_t *state, const state_record_t *record) {
+error_t state_write(state_t *state, const state_record_t *record) {
     CHECK_NULL(state);
     CHECK_NULL(record);
     CHECK_NULL(state->db);
@@ -1704,7 +1704,7 @@ error_t *state_write(state_t *state, const state_record_t *record) {
  * on STATEMENT_RETIRE and the header contract); a missing record matches nothing
  * and is success.
  */
-error_t *state_retire(state_t *state, const char *filesystem_path) {
+error_t state_retire(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);
@@ -1727,7 +1727,7 @@ error_t *state_retire(state_t *state, const char *filesystem_path) {
  * UPDATE of the record's order (see the SQL comment on STATEMENT_ORDER_PRUNE
  * and the header contract); a missing record matches nothing and is success.
  */
-error_t *state_order_prune(state_t *state, const char *filesystem_path, time_t now) {
+error_t state_order_prune(state_t *state, const char *filesystem_path, time_t now) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);

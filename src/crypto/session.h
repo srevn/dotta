@@ -74,7 +74,7 @@
  * @return NULL on success; ERR_FS on I/O failure; ERR_CRYPTO if the nonce cannot
  *         be drawn
  */
-error_t *session_save(
+error_t session_save(
     const uint8_t master_key[KDF_KEY_SIZE],
     const kdf_epoch_t *epoch,
     time_t expires_at
@@ -103,7 +103,7 @@ error_t *session_save(
  *         ERR_CRYPTO for corruption, wrong mode or owner, version mismatch or
  *         MAC failure; ERR_FS for an unexpected I/O error
  */
-error_t *session_load(
+error_t session_load(
     uint8_t out_master_key[KDF_KEY_SIZE],
     const kdf_epoch_t *epoch,
     time_t *out_expires_at

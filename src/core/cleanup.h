@@ -454,8 +454,8 @@ cleanup_preflight_result_t *cleanup_preflight(
  * deploy_outcome_t's stat. Borrowed, as every error is (base/error.h).
  */
 typedef struct {
-    const workspace_item_t *item;   /* Borrowed (workspace lifetime) */
-    error_t *error;                 /* The failed bucket's cause; NULL elsewhere (borrowed) */
+    const workspace_item_t *item;  /* Borrowed (workspace lifetime) */
+    error_t error;                 /* The failed bucket's cause; NULL elsewhere (borrowed) */
 } cleanup_outcome_t;
 
 /**

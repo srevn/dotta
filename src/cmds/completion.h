@@ -194,7 +194,7 @@ typedef struct {
  * @param ctx Dispatch context (ctx->run.repo is NULL outside a repository)
  * @param opts Command options (must not be NULL)
  */
-error_t *cmd_complete(const dotta_ctx_t *ctx, const cmd_complete_options_t *opts);
+error_t cmd_complete(const dotta_ctx_t *ctx, const cmd_complete_options_t *opts);
 
 /**
  * Spec-engine command specification for `dotta __complete`.
@@ -219,7 +219,7 @@ typedef struct {
  * @param opts Command options (must not be NULL; the shell admitted by post_parse)
  * @return Error when the registry holds a name the script cannot carry, or NULL
  */
-error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *opts);
+error_t cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *opts);
 
 /**
  * Spec-engine command specification for `dotta completion`.

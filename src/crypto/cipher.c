@@ -68,7 +68,7 @@ _Static_assert(
  * @param out_len      Set to the path's length on success
  * @return Error or NULL on success
  */
-static error_t *validate_path(const char *storage_path, size_t *out_len) {
+static error_t validate_path(const char *storage_path, size_t *out_len) {
     size_t len = strnlen(storage_path, CIPHER_STORAGE_PATH_MAX + 1);
     if (len > CIPHER_STORAGE_PATH_MAX) {
         return ERROR(
@@ -94,7 +94,7 @@ static error_t *validate_path(const char *storage_path, size_t *out_len) {
  * @param data_len Blob length
  * @return Error or NULL if the header is well-formed
  */
-static error_t *validate_header(const uint8_t *data, size_t data_len) {
+static error_t validate_header(const uint8_t *data, size_t data_len) {
     if (data_len < CIPHER_HEADER_SIZE) {
         return ERROR(
             ERR_CRYPTO,
@@ -145,7 +145,7 @@ static void compute_siv(
     crypto_wipe(&ctx, sizeof(ctx));
 }
 
-error_t *cipher_read_header(
+error_t cipher_read_header(
     const uint8_t *data,
     size_t data_len,
     uint8_t out_epoch_fp[KDF_EPOCH_FP_SIZE]
@@ -153,7 +153,7 @@ error_t *cipher_read_header(
     CHECK_NULL(data);
     CHECK_NULL(out_epoch_fp);
 
-    error_t *err = validate_header(data, data_len);
+    error_t err = validate_header(data, data_len);
     if (err) return err;
 
     memcpy(out_epoch_fp, &data[CIPHER_OFFSET_EPOCH_FP], KDF_EPOCH_FP_SIZE);
@@ -161,7 +161,7 @@ error_t *cipher_read_header(
     return NULL;
 }
 
-error_t *cipher_encrypt(
+error_t cipher_encrypt(
     const uint8_t *plaintext,
     size_t plaintext_len,
     const uint8_t mac_key[KDF_KEY_SIZE],
@@ -177,7 +177,7 @@ error_t *cipher_encrypt(
     CHECK_NULL(epoch_fp);
     CHECK_NULL(out_ciphertext);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     uint8_t header[CIPHER_HEADER_SIZE];
     uint8_t keystream_seed[CIPHER_SIV_SIZE] = { 0 };
     buffer_t output = BUFFER_INIT;
@@ -350,7 +350,7 @@ static bool unseal(
     return opens;
 }
 
-error_t *cipher_decrypt(
+error_t cipher_decrypt(
     const uint8_t *ciphertext,
     size_t ciphertext_len,
     const uint8_t mac_key[KDF_KEY_SIZE],
@@ -364,7 +364,7 @@ error_t *cipher_decrypt(
     CHECK_NULL(storage_path);
     CHECK_NULL(out_plaintext);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     buffer_t output = BUFFER_INIT;
     size_t path_len = 0;
 

@@ -30,14 +30,14 @@
  * Returns ERR_NOT_FOUND if the tree exists but has no .bootstrap entry; wraps
  * any underlying Git error otherwise.
  */
-static error_t *load_bootstrap_entry(
+static error_t load_bootstrap_entry(
     git_repository *repo,
     const char *profile,
     git_tree **out_tree,
     const git_tree_entry **out_entry
 ) {
     git_tree *tree = NULL;
-    error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+    error_t err = gitops_load_branch_tree(repo, profile, &tree, NULL);
     if (err) {
         return error_wrap(
             err, "Failed to load tree for profile '%s'", profile
@@ -74,7 +74,7 @@ static const char *tmp_dir(void) {
  * Write exactly `size` bytes from `data` to `fd`, retrying on EINTR and handling
  * short writes. Returns NULL on success.
  */
-static error_t *write_all(int fd, const void *data, size_t size) {
+static error_t write_all(int fd, const void *data, size_t size) {
     const unsigned char *p = data;
     size_t written = 0;
     while (written < size) {
@@ -95,7 +95,7 @@ bool bootstrap_exists(git_repository *repo, const char *profile) {
     /* A branch that cannot be asked about or will not load holds no script to
      * read: its error is dropped, one per such profile asked. */
     bool exists = false;
-    error_t *err = gitops_branch_exists(repo, profile, &exists);
+    error_t err = gitops_branch_exists(repo, profile, &exists);
     if (err) {
         return false;
     }
@@ -112,7 +112,7 @@ bool bootstrap_exists(git_repository *repo, const char *profile) {
     return found;
 }
 
-error_t *bootstrap_read(
+error_t bootstrap_read(
     git_repository *repo,
     const char *profile,
     buffer_t *out_content
@@ -126,7 +126,7 @@ error_t *bootstrap_read(
     git_tree *tree = NULL;
     const git_tree_entry *entry = NULL;
     void *raw = NULL;
-    error_t *err = NULL;
+    error_t err = NULL;
 
     err = load_bootstrap_entry(repo, profile, &tree, &entry);
     if (err) goto cleanup;
@@ -146,7 +146,7 @@ cleanup:
     return err;
 }
 
-error_t *bootstrap_extract_to_temp(
+error_t bootstrap_extract_to_temp(
     git_repository *repo,
     const char *profile,
     char **out_temp_path
@@ -160,7 +160,7 @@ error_t *bootstrap_extract_to_temp(
     void *raw = NULL;
     char *path = NULL;
     int fd = -1;
-    error_t *err = NULL;
+    error_t err = NULL;
 
     err = load_bootstrap_entry(repo, profile, &tree, &entry);
     if (err) goto cleanup;
@@ -221,7 +221,7 @@ cleanup:
     return err;
 }
 
-error_t *bootstrap_validate(const unsigned char *content, size_t size) {
+error_t bootstrap_validate(const unsigned char *content, size_t size) {
     CHECK_ARG(content != NULL || size == 0, "content cannot be NULL with a size");
 
     if (size == 0) {

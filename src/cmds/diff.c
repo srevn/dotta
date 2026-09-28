@@ -251,7 +251,7 @@ static const char *get_status_message_from_item(
  * @param out Output context (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *show_file_diff_from_workspace(
+static error_t show_file_diff_from_workspace(
     const workspace_item_t *item,
     content_cache_t *cache,
     diff_direction_t direction,
@@ -333,7 +333,7 @@ static error_t *show_file_diff_from_workspace(
      * free), read as the entry the row's type says it is */
     git_filemode_t mode = path_type_to_git_filemode(file->type);
     const buffer_t *content = NULL;
-    error_t *err = content_cache_get_from_blob_oid(
+    error_t err = content_cache_get_from_blob_oid(
         cache, &file->blob_oid, mode, file->storage_path, file->profile, &content
     );
     if (err) {
@@ -389,7 +389,7 @@ static error_t *show_file_diff_from_workspace(
  *                   look at; shown by their status line, no hunk (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *present_diffs_for_direction(
+static error_t present_diffs_for_direction(
     workspace_items_t diverged,
     content_cache_t *cache,
     diff_direction_t direction,
@@ -409,7 +409,7 @@ static error_t *present_diffs_for_direction(
     *diff_count = 0;
     *unverified = 0;
 
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* Early return if no diverged items */
     if (diverged.count == 0) return NULL;
@@ -514,7 +514,7 @@ static void print_commit_header(
 /**
  * Print diff statistics
  */
-static error_t *print_diff_stats(
+static error_t print_diff_stats(
     output_t *out,
     git_diff *diff
 ) {
@@ -522,7 +522,7 @@ static error_t *print_diff_stats(
     CHECK_NULL(diff);
 
     git_diff_stats *stats = NULL;
-    error_t *err = gitops_diff_get_stats(diff, &stats);
+    error_t err = gitops_diff_get_stats(diff, &stats);
     if (err) return err;
 
     size_t files_changed = git_diff_stats_files_changed(stats);
@@ -629,7 +629,7 @@ static int print_diff_line_cb(
  * @param diff_count Output: number of diffs shown (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *compare_tree_files_to_filesystem(
+static error_t compare_tree_files_to_filesystem(
     const manifest_t *view,
     const pathspec_t *file_filter,
     const cmd_diff_options_t *opts,
@@ -679,7 +679,7 @@ static error_t *compare_tree_files_to_filesystem(
 
             /* Get content from historical commit (cached) */
             const buffer_t *hist_content = NULL;
-            error_t *err = content_cache_get_from_blob_oid(
+            error_t err = content_cache_get_from_blob_oid(
                 cache, &entry->blob_oid, mode, storage_path, profile, &hist_content
             );
             if (err) {
@@ -707,7 +707,7 @@ static error_t *compare_tree_files_to_filesystem(
          * this loop used to compare the row itself and then hand the renderer
          * the same question four lines later. */
         const buffer_t *hist_content = NULL;
-        error_t *err = content_cache_get_from_blob_oid(
+        error_t err = content_cache_get_from_blob_oid(
             cache, &entry->blob_oid, mode, storage_path, profile, &hist_content
         );
         if (err) {
@@ -905,7 +905,7 @@ static bool validate_filter_paths(
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *diff_commit_to_workspace(
+static error_t diff_commit_to_workspace(
     const dotta_ctx_t *ctx,
     const char *commit_ref,
     const scope_t *scope,
@@ -925,7 +925,7 @@ static error_t *diff_commit_to_workspace(
     const string_array_t *profiles = scope_enabled(scope);
     const pathspec_t *file_filter = scope_paths(scope);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     git_commit *commit = NULL;
     const char *profile = NULL;  /* borrowed from the enabled set */
     git_tree *tree = NULL;
@@ -1101,7 +1101,7 @@ static int select_delta(
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *diff_commits(
+static error_t diff_commits(
     const dotta_ctx_t *ctx,
     const char *commit1_ref,
     const char *commit2_ref,
@@ -1122,7 +1122,7 @@ static error_t *diff_commits(
     const string_array_t *profiles = scope_enabled(scope);
     const pathspec_t *file_filter = scope_paths(scope);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     git_commit *commit1 = NULL;
     git_commit *commit2 = NULL;
     /* Both borrowed from the enabled set, which outlives this call. */
@@ -1260,7 +1260,7 @@ cleanup:
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *diff_workspace(
+static error_t diff_workspace(
     const dotta_ctx_t *ctx,
     const scope_t *scope,
     const cmd_diff_options_t *opts
@@ -1290,7 +1290,7 @@ static error_t *diff_workspace(
     };
 
     workspace_t *ws = NULL;
-    error_t *err = workspace_load(repo, state, config, cache, manifest, &ws_opts, arena, &ws);
+    error_t err = workspace_load(repo, state, config, cache, manifest, &ws_opts, arena, &ws);
     if (err) return error_wrap(err, "Failed to load workspace");
 
     /* What the load owes the record — its observations, its confirmations, the
@@ -1397,7 +1397,7 @@ static error_t *diff_workspace(
 /**
  * Diff command implementation
  */
-error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
+error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -1486,7 +1486,7 @@ static args_class_t diff_classify(const char *tok) {
  * mode. Zero-default on `direction` (DIFF_DIR_UNSET) is the signal that no
  * direction flag was seen; it resolves to DIFF_UPSTREAM as the legacy default.
  */
-static error_t *diff_post_parse(
+static error_t diff_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) arena;
@@ -1551,7 +1551,7 @@ static args_want_t diff_complete(
     return ARGS_WANT_FILES;
 }
 
-static error_t *diff_dispatch(const void *ctx_v, void *opts_v) {
+static error_t diff_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_diff(ctx, (const cmd_diff_options_t *) opts_v);
 }

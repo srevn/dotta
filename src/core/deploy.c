@@ -353,7 +353,7 @@ static clearance_t path_clearance(const char *path, fs_occupant_t occ, bool cons
  * fills up between the two stops the run instead of going with it. Absence is
  * success — a race that removes the occupant first has done this function's work.
  */
-static error_t *clear_occupant(const char *path, fs_occupant_t occ) {
+static error_t clear_occupant(const char *path, fs_occupant_t occ) {
     return (occ == FS_OCCUPANT_DIRECTORY) ? fs_remove_empty_dir(path)
                                           : fs_remove_file(path);
 }
@@ -733,7 +733,7 @@ cleanup:
  * @return The strict_ownership refusal, or NULL — a name this host cannot resolve
  *         is otherwise a warning and no change
  */
-static error_t *resolve_deployment_ownership(
+static error_t resolve_deployment_ownership(
     const manifest_row_t *row, bool strict_ownership, string_array_t *warnings,
     uid_t *out_uid, gid_t *out_gid
 ) {
@@ -819,12 +819,12 @@ static error_t *resolve_deployment_ownership(
  * @return Error or NULL on success (a strict_ownership failure is one; a skip
  *         is not)
  */
-static error_t *check_ownership(
+static error_t check_ownership(
     const deploy_options_t *opts, string_array_t *warnings,
     const manifest_row_t *row, uid_t *out_uid, gid_t *out_gid,
     deploy_skip_reason_t *out_reason
 ) {
-    error_t *err = resolve_deployment_ownership(
+    error_t err = resolve_deployment_ownership(
         row, opts->strict_ownership, warnings, out_uid, out_gid
     );
     if (err) {
@@ -886,7 +886,7 @@ static bool above_deployable_row(
  * ANCESTOR — the ancestry rung (check_ancestry), asked before any probe of the
  * row's own.
  */
-error_t *deploy_preflight(
+error_t deploy_preflight(
     const workspace_t *ws,
     const deploy_plan_t *plan,
     const deploy_options_t *opts,
@@ -1272,12 +1272,12 @@ static void hold_directory(deploy_run_t *run, const char *path, mode_t mode) {
  * the converge arm uses, never a chmod(2) on a path that may have become a symlink
  * meanwhile. Every entry is attempted; the first failure is the one reported.
  */
-static error_t *release_directories(deploy_run_t *run) {
-    error_t *err = NULL;
+static error_t release_directories(deploy_run_t *run) {
+    error_t err = NULL;
 
     for (size_t i = run->held.count; i-- > 0;) {
         const held_directory_t *held = run->held.entries[i];
-        error_t *release_err = fs_create_dir_with_ownership(
+        error_t release_err = fs_create_dir_with_ownership(
             held->path, held->mode, (uid_t) -1, (gid_t) -1
         );
 
@@ -1309,7 +1309,7 @@ static error_t *release_directories(deploy_run_t *run) {
  * @param v Verdict for the directory row (must not be NULL; borrowed, read-only)
  * @return Error or NULL on success
  */
-static error_t *materialize_directory(
+static error_t materialize_directory(
     deploy_run_t *run, const deploy_verdict_t *v
 ) {
     const manifest_row_t *dir = v->item->row;
@@ -1353,7 +1353,7 @@ static error_t *materialize_directory(
  * @param path Absent ancestor to create (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *create_ancestor(deploy_run_t *run, const char *path) {
+static error_t create_ancestor(deploy_run_t *run, const char *path) {
     const deploy_verdicts_t *ancestors = &run->verdicts->ancestors;
 
     for (size_t i = 0; i < ancestors->count; i++) {
@@ -1420,7 +1420,7 @@ static error_t *create_ancestor(deploy_run_t *run, const char *path) {
  * @param st Its lstat
  * @return Error or NULL on success
  */
-static error_t *open_landing_directory(
+static error_t open_landing_directory(
     deploy_run_t *run,
     const char *ancestor,
     fs_occupant_t occ,
@@ -1436,7 +1436,7 @@ static error_t *open_landing_directory(
     }
 
     mode_t current = st->st_mode & 0777;
-    error_t *err = fs_create_dir_with_ownership(
+    error_t err = fs_create_dir_with_ownership(
         dir->filesystem_path, working_mode(current), (uid_t) -1, (gid_t) -1
     );
     if (err) {
@@ -1464,10 +1464,10 @@ static error_t *open_landing_directory(
  * @param path Planned path whose parents must exist (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *ensure_parents(deploy_run_t *run, const char *path) {
+static error_t ensure_parents(deploy_run_t *run, const char *path) {
     char *scratch = heap_strdup(path);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     size_t ancestor_slash;
     fs_occupant_t occ;
     bool is_dir;
@@ -1539,7 +1539,7 @@ cleanup:
  *          leaves the entry default standing. UNSET on every error return
  * @return Error or NULL on success
  */
-static error_t *deploy_file(
+static error_t deploy_file(
     deploy_run_t *run, const deploy_verdict_t *v, state_stat_t *out_stat
 ) {
     /* The stat's resting state: UNSET unless the regular arm's write lands and
@@ -1550,7 +1550,7 @@ static error_t *deploy_file(
 
     const manifest_row_t *file = v->item->row;
 
-    error_t *err = NULL;
+    error_t err = NULL;
     const buffer_t *content_buffer = NULL;  /* Borrowed from cache */
     char *target_str = NULL;
 
@@ -1669,7 +1669,7 @@ cleanup:
  * @param v Verdict for the row (must not be NULL; the row is borrowed, read-only)
  * @return Error or NULL on success
  */
-static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
+static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
     const char *path = v->item->filesystem_path;
 
     switch (v->occupant) {
@@ -1701,7 +1701,7 @@ static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
 
     /* Create-or-fix with atomic ownership and permissions (fchown/fchmod on the
      * directory fd — no window with wrong metadata). Idempotent. */
-    error_t *err = materialize_directory(run, v);
+    error_t err = materialize_directory(run, v);
     if (err) {
         return error_wrap(err, "Failed to create directory: %s", path);
     }
@@ -1751,7 +1751,7 @@ static const char *poisoned_above(const deploy_result_t *result, const char *pat
  * (deploy_result_t's contract); the receipt travels in *out beside a release
  * error too, complete.
  */
-error_t *deploy_execute(
+error_t deploy_execute(
     git_repository *repo,
     const workspace_t *ws,
     const deploy_preflight_result_t *verdicts,
@@ -1766,7 +1766,7 @@ error_t *deploy_execute(
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    error_t *err = NULL;
+    error_t err = NULL;
 
     deploy_result_t *result = heap_calloc(1, sizeof(deploy_result_t));
 

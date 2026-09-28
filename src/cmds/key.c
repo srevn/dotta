@@ -26,7 +26,7 @@
  * holds passphrase bytes: what to verify against, how many times to ask, and
  * what stands after a refusal are the keymgr's decisions.
  */
-static error_t *cmd_key_set(const dotta_ctx_t *ctx) {
+static error_t cmd_key_set(const dotta_ctx_t *ctx) {
     keymgr *keymgr = ctx->run.keymgr;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
@@ -107,7 +107,7 @@ static error_t *cmd_key_set(const dotta_ctx_t *ctx) {
  * Clears the cached passphrase from the dispatcher-owned keymgr and its on-disk
  * session cache.
  */
-static error_t *cmd_key_clear(const dotta_ctx_t *ctx) {
+static error_t cmd_key_clear(const dotta_ctx_t *ctx) {
     keymgr *keymgr = ctx->run.keymgr;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
@@ -149,7 +149,7 @@ static error_t *cmd_key_clear(const dotta_ctx_t *ctx) {
  *
  * Displays encryption configuration and key cache status.
  */
-static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
+static error_t cmd_key_status(const dotta_ctx_t *ctx) {
     git_repository *repo = ctx->run.repo;
     const state_t *state = ctx->run.state;
     keymgr *keymgr = ctx->run.keymgr;
@@ -298,7 +298,7 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
     output_section(out, OUTPUT_NORMAL, "Encrypted Files");
 
     manifest_t *manifest = NULL;
-    error_t *err = manifest_build(repo, state, ctx->arena, &manifest);
+    error_t err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) {
         /* Non-fatal error - concise at normal, detail at verbose */
         output_print(
@@ -333,7 +333,7 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
 /**
  * Execute key command
  */
-error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
+error_t cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -364,7 +364,7 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
  * Each sub's `init_defaults` already set the `action` discriminator, so `cmd_key`'s
  * switch routes the call.
  */
-static error_t *key_dispatch(const void *ctx_v, void *opts_v) {
+static error_t key_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_key(ctx, (const cmd_key_options_t *) opts_v);
 }

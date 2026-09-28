@@ -153,16 +153,16 @@ struct manifest {
  *          (base/error.h)
  */
 struct claim_ctx {
-    manifest_t *manifest;          /* Target view (modified by callback) */
-    contribution_t *contribution;  /* The profile's own claims and their index */
-    const char *profile;           /* Profile name for rows and error messages */
-    const mount_table_t *mounts;   /* Mount table for storage→filesystem resolution */
-    const metadata_t *metadata;    /* The tree's own claim sheet, never NULL */
-    ptr_array_t *placed;           /* Every row this step placed, in claim order */
-    ptr_array_t *contenders;       /* The rows that met a path already named */
-    hashmap_t *contradicted;       /* The sheet's names this tree holds a blob at */
-    arena_t *arena;                /* Arena for allocations (must not be NULL) */
-    error_t *error;                /* Error propagation (set on failure) */
+    manifest_t *manifest;         /* Target view (modified by callback) */
+    contribution_t *contribution; /* The profile's own claims and their index */
+    const char *profile;          /* Profile name for rows and error messages */
+    const mount_table_t *mounts;  /* Mount table for storage→filesystem resolution */
+    const metadata_t *metadata;   /* The tree's own claim sheet, never NULL */
+    ptr_array_t *placed;          /* Every row this step placed, in claim order */
+    ptr_array_t *contenders;      /* The rows that met a path already named */
+    hashmap_t *contradicted;      /* The sheet's names this tree holds a blob at */
+    arena_t *arena;               /* Arena for allocations (must not be NULL) */
+    error_t error;                /* Error propagation (set on failure) */
 };
 
 /**
@@ -355,7 +355,7 @@ typedef struct {
  * terminates because the ascent reads rungs strictly above the path it is asked
  * about, so every turn is a strictly shorter path and the depth is bounded by
  * the rungs; it is entered at all only where a group stands. */
-static error_t *manifest_ascend(
+static error_t manifest_ascend(
     const naming_t *n, const char *filesystem_path, const char **out_storage
 );
 
@@ -406,14 +406,14 @@ static manifest_claim_t manifest_row_claim(const manifest_row_t *row) {
  * @param out_kept The row whose name stands (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *manifest_decide(
+static error_t manifest_decide(
     const naming_t *n,
     const char *filesystem_path,
     manifest_row_t **group,
     manifest_row_t **out_kept
 ) {
     const char *fresh = NULL;
-    error_t *err = manifest_ascend(n, filesystem_path, &fresh);
+    error_t err = manifest_ascend(n, filesystem_path, &fresh);
     if (err) {
         return error_wrap(
             err, "Failed to name '%s' for profile '%s'", filesystem_path, n->profile
@@ -480,7 +480,7 @@ static error_t *manifest_decide(
  *            NULL)
  * @return Error or NULL on success
  */
-static error_t *manifest_standing(
+static error_t manifest_standing(
     const naming_t *n, const char *filesystem_path, manifest_claim_t *out
 ) {
     *out = (manifest_claim_t){ 0 };
@@ -491,7 +491,7 @@ static error_t *manifest_standing(
         c && c->contested ? hashmap_get(c->contested, filesystem_path) : NULL;
     if (group) {
         manifest_row_t *kept = NULL;
-        error_t *err = manifest_decide(n, filesystem_path, group, &kept);
+        error_t err = manifest_decide(n, filesystem_path, group, &kept);
         if (err) return err;
 
         *out = manifest_row_claim(kept);
@@ -559,7 +559,7 @@ static error_t *manifest_standing(
  * @param out_storage The composed name, never NULL on success (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *manifest_ascend(
+static error_t manifest_ascend(
     const naming_t *n, const char *filesystem_path, const char **out_storage
 ) {
     *out_storage = NULL;
@@ -582,7 +582,7 @@ static error_t *manifest_ascend(
         /* What stands at this rung, and only a directory naming what lies beneath
          * it. */
         manifest_claim_t claim = { 0 };
-        error_t *err = manifest_standing(n, rung, &claim);
+        error_t err = manifest_standing(n, rung, &claim);
         if (err) return err;
 
         const char *above = manifest_claim_beneath(claim);
@@ -668,7 +668,7 @@ static int name_order(const void *a, const void *b) {
  * @param arena Arena for the groups and the composed names (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *manifest_settle(
+static error_t manifest_settle(
     manifest_t *manifest,
     contribution_t *c,
     ptr_array_t *contenders,
@@ -713,7 +713,7 @@ static error_t *manifest_settle(
         qsort(group, count + 1, sizeof(*group), name_order);
 
         manifest_row_t *kept = NULL;
-        error_t *err = manifest_decide(&n, filesystem_path, group, &kept);
+        error_t err = manifest_decide(&n, filesystem_path, group, &kept);
         if (err) return err;
 
         hashmap_set(c->index, filesystem_path, kept);
@@ -805,7 +805,7 @@ static int manifest_claim_blob(
      * checked where the tree is read, the same reason metadata's key loop checks
      * its own (core/metadata.c). Malformed here is corruption, not a lifecycle
      * stage: it takes the err branch below rather than the unbound note. */
-    error_t *err = label_validate_storage(storage_path);
+    error_t err = label_validate_storage(storage_path);
     if (err) {
         ctx->error = error_wrap(
             err, "Invalid path in profile '%s'", ctx->profile
@@ -940,7 +940,7 @@ static int manifest_claim_blob(
  * @param arena Arena backing the contribution (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *manifest_contribute(
+static error_t manifest_contribute(
     manifest_t *manifest,
     git_repository *repo,
     const git_tree *tree,
@@ -966,7 +966,7 @@ static error_t *manifest_contribute(
      * no directories); every error is a sheet that would not load, and the build
      * fails whole rather than read it as "no claims". */
     metadata_t *metadata = NULL;
-    error_t *err = metadata_load_from_tree(repo, tree, c->profile, &metadata);
+    error_t err = metadata_load_from_tree(repo, tree, c->profile, &metadata);
     if (err) {
         return error_wrap(
             err, "Failed to load metadata for profile '%s'", c->profile
@@ -1220,7 +1220,7 @@ static manifest_t *manifest_allocate(
  * that brought a binding of its own runs it with that, so every one of them reads
  * one value from one instant's rows.
  */
-error_t *manifest_mount_table(
+error_t manifest_mount_table(
     const state_t *state,
     const mount_t *binding,
     arena_t *arena,
@@ -1260,7 +1260,7 @@ error_t *manifest_mount_table(
 /**
  * Build the manifest over the enabled set
  */
-error_t *manifest_build(
+error_t manifest_build(
     git_repository *repo,
     const state_t *state,
     arena_t *arena,
@@ -1282,7 +1282,7 @@ error_t *manifest_build(
      * machine's $HOME — built here, from the rows of this instant, so a custom/
      * path always resolves under the target the row it came from carries. */
     mount_table_t *mounts = NULL;
-    error_t *err = manifest_mount_table(state, NULL, arena, &mounts);
+    error_t err = manifest_mount_table(state, NULL, arena, &mounts);
     if (err) {
         return error_wrap(err, "Failed to build mount table");
     }
@@ -1338,7 +1338,7 @@ error_t *manifest_build(
 /**
  * Build the manifest from a single Git tree
  */
-error_t *manifest_build_tree(
+error_t manifest_build_tree(
     git_repository *repo,
     const git_tree *tree,
     const char *profile,
@@ -1378,7 +1378,7 @@ error_t *manifest_build_tree(
  * The load is wrapped and the build is not: a build's own failures already name
  * the profile they were reading.
  */
-error_t *manifest_build_branch(
+error_t manifest_build_branch(
     git_repository *repo,
     const char *branch,
     const mount_table_t *mounts,
@@ -1394,7 +1394,7 @@ error_t *manifest_build_branch(
     *out = NULL;
 
     git_tree *tree = NULL;
-    error_t *err = gitops_load_branch_tree(repo, branch, &tree, NULL);
+    error_t err = gitops_load_branch_tree(repo, branch, &tree, NULL);
     if (err) {
         return error_wrap(err, "Failed to load tree for profile '%s'", branch);
     }
@@ -1543,7 +1543,7 @@ bool manifest_holds_name(
  * copies, which costs one strdup and buys the absence of a contract where three
  * lifetimes meet.
  */
-error_t *manifest_name(
+error_t manifest_name(
     const manifest_t *manifest,
     const char *profile,
     const char *filesystem_path,
@@ -1567,7 +1567,7 @@ error_t *manifest_name(
     };
 
     manifest_claim_t here = { 0 };
-    error_t *err = manifest_standing(&n, filesystem_path, &here);
+    error_t err = manifest_standing(&n, filesystem_path, &here);
     if (err) return err;
 
     if (here.storage_path) {

@@ -306,7 +306,7 @@ static metadata_t *load_sheet(
     const char *profile
 ) {
     metadata_t *metadata = NULL;
-    error_t *err = metadata_load_from_tree(ctx->run.repo, tree, profile, &metadata);
+    error_t err = metadata_load_from_tree(ctx->run.repo, tree, profile, &metadata);
     if (!err) return metadata;
 
     output_warning(
@@ -330,14 +330,14 @@ static metadata_t *load_sheet(
  * has no last segment, and there is nothing for a directory destination to nest
  * the copy under. Asked before the join, which refuses an empty component.
  */
-static error_t *dest_resolve(
+static error_t dest_resolve(
     const char *dest,
     const char *name,
     arena_t *arena,
     const char **out
 ) {
     char *expanded = NULL;
-    error_t *err = fs_expand_tilde(dest, &expanded);
+    error_t err = fs_expand_tilde(dest, &expanded);
     if (err) return err;
 
     char *final = expanded;
@@ -365,7 +365,7 @@ struct collect_ctx {
     const char *storage_base;  /* "" for whole profile, else target path */
     export_entry_list_t *list;
     arena_t *arena;
-    error_t *error;
+    error_t error;
 };
 
 static int collect_tree_callback(
@@ -412,7 +412,7 @@ static int collect_tree_callback(
      * manifest_claim_blob makes the same check in the same words). A link's target
      * is the link's own business, copied verbatim, and is not a path of this
      * copy. */
-    error_t *shape = label_validate_storage(e.storage_path);
+    error_t shape = label_validate_storage(e.storage_path);
     if (shape) {
         ctx->error = error_wrap(
             shape, "Invalid path in profile '%s'", ctx->profile
@@ -484,7 +484,7 @@ static int export_entry_cmp(const void *a, const void *b) {
  * keys were checked against the storage grammar when the sheet loaded
  * (core/metadata.c), so unlike the walk's names they arrive well-formed.
  */
-static error_t *append_claim_dirs(
+static error_t append_claim_dirs(
     export_entry_list_t *list,
     arena_t *arena,
     const metadata_t *metadata,
@@ -550,7 +550,7 @@ static error_t *append_claim_dirs(
  * Emptiness is asked here, at the arm's own source: a profile holding nothing
  * but its root has no content to copy.
  */
-static error_t *collect_profile(
+static error_t collect_profile(
     const dotta_ctx_t *ctx,
     git_tree *tree,
     const char *profile,
@@ -574,7 +574,7 @@ static error_t *collect_profile(
         .arena        = arena,
         .error        = NULL
     };
-    error_t *err = gitops_tree_walk(tree, collect_tree_callback, &cctx);
+    error_t err = gitops_tree_walk(tree, collect_tree_callback, &cctx);
     if (cctx.error) {
         /* The callback error is the cause; the walk's generic user-abort wrapper
          * is noise. */
@@ -613,7 +613,7 @@ cleanup:
  * sheet's blob-less claims beneath the name follow the walk. A gitlink is refused,
  * and a name neither document holds is not found.
  */
-static error_t *collect_storage(
+static error_t collect_storage(
     const dotta_ctx_t *ctx,
     git_tree *tree,
     const char *profile,
@@ -631,7 +631,7 @@ static error_t *collect_storage(
      * profile_holds) — the sheet as this verb read it, tolerantly (load_sheet),
      * so a damaged sheet costs the copy a claim and never the tree's answer. */
     profile_held_t held;
-    error_t *err = profile_holds(ctx->run.repo, tree, metadata, profile, name, &held);
+    error_t err = profile_holds(ctx->run.repo, tree, metadata, profile, name, &held);
     if (err) goto cleanup;
 
     switch (held.kind) {
@@ -782,7 +782,7 @@ static export_entry_t entry_from_row(const manifest_row_t *row) {
  * a path like any other here: rows beneath it, and nothing standing at it unless
  * a claim does. The rungs between the rows are complete_directories'.
  */
-static error_t *collect_filesystem(
+static error_t collect_filesystem(
     const dotta_ctx_t *ctx,
     git_tree *tree,
     const char *profile,
@@ -793,7 +793,7 @@ static error_t *collect_filesystem(
     arena_t *arena = ctx->arena;
 
     manifest_t *view = NULL;
-    error_t *err = manifest_build_tree(
+    error_t err = manifest_build_tree(
         ctx->run.repo, tree, profile, ctx->run.mounts, arena, &view
     );
     if (err) {
@@ -912,13 +912,13 @@ static error_t *collect_filesystem(
  * the customary +1. Only the collected entries climb: a supplied rung's own
  * prefixes were the climb that supplied it.
  */
-static error_t *complete_directories(export_entry_list_t *list, arena_t *arena) {
+static error_t complete_directories(export_entry_list_t *list, arena_t *arena) {
     hashmap_t *standing = hashmap_borrow(arena, list->count);
     for (size_t i = 0; i < list->count; i++) {
         hashmap_set(standing, list->items[i].rel_path, (void *) (uintptr_t) (i + 1));
     }
 
-    error_t *err = NULL;
+    error_t err = NULL;
 
     size_t collected = list->count;
 
@@ -974,12 +974,12 @@ static error_t *complete_directories(export_entry_list_t *list, arena_t *arena) 
  * and where it lands is this pass's, so no collector knows a destination at all
  * — which is also why a '-' export resolves none.
  */
-static error_t *resolve_destinations(
+static error_t resolve_destinations(
     export_entry_list_t *list,
     const char *output,
     arena_t *arena
 ) {
-    error_t *err = dest_resolve(
+    error_t err = dest_resolve(
         output, list->basename, arena, &list->items[0].dest_path
     );
     if (err) return err;
@@ -1009,7 +1009,7 @@ static error_t *resolve_destinations(
  * a symlink there is the user's stated intent, while content-dictated paths inside
  * a tree copy refuse symlinks outright (the escape vector).
  */
-static error_t *validate_destinations(export_entry_list_t *list) {
+static error_t validate_destinations(export_entry_list_t *list) {
     const bool single_dest = list->items[0].rel_path[0] != '\0';
 
     for (size_t i = 0; i < list->count; i++) {
@@ -1110,7 +1110,7 @@ static error_t *validate_destinations(export_entry_list_t *list) {
  * The stamp needs no kind test of its own: a directory claim carries none, by
  * construction at both of the sheet's boundaries (core/metadata.h).
  */
-static error_t *validate_content(
+static error_t validate_content(
     const dotta_ctx_t *ctx, const char *profile, export_entry_list_t *list
 ) {
     git_repository *repo = ctx->run.repo;
@@ -1124,7 +1124,7 @@ static error_t *validate_content(
                 break;
 
             case EXPORT_ENTRY_SYMLINK: {
-                error_t *err = content_get_from_blob_oid(
+                error_t err = content_get_from_blob_oid(
                     repo, &e->blob_oid, GIT_FILEMODE_LINK, e->storage_path,
                     profile, keymgr, &e->content
                 );
@@ -1152,7 +1152,7 @@ static error_t *validate_content(
                  * which the reader refuses with the version pair. Its error passes
                  * through: "Cannot decrypt '<path>'" over the cause is the whole
                  * story. */
-                error_t *err = content_get_from_blob_oid(
+                error_t err = content_get_from_blob_oid(
                     repo, &e->blob_oid, GIT_FILEMODE_BLOB, e->storage_path,
                     profile, keymgr, &e->content
                 );
@@ -1178,7 +1178,7 @@ static error_t *validate_content(
  * its own contents, so nothing here creates a path phase 1 did not lstat, and
  * the reverse pass reaches the deepest first and the root last.
  */
-static error_t *materialize_entries(
+static error_t materialize_entries(
     const dotta_ctx_t *ctx,
     const char *profile,
     export_entry_list_t *list,
@@ -1188,7 +1188,7 @@ static error_t *materialize_entries(
     keymgr *keymgr = ctx->run.keymgr;
     output_t *out = ctx->out;
 
-    error_t *err = NULL;
+    error_t err = NULL;
 
     for (size_t i = 0; i < list->count; i++) {
         export_entry_t *e = &list->items[i];
@@ -1371,7 +1371,7 @@ static void print_dry_run(
  * which is a terminal display. Flushes so buffered IO failures surface as a
  * non-zero exit.
  */
-static error_t *write_bytes_stdout(const buffer_t *content) {
+static error_t write_bytes_stdout(const buffer_t *content) {
     if (content->size > 0 &&
         fwrite(content->data, 1, content->size, stdout) != content->size) {
         return ERROR(ERR_FS, "Failed to write content to stdout");
@@ -1385,7 +1385,7 @@ static error_t *write_bytes_stdout(const buffer_t *content) {
 /**
  * Export command implementation
  */
-error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
+error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
     CHECK_NULL(opts->profile);
@@ -1407,7 +1407,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     /* '-' dedicates stdout to the payload. Errors already live there. */
     if (to_stdout) output_set_stream(out, stderr);
 
-    error_t *err = NULL;
+    error_t err = NULL;
     git_commit *commit = NULL;
     git_tree *tree = NULL;
     export_entry_list_t list = { 0 };
@@ -1613,7 +1613,7 @@ cleanup:
  * borrow argv. The destination is settled last: every shape must have named one,
  * and '-' can only stream a single file.
  */
-static error_t *export_post_parse(
+static error_t export_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) cmd;
@@ -1638,7 +1638,7 @@ static error_t *export_post_parse(
 
     if (o->positional_count == 1) {
         refspec_t rs = { 0 };
-        error_t *err = parse_refspec(arena, first, &rs);
+        error_t err = parse_refspec(arena, first, &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse target specification");
         }
@@ -1663,7 +1663,7 @@ static error_t *export_post_parse(
          * token to distinguish it from a path or commit, and heuristics on user
          * paths are how silent misroutes happen. */
         refspec_t rs = { 0 };
-        error_t *err = parse_refspec(arena, args[0], &rs);
+        error_t err = parse_refspec(arena, args[0], &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse target specification");
         }
@@ -1702,7 +1702,7 @@ static error_t *export_post_parse(
             o->commit = args[1];
         } else {
             refspec_t rs = { 0 };
-            error_t *err = parse_refspec(arena, args[1], &rs);
+            error_t err = parse_refspec(arena, args[1], &rs);
             if (err != NULL) {
                 return error_wrap(err, "Failed to parse file specification");
             }
@@ -1775,7 +1775,7 @@ static args_want_t export_complete(
     return ARGS_WANT_NONE;
 }
 
-static error_t *export_dispatch(const void *ctx_v, void *opts_v) {
+static error_t export_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_export(ctx, (const cmd_export_options_t *) opts_v);
 }

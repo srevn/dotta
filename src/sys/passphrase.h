@@ -72,7 +72,7 @@
  *         code on a read failure. ERR_MEMORY when the mapping fails.
  *         ERR_INVALID_ARG on empty or truncated input.
  */
-error_t *passphrase_prompt(
+error_t passphrase_prompt(
     const char *prompt,
     char **out_passphrase,
     size_t *out_len
@@ -98,7 +98,7 @@ error_t *passphrase_prompt(
  * @return NULL on success. ERR_NOT_FOUND if the env var is unset or empty.
  *         ERR_MEMORY when the mapping fails.
  */
-error_t *passphrase_from_env(
+error_t passphrase_from_env(
     char **out_passphrase,
     size_t *out_len
 );

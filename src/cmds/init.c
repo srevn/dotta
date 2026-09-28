@@ -45,7 +45,7 @@
  * by its refs like any other: a foreign one is refused with a HEAD it did not
  * have, which git needs to open it at all.
  */
-static error_t *ensure_repository_adoptable(
+static error_t ensure_repository_adoptable(
     const dotta_ctx_t *ctx,
     git_repository *repo,
     const char *path
@@ -67,7 +67,7 @@ static error_t *ensure_repository_adoptable(
     }
 
     bool declared = false;
-    error_t *err = repo_is_store(repo, &declared);
+    error_t err = repo_is_store(repo, &declared);
     if (err) return err;
     if (declared) return NULL;
 
@@ -102,11 +102,11 @@ static error_t *ensure_repository_adoptable(
  * not already exist, then commits the empty transaction. A clean state file on
  * disk means subsequent commands do not have to bootstrap it.
  */
-static error_t *init_state(git_repository *repo) {
+static error_t init_state(git_repository *repo) {
     CHECK_NULL(repo);
 
     state_t *state = NULL;
-    error_t *err = state_open(repo, &state);
+    error_t err = state_open(repo, &state);
     if (err) return err;
 
     err = state_save(state);
@@ -120,7 +120,7 @@ static error_t *init_state(git_repository *repo) {
 /**
  * Initialize command implementation
  */
-error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
+error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -128,7 +128,7 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     output_t *out = ctx->out;
 
     git_repository *repo = NULL;
-    error_t *err = NULL;
+    error_t err = NULL;
     char *path = NULL;
     char *elsewhere = NULL;
 
@@ -306,7 +306,7 @@ static args_want_t init_complete(
     return o->repo_path == NULL ? ARGS_WANT_DIRS : ARGS_WANT_NONE;
 }
 
-static error_t *init_dispatch(const void *ctx_v, void *opts_v) {
+static error_t init_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_init(ctx, (const cmd_init_options_t *) opts_v);
 }

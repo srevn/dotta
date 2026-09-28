@@ -29,7 +29,7 @@ struct terminal {
     bool raw_mode_enabled;        /* Track if raw mode is active */
 };
 
-error_t *terminal_init(terminal_t **out) {
+error_t terminal_init(terminal_t **out) {
     CHECK_NULL(out);
 
     /* Check if stdin is a TTY */
@@ -161,7 +161,7 @@ void terminal_restore_armed(void) {
 
 /* Terminal Capabilities */
 
-error_t *terminal_get_size(terminal_size_t *out) {
+error_t terminal_get_size(terminal_size_t *out) {
     CHECK_NULL(out);
 
     struct winsize ws;

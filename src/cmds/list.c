@@ -110,7 +110,7 @@ typedef struct {
  * Default: Just profile names Verbose: Add stats (file count, size, last commit)
  * Remote:  Add tracking indicators
  */
-static error_t *list_profiles(
+static error_t list_profiles(
     const dotta_ctx_t *ctx,
     const cmd_list_options_t *opts
 ) {
@@ -125,7 +125,7 @@ static error_t *list_profiles(
 
     /* Every profile here */
     string_array_t branches;
-    error_t *err = gitops_list_branches(repo, ctx->arena, &branches);
+    error_t err = gitops_list_branches(repo, ctx->arena, &branches);
     if (err) {
         return error_wrap(err, "Failed to list branches");
     }
@@ -255,12 +255,12 @@ static error_t *list_profiles(
          * branch. */
         if (verbose) {
             char refname[DOTTA_REFNAME_MAX];
-            error_t *ref_err = gitops_branch_refname(
+            error_t ref_err = gitops_branch_refname(
                 refname, sizeof(refname), profile
             );
             if (!ref_err) {
                 git_commit *last_commit = NULL;
-                error_t *commit_err = gitops_get_commit(repo, refname, &last_commit);
+                error_t commit_err = gitops_get_commit(repo, refname, &last_commit);
 
                 if (!commit_err && last_commit) {
                     const git_oid *oid = git_commit_id(last_commit);
@@ -292,7 +292,7 @@ static error_t *list_profiles(
          * dropped, one per such branch */
         if (show_remote) {
             upstream_info_t info;
-            error_t *upstream_err = upstream_analyze_profile(repo, remote_name, profile, &info);
+            error_t upstream_err = upstream_analyze_profile(repo, remote_name, profile, &info);
             if (!upstream_err) {
                 print_upstream_state(out, &info);
             }
@@ -332,7 +332,7 @@ static error_t *list_profiles(
  *
  * Default: Just file paths Verbose: Add sizes and per-file last commit
  */
-static error_t *list_files(
+static error_t list_files(
     const dotta_ctx_t *ctx,
     const cmd_list_options_t *opts
 ) {
@@ -348,7 +348,7 @@ static error_t *list_files(
     /* One branch read serves the whole listing: the file walk, the verbose
      * per-entry lookups and commit map, and the statistics (what else the branch
      * holds, when the file list is empty). */
-    error_t *err = profile_require(repo, opts->profile);
+    error_t err = profile_require(repo, opts->profile);
     if (err) return err;
 
     git_tree *tree = NULL;
@@ -387,7 +387,7 @@ static error_t *list_files(
          * profile twice more and nothing else, and this line names it a third
          * time (base/error.h error_root). */
         profile_stats_t stats = { 0 };
-        error_t *stats_err = profile_get_tree_stats(repo, tree, opts->profile, &stats);
+        error_t stats_err = profile_get_tree_stats(repo, tree, opts->profile, &stats);
         if (stats_err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
@@ -527,7 +527,7 @@ static error_t *list_files(
                  * the same failure (core/profiles.h profile_get_tree_stats).
                  * The header's error is dropped, one per unreadable blob. */
                 size_t size = 0;
-                error_t *size_err = stats_blob_size(
+                error_t size_err = stats_blob_size(
                     repo, git_tree_entry_id(entry), &size
                 );
                 if (!size_err) {
@@ -620,7 +620,7 @@ static bool format_time(git_time_t timestamp, char *buf, size_t buf_size) {
  *
  * Default: Oneline format (hash, summary, time) Verbose: Full commit format
  */
-static error_t *list_file_history(
+static error_t list_file_history(
     const dotta_ctx_t *ctx,
     const cmd_list_options_t *opts
 ) {
@@ -640,7 +640,7 @@ static error_t *list_file_history(
     const char *profile = opts->profile;
     const char *storage_path = NULL;
     git_tree *tree = NULL;
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* The argument first, above the profile question and above anything read
      * under either: reading one asks no topology (infra/path.h), so every refusal
@@ -844,7 +844,7 @@ static error_t *list_file_history(
 /**
  * List command implementation
  */
-error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
+error_t cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -897,7 +897,7 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
  *                      name? LIST_FILES
  *     2 positionals -> LIST_FILE_HISTORY (profile = pos[0], file = pos[1])
  */
-static error_t *list_post_parse(
+static error_t list_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) arena;
@@ -981,7 +981,7 @@ static args_want_t list_complete(
     return ARGS_WANT_NONE;
 }
 
-static error_t *list_dispatch(const void *ctx_v, void *opts_v) {
+static error_t list_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_list(ctx, (const cmd_list_options_t *) opts_v);
 }

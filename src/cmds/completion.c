@@ -63,7 +63,7 @@ void completion_profiles(
 
     /* A listing that failed offers no local name, and the remote's may still */
     string_array_t branches;
-    error_t *err = gitops_list_branches(repo, ctx->arena, &branches);
+    error_t err = gitops_list_branches(repo, ctx->arena, &branches);
     if (!err) {
         for (size_t i = 0; i < branches.count; i++) {
             const char *branch = branches.entries[i];
@@ -134,7 +134,7 @@ void completion_files(
      * whole `dotta __complete` invocation (process start included) on a 4-profile
      * / ~180-row repository, measured 2026-08 — well inside a tab-press. */
     manifest_t *manifest = NULL;
-    error_t *err = manifest_build(repo, state, ctx->arena, &manifest);
+    error_t err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) {
         return;
     }
@@ -174,7 +174,7 @@ void completion_directories(
     if (repo == NULL || branch == NULL) return;
 
     metadata_t *metadata = NULL;
-    error_t *err = metadata_load_from_branch(repo, branch, &metadata);
+    error_t err = metadata_load_from_branch(repo, branch, &metadata);
     if (err) return;  /* not a branch, or an unreadable sheet: nothing to offer */
 
     size_t count = 0;
@@ -249,7 +249,7 @@ void completion_refspecs(
         string_array_init(&branches, ctx->arena);
         string_array_push(&branches, pinned);
     } else {
-        error_t *err = gitops_list_branches(repo, ctx->arena, &branches);
+        error_t err = gitops_list_branches(repo, ctx->arena, &branches);
         if (err) return;              /* silent-failure model */
         string_array_sort(&branches); /* deterministic order under the cap */
     }
@@ -264,7 +264,7 @@ void completion_refspecs(
         const char *branch = branches.entries[i];
 
         git_tree *tree = NULL;
-        error_t *load_err = gitops_load_branch_tree(repo, branch, &tree, NULL);
+        error_t load_err = gitops_load_branch_tree(repo, branch, &tree, NULL);
         if (load_err) continue;  /* not a branch, or unloadable: silent */
 
         walk.branch = branch;
@@ -406,7 +406,7 @@ static void commits_emit(
  */
 const char *completion_profile_of(const dotta_ctx_t *ctx, const char *token) {
     refspec_t rs = { 0 };
-    error_t *err = parse_refspec(ctx->arena, token, &rs);
+    error_t err = parse_refspec(ctx->arena, token, &rs);
     if (err) {
         return token;
     }
@@ -476,7 +476,7 @@ bool completion_paths_under(
      * the completion with no root of its own to offer beneath, so the shell's
      * own files stand. */
     const char *root = NULL;
-    error_t *err = path_input_filesystem_path(target, ctx->arena, &root);
+    error_t err = path_input_filesystem_path(target, ctx->arena, &root);
     if (err) {
         return false;
     }
@@ -548,7 +548,7 @@ bool completion_paths_under(
 /**
  * What can stand at the cursor of the line
  */
-error_t *cmd_complete(const dotta_ctx_t *ctx, const cmd_complete_options_t *opts) {
+error_t cmd_complete(const dotta_ctx_t *ctx, const cmd_complete_options_t *opts) {
     /* The line as argv: the program, then the complete tokens after it. The engine
      * resolves and consumes it and calls the command's hook; outside a repository
      * the hooks' sources stay silent and only native-path requests come back.
@@ -569,7 +569,7 @@ error_t *cmd_complete(const dotta_ctx_t *ctx, const cmd_complete_options_t *opts
 /**
  * The completion script for the shell
  */
-error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *opts) {
+error_t cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *opts) {
     (void) ctx;
     (void) opts;   /* fish — the one shell post_parse admits */
 
@@ -586,7 +586,7 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
 
-static error_t *complete_dispatch(const void *ctx_v, void *opts_v) {
+static error_t complete_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_complete(ctx, (const cmd_complete_options_t *) opts_v);
 }
@@ -623,7 +623,7 @@ const args_command_t spec_complete = {
 /**
  * Admit the one shell the engine exports a script for.
  */
-static error_t *completion_post_parse(
+static error_t completion_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) arena;
@@ -655,7 +655,7 @@ static args_want_t completion_complete(
     return ARGS_WANT_NONE;
 }
 
-static error_t *completion_dispatch(const void *ctx_v, void *opts_v) {
+static error_t completion_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_completion(ctx, (const cmd_completion_options_t *) opts_v);
 }

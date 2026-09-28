@@ -48,7 +48,7 @@ struct stage_admission {
  * The two openers are its doors: each resolves the ref, refuses the state it
  * did not expect, and seeds here.
  */
-static error_t *stage_seed(
+static error_t stage_seed(
     git_repository *repo, const char *refname, const git_oid *tip, stage_t **out
 ) {
     stage_t *st = heap_calloc(1, sizeof(*st));
@@ -107,7 +107,7 @@ static error_t *stage_seed(
     return NULL;
 }
 
-error_t *stage_open(git_repository *repo, const char *refname, stage_t **out) {
+error_t stage_open(git_repository *repo, const char *refname, stage_t **out) {
     CHECK_NULL(repo);
     CHECK_NULL(refname);
     CHECK_NULL(out);
@@ -127,7 +127,7 @@ error_t *stage_open(git_repository *repo, const char *refname, stage_t **out) {
     return stage_seed(repo, refname, &tip, out);
 }
 
-error_t *stage_orphan(git_repository *repo, const char *refname, stage_t **out) {
+error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out) {
     CHECK_NULL(repo);
     CHECK_NULL(refname);
     CHECK_NULL(out);
@@ -155,7 +155,7 @@ git_index *stage_index(stage_t *st) {
     return st ? st->index : NULL;
 }
 
-error_t *stage_put(
+error_t stage_put(
     stage_t *st, const char *path, const void *data, size_t size,
     git_filemode_t mode, git_oid *out_blob
 ) {
@@ -194,7 +194,7 @@ error_t *stage_put(
  * The scratch is this function's, NUL-terminated at each slash in turn; the
  * sentence prints from `path`, which is whole throughout.
  */
-static error_t *admit_tree_path(git_index *index, const char *path) {
+static error_t admit_tree_path(git_index *index, const char *path) {
     size_t len = strlen(path);
     if (len == 0 || path[0] == '/' || path[len - 1] == '/' || strstr(path, "//")) {
         return ERROR(
@@ -245,7 +245,7 @@ static error_t *admit_tree_path(git_index *index, const char *path) {
  * as one — here, because nothing later can: error_wrap keeps its cause's code,
  * and error_from_git is always ERR_GIT.
  */
-static error_t *put_entry(git_index *index, const git_index_entry *entry) {
+static error_t put_entry(git_index *index, const git_index_entry *entry) {
     const char *path = entry->path;
 
     if (entry->mode != GIT_FILEMODE_BLOB &&
@@ -305,7 +305,7 @@ static error_t *put_entry(git_index *index, const git_index_entry *entry) {
     return error_wrap(error_from_git(rc), "Failed to stage '%s'", path);
 }
 
-error_t *stage_admission_create(const stage_t *st, stage_admission_t **out) {
+error_t stage_admission_create(const stage_t *st, stage_admission_t **out) {
     CHECK_NULL(st);
     CHECK_NULL(out);
     *out = NULL;
@@ -331,7 +331,7 @@ error_t *stage_admission_create(const stage_t *st, stage_admission_t **out) {
     return NULL;
 }
 
-error_t *stage_admit_blob(stage_admission_t *adm, const char *path) {
+error_t stage_admit_blob(stage_admission_t *adm, const char *path) {
     CHECK_NULL(adm);
     CHECK_NULL(path);
 
@@ -346,7 +346,7 @@ error_t *stage_admit_blob(stage_admission_t *adm, const char *path) {
     return put_entry(adm->index, &entry);
 }
 
-error_t *stage_admit_subtree(const stage_admission_t *adm, const char *path) {
+error_t stage_admit_subtree(const stage_admission_t *adm, const char *path) {
     CHECK_NULL(adm);
     CHECK_NULL(path);
     RETURN_IF_ERROR(admit_tree_path(adm->index, path));
@@ -370,7 +370,7 @@ void stage_admission_free(stage_admission_t *adm) {
     free(adm);
 }
 
-error_t *stage_put_blob(
+error_t stage_put_blob(
     stage_t *st, const char *path, const git_oid *blob, git_filemode_t mode
 ) {
     CHECK_NULL(st);
@@ -386,7 +386,7 @@ error_t *stage_put_blob(
     return put_entry(st->index, &entry);
 }
 
-error_t *stage_remove(stage_t *st, const char *path) {
+error_t stage_remove(stage_t *st, const char *path) {
     CHECK_NULL(st);
     CHECK_NULL(path);
 
@@ -403,7 +403,7 @@ error_t *stage_remove(stage_t *st, const char *path) {
     return NULL;
 }
 
-error_t *stage_commit(stage_t *st, const char *message, bool *out_committed) {
+error_t stage_commit(stage_t *st, const char *message, bool *out_committed) {
     CHECK_NULL(st);
     CHECK_NULL(message);
 
@@ -434,7 +434,7 @@ error_t *stage_commit(stage_t *st, const char *message, bool *out_committed) {
     }
 
     git_signature *sig = NULL;
-    error_t *err = gitops_get_signature(&sig, st->repo);
+    error_t err = gitops_get_signature(&sig, st->repo);
     if (err) {
         git_tree_free(tree);
         return err;

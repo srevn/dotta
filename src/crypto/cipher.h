@@ -156,7 +156,7 @@ _Static_assert(
  * @param out_epoch_fp The header's epoch fingerprint on success (8 bytes)
  * @return Error or NULL on success
  */
-error_t *cipher_read_header(
+error_t cipher_read_header(
     const uint8_t *data,
     size_t data_len,
     uint8_t out_epoch_fp[KDF_EPOCH_FP_SIZE]
@@ -184,7 +184,7 @@ error_t *cipher_read_header(
  * @param out_ciphertext Output buffer (caller frees with buffer_deinit)
  * @return Error or NULL on success
  */
-error_t *cipher_encrypt(
+error_t cipher_encrypt(
     const uint8_t *plaintext,
     size_t plaintext_len,
     const uint8_t mac_key[KDF_KEY_SIZE],
@@ -218,7 +218,7 @@ error_t *cipher_encrypt(
  * @param out_plaintext  Output buffer (caller frees with buffer_deinit)
  * @return Error or NULL on success (ERR_CRYPTO on auth/parse failure)
  */
-error_t *cipher_decrypt(
+error_t cipher_decrypt(
     const uint8_t *ciphertext,
     size_t ciphertext_len,
     const uint8_t mac_key[KDF_KEY_SIZE],

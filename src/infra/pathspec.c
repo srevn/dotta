@@ -83,7 +83,7 @@ static void prefix_storage(entry_t *e, const char *name) {
  * anything else — a bare `conf<star>/x` could mean either vocabulary — is refused
  * toward the self-announcing spellings. The shape is read past a leading '!',
  * so a negated rule is a rule in either vocabulary. */
-static error_t *compile_rule(const char *input, arena_t *arena, entry_t *out) {
+static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
     bool negated = input[0] == '!';
     const char *body = input + (negated ? 1 : 0);
     const char *line = input; /* what gitignore parses: the input, or the anchored tail */
@@ -126,7 +126,7 @@ static error_t *compile_rule(const char *input, arena_t *arena, entry_t *out) {
          * path it names, through the door that reads one and answers no key to
          * disagree with (infra/path.h path_input_filesystem_path). */
         const char *filesystem_path = NULL;
-        error_t *err = path_input_filesystem_path(head, arena, &filesystem_path);
+        error_t err = path_input_filesystem_path(head, arena, &filesystem_path);
         if (err) {
             return error_wrap(err, "Invalid glob pattern '%s'", input);
         }
@@ -139,7 +139,7 @@ static error_t *compile_rule(const char *input, arena_t *arena, entry_t *out) {
      * a rewritten tail — a metacharacter behind an anchor — never is: what it
      * quotes is the text the user typed, and the wrap names the kind of input
      * without repeating it. */
-    error_t *err = gitignore_rule_parse(arena, line, &out->rule);
+    error_t err = gitignore_rule_parse(arena, line, &out->rule);
     if (err) {
         return error_wrap(err, "Invalid glob pattern");
     }
@@ -161,7 +161,7 @@ static bool listed(const pathspec_t *spec, const entry_t *entry) {
     return false;
 }
 
-error_t *pathspec_create(
+error_t pathspec_create(
     char *const *inputs, size_t count, arena_t *arena, pathspec_t **out
 ) {
     CHECK_NULL(arena);
@@ -190,7 +190,7 @@ error_t *pathspec_create(
              * any other, and naming it selects every name beneath it — the only
              * reading that reaches a claim standing nowhere on this machine. */
             path_input_t arg;
-            error_t *err = path_input_resolve(input, arena, &arg);
+            error_t err = path_input_resolve(input, arena, &arg);
             if (err) {
                 return error_wrap(err, "Invalid path '%s'", input);
             }

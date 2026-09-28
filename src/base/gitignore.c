@@ -192,7 +192,7 @@ static size_t unescape_spaces(char *str) {
  * 10 000 must not falsely trip the limit. The rule comes by value: the caller's
  * copy, taken before any growth runs, so the array it was read from — this set's
  * own, when a set appends itself — need not outlive the push. */
-static error_t *push_rule(
+static error_t push_rule(
     gitignore_ruleset_t *set, gitignore_rule_t rule, gitignore_origin_t origin
 ) {
     if (set->count >= MAX_RULES)
@@ -335,7 +335,7 @@ static void parse_line(
  * before it bound the quote to one line of at most 4096 bytes — and one about
  * its shape does not. `#` is tested beside rule_span's own test of it: one module,
  * one definition of a comment. */
-static error_t *validate_pattern(const char *pattern, size_t len) {
+static error_t validate_pattern(const char *pattern, size_t len) {
     if (memchr(pattern, '\n', len))
         return ERROR(ERR_VALIDATION, "gitignore: a pattern is one line");
     if (len > MAX_PATTERN_LENGTH)
@@ -355,7 +355,7 @@ static error_t *validate_pattern(const char *pattern, size_t len) {
 
 /* One pattern into one rule: refused as validate_pattern refuses, and a rule
  * whenever it is not — rule_span's zero is exactly "no rule". */
-static error_t *parse_rule(
+static error_t parse_rule(
     arena_t *arena, const char *pattern, gitignore_rule_t *out
 ) {
     size_t len = strlen(pattern);
@@ -506,7 +506,7 @@ gitignore_ruleset_t *gitignore_ruleset_create(arena_t *arena) {
     return set;
 }
 
-error_t *gitignore_ruleset_append_file(
+error_t gitignore_ruleset_append_file(
     gitignore_ruleset_t *set, const char *content, gitignore_origin_t origin
 ) {
     CHECK_NULL(set);
@@ -545,7 +545,7 @@ const char *gitignore_file_lines(const char *content) {
     return strncmp(content, "\xEF\xBB\xBF", 3) == 0 ? content + 3 : content;
 }
 
-error_t *gitignore_ruleset_append_pattern(
+error_t gitignore_ruleset_append_pattern(
     gitignore_ruleset_t *set, const char *pattern, gitignore_origin_t origin
 ) {
     CHECK_NULL(set);
@@ -556,7 +556,7 @@ error_t *gitignore_ruleset_append_pattern(
     return push_rule(set, rule, origin);
 }
 
-error_t *gitignore_ruleset_append_rules(
+error_t gitignore_ruleset_append_rules(
     gitignore_ruleset_t *set, const gitignore_ruleset_t *from,
     gitignore_origin_t origin
 ) {
@@ -719,13 +719,13 @@ const char *gitignore_ruleset_source(
 
 /* --- The rule alone -------------------------------------------------- */
 
-error_t *gitignore_validate_pattern(const char *pattern) {
+error_t gitignore_validate_pattern(const char *pattern) {
     CHECK_NULL(pattern);
 
     return validate_pattern(pattern, strlen(pattern));
 }
 
-error_t *gitignore_rule_parse(
+error_t gitignore_rule_parse(
     arena_t *arena, const char *pattern, gitignore_rule_t **out
 ) {
     CHECK_NULL(arena);

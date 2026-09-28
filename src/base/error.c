@@ -19,7 +19,7 @@
 struct error {
     error_code_t code;
     const char *message;
-    error_t *cause;  /* The error this one wraps; NULL at the root */
+    error_t cause;  /* The error this one wraps; NULL at the root */
 };
 
 /**
@@ -39,14 +39,14 @@ static arena_t *error_arena(void) {
 /**
  * The node over a message already in the arena
  */
-static error_t *error_node(error_code_t code, error_t *cause, const char *message) {
-    error_t *err = arena_alloc(error_arena(), sizeof(*err));
-    *err = (error_t){ .code = code, .message = message, .cause = cause };
+static error_t error_node(error_code_t code, error_t cause, const char *message) {
+    struct error *node = arena_alloc(error_arena(), sizeof(*node));
+    *node = (struct error){ .code = code, .message = message, .cause = cause };
 
-    return err;
+    return node;
 }
 
-error_t *error_create(error_code_t code, const char *fmt, ...) {
+error_t error_create(error_code_t code, const char *fmt, ...) {
     /* The format is its writer's: one that cannot be formatted is a caller's
      * bug, and dies in the arena's formatter, never an error to report. */
     va_list args;
@@ -57,7 +57,7 @@ error_t *error_create(error_code_t code, const char *fmt, ...) {
     return error_node(code, NULL, message);
 }
 
-error_t *error_wrap(error_t *cause, const char *fmt, ...) {
+error_t error_wrap(error_t cause, const char *fmt, ...) {
     if (!cause) return NULL;
 
     va_list args;
@@ -68,7 +68,7 @@ error_t *error_wrap(error_t *cause, const char *fmt, ...) {
     return error_node(cause->code, cause, message);
 }
 
-error_t *error_from_git(int git_error_code) {
+error_t error_from_git(int git_error_code) {
     const git_error *e = git_error_last();
     const char *msg = e ? e->message : "Unknown git error";
 
@@ -91,7 +91,7 @@ error_code_t error_code_from_errno(int errno_val) {
     }
 }
 
-error_t *error_from_errno(int errno_val, const char *fmt, ...) {
+error_t error_from_errno(int errno_val, const char *fmt, ...) {
     CHECK_NULL(fmt);
 
     /* The caller's prose, then ": " and strerror's word: one message, sized before
@@ -116,22 +116,22 @@ error_t *error_from_errno(int errno_val, const char *fmt, ...) {
     return error_node(error_code_from_errno(errno_val), NULL, message);
 }
 
-const char *error_message(const error_t *err) {
+const char *error_message(error_t err) {
     if (!err) return NULL;
     return err->message;
 }
 
-error_code_t error_code(const error_t *err) {
+error_code_t error_code(error_t err) {
     if (!err) return OK;
     return err->code;
 }
 
-const error_t *error_cause(const error_t *err) {
+error_t error_cause(error_t err) {
     if (!err) return NULL;
     return err->cause;
 }
 
-const error_t *error_root(const error_t *err) {
+error_t error_root(error_t err) {
     if (!err) return NULL;
     while (err->cause) {
         err = err->cause;
@@ -139,7 +139,7 @@ const error_t *error_root(const error_t *err) {
     return err;
 }
 
-void error_print(const error_t *err, FILE *stream) {
+void error_print(error_t err, FILE *stream) {
     if (!err) return;
 
     fprintf(
@@ -148,7 +148,7 @@ void error_print(const error_t *err, FILE *stream) {
     );
 
     /* Print cause chain */
-    const error_t *cause = err->cause;
+    error_t cause = err->cause;
     while (cause) {
         fprintf(
             stream, "  Caused by: %s\n",

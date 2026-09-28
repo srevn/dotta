@@ -99,7 +99,7 @@ void source_filter_free(source_filter_t *f);
  * @param out      Output boolean (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *source_filter_is_excluded(
+error_t source_filter_is_excluded(
     source_filter_t *f,
     const char *abs_path,
     bool is_dir,

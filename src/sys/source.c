@@ -104,7 +104,7 @@ void source_filter_free(source_filter_t *f) {
  * what makes a nested repository answer for its own contents, and what keeps
  * the rules of every repository above it from reaching in.
  */
-static error_t *adopt(git_repository **held, const char *directory) {
+static error_t adopt(git_repository **held, const char *directory) {
     git_buf discovered = GIT_BUF_INIT;
     int rc = git_repository_discover(&discovered, directory, 0, NULL);
 
@@ -137,7 +137,7 @@ static error_t *adopt(git_repository **held, const char *directory) {
  * value is the same object `git rev-parse --show-prefix` prints, and it is what
  * every query in the directory is composed under.
  */
-static error_t *place(git_repository *repo, const char *directory, char **out) {
+static error_t place(git_repository *repo, const char *directory, char **out) {
     *out = NULL;
 
     const char *workdir = git_repository_workdir(repo);
@@ -177,7 +177,7 @@ static error_t *place(git_repository *repo, const char *directory, char **out) {
  * which is what makes a repository that cannot be opened say so for every entry
  * instead of once.
  */
-static error_t *enter(
+static error_t enter(
     source_filter_t *f, const char *path, size_t directory_len
 ) {
     char *directory = heap_strndup(path, directory_len);
@@ -187,7 +187,7 @@ static error_t *enter(
     f->directory = directory;
     f->prefix = NULL;
 
-    error_t *err = adopt(&f->repo, directory);
+    error_t err = adopt(&f->repo, directory);
     if (!err && f->repo) {
         err = place(f->repo, directory, &f->prefix);
     }
@@ -196,7 +196,7 @@ static error_t *enter(
     return err;
 }
 
-error_t *source_filter_is_excluded(
+error_t source_filter_is_excluded(
     source_filter_t *f, const char *abs_path, bool is_dir, bool *out
 ) {
     CHECK_NULL(f);

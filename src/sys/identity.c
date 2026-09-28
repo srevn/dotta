@@ -103,7 +103,7 @@ const char *identity_home(
  * and what its children need to read are the process's own, established for every
  * run whether or not this is called (identity_init).
  */
-static error_t *drop_to_invoker(void) {
+static error_t drop_to_invoker(void) {
     if (!self.name) {
         return ERROR(
             ERR_PERMISSION, "Cannot run as uid %u: the user has no name",
@@ -127,7 +127,7 @@ static error_t *drop_to_invoker(void) {
     return NULL;
 }
 
-error_t *identity_init(void) {
+error_t identity_init(void) {
     uid_t ruid = getuid();
     uid_t euid = geteuid();
     self.privileged = (euid == 0);

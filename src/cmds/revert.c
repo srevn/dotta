@@ -51,7 +51,7 @@
  * a list short by one is a falsely unique answer; the refusal spells the command
  * that reads one branch instead of all of them.
  */
-static error_t *select_profile(
+static error_t select_profile(
     const dotta_ctx_t *ctx,
     const cmd_revert_options_t *opts,
     const path_input_t *arg,
@@ -82,7 +82,7 @@ static error_t *select_profile(
                                                           : arg->storage_path;
 
     profile_claims_t claims = { 0 };
-    error_t *err = profile_discover_claims(
+    error_t err = profile_discover_claims(
         repo, ctx->run.mounts, arg, ctx->arena, &claims
     );
     if (err) {
@@ -162,7 +162,7 @@ static error_t *select_profile(
  *                command arena's, borrowed)
  * @return Error or NULL on success
  */
-static error_t *claim_standing(
+static error_t claim_standing(
     const dotta_ctx_t *ctx,
     const git_tree *tree,
     const char *profile,
@@ -178,7 +178,7 @@ static error_t *claim_standing(
     *out_row = NULL;
 
     manifest_t *view = NULL;
-    error_t *err = manifest_build_tree(
+    error_t err = manifest_build_tree(
         ctx->run.repo, tree, profile, ctx->run.mounts, ctx->arena, &view
     );
     if (err) return err;
@@ -215,7 +215,7 @@ static error_t *claim_standing(
  * @param commit Abbreviated target commit oid, for the remedy (must not be NULL)
  * @return The refusal, or NULL when the name may be authored
  */
-static error_t *refuse_second_name(
+static error_t refuse_second_name(
     const dotta_ctx_t *ctx,
     const git_tree *tip,
     const char *profile,
@@ -231,7 +231,7 @@ static error_t *refuse_second_name(
     CHECK_NULL(commit);
 
     manifest_t *view = NULL;
-    error_t *err = manifest_build_tree(
+    error_t err = manifest_build_tree(
         ctx->run.repo, tip, profile, ctx->run.mounts, ctx->arena, &view
     );
     if (err) return err;
@@ -310,7 +310,7 @@ static error_t *refuse_second_name(
  *                 not be NULL)
  * @return Error or NULL on success
  */
-static error_t *entry_to_restore(
+static error_t entry_to_restore(
     const dotta_ctx_t *ctx,
     const git_tree *target_tree,
     const metadata_t *target_sheet,
@@ -439,7 +439,7 @@ static error_t *entry_to_restore(
  * @param target_mode Its filemode at the commit
  * @return Error or NULL on success
  */
-static error_t *show_diff_preview(
+static error_t show_diff_preview(
     const dotta_ctx_t *ctx,
     const char *profile,
     const char *standing_name,
@@ -466,7 +466,7 @@ static error_t *show_diff_preview(
      * the routing decision lives with the blob, so encryption-state changes between
      * commits are handled by the content layer with no caller participation. */
     buffer_t standing_plaintext = BUFFER_INIT;
-    error_t *err = content_get_from_blob_oid(
+    error_t err = content_get_from_blob_oid(
         repo,
         standing_oid,
         standing_mode,
@@ -722,7 +722,7 @@ static bool already_at_target(
 /**
  * Revert command implementation
  */
-error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
+error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
     CHECK_NULL(opts->file_path);
@@ -740,7 +740,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * lands on the claim standing at the path, so the standing side has no name
      * of its own here: wherever the tip holds anything, its name is the write's,
      * and where it holds nothing there is no name to have. */
-    error_t *err = NULL;
+    error_t err = NULL;
     const char *profile = NULL;
     const char *target_name = NULL;
     const char *restored_name = NULL;
@@ -1285,7 +1285,7 @@ cleanup:
  * A refspec that yields an explicit profile always overrides a previously-set
  * one (from -p or a positional).
  */
-static error_t *revert_post_parse(
+static error_t revert_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) cmd;
@@ -1301,7 +1301,7 @@ static error_t *revert_post_parse(
     if (o->positional_count == 1) {
         /* [profile:]<file>[@commit] */
         refspec_t rs = { 0 };
-        error_t *err = parse_refspec(arena, args[0], &rs);
+        error_t err = parse_refspec(arena, args[0], &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse file specification");
         }
@@ -1317,7 +1317,7 @@ static error_t *revert_post_parse(
             /* <profile> <file[@commit]> — refspec profile wins if present. */
             o->profile = args[0];
             refspec_t rs = { 0 };
-            error_t *err = parse_refspec(arena, args[1], &rs);
+            error_t err = parse_refspec(arena, args[1], &rs);
             if (err != NULL) {
                 return error_wrap(err, "Failed to parse file specification");
             }
@@ -1387,7 +1387,7 @@ static args_want_t revert_complete(
     return ARGS_WANT_NONE;
 }
 
-static error_t *revert_dispatch(const void *ctx_v, void *opts_v) {
+static error_t revert_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_revert(ctx, (const cmd_revert_options_t *) opts_v);
 }

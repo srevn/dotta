@@ -220,7 +220,7 @@ static void transfer_commit_credential_decision(transfer_context_t *ctx) {
     }
 
     credential_url_t u = { 0 };
-    error_t *parse_err = credential_url_parse(ctx->url, &u);
+    error_t parse_err = credential_url_parse(ctx->url, &u);
     if (parse_err) {
         /* URL came from gitops_get_remote_url, so a parse failure here is an
          * internal correctness issue rather than user-actionable. Surface
@@ -233,7 +233,7 @@ static void transfer_commit_credential_decision(transfer_context_t *ctx) {
         return;
     }
 
-    error_t *commit_err =
+    error_t commit_err =
         (ctx->credential_state == CRED_STATE_VALIDATED)
         ? credential_helper_approve(&u, ctx->username, ctx->password)
         : credential_helper_reject(&u, ctx->username, ctx->password);
@@ -498,7 +498,7 @@ int transfer_credentials_callback(
          * and dropped — at most one per operation, which the anti-loop above
          * asks once. */
         credential_url_t u = { 0 };
-        error_t *parse_err = credential_url_parse(url, &u);
+        error_t parse_err = credential_url_parse(url, &u);
         char *fresh_user = NULL;
         char *fresh_pass = NULL;
 
@@ -508,7 +508,7 @@ int transfer_credentials_callback(
                 "credential URL parse: %s\n", error_message(parse_err)
             );
         } else {
-            error_t *fill_err = credential_helper_fill(
+            error_t fill_err = credential_helper_fill(
                 &u, username_from_url, &fresh_user, &fresh_pass
             );
             credential_url_deinit(&u);

@@ -58,7 +58,7 @@ bool path_input_announces_path(const char *input) {
            label_prefixes(input) || strpbrk(input, "*?[") != NULL;
 }
 
-error_t *path_input_resolve(
+error_t path_input_resolve(
     const char *input, arena_t *arena, path_input_t *out
 ) {
     CHECK_NULL(input);
@@ -87,7 +87,7 @@ error_t *path_input_resolve(
         while (input[len - 1] == '/') len--;
 
         char *storage = arena_strndup(arena, input, len);
-        error_t *err = label_validate_storage(storage);
+        error_t err = label_validate_storage(storage);
         if (err) {
             return error_wrap(err, "Invalid storage path '%s'", input);
         }
@@ -125,7 +125,7 @@ error_t *path_input_resolve(
     return path_input_filesystem_path(input, arena, &out->filesystem_path);
 }
 
-error_t *path_input_filesystem_path(const char *input, arena_t *arena, const char **out) {
+error_t path_input_filesystem_path(const char *input, arena_t *arena, const char **out) {
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -165,7 +165,7 @@ error_t *path_input_filesystem_path(const char *input, arena_t *arena, const cha
  * is a link to its own descendant, which the kernel refuses as a loop. In each,
  * the directory stands as the shell spelled it.
  */
-static error_t *working_directory(char **out) {
+static error_t working_directory(char **out) {
     char *cwd = NULL;
     RETURN_IF_ERROR(fs_working_directory(&cwd));
     *out = cwd;
@@ -190,7 +190,7 @@ static error_t *working_directory(char **out) {
     return NULL;
 }
 
-error_t *path_input_normalize(const char *input, char **out) {
+error_t path_input_normalize(const char *input, char **out) {
     CHECK_NULL(input);
     CHECK_NULL(out);
 
@@ -205,7 +205,7 @@ error_t *path_input_normalize(const char *input, char **out) {
      * joins the working directory, and `.`, `..` and doubled slashes fold out
      * lexically. */
     char *expanded = NULL;
-    error_t *err = fs_expand_tilde(input, &expanded);
+    error_t err = fs_expand_tilde(input, &expanded);
     if (err) return err;
 
     /* An absolute spelling — typed, or the tilde's — is the user's own and stands.

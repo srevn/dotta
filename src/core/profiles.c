@@ -34,7 +34,7 @@
 /**
  * Is there a profile of this name here, or refuse
  */
-error_t *profile_require(git_repository *repo, const char *name) {
+error_t profile_require(git_repository *repo, const char *name) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
 
@@ -177,7 +177,7 @@ string_array_t profile_detect(arena_t *arena, const string_array_t *available_br
 /**
  * Resolve enabled profile names from state database
  */
-error_t *profile_resolve_enabled(
+error_t profile_resolve_enabled(
     git_repository *repo,
     const state_t *state,
     arena_t *arena,
@@ -205,7 +205,7 @@ error_t *profile_resolve_enabled(
         const char *profile = enabled_profiles.entries[i].name;
 
         bool exists = false;
-        error_t *err = gitops_branch_exists(repo, profile, &exists);
+        error_t err = gitops_branch_exists(repo, profile, &exists);
         if (err) return error_wrap(err, "Failed to validate state profiles");
         string_array_push(exists ? &valid_profiles : &missing_profiles, profile);
     }
@@ -236,7 +236,7 @@ error_t *profile_resolve_enabled(
 /**
  * Which enabled profile holds a commit
  */
-error_t *profile_resolve_commit(
+error_t profile_resolve_commit(
     git_repository *repo,
     const string_array_t *enabled_profiles,
     const char *commit_ref,
@@ -253,7 +253,7 @@ error_t *profile_resolve_commit(
         const char *profile = enabled_profiles->entries[i];
         git_commit *commit = NULL;
 
-        error_t *err = gitops_resolve_commit_in_branch(
+        error_t err = gitops_resolve_commit_in_branch(
             repo, profile, commit_ref, &commit
         );
 
@@ -308,7 +308,7 @@ static bool tree_entry_content_path(
     const git_tree_entry *entry,
     char *buf,
     size_t size,
-    error_t **out_err
+    error_t *out_err
 ) {
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
         return false;
@@ -349,7 +349,7 @@ static bool tree_entry_content_path(
      * (core/manifest.c manifest_claim_blob). Malformed here is corruption, not
      * an entry to skip: a walk that dropped it silently would leave the caller
      * a listing it cannot place and call it complete. */
-    error_t *shape = label_validate_storage(buf);
+    error_t shape = label_validate_storage(buf);
     if (shape) {
         *out_err = shape;
         return false;
@@ -363,7 +363,7 @@ static bool tree_entry_content_path(
  */
 struct walk_data {
     string_array_t *paths;
-    error_t *error;
+    error_t error;
 };
 
 /**
@@ -392,7 +392,7 @@ static int tree_walk_callback(
 /**
  * List deployable files in a Git tree
  */
-error_t *profile_list_tree_files(
+error_t profile_list_tree_files(
     const git_tree *tree,
     arena_t *arena,
     string_array_t *out
@@ -408,7 +408,7 @@ error_t *profile_list_tree_files(
         .error = NULL
     };
 
-    error_t *err = gitops_tree_walk(tree, tree_walk_callback, &data);
+    error_t err = gitops_tree_walk(tree, tree_walk_callback, &data);
     if (data.error) {
         /* The callback's error names the entry that failed; the walk's own is
          * the abort libgit2 stamped in answer to it — an echo of this call's
@@ -425,7 +425,7 @@ error_t *profile_list_tree_files(
 /**
  * List files in profile
  */
-error_t *profile_list_files(
+error_t profile_list_files(
     git_repository *repo,
     const char *profile,
     arena_t *arena,
@@ -436,7 +436,7 @@ error_t *profile_list_files(
     CHECK_NULL(out);
 
     git_tree *tree = NULL;
-    error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+    error_t err = gitops_load_branch_tree(repo, profile, &tree, NULL);
     if (err) {
         return error_wrap(
             err, "Failed to load tree for profile '%s'", profile
@@ -456,7 +456,7 @@ struct stats_walk_data {
     const metadata_t *sheet;   /* The branch's claims: what the sizes are read through */
     size_t file_count;
     size_t total_size;
-    error_t *error;
+    error_t error;
 };
 
 /**
@@ -477,7 +477,7 @@ static int stats_walk_callback(
     }
 
     size_t size = 0;
-    error_t *err = stats_blob_size_with_odb(
+    error_t err = stats_blob_size_with_odb(
         data->odb, git_tree_entry_id(entry), &size
     );
     if (err) {
@@ -515,7 +515,7 @@ static int stats_walk_callback(
 /**
  * Count what a profile branch holds, in a tree already open
  */
-error_t *profile_get_tree_stats(
+error_t profile_get_tree_stats(
     git_repository *repo,
     const git_tree *tree,
     const char *profile,
@@ -532,7 +532,7 @@ error_t *profile_get_tree_stats(
      * loads as an empty one — no claim, so nothing counted and nothing stamped
      * — and every load error is real and propagates. */
     metadata_t *metadata = NULL;
-    error_t *err = metadata_load_from_tree(repo, tree, profile, &metadata);
+    error_t err = metadata_load_from_tree(repo, tree, profile, &metadata);
     if (err) {
         return error_wrap(
             err, "Failed to load metadata for profile '%s'", profile
@@ -634,7 +634,7 @@ cleanup:
 /**
  * Count what a profile branch holds
  */
-error_t *profile_get_stats(
+error_t profile_get_stats(
     git_repository *repo,
     const char *profile,
     profile_stats_t *out
@@ -644,7 +644,7 @@ error_t *profile_get_stats(
     CHECK_NULL(out);
 
     git_tree *tree = NULL;
-    error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+    error_t err = gitops_load_branch_tree(repo, profile, &tree, NULL);
     if (err) {
         return error_wrap(
             err, "Failed to load tree for profile '%s'", profile
@@ -659,7 +659,7 @@ error_t *profile_get_stats(
 /**
  * What `profile` holds at `name` in `tree`
  */
-error_t *profile_holds(
+error_t profile_holds(
     git_repository *repo,
     const git_tree *tree,
     const metadata_t *sheet,
@@ -712,7 +712,7 @@ error_t *profile_holds(
      * freed below — `own` marks whose it is, and metadata_free takes a NULL. */
     metadata_t *own = NULL;
     if (!sheet) {
-        error_t *err = metadata_load_from_tree(repo, tree, profile, &own);
+        error_t err = metadata_load_from_tree(repo, tree, profile, &own);
         if (err) {
             return error_wrap(
                 err, "Failed to load metadata for profile '%s'", profile
@@ -738,7 +738,7 @@ error_t *profile_holds(
  * claim has nowhere to go and is recorded, which is the answer. The view is a
  * frame's, built to read one count off it.
  */
-error_t *profile_needs_target(
+error_t profile_needs_target(
     git_repository *repo,
     const char *profile,
     bool *needs_target
@@ -753,7 +753,7 @@ error_t *profile_needs_target(
 
     mount_table_t *mounts = NULL;
     manifest_t *view = NULL;
-    error_t *err = mount_table_build(frame, NULL, 0, &mounts);
+    error_t err = mount_table_build(frame, NULL, 0, &mounts);
     if (!err) err = manifest_build_branch(repo, profile, mounts, frame, &view);
     if (!err) *needs_target = manifest_unbound(view).count > 0;
 
@@ -781,7 +781,7 @@ static int index_order(const void *a, const void *b) {
 /**
  * filesystem path → the claims every local branch but `exclude` places there
  */
-error_t *profile_build_filesystem_index(
+error_t profile_build_filesystem_index(
     git_repository *repo,
     const mount_table_t *mounts,
     const char *exclude,
@@ -797,7 +797,7 @@ error_t *profile_build_filesystem_index(
 
     /* The branches, in the arena the index lives in */
     string_array_t branches;
-    error_t *err = gitops_list_branches(repo, arena, &branches);
+    error_t err = gitops_list_branches(repo, arena, &branches);
     if (err) return err;
 
     /* Every placed row of every branch, gathered before any of it is keyed: the
@@ -857,7 +857,7 @@ error_t *profile_build_filesystem_index(
 /**
  * The name `profile` has for `filesystem_path` in `tree`
  */
-error_t *profile_claim_name(
+error_t profile_claim_name(
     git_repository *repo,
     const git_tree *tree,
     const mount_table_t *mounts,
@@ -877,7 +877,7 @@ error_t *profile_claim_name(
     *out_storage = NULL;
 
     manifest_t *view = NULL;
-    error_t *err = manifest_build_tree(repo, tree, profile, mounts, arena, &view);
+    error_t err = manifest_build_tree(repo, tree, profile, mounts, arena, &view);
     if (err) return err;
 
     /* The claim standing there, before the name one would take: a derived claim
@@ -905,7 +905,7 @@ error_t *profile_claim_name(
  *
  * The answer is the row's own string, the arena's, as the view is.
  */
-static error_t *claim_by_filesystem_path(
+static error_t claim_by_filesystem_path(
     git_repository *repo,
     const char *branch,
     const mount_table_t *mounts,
@@ -916,7 +916,7 @@ static error_t *claim_by_filesystem_path(
     *out_storage = NULL;
 
     manifest_t *view = NULL;
-    error_t *err = manifest_build_branch(repo, branch, mounts, arena, &view);
+    error_t err = manifest_build_branch(repo, branch, mounts, arena, &view);
     if (err) return err;
 
     const manifest_row_t *row = manifest_lookup_claim(view, branch, filesystem_path);
@@ -937,7 +937,7 @@ static error_t *claim_by_filesystem_path(
  * — and the sheet is opened only where the tree did not answer, which is the
  * whole of what a name still costs less than a path.
  */
-static error_t *claim_by_name(
+static error_t claim_by_name(
     git_repository *repo,
     const char *branch,
     const char *storage_path,
@@ -946,7 +946,7 @@ static error_t *claim_by_name(
     *out_storage = NULL;
 
     git_tree *tree = NULL;
-    error_t *err = gitops_load_branch_tree(repo, branch, &tree, NULL);
+    error_t err = gitops_load_branch_tree(repo, branch, &tree, NULL);
     if (err) {
         return error_wrap(err, "Failed to load tree for profile '%s'", branch);
     }
@@ -964,7 +964,7 @@ static error_t *claim_by_name(
 /**
  * Every claim standing at what the user named, across the local branches
  */
-error_t *profile_discover_claims(
+error_t profile_discover_claims(
     git_repository *repo,
     const mount_table_t *mounts,
     const path_input_t *arg,
@@ -982,7 +982,7 @@ error_t *profile_discover_claims(
     /* The branches, in the arena the claims live in, so a claim borrows its
      * branch's name from the listing */
     string_array_t branches;
-    error_t *err = gitops_list_branches(repo, arena, &branches);
+    error_t err = gitops_list_branches(repo, arena, &branches);
     if (err) return err;
 
     /* At most one claim per branch: a branch names a path once and holds a name

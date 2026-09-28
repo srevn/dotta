@@ -34,7 +34,7 @@
  * used directly inside the crypto layer; non-crypto layers use `secure_wipe`
  * from `base/secure.h`). The struct itself — the slot is the secret — is a
  * `secure_alloc` mapping, wiped and unmapped by `keymgr_free`. Public API symmetry:
- * every entry point either returns `error_t *` with the cleanup-on-error contract,
+ * every entry point either returns `error_t` with the cleanup-on-error contract,
  * runs idempotently with no error surface (free, clear), or is a getter reporting
  * what the slot holds (witness, cached, epoch) — the getters are NULL-safe except
  * `keymgr_epoch`, whose answer borrows from the key manager and so has none for
@@ -91,7 +91,7 @@ struct keymgr {
      * and all — each of the ladder's failures is the run's, never one row's (a
      * passphrase, the derivation, the witness walk over the whole repository) —
      * and borrowed, as every error is (base/error.h). */
-    error_t *refusal;
+    error_t refusal;
 
     /* Where a fresh master finds witnesses; NULL for none, which is the unit
      * suites' shape. `repo` is the source's own argument, carried untouched. */
@@ -178,13 +178,13 @@ static void bind_epoch(keymgr *km, const kdf_epoch_t *epoch) {
  * through `keymgr_set`, which clears it first — and hand it back to the asker
  * that met it. Every resolve after returns the same node.
  */
-static error_t *refuse(keymgr *km, error_t *err) {
+static error_t refuse(keymgr *km, error_t err) {
     km->refusal = err;
 
     return err;
 }
 
-error_t *keymgr_create(
+error_t keymgr_create(
     int32_t session_timeout,
     const kdf_epoch_t *epoch,
     keymgr_reach_t reach,
@@ -314,14 +314,14 @@ static bool witness_exists(void *self, const keymgr_witness_t *witness) {
  * the one exit that scrubs the proof. So a caller may return a refusal without
  * a wipe, which is what `obtain`'s contract promises its own.
  */
-static error_t *derive_and_check(
+static error_t derive_and_check(
     keymgr *km, const char *subject, const char *passphrase,
     size_t passphrase_len, const keymgr_witness_t *in_hand,
     keymgr_proof_t *out
 ) {
     keymgr_trial_t trial = { .in_hand = in_hand, .proof = out };
 
-    error_t *err = kdf_master_key(
+    error_t err = kdf_master_key(
         (const uint8_t *) passphrase, passphrase_len,
         &km->epoch, out->master
     );
@@ -390,7 +390,7 @@ fail:
  * where the last empty line lands. A mapping the prompt was refused (ERR_MEMORY,
  * base/secure.h) passes through as itself.
  */
-static error_t *nothing_read(error_t *read_err) {
+static error_t nothing_read(error_t read_err) {
     if (error_code(read_err) == ERR_MEMORY) {
         return read_err;
     }
@@ -406,7 +406,7 @@ static error_t *nothing_read(error_t *read_err) {
  * terminal. A miss of any kind — a wrong passphrase, an empty line — is an attempt,
  * and the last one's error is the refusal; over a pipe the first miss is.
  */
-static error_t *prompt_and_verify(
+static error_t prompt_and_verify(
     keymgr *km,
     const keymgr_witness_t *in_hand,
     keymgr_proof_t *out
@@ -419,7 +419,7 @@ static error_t *prompt_and_verify(
     for (int attempt = 1;; attempt++) {
         char *passphrase = NULL;
         size_t passphrase_len = 0;
-        error_t *err = passphrase_prompt(prompt, &passphrase, &passphrase_len);
+        error_t err = passphrase_prompt(prompt, &passphrase, &passphrase_len);
         if (err) {
             if (tty && error_code(err) == ERR_INVALID_ARG
                 && attempt < KEYMGR_ATTEMPTS) {
@@ -450,7 +450,7 @@ static error_t *prompt_and_verify(
  * process; constant time defends nothing here. A confirm the primitive refuses
  * (an empty line) is a mismatch; one it cannot read at all ends the ladder.
  */
-static error_t *prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
+static error_t prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
     const bool tty = isatty(STDIN_FILENO);
     const char *prompt = "Enter encryption passphrase: ";
 
@@ -459,7 +459,7 @@ static error_t *prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
     for (int attempt = 1;; attempt++) {
         char *passphrase = NULL;
         size_t passphrase_len = 0;
-        error_t *err = passphrase_prompt(prompt, &passphrase, &passphrase_len);
+        error_t err = passphrase_prompt(prompt, &passphrase, &passphrase_len);
         if (err) {
             if (tty && error_code(err) == ERR_INVALID_ARG
                 && attempt < KEYMGR_ATTEMPTS) {
@@ -513,13 +513,13 @@ static error_t *prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
  * A refusal leaves the proof as it found it: nothing written, or already scrubbed
  * by the derivation that failed. Callers return it without a wipe.
  */
-static error_t *obtain(
+static error_t obtain(
     keymgr *km, const keymgr_witness_t *in_hand, keymgr_proof_t *out
 ) {
     /* The caches are as far as a reporting command may reach: below them the
      * user would be asked, and a report never asks. */
     if (km->reach != KEYMGR_REACH_OBTAIN) {
-        error_t *err = ERROR(
+        error_t err = ERROR(
             ERR_LOCKED,
             "No passphrase is cached, and this command does not ask for one; "
             "run 'dotta key set'"
@@ -529,7 +529,7 @@ static error_t *obtain(
 
     char *passphrase = NULL;
     size_t passphrase_len = 0;
-    error_t *err = passphrase_from_env(&passphrase, &passphrase_len);
+    error_t err = passphrase_from_env(&passphrase, &passphrase_len);
     if (!err) {
         err = derive_and_check(
             km, "DOTTA_ENCRYPTION_PASSPHRASE", passphrase, passphrase_len,
@@ -579,7 +579,7 @@ static bool warm_from_file(keymgr *km) {
 
     keymgr_proof_t proof = { 0 };
     time_t expires_at = 0;
-    error_t *err = session_load(proof.master, &km->epoch, &expires_at);
+    error_t err = session_load(proof.master, &km->epoch, &expires_at);
     if (err) {
         return false;
     }
@@ -598,9 +598,9 @@ static bool warm_from_file(keymgr *km) {
  * unlinks the file, so the next process never loads a master this one meant to
  * replace.
  */
-static error_t *keep(keymgr *km, keymgr_proof_t *proof) {
+static error_t keep(keymgr *km, keymgr_proof_t *proof) {
     time_t expires_at = 0;
-    error_t *err = NULL;
+    error_t err = NULL;
 
     if (km->session_timeout != 0) {
         expires_at = km->session_timeout < 0
@@ -627,7 +627,7 @@ static error_t *keep(keymgr *km, keymgr_proof_t *proof) {
  * this is the one place the question is asked. On success the slot holds a verified
  * master; a refusal leaves it empty and writes nothing.
  */
-static error_t *resolve_master(keymgr *km, const keymgr_witness_t *in_hand) {
+static error_t resolve_master(keymgr *km, const keymgr_witness_t *in_hand) {
     if (km->has_key) {
         return NULL;
     }
@@ -653,7 +653,7 @@ static error_t *resolve_master(keymgr *km, const keymgr_witness_t *in_hand) {
  * so there is no per-call copy on the stack to scrub. The caller wipes (mac_key,
  * prf_key) after per-operation use.
  */
-static error_t *acquire_subkeys(
+static error_t acquire_subkeys(
     keymgr *km,
     const char *profile,
     const keymgr_witness_t *in_hand,
@@ -666,7 +666,7 @@ static error_t *acquire_subkeys(
     return NULL;
 }
 
-error_t *keymgr_set(keymgr *km) {
+error_t keymgr_set(keymgr *km) {
     CHECK_NULL(km);
 
     /* The verb verifies against the repository, not against what an earlier run
@@ -739,7 +739,7 @@ bool keymgr_cached(keymgr *km, time_t *out_expires_at) {
     return warm;
 }
 
-error_t *keymgr_encrypt(
+error_t keymgr_encrypt(
     keymgr *km, const char *profile, const char *storage_path,
     const uint8_t *plaintext, size_t plaintext_len,
     buffer_t *out_ciphertext
@@ -758,7 +758,7 @@ error_t *keymgr_encrypt(
 
     /* No blob in hand: a fresh master is verified against what the repository
      * holds, or confirmed when it holds nothing. */
-    error_t *err = acquire_subkeys(km, profile, NULL, mac_key, prf_key);
+    error_t err = acquire_subkeys(km, profile, NULL, mac_key, prf_key);
     if (err) return err;
 
     err = cipher_encrypt(
@@ -774,7 +774,7 @@ error_t *keymgr_encrypt(
     return err;
 }
 
-error_t *keymgr_decrypt(
+error_t keymgr_decrypt(
     keymgr *km, const char *profile, const char *storage_path,
     const uint8_t *ciphertext, size_t ciphertext_len,
     buffer_t *out_plaintext
@@ -796,7 +796,7 @@ error_t *keymgr_decrypt(
      * this build does not read) pass through with their own words. Public identity,
      * plain memcmp. */
     uint8_t blob_fp[KDF_EPOCH_FP_SIZE];
-    error_t *err = cipher_read_header(ciphertext, ciphertext_len, blob_fp);
+    error_t err = cipher_read_header(ciphertext, ciphertext_len, blob_fp);
     if (err) return err;
     if (memcmp(blob_fp, km->epoch_fp, KDF_EPOCH_FP_SIZE) != 0) {
         return ERROR(

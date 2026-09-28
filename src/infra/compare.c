@@ -44,7 +44,7 @@ typedef struct {
  * the bytes in hand are whatever that read returned, and the verdict over them
  * is the same verdict whichever caller asked.
  */
-static error_t *judge(
+static error_t judge(
     const reference_t *ref, const buffer_t *copy, const char *disk_path,
     compare_result_t *result
 ) {
@@ -140,7 +140,7 @@ static bool mode_stands(const struct stat *st, git_filemode_t expected_mode) {
  * other failure to a failed look, so the absence rule compare.h states once is
  * spelled once.
  */
-static error_t *read_copy(
+static error_t read_copy(
     const char *disk_path, git_filemode_t expected_mode, buffer_t *out
 ) {
     /* fs_read_fd clears this too, but a link's read and a failed open never reach
@@ -162,7 +162,7 @@ static error_t *read_copy(
         return error_from_errno(errno, "Failed to open '%s'", disk_path);
     }
 
-    error_t *err = fs_read_fd(fd, out);
+    error_t err = fs_read_fd(fd, out);
     close(fd);
 
     return err ? error_wrap(err, "Failed to read '%s'", disk_path) : NULL;
@@ -181,11 +181,11 @@ static error_t *read_copy(
  * `copy` is filled whole and is the caller's on every exit: wiped and freed by
  * whichever of the two took it, whatever the verdict (compare.h).
  */
-static error_t *judge_copy(
+static error_t judge_copy(
     const reference_t *ref, const char *disk_path, git_filemode_t expected_mode,
     buffer_t *copy, compare_result_t *result
 ) {
-    error_t *err = read_copy(disk_path, expected_mode, copy);
+    error_t err = read_copy(disk_path, expected_mode, copy);
 
     if (!err) {
         return judge(ref, copy, disk_path, result);
@@ -224,7 +224,7 @@ static error_t *judge_copy(
  * This separation keeps the infrastructure layer pure and focused on content
  * comparison only.
  */
-static error_t *compare_reference_to_disk(
+static error_t compare_reference_to_disk(
     const reference_t *ref, const char *disk_path, git_filemode_t expected_mode,
     const struct stat *st, compare_result_t *result
 ) {
@@ -247,7 +247,7 @@ static error_t *compare_reference_to_disk(
     }
 
     buffer_t copy = BUFFER_INIT;
-    error_t *err = judge_copy(ref, disk_path, expected_mode, &copy, result);
+    error_t err = judge_copy(ref, disk_path, expected_mode, &copy, result);
 
     /* For an encrypted row the disk copy is the plaintext — the twin of the buffer
      * the content cache wipes before it frees. Wiped like it, whatever the read
@@ -261,7 +261,7 @@ static error_t *compare_reference_to_disk(
     return err;
 }
 
-error_t *compare_buffer_to_disk(
+error_t compare_buffer_to_disk(
     const buffer_t *content,
     const char *disk_path,
     git_filemode_t expected_mode,
@@ -277,7 +277,7 @@ error_t *compare_buffer_to_disk(
     return compare_reference_to_disk(&ref, disk_path, expected_mode, st, result);
 }
 
-error_t *compare_oid_to_disk(
+error_t compare_oid_to_disk(
     const git_oid *blob_oid,
     const char *disk_path,
     git_filemode_t expected_mode,
@@ -376,7 +376,7 @@ static char *generate_symlink_diff(
  * buffer-based diff API — the two sides in hand, old first, the order the caller
  * read off the direction.
  */
-static error_t *generate_text_diff(
+static error_t generate_text_diff(
     const buffer_t *old_side,
     const buffer_t *new_side,
     const char *path_label,
@@ -423,7 +423,7 @@ static error_t *generate_text_diff(
 /**
  * Render the disk copy's difference from the reference — the renderer's own look
  */
-error_t *compare_generate_diff(
+error_t compare_generate_diff(
     const buffer_t *content, const char *disk_path, const char *path_label,
     git_filemode_t mode, compare_direction_t direction, file_diff_t *out
 ) {
@@ -439,7 +439,7 @@ error_t *compare_generate_diff(
     /* The look, then the verdict off it and the read of what it found. */
     struct stat st;
     buffer_t copy = BUFFER_INIT;
-    error_t *err = NULL;
+    error_t err = NULL;
 
     if (fs_lstat(disk_path, &st) != 0) {
         if (errno != ENOENT && errno != ENOTDIR) {

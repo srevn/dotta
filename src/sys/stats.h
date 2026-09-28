@@ -73,7 +73,7 @@ typedef struct {
  * @param out Size in bytes (required, filled by function)
  * @return Error or NULL on success
  */
-error_t *stats_blob_size(
+error_t stats_blob_size(
     git_repository *repo,
     const git_oid *blob_oid,
     size_t *out
@@ -91,7 +91,7 @@ error_t *stats_blob_size(
  * @param out Size in bytes (required, filled by function)
  * @return Error or NULL on success
  */
-error_t *stats_blob_size_with_odb(
+error_t stats_blob_size_with_odb(
     git_odb *odb,
     const git_oid *blob_oid,
     size_t *out
@@ -120,7 +120,7 @@ error_t *stats_blob_size_with_odb(
  * @param out File→commit map (required; left as it was on a failure)
  * @return Error or NULL on success
  */
-error_t *stats_build_file_commit_map(
+error_t stats_build_file_commit_map(
     git_repository *repo,
     const char *branch_name,
     git_tree *tree,
@@ -147,7 +147,7 @@ error_t *stats_build_file_commit_map(
  * @param out File history (required; left as it was on a failure)
  * @return Error or NULL on success; ERR_NOT_FOUND when no commit touched the file
  */
-error_t *stats_file_history(
+error_t stats_file_history(
     git_repository *repo,
     const char *branch_name,
     const char *file_path,

@@ -1019,7 +1019,7 @@ typedef struct {
  * @param out Workspace (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *workspace_load(
+error_t workspace_load(
     git_repository *repo,
     state_t *state,
     const struct config *config,
@@ -1377,7 +1377,7 @@ static inline state_record_t workspace_observation(const manifest_row_t *row) {
  *            never owned)
  * @return The write's failure, naming the path, or NULL on success
  */
-error_t *workspace_anchor(
+error_t workspace_anchor(
     workspace_t *ws,
     const workspace_item_t *item,
     state_stat_t stat,
@@ -1412,7 +1412,7 @@ error_t *workspace_anchor(
  *             writes nothing, and the item keeps its record)
  * @return The write's failure, naming the path, or NULL on success
  */
-error_t *workspace_learn(
+error_t workspace_learn(
     workspace_t *ws,
     const workspace_item_t *item,
     divergence_type_t axes
@@ -1527,6 +1527,6 @@ error_t *workspace_learn(
  * @return The failure of a write into the caller's transaction, the caller's to
  *         end; NULL otherwise, a flush that writes for itself keeping its own
  */
-error_t *workspace_flush(workspace_t *ws);
+error_t workspace_flush(workspace_t *ws);
 
 #endif /* DOTTA_WORKSPACE_H */

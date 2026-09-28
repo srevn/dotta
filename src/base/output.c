@@ -428,7 +428,7 @@ void output_set_stream(output_t *ctx, FILE *stream) {
     ctx->report = OUTPUT_REPORT_START;
 }
 
-error_t *output_parse_verbosity(const char *word, output_verbosity_t *out) {
+error_t output_parse_verbosity(const char *word, output_verbosity_t *out) {
     CHECK_NULL(word);
     CHECK_NULL(out);
 
@@ -447,7 +447,7 @@ error_t *output_parse_verbosity(const char *word, output_verbosity_t *out) {
     return NULL;
 }
 
-error_t *output_parse_color_mode(const char *word, output_color_mode_t *out) {
+error_t output_parse_color_mode(const char *word, output_color_mode_t *out) {
     CHECK_NULL(word);
     CHECK_NULL(out);
 

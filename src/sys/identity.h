@@ -154,7 +154,7 @@ typedef struct identity {
  *         run owes cannot be made, or when the environment cannot be set; NULL
  *         on success
  */
-error_t *identity_init(void);
+error_t identity_init(void);
 
 /**
  * The identity of the run — borrowed, immutable

@@ -87,7 +87,7 @@ static bool validate_remote_url(const char *url) {
 /**
  * List remotes
  */
-static error_t *remote_list(
+static error_t remote_list(
     git_repository *repo,
     output_t *out,
     bool verbose
@@ -156,7 +156,7 @@ static error_t *remote_list(
 /**
  * Add remote
  */
-static error_t *remote_add(
+static error_t remote_add(
     git_repository *repo,
     output_t *out,
     const char *name,
@@ -219,7 +219,7 @@ static error_t *remote_add(
 /**
  * Remove remote
  */
-static error_t *remote_remove(
+static error_t remote_remove(
     git_repository *repo,
     output_t *out,
     const char *name
@@ -253,7 +253,7 @@ static error_t *remote_remove(
 /**
  * Set remote URL
  */
-static error_t *remote_set_url(
+static error_t remote_set_url(
     git_repository *repo,
     output_t *out,
     const char *name,
@@ -298,7 +298,7 @@ static error_t *remote_set_url(
 /**
  * Rename remote
  */
-static error_t *remote_rename(
+static error_t remote_rename(
     git_repository *repo,
     output_t *out,
     const char *old_name,
@@ -370,7 +370,7 @@ static error_t *remote_rename(
 /**
  * Show remote details
  */
-static error_t *remote_show(
+static error_t remote_show(
     git_repository *repo,
     output_t *out,
     const char *name
@@ -440,7 +440,7 @@ static error_t *remote_show(
 /**
  * Remote command implementation
  */
-error_t *cmd_remote(const dotta_ctx_t *ctx, const cmd_remote_options_t *opts) {
+error_t cmd_remote(const dotta_ctx_t *ctx, const cmd_remote_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -482,7 +482,7 @@ error_t *cmd_remote(const dotta_ctx_t *ctx, const cmd_remote_options_t *opts) {
  * Each sub's `init_defaults` already set the `subcommand` discriminator, so
  * `cmd_remote`'s switch routes the call.
  */
-static error_t *remote_dispatch(const void *ctx_v, void *opts_v) {
+static error_t remote_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_remote(ctx, (const cmd_remote_options_t *) opts_v);
 }

@@ -75,7 +75,7 @@ const char *label_tail(const char *storage_path) {
     return split.tail;
 }
 
-error_t *label_validate_storage(const char *storage_path) {
+error_t label_validate_storage(const char *storage_path) {
     CHECK_NULL(storage_path);
 
     if (storage_path[0] == '\0') {

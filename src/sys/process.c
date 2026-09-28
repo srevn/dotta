@@ -241,7 +241,7 @@ static char *capture_grow_secure(
     return grown;
 }
 
-error_t *process_run(const process_spec_t *spec, process_result_t *result) {
+error_t process_run(const process_spec_t *spec, process_result_t *result) {
     CHECK_NULL(spec);
     CHECK_NULL(result);
     CHECK_NULL(spec->argv);
@@ -301,7 +301,7 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
     size_t cap_dropped = 0;
     int status = 0;
     bool timed_out = false;
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* Output pipe (child stdout/stderr → parent). */
     if (pipe(pipefd) != 0) {
@@ -727,7 +727,7 @@ void process_result_deinit(process_result_t *result) {
     *result = (process_result_t) { 0 };
 }
 
-error_t *process_foreground(char *const argv[], process_result_t *result) {
+error_t process_foreground(char *const argv[], process_result_t *result) {
     CHECK_NULL(argv);
     CHECK_NULL(argv[0]);
     CHECK_NULL(result);

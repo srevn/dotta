@@ -149,7 +149,7 @@ char *fs_realpath(const char *path, char *resolved);
  * @param out Output buffer (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_read_file(const char *path, buffer_t *out);
+error_t fs_read_file(const char *path, buffer_t *out);
 
 /**
  * Read a file descriptor to EOF into buffer
@@ -169,7 +169,7 @@ error_t *fs_read_file(const char *path, buffer_t *out);
  * @param out Output buffer (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_read_fd(int fd, buffer_t *out);
+error_t fs_read_fd(int fd, buffer_t *out);
 
 /**
  * Write raw bytes to file (overwrites if exists)
@@ -207,7 +207,7 @@ error_t *fs_read_fd(int fd, buffer_t *out);
  *        act reads (core/deploy)
  * @return Error or NULL on success
  */
-error_t *fs_write_file_raw(
+error_t fs_write_file_raw(
     const char *path,
     const unsigned char *data,
     size_t size,
@@ -226,7 +226,7 @@ error_t *fs_write_file_raw(
  * @param content Buffer to write (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_write_file(const char *path, const buffer_t *content);
+error_t fs_write_file(const char *path, const buffer_t *content);
 
 /**
  * Copy file preserving permissions
@@ -235,7 +235,7 @@ error_t *fs_write_file(const char *path, const buffer_t *content);
  * @param dst Destination path (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_copy_file(const char *src, const char *dst);
+error_t fs_copy_file(const char *src, const char *dst);
 
 /**
  * Remove file
@@ -245,7 +245,7 @@ error_t *fs_copy_file(const char *src, const char *dst);
  * @param path File path (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_remove_file(const char *path);
+error_t fs_remove_file(const char *path);
 
 /**
  * Check if file exists
@@ -283,7 +283,7 @@ bool fs_is_os_metadata_file(const char *filename);
  * @param parents Create parent directories if true
  * @return Error or NULL on success
  */
-error_t *fs_create_dir(const char *path, bool parents);
+error_t fs_create_dir(const char *path, bool parents);
 
 /**
  * Create directory with specific mode (idempotent)
@@ -313,7 +313,7 @@ error_t *fs_create_dir(const char *path, bool parents);
  * - ERR_FS: Failed to set permissions (not owner, etc.)
  * - ERR_INVALID_ARG: Invalid mode (> 0777)
  */
-error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
+error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
 
 /**
  * Create directory with specific mode and ownership (atomic, idempotent)
@@ -353,7 +353,7 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
  * - ERR_FS: Failed to set ownership (not running as root)
  * - ERR_FS: Failed to set permissions
  */
-error_t *fs_create_dir_with_ownership(
+error_t fs_create_dir_with_ownership(
     const char *path,
     mode_t mode,
     uid_t uid,
@@ -398,7 +398,7 @@ error_t *fs_create_dir_with_ownership(
  * - ERR_EXISTS: Something already stands at the path
  * - ERR_FS: Failed to create, open or attribute the directory
  */
-error_t *fs_create_dir_exclusive(
+error_t fs_create_dir_exclusive(
     const char *path,
     mode_t mode,
     uid_t uid,
@@ -417,7 +417,7 @@ error_t *fs_create_dir_exclusive(
  * @param path Directory path (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_remove_dir(const char *path);
+error_t fs_remove_dir(const char *path);
 
 /**
  * Clear path for replacement (remove file, symlink, or directory)
@@ -431,7 +431,7 @@ error_t *fs_remove_dir(const char *path);
  * @param path Path to clear (must not be NULL or empty)
  * @return Error or NULL on success
  */
-error_t *fs_clear_path(const char *path);
+error_t fs_clear_path(const char *path);
 
 /**
  * Check if path is a directory
@@ -531,7 +531,7 @@ bool fs_is_directory_empty(const char *path);
  * @param path Directory path (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_remove_empty_dir(const char *path);
+error_t fs_remove_empty_dir(const char *path);
 
 /**
  * List directory contents (excludes . and ..)
@@ -544,7 +544,7 @@ error_t *fs_remove_empty_dir(const char *path);
  * @param out   The names, in readdir's order (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_list_dir(const char *path, arena_t *arena, string_array_t *out);
+error_t fs_list_dir(const char *path, arena_t *arena, string_array_t *out);
 
 /* The depth a recursive walk of this filesystem is bounded to. The directory a
  * walk starts at is depth 0, frames 0 through 127 enumerate, and a frame at depth
@@ -570,7 +570,7 @@ error_t *fs_list_dir(const char *path, arena_t *arena, string_array_t *out);
  * @param path Full path to file/directory (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_ensure_parent_dirs(const char *path);
+error_t fs_ensure_parent_dirs(const char *path);
 
 /**
  * Path operations
@@ -594,7 +594,7 @@ error_t *fs_ensure_parent_dirs(const char *path);
  * @param out The directory (caller frees, must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_working_directory(char **out);
+error_t fs_working_directory(char **out);
 
 /**
  * Make path absolute without resolving symlinks
@@ -620,7 +620,7 @@ error_t *fs_working_directory(char **out);
  * @param out Absolute path (caller frees, must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_make_absolute(const char *path, char **out);
+error_t fs_make_absolute(const char *path, char **out);
 
 /**
  * Canonicalize path (resolve symlinks, . and ..)
@@ -633,7 +633,7 @@ error_t *fs_make_absolute(const char *path, char **out);
  * @param out Canonical path (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *fs_canonicalize_path(const char *path, char **out);
+error_t fs_canonicalize_path(const char *path, char **out);
 
 /**
  * Normalize path by resolving . and .. components (no filesystem access)
@@ -670,7 +670,7 @@ error_t *fs_canonicalize_path(const char *path, char **out);
  * @param out Normalized path (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *fs_normalize_path(const char *path, char **out);
+error_t fs_normalize_path(const char *path, char **out);
 
 /**
  * Is this path the fold's own spelling?
@@ -704,7 +704,7 @@ bool fs_is_folded(const char *path);
  * @param out Parent directory (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *fs_get_parent_dir(const char *path, char **out);
+error_t fs_get_parent_dir(const char *path, char **out);
 
 /**
  * Join path components
@@ -714,7 +714,7 @@ error_t *fs_get_parent_dir(const char *path, char **out);
  * @param out Joined path (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *fs_path_join(const char *base, const char *component, char **out);
+error_t fs_path_join(const char *base, const char *component, char **out);
 
 /**
  * Expand a leading tilde to the invoker's home (sys/identity).
@@ -731,7 +731,7 @@ error_t *fs_path_join(const char *base, const char *component, char **out);
  * @param out  Expanded path (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *fs_expand_tilde(const char *path, char **out);
+error_t fs_expand_tilde(const char *path, char **out);
 
 /**
  * Symlink operations
@@ -752,7 +752,7 @@ error_t *fs_expand_tilde(const char *path, char **out);
  * @param gid Group to set on the link, or (gid_t) -1 to leave it
  * @return Error or NULL on success
  */
-error_t *fs_create_symlink(
+error_t fs_create_symlink(
     const char *target,
     const char *linkpath,
     uid_t uid,
@@ -771,7 +771,7 @@ error_t *fs_create_symlink(
  * @param out Target path (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *fs_read_symlink(const char *linkpath, char **out);
+error_t fs_read_symlink(const char *linkpath, char **out);
 
 /**
  * Permission operations
@@ -784,7 +784,7 @@ error_t *fs_read_symlink(const char *linkpath, char **out);
  * @param out Mode (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_get_permissions(const char *path, mode_t *out);
+error_t fs_get_permissions(const char *path, mode_t *out);
 
 /**
  * Set file permissions
@@ -793,7 +793,7 @@ error_t *fs_get_permissions(const char *path, mode_t *out);
  * @param mode Permission mode
  * @return Error or NULL on success
  */
-error_t *fs_set_permissions(const char *path, mode_t mode);
+error_t fs_set_permissions(const char *path, mode_t mode);
 
 /**
  * Check if file is executable

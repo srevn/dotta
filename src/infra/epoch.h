@@ -129,7 +129,7 @@
  *                     re-minted (can be NULL)
  * @return Error or NULL on success
  */
-error_t *epoch_init(
+error_t epoch_init(
     git_repository *repo,
     uint16_t memory_mib,
     uint8_t passes,
@@ -171,7 +171,7 @@ error_t *epoch_init(
  * @param out  The epoch (must not be NULL; zeroed on failure)
  * @return Error or NULL on success
  */
-error_t *epoch_load(git_repository *repo, kdf_epoch_t *out);
+error_t epoch_load(git_repository *repo, kdf_epoch_t *out);
 
 /**
  * Push `refs/dotta/epoch` to the named remote.
@@ -189,7 +189,7 @@ error_t *epoch_load(git_repository *repo, kdf_epoch_t *out);
  * @param xfer        Transfer context for credentials / progress
  * @return Error or NULL on success
  */
-error_t *epoch_push(
+error_t epoch_push(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer
@@ -230,7 +230,7 @@ error_t *epoch_push(
  * @return Error or NULL on success; ERR_NOT_FOUND if the remote lacks the ref;
  *         ERR_CRYPTO if the fetched epoch is malformed (the local ref untouched)
  */
-error_t *epoch_fetch(
+error_t epoch_fetch(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer,
@@ -344,7 +344,7 @@ typedef enum {
  * @return Error on a census that could not finish; otherwise NULL with
  *         *out_decision set
  */
-error_t *epoch_resolve(
+error_t epoch_resolve(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer,
@@ -390,7 +390,7 @@ error_t *epoch_resolve(
  *                     (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *epoch_find_ciphertext(
+error_t epoch_find_ciphertext(
     git_repository *repo,
     const kdf_epoch_t *epoch,
     keymgr_opens_fn accept,

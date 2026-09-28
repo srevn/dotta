@@ -109,7 +109,7 @@ static bool encryption_policy_matches_auto_patterns(
     );
 }
 
-error_t *encryption_policy_should_encrypt(
+error_t encryption_policy_should_encrypt(
     const config_t *config,
     const char *storage_path,
     encryption_request_t request,

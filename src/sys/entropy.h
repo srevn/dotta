@@ -54,6 +54,6 @@
  * @param len Number of bytes to write
  * @return Error or NULL on success
  */
-error_t *entropy_fill(uint8_t *out, size_t len);
+error_t entropy_fill(uint8_t *out, size_t len);
 
 #endif /* DOTTA_SYS_ENTROPY_H */

@@ -122,7 +122,7 @@ static bool is_valid_host(const char *host) {
     return true;
 }
 
-error_t *credential_url_parse(const char *url, credential_url_t *out) {
+error_t credential_url_parse(const char *url, credential_url_t *out) {
     CHECK_NULL(url);
     CHECK_NULL(out);
 
@@ -279,7 +279,7 @@ static buffer_t build_credential_request(
  * `capture` controls whether the helper's response is captured into `*result`.
  * Approve/reject pass false (fire-and-forget, output ignored); fill passes true.
  */
-static error_t *run_credential_helper(
+static error_t run_credential_helper(
     const char *subcommand,
     const char *request,
     size_t request_len,
@@ -338,7 +338,7 @@ static void credential_request_secure_free(buffer_t *req) {
  * `subcommand` is woven into the message so the caller doesn't need to repeat
  * the context.
  */
-static error_t *helper_outcome_error(
+static error_t helper_outcome_error(
     const char *subcommand, const process_result_t *result
 ) {
     if (result->exec_failed) {
@@ -379,7 +379,7 @@ static error_t *helper_outcome_error(
  * are read-only and don't implement approve/reject. Only exec failure or timeout
  * produce an error_t; the caller decides whether to surface it.
  */
-static error_t *credential_helper_commit(
+static error_t credential_helper_commit(
     const char *subcommand,
     const credential_url_t *u,
     const char *username,
@@ -401,7 +401,7 @@ static error_t *credential_helper_commit(
     );
 
     process_result_t result = { 0 };
-    error_t *err = run_credential_helper(
+    error_t err = run_credential_helper(
         subcommand, req.data, req.size, false, &result
     );
     credential_request_secure_free(&req);
@@ -413,21 +413,21 @@ static error_t *credential_helper_commit(
     return err;
 }
 
-error_t *credential_helper_approve(
+error_t credential_helper_approve(
     const credential_url_t *u, const char *user, const char *pass
 ) {
     CHECK_NULL(u);
     return credential_helper_commit("approve", u, user, pass);
 }
 
-error_t *credential_helper_reject(
+error_t credential_helper_reject(
     const credential_url_t *u, const char *user, const char *pass
 ) {
     CHECK_NULL(u);
     return credential_helper_commit("reject", u, user, pass);
 }
 
-error_t *credential_helper_fill(
+error_t credential_helper_fill(
     const credential_url_t *u,
     const char *username_from_url,
     char **out_user,
@@ -453,7 +453,7 @@ error_t *credential_helper_fill(
     );
 
     process_result_t result = { 0 };
-    error_t *err = run_credential_helper("fill", req.data, req.size, true, &result);
+    error_t err = run_credential_helper("fill", req.data, req.size, true, &result);
 
     /* Request bytes (protocol, host, optionally username-from-URL) are
      * low-sensitivity, but scrub on the same path as approve/reject so the

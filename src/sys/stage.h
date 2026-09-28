@@ -101,7 +101,7 @@ typedef struct stage stage_t;
  * @param out Stage (must not be NULL; freed with stage_free)
  * @return Error or NULL on success
  */
-error_t *stage_open(git_repository *repo, const char *refname, stage_t **out);
+error_t stage_open(git_repository *repo, const char *refname, stage_t **out);
 
 /**
  * Open a ref that does not exist: the empty tree in a private index, and no parent
@@ -115,7 +115,7 @@ error_t *stage_open(git_repository *repo, const char *refname, stage_t **out);
  * @param out Stage (must not be NULL; freed with stage_free)
  * @return Error or NULL on success
  */
-error_t *stage_orphan(git_repository *repo, const char *refname, stage_t **out);
+error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out);
 
 /**
  * The tree the stage opened at — the ref's own bytes at open
@@ -177,7 +177,7 @@ typedef struct stage_admission stage_admission_t;
  * @param out Admission (must not be NULL; freed with stage_admission_free)
  * @return Error or NULL on success
  */
-error_t *stage_admission_create(const stage_t *st, stage_admission_t **out);
+error_t stage_admission_create(const stage_t *st, stage_admission_t **out);
 
 /**
  * Can a blob stand at this path, beside every name admitted before it? Recorded
@@ -209,7 +209,7 @@ error_t *stage_admission_create(const stage_t *st, stage_admission_t **out);
  * @param path Storage path (must not be NULL)
  * @return Error naming the obstruction, or NULL when the blob stands, recorded
  */
-error_t *stage_admit_blob(stage_admission_t *adm, const char *path);
+error_t stage_admit_blob(stage_admission_t *adm, const char *path);
 
 /**
  * Can a subtree stand at this path — the shape, and the one collision?
@@ -236,7 +236,7 @@ error_t *stage_admit_blob(stage_admission_t *adm, const char *path);
  * @param path Storage path (must not be NULL)
  * @return Error naming the collision, or NULL when a subtree may stand there
  */
-error_t *stage_admit_subtree(const stage_admission_t *adm, const char *path);
+error_t stage_admit_subtree(const stage_admission_t *adm, const char *path);
 
 /**
  * Free the admission
@@ -274,7 +274,7 @@ void stage_admission_free(stage_admission_t *adm);
  *                 be NULL)
  * @return Error or NULL on success
  */
-error_t *stage_put(
+error_t stage_put(
     stage_t *st,
     const char *path,
     const void *data,
@@ -295,7 +295,7 @@ error_t *stage_put(
  * @param mode The entry's filemode
  * @return Error or NULL on success
  */
-error_t *stage_put_blob(
+error_t stage_put_blob(
     stage_t *st,
     const char *path,
     const git_oid *blob,
@@ -312,7 +312,7 @@ error_t *stage_put_blob(
  * @param path Tree path (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *stage_remove(stage_t *st, const char *path);
+error_t stage_remove(stage_t *st, const char *path);
 
 /**
  * The tree, and — when it differs from the opened one — one commit
@@ -330,7 +330,7 @@ error_t *stage_remove(stage_t *st, const char *path);
  *                      (optional, can be NULL)
  * @return Error or NULL on success
  */
-error_t *stage_commit(stage_t *st, const char *message, bool *out_committed);
+error_t stage_commit(stage_t *st, const char *message, bool *out_committed);
 
 /**
  * Free the stage

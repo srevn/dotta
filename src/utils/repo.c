@@ -15,7 +15,7 @@
 /**
  * Resolve repository path
  */
-error_t *resolve_repo_path(const config_t *config, char **out) {
+error_t resolve_repo_path(const config_t *config, char **out) {
     CHECK_NULL(config);
     CHECK_NULL(out);
 
@@ -24,7 +24,7 @@ error_t *resolve_repo_path(const config_t *config, char **out) {
      * 2. Config file repo_dir setting
      * 3. Default: ~/.local/share/dotta/repo */
     char *repo_dir = NULL;
-    error_t *err = config_get_repo_dir(config, &repo_dir);
+    error_t err = config_get_repo_dir(config, &repo_dir);
     if (err) {
         /* Path expansion failed (e.g., invalid home directory). This is a genuine
          * error that should be propagated.
@@ -41,7 +41,7 @@ error_t *resolve_repo_path(const config_t *config, char **out) {
 /**
  * Where a create-style command puts the repository
  */
-error_t *repo_create_target(
+error_t repo_create_target(
     const config_t *config,
     const char *explicit_path,
     char **out_path,
@@ -59,7 +59,7 @@ error_t *repo_create_target(
     RETURN_IF_ERROR(resolve_repo_path(config, &resolved));
 
     char *configured = NULL;
-    error_t *err = fs_make_absolute(resolved, &configured);
+    error_t err = fs_make_absolute(resolved, &configured);
     free(resolved);
     if (err) return err;
 
@@ -112,7 +112,7 @@ error_t *repo_create_target(
 /**
  * Declare the repository dotta's store
  */
-error_t *repo_declare_store(git_repository *repo) {
+error_t repo_declare_store(git_repository *repo) {
     CHECK_NULL(repo);
 
     /* The layered handle writes at its write level, the repository's own file. */
@@ -136,7 +136,7 @@ error_t *repo_declare_store(git_repository *repo) {
 /**
  * Is this repository declared dotta's store?
  */
-error_t *repo_is_store(git_repository *repo, bool *out) {
+error_t repo_is_store(git_repository *repo, bool *out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
@@ -177,13 +177,13 @@ error_t *repo_is_store(git_repository *repo, bool *out) {
 /**
  * Open dotta's store
  */
-error_t *repo_open(const config_t *config, git_repository **repo_out, char **path_out) {
+error_t repo_open(const config_t *config, git_repository **repo_out, char **path_out) {
     CHECK_NULL(config);
     CHECK_NULL(repo_out);
 
     char *repo_path = NULL;
     git_repository *repo = NULL;
-    error_t *err = NULL;
+    error_t err = NULL;
 
     /* Resolve repository path — resolve_repo_path names its own failure. */
     err = resolve_repo_path(config, &repo_path);
@@ -209,7 +209,7 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
      */
     err = gitops_open_repository(&repo, repo_path);
     if (err) {
-        error_t *answer;
+        error_t answer;
 
         if (error_code(err) == ERR_NOT_FOUND) {
             /* Which of the two it is. libgit2 words them identically — "could
@@ -224,7 +224,7 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
              * a repository here that could not be read, and the answer to an
              * absence is the one answer that must not be offered for it. */
             char *head = NULL;
-            error_t *join_err = fs_path_join(repo_path, "HEAD", &head);
+            error_t join_err = fs_path_join(repo_path, "HEAD", &head);
             bool absent = !join_err
                 && fs_lstat_occupant(head, NULL) == FS_OCCUPANT_NONE;
             free(head);

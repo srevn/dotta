@@ -265,17 +265,15 @@ error_t *profile_resolve_commit(
         }
 
         /* ERR_NOT_FOUND is this profile's own answer — the commit is not its,
-         * and the search moves on. Every other code is a rung of the resolution
-         * that could not be made (sys/gitops.h), and it ends the search where
-         * it stands, whatever a later profile would have said: what comes back
-         * is the first holder in precedence order, a claim about every profile
-         * ahead of it, and a branch that would not read is one the claim cannot
-         * be made over. */
+         * and the search moves on, the answer's error dropped: one per profile
+         * that says so. Every other code is a rung of the resolution that could
+         * not be made (sys/gitops.h), and it ends the search where it stands,
+         * whatever a later profile would have said: what comes back is the first
+         * holder in precedence order, a claim about every profile ahead of it,
+         * and a branch that would not read is one the claim cannot be made over. */
         if (error_code(err) != ERR_NOT_FOUND) {
             return err;
         }
-
-        error_free(err);
     }
 
     /* Every profile was asked, and each said the commit is not its. No cause
@@ -414,9 +412,8 @@ error_t *profile_list_tree_files(
     if (data.error) {
         /* The callback's error names the entry that failed; the walk's own is
          * the abort libgit2 stamped in answer to it — an echo of this call's
-         * own decision, which names nothing and is freed rather than reported
+         * own decision, which names nothing and is dropped rather than reported
          * in its place. */
-        error_free(err);
         err = data.error;
     }
     if (err) return err;
@@ -564,7 +561,6 @@ error_t *profile_get_tree_stats(
     if (err || data.error) {
         /* Prefer the callback's error — it names the entry that failed */
         if (data.error) {
-            error_free(err);
             err = data.error;
         }
         err = error_wrap(

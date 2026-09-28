@@ -230,7 +230,6 @@ static void transfer_commit_credential_decision(transfer_context_t *ctx) {
             "credential helper: skipping commit — %s\n",
             error_message(parse_err)
         );
-        error_free(parse_err);
         return;
     }
 
@@ -245,7 +244,6 @@ static void transfer_commit_credential_decision(transfer_context_t *ctx) {
             "credential helper: %s",
             error_message(commit_err)
         );
-        error_free(commit_err);
     }
 
     credential_url_deinit(&u);
@@ -496,7 +494,9 @@ int transfer_credentials_callback(
             return credential_make_default(out) == 0 ? 0 : GIT_PASSTHROUGH;
         }
 
-        /* Fresh fill from the helper. */
+        /* Fresh fill from the helper. A parse or a fill that fails is printed
+         * and dropped — at most one per operation, which the anti-loop above
+         * asks once. */
         credential_url_t u = { 0 };
         error_t *parse_err = credential_url_parse(url, &u);
         char *fresh_user = NULL;
@@ -507,7 +507,6 @@ int transfer_credentials_callback(
                 ctx->output, OUTPUT_VERBOSE,
                 "credential URL parse: %s\n", error_message(parse_err)
             );
-            error_free(parse_err);
         } else {
             error_t *fill_err = credential_helper_fill(
                 &u, username_from_url, &fresh_user, &fresh_pass
@@ -521,7 +520,6 @@ int transfer_credentials_callback(
                     ctx->output, OUTPUT_NORMAL,
                     "credential helper: %s", error_message(fill_err)
                 );
-                error_free(fill_err);
             }
         }
 

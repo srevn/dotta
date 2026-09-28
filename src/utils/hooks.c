@@ -413,7 +413,6 @@ void hook_fire_post(
             cmd_name(inv->cmd), error_message(err)
         );
         print_hook_output(out, &result);
-        error_free(err);
     }
     process_result_deinit(&result);
 }

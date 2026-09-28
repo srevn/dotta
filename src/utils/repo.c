@@ -228,7 +228,6 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
             bool absent = !join_err
                 && fs_lstat_occupant(head, NULL) == FS_OCCUPANT_NONE;
             free(head);
-            error_free(join_err);
 
             if (absent) {
                 answer = ERROR(
@@ -243,7 +242,6 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
                     "%s%s", repo_path, repo_path, env_note, env_value
                 );
             }
-            error_free(err);
         } else if (error_code(err) == ERR_PERMISSION) {
             /* libgit2's owner check (CVE-2022-24765): the repository is another
              * user's — any other user's, which is why the hint says "could" —

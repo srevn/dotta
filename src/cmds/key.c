@@ -308,7 +308,6 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
             out, OUTPUT_VERBOSE, "  %s\n",
             error_message(err)
         );
-        error_free(err);
     } else {
         size_t encrypted_count = 0;
         manifest_rows_t rows = manifest_rows(manifest);

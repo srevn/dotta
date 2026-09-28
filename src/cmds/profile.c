@@ -211,13 +211,13 @@ static error_t *profile_list(
             profile_stats_t stats = { 0 };
             error_t *row_err = profile_get_stats(repo, profile, &stats);
 
-            /* Name what the branch holds if we could read it, otherwise say so */
+            /* Name what the branch holds where it reads, otherwise say so: the
+             * row's error is dropped, one per unreadable branch */
             if (row_err) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (counts unavailable)",
                     i + 1, profile
                 );
-                error_free(row_err);
             } else {
                 char counts[64];
                 output_format_counts(
@@ -256,13 +256,13 @@ static error_t *profile_list(
             error_t *row_err = profile_get_stats(repo, profile, &stats);
             if (!row_err) row_err = profile_needs_target(repo, profile, &needs_target);
 
-            /* Name what the branch holds if we could read it, otherwise say so */
+            /* Name what the branch holds where it reads, otherwise say so: the
+             * row's error is dropped, one per unreadable branch */
             if (row_err) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (counts unavailable)",
                     profile
                 );
-                error_free(row_err);
             } else {
                 char counts[64];
                 output_format_counts(
@@ -289,7 +289,6 @@ static error_t *profile_list(
                 out, OUTPUT_NORMAL, "Could not detect remote: %s",
                 error_message(remote_err)
             );
-            error_free(remote_err);
         } else {
             /* Create transfer context for credentials */
             transfer_options_t xfer_opts = {
@@ -312,7 +311,6 @@ static error_t *profile_list(
                     out, OUTPUT_NORMAL, "Could not query remote: %s",
                     error_message(remote_err)
                 );
-                error_free(remote_err);
             } else if (remote_branches.count > 0) {
                 /* Filter out branches that already exist locally */
                 string_array_t remote_only;
@@ -400,13 +398,14 @@ static error_t *profile_fetch(
 
             output_info(out, OUTPUT_VERBOSE, "  Fetching %s...", branch_name);
 
+            /* A branch that fails is named and counted, its error dropped — at
+             * most one per branch */
             error_t *fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, xfer);
             if (fetch_err) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  {red}✗{reset} Failed to fetch %s: %s\n",
                     branch_name, error_message(fetch_err)
                 );
-                error_free(fetch_err);
                 failed_count++;
                 continue;
             }
@@ -423,7 +422,6 @@ static error_t *profile_fetch(
                     "  {red}✗{reset} Failed to create local branch %s: %s\n",
                     branch_name, error_message(fetch_err)
                 );
-                error_free(fetch_err);
                 failed_count++;
             } else {
                 fetched_count++;
@@ -488,6 +486,8 @@ static error_t *profile_fetch(
         for (size_t i = 0; i < opts->profile_count; i++) {
             const char *profile = opts->profiles[i];
 
+            /* A profile that fails is named and counted, its error dropped — at
+             * most one per profile */
             error_t *fetch_err = gitops_fetch_branch(repo, remote_name, profile, xfer);
             if (fetch_err) {
                 output_styled(
@@ -495,7 +495,6 @@ static error_t *profile_fetch(
                     "  {red}✗{reset} Failed to fetch %s: %s\n",
                     profile, error_message(fetch_err)
                 );
-                error_free(fetch_err);
                 failed_count++;
                 continue;
             }
@@ -512,7 +511,6 @@ static error_t *profile_fetch(
                     "  {red}✗{reset} Failed to create local branch %s: %s\n",
                     profile, error_message(fetch_err)
                 );
-                error_free(fetch_err);
                 failed_count++;
             } else {
                 fetched_count++;
@@ -1140,8 +1138,6 @@ static error_t *profile_disable(
             output_warning(
                 out, OUTPUT_NORMAL, "Manifest build failed: %s", error_message(err)
             );
-            error_free(err);
-            err = NULL;
         }
 
         /* Phase 3: Write scope to state */

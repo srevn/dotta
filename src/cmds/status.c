@@ -1125,7 +1125,6 @@ static error_t *status_print_remote(
     );
     if (err) {
         /* No remote configured - not an error, just skip this section */
-        error_free(err);
         return NULL;
     }
 
@@ -1194,7 +1193,6 @@ static error_t *status_print_remote(
                 out, OUTPUT_VERBOSE, "Failed to fetch branches: %s",
                 error_message(fetch_err)
             );
-            error_free(fetch_err);
         }
 
         transfer_context_free(xfer);
@@ -1217,9 +1215,9 @@ static error_t *status_print_remote(
         upstream_info_t info;
         err = upstream_analyze_profile(repo, remote_name, profile, &info);
         if (err) {
-            /* Show error for this profile but continue */
+            /* Show error for this profile but continue: the error is dropped,
+             * one per such profile */
             output_error(out, "  %s: %s", profile, error_message(err));
-            error_free(err);
             continue;
         }
 
@@ -1282,7 +1280,9 @@ static error_t *status_print_remote(
             output_gap(out, OUTPUT_VERBOSE);
             output_print(out, OUTPUT_VERBOSE, "Profile: %s\n", profile);
 
-            /* Get local commit info */
+            /* Get local commit info. A commit lookup here that fails prints no
+             * line, its error dropped — at most two per profile, the local and
+             * the remote. */
             char local_ref[DOTTA_REFNAME_MAX];
             error_t *local_ref_err = gitops_branch_refname(
                 local_ref, sizeof(local_ref), profile
@@ -1313,7 +1313,6 @@ static error_t *status_print_remote(
 
                 git_commit_free(local_commit);
             }
-            error_free(commit_err);
 
             /* Remote commit info — guaranteed reachable per the enclosing filter
              * above. */
@@ -1344,7 +1343,6 @@ static error_t *status_print_remote(
 
                 git_commit_free(remote_commit);
             }
-            error_free(commit_err);
         } else {
             /* Compact mode: single line matching enabled profiles format */
             output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
@@ -1457,12 +1455,10 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     }
 
     /* Show remote sync status (if requested). Non-fatal: there might be no remote
-     * configured. */
+     * configured, and the section's own failure is dropped here. */
     if (opts->show_remote) {
-        error_free(
-            status_print_remote(
+        (void) status_print_remote(
             ctx, scope_profiles(scope), opts->all_profiles, opts->no_fetch
-            )
         );
     }
 

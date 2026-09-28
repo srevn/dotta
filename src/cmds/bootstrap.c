@@ -476,24 +476,18 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
         .dry_run       = opts->dry_run,
         .stop_on_error = !opts->continue_on_error,
     };
-    bool had_failures = false;
 
+    /* A failure under --continue-on-error is partial — per-profile details already
+     * on screen and the failed list was printed by bootstrap_fire — and the closing
+     * line below reads off it. */
     err = bootstrap_fire(out, &spec);
-    if (err) {
-        if (opts->continue_on_error) {
-            /* Partial failure — per-profile details already on screen and the
-             * failed list was printed by bootstrap_fire. */
-            had_failures = true;
-            error_free(err);
-            err = NULL;
-        } else {
-            return error_wrap(err, "Bootstrap failed");
-        }
+    if (err && !opts->continue_on_error) {
+        return error_wrap(err, "Bootstrap failed");
     }
 
     if (!opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
-        if (had_failures) {
+        if (err) {
             output_warning(out, OUTPUT_NORMAL, "Bootstrap completed with errors.");
         } else {
             output_success(out, OUTPUT_NORMAL, "Bootstrap complete!");

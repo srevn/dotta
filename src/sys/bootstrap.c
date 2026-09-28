@@ -92,10 +92,11 @@ static error_t *write_all(int fd, const void *data, size_t size) {
 bool bootstrap_exists(git_repository *repo, const char *profile) {
     if (!repo || !profile || *profile == '\0') return false;
 
+    /* A branch that cannot be asked about or will not load holds no script to
+     * read: its error is dropped, one per such profile asked. */
     bool exists = false;
     error_t *err = gitops_branch_exists(repo, profile, &exists);
     if (err) {
-        error_free(err);
         return false;
     }
     if (!exists) return false;
@@ -103,7 +104,6 @@ bool bootstrap_exists(git_repository *repo, const char *profile) {
     git_tree *tree = NULL;
     err = gitops_load_branch_tree(repo, profile, &tree, NULL);
     if (err) {
-        error_free(err);
         return false;
     }
 

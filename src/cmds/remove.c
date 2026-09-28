@@ -419,12 +419,12 @@ static error_t *remove_resolve(
         err = path_input_resolve(input_paths[i], ctx->arena, &arg);
         if (err) {
             if (!opts->force) goto cleanup;
-            /* With --force, skip this path */
+            /* With --force, skip this path: its error is dropped, one per refused
+             * argument */
             output_warning(
                 out, OUTPUT_VERBOSE, "Skipping invalid path '%s': %s",
                 input_paths[i], error_message(err)
             );
-            error_free(err);
             err = NULL;
             continue;
         }
@@ -582,11 +582,10 @@ static error_t *remove_overlaps(
     );
     if (err) return err;
 
+    /* Tolerant (the header): a view the builder refuses leaves `view` NULL and
+     * the bit false, its error dropped */
     manifest_t *view = NULL;
-    error_t *view_err = manifest_build(
-        ctx->run.repo, ctx->run.state, ctx->arena, &view
-    );
-    if (view_err) error_free(view_err);
+    (void) manifest_build(ctx->run.repo, ctx->run.state, ctx->arena, &view);
 
     overlap_t *overlaps = arena_calloc(
         ctx->arena, claim_count, sizeof(*overlaps)
@@ -867,7 +866,6 @@ static error_t *remove_paths(
             out, OUTPUT_NORMAL, "Could not read the other profiles' claims: %s",
             error_message(err)
         );
-        error_free(err);
         err = NULL;
     }
 
@@ -1100,7 +1098,6 @@ static error_t *remove_paths(
             out, OUTPUT_NORMAL, "Record update failed: %s",
             error_message(record_err)
         );
-        error_free(record_err);
     } else if (candidate_count > 0 || state_enabled(state, opts->profile)) {
         record_err = state_begin(state);
         if (record_err) {
@@ -1108,7 +1105,6 @@ static error_t *remove_paths(
                 out, OUTPUT_NORMAL, "Failed to open transaction for record update: %s",
                 error_message(record_err)
             );
-            error_free(record_err);
         } else {
             /* What the settle acts on, read again under the lock: the read above
              * decided only whether to take it, and another process can write
@@ -1129,7 +1125,6 @@ static error_t *remove_paths(
                     out, OUTPUT_NORMAL, "Record update failed: %s",
                     error_message(record_err)
                 );
-                error_free(record_err);
                 state_rollback(state);
                 settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
             } else {
@@ -1140,7 +1135,6 @@ static error_t *remove_paths(
                         out, OUTPUT_NORMAL, "Failed to save record updates: %s",
                         error_message(commit_err)
                     );
-                    error_free(commit_err);
                     state_rollback(state);
                     settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
                 } else if (settlement.ordered + settlement.released + settlement.fallback > 0) {
@@ -1290,7 +1284,6 @@ static error_t *remove_profile(
         profile_stats_t stats = { 0 };
         error_t *stats_err = profile_get_stats(repo, opts->profile, &stats);
         if (stats_err) {
-            error_free(stats_err);
             snprintf(counts, sizeof(counts), "counts unavailable");
         } else {
             output_format_counts(
@@ -1337,13 +1330,11 @@ static error_t *remove_profile(
             }
         } else {
             /* Non-fatal: can't determine upstream state */
-            error_free(err);
             err = NULL;
         }
     } else if (err) {
         /* No remote configured - treat as local-only */
         is_local_only = true;
-        error_free(err);
         err = NULL;
     }
 
@@ -1384,7 +1375,6 @@ static error_t *remove_profile(
                 out, OUTPUT_NORMAL, "Failed to read the record: %s",
                 error_message(read_err)
             );
-            error_free(read_err);
         }
     }
     for (size_t i = 0; i < candidate_count; i++) {
@@ -1460,9 +1450,7 @@ static error_t *remove_profile(
     error_t *meta_err = metadata_load_from_branch(
         repo, opts->profile, &branch_metadata
     );
-    if (meta_err) {
-        error_free(meta_err);
-    } else {
+    if (!meta_err) {
         size_t item_count = 0;
         const metadata_item_t *const *items =
             metadata_items(branch_metadata, &item_count);
@@ -1572,7 +1560,6 @@ static error_t *remove_profile(
                     out, OUTPUT_NORMAL, "Failed to update state after branch deletion: %s",
                     error_message(delete_err)
                 );
-                error_free(delete_err);
                 state_rollback(state);
                 settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
             } else if (settlement.ordered + settlement.released + settlement.fallback > 0) {
@@ -1600,7 +1587,6 @@ static error_t *remove_profile(
                 out, OUTPUT_NORMAL, "Failed to begin transaction for post-deletion update: %s",
                 error_message(delete_err)
             );
-            error_free(delete_err);
         }
     }
 
@@ -1634,7 +1620,6 @@ static error_t *remove_profile(
                 "         You can manually push the deletion with: git push %s :%s",
                 remote_name, opts->profile
             );
-            error_free(err);
             err = NULL;
         } else {
             output_info(out, OUTPUT_NORMAL, "Profile deletion pushed to remote");

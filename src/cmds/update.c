@@ -617,12 +617,13 @@ static error_t *update_profile(
                      * said at: the claim standing on the directory is left exactly
                      * as it is — absence of a capture is not knowledge that the
                      * claim is wrong — so the sheet quietly keeps saying something
-                     * this run could not confirm. */
+                     * this run could not confirm. The error is dropped once said,
+                     * one per directory whose owner or group this host cannot
+                     * name (core/metadata.h). */
                     output_warning(
                         out, OUTPUT_NORMAL, "Skipping directory '%s': %s",
                         item->filesystem_path, error_message(err)
                     );
-                    error_free(err);
                     err = NULL;
                     continue;
                 }
@@ -1825,9 +1826,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * here: the landed commits are Git truth and the record follows them;
          * the profiles that never committed have nothing to write.
          *
-         * Non-fatal, and said in landed terms: its fate is the error, which lives
-         * to the screens that read it — the stop's, and the summary's — and is
-         * freed with the run's resources. */
+         * Non-fatal, and said in landed terms: its fate is the error, which is
+         * carried to the screens that read it — the stop's, and the summary's. */
         record_err = update_write_record(ctx, commits, commit_count);
 
         if (record_err) {
@@ -1903,8 +1903,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
 cleanup:
-    error_free(record_err);
-
     return err;
 }
 

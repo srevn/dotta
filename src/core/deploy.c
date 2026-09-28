@@ -726,11 +726,12 @@ cleanup:
  *
  * @param row The row, for its claim and its name in a message (must not be NULL)
  * @param strict_ownership Fail deployment if ownership cannot be resolved
- * @param warnings Preflight warnings, for a non-fatal failure (must not be NULL)
+ * @param warnings Preflight warnings, for a name this host cannot resolve (must
+ *        not be NULL)
  * @param out_uid Resolved UID or -1 for no change (must not be NULL)
  * @param out_gid Resolved GID or -1 for no change (must not be NULL)
- * @return Error on fatal failures, NULL on success (non-fatal errors recorded
- *         as warnings and suppressed)
+ * @return The strict_ownership refusal, or NULL — a name this host cannot resolve
+ *         is otherwise a warning and no change
  */
 static error_t *resolve_deployment_ownership(
     const manifest_row_t *row, bool strict_ownership, string_array_t *warnings,
@@ -1280,15 +1281,13 @@ static error_t *release_directories(deploy_run_t *run) {
             held->path, held->mode, (uid_t) -1, (gid_t) -1
         );
 
-        if (release_err) {
-            if (err) {
-                error_free(release_err);
-            } else {
-                err = error_wrap(
-                    release_err, "Failed to release directory '%s' to mode %04o",
-                    held->path, held->mode
-                );
-            }
+        /* The first failure is the one reported; the rest are dropped, one per
+         * held directory that would not release */
+        if (release_err && !err) {
+            err = error_wrap(
+                release_err, "Failed to release directory '%s' to mode %04o",
+                held->path, held->mode
+            );
         }
     }
 
@@ -1870,15 +1869,12 @@ error_t *deploy_execute(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Free a deployment receipt — the four outcome arrays, and the failed bucket's
- * owned causes. The verdicts they all point at belong to the preflight result.
+ * Free a deployment receipt — the four outcome arrays. The failed bucket's causes
+ * are borrowed, as every error is, and the verdicts they all point at belong to
+ * the preflight result.
  */
 void deploy_result_free(deploy_result_t *result) {
     if (!result) return;
-
-    for (size_t i = 0; i < result->failed.count; i++) {
-        error_free(result->failed.entries[i].error);
-    }
 
     free(result->deployed.entries);
     free(result->converged.entries);

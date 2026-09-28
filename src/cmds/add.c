@@ -126,11 +126,10 @@ typedef struct {
  * What the record phase did, for the receipt
  *
  * The phase's fate is its error return and is not restated here: a field for it
- * would be a second producer of one fact, and it would exist only so the caller
- * could free the error before rendering the fate. The caller renders both together
- * instead (cmd_add's tail), and every count below speaks for a phase that returned
- * NULL — a statement is not durable until state_save commits the transaction
- * the dispatcher opened.
+ * would be a second producer of one fact. The caller renders both together
+ * (cmd_add's tail), and every count below speaks for a phase that returned NULL
+ * — a statement is not durable until state_save commits the transaction the
+ * dispatcher opened.
  *
  * Nor is whether a row holds this profile, which the error cannot carry either
  * — a row can hold it through a failure (a branch recreated over a leftover row)
@@ -410,12 +409,14 @@ static bool add_excluded(
             walk->source_filter, filesystem_path, is_directory, &excluded
         );
         if (err) {
+            /* Degraded (above): its error is dropped once warned — one per entry
+             * no layer decided, only while its source repository will not read
+             * (sys/source.h). */
             output_warning(
                 walk->ctx->out, OUTPUT_VERBOSE,
                 "Source .gitignore check failed for %s: %s", filesystem_path,
                 error_message(err)
             );
-            error_free(err);
             return false;
         }
         return excluded;
@@ -675,7 +676,8 @@ static error_t *add_collect(
          * is a verdict about the path — a name the tree or the sheet has no room
          * for, or one Git will not hold (sys/stage.h); a failure to decide is
          * the run failing, and publishing a selection past one would commit a
-         * silently partial capture. */
+         * silently partial capture. A conflict is warned and dropped, one per
+         * child it skips. */
         err = add_admit(walk, child_storage, kind);
         if (err) {
             if (error_code(err) != ERR_CONFLICT) goto cleanup;
@@ -683,7 +685,6 @@ static error_t *add_collect(
                 out, OUTPUT_NORMAL, "Skipping '%s': %s", child_fs,
                 error_message(err)
             );
-            error_free(err);
             err = NULL;
             continue;
         }
@@ -1676,7 +1677,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * after the sheet load so a sheet that will not load is still the earlier
      * refusal — the builder loads it again and would say the same thing later.
      * Every naming question below reads it, so does the kind question, and so
-     * does the refusal the completed selection owes; freed once, at cleanup. */
+     * does the refusal the completed selection owes; the command's arena's, as
+     * every view is. */
     err = manifest_build_tree(
         repo, stage_tree(stage), opts->profile, mounts, ctx->arena, &view
     );
@@ -2452,9 +2454,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      *
      * Non-fatal, and rendered in the tail with the counts: the phase's fate is
      * its error and a warning above the ✓ lines would read as a refusal of the
-     * add, which a record failure is not. The error therefore lives from here
-     * to the screen that renders it, which frees it once below; the region between
-     * holds no exit.
+     * add, which a record failure is not. The error is therefore carried from
+     * here to the screen that renders it, and the region between holds no exit.
      */
     receipt_t receipt = { 0 };
 
@@ -2641,10 +2642,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             out, OUTPUT_NORMAL, "Re-run this add with --force to record these paths"
         );
     }
-
-    /* Freed below both blocks that read it, not in the arm that prints its message:
-     * the remedy is chosen from the same fate one screen later. */
-    error_free(record_err);
 
 cleanup:
     /* Free resources in reverse order of allocation. The listing and the view

@@ -272,11 +272,7 @@ static error_t *open_run(
     }
 
 done:
-    if (err && needs->tolerant) {
-        error_free(err);
-        err = NULL;
-    }
-    return err;
+    return needs->tolerant ? NULL : err;
 }
 
 /**
@@ -402,7 +398,6 @@ static int run_spec(
      * did, under the same flag. */
     if (err != NULL) {
         if (!resolved->silent_failure) error_print(err, stderr);
-        error_free(err);
         return 1;
     }
     /* Passthrough dispatch writes via *ctx->exit_code to propagate the child's
@@ -517,7 +512,6 @@ int main(int argc, char **argv) {
     error_t *id_err = identity_init();
     if (id_err) {
         error_print(id_err, stderr);
-        error_free(id_err);
         return 1;
     }
 
@@ -525,7 +519,6 @@ int main(int argc, char **argv) {
     error_t *git_err = gitops_init();
     if (git_err) {
         error_print(git_err, stderr);
-        error_free(git_err);
         return 1;
     }
 
@@ -573,7 +566,6 @@ int main(int argc, char **argv) {
     error_t *cfg_err = config_load(&config);
     if (cfg_err) {
         error_print(cfg_err, stderr);
-        error_free(cfg_err);
         gitops_shutdown();
         return 1;
     }

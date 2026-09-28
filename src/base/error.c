@@ -10,48 +10,51 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "base/heap.h"
+#include "base/arena.h"
 #include "base/terminal.h"
 
 /* The node, this file's alone: a reader asks for its code, its message, its cause
- * or its root, and never reads a field. */
+ * or its root, and never reads a field. Made whole and never edited: a wrap holds
+ * its cause, and never copies or edits it. */
 struct error {
     error_code_t code;
-    char *message;
-    error_t *cause;  /* Wrapped error (can be NULL) */
+    const char *message;
+    error_t *cause;  /* The error this one wraps; NULL at the root */
 };
 
 /**
- * Create error with variable arguments (internal helper)
+ * Every error the process makes, in one arena of this module's own (the header's
+ * "Lifetime"): made at the first error, never reset and never freed. Not the
+ * command's — errors are made before it and rendered after it (main.c run_spec)
+ * — and not main's, which base cannot see: a fact of the process kept where it
+ * is asked for, as sys/identity keeps its own.
  */
-static error_t *error_vcreate(
-    error_code_t code,
-    const char *fmt,
-    va_list args
-) {
-    /* Size the message. The format is its writer's: one that cannot be formatted
-     * is a caller's bug, never an error to report. */
-    va_list args_copy;
-    va_copy(args_copy, args);
-    int len = vsnprintf(NULL, 0, fmt, args_copy);
-    va_end(args_copy);
-    CHECK_ARG(len >= 0, "fmt cannot be formatted");
+static arena_t *error_arena(void) {
+    static arena_t *errors;
+    if (!errors) errors = arena_create(0);
 
-    /* The error and its message, from the heap that cannot fail. */
-    error_t *err = heap_calloc(1, sizeof(error_t));
-    err->code = code;
-    err->message = heap_alloc((size_t) len + 1);
-    vsnprintf(err->message, (size_t) len + 1, fmt, args);
+    return errors;
+}
+
+/**
+ * The node over a message already in the arena
+ */
+static error_t *error_node(error_code_t code, error_t *cause, const char *message) {
+    error_t *err = arena_alloc(error_arena(), sizeof(*err));
+    *err = (error_t){ .code = code, .message = message, .cause = cause };
 
     return err;
 }
 
 error_t *error_create(error_code_t code, const char *fmt, ...) {
+    /* The format is its writer's: one that cannot be formatted is a caller's
+     * bug, and dies in the arena's formatter, never an error to report. */
     va_list args;
     va_start(args, fmt);
-    error_t *err = error_vcreate(code, fmt, args);
+    const char *message = arena_str_vformat(error_arena(), fmt, args);
     va_end(args);
-    return err;
+
+    return error_node(code, NULL, message);
 }
 
 error_t *error_wrap(error_t *cause, const char *fmt, ...) {
@@ -59,11 +62,10 @@ error_t *error_wrap(error_t *cause, const char *fmt, ...) {
 
     va_list args;
     va_start(args, fmt);
-    error_t *err = error_vcreate(cause->code, fmt, args);
+    const char *message = arena_str_vformat(error_arena(), fmt, args);
     va_end(args);
 
-    err->cause = cause;
-    return err;
+    return error_node(cause->code, cause, message);
 }
 
 error_t *error_from_git(int git_error_code) {
@@ -90,28 +92,28 @@ error_code_t error_code_from_errno(int errno_val) {
 }
 
 error_t *error_from_errno(int errno_val, const char *fmt, ...) {
+    CHECK_NULL(fmt);
+
+    /* The caller's prose, then ": " and strerror's word: one message, sized before
+     * the arena is asked, so it is one allocation as every other's is. */
+    const char *why = strerror(errno_val);
+
     va_list args;
     va_start(args, fmt);
-    error_t *err = error_vcreate(error_code_from_errno(errno_val), fmt, args);
+    va_list sized;
+    va_copy(sized, args);
+    int len = vsnprintf(NULL, 0, fmt, sized);
+    va_end(sized);
+    CHECK_ARG(len >= 0, "fmt cannot be formatted");
+
+    const size_t prose = (size_t) len;
+    const size_t total = prose + 2 + strlen(why);
+    char *message = arena_alloc(error_arena(), total + 1);
+    vsnprintf(message, prose + 1, fmt, args);
     va_end(args);
+    snprintf(message + prose, total - prose + 1, ": %s", why);
 
-    /* The caller's prose, then ": " and strerror's word. */
-    const char *why = strerror(errno_val);
-    size_t len = strlen(err->message);
-    err->message = heap_realloc(err->message, len + 2 + strlen(why) + 1);
-    memcpy(err->message + len, ": ", 2);
-    strcpy(err->message + len + 2, why);
-
-    return err;
-}
-
-void error_free(error_t *err) {
-    while (err) {
-        error_t *cause = err->cause;
-        free(err->message);
-        free(err);
-        err = cause;
-    }
+    return error_node(error_code_from_errno(errno_val), NULL, message);
 }
 
 const char *error_message(const error_t *err) {

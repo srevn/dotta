@@ -488,7 +488,7 @@ typedef struct {
  * in every landed bucket: the bucket is the tag, as UNSET already is for the
  * stat. A failure has a dozen causes and the remedy differs by cause, so the
  * receipt keeps each for the caller to render, as cleanup's does
- * (cleanup_outcome_t). Owned by the receipt; deploy_result_free frees it.
+ * (cleanup_outcome_t). Borrowed, as every error is (base/error.h).
  *
  * The verdict is borrowed from the preflight result, whose arrays are sized once
  * and never reallocated, so every address is stable for the receipt's life. Free
@@ -497,7 +497,7 @@ typedef struct {
 typedef struct {
     const deploy_verdict_t *verdict;    /* Borrowed (preflight-result lifetime) */
     state_stat_t stat;                  /* The write's stat; UNSET where it authored none */
-    error_t *error;                     /* The failed bucket's cause; NULL elsewhere (owned) */
+    error_t *error;                     /* The failed bucket's cause; NULL elsewhere (borrowed) */
 } deploy_outcome_t;
 
 /**
@@ -840,7 +840,7 @@ error_t *deploy_execute(
 );
 
 /**
- * Free deployment results
+ * Free deployment results — the arrays; the rows' causes are borrowed
  *
  * @param result Results to free (can be NULL)
  */

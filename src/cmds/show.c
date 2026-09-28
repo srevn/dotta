@@ -344,7 +344,6 @@ static error_t *show_file(
      * it, and the sheet is read once. */
     error_t *err = metadata_load_from_tree(repo, tree, profile, &metadata);
     if (err) {
-        error_free(err);
         metadata = metadata_create_empty();
     }
 

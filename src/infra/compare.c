@@ -195,8 +195,8 @@ static error_t *judge_copy(
     }
 
     /* The read met the absence: the path left between the look and the read. A
-     * verdict, not a failed look. */
-    error_free(err);
+     * verdict, not a failed look, and the read's error is dropped — one per path
+     * that left in that window. */
     *result = CMP_MISSING;
 
     return NULL;

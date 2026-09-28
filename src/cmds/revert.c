@@ -100,7 +100,6 @@ static error_t *select_profile(
                 subject, opts->file_path, opts->commit
             );
         }
-        error_free(err);
         return ERROR(
             ERR_NOT_FOUND, "'%s' is not held by any profile\n\n"
             "If you are trying to revert a deleted file, specify the profile:\n"
@@ -1168,7 +1167,6 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
                 out, OUTPUT_NORMAL, "Could not show diff preview: %s",
                 error_message(err)
             );
-            error_free(err);
             err = NULL;
         }
     }

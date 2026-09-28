@@ -71,14 +71,14 @@ static void land_profiles(
         const char *profile = profiles[i];
 
         /* The local branch: created at the remote's commit, or already here (the
-         * same name given twice) and left where it stands */
+         * same name given twice) and left where it stands. A name that fails is
+         * warned about and skipped, its error dropped, one per such name. */
         error_t *err = upstream_ensure_tracking_branch(repo, remote_name, profile);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to create local branch '%s': %s",
                 profile, error_message(err)
             );
-            error_free(err);
             continue;
         }
 
@@ -263,7 +263,6 @@ static void rollback_clone_dir(
             path, error_message(err)
         );
         output_hint(ctx->out, OUTPUT_NORMAL, "Remove it manually before retrying");
-        error_free(err);
         return;
     }
 
@@ -376,20 +375,11 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             /* Split the diagnostic: an empty remote is a publish-first problem,
              * a ref-bearing one is simply not dotta's. On a listing failure fall
              * through to the foreign diagnostic. */
-            bool remote_empty = false;
             string_array_t remote_refs;
             error_t *list_err = gitops_list_remote_tracking(
                 repo, "origin", ctx->arena, &remote_refs
             );
-            if (list_err) {
-                error_free(list_err);
-            } else {
-                remote_empty = (remote_refs.count == 0);
-            }
-
-            error_free(err);
-
-            if (remote_empty) {
+            if (!list_err && remote_refs.count == 0) {
                 err = ERROR(
                     ERR_NOT_FOUND,
                     "Remote is empty - nothing to clone\n\n"
@@ -421,8 +411,6 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 "is fetched or 'dotta init' is run locally.",
                 error_message(err)
             );
-            error_free(err);
-            err = NULL;
         } else {
             err = error_wrap(err, "Failed to fetch repository epoch");
             goto cleanup;
@@ -455,8 +443,6 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 out, "Failed to fetch all profiles: %s",
                 error_message(err)
             );
-            error_free(err);
-            err = NULL;
         } else {
             /* Every fetched profile, seeded in the convention's order: the remote's
              * listing has none of its own, and initialize_state enables in the
@@ -481,8 +467,6 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 out, OUTPUT_NORMAL, "Failed to list remote branches: %s",
                 error_message(err)
             );
-            error_free(err);
-            err = NULL;
         } else {
             /* Name-based detection against remote branches */
             detected_profiles = profile_detect(ctx->arena, &remote_branches);
@@ -640,12 +624,11 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         err = bootstrap_fire(out, &spec);
         if (err) {
             output_error(out, "Bootstrap failed: %s", error_message(err));
-            error_free(err);
             err = NULL;
             /* Non-fatal — the clone itself succeeded, and the exit code is the
              * clone's. What the clone may not claim is that the bootstrap finished:
-             * the closing line reads off this flag, the way cmd_bootstrap reads
-             * off its own. */
+             * the closing line reads off this flag — cmd_bootstrap's reads off
+             * the error itself, which here is the clone's to return. */
             bootstrap_failed = true;
         }
     }

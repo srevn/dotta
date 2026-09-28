@@ -326,7 +326,7 @@ typedef enum {
  *                path points at the verb.
  *
  * The class is the whole of what the item carries. The mechanism's own sentence
- * stays in the error the analysis freed, where the verb that raises it prints
+ * stays in the error the analysis dropped, where the verb that raises it prints
  * it ("dotta show", "dotta export", add's and update's wraps): a report is a
  * list of paths and their state, and every block in cmds/ closes by naming a
  * remedy in its own fixed words, never by quoting a line another layer wrote.

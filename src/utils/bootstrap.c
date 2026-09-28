@@ -246,10 +246,9 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
             break;
         }
 
-        /* Continue-on-error: remember for the summary, then free the per-step
-         * error (the details are already on screen). */
+        /* Continue-on-error: remember for the summary. The step's error is dropped,
+         * its details already on screen — one per failed script. */
         string_array_push(&failed, profile);
-        error_free(step_err);
     }
 
     /* The summary, of a run that went on past its failures: a stop pushed none,

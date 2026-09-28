@@ -3,6 +3,25 @@
  *
  * Centralized error handling with context tracking and propagation helpers.
  *
+ * Lifetime
+ * --------
+ * An error is a fact of the process: made whole, never edited, never freed, and
+ * borrowed by every reader until the process ends. Its reader is not known where
+ * it is made — rendered at once, kept in a receipt's row, rendered by main after
+ * the command's arena is gone, or made before that arena exists (identity_init,
+ * gitops_init, config_load) — and the process is the one scope that encloses
+ * them all. So every error lives in one arena of this module's own, made at the
+ * first error; a wrap holds its cause, two wraps of one cause share it, and no
+ * reader can reach back into one.
+ *
+ * What that costs is the pressure the shape is for: an error is minted on a failure
+ * path only. One made per row on a path that continues is an answer spelled as
+ * an error, and every one of them stays for the run — so an answer
+ * is data (a key opens a ciphertext or it does not, crypto/cipher.h cipher_opens;
+ * a claim's names resolve or say which did not, core/metadata.h
+ * metadata_ownership), and a loop that still reads one says its bound where it
+ * reads it.
+ *
  * ERR_PERMISSION
  * --------------
  * The one code a consumer acts on rather than prints, so its meaning is fixed
@@ -39,15 +58,15 @@
 /**
  * Create a new error with formatted message
  *
- * An error is the heap's, so it is made or the run dies of exhaustion
- * (base/heap.h): no answer here is NULL. The format is its writer's, checked by
- * the compiler at every site, and one that still cannot be formatted is a caller's
- * bug.
+ * An error is this module's arena's ("Lifetime" above), so it is made or the
+ * run dies of exhaustion (base/arena.h): no answer here is NULL. The format is
+ * its writer's, checked by the compiler at every site, and one that still cannot
+ * be formatted is a caller's bug.
  *
  * @param code Error code
  * @param fmt Format string (printf-style)
  * @param ... Format arguments
- * @return Newly allocated error (must be freed with error_free)
+ * @return The error, the process's
  */
 error_t *error_create(error_code_t code, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
@@ -55,10 +74,10 @@ __attribute__((format(printf, 2, 3)));
 /**
  * Wrap an existing error with additional context
  *
- * Ownership of cause is consumed: it becomes the new error's cause, and the new
- * error keeps its code.
+ * The new node holds its cause and keeps its code; two wraps of one cause share
+ * it, and neither edits it.
  *
- * @param cause Original error (ownership transferred; NULL wraps nothing)
+ * @param cause Original error (NULL wraps nothing)
  * @param fmt Context message format
  * @param ... Format arguments
  * @return New error wrapping the original, or NULL for a NULL cause
@@ -70,7 +89,7 @@ __attribute__((format(printf, 2, 3)));
  * Create error from libgit2 error
  *
  * @param git_error_code Git error code (from libgit2)
- * @return Newly allocated error
+ * @return The error, the process's
  */
 error_t *error_from_git(int git_error_code);
 
@@ -102,23 +121,16 @@ error_code_t error_code_from_errno(int errno_val);
  * @param errno_val errno value
  * @param fmt Format string (printf-style) for the caller's part of the message
  * @param ... Format arguments
- * @return Newly allocated error
+ * @return The error, the process's
  */
 error_t *error_from_errno(int errno_val, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
- * Free error and all chained causes
- *
- * @param err Error to free (can be NULL)
- */
-void error_free(error_t *err);
-
-/**
  * Get error message
  *
  * @param err Error
- * @return Error message (valid until error is freed)
+ * @return Error message
  */
 const char *error_message(const error_t *err);
 
@@ -137,8 +149,7 @@ error_code_t error_code(const error_t *err);
  * taken to its end, error_print the walk rendered.
  *
  * @param err Error
- * @return The wrapped error, or NULL at the root and for NULL (valid until the
- *         error is freed)
+ * @return The wrapped error, or NULL at the root and for NULL
  */
 const error_t *error_cause(const error_t *err);
 
@@ -152,8 +163,7 @@ const error_t *error_cause(const error_t *err);
  * chain instead.
  *
  * @param err Error
- * @return The deepest cause — err itself when nothing is wrapped (valid until
- *         the error is freed)
+ * @return The deepest cause — err itself when nothing is wrapped
  */
 const error_t *error_root(const error_t *err);
 

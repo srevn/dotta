@@ -219,7 +219,7 @@ typedef void (*args_defaults)(void *opts);
  * N-positional reinterpretation, mode inference, and cross-field invariants
  * (mutually exclusive flags, a value one mode requires and another forbids).
  * Allocations may use `arena`. Returning a non-NULL error aborts dispatch; the
- * error is wrapped into the error collector and freed.
+ * error's message is copied into the error collector.
  */
 typedef error_t *(*args_postparse)(
     void *opts, arena_t *arena,
@@ -657,7 +657,7 @@ void args_render_errors(
  *                   -- <tokens…>`. Fish source, written verbatim.
  * @return           NULL when the script was written; else, nothing written,
  *                   an error naming the first name that cannot stand as a fish
- *                   word (caller frees).
+ *                   word.
  */
 error_t *args_export_completion_fish(
     FILE *out,
@@ -677,7 +677,7 @@ error_t *args_export_completion_fish(
  * Fails on: empty, non-numeric trailing chars, value outside [min, max], or ERANGE
  * from strtol. `text` and `out` must not be NULL.
  *
- * @return NULL on success; `error_t *` (caller frees) on failure.
+ * @return NULL on success; the error on failure.
  */
 error_t *args_parse_long(const char *text, long min, long max, long *out);
 

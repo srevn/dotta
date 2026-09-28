@@ -11,9 +11,8 @@
  *   - `evict_slot` / `install_slot` — the two writers of the slot; every write
  *     to (master_key, has_key, expires_at, the witness) goes through one of them,
  *     and `install_slot` is the one verb that consumes a proof.
- *   - `refuse` / `clear_refusal` — the standing refusal: the code and the line
- *     of the ladder's first refusal, held for the run and re-issued by every
- *     resolve after.
+ *   - `refuse` — the standing refusal: the ladder's first, held for the run and
+ *     handed to every resolve after.
  *   - `open_witness` / `trial_opens` / `witness_exists` / `derive_and_check` —
  *     the proof's making: Argon2 under the epoch, then the witnesses in order —
  *     the blob in hand, then whatever the witness source presents — until one
@@ -87,15 +86,12 @@ struct keymgr {
     char *witness_profile;              /* the branch it opened */
     char *witness_path;                 /* the tree path it opened */
 
-    /* The ladder ran and refused: the code and the top line of what it refused
-     * with, re-issued by every resolve after. A NULL line means none stands.
-     * The asker that met it got the error itself, causes and all — the chain
-     * describes an event that happened once, at the row that met it — and what
-     * stands for the run is the one sentence that is true of the run. */
-    struct {
-        error_code_t code;
-        char *line;
-    } refusal;
+    /* The ladder ran and refused: the error it refused with, handed to every
+     * resolve after; NULL while none stands. The same node for every row, causes
+     * and all — each of the ladder's failures is the run's, never one row's (a
+     * passphrase, the derivation, the witness walk over the whole repository) —
+     * and borrowed, as every error is (base/error.h). */
+    error_t *refusal;
 
     /* Where a fresh master finds witnesses; NULL for none, which is the unit
      * suites' shape. `repo` is the source's own argument, carried untouched. */
@@ -177,23 +173,15 @@ static void bind_epoch(keymgr *km, const kdf_epoch_t *epoch) {
 }
 
 /**
- * Record the ladder's refusal for the run — the first one stands; a later one
- * replaces it only through `keymgr_set`, which clears it before asking again —
- * and hand `err` back to the asker that met it, whole. The record is the code
- * and the message's top line, which is what a later resolve re-issues; `err`
- * itself, causes and all, stays the caller's to free.
+ * Record the ladder's refusal for the run — the first one stands, since a standing
+ * one is returned before the ladder is asked again; a later one replaces it only
+ * through `keymgr_set`, which clears it first — and hand it back to the asker
+ * that met it. Every resolve after returns the same node.
  */
 static error_t *refuse(keymgr *km, error_t *err) {
-    free(km->refusal.line);
-    km->refusal.line = heap_strdup(error_message(err));
-    km->refusal.code = error_code(err);
+    km->refusal = err;
 
     return err;
-}
-
-static void clear_refusal(keymgr *km) {
-    free(km->refusal.line);
-    km->refusal.line = NULL;
 }
 
 error_t *keymgr_create(
@@ -226,7 +214,6 @@ error_t *keymgr_create(
 void keymgr_free(keymgr *km) {
     if (!km) return;
     evict_slot(km);
-    clear_refusal(km);
     secure_free(km, sizeof(*km));
 }
 
@@ -401,19 +388,17 @@ fail:
  * line too long, a terminal that would not be set. The LOCKED root folds the
  * primitive's line and names the ways out — true at a terminal too, which is
  * where the last empty line lands. A mapping the prompt was refused (ERR_MEMORY,
- * base/secure.h) passes through as itself. Takes ownership of `read_err`.
+ * base/secure.h) passes through as itself.
  */
 static error_t *nothing_read(error_t *read_err) {
     if (error_code(read_err) == ERR_MEMORY) {
         return read_err;
     }
-    error_t *locked = ERROR(
+    return ERROR(
         ERR_LOCKED,
         "No passphrase: %s; set DOTTA_ENCRYPTION_PASSPHRASE, or run "
         "'dotta key set' at a terminal", error_message(read_err)
     );
-    error_free(read_err);
-    return locked;
 }
 
 /**
@@ -429,6 +414,8 @@ static error_t *prompt_and_verify(
     const bool tty = isatty(STDIN_FILENO);
     const char *prompt = "Enter encryption passphrase: ";
 
+    /* Each miss this loop drops leaves its error behind, one per attempt at
+     * most. */
     for (int attempt = 1;; attempt++) {
         char *passphrase = NULL;
         size_t passphrase_len = 0;
@@ -436,7 +423,6 @@ static error_t *prompt_and_verify(
         if (err) {
             if (tty && error_code(err) == ERR_INVALID_ARG
                 && attempt < KEYMGR_ATTEMPTS) {
-                error_free(err);
                 continue;
             }
             return refuse(km, nothing_read(err));
@@ -453,7 +439,6 @@ static error_t *prompt_and_verify(
         if (!tty || error_code(err) != ERR_LOCKED || attempt == KEYMGR_ATTEMPTS) {
             return refuse(km, err);
         }
-        error_free(err);
         prompt = "Wrong passphrase, try again: ";
     }
 }
@@ -469,6 +454,8 @@ static error_t *prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
     const bool tty = isatty(STDIN_FILENO);
     const char *prompt = "Enter encryption passphrase: ";
 
+    /* Each miss this loop drops leaves its error behind, one per attempt at
+     * most. */
     for (int attempt = 1;; attempt++) {
         char *passphrase = NULL;
         size_t passphrase_len = 0;
@@ -476,7 +463,6 @@ static error_t *prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
         if (err) {
             if (tty && error_code(err) == ERR_INVALID_ARG
                 && attempt < KEYMGR_ATTEMPTS) {
-                error_free(err);
                 continue;
             }
             return refuse(km, nothing_read(err));
@@ -496,7 +482,6 @@ static error_t *prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
 
         const bool same = !err && again_len == passphrase_len
             && memcmp(again, passphrase, passphrase_len) == 0;
-        error_free(err);
         secure_free(again, again_len + 1);
 
         if (same) {
@@ -556,7 +541,6 @@ static error_t *obtain(
     if (error_code(err) != ERR_NOT_FOUND) {
         return refuse(km, err);
     }
-    error_free(err);
 
     /* The prompt's shape is the repository's to decide: a witness in reach means
      * the passphrase is verified, none means it is confirmed. The question is
@@ -597,7 +581,6 @@ static bool warm_from_file(keymgr *km) {
     time_t expires_at = 0;
     error_t *err = session_load(proof.master, &km->epoch, &expires_at);
     if (err) {
-        error_free(err);
         return false;
     }
 
@@ -648,8 +631,8 @@ static error_t *resolve_master(keymgr *km, const keymgr_witness_t *in_hand) {
     if (km->has_key) {
         return NULL;
     }
-    if (km->refusal.line) {
-        return ERROR(km->refusal.code, "%s", km->refusal.line);
+    if (km->refusal) {
+        return km->refusal;
     }
     if (warm_from_file(km)) {
         return NULL;
@@ -657,7 +640,7 @@ static error_t *resolve_master(keymgr *km, const keymgr_witness_t *in_hand) {
 
     keymgr_proof_t proof = { 0 };
     RETURN_IF_ERROR(obtain(km, in_hand, &proof));
-    error_free(keep(km, &proof));
+    (void) keep(km, &proof);
     return NULL;
 }
 
@@ -690,7 +673,7 @@ error_t *keymgr_set(keymgr *km) {
      * left: the slot goes, and so does the refusal — this is the one ask that
      * may follow one. */
     evict_slot(km);
-    clear_refusal(km);
+    km->refusal = NULL;
 
     keymgr_proof_t proof = { 0 };
     RETURN_IF_ERROR(obtain(km, NULL, &proof));
@@ -736,7 +719,7 @@ void keymgr_rekey(keymgr *km, const kdf_epoch_t *epoch) {
      * master could open. After the re-binding, `session_load` resolves the new
      * epoch's path and the old file is out of reach anyway. */
     evict_slot(km);
-    clear_refusal(km);
+    km->refusal = NULL;
     bind_epoch(km, epoch);
 }
 

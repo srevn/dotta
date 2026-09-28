@@ -775,11 +775,11 @@ static error_t *capture_ancestor(
         /* A name this host cannot spell is the same silence as a path it cannot
          * see: a directory capture that fails loses a claim and nothing else,
          * so the rung keeps what it had and dotta creates it as it would have
-         * before. */
+         * before. Its error is dropped — one per such rung, per leaf climbed
+         * through it. */
         if (error_code(err) != ERR_NOT_FOUND) {
             return err;
         }
-        error_free(err);
         return NULL;
     }
 

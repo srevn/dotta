@@ -54,7 +54,7 @@ typedef struct {
     size_t ahead;
     size_t behind;
     sync_outcome_t outcome;
-    error_t *error;                 /* Owned; set by mark_result_failed */
+    error_t *error;                 /* Borrowed; set by mark_result_failed */
 } profile_sync_result_t;
 
 /**
@@ -83,7 +83,6 @@ static void sync_results_free(sync_results_t *results) {
 
     for (size_t i = 0; i < results->profile_count; i++) {
         free(results->profiles[i].profile);
-        error_free(results->profiles[i].error);
     }
 
     free(results->profiles);
@@ -91,8 +90,8 @@ static void sync_results_free(sync_results_t *results) {
 }
 
 /**
- * Single funnel for SYNC_OUTCOME_FAILED. Takes ownership of err. Caller must
- * print any output_error messages before calling.
+ * Single funnel for SYNC_OUTCOME_FAILED. Keeps err, borrowed as every error is
+ * (base/error.h). Caller must print any output_error messages before calling.
  */
 static void mark_result_failed(
     profile_sync_result_t *result,
@@ -319,7 +318,6 @@ static error_t *sync_fetch_phase(
         } else {
             output_error(out, "Fetch failed: %s", err_msg);
         }
-        error_free(err);
 
         return ERROR(
             ERR_GIT, "Failed to fetch profiles from remote\n"
@@ -1257,10 +1255,10 @@ static void sync_render_summary(
  * is that bucket's whole report, and `dotta sync && dotta apply` keeps working
  * for everyone who syncs under 'warn'.
  *
- * Pure, and deliberately so: the per-profile errors stay owned by `results` and
- * are never rethrown, since each was already rendered where it happened. The
- * message carries the one fact the receipt does not — how much of the run the
- * failures were.
+ * Pure, and deliberately so: the per-profile errors stay in the rows of `results`
+ * that borrow them and are never rethrown, since each was already rendered where
+ * it happened. The message carries the one fact the receipt does not — how much
+ * of the run the failures were.
  */
 static error_t *sync_failure(const sync_results_t *results) {
     size_t failed = 0;
@@ -1374,7 +1372,6 @@ static void epoch_reconcile(
          * lead there is, so it is printed the way a continuation line is rather
          * than dressed up as advice. */
         output_hintline(out, OUTPUT_NORMAL, "  %s", error_message(err));
-        error_free(err);
         return;
     }
 
@@ -1423,7 +1420,6 @@ static void epoch_reconcile(
                     "Failed to establish repository epoch on remote: %s",
                     error_message(err)
                 );
-                error_free(err);
                 return;  /* best-effort; retried next sync */
             }
             output_success(
@@ -1478,7 +1474,6 @@ static void epoch_reconcile(
                     : "Failed to adopt repository epoch from remote: %s",
                     error_message(err)
                 );
-                error_free(err);
                 return;  /* best-effort */
             }
             output_success(
@@ -2032,8 +2027,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         output_warning(
             out, OUTPUT_NORMAL, "Manifest build failed: %s", error_message(err)
         );
-        error_free(err);
-        err = NULL;
     } else {
         state_record_t *records = NULL;
         size_t record_count = 0;

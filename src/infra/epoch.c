@@ -274,7 +274,6 @@ error_t *epoch_init(
          * it. The probe goes: what is wrong with the ref is not actionable until
          * the thing that broke the census is, and this refusal is the one blocking
          * it. */
-        error_free(probe_err);
         return error_wrap(
             cerr,
             "Cannot tell whether this repository holds encrypted files sealed "
@@ -303,7 +302,6 @@ error_t *epoch_init(
                 EPOCH_REF
             );
         }
-        error_free(probe_err);
 
         int rc = git_reference_remove(repo, EPOCH_REF);
         if (rc < 0) {
@@ -320,8 +318,6 @@ error_t *epoch_init(
          * for the probe to add — "not found" is what the refusal's own first
          * line already says. Only the census stands between the mint and whatever
          * the ref used to key. */
-        error_free(probe_err);
-
         if (any_ciphertext) {
             return ERROR(
                 ERR_CRYPTO,
@@ -562,13 +558,11 @@ error_t *epoch_fetch(
          * callers route uniformly — fold the read's specific cause into the message
          * rather than chaining, since error_wrap would inherit its varied codes
          * (ERR_CRYPTO / ERR_GIT) and split the callers' handling. */
-        error_t *malformed = ERROR(
+        return ERROR(
             ERR_CRYPTO,
             "Remote epoch is malformed; remote repo may be corrupt (%s)",
             error_message(err)
         );
-        error_free(err);
-        return malformed;
     }
 
     /* Install, and only now: the one mutation this function makes, and its last
@@ -639,7 +633,7 @@ typedef struct {
     void *payload;              /* the asker's, carried untouched */
     const char *branch;         /* the branch under walk */
     bool stopped;               /* the asker stopped the walk */
-    error_t *error;             /* the walk could not prove anything (owned) */
+    error_t *error;             /* the walk could not prove anything (borrowed) */
 } epoch_walk_t;
 
 /*
@@ -836,17 +830,16 @@ static error_t *walk_ciphertext(
             error_t *walk_err = gitops_tree_walk(tree, epoch_walk_cb, &walk);
             git_tree_free(tree);
 
+            /* The payload speaks first: behind the callback's own error and behind
+             * the asker's stop, the walk's error is the abort libgit2 stamped
+             * in reply — a benign stop wrapper, dropped. */
             if (walk.error) {
-                error_free(walk_err);  /* benign stop wrapper */
                 err = walk.error;
                 goto cleanup;
             }
-            if (walk.stopped) {
-                error_free(walk_err);  /* benign stop wrapper */
-                break;                 /* short-circuit; outer loop exits too */
-            }
+            if (walk.stopped) break;  /* short-circuit; outer loop exits too */
             if (walk_err) {
-                err = walk_err;  /* genuine walk-machinery failure */
+                err = walk_err;       /* genuine walk-machinery failure */
                 goto cleanup;
             }
         }
@@ -1003,7 +996,6 @@ static error_t *decide_divergence(
         /* No bytes at the ref: nothing to make unreachable, and whatever this
          * repository holds was orphaned by whatever removed them. A census here
          * would attribute against a value that does not exist. */
-        error_free(lerr);
         *out_decision = EPOCH_RECONCILE_ADOPT;
         return NULL;
     }
@@ -1015,8 +1007,6 @@ static error_t *decide_divergence(
          * can be matched against anything, so the census asks for any ciphertext
          * at all. Its own cause has nothing to add to either verdict: what the
          * blob is wrong about does not change whether something is sealed. */
-        error_free(lerr);
-
         bool any = false;
         error_t *cerr = local_has_ciphertext(repo, NULL, &any);
         if (cerr) return cerr;
@@ -1115,7 +1105,6 @@ error_t *epoch_resolve(
         /* Transport / lookup failure folds to UNREACHABLE: the caller skips epoch
          * reconciliation best-effort, and the fetch phase carries the authoritative
          * "remote unreachable" diagnostic. */
-        error_free(err);
         *out_decision = EPOCH_RECONCILE_UNREACHABLE;
         return NULL;
     }
@@ -1135,7 +1124,6 @@ error_t *epoch_resolve(
             *out_decision = lerr ? EPOCH_RECONCILE_NO_LOCAL_EPOCH
                                  : EPOCH_RECONCILE_ESTABLISH;
 
-            error_free(lerr);
             return NULL;
         }
 

@@ -666,11 +666,13 @@ static bool source_gitignore_matches(
     bool excluded = false;
     error_t *err = source_filter_is_excluded(filter, abs_path, is_directory, &excluded);
     if (err) {
+        /* Surfaced (above): its error is dropped once warned — one per asker no
+         * layer decided, only while the source repository will not read
+         * (sys/source.h). */
         output_warning(
             out, OUTPUT_NORMAL,
             "Source .gitignore check failed: %s", error_message(err)
         );
-        error_free(err);
         return false;
     }
     return excluded;

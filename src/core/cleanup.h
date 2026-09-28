@@ -451,11 +451,11 @@ cleanup_preflight_result_t *cleanup_preflight(
  * an EIO the unlink met) — a prune's cause names its remedy the way a deploy's
  * does, and the remedies differ, so the receipt keeps it for the caller to render.
  * NULL in every other bucket: the bucket is the tag, as UNSET is for
- * deploy_outcome_t's stat. Owned by the receipt; cleanup_result_free frees it.
+ * deploy_outcome_t's stat. Borrowed, as every error is (base/error.h).
  */
 typedef struct {
     const workspace_item_t *item;   /* Borrowed (workspace lifetime) */
-    error_t *error;                 /* The failed bucket's cause; NULL elsewhere (owned) */
+    error_t *error;                 /* The failed bucket's cause; NULL elsewhere (borrowed) */
 } cleanup_outcome_t;
 
 /**
@@ -551,7 +551,7 @@ typedef struct {
 cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts);
 
 /**
- * Free a result — the failed causes, then the arrays. No-op on NULL.
+ * Free a result — the arrays; the rows' causes are borrowed. No-op on NULL.
  */
 void cleanup_result_free(cleanup_result_t *result);
 

@@ -1025,10 +1025,11 @@ static bool entry_is_removable_metadata(const char *dir, const char *name) {
         return false;
     }
 
+    /* Not metadata when it cannot be named: the join's error is dropped, one
+     * per entry it refuses — an empty name, which no metadata name is. */
     char *child = NULL;
     error_t *err = fs_path_join(dir, name, &child);
     if (err) {
-        error_free(err);
         return false;
     }
 
@@ -1096,8 +1097,9 @@ fs_emptiness_t fs_directory_emptiness(
                 /* Cannot name it, so cannot let the caller vouch for it — and
                  * an entry nobody could be asked about is not an entry nobody
                  * vouched for. The walk is incomplete, which is what the read
-                 * error above answers too: nothing can be said. */
-                error_free(err);
+                 * error above answers too: nothing can be said. The join's error
+                 * is dropped, at most one per directory asked — only an empty
+                 * name draws one, which readdir never hands out. */
                 answer = FS_DIR_UNREADABLE;
                 break;
             }

@@ -680,10 +680,10 @@ cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts) {
 
         /* The refusal is the "not empty" verdict by another route, and the bucket
          * is the tag: the entry that stopped it is the next load's to read, so
-         * the cause is not kept. Anything else is the item's own failure, kept
+         * the receipt keeps no cause — the error is dropped, one per directory
+         * an entry still holds. Anything else is the item's own failure, kept
          * with its cause as above. */
         if (error_code(remove_err) == ERR_CONFLICT) {
-            error_free(remove_err);
             result->skipped_dirs.entries[result->skipped_dirs.count++].item = item;
             continue;
         }
@@ -699,10 +699,6 @@ cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts) {
 
 void cleanup_result_free(cleanup_result_t *result) {
     if (!result) return;
-
-    for (size_t i = 0; i < result->failed.count; i++) {
-        error_free(result->failed.entries[i].error);
-    }
 
     free(result->pruned_files.entries);
     free(result->reclaimed_files.entries);

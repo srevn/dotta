@@ -438,7 +438,6 @@ static error_t *read_file(const char *path, config_t *config) {
     error_t *err = fs_read_file(path, &text);
     if (error_code(err) == ERR_NOT_FOUND) {
         /* No config file - every key keeps its default */
-        error_free(err);
         return NULL;
     }
     RETURN_IF_ERROR(err);

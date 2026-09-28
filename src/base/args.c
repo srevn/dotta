@@ -411,11 +411,12 @@ static void apply_value_opt(
         }
 
         case ARGS_KIND_INT: {
+            /* A refused value is its message in the collector, and the error is
+             * dropped: one per integer token that does not parse. */
             long parsed = 0;
             error_t *err = args_parse_long(v, opt->int_min, opt->int_max, &parsed);
             if (err != NULL) {
                 record_error_from_err(errors, arena, tok_idx, opt, err);
-                error_free(err);
                 return;
             }
             *long_field(opts, opt) = parsed;
@@ -963,7 +964,6 @@ args_outcome_t args_parse(
         error_t *err = leaf->post_parse(opts_out, arena, leaf);
         if (err != NULL) {
             record_error_from_err(errors_out, arena, -1, NULL, err);
-            error_free(err);
             return ARGS_FAILED;
         }
     }
@@ -1466,7 +1466,7 @@ static bool fish_word_ok(const char *s, size_t len) {
  * the emission's. The command's own `name` is the caller's to check: a subcommand's
  * is the qualified "parent sub", never written.
  *
- * @return NULL, or an error naming the first offender (caller frees).
+ * @return NULL, or an error naming the first offender.
  */
 static error_t *check_command_names(const args_command_t *cmd) {
     const char *owner = cmd->name ? cmd->name : "?";

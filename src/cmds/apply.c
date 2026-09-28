@@ -2773,7 +2773,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     out, OUTPUT_NORMAL, "%s; the next apply converges it",
                     error_message(err)
                 );
-                error_free(err);
                 err = NULL;
             }
         } else if (deploy_verdicts->skipped.count == 0) {
@@ -2808,7 +2807,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 out, OUTPUT_NORMAL,
                 "The record was not written - what it already held stands"
             );
-            error_free(record_err);
         }
     }
 

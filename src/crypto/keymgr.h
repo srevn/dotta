@@ -37,13 +37,12 @@
  *
  * The ladder asks once per run. Its refusal — no passphrase in reach, nothing
  * read at the prompt, a passphrase that opened nothing — stands for the process:
- * the asker that met it gets that error whole, causes and all, and every later
- * resolve re-issues its one line without asking again, so a workspace of N
- * encrypted rows costs one prompt and one file probe, not N. Retries only
- * at a terminal (KEYMGR_ATTEMPTS, misses of any kind); over a pipe, one line;
- * from the environment, none. `key set` is the one ask that clears a standing
- * refusal; a rekey clears it too (the sources are now about another epoch);
- * `key clear` does not (it is about the caches).
+ * the asker that met it and every later resolve get that one error, causes and
+ * all, without asking again, so a workspace of N encrypted rows costs one prompt
+ * and one file probe, not N. Retries only at a terminal (KEYMGR_ATTEMPTS, misses
+ * of any kind); over a pipe, one line; from the environment, none. `key set` is
+ * the one ask that clears a standing refusal; a rekey clears it too (the sources
+ * are now about another epoch); `key clear` does not (it is about the caches).
  *
  * The slot and the file. The in-memory slot is the process memo of the master:
  * once resolved, every later operation of the run reads it, under every

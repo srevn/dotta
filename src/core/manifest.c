@@ -149,7 +149,8 @@ struct manifest {
  *             walk met a blob at, written here and read by the directory pass.
  *             Keyed by the arena name the walk joined, which outlives it.
  * - arena: borrowed, must not be NULL; per-row strings are abandoned to it
- * - error: owned by callback, caller must free on error
+ * - error: set by the callback on failure; borrowed, as every error is
+ *          (base/error.h)
  */
 struct claim_ctx {
     manifest_t *manifest;          /* Target view (modified by callback) */
@@ -1009,8 +1010,7 @@ static error_t *manifest_contribute(
     if (ctx.error) {
         /* The callback's error names the entry that failed; the walk's own is
          * the abort libgit2 stamped in answer to it — an echo of this call's
-         * own decision, which names nothing and is freed rather than dropped. */
-        error_free(err);
+         * own decision, which names nothing and is dropped. */
         err = ctx.error;
     }
     if (err) {

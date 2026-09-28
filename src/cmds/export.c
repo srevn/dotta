@@ -314,7 +314,6 @@ static metadata_t *load_sheet(
         "Metadata unreadable for profile '%s' (%s); falling back to git filemodes",
         profile, error_message(err)
     );
-    error_free(err);
 
     return metadata_create_empty();
 }
@@ -579,7 +578,6 @@ static error_t *collect_profile(
     if (cctx.error) {
         /* The callback error is the cause; the walk's generic user-abort wrapper
          * is noise. */
-        error_free(err);
         err = cctx.error;
     }
     if (err) goto cleanup;
@@ -678,7 +676,6 @@ static error_t *collect_storage(
                 };
                 err = gitops_tree_walk(subtree, collect_tree_callback, &cctx);
                 if (cctx.error) {
-                    error_free(err);
                     err = cctx.error;
                 }
                 if (err) goto cleanup;

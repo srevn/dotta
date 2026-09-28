@@ -65,7 +65,6 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
     free(argv);
     if (err) {
         fprintf(stderr, "Error: %s\n", error_message(err));
-        error_free(err);
         return 1;
     }
 

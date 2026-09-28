@@ -61,11 +61,10 @@ void completion_profiles(
         return;
     }
 
+    /* A listing that failed offers no local name, and the remote's may still */
     string_array_t branches;
     error_t *err = gitops_list_branches(repo, ctx->arena, &branches);
-    if (err) {
-        error_free(err);
-    } else {
+    if (!err) {
         for (size_t i = 0; i < branches.count; i++) {
             const char *branch = branches.entries[i];
             fprintf(
@@ -79,16 +78,10 @@ void completion_profiles(
     if (set == COMPLETION_ALL) {
         const char *remote_name = NULL;
         err = gitops_resolve_default_remote(repo, ctx->arena, &remote_name, NULL);
-        if (err) {
-            error_free(err);  /* no remote configured: nothing to download */
-            return;
-        }
+        if (err) return;  /* no remote configured: nothing to download */
         string_array_t remote_branches;
         err = upstream_discover_branches(repo, remote_name, ctx->arena, &remote_branches);
-        if (err) {
-            error_free(err);
-            return;
-        }
+        if (err) return;
         for (size_t i = 0; i < remote_branches.count; i++) {
             fprintf(out, "%s\tRemote profile\n", remote_branches.entries[i]);
         }
@@ -107,11 +100,13 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out) {
 
     for (size_t i = 0; i < remotes.count; i++) {
         const char *name = remotes.strings[i];
+
+        /* A remote with no URL is described by its kind: the lookup's error is
+         * dropped, one per such remote */
         char *url = NULL;
-        error_t *url_err = gitops_get_remote_url(repo, name, &url);
+        (void) gitops_get_remote_url(repo, name, &url);
         fprintf(out, "%s\t%s\n", name, url ? url : "Remote");
         free(url);
-        error_free(url_err);
     }
 
     git_strarray_dispose(&remotes);
@@ -141,7 +136,6 @@ void completion_files(
     manifest_t *manifest = NULL;
     error_t *err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) {
-        error_free(err);
         return;
     }
 
@@ -181,10 +175,7 @@ void completion_directories(
 
     metadata_t *metadata = NULL;
     error_t *err = metadata_load_from_branch(repo, branch, &metadata);
-    if (err) {
-        error_free(err);  /* not a branch, or an unreadable sheet: nothing to offer */
-        return;
-    }
+    if (err) return;  /* not a branch, or an unreadable sheet: nothing to offer */
 
     size_t count = 0;
     const metadata_item_t *const *items = metadata_items(metadata, &count);
@@ -259,11 +250,8 @@ void completion_refspecs(
         string_array_push(&branches, pinned);
     } else {
         error_t *err = gitops_list_branches(repo, ctx->arena, &branches);
-        if (err) {
-            error_free(err);  /* silent-failure model */
-            return;
-        }
-        string_array_sort(&branches);  /* deterministic order under the cap */
+        if (err) return;              /* silent-failure model */
+        string_array_sort(&branches); /* deterministic order under the cap */
     }
 
     refspec_walk_ctx_t walk = {
@@ -277,16 +265,14 @@ void completion_refspecs(
 
         git_tree *tree = NULL;
         error_t *load_err = gitops_load_branch_tree(repo, branch, &tree, NULL);
-        if (load_err) {
-            error_free(load_err);  /* not a branch, or unloadable: silent */
-            continue;
-        }
+        if (load_err) continue;  /* not a branch, or unloadable: silent */
 
         walk.branch = branch;
-        error_t *walk_err = gitops_tree_walk(tree, refspec_emit_cb, &walk);
+        /* A walk's error is benign on the cap's abort, and silent otherwise;
+         * with the load's above, at most one per branch is dropped */
+        (void) gitops_tree_walk(tree, refspec_emit_cb, &walk);
         git_tree_free(tree);
-        if (walk_err) error_free(walk_err);  /* benign on cap-abort; else also silent */
-        if (walk.truncated) break;           /* cap hit (the walk error above was the abort) */
+        if (walk.truncated) break;           /* cap hit (the walk's error was the abort) */
     }
 }
 
@@ -422,7 +408,6 @@ const char *completion_profile_of(const dotta_ctx_t *ctx, const char *token) {
     refspec_t rs = { 0 };
     error_t *err = parse_refspec(ctx->arena, token, &rs);
     if (err) {
-        error_free(err);
         return token;
     }
     return rs.profile ? rs.profile : rs.file;
@@ -493,7 +478,6 @@ bool completion_paths_under(
     const char *root = NULL;
     error_t *err = path_input_filesystem_path(target, ctx->arena, &root);
     if (err) {
-        error_free(err);
         return false;
     }
 
@@ -543,10 +527,7 @@ bool completion_paths_under(
 
     string_array_t listing;
     err = fs_list_dir(dir, ctx->arena, &listing);
-    if (err) {
-        error_free(err);   /* nothing under there: the root applies, nothing to offer */
-        return true;
-    }
+    if (err) return true;   /* nothing under there: the root applies, nothing to offer */
 
     for (size_t i = 0; i < listing.count; i++) {
         const char *entry = listing.entries[i];

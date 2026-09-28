@@ -232,10 +232,11 @@ static void read_targets(
             it->target = heap_strdup(bound);
         }
 
+        /* The need, absorbed (above): the error is dropped, one per row whose
+         * branch will not read. */
         error_t *err = profile_needs_target(repo, it->name, &it->needs_target);
         if (err) {
             it->unreadable = true;
-            error_free(err);
         }
     }
 }
@@ -674,11 +675,10 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
              * directory, like a shell's — resolved to the absolute path the row
              * stores. One that cannot be resolved is kept as typed, for
              * plan_validate to refuse at save with the message, the way it refuses
-             * a bad path today. */
+             * a bad path today; its error is dropped, one per such Enter. */
             char *captured = NULL;
             error_t *err = path_input_normalize(p->buffer.data, &captured);
             if (err) {
-                error_free(err);
                 captured = heap_strdup(p->buffer.data);
             }
             item_t *it = &view->items[p->item_index];

@@ -324,14 +324,15 @@ static workspace_fault_t workspace_code_fault(error_code_t code) {
 }
 
 /**
- * Class a look's outcome, and consume its error
+ * Class a look's outcome by its error
  *
  * The class is all the item keeps: the message is the failing verb's to print,
  * and this analysis is not failing — it is reporting a path it could not read.
- * WORKSPACE_FAULT_NONE where the look succeeded and there is nothing to consume
- * — total over the convention every verb in the tree returns by, so a fold can
- * be written at the call itself rather than through a local whose only job is
- * to outlive the test (workspace_measure; Rule 5).
+ * The error is dropped, one per path a look could not read. WORKSPACE_FAULT_NONE
+ * where the look succeeded and there is no error to class — total over the
+ * convention every verb in the tree returns by, so a fold can be written at the
+ * call itself rather than through a local whose only job is to outlive the test
+ * (workspace_measure; Rule 5).
  *
  * Called at the two folds that hold an error of the look they just made —
  * workspace_analyze_file's look at the content, workspace_measure's compare.
@@ -342,9 +343,7 @@ static workspace_fault_t workspace_code_fault(error_code_t code) {
 static workspace_fault_t workspace_error_fault(error_t *err) {
     if (!err) return WORKSPACE_FAULT_NONE;
 
-    workspace_fault_t fault = workspace_code_fault(error_code(error_root(err)));
-    error_free(err);
-    return fault;
+    return workspace_code_fault(error_code(error_root(err)));
 }
 
 /**
@@ -1062,13 +1061,13 @@ static void workspace_analyze_file(
          *
          * A failed look answers nothing and leaves disk_at_base false: the edit
          * is taken as real (CONTENT), the conservative answer — STALE still holds,
-         * because git_moved is a fact about two OIDs. */
+         * because git_moved is a fact about two OIDs. Its error is dropped, at
+         * most one per path. */
         if (git_moved && (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
             compare_result_t at_base;
             error_t *verify_err = workspace_compare_base(ws, item, &at_base);
 
             disk_at_base = !verify_err && at_base == CMP_EQUAL;
-            error_free(verify_err);
         }
     }
 
@@ -1353,7 +1352,9 @@ typedef enum {
  *
  * No failure is raised: each one says only that the probe could not answer, which
  * UNVERIFIED already says — the orphan's hold, never the load's, the rule every
- * failed look in this file takes.
+ * failed look in this file takes. The lookup's error is dropped, at most one
+ * per orphan row — a failure caches nothing, so the next row of the profile asks
+ * again.
  *
  * @param repo Repository (must not be NULL)
  * @param cache profile → authority_cache_t (borrowed keys, owned values)
@@ -1377,7 +1378,6 @@ static orphan_authority_t compute_orphan_authority(
         bool exists = false;
         error_t *err = gitops_branch_exists(repo, profile, &exists);
         if (err) {
-            error_free(err);
             return ORPHAN_AUTHORITY_UNVERIFIED;
         }
 
@@ -1401,7 +1401,6 @@ static orphan_authority_t compute_orphan_authority(
         git_tree *tree = NULL;
         error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
         if (err) {
-            error_free(err);
             return ORPHAN_AUTHORITY_UNVERIFIED;
         }
         cached->tree = tree;                /* Ownership transfers to the cache */
@@ -1445,7 +1444,6 @@ static orphan_authority_t compute_orphan_authority(
         metadata_t *metadata = NULL;
         error_t *err = metadata_load_from_tree(repo, cached->tree, profile, &metadata);
         if (err) {
-            error_free(err);
             return ORPHAN_AUTHORITY_UNVERIFIED;
         }
         cached->metadata = metadata;        /* Ownership transfers to the cache */
@@ -1974,7 +1972,7 @@ static void workspace_analyze_orphans(workspace_t *ws) {
     hashmap_t *authority_cache = hashmap_borrow(ws->arena, 8);
 
     /* The walk cannot fail: a folded error is not the walk's — the probe's failures
-     * are the orphan's hold and the measure's are its bit, and each is consumed
+     * are the orphan's hold and the measure's are its bit, and each is dropped
      * at the call that raised it, never carried. */
     for (size_t i = 0; i < ws->orphan_count; i++) {
         workspace_item_t *item = ws->orphans[i];
@@ -2410,7 +2408,8 @@ static error_t *scan_directory_for_untracked(
                 );
                 break;
         }
-        error_free(err);
+        /* The listing's error is dropped, one per directory the walk could not
+         * list */
         arena_free(scratch);
         return NULL;
     }
@@ -2542,14 +2541,14 @@ static error_t *scan_directory_for_untracked(
          * That one reads the place and not the subject, so a root standing inside
          * a repository whose rules name it is not entered, which is the answer
          * the directory would get under any other name. The layer's own failure
-         * leaves no verdict, as today. */
+         * leaves no verdict, as today, and its error is dropped — one per entry
+         * no layer decided, only while the source repository will not read
+         * (sys/source.h). */
         gitignore_match_t match;
         gitignore_eval(scan->rules, label_tail(name), is_dir, &match);
         bool ignored = match.decided && match.ignored;
         if (!match.decided && scan->source_filter) {
-            error_free(
-                source_filter_is_excluded(scan->source_filter, child, is_dir, &ignored)
-            );
+            (void) source_filter_is_excluded(scan->source_filter, child, is_dir, &ignored);
         }
         if (ignored) continue;
 
@@ -3939,6 +3938,5 @@ rollback:
      * load owed, the next load owes again. */
     if (!scoped) return err;
     state_rollback(ws->state);
-    error_free(err);
     return NULL;
 }

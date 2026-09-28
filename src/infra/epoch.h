@@ -365,7 +365,7 @@ error_t *epoch_resolve(
  * no master here can open either, so it says nothing about a passphrase. The
  * keymgr asks two questions through this one function: whether any ciphertext
  * exists (an `accept` that takes the first) and whether a fresh master opens
- * one (an `accept` that decrypts).
+ * one (an `accept` that asks the cipher, crypto/cipher.h cipher_opens).
  *
  * The full history and not the tips, for the reason at the head of this file:
  * an absence here is a licence, and a walk that stopped at the tips would report
@@ -373,8 +373,8 @@ error_t *epoch_resolve(
  * taking a wrong passphrase as given (crypto/keymgr.h).
  *
  * The walk's own failure — a branch that will not list, an object that will not
- * load — is returned and stands as that attempt's refusal in the keymgr, and so
- * is a refusal `accept` itself raises; either leaves `*out_accepted` false. A
+ * load — is returned and stands as that attempt's refusal in the keymgr, and
+ * leaves `*out_accepted` false; `accept` is a predicate and raises none. A
  * ciphertext reachable from no local branch is never presented, and a decrypt
  * of one reads its refusal on its own row.
  *

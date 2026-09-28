@@ -118,7 +118,6 @@ static error_t *resolve_merge_trees(
     );
     if (err) {
         if (error_code(err) == ERR_NOT_FOUND) {
-            error_free(err);
             return ERROR(
                 ERR_NOT_FOUND,
                 "No common history for branch '%s' - branches may have been "

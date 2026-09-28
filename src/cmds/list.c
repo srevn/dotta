@@ -145,8 +145,6 @@ static error_t *list_profiles(
                 out, OUTPUT_NORMAL, "Could not detect remote: %s",
                 error_message(err)
             );
-            error_free(err);
-            err = NULL;
         } else {
             show_remote = true;
         }
@@ -190,12 +188,12 @@ static error_t *list_profiles(
             profile_stats_t stats = { 0 };
             err = profile_get_stats(repo, bname, &stats);
             if (err) {
+                /* The count's error is warned and dropped, one per unreadable
+                 * branch */
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
                     bname, error_message(error_root(err))
                 );
-                error_free(err);
-                err = NULL;
                 continue;
             }
 
@@ -252,7 +250,9 @@ static error_t *list_profiles(
             );
         }
 
-        /* Verbose: Add last commit info (uses branch name, not profile tree) */
+        /* Verbose: Add last commit info (uses branch name, not profile tree). A
+         * tip that will not read shows none: its error is dropped, one per such
+         * branch. */
         if (verbose) {
             char refname[DOTTA_REFNAME_MAX];
             error_t *ref_err = gitops_branch_refname(
@@ -285,20 +285,16 @@ static error_t *list_profiles(
 
                     git_commit_free(last_commit);
                 }
-                error_free(commit_err);
-            } else {
-                error_free(ref_err);
             }
         }
 
-        /* Remote: Add tracking state */
+        /* Remote: Add tracking state — none where the analysis fails, its error
+         * dropped, one per such branch */
         if (show_remote) {
             upstream_info_t info;
             error_t *upstream_err = upstream_analyze_profile(repo, remote_name, profile, &info);
             if (!upstream_err) {
                 print_upstream_state(out, &info);
-            } else {
-                error_free(upstream_err);
             }
         }
 
@@ -397,7 +393,6 @@ static error_t *list_files(
                 out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
                 opts->profile, error_message(error_root(stats_err))
             );
-            error_free(stats_err);
         }
 
         /* Either the count stands or the statistics wrote nothing at all (their
@@ -448,8 +443,6 @@ static error_t *list_files(
                 out, OUTPUT_NORMAL, "Failed to read what profile '%s' claims: %s",
                 opts->profile, error_message(error_root(err))
             );
-            error_free(err);
-            err = NULL;
         }
 
         err = stats_build_file_commit_map(
@@ -461,8 +454,6 @@ static error_t *list_files(
                 out, OUTPUT_NORMAL, "Failed to load commit history: %s",
                 error_message(err)
             );
-            error_free(err);
-            err = NULL;
         }
 
         for (size_t i = 0; i < files.count; i++) {
@@ -533,7 +524,8 @@ static error_t *list_files(
                  * where the reader can see it, which is the whole of what this
                  * screen can honestly say: the object is missing or corrupt,
                  * and the count of what the branch holds refuses outright over
-                 * the same failure (core/profiles.h profile_get_tree_stats). */
+                 * the same failure (core/profiles.h profile_get_tree_stats).
+                 * The header's error is dropped, one per unreadable blob. */
                 size_t size = 0;
                 error_t *size_err = stats_blob_size(
                     repo, git_tree_entry_id(entry), &size
@@ -548,7 +540,6 @@ static error_t *list_files(
                 } else {
                     output_styled(out, OUTPUT_VERBOSE, " {dim}%8s{reset}", "[?]");
                 }
-                error_free(size_err);
 
                 /* Get last commit for this file */
                 if (commit_map) {

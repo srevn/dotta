@@ -37,8 +37,8 @@
  * - Metadata is reproduced, not negotiated: every write applies the row's mode
  *   and resolved ownership atomically through its own descriptor, so there is
  *   never a moment when a path stands with the wrong owner
- * - Silent: outcomes travel in the result — a row's failure among them, its cause
- *   on the outcome — verdicts and skips in the preflight result, with the anomalies
+ * - Silent: outcomes travel in the receipt — a row's failure among them, its
+ *   cause on the outcome — verdicts and skips in the preflight, with the anomalies
  *   met while deciding (an identity that could not be resolved), which are the
  *   caller's to print; only the run's infrastructure travels in the returned
  *   error. This module emits no prose of its own; verbosity and tense are the
@@ -142,7 +142,7 @@ static inline bool deploy_occupant_present(fs_occupant_t occ) {
  * The verdict's occupant decides the whole of it: nothing stood → created; a
  * directory did → fixed, converged in place, no new entry lands; anything else
  * → replaced, one node cleared and then created. One producer for the mapping
- * deploy_verdict_t documents and deploy_result_t's verbs derive from, so the
+ * deploy_verdict_t documents and deploy_receipt_t's verbs derive from, so the
  * preview, the receipt, apply's record phase and the executor's own poison rule
  * read one answer and cannot drift. Two facts ride on it and are read as it: a
  * new entry lands iff the convergence is not a fix (preflight's landing question,
@@ -380,7 +380,7 @@ typedef struct {
 } deploy_skips_t;
 
 /**
- * Pre-flight results: the skips, the anomalies, and the verdicts
+ * Preflight: the skips, the anomalies, and the verdicts
  *
  * The verdicts are the *how*, one per row the run WILL deploy, in plan order —
  * directories parents-first, the order deploy_execute converges them in — and
@@ -412,7 +412,7 @@ typedef struct {
     deploy_verdicts_t directories;       /* Pending directory rows, parents first */
     deploy_verdicts_t files;             /* Pending file rows */
     deploy_verdicts_t ancestors;         /* Directory rows the run may make on the way */
-} deploy_preflight_result_t;
+} deploy_preflight_t;
 
 /**
  * One kind's partition of the active items in scope
@@ -490,12 +490,12 @@ typedef struct {
  * receipt keeps each for the caller to render, as cleanup's does
  * (cleanup_outcome_t). Borrowed, as every error is (base/error.h).
  *
- * The verdict is borrowed from the preflight result, whose arrays are sized once
- * and never reallocated, so every address is stable for the receipt's life. Free
- * the result before the preflight result.
+ * The verdict is borrowed from the preflight, whose arrays are sized once and
+ * never reallocated, so every address is stable for the receipt's life — which
+ * is no longer than the preflight's (deploy_receipt_t).
  */
 typedef struct {
-    const deploy_verdict_t *verdict;   /* Borrowed (preflight-result lifetime) */
+    const deploy_verdict_t *verdict;   /* Borrowed (the preflight's lifetime) */
     state_stat_t stat;                 /* The write's stat; UNSET where it authored none */
     error_t error;                     /* The failed bucket's cause; NULL elsewhere (borrowed) */
 } deploy_outcome_t;
@@ -509,7 +509,7 @@ typedef struct {
 } deploy_outcomes_t;
 
 /**
- * Deployment result — the run's receipt: one outcome per verdict, in act order
+ * Deployment receipt — the run's: one outcome per verdict, in act order
  *
  * Four arrays: three mirroring the preflight's split for the rows that landed,
  * and `failed` for the rows that did not — landed or failed is the one split
@@ -518,7 +518,7 @@ typedef struct {
  * twice — a directory's is its verdict's occupant (the mapping is
  * deploy_convergence's), so the caller can still say "replaced" where a squatter
  * went and "fixed" where nothing was created. Work the run deliberately did not
- * do is the plan's to report, never the result's — the plan decided it, so only
+ * do is the plan's to report, never the receipt's — the plan decided it, so only
  * the plan can report it before a run that ends up executing nothing. A failure
  * is a row's own outcome: it lands in `failed` with its cause, the run goes on,
  * and the caller's exit contract reads the count; the returned error is reserved
@@ -550,15 +550,16 @@ typedef struct {
  * so the caller's summary keeps them apart from the created count. A parent no
  * row claims has no receipt and no record.
  *
- * Free with deploy_result_free; the outcomes borrow the verdicts, which outlive
- * it in their arena.
+ * A value of the arena its run was handed, as its four arrays are: nothing frees
+ * one. Its outcomes borrow the verdicts, so a receipt lives in the arena they
+ * were decided in, or in one they outlive.
  */
 typedef struct {
     deploy_outcomes_t deployed;      /* Files written or linked, each with its write's stat */
     deploy_outcomes_t converged;     /* Planned directories — the verb is the verdict's occupant */
     deploy_outcomes_t ancestors;     /* Claimed directories made on the way, each once */
     deploy_outcomes_t failed;        /* Rows that did not land — both kinds, each with its cause */
-} deploy_result_t;
+} deploy_receipt_t;
 
 /**
  * Build the deployment plan
@@ -647,9 +648,9 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * rows, converged before anything is written beneath them. The skips and the
  * warnings come out in that order too.
  *
- * One fate per pending row (the totality equation, deploy_preflight_result_t),
- * each question asked of its one authority, the first skip reason that applies
- * winning (deploy_skip_reason_t):
+ * One fate per pending row (the totality equation, deploy_preflight_t), each
+ * question asked of its one authority, the first skip reason that applies winning
+ * (deploy_skip_reason_t):
  * - Ancestry — the look must bind. A squatted directory row above the path
  *   (workspace_squatted_ancestor) voids every probe taken beneath it, the landing
  *   check's included — the workspace took none there at all, so the row arrives
@@ -749,9 +750,9 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * @param ws Workspace with pre-loaded divergence analysis (must not be NULL)
  * @param plan Deployment plan (must not be NULL)
  * @param opts Deployment options (must not be NULL)
- * @param arena Arena the results and every array they hold live in (must not be
- *        NULL)
- * @param out Pre-flight results (must not be NULL; left as it was on a failure)
+ * @param arena Arena the preflight and every array it holds live in (must not
+ *        be NULL)
+ * @param out The preflight (must not be NULL; left as it was on a failure)
  * @return Error or NULL on success (a skip is not an error; a strict_ownership
  *         failure is)
  */
@@ -760,7 +761,7 @@ error_t deploy_preflight(
     const deploy_plan_t *plan,
     const deploy_options_t *opts,
     arena_t *arena,
-    deploy_preflight_result_t **out
+    deploy_preflight_t **out
 );
 
 /**
@@ -826,24 +827,19 @@ error_t deploy_preflight(
  * @param verdicts The verdicts to carry out — deployable rows only, by
  *        construction: the skips never enter these arrays (must not be NULL)
  * @param cache Content cache for batch operations (must not be NULL)
- * @param arena Arena the run's held directories live in (must not be NULL)
- * @param out Deployment results (must not be NULL, caller must free)
+ * @param arena Arena the receipt, its arrays and the run's held directories live
+ *        in (must not be NULL; the verdicts' own, or one they outlive)
+ * @param out The receipt, the arena's — set beside a release error too (must
+ *        not be NULL)
  * @return Error or NULL on success
  */
 error_t deploy_execute(
     git_repository *repo,
     const workspace_t *ws,
-    const deploy_preflight_result_t *verdicts,
+    const deploy_preflight_t *verdicts,
     content_cache_t *cache,
     arena_t *arena,
-    deploy_result_t **out
+    deploy_receipt_t **out
 );
-
-/**
- * Free deployment results — the arrays; the rows' causes are borrowed
- *
- * @param result Results to free (can be NULL)
- */
-void deploy_result_free(deploy_result_t *result);
 
 #endif /* DOTTA_DEPLOY_H */

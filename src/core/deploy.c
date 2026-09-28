@@ -499,7 +499,7 @@ static const manifest_row_t *holdable_directory(
  * ancestors' (parents-first); everywhere else the directory pass is complete.
  */
 static bool directory_is_deployable(
-    const deploy_preflight_result_t *verdicts, const char *path
+    const deploy_preflight_t *verdicts, const char *path
 ) {
     for (size_t i = 0; i < verdicts->directories.count; i++) {
         if (strcmp(verdicts->directories.entries[i].item->filesystem_path, path) == 0) {
@@ -566,7 +566,7 @@ static bool directory_is_deployable(
  *        not be NULL)
  */
 static void check_ancestry(
-    const workspace_t *ws, const deploy_preflight_result_t *verdicts, const char *path,
+    const workspace_t *ws, const deploy_preflight_t *verdicts, const char *path,
     deploy_skip_t *skip, bool *out_absent
 ) {
     const workspace_squatted_t *above = workspace_squatted_ancestor(ws, path);
@@ -661,7 +661,7 @@ static void check_ancestry(
  *        named), and UNCLAIMED on the ANCESTOR refusal alone
  */
 static void check_landing(
-    const workspace_t *ws, const deploy_preflight_result_t *verdicts,
+    const workspace_t *ws, const deploy_preflight_t *verdicts,
     const char *path, deploy_skip_t *skip
 ) {
     char *scratch = heap_strdup(path);
@@ -720,9 +720,9 @@ cleanup:
  *
  * Pure decision, taken at preflight — no filesystem mutation — so the
  * strict_ownership abort is met before the prompt and never mid-run. A warning
- * is an anomaly report and travels in the preflight result for the caller to
- * print; nothing here reads a verbosity flag, because the warning's visibility
- * is not this module's output policy to set.
+ * is an anomaly report and travels in the preflight for the caller to print;
+ * nothing here reads a verbosity flag, because the warning's visibility is not
+ * this module's output policy to set.
  *
  * @param row The row, for its claim and its name in a message (must not be NULL)
  * @param strict_ownership Fail deployment if ownership cannot be resolved
@@ -853,7 +853,7 @@ static error_t check_ownership(
  * @param dir Directory path (must not be NULL)
  */
 static bool above_deployable_row(
-    const deploy_preflight_result_t *verdicts, const char *dir
+    const deploy_preflight_t *verdicts, const char *dir
 ) {
     const deploy_verdicts_t *kinds[] = { &verdicts->directories, &verdicts->files };
     size_t len = strlen(dir);
@@ -891,7 +891,7 @@ error_t deploy_preflight(
     const deploy_plan_t *plan,
     const deploy_options_t *opts,
     arena_t *arena,
-    deploy_preflight_result_t **out
+    deploy_preflight_t **out
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(plan);
@@ -899,11 +899,11 @@ error_t deploy_preflight(
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    /* The result and every array it holds are the arena's, beside the items they
-     * borrow: nothing frees them, and a failure below leaves a partial result
-     * as the arena's bytes. */
-    deploy_preflight_result_t *result = arena_calloc(arena, 1, sizeof(*result));
-    string_array_init(&result->warnings, arena);
+    /* The verdicts and every array they are held in are the arena's, beside the
+     * items they borrow: nothing frees them, and a failure below leaves a partial
+     * preflight as the arena's bytes. */
+    deploy_preflight_t *verdicts = arena_calloc(arena, 1, sizeof(*verdicts));
+    string_array_init(&verdicts->warnings, arena);
 
     /* One slot per pending item — verdict or skip, so the skip array's bound is
      * both kinds together — and one per directory item for the ancestors (an
@@ -912,10 +912,10 @@ error_t deploy_preflight(
     workspace_items_t dirs = workspace_items(&plan->directories.pending);
     workspace_items_t all_dirs = workspace_directories(ws);
 
-    result->directories.entries = arena_calloc(arena, dirs.count, sizeof(deploy_verdict_t));
-    result->files.entries = arena_calloc(arena, files.count, sizeof(deploy_verdict_t));
-    result->ancestors.entries = arena_calloc(arena, all_dirs.count, sizeof(deploy_verdict_t));
-    result->skipped.entries = arena_calloc(
+    verdicts->directories.entries = arena_calloc(arena, dirs.count, sizeof(deploy_verdict_t));
+    verdicts->files.entries = arena_calloc(arena, files.count, sizeof(deploy_verdict_t));
+    verdicts->ancestors.entries = arena_calloc(arena, all_dirs.count, sizeof(deploy_verdict_t));
+    verdicts->skipped.entries = arena_calloc(
         arena, files.count + dirs.count, sizeof(deploy_skip_t)
     );
 
@@ -948,7 +948,7 @@ error_t deploy_preflight(
         deploy_skip_t skip = { .item = item };
         bool absent = false;
 
-        check_ancestry(ws, result, path, &skip, &absent);
+        check_ancestry(ws, verdicts, path, &skip, &absent);
 
         /* The path's rungs, unless its ancestry answered. A row planned as absent
          * is asked none of them: the path is empty once the directory pass has
@@ -968,7 +968,7 @@ error_t deploy_preflight(
              * skipped on its own account only when the landing had nothing to
              * say — as for a file. */
             if (deploy_convergence(occupant) != DEPLOY_CONVERGE_FIX) {
-                check_landing(ws, result, path, &skip);
+                check_landing(ws, verdicts, path, &skip);
             } else if (!identity_may_chmod(identity(), item->st.st_uid)) {
                 skip.reason = DEPLOY_SKIP_FOREIGN;
             }
@@ -1002,17 +1002,17 @@ error_t deploy_preflight(
         if (skip.reason == DEPLOY_SKIP_NONE) {
             RETURN_IF_ERROR(
                 check_ownership(
-                opts, &result->warnings, item->row, &uid, &gid, &skip.reason
+                opts, &verdicts->warnings, item->row, &uid, &gid, &skip.reason
                 )
             );
         }
 
         if (skip.reason != DEPLOY_SKIP_NONE) {
-            result->skipped.entries[result->skipped.count++] = skip;
+            verdicts->skipped.entries[verdicts->skipped.count++] = skip;
             continue;
         }
 
-        deploy_verdict_t *v = &result->directories.entries[result->directories.count++];
+        deploy_verdict_t *v = &verdicts->directories.entries[verdicts->directories.count++];
 
         v->item = item;
         v->occupant = occupant;
@@ -1030,7 +1030,7 @@ error_t deploy_preflight(
         deploy_skip_t skip = { .item = item };
         bool absent = false;
 
-        check_ancestry(ws, result, path, &skip, &absent);
+        check_ancestry(ws, verdicts, path, &skip, &absent);
 
         /* The path's rungs, unless its ancestry answered (see the directory loop):
          * a row planned as absent is written beneath a directory this run converges
@@ -1044,7 +1044,7 @@ error_t deploy_preflight(
              * row lands through its parent, whichever arm writes it and whether
              * or not something is already at the path — so one question covers
              * both, and it is never about the path itself. */
-            check_landing(ws, result, path, &skip);
+            check_landing(ws, verdicts, path, &skip);
 
             if (skip.reason == DEPLOY_SKIP_NONE) {
                 if (occupant_conflicts(occupant, item->row->type)) {
@@ -1113,17 +1113,17 @@ error_t deploy_preflight(
         if (skip.reason == DEPLOY_SKIP_NONE) {
             RETURN_IF_ERROR(
                 check_ownership(
-                opts, &result->warnings, item->row, &uid, &gid, &skip.reason
+                opts, &verdicts->warnings, item->row, &uid, &gid, &skip.reason
                 )
             );
         }
 
         if (skip.reason != DEPLOY_SKIP_NONE) {
-            result->skipped.entries[result->skipped.count++] = skip;
+            verdicts->skipped.entries[verdicts->skipped.count++] = skip;
             continue;
         }
 
-        deploy_verdict_t *v = &result->files.entries[result->files.count++];
+        deploy_verdict_t *v = &verdicts->files.entries[verdicts->files.count++];
 
         v->item = item;
         v->occupant = occupant;
@@ -1151,7 +1151,7 @@ error_t deploy_preflight(
         const workspace_item_t *item = all_dirs.entries[i];
         const char *path = item->filesystem_path;
 
-        if (directory_is_deployable(result, path)) {
+        if (directory_is_deployable(verdicts, path)) {
             continue;
         }
 
@@ -1161,17 +1161,17 @@ error_t deploy_preflight(
         deploy_skip_t skip = { .item = item };
         bool absent = false;
 
-        check_ancestry(ws, result, path, &skip, &absent);
+        check_ancestry(ws, verdicts, path, &skip, &absent);
         if (skip.reason != DEPLOY_SKIP_NONE) {
             continue;   /* skipped beneath a squatted ancestor that stays */
         }
 
         if (!(absent || item->occupant == FS_OCCUPANT_NONE) ||
-            !above_deployable_row(result, path)) {
+            !above_deployable_row(verdicts, path)) {
             continue;
         }
 
-        deploy_verdict_t *v = &result->ancestors.entries[result->ancestors.count++];
+        deploy_verdict_t *v = &verdicts->ancestors.entries[verdicts->ancestors.count++];
 
         v->item = item;
         v->occupant = FS_OCCUPANT_NONE;
@@ -1185,12 +1185,12 @@ error_t deploy_preflight(
          * can write. */
         RETURN_IF_ERROR(
             resolve_deployment_ownership(
-            item->row, opts->strict_ownership, &result->warnings, &v->uid, &v->gid
+            item->row, opts->strict_ownership, &verdicts->warnings, &v->uid, &v->gid
             )
         );
     }
 
-    *out = result;
+    *out = verdicts;
     return NULL;
 }
 
@@ -1214,11 +1214,11 @@ typedef struct {
 typedef struct {
     git_repository *repo;
     content_cache_t *cache;
-    const workspace_t *ws;                     /* a landing directory's row (holdable_directory) */
-    const deploy_preflight_result_t *verdicts; /* the ancestors' metadata (create_ancestor) */
-    deploy_result_t *result;                   /* the receipt so far (the ancestors bucket) */
-    arena_t *arena;                            /* the held directories live here */
-    ptr_array_t held;                          /* held_directory_t *, in the order taken */
+    const workspace_t *ws;              /* a landing directory's row (holdable_directory) */
+    const deploy_preflight_t *verdicts; /* the ancestors' metadata (create_ancestor) */
+    deploy_receipt_t *receipt;          /* the receipt so far (the ancestors bucket) */
+    arena_t *arena;                     /* the held directories live here */
+    ptr_array_t held;                   /* held_directory_t *, in the order taken */
 } deploy_run_t;
 
 /**
@@ -1375,7 +1375,7 @@ static error_t create_ancestor(deploy_run_t *run, const char *path) {
         /* On the receipt once — and bounds the sized array: a parent present at
          * an earlier row's write and removed since is re-made here, and without
          * this scan the second re-make would write past entries[count]. */
-        deploy_outcomes_t *receipt = &run->result->ancestors;
+        deploy_outcomes_t *receipt = &run->receipt->ancestors;
         for (size_t j = 0; j < receipt->count; j++) {
             if (receipt->entries[j].verdict == v) {
                 return NULL;
@@ -1725,9 +1725,9 @@ static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
  * offender every deeper row is named against. The failed bucket is empty on every
  * healthy run, which is what makes the scan free.
  */
-static const char *poisoned_above(const deploy_result_t *result, const char *path) {
-    for (size_t i = 0; i < result->failed.count; i++) {
-        const deploy_verdict_t *v = result->failed.entries[i].verdict;
+static const char *poisoned_above(const deploy_receipt_t *receipt, const char *path) {
+    for (size_t i = 0; i < receipt->failed.count; i++) {
+        const deploy_verdict_t *v = receipt->failed.entries[i].verdict;
         const char *dir = v->item->filesystem_path;
 
         if (v->item->item_kind != PATH_KIND_DIRECTORY ||
@@ -1748,16 +1748,16 @@ static const char *poisoned_above(const deploy_result_t *result, const char *pat
  * Every exit passes through release_directories: a held directory takes its exact
  * recorded mode however the rows fared, so the tree a failure leaves behind is
  * incomplete but never wider than recorded. Row failures land in the receipt
- * (deploy_result_t's contract); the receipt travels in *out beside a release
+ * (deploy_receipt_t's contract); the receipt travels in *out beside a release
  * error too, complete.
  */
 error_t deploy_execute(
     git_repository *repo,
     const workspace_t *ws,
-    const deploy_preflight_result_t *verdicts,
+    const deploy_preflight_t *verdicts,
     content_cache_t *cache,
     arena_t *arena,
-    deploy_result_t **out
+    deploy_receipt_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(ws);
@@ -1766,28 +1766,25 @@ error_t deploy_execute(
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    error_t err = NULL;
-
-    deploy_result_t *result = heap_calloc(1, sizeof(deploy_result_t));
-
-    /* The receipt is sized to the verdicts up front — one slot per verdict, zeroed,
-     * filled in verdict order as each act lands (a zeroed slot's stat IS the
-     * UNSET triple), the failed bucket to both kinds together — every promised
-     * row could fail. count gates what a consumer reads, so an untaken slot is
-     * invisible and the receipt holds exactly what happened — for a landed file,
-     * with its own write's stat. */
-    result->deployed.entries = heap_calloc(
-        verdicts->files.count, sizeof(*result->deployed.entries)
+    /* The receipt is sized to the verdicts up front, in the arena the run is
+     * handed — one slot per verdict, zeroed, filled in verdict order as each
+     * act lands (a zeroed slot's stat IS the UNSET triple), the failed bucket
+     * to both kinds together — every promised row could fail. count gates what
+     * a consumer reads, so an untaken slot is invisible and the receipt holds
+     * exactly what happened — for a landed file, with its own write's stat. */
+    deploy_receipt_t *receipt = arena_calloc(arena, 1, sizeof(*receipt));
+    receipt->deployed.entries = arena_calloc(
+        arena, verdicts->files.count, sizeof(*receipt->deployed.entries)
     );
-    result->converged.entries = heap_calloc(
-        verdicts->directories.count, sizeof(*result->converged.entries)
+    receipt->converged.entries = arena_calloc(
+        arena, verdicts->directories.count, sizeof(*receipt->converged.entries)
     );
-    result->ancestors.entries = heap_calloc(
-        verdicts->ancestors.count, sizeof(*result->ancestors.entries)
+    receipt->ancestors.entries = arena_calloc(
+        arena, verdicts->ancestors.count, sizeof(*receipt->ancestors.entries)
     );
-    result->failed.entries = heap_calloc(
-        verdicts->directories.count + verdicts->files.count,
-        sizeof(*result->failed.entries)
+    receipt->failed.entries = arena_calloc(
+        arena, verdicts->directories.count + verdicts->files.count,
+        sizeof(*receipt->failed.entries)
     );
 
     deploy_run_t run = {
@@ -1795,7 +1792,7 @@ error_t deploy_execute(
         .cache    = cache,
         .ws       = ws,
         .verdicts = verdicts,
-        .result   = result,
+        .receipt  = receipt,
         .arena    = arena,
     };
     ptr_array_init(&run.held, arena);
@@ -1808,22 +1805,21 @@ error_t deploy_execute(
      * the replace has made that true. */
     for (size_t i = 0; i < verdicts->directories.count; i++) {
         const deploy_verdict_t *v = &verdicts->directories.entries[i];
-        const char *above = poisoned_above(result, v->item->filesystem_path);
+        const char *above = poisoned_above(receipt, v->item->filesystem_path);
 
-        err = above ? ERROR(ERR_FS, "'%s' was not converged", above)
-                    : deploy_directory(&run, v);
+        error_t err = above ? ERROR(ERR_FS, "'%s' was not converged", above)
+                            : deploy_directory(&run, v);
         if (err) {
             /* The row's own outcome; the cause already names its subject */
-            deploy_outcome_t *o = &result->failed.entries[result->failed.count++];
+            deploy_outcome_t *o = &receipt->failed.entries[receipt->failed.count++];
 
             o->verdict = v;
             o->error = err;
-            err = NULL;
             continue;
         }
 
         /* Record success; the verb is the verdict's occupant */
-        result->converged.entries[result->converged.count++].verdict = v;
+        receipt->converged.entries[receipt->converged.count++].verdict = v;
     }
 
     /* Every verdict is work the plan chose, by construction: the planner routed
@@ -1833,52 +1829,30 @@ error_t deploy_execute(
      * deploy_file. */
     for (size_t i = 0; i < verdicts->files.count; i++) {
         const deploy_verdict_t *v = &verdicts->files.entries[i];
-        deploy_outcome_t *o = &result->deployed.entries[result->deployed.count];
-        const char *above = poisoned_above(result, v->item->filesystem_path);
+        deploy_outcome_t *o = &receipt->deployed.entries[receipt->deployed.count];
+        const char *above = poisoned_above(receipt, v->item->filesystem_path);
 
-        err = above ? ERROR(ERR_FS, "'%s' was not converged", above)
-                    : deploy_file(&run, v, &o->stat);
+        error_t err = above ? ERROR(ERR_FS, "'%s' was not converged", above)
+                            : deploy_file(&run, v, &o->stat);
         if (err) {
             /* The row's own outcome, as above. The deployed slot stays untaken:
              * count never covers it, and its stat is UNSET on every deploy_file
              * error return. */
-            deploy_outcome_t *f = &result->failed.entries[result->failed.count++];
+            deploy_outcome_t *f = &receipt->failed.entries[receipt->failed.count++];
 
             f->verdict = v;
             f->error = err;
-            err = NULL;
             continue;
         }
 
         /* Record success */
         o->verdict = v;
-        result->deployed.count++;
+        receipt->deployed.count++;
     }
 
     /* The subtree is as complete as it is going to get: exact modes now. The
      * rows' failures are in the receipt; what the release returns is the run's
      * one non-row error, and the receipt travels beside it either way. */
-    err = release_directories(&run);
-
-    *out = result;
-    return err;
-}
-
-/* ══════════════════════════════════════════════════════════════════
- * Teardown
- * ══════════════════════════════════════════════════════════════════ */
-
-/**
- * Free a deployment receipt — the four outcome arrays. The failed bucket's causes
- * are borrowed, as every error is, and the verdicts they all point at belong to
- * the preflight result.
- */
-void deploy_result_free(deploy_result_t *result) {
-    if (!result) return;
-
-    free(result->deployed.entries);
-    free(result->converged.entries);
-    free(result->ancestors.entries);
-    free(result->failed.entries);
-    free(result);
+    *out = receipt;
+    return release_directories(&run);
 }

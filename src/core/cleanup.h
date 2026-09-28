@@ -475,14 +475,14 @@ typedef struct {
  *   verdicts->prunable_files ∪ verdicts->prunable_dirs = pruned_files ∪
  *       reclaimed_files ∪ pruned_dirs ∪ reclaimed_dirs ∪ skipped_dirs ∪ failed
  *
- * — the mirror of deploy_result_t's equation. It holds by the loops' shape: every
- * iteration ends in exactly one bucket, and the occupant switch is total, so a
- * new occupant is a build error and never a dropped item. The fates execute never
- * touches — released, skipped at preflight, absent at load — are the verdicts'
- * and are read there: they are decisions, and this object reports effects. The
- * preview says both; the receipt's printer restates the decided ones from the
- * verdicts and reports the run's own from here, in the preview's order (apply's
- * apply_print_cleanup_results reads both objects).
+ * — the mirror of deploy_receipt_t's equation. It holds by the loops' shape:
+ * every iteration ends in exactly one bucket, and the occupant switch is total,
+ * so a new occupant is a build error and never a dropped item. The fates execute
+ * never touches — released, skipped at preflight, absent at load — are the
+ * verdicts' and are read there: they are decisions, and this object reports
+ * effects. The preview says both; the receipt's printer restates the decided
+ * ones from the verdicts and reports the run's own from here, in the preview's
+ * order (apply's apply_print_cleanup_results reads both objects).
  *
  * pruned_* guarantee a filesystem removal happened. reclaimed_* were gone by
  * the time the run looked — after the prompt, before the removal — so no removal

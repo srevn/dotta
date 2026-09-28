@@ -86,7 +86,7 @@
  * line: the exit error's message is the count's one home.
  */
 static void apply_print_deploy_skips(
-    output_t *out, const deploy_preflight_result_t *verdicts
+    output_t *out, const deploy_preflight_t *verdicts
 ) {
     if (verdicts->skipped.count == 0) return;
 
@@ -352,7 +352,7 @@ static void apply_print_deploy_skips(
  */
 static void apply_print_deploy_preview(
     output_t *out,
-    const deploy_preflight_result_t *verdicts
+    const deploy_preflight_t *verdicts
 ) {
     const deploy_verdicts_t *files = &verdicts->files;
     const deploy_verdicts_t *dirs = &verdicts->directories;
@@ -634,14 +634,14 @@ static void apply_print_withheld(
 }
 
 /**
- * Print deployment results
+ * Print deploy's receipt
  *
- * Handles all output for deployment results. The deploy layer only collects
- * outcomes; this function handles all presentation — the run's receipt, per-item
- * sections at verbose and summary counts at normal. Every number is the same
- * fold the preview takes over the verdicts (apply_print_deploy_preview), taken
- * here over the verdicts the run carried out — so the receipt restates the preview
- * by construction, adding nothing of its own.
+ * Handles all output for the receipt. The deploy layer only collects outcomes;
+ * this function handles all presentation — the run's receipt, per-item sections
+ * at verbose and summary counts at normal. Every number is the same fold the
+ * preview takes over the verdicts (apply_print_deploy_preview), taken here over
+ * the verdicts the run carried out — so the receipt restates the preview by
+ * construction, adding nothing of its own.
  *
  * Categories (each semantically distinct):
  * - deployed: Files written to disk (green)
@@ -681,13 +681,13 @@ static void apply_print_withheld(
  * Adoption (ownership stamping for pre-existing matching files) is an apply-level
  * concern and its summary is printed by cmd_apply directly.
  */
-static void apply_print_deploy_results(
+static void apply_print_deploy_receipt(
     output_t *out,
-    const deploy_result_t *result
+    const deploy_receipt_t *receipt
 ) {
-    deploy_outcomes_t deployed = result->deployed;
-    deploy_outcomes_t converged = result->converged;
-    deploy_outcomes_t ancestors = result->ancestors;
+    deploy_outcomes_t deployed = receipt->deployed;
+    deploy_outcomes_t converged = receipt->converged;
+    deploy_outcomes_t ancestors = receipt->ancestors;
 
     /* The verbs, folded off the carried-out fates exactly as the preview folds
      * them off the verdicts (apply_print_deploy_preview) — the receipt restates
@@ -883,10 +883,10 @@ static void apply_print_deploy_results(
      * capped the way the skip block is. The cause is the chain's root, where
      * the refusal speaks verbatim — EISDIR, ENOSPC, a blob that would not load;
      * the wraps above it restate the row the line already names. */
-    if (result->failed.count > 0) {
+    if (receipt->failed.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Failed deployments");
-        for (size_t i = 0; i < result->failed.count && i < LIST_LIMIT; i++) {
-            const deploy_outcome_t *o = &result->failed.entries[i];
+        for (size_t i = 0; i < receipt->failed.count && i < LIST_LIMIT; i++) {
+            const deploy_outcome_t *o = &receipt->failed.entries[i];
 
             output_styled(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s)\n",
@@ -894,9 +894,9 @@ static void apply_print_deploy_results(
                 error_message(error_root(o->error))
             );
         }
-        if (result->failed.count > LIST_LIMIT) {
+        if (receipt->failed.count > LIST_LIMIT) {
             output_print(
-                out, OUTPUT_NORMAL, "  ... and %zu more\n", result->failed.count - LIST_LIMIT
+                out, OUTPUT_NORMAL, "  ... and %zu more\n", receipt->failed.count - LIST_LIMIT
             );
         }
     }
@@ -1602,7 +1602,7 @@ static void apply_print_cleanup_refused(
  * @param ws Workspace (must not be NULL): the items every fate carries are its own
  * @param cleanup_verdicts Cleanup's verdicts (must not be NULL)
  * @param cleanup_result Cleanup's receipt (must not be NULL)
- * @param deploy_result Deploy's receipt, or NULL where the run deployed nothing
+ * @param deploy_receipt Deploy's receipt, or NULL where the run deployed nothing
  * @param now Timestamp of the run's ownership events (must be > 0)
  * @param acknowledged The pending reassignments the record acknowledged (must
  *                     not be NULL) — zero where the phase fails, since nothing
@@ -1614,7 +1614,7 @@ static error_t apply_write_record(
     workspace_t *ws,
     const cleanup_preflight_result_t *cleanup_verdicts,
     const cleanup_result_t *cleanup_result,
-    const deploy_result_t *deploy_result,
+    const deploy_receipt_t *deploy_receipt,
     time_t now,
     size_t *acknowledged
 ) {
@@ -1723,8 +1723,8 @@ static error_t apply_write_record(
      * were said where they were written. Ancestors' ownership events stay
      * uncounted: they are outside the plan, so no writer named them for the
      * preview, and an acknowledgement that rides one heals the record silently. */
-    if (deploy_result) {
-        deploy_outcomes_t deployed = deploy_result->deployed;
+    if (deploy_receipt) {
+        deploy_outcomes_t deployed = deploy_receipt->deployed;
 
         for (size_t i = 0; i < deployed.count; i++) {
             const deploy_outcome_t *o = &deployed.entries[i];
@@ -1741,7 +1741,7 @@ static error_t apply_write_record(
             if (err) goto cleanup;
         }
 
-        deploy_outcomes_t converged = deploy_result->converged;
+        deploy_outcomes_t converged = deploy_receipt->converged;
         for (size_t i = 0; i < converged.count; i++) {
             const deploy_verdict_t *v = converged.entries[i].verdict;
             const workspace_item_t *item = v->item;
@@ -1785,7 +1785,7 @@ static error_t apply_write_record(
             if (err) goto cleanup;
         }
 
-        deploy_outcomes_t ancestors = deploy_result->ancestors;
+        deploy_outcomes_t ancestors = deploy_receipt->ancestors;
         for (size_t i = 0; i < ancestors.count; i++) {
             err = workspace_anchor(
                 ws, ancestors.entries[i].verdict->item, STATE_STAT_UNSET, now
@@ -1831,9 +1831,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     workspace_t *ws = NULL;
     deploy_plan_t *deploy_plan = NULL;                 /* Items borrow from ws */
     cleanup_plan_t *cleanup_plan = NULL;               /* Items borrow from ws */
-    deploy_preflight_result_t *deploy_verdicts = NULL; /* Fates borrow items from ws */
+    deploy_preflight_t *deploy_verdicts = NULL; /* Fates borrow items from ws */
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
-    deploy_result_t *deploy_result = NULL;   /* Outcomes borrow the fates */
+    deploy_receipt_t *deploy_receipt = NULL;   /* Outcomes borrow the fates */
     cleanup_result_t *cleanup_result = NULL; /* Outcomes borrow the verdicts */
 
     /* CLI flags override config */
@@ -2753,10 +2753,10 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             /* The content cache was populated with decrypted content during
              * workspace divergence analysis; deploy's fetches hit it. */
             err = deploy_execute(
-                repo, ws, deploy_verdicts, content_cache, ctx->arena, &deploy_result
+                repo, ws, deploy_verdicts, content_cache, ctx->arena, &deploy_receipt
             );
 
-            apply_print_deploy_results(out, deploy_result);
+            apply_print_deploy_receipt(out, deploy_receipt);
             if (err) {
                 /* Infrastructure, never a row — a row's own failure is in the
                  * receipt's failed bucket, and the run goes on to record what
@@ -2788,7 +2788,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * refused is said beneath the receipts, with what it left standing; one
          * that landed says only the reassignments it acknowledged, at the tail. */
         error_t record_err = apply_write_record(
-            ctx, ws, cleanup_verdicts, cleanup_result, deploy_result, now, &acknowledged_count
+            ctx, ws, cleanup_verdicts, cleanup_result, deploy_receipt, now, &acknowledged_count
         );
         if (record_err) {
             output_gap(out, OUTPUT_NORMAL);
@@ -2852,8 +2852,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             undelivered++;
         }
     }
-    if (deploy_result) {
-        undelivered += deploy_result->failed.count;
+    if (deploy_receipt) {
+        undelivered += deploy_receipt->failed.count;
     }
 
     /* Attempted and refused only — the skipped orphans stay out: cleanup's plan
@@ -2884,11 +2884,10 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
 cleanup:
-    /* What the engines hold on the heap: their two receipts, in either order —
-     * each borrows only what the arena holds. None frees an item: the workspace,
-     * its items, both plans and both engines' verdicts are the arena's
+    /* What the engines hold on the heap: cleanup's receipt, which borrows only
+     * what the arena holds. None frees an item: the workspace, its items, both
+     * plans, both engines' verdicts and deploy's receipt are the arena's
      * (core/deploy.h, core/cleanup.h). */
-    if (deploy_result) deploy_result_free(deploy_result);
     if (cleanup_result) cleanup_result_free(cleanup_result);
 
     return err;

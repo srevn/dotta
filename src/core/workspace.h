@@ -152,7 +152,7 @@ typedef enum {
  *
  * The words on screen: MODE is the mode and OWNERSHIP the ownership wherever a
  * screen names a claim axis that differs — the tags (workspace_item_tags), which
- * apply's fixed directories print too (cmds/apply.c apply_print_deploy_results),
+ * apply's fixed directories print too (cmds/apply.c apply_print_deploy_receipt),
  * diff's status line (cmds/diff.c get_status_message_from_item), and a skipped
  * orphan's label and legend (cmds/apply.c apply_print_cleanup_skips, cmds/status.c
  * status_print_workspace) — and a sentence that names both says "mode and

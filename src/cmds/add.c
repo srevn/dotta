@@ -48,7 +48,7 @@
  * `claim` is the pair the namer reads (core/manifest.h manifest_claim_t): the
  * name the capture commits under, and the kind that says whether anything can
  * be named beneath it. The listing indexes it by that key, so every path beneath
- * one already listed is named from it and the walk carries no frame of its own.
+ * one already listed is named from it, and no name is carried down the walk.
  *
  * `occupant` is what the listing's lstat found there, and it chooses the capture:
  * a link's (content_capture_link) or a regular file's (content_capture_file),
@@ -86,7 +86,7 @@ typedef struct {
  * CLI arguments (~/.config and ~/.config/fish) list each path once — a directory
  * already walked is skipped with its subtree, a file already listed is not listed
  * again — and every path beneath one already listed is named from its claim,
- * which is why no frame is carried down the walk. The key is the path, so two
+ * which is why no name is carried down the walk. The key is the path, so two
  * spellings of one argument — `~/x` beside its absolute, `./x` beside `~/x` from
  * inside HOME — are one key; a link is a component, so a path through one and
  * the path around it are two, as two claims through and around it are two claims
@@ -422,23 +422,28 @@ static bool add_excluded(
  * List `filesystem_path` under the name it was given: the item, its bucket, and
  * the listing's index
  *
- * The item is the arena's and stable, which is what lets the index borrow its
- * claim rather than a loop-local pair — and that is what makes every path beneath
- * this one nameable from it (core/manifest.h manifest_name, the `pending` layer).
- * The claim's kind is the occupant's reading — a directory is a directory, and
- * anything else the listing keeps is a file, a link among them — so the kind
- * and the occupant the capture is chosen by are one fact. The kind chooses the
- * bucket: the walk is the sole source of directory tracking, and every phase
- * after reads the two lists apart.
+ * The one door a walked path leaves the walk's scratch through: both strings
+ * are copied into the command arena, where the item lives, so the index's key
+ * and the claim it lends are the item's own and outlive the entry that found
+ * them (sys/filesystem.h fs_listing_t). The item is the arena's and stable, which
+ * is what lets the index borrow its claim rather than a loop-local pair — and
+ * that is what makes every path beneath this one nameable from it (core/manifest.h
+ * manifest_name, the `pending` layer). The claim's kind is the occupant's reading
+ * — a directory is a directory, and anything else the listing keeps is a file,
+ * a link among them — so the kind and the occupant the capture is chosen by are
+ * one fact. The kind chooses the bucket: the walk is the sole source of directory
+ * tracking, and every phase after reads the two lists apart.
  */
 static void add_list(
     walk_t *walk, const char *filesystem_path, const char *storage_path,
     fs_occupant_t occupant
 ) {
-    path_t *path = arena_calloc(walk->ctx->arena, 1, sizeof(*path));
-    path->filesystem_path = filesystem_path;
+    arena_t *arena = walk->ctx->arena;
+
+    path_t *path = arena_calloc(arena, 1, sizeof(*path));
+    path->filesystem_path = arena_strdup(arena, filesystem_path);
     path->claim = (manifest_claim_t){
-        storage_path,
+        arena_strdup(arena, storage_path),
         occupant == FS_OCCUPANT_DIRECTORY ? PATH_KIND_DIRECTORY : PATH_KIND_FILE
     };
     path->occupant = occupant;
@@ -447,7 +452,7 @@ static void add_list(
         path->claim.kind == PATH_KIND_DIRECTORY ? &walk->directories : &walk->files,
         path
     );
-    hashmap_set(walk->listing, filesystem_path, &path->claim);
+    hashmap_set(walk->listing, path->filesystem_path, &path->claim);
 }
 
 /**
@@ -525,15 +530,23 @@ static error_t add_admit(
  * there costs nothing, where a skip would leave the profile permanently short
  * of a subtree that can in fact be captured.
  *
- * On error the lists keep what was collected, in the command arena.
+ * On error the lists keep what was collected, in the command arena, and the scratch
+ * is left as it stands, for the walk's driver to free.
+ *
+ * @param walk      The walk (must not be NULL)
+ * @param scratch   The walk's: every frame's listing and every entry's strings
+ *                  (must not be NULL)
+ * @param directory The key this frame enumerates, already settled (must not be
+ *                  NULL)
+ * @param depth     Frames beneath the argument the walk began at
+ * @return Error or NULL on success
  */
 static error_t add_collect(
-    walk_t *walk, const char *directory, size_t depth
+    walk_t *walk, arena_t *scratch, const char *directory, size_t depth
 ) {
     CHECK_NULL(walk);
     CHECK_NULL(directory);
 
-    arena_t *arena = walk->ctx->arena;
     output_t *out = walk->ctx->out;
 
     /* The bound is the frame's own, tested before it enumerates. A directory
@@ -549,25 +562,15 @@ static error_t add_collect(
         );
     }
 
-    /* "/" is the one directory whose spelling ends in its separator: a child
-     * beneath it is joined with none. */
-    const char *separator = directory[1] ? "/" : "";
+    /* The frame's listing, in the walk's scratch (sys/filesystem.h fs_listing_t):
+     * the whole of it, and the stream closed with it — one open at a time down
+     * the recursion rather than one per frame. Each child's strings — its path
+     * and its name — go at the next entry, the frames of its subtree with them;
+     * what outlives the entry is a listed path's, copied at its door (add_list). */
+    fs_listing_t listing;
+    RETURN_IF_ERROR(fs_listing_init(&listing, scratch, directory));
 
-    /* The whole listing, and the stream closed with it: one open at a time down
-     * the recursion rather than one per frame, and the errno discipline is
-     * fs_list_dir's. The listing lives in a frame of this call's own, freed as
-     * the call returns: its names are read only to compose the children's paths,
-     * and those are the command arena's. */
-    arena_t *frame = arena_create(0);
-    string_array_t children;
-    error_t err = fs_list_dir(directory, frame, &children);
-    if (err) goto cleanup;
-
-    for (size_t i = 0; i < children.count; i++) {
-        const char *child_fs = arena_str_format(
-            arena, "%s%s%s", directory, separator, children.entries[i]
-        );
-
+    for (const char *child_fs; (child_fs = fs_listing_next(&listing)) != NULL;) {
         /* One lstat names what stands there, and the kind follows from it: a
          * symlink is never a directory here. Absence is a skip — the listing
          * and this look are two moments, and a path that left between them is
@@ -584,13 +587,8 @@ static error_t add_collect(
                 output_info(out, OUTPUT_VERBOSE, "Skipped absent: %s", child_fs);
                 continue;
 
-            case FS_OCCUPANT_UNKNOWN: {
-                int saved_errno = errno;
-                err = error_from_errno(
-                    saved_errno, "Failed to stat '%s'", child_fs
-                );
-                goto cleanup;
-            }
+            case FS_OCCUPANT_UNKNOWN:
+                return error_from_errno(errno, "Failed to stat '%s'", child_fs);
 
             case FS_OCCUPANT_OTHER:
                 output_info(
@@ -618,7 +616,7 @@ static error_t add_collect(
          * the nearest claim above it, else the label of the root it lies under,
          * the word alone where the child is one of this profile's own roots. */
         const char *child_storage = manifest_name(
-            arena, walk->view, walk->profile, child_fs, walk->listing
+            scratch, walk->view, walk->profile, child_fs, walk->listing
         );
 
         /* Check exclude patterns */
@@ -665,14 +663,13 @@ static error_t add_collect(
          * the run failing, and publishing a selection past one would commit a
          * silently partial capture. A conflict is warned and dropped, one per
          * child it skips. */
-        err = add_admit(walk, child_storage, kind);
+        error_t err = add_admit(walk, child_storage, kind);
         if (err) {
-            if (error_code(err) != ERR_CONFLICT) goto cleanup;
+            if (error_code(err) != ERR_CONFLICT) return err;
             output_warning(
                 out, OUTPUT_NORMAL, "Skipping '%s': %s", child_fs,
                 error_message(err)
             );
-            err = NULL;
             continue;
         }
 
@@ -680,15 +677,11 @@ static error_t add_collect(
 
         /* Settled, so the descent is one statement. */
         if (kind == PATH_KIND_DIRECTORY) {
-            err = add_collect(walk, child_fs, depth + 1);
-            if (err) goto cleanup;
+            RETURN_IF_ERROR(add_collect(walk, scratch, child_fs, depth + 1));
         }
     }
 
-cleanup:
-    arena_free(frame);
-
-    return err;
+    return NULL;
 }
 
 /**
@@ -1800,13 +1793,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 goto cleanup;
             }
 
-            case FS_OCCUPANT_UNKNOWN: {
-                int saved_errno = errno;
-                err = error_from_errno(
-                    saved_errno, "Cannot access '%s'", filesystem_path
-                );
+            case FS_OCCUPANT_UNKNOWN:
+                err = error_from_errno(errno, "Cannot access '%s'", filesystem_path);
                 goto cleanup;
-            }
 
             case FS_OCCUPANT_OTHER:
                 err = ERROR(
@@ -1958,7 +1947,11 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         add_list(&walk, filesystem_path, storage_path, occupant);
 
         if (kind == PATH_KIND_DIRECTORY) {
-            err = add_collect(&walk, filesystem_path, 0);
+            /* The walk's one scratch, freed whatever the walk met: every frame's
+             * listing and every entry's strings, none of which outlives it. */
+            arena_t *scratch = arena_create(0);
+            err = add_collect(&walk, scratch, filesystem_path, 0);
+            arena_free(scratch);
             if (err) {
                 err = error_wrap(err, "Failed to collect from '%s'", file);
                 goto cleanup;

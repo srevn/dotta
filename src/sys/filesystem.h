@@ -563,7 +563,8 @@ error_t fs_list_dir(const char *path, arena_t *arena, string_array_t *out);
  *
  * A value its frame holds, and nothing frees one. Readers: sys/filesystem.c
  * fs_remove_subtree; core/workspace.c workspace_scan, whose entries leave the
- * scratch through workspace_add_untracked.
+ * scratch through workspace_add_untracked; cmds/add.c add_collect, whose leave
+ * through add_list.
  */
 typedef struct {
     arena_t *scratch;       /* The walk's: every listing, path and string it makes */

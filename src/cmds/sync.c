@@ -213,19 +213,17 @@ static error_t *pull_branch_ff(
  * set — different role, different accessor.
  */
 static error_t *sync_fetch_phase(
-    git_repository *repo,
+    const dotta_ctx_t *ctx,
     const char *remote_name,
     const scope_t *scope,
-    sync_results_t *results,
-    output_t *out,
     transfer_context_t *xfer
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ctx);
     CHECK_NULL(remote_name);
     CHECK_NULL(scope);
-    CHECK_NULL(results);
-    CHECK_NULL(out);
 
+    git_repository *repo = ctx->run.repo;
+    output_t *out = ctx->out;
     const string_array_t *profiles = scope_profiles(scope);
 
     /* Check if remote exists */
@@ -258,15 +256,15 @@ static error_t *sync_fetch_phase(
      * or Git's error (gitops_reference_exists): a ref this run cannot read is
      * not "never pushed", and read as that it left the profile out of the fetch
      * without a word. */
-    char **branch_names = heap_calloc(profiles->count, sizeof(char *));
+    string_array_t branch_names;
+    string_array_init(&branch_names, ctx->arena);
 
     error_t *err = NULL;
-    size_t fetch_count = 0;
     for (size_t i = 0; i < profiles->count; i++) {
         char remote_refname[DOTTA_REFNAME_MAX];
         err = gitops_build_refname(
             remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
-            remote_name, profiles->items[i]
+            remote_name, profiles->entries[i]
         );
         if (err) break;
 
@@ -275,11 +273,10 @@ static error_t *sync_fetch_phase(
         if (err) break;
 
         if (tracked) {
-            branch_names[fetch_count++] = profiles->items[i];
+            string_array_push(&branch_names, profiles->entries[i]);
         }
     }
     if (err) {
-        free(branch_names);
         if (ephemeral) {
             output_clear_line(out);
         } else {
@@ -289,8 +286,7 @@ static error_t *sync_fetch_phase(
     }
 
     /* Skip fetch entirely if no profiles have remote tracking refs */
-    if (fetch_count == 0) {
-        free(branch_names);
+    if (branch_names.count == 0) {
         if (ephemeral) {
             output_clear_line(out);
         } else {
@@ -300,9 +296,7 @@ static error_t *sync_fetch_phase(
     }
 
     /* Perform batched fetch - single network operation for all branches */
-    string_array_t fetch_arr = { .items = branch_names, .count = fetch_count };
-    err = gitops_fetch_branches(repo, remote_name, &fetch_arr, xfer);
-    free(branch_names);
+    err = gitops_fetch_branches(repo, remote_name, &branch_names, xfer);
 
     /* Resolve the ephemeral fetch/progress line. Handles all cases:
      *   - Callback completed: already cleared, harmless no-op
@@ -362,12 +356,12 @@ static void sync_analyze_phase(
     for (size_t i = 0; i < profiles->count; i++) {
         profile_sync_result_t *result = &results->profiles[i];
 
-        result->profile = heap_strdup(profiles->items[i]);
+        result->profile = heap_strdup(profiles->entries[i]);
 
         /* Analyze state */
         upstream_info_t info;
         error_t *err = upstream_analyze_profile(
-            repo, remote_name, profiles->items[i], &info
+            repo, remote_name, profiles->entries[i], &info
         );
 
         if (err) {
@@ -1530,8 +1524,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     const char *remote_name = NULL;
     const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
-    char *profiles_str = NULL;
-    char *remote_env = NULL;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1919,17 +1911,15 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     }
 
     /* Build the hook invocation. Same struct is reused for both pre-sync (here)
-     * and post-sync (after the manifest block). profiles_str / remote_env are
-     * heap-allocated and freed at cleanup; sync_extras is a stack literal whose
-     * lifetime is cmd_sync's frame — covers both fire sites. */
-    profiles_str = string_array_join(scope_profiles(scope), " ");
-
-    remote_env = heap_str_format("DOTTA_REMOTE=%s", remote_name);
-
-    char *const sync_extras[] = { remote_env, NULL };
+     * and post-sync (after the manifest block). The invocation's strings are
+     * the command arena's; sync_extras is a stack literal whose lifetime is
+     * cmd_sync's frame — covers both fire sites. */
+    char *const sync_extras[] = {
+        arena_str_format(ctx->arena, "DOTTA_REMOTE=%s", remote_name), NULL
+    };
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_SYNC,
-        .profile    = profiles_str,
+        .profile    = string_array_join(ctx->arena,scope_profiles(scope),  " "),
         .files      = NULL,
         .file_count = 0,
         .extras     = sync_extras,
@@ -1956,9 +1946,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     epoch_reconcile(ctx, remote_name, xfer, opts);
 
     /* Phase 1: Fetch profiles in sync scope from remote */
-    err = sync_fetch_phase(
-        repo, remote_name, scope, results, out, xfer
-    );
+    err = sync_fetch_phase(ctx, remote_name, scope, xfer);
     if (err) goto cleanup;
 
     /* Phase 2: Analyze branch states */
@@ -2245,9 +2233,6 @@ cleanup:
     manifest_free(after);
     if (xfer) transfer_context_free(xfer);
     if (results) sync_results_free(results);
-    if (scope) scope_free(scope);
-    if (profiles_str) free(profiles_str);
-    if (remote_env) free(remote_env);
 
     return err;
 }

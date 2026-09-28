@@ -25,6 +25,7 @@
 #ifndef DOTTA_ARENA_H
 #define DOTTA_ARENA_H
 
+#include <stdarg.h>
 #include <types.h>
 
 /**
@@ -87,6 +88,19 @@ char *arena_strndup(arena_t *arena, const char *str, size_t n);
  */
 char *arena_str_format(arena_t *arena, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
+
+/**
+ * arena_str_format over a va_list, for a formatter of its own
+ *
+ * The format is dotta's own, so one that cannot be formatted is its writer's
+ * bug. Readers: base/array.c string_array_pushf.
+ *
+ * @param fmt  Format string (must not be NULL)
+ * @param args The arguments, as a variadic caller received them
+ * @return Arena-allocated formatted string; never NULL.
+ */
+char *arena_str_vformat(arena_t *arena, const char *fmt, va_list args)
+__attribute__((format(printf, 2, 0)));
 
 /**
  * Room for `want` entries in an array the arena holds

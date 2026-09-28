@@ -781,13 +781,11 @@ static error_t *resolve_deployment_ownership(
 
     /* Otherwise a warning, in the resolver's own words — which name it could
      * not find — and the deployment continues */
-    char *warning = heap_str_format(
-        "Could not resolve ownership for %s: %s",
+    string_array_pushf(
+        warnings, "Could not resolve ownership for %s: %s",
         row->storage_path, error_message(err)
     );
-    error_free(err);    /* its message just moved into the warning */
-
-    string_array_push_owned(warnings, warning);
+    error_free(err);    /* its message is the warning's now */
 
     /* No change, not a guess: a claim that cannot be honoured is not applied by
      * halves — not the half that resolved, and not the invoker for the half that
@@ -899,16 +897,20 @@ error_t *deploy_preflight(
     const workspace_t *ws,
     const deploy_plan_t *plan,
     const deploy_options_t *opts,
+    arena_t *arena,
     deploy_preflight_result_t **out
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(plan);
     CHECK_NULL(opts);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    deploy_preflight_result_t *result = heap_calloc(1, sizeof(deploy_preflight_result_t));
-
-    result->warnings = string_array_new(0);
+    /* The result and every array it holds are the arena's, beside the items they
+     * borrow: nothing frees them, and a failure below leaves a partial result
+     * as the arena's bytes. */
+    deploy_preflight_result_t *result = arena_calloc(arena, 1, sizeof(*result));
+    string_array_init(&result->warnings, arena);
 
     /* One slot per pending item — verdict or skip, so the skip array's bound is
      * both kinds together — and one per directory item for the ancestors (an
@@ -917,12 +919,12 @@ error_t *deploy_preflight(
     workspace_items_t dirs = workspace_items(&plan->directories.pending);
     workspace_items_t all_dirs = workspace_directories(ws);
 
-    result->directories.entries = heap_calloc(dirs.count, sizeof(deploy_verdict_t));
-    result->files.entries = heap_calloc(files.count, sizeof(deploy_verdict_t));
-    result->ancestors.entries = heap_calloc(all_dirs.count, sizeof(deploy_verdict_t));
-    result->skipped.entries = heap_calloc(files.count + dirs.count, sizeof(deploy_skip_t));
-
-    error_t *err = NULL;
+    result->directories.entries = arena_calloc(arena, dirs.count, sizeof(deploy_verdict_t));
+    result->files.entries = arena_calloc(arena, files.count, sizeof(deploy_verdict_t));
+    result->ancestors.entries = arena_calloc(arena, all_dirs.count, sizeof(deploy_verdict_t));
+    result->skipped.entries = arena_calloc(
+        arena, files.count + dirs.count, sizeof(deploy_skip_t)
+    );
 
     /* Directories decide first, then files, then the ancestors — the order the
      * run acts in (deploy_execute), and the order deploy_plan_build classified
@@ -1005,8 +1007,11 @@ error_t *deploy_preflight(
         gid_t gid = (gid_t) -1;
 
         if (skip.reason == DEPLOY_SKIP_NONE) {
-            err = check_ownership(opts, result->warnings, item->row, &uid, &gid, &skip.reason);
-            if (err) goto cleanup;
+            RETURN_IF_ERROR(
+                check_ownership(
+                opts, &result->warnings, item->row, &uid, &gid, &skip.reason
+                )
+            );
         }
 
         if (skip.reason != DEPLOY_SKIP_NONE) {
@@ -1113,8 +1118,11 @@ error_t *deploy_preflight(
         gid_t gid = (gid_t) -1;
 
         if (skip.reason == DEPLOY_SKIP_NONE) {
-            err = check_ownership(opts, result->warnings, item->row, &uid, &gid, &skip.reason);
-            if (err) goto cleanup;
+            RETURN_IF_ERROR(
+                check_ownership(
+                opts, &result->warnings, item->row, &uid, &gid, &skip.reason
+                )
+            );
         }
 
         if (skip.reason != DEPLOY_SKIP_NONE) {
@@ -1182,18 +1190,15 @@ error_t *deploy_preflight(
          * behind (fs_create_dir_exclusive) — the under-approximation this pass
          * accepts for a foreign-owned derived claim above a landing the invoker
          * can write. */
-        err = resolve_deployment_ownership(
-            item->row, opts->strict_ownership, result->warnings, &v->uid, &v->gid
+        RETURN_IF_ERROR(
+            resolve_deployment_ownership(
+            item->row, opts->strict_ownership, &result->warnings, &v->uid, &v->gid
+            )
         );
-        if (err) goto cleanup;
     }
 
     *out = result;
     return NULL;
-
-cleanup:
-    deploy_preflight_result_free(result);
-    return err;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1871,21 +1876,6 @@ error_t *deploy_execute(
 /* ══════════════════════════════════════════════════════════════════
  * Teardown
  * ══════════════════════════════════════════════════════════════════ */
-
-/**
- * Free preflight result — the warnings, the skip array and the verdict arrays.
- * The items they all point at belong to the workspace.
- */
-void deploy_preflight_result_free(deploy_preflight_result_t *verdicts) {
-    if (!verdicts) return;
-
-    string_array_free(verdicts->warnings);
-    free(verdicts->directories.entries);
-    free(verdicts->files.entries);
-    free(verdicts->ancestors.entries);
-    free(verdicts->skipped.entries);
-    free(verdicts);
-}
 
 /**
  * Free a deployment receipt — the four outcome arrays, and the failed bucket's

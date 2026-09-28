@@ -72,11 +72,12 @@
  * No Git operations — takes a branch name list, returns matching names. All
  * detection steps are non-fatal (skip on system call failure).
  *
+ * @param arena Arena the answer lives in (must not be NULL)
  * @param available_branches List of branch names to match against (must not be
  *                           NULL)
- * @return Matched profile names in the convention's order (caller frees)
+ * @return Matched profile names in the convention's order, possibly none
  */
-string_array_t *profile_detect(const string_array_t *available_branches);
+string_array_t profile_detect(arena_t *arena, const string_array_t *available_branches);
 
 /**
  * Order profile names by the layering convention — least specific first.
@@ -119,14 +120,16 @@ void profile_order(string_array_t *names);
  * @param state State handle (must not be NULL; borrowed, not freed). Nothing is
  *              executed on it — the rows are the handle's own — so a handle in
  *              any shape serves.
- * @param out Validated profile names, possibly none (must not be NULL, caller
- *            must free)
+ * @param arena Arena the answer lives in (must not be NULL)
+ * @param out Validated profile names, possibly none (must not be NULL; left as
+ *            it was on a failure)
  * @return Error or NULL on success
  */
 error_t *profile_resolve_enabled(
     git_repository *repo,
     const state_t *state,
-    string_array_t **out
+    arena_t *arena,
+    string_array_t *out
 );
 
 /**
@@ -435,12 +438,14 @@ error_t *profile_holds(
  * can.
  *
  * @param tree Git tree to walk (must not be NULL)
- * @param out String array of storage paths (must not be NULL, caller must free)
+ * @param arena Arena the listing lives in (must not be NULL)
+ * @param out The storage paths (must not be NULL; left as it was on a failure)
  * @return Error or NULL on success
  */
 error_t *profile_list_tree_files(
     const git_tree *tree,
-    string_array_t **out
+    arena_t *arena,
+    string_array_t *out
 );
 
 /**
@@ -452,13 +457,15 @@ error_t *profile_list_tree_files(
  *
  * @param repo Repository (must not be NULL)
  * @param profile Profile name (must not be NULL)
- * @param out String array of storage paths (must not be NULL, caller must free)
+ * @param arena Arena the listing lives in (must not be NULL)
+ * @param out The storage paths (must not be NULL; left as it was on a failure)
  * @return Error or NULL on success
  */
 error_t *profile_list_files(
     git_repository *repo,
     const char *profile,
-    string_array_t **out
+    arena_t *arena,
+    string_array_t *out
 );
 
 /**

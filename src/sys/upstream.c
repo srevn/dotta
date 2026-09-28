@@ -150,38 +150,31 @@ output_color_t upstream_state_color(upstream_state_t state) {
 error_t *upstream_discover_branches(
     git_repository *repo,
     const char *remote_name,
-    string_array_t **out_branches
+    arena_t *arena,
+    string_array_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
-    CHECK_NULL(out_branches);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
 
-    /* Get all remote tracking branches */
-    string_array_t *remote_branches = NULL;
-    error_t *err = gitops_list_remote_tracking(repo, remote_name, &remote_branches);
-    if (err) return err;
+    /* Every remote tracking branch, and every local one: both listings are the
+     * answer's arena's */
+    string_array_t remote_branches;
+    RETURN_IF_ERROR(gitops_list_remote_tracking(repo, remote_name, arena, &remote_branches));
 
-    /* Get all local branches */
-    string_array_t *local_branches = NULL;
-    err = gitops_list_branches(repo, &local_branches);
-    if (err) {
-        string_array_free(remote_branches);
-        return err;
-    }
+    string_array_t local_branches;
+    RETURN_IF_ERROR(gitops_list_branches(repo, arena, &local_branches));
 
-    /* Set difference: remote branches not yet present locally */
-    string_array_t *new_branches = string_array_new(remote_branches->count);
-
-    for (size_t i = 0; i < remote_branches->count; i++) {
-        if (!string_array_contains(local_branches, remote_branches->items[i])) {
-            string_array_push(new_branches, remote_branches->items[i]);
+    /* Set difference, in place and in the remote's order: what is here already
+     * leaves the remote listing, which is then the answer */
+    for (size_t i = remote_branches.count; i-- > 0;) {
+        if (string_array_contains(&local_branches, remote_branches.entries[i])) {
+            string_array_remove(&remote_branches, i);
         }
     }
 
-    string_array_free(remote_branches);
-    string_array_free(local_branches);
-
-    *out_branches = new_branches;
+    *out = remote_branches;
     return NULL;
 }
 
@@ -207,22 +200,19 @@ error_t *upstream_ensure_tracking_branch(
      * blocker is always a local branch: a profile added on this machine and never
      * pushed, standing where a fetched one would go. Refused by name, ahead of
      * the ref write whose own message names only one of the two. */
-    char *blocker = NULL;
-    error_t *err = gitops_branch_blocker(repo, branch_name, &blocker);
-    if (err) return err;
-    if (blocker) {
-        error_t *conflict = ERROR(
+    char blocker[DOTTA_REFNAME_MAX];
+    RETURN_IF_ERROR(gitops_branch_blocker(repo, branch_name, blocker, sizeof(blocker)));
+    if (blocker[0]) {
+        return ERROR(
             ERR_CONFLICT,
             "Branch '%s' already exists, and Git cannot hold '%s' beside it: "
             "one is a name, the other a folder of names", blocker, branch_name
         );
-        free(blocker);
-        return conflict;
     }
 
     /* Get remote ref */
     git_oid target_oid;
-    err = gitops_resolve_remote_branch_oid(
+    error_t *err = gitops_resolve_remote_branch_oid(
         repo, remote_name, branch_name, &target_oid
     );
     if (err) return err;

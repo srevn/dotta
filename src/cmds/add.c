@@ -531,7 +531,7 @@ static error_t *add_admit(
  * there costs nothing, where a skip would leave the profile permanently short
  * of a subtree that can in fact be captured.
  *
- * On error the lists keep what was collected; the caller's cleanup owns them.
+ * On error the lists keep what was collected, in the command arena.
  */
 static error_t *add_collect(
     walk_t *walk, const char *directory, size_t depth
@@ -561,15 +561,17 @@ static error_t *add_collect(
 
     /* The whole listing, and the stream closed with it: one open at a time down
      * the recursion rather than one per frame, and the errno discipline is
-     * fs_list_dir's. */
-    string_array_t *entries = NULL;
-    RETURN_IF_ERROR(fs_list_dir(directory, &entries));
+     * fs_list_dir's. The listing lives in a frame of this call's own, freed as
+     * the call returns: its names are read only to compose the children's paths,
+     * and those are the command arena's. */
+    arena_t *frame = arena_create(0);
+    string_array_t children;
+    error_t *err = fs_list_dir(directory, frame, &children);
+    if (err) goto cleanup;
 
-    error_t *err = NULL;
-
-    for (size_t i = 0; i < entries->count; i++) {
+    for (size_t i = 0; i < children.count; i++) {
         const char *child_fs = arena_str_format(
-            arena, "%s%s%s", directory, separator, entries->items[i]
+            arena, "%s%s%s", directory, separator, children.entries[i]
         );
 
         /* One lstat names what stands there, and the kind follows from it: a
@@ -696,7 +698,7 @@ static error_t *add_collect(
     }
 
 cleanup:
-    string_array_free(entries);
+    arena_free(frame);
 
     return err;
 }
@@ -1407,7 +1409,7 @@ static error_t *add_write_record(
         const char *filesystem_path = NULL;
 
         err = mount_resolve(
-            mounts, profile, retired->items[i], ctx->arena, &filesystem_path
+            mounts, profile, retired->entries[i], ctx->arena, &filesystem_path
         );
         if (err) goto cleanup;
         if (!filesystem_path || manifest_lookup(manifest, filesystem_path)) continue;
@@ -1469,7 +1471,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* The ancestry pass's other half: the keys it retired, read by the record
      * write once the commit that drops them has landed. */
-    string_array_t ancestry_retired STRING_ARRAY_AUTO = { 0 };
+    string_array_t ancestry_retired;
+    string_array_init(&ancestry_retired, ctx->arena);
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1491,10 +1494,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (err) goto cleanup;
 
     if (!profile_exists) {
-        char *blocker = NULL;
-        err = gitops_branch_blocker(repo, opts->profile, &blocker);
+        char blocker[DOTTA_REFNAME_MAX];
+        err = gitops_branch_blocker(repo, opts->profile, blocker, sizeof(blocker));
         if (err) goto cleanup;
-        if (blocker) {
+        if (blocker[0]) {
             const char *base = strlen(blocker) < strlen(opts->profile)
                 ? blocker : opts->profile;
             err = ERROR(
@@ -1502,7 +1505,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 "Git stores each profile as a branch, and '%s' cannot be both "
                 "a branch and a folder of branches.\n", opts->profile, blocker, base
             );
-            free(blocker);
             goto cleanup;
         }
     }

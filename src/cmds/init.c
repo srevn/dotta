@@ -10,7 +10,6 @@
 #include <string.h>
 
 #include "base/args.h"
-#include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
 #include "core/ignore.h"
@@ -46,7 +45,12 @@
  * by its refs like any other: a foreign one is refused with a HEAD it did not
  * have, which git needs to open it at all.
  */
-static error_t *ensure_repository_adoptable(git_repository *repo, const char *path) {
+static error_t *ensure_repository_adoptable(
+    const dotta_ctx_t *ctx,
+    git_repository *repo,
+    const char *path
+) {
+    CHECK_NULL(ctx);
     CHECK_NULL(repo);
     CHECK_NULL(path);
 
@@ -74,15 +78,12 @@ static error_t *ensure_repository_adoptable(git_repository *repo, const char *pa
      * HEAD to name the configured initial branch, so `git init --bare` followed
      * by `git symbolic-ref HEAD refs/heads/x` would fail it and be refused with
      * nothing to lose. */
-    string_array_t *refs = NULL;
-    err = gitops_list_refs(repo, "refs", &refs);
+    string_array_t refs;
+    err = gitops_list_refs(repo, "refs", ctx->arena, &refs);
     if (err) {
         return error_wrap(err, "Failed to list repository references");
     }
-    size_t ref_count = refs->count;
-    string_array_free(refs);
-
-    if (ref_count == 0) return NULL;
+    if (refs.count == 0) return NULL;
 
     return ERROR(
         ERR_CONFLICT,
@@ -177,7 +178,7 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
 
     /* Whose repository is this? Asked before the first step below writes, so a
      * refusal leaves it exactly as it was found. */
-    err = ensure_repository_adoptable(repo, path);
+    err = ensure_repository_adoptable(ctx, repo, path);
     if (err) goto cleanup;
 
     /*

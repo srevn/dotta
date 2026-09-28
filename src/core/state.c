@@ -932,12 +932,12 @@ error_t *state_reorder_profiles(
      * the cache means the caller wants to add a profile — they should call
      * state_enable_profile first. */
     for (size_t i = 0; i < profiles->count; i++) {
-        if (!state_find_profile(state, profiles->items[i])) {
+        if (!state_find_profile(state, profiles->entries[i])) {
             return ERROR(
                 ERR_INVALID_ARG,
                 "state_reorder_profiles: profile '%s' is not currently enabled "
                 "(use state_enable_profile to add a profile)",
-                profiles->items[i]
+                profiles->entries[i]
             );
         }
     }
@@ -974,7 +974,7 @@ error_t *state_reorder_profiles(
      * stay safe. Cost is <100 bytes of memcpy per row; the table tops out around
      * ten rows in practice. */
     for (size_t i = 0; i < profiles->count; i++) {
-        const char *name = profiles->items[i];
+        const char *name = profiles->entries[i];
         const state_profile_entry_t *preserved = state_find_profile(state, name);
 
         /* The precondition loop above guarantees preserved is non-NULL. A profile

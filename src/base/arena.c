@@ -168,10 +168,16 @@ char *arena_strndup(arena_t *arena, const char *str, size_t n) {
 }
 
 char *arena_str_format(arena_t *arena, const char *fmt, ...) {
-    CHECK_NULL(fmt);
-
     va_list args;
     va_start(args, fmt);
+    char *str = arena_str_vformat(arena, fmt, args);
+    va_end(args);
+
+    return str;
+}
+
+char *arena_str_vformat(arena_t *arena, const char *fmt, va_list args) {
+    CHECK_NULL(fmt);
 
     /* Pass 1: size the buffer. A format that cannot be formatted is its writer's
      * bug. */
@@ -185,7 +191,6 @@ char *arena_str_format(arena_t *arena, const char *fmt, ...) {
      * `len` excludes it but its `size` argument includes it. */
     char *buf = arena_alloc(arena, (size_t) len + 1);
     vsnprintf(buf, (size_t) len + 1, fmt, args);
-    va_end(args);
 
     return buf;
 }

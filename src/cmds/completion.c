@@ -61,21 +61,19 @@ void completion_profiles(
         return;
     }
 
-    string_array_t *branches = NULL;
-    error_t *err = gitops_list_branches(repo, &branches);
+    string_array_t branches;
+    error_t *err = gitops_list_branches(repo, ctx->arena, &branches);
     if (err) {
         error_free(err);
     } else {
-        for (size_t i = 0; i < branches->count; i++) {
-            const char *branch = branches->items[i];
+        for (size_t i = 0; i < branches.count; i++) {
+            const char *branch = branches.entries[i];
             fprintf(
                 out, "%s\t%s\n", branch,
                 state_enabled(state, branch) ? "Enabled profile"
                                              : "Available profile"
             );
         }
-
-        string_array_free(branches);
     }
 
     if (set == COMPLETION_ALL) {
@@ -85,17 +83,15 @@ void completion_profiles(
             error_free(err);  /* no remote configured: nothing to download */
             return;
         }
-        string_array_t *remote_branches = NULL;
-        err = upstream_discover_branches(repo, remote_name, &remote_branches);
+        string_array_t remote_branches;
+        err = upstream_discover_branches(repo, remote_name, ctx->arena, &remote_branches);
         if (err) {
             error_free(err);
             return;
         }
-        for (size_t i = 0; i < remote_branches->count; i++) {
-            fprintf(out, "%s\tRemote profile\n", remote_branches->items[i]);
+        for (size_t i = 0; i < remote_branches.count; i++) {
+            fprintf(out, "%s\tRemote profile\n", remote_branches.entries[i]);
         }
-
-        string_array_free(remote_branches);
     }
 }
 
@@ -259,17 +255,17 @@ void completion_refspecs(
     git_repository *repo = ctx->run.repo;
     if (repo == NULL) return;
 
-    string_array_t *branches = NULL;
+    string_array_t branches;
     if (pinned) {
-        branches = string_array_new(1);
-        string_array_push(branches, pinned);
+        string_array_init(&branches, ctx->arena);
+        string_array_push(&branches, pinned);
     } else {
-        error_t *err = gitops_list_branches(repo, &branches);
+        error_t *err = gitops_list_branches(repo, ctx->arena, &branches);
         if (err) {
             error_free(err);  /* silent-failure model */
             return;
         }
-        string_array_sort(branches);  /* deterministic order under the cap */
+        string_array_sort(&branches);  /* deterministic order under the cap */
     }
 
     refspec_walk_ctx_t walk = {
@@ -278,8 +274,8 @@ void completion_refspecs(
         .prefix = (pinned == NULL)
     };
 
-    for (size_t i = 0; i < branches->count; i++) {
-        const char *branch = branches->items[i];
+    for (size_t i = 0; i < branches.count; i++) {
+        const char *branch = branches.entries[i];
 
         git_tree *tree = NULL;
         error_t *load_err = gitops_load_branch_tree(repo, branch, &tree, NULL);
@@ -294,8 +290,6 @@ void completion_refspecs(
         if (walk_err) error_free(walk_err);  /* benign on cap-abort; else also silent */
         if (walk.truncated) break;           /* cap hit (the walk error above was the abort) */
     }
-
-    string_array_free(branches);
 }
 
 /**
@@ -542,22 +536,22 @@ bool completion_paths_under(
     const char *name = slash ? slash + 1 : rel;
     size_t name_len = strlen(name);
 
-    /* The listing's own paths are the arena's and abandoned, the module's idiom
-     * (cmds/add.c add_inside): the only thing freed here is what fs_list_dir
-     * allocated, and no candidate's path has a free to get wrong. */
+    /* The listing and every path built from it are the arena's and abandoned,
+     * the module's idiom (cmds/add.c add_inside): nothing here is freed, so no
+     * candidate's path has a free to get wrong. */
     const char *dir = arena_str_format(
         ctx->arena, "%.*s/%.*s", (int) root_len, root, (int) dir_len, rel
     );
 
-    string_array_t *entries = NULL;
-    err = fs_list_dir(dir, &entries);
+    string_array_t listing;
+    err = fs_list_dir(dir, ctx->arena, &listing);
     if (err) {
         error_free(err);   /* nothing under there: the root applies, nothing to offer */
         return true;
     }
 
-    for (size_t i = 0; i < entries->count; i++) {
-        const char *entry = entries->items[i];
+    for (size_t i = 0; i < listing.count; i++) {
+        const char *entry = listing.entries[i];
         if (strncmp(entry, name, name_len) != 0) continue;
         if (entry[0] == '.' && name[0] != '.') continue;
 
@@ -569,7 +563,6 @@ bool completion_paths_under(
         );
     }
 
-    string_array_free(entries);
     return true;
 }
 

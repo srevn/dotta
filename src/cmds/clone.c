@@ -49,13 +49,13 @@
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (typically "origin")
  * @param profiles Array of profile names to make local (may be NULL when count
- *                 is 0: the items of an empty listing, a remote with no branch)
+ *                 is 0: the entries of an empty listing, a remote with no branch)
  * @param count Number of profiles
  * @param out Output context for messages
- * @param landed Optional: array to populate with the names made local (can be NULL)
- * @return Number made local
+ * @param landed Array the names made local are pushed to, in order (must not be
+ *               NULL)
  */
-static size_t land_profiles(
+static void land_profiles(
     git_repository *repo,
     const char *remote_name,
     char **profiles,
@@ -65,8 +65,7 @@ static size_t land_profiles(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
-
-    size_t local_count = 0;
+    CHECK_NULL(landed);
 
     for (size_t i = 0; i < count; i++) {
         const char *profile = profiles[i];
@@ -82,15 +81,9 @@ static size_t land_profiles(
             error_free(err);
             continue;
         }
-        local_count++;
 
-        /* Add to the landed names array if provided */
-        if (landed) {
-            string_array_push(landed, profile);
-        }
+        string_array_push(landed, profile);
     }
-
-    return local_count;
 }
 
 /**
@@ -99,25 +92,28 @@ static size_t land_profiles(
  * @param repo Repository
  * @param remote_name Remote name
  * @param out Output context
- * @param landed Output: the profile names made local
+ * @param arena Arena the answer and the listing it is read from live in
+ * @param landed Output: the profile names made local (left as it was on a failure)
  * @return Error or NULL on success
  */
 static error_t *land_all_profiles(
     git_repository *repo,
     const char *remote_name,
     output_t *out,
-    string_array_t **landed
+    arena_t *arena,
+    string_array_t *landed
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
+    CHECK_NULL(arena);
     CHECK_NULL(landed);
 
     output_section(out, OUTPUT_NORMAL, "Fetching all remote profiles");
 
     /* Every branch the one fetch brought */
-    string_array_t *all_branches = NULL;
+    string_array_t all_branches;
     error_t *err = gitops_list_remote_tracking(
-        repo, remote_name, &all_branches
+        repo, remote_name, arena, &all_branches
     );
     if (err) {
         return error_wrap(
@@ -126,18 +122,17 @@ static error_t *land_all_profiles(
     }
 
     /* Create array for the profiles made local */
-    string_array_t *successful = string_array_new(0);
+    string_array_t successful;
+    string_array_init(&successful, arena);
 
     /* Create local branches */
-    size_t fetched_count = land_profiles(
-        repo, remote_name, all_branches->items, all_branches->count, out, successful
+    land_profiles(
+        repo, remote_name, all_branches.entries, all_branches.count, out, &successful
     );
-
-    string_array_free(all_branches);
 
     output_success(
         out, OUTPUT_NORMAL, "Fetched %zu profile%s",
-        fetched_count, fetched_count == 1 ? "" : "s"
+        successful.count, successful.count == 1 ? "" : "s"
     );
 
     *landed = successful;
@@ -153,6 +148,7 @@ static error_t *land_all_profiles(
  * them when there are any.
  *
  * @param repo Repository
+ * @param arena Arena the view is built in and the names are joined in
  * @param profiles Profile names to set as enabled (must not be NULL; may be empty)
  * @param out Output context
  * @return Error or NULL on success
@@ -189,11 +185,11 @@ static error_t *initialize_state(
      * enabled. */
     if (profiles->count > 0) {
         for (size_t i = 0; i < profiles->count; i++) {
-            err = state_enable_profile(state, profiles->items[i], NULL);
+            err = state_enable_profile(state, profiles->entries[i], NULL);
             if (err) {
                 state_free(state);
                 return error_wrap(
-                    err, "Failed to enable profile '%s'", profiles->items[i]
+                    err, "Failed to enable profile '%s'", profiles->entries[i]
                 );
             }
         }
@@ -219,18 +215,9 @@ static error_t *initialize_state(
     /* The names enabled, when there are any: a run that enabled nothing said
      * why per profile above, and has no list to print. */
     if (profiles->count > 0) {
-        char profiles_str[1024] = { 0 };
-        size_t offset = 0;
-        for (size_t i = 0; i < profiles->count && offset < sizeof(profiles_str) - 1; i++) {
-            int written = snprintf(
-                profiles_str + offset, sizeof(profiles_str) - offset,
-                "%s%s", profiles->items[i], (i < profiles->count - 1) ? ", " : ""
-            );
-            if (written > 0) offset += written;
-        }
-
         output_success(
-            out, OUTPUT_NORMAL, "Initialized enabled profiles: %s", profiles_str
+            out, OUTPUT_NORMAL, "Initialized enabled profiles: %s",
+            string_array_join(arena, profiles, ", ")
         );
     }
 
@@ -248,41 +235,40 @@ static error_t *initialize_state(
  * unwound still stands, so a removal failure only warns.
  */
 static void rollback_clone_dir(
+    const dotta_ctx_t *ctx,
     const char *path,
-    bool path_preexisted,
-    output_t *out
+    bool path_preexisted
 ) {
     error_t *err = NULL;
 
     if (path_preexisted) {
-        string_array_t *entries = NULL;
-        err = fs_list_dir(path, &entries);
+        string_array_t listing;
+        err = fs_list_dir(path, ctx->arena, &listing);
         if (!err) {
-            for (size_t i = 0; i < entries->count && !err; i++) {
+            for (size_t i = 0; i < listing.count && !err; i++) {
                 char *child = NULL;
-                err = fs_path_join(path, entries->items[i], &child);
+                err = fs_path_join(path, listing.entries[i], &child);
                 if (!err) {
                     err = fs_clear_path(child);
                     free(child);
                 }
             }
-            string_array_free(entries);
         }
     } else {
-        err = fs_remove_dir(path, true);
+        err = fs_remove_dir(path);
     }
 
     if (err) {
         output_warning(
-            out, OUTPUT_NORMAL, "Failed to remove partial clone at %s: %s",
+            ctx->out, OUTPUT_NORMAL, "Failed to remove partial clone at %s: %s",
             path, error_message(err)
         );
-        output_hint(out, OUTPUT_NORMAL, "Remove it manually before retrying");
+        output_hint(ctx->out, OUTPUT_NORMAL, "Remove it manually before retrying");
         error_free(err);
         return;
     }
 
-    output_info(out, OUTPUT_NORMAL, "Rolled back partial clone at %s", path);
+    output_info(ctx->out, OUTPUT_NORMAL, "Rolled back partial clone at %s", path);
 }
 
 /**
@@ -303,10 +289,6 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     bool path_preexisted = false;
     bool clone_landed = false;
     transfer_context_t *xfer = NULL;
-    string_array_t *fetched_profiles = NULL;
-    string_array_t *detected_profiles = NULL;
-    string_array_t to_enable STRING_ARRAY_AUTO = { 0 };
-    string_array_t bootstrap_found STRING_ARRAY_AUTO = { 0 };
 
     if (opts->quiet) {
         output_set_verbosity(out, OUTPUT_QUIET);
@@ -396,15 +378,14 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
              * a ref-bearing one is simply not dotta's. On a listing failure fall
              * through to the foreign diagnostic. */
             bool remote_empty = false;
-            string_array_t *remote_refs = NULL;
+            string_array_t remote_refs;
             error_t *list_err = gitops_list_remote_tracking(
-                repo, "origin", &remote_refs
+                repo, "origin", ctx->arena, &remote_refs
             );
             if (list_err) {
                 error_free(list_err);
             } else {
-                remote_empty = (remote_refs->count == 0);
-                string_array_free(remote_refs);
+                remote_empty = (remote_refs.count == 0);
             }
 
             error_free(err);
@@ -450,25 +431,25 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     }
 
     /* Determine which profiles to fetch */
-    fetched_profiles = string_array_new(0);
+    string_array_t fetched_profiles;
+    string_array_init(&fetched_profiles, ctx->arena);
 
     if (opts->profiles && opts->profile_count > 0) {
         /* Explicit profile management */
         output_section(out, OUTPUT_NORMAL, "Fetching specified profiles");
 
-        size_t fetched_count = land_profiles(
-            repo, "origin", opts->profiles, opts->profile_count, out, fetched_profiles
+        land_profiles(
+            repo, "origin", opts->profiles, opts->profile_count, out, &fetched_profiles
         );
 
         output_success(
             out, OUTPUT_NORMAL, "Fetched %zu of %zu specified profile%s",
-            fetched_count, opts->profile_count, opts->profile_count == 1 ? "" : "s"
+            fetched_profiles.count, opts->profile_count, opts->profile_count == 1 ? "" : "s"
         );
 
     } else if (opts->fetch_all) {
         /* Hub mode - fetch all profiles */
-        string_array_t *all_profiles = NULL;
-        err = land_all_profiles(repo, "origin", out, &all_profiles);
+        err = land_all_profiles(repo, "origin", out, ctx->arena, &fetched_profiles);
 
         if (err) {
             output_error(
@@ -482,9 +463,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
              * listing has none of its own, and initialize_state enables in the
              * order this list has. Named profiles (-p) keep the order typed;
              * detection sorts its own answer. */
-            profile_order(all_profiles);
-            string_array_free(fetched_profiles);
-            fetched_profiles = all_profiles;
+            profile_order(&fetched_profiles);
         }
 
     } else {
@@ -493,9 +472,11 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             out, OUTPUT_NORMAL, "Auto-detecting profiles for this system"
         );
 
-        /* Every branch the one fetch brought */
-        string_array_t *remote_branches = NULL;
-        err = gitops_list_remote_tracking(repo, "origin", &remote_branches);
+        /* Every branch the one fetch brought, and the profiles detected among
+         * them: both empty where the listing failed */
+        string_array_t remote_branches = { 0 };
+        string_array_t detected_profiles = { 0 };
+        err = gitops_list_remote_tracking(repo, "origin", ctx->arena, &remote_branches);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to list remote branches: %s",
@@ -503,48 +484,43 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             );
             error_free(err);
             err = NULL;
-            remote_branches = NULL;
+        } else {
+            /* Name-based detection against remote branches */
+            detected_profiles = profile_detect(ctx->arena, &remote_branches);
         }
 
-        /* Name-based detection against remote branches */
-        if (remote_branches) {
-            detected_profiles = profile_detect(remote_branches);
-        }
-
-        if (detected_profiles && detected_profiles->count > 0) {
+        if (detected_profiles.count > 0) {
             /* Show detected profiles */
-            for (size_t i = 0; i < detected_profiles->count; i++) {
-                output_info(out, OUTPUT_NORMAL, "  • %s", detected_profiles->items[i]);
+            for (size_t i = 0; i < detected_profiles.count; i++) {
+                output_info(out, OUTPUT_NORMAL, "  • %s", detected_profiles.entries[i]);
             }
             output_gap(out, OUTPUT_NORMAL);
 
             /* Make the detected profiles local */
-            size_t fetched_count = land_profiles(
-                repo, "origin", detected_profiles->items, detected_profiles->count,
-                out, fetched_profiles
+            land_profiles(
+                repo, "origin", detected_profiles.entries, detected_profiles.count,
+                out, &fetched_profiles
             );
 
-            if (fetched_count > 0) {
+            if (fetched_profiles.count > 0) {
                 output_success(
                     out, OUTPUT_NORMAL, "Fetched %zu profile%s",
-                    fetched_count, fetched_count == 1 ? "" : "s"
+                    fetched_profiles.count, fetched_profiles.count == 1 ? "" : "s"
                 );
             }
 
         } else {
             /* No profiles detected — show available remote branches as guidance */
             output_warning(out, OUTPUT_NORMAL, "No profiles auto-detected for this system");
-            if (remote_branches && remote_branches->count > 0) {
+            if (remote_branches.count > 0) {
                 output_section(out, OUTPUT_NORMAL, "Available remote profiles");
-                for (size_t i = 0; i < remote_branches->count; i++) {
-                    output_info(out, OUTPUT_NORMAL, "  • %s", remote_branches->items[i]);
+                for (size_t i = 0; i < remote_branches.count; i++) {
+                    output_info(out, OUTPUT_NORMAL, "  • %s", remote_branches.entries[i]);
                 }
                 output_gap(out, OUTPUT_NORMAL);
             }
             output_info(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>' after setup");
         }
-
-        string_array_free(remote_branches);
     }
 
     /* The profiles to enable: every fetched one whose claims this machine can
@@ -556,8 +532,10 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * read, or a sheet this build cannot, fails the clone whole and rolls the
      * store back — as the build in initialize_state already did for a portable
      * branch, and now for every fetched one. */
-    for (size_t i = 0; i < fetched_profiles->count; i++) {
-        const char *profile = fetched_profiles->items[i];
+    string_array_t to_enable;
+    string_array_init(&to_enable, ctx->arena);
+    for (size_t i = 0; i < fetched_profiles.count; i++) {
+        const char *profile = fetched_profiles.entries[i];
         bool needs_target = false;
         err = profile_needs_target(repo, profile, &needs_target);
         if (err) goto cleanup;
@@ -576,7 +554,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         string_array_push(&to_enable, profile);
     }
 
-    if (fetched_profiles->count == 0) {
+    if (fetched_profiles.count == 0) {
         output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
     }
 
@@ -607,16 +585,18 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * .bootstrap script into `bootstrap_found`, then display, prompt, and
      * (conditionally) fire. bootstrap_available is a simple derived flag used
      * by the final "Next steps" hint. */
+    string_array_t bootstrap_found;
+    string_array_init(&bootstrap_found, ctx->arena);
     bool run_bootstrap = false;
     bool bootstrap_available = false;
     bool bootstrap_failed = false;
 
     /* Check bootstrap scripts in all fetched profiles */
     if (opts->bootstrap_mode != CLONE_BOOTSTRAP_SKIP &&
-        fetched_profiles->count > 0) {
+        fetched_profiles.count > 0) {
         /* Check if any fetched profiles have bootstrap scripts */
-        for (size_t i = 0; i < fetched_profiles->count; i++) {
-            const char *profile = fetched_profiles->items[i];
+        for (size_t i = 0; i < fetched_profiles.count; i++) {
+            const char *profile = fetched_profiles.entries[i];
             if (!bootstrap_exists(repo, profile)) continue;
             string_array_push(&bootstrap_found, profile);
         }
@@ -630,7 +610,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             for (size_t i = 0; i < bootstrap_found.count; i++) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  {green}✓{reset} %s/%s\n",
-                    bootstrap_found.items[i], BOOTSTRAP_SCRIPT_NAME
+                    bootstrap_found.entries[i], BOOTSTRAP_SCRIPT_NAME
                 );
             }
             output_gap(out, OUTPUT_NORMAL);
@@ -709,12 +689,8 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
 cleanup:
     /* Cleanup resources */
-    string_array_free(detected_profiles);
     if (xfer) {
         transfer_context_free(xfer);
-    }
-    if (fetched_profiles) {
-        string_array_free(fetched_profiles);
     }
     if (repo) {
         gitops_close_repository(repo);
@@ -725,7 +701,7 @@ cleanup:
      * refuses a non-empty directory). Runs after the repo handle is closed so
      * nothing holds the directory open. */
     if (err && clone_landed) {
-        rollback_clone_dir(local_path, path_preexisted, out);
+        rollback_clone_dir(ctx, local_path, path_preexisted);
     }
 
     free(local_path);

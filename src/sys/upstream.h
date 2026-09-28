@@ -106,13 +106,17 @@ output_color_t upstream_state_color(upstream_state_t state);
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin")
- * @param out_branches String array of branch names (caller must free)
+ * @param arena Arena the answer and both listings it is read from live in (must
+ *              not be NULL)
+ * @param out The branch names, in the remote listing's order (must not be NULL;
+ *            left as it was on a failure)
  * @return Error or NULL on success
  */
 error_t *upstream_discover_branches(
     git_repository *repo,
     const char *remote_name,
-    string_array_t **out_branches
+    arena_t *arena,
+    string_array_t *out
 );
 
 /**

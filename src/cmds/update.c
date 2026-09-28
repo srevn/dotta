@@ -184,9 +184,7 @@ typedef struct {
  * the receipt read, while a dropped claim leaves the view by this commit and
  * only its key can settle the record it strands.
  *
- * Memory: the caller zero-fills the struct; update_profile allocates `captured`
- * (sized to its item count, an upper bound) and makes `deleted` in the command
- * arena; release with update_commits_free.
+ * Memory: every member is the command arena's, and nothing frees a commit.
  */
 typedef struct {
     const char *profile;      /* Borrowed from the item group */
@@ -197,19 +195,6 @@ typedef struct {
     size_t claimed;           /* Ancestor claims the derivation authored or refreshed */
     string_array_t retired;   /* Ancestor claims the derivation dropped (storage paths) */
 } commit_t;
-
-/**
- * Release an array of commits — the bookkeeping, never the items.
- */
-static void update_commits_free(commit_t *commits, size_t count) {
-    if (!commits) return;
-    for (size_t i = 0; i < count; i++) {
-        free(commits[i].captured);
-        string_array_deinit(&commits[i].pruned);
-        string_array_deinit(&commits[i].retired);
-    }
-    free(commits);
-}
 
 /**
  * What the filter made of the diverged items, in scope
@@ -416,6 +401,8 @@ static error_t *update_profile(
     *out_processed = 0;
     commit->profile = profile;
     ptr_array_init(&commit->deleted, ctx->arena);
+    string_array_init(&commit->pruned, ctx->arena);
+    string_array_init(&commit->retired, ctx->arena);
 
     if (item_count == 0 && row_count == 0) return NULL;
 
@@ -435,7 +422,9 @@ static error_t *update_profile(
     /* The capture list can hold every item; the walk fills it with the ones that
      * landed. A rows-only call has nothing to capture and no list to size. */
     if (item_count > 0) {
-        commit->captured = heap_calloc(item_count, sizeof(*commit->captured));
+        commit->captured = arena_calloc(
+            ctx->arena, item_count, sizeof(*commit->captured)
+        );
     }
 
     size_t captured_file_count = 0;
@@ -796,7 +785,7 @@ static error_t *update_profile(
             storage_paths[named++] = item->storage_path;
         }
         for (size_t i = 0; i < commit->retired.count; i++) {
-            storage_paths[named++] = commit->retired.items[i];
+            storage_paths[named++] = commit->retired.entries[i];
         }
     }
 
@@ -966,7 +955,8 @@ static error_t *update_write_record(
             for (size_t i = 0; i < let_go[b]->count; i++) {
                 const char *filesystem_path = NULL;
                 err = mount_resolve(
-                    mounts, commit->profile, let_go[b]->items[i], ctx->arena, &filesystem_path
+                    mounts, commit->profile, let_go[b]->entries[i], ctx->arena,
+                    &filesystem_path
                 );
                 if (err) goto cleanup;
                 /* An unbound claim resolves nowhere on this machine: no filesystem
@@ -1044,9 +1034,8 @@ cleanup:
  * @param opts Update options (must not be NULL)
  * @param total_updated Output: total items committed across all profiles (must
  *                      not be NULL)
- * @param out_commits Output: one commit's bookkeeping per landed commit; set
- *                    even on error (must not be NULL; caller frees with
- *                    update_commits_free)
+ * @param out_commits Output: one commit's bookkeeping per landed commit, in the
+ *                    command arena; set even on error (must not be NULL)
  * @param out_commit_count Output: number of entries in out_commits (must not be
  *                         NULL)
  * @return Error or NULL on success
@@ -1087,10 +1076,10 @@ static error_t *update_execute(
 
     /* One bookkeeping slot per enabled profile — an upper bound; only landed
      * commits fill one. */
-    commits = heap_calloc(enabled->count, sizeof(commit_t));
+    commits = arena_calloc(ctx->arena, enabled->count, sizeof(commit_t));
 
     for (size_t p = 0; p < enabled->count; p++) {
-        const char *profile = enabled->items[p];
+        const char *profile = enabled->entries[p];
 
         /* This profile's items, in filter order */
         ptr_array_t group;
@@ -1143,46 +1132,40 @@ static error_t *update_execute(
         );
         stage_free(stage);
 
+        /* Any error is a failure before the commit: no commit landed, whatever
+         * the bookkeeping holds */
+        if (err) {
+            err = error_wrap(err, "Failed to update profile '%s'", profile);
+            goto cleanup;
+        }
+
         /* The commit gate's own sum, read back off the bookkeeping the walk filled:
          * on a clean return, zero means the gate closed without a commit and
          * anything else means the walk did its work and committed it — a
          * derivation-only commit carries no user item, so `processed` alone cannot
          * say. (A stage whose tree equals the one it opened commits nothing;
          * only a capture re-read identical inside the load-to-open window makes
-         * one, and the record write is right for it either way.) Any error means
-         * no commit landed, whatever the bookkeeping holds. */
+         * one, and the record write is right for it either way.) */
         size_t landed = bookkeeping.captured_count + bookkeeping.deleted.count +
             bookkeeping.claimed + bookkeeping.retired.count;
-        if (!err && landed > 0) {
-            /* The commit landed: its bookkeeping is the record write's now */
-            commits[commit_count++] = bookkeeping;
-            *total_updated += processed;
+        if (landed == 0) continue;
 
-            if (!output_is_verbose(out)) {
-                if (processed > 0) {
-                    output_styled(
-                        out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %zu item%s\n",
-                        processed, processed == 1 ? "" : "s"
-                    );
-                } else {
-                    /* A derivation-only commit: no user item moved, the chains
-                     * did */
-                    output_styled(
-                        out, OUTPUT_NORMAL, "  {green}✓{reset} Re-derived the ancestry\n"
-                    );
-                }
+        /* The commit landed: its bookkeeping is the record write's now */
+        commits[commit_count++] = bookkeeping;
+        *total_updated += processed;
+
+        if (!output_is_verbose(out)) {
+            if (processed > 0) {
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %zu item%s\n",
+                    processed, processed == 1 ? "" : "s"
+                );
+            } else {
+                /* A derivation-only commit: no user item moved, the chains did */
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {green}✓{reset} Re-derived the ancestry\n"
+                );
             }
-        } else {
-            /* No commit landed — a walk that touched nothing, or a failure before
-             * the commit: the bookkeeping describes nothing */
-            free(bookkeeping.captured);
-            string_array_deinit(&bookkeeping.pruned);
-            string_array_deinit(&bookkeeping.retired);
-        }
-
-        if (err) {
-            err = error_wrap(err, "Failed to update profile '%s'", profile);
-            goto cleanup;
         }
     }
 
@@ -1471,7 +1454,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     error_t *err = NULL;
     workspace_t *ws = NULL;
     scope_t *scope = NULL;
-    char *profiles_str = NULL;
     partition_t partition = { 0 };
     size_t total_updated = 0;
     error_t *record_err = NULL;   /* The record phase's fate: non-fatal, read by the stop and the summary */
@@ -1769,10 +1751,9 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * nothing), before the prompt: apply's order. The preview's verdicts predate
      * the pre-hook, but the capture stores execute-time bytes — a pre-hook that
      * edits a candidate still commits what it wrote. */
-    profiles_str = string_array_join(scope_profiles(scope), " ");
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_UPDATE,
-        .profile    = profiles_str,
+        .profile    = string_array_join(ctx->arena,scope_profiles(scope),  " "),
         .files      = opts->files,
         .file_count = opts->file_count,
         .dry_run    = opts->dry_run,
@@ -1855,9 +1836,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * freed with the run's resources. */
         record_err = update_write_record(ctx, commits, commit_count);
 
-        /* The bookkeeping has served the record */
-        update_commits_free(commits, commit_count);
-
         if (record_err) {
             /* The landed commits are Git truth and the record's write failed
              * behind them, rolled back whole: the record is what it was. The
@@ -1932,8 +1910,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
 cleanup:
     error_free(record_err);
-    if (profiles_str) free(profiles_str);
-    if (scope) scope_free(scope);
 
     return err;
 }

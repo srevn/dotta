@@ -193,14 +193,17 @@ error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exis
  * one. A name Git refuses is no candidate: the branch rule refuses it
  * (gitops_branch_refname) before any branch is read.
  *
- * @param repo Repository (must not be NULL)
- * @param name Branch name to test (must not be NULL)
- * @param out_blocker Receives the blocking branch's name (caller frees), or NULL
- *                    when nothing blocks (must not be NULL)
+ * The answer is a branch name, written to the caller's buffer — "" when nothing
+ * blocks, which no ref name is; the listing it scans is a frame of the call's own.
+ *
+ * @param repo    Repository (must not be NULL)
+ * @param name    Branch name to test (must not be NULL)
+ * @param blocker Receives the blocking branch's name, or "" (must not be NULL)
+ * @param size    The buffer's size: DOTTA_REFNAME_MAX holds any branch name
  * @return Error or NULL on success
  */
 error_t *gitops_branch_blocker(
-    git_repository *repo, const char *name, char **out_blocker
+    git_repository *repo, const char *name, char *blocker, size_t size
 );
 
 /**
@@ -221,13 +224,16 @@ error_t *gitops_branch_blocker(
  * gitops_list_branches and gitops_list_remote_tracking are this under their
  * namespaces; init's adoption test asks it of "refs" whole.
  *
+ * The listing is a value of `arena`; on a failure `out` is left as it was.
+ *
  * @param repo Repository (must not be NULL)
  * @param namespace The namespace, no trailing slash (must not be NULL or empty)
- * @param out String array of names beneath it (must not be NULL, caller frees)
+ * @param arena Arena the listing lives in (must not be NULL)
+ * @param out The names beneath it (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_list_refs(
-    git_repository *repo, const char *namespace, string_array_t **out
+    git_repository *repo, const char *namespace, arena_t *arena, string_array_t *out
 );
 
 /**
@@ -236,10 +242,11 @@ error_t *gitops_list_refs(
  * Every branch under refs/heads by name, complete or an error (gitops_list_refs).
  *
  * @param repo Repository (must not be NULL)
- * @param out String array of branch names (must not be NULL, caller must free)
+ * @param arena Arena the listing lives in (must not be NULL)
+ * @param out The branch names (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_list_branches(git_repository *repo, string_array_t **out);
+error_t *gitops_list_branches(git_repository *repo, arena_t *arena, string_array_t *out);
 
 /**
  * List all remote tracking branches
@@ -251,13 +258,15 @@ error_t *gitops_list_branches(git_repository *repo, string_array_t **out);
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)
- * @param out String array of branch names (must not be NULL, caller must free)
+ * @param arena Arena the listing lives in (must not be NULL)
+ * @param out The branch names (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_list_remote_tracking(
     git_repository *repo,
     const char *remote_name,
-    string_array_t **out
+    arena_t *arena,
+    string_array_t *out
 );
 
 /**
@@ -583,14 +592,16 @@ error_t *gitops_delete_remote_branch(
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL)
  * @param xfer Transfer context for credentials and op lifecycle (must not be NULL)
- * @param out_branches Branch names on remote (must not be NULL, caller frees)
+ * @param arena Arena the listing lives in (must not be NULL)
+ * @param out Branch names on remote (must not be NULL; left as it was on a failure)
  * @return Error or NULL on success
  */
 error_t *gitops_list_remote_branches(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer,
-    string_array_t **out_branches
+    arena_t *arena,
+    string_array_t *out
 );
 
 /**

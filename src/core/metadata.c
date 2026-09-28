@@ -439,8 +439,8 @@ static bool tracked_beneath(
  *
  * Two-pass collect-then-prune: metadata_remove_item frees the item it removes
  * and shifts the spine behind it, so the pass that decides cannot also be the
- * pass that acts. string_array_push duplicates each key, so the prune pass operates
- * on independent strings.
+ * pass that acts. string_array_push copies each key into the array's own arena,
+ * so the prune pass operates on strings the removals cannot free.
  */
 error_t *metadata_prune_ancestors(
     metadata_t *metadata, git_index *index, string_array_t *pruned
@@ -488,7 +488,7 @@ error_t *metadata_prune_ancestors(
     /* Every key here was read off an item the walk above just saw, so each names
      * something that is there to remove. */
     for (size_t i = first; i < pruned->count; i++) {
-        metadata_remove_item(metadata, pruned->items[i]);
+        metadata_remove_item(metadata, pruned->entries[i]);
     }
 
     return NULL;

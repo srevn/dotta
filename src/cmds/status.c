@@ -12,7 +12,6 @@
 #include <time.h>
 
 #include "base/args.h"
-#include "base/array.h"
 #include "base/error.h"
 #include "base/heap.h"
 #include "base/output.h"
@@ -72,7 +71,7 @@ static void status_print_profiles(
     bool unused_shown = false;
 
     for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile = profiles->items[i];
+        const char *profile = profiles->entries[i];
 
         /* Format profile name, and the binding when the row has one */
         output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
@@ -390,7 +389,7 @@ static void status_print_workspace(
                 "  Clean - %zu path%s aligned\n",
                 scoped_paths, scoped_paths == 1 ? "" : "s"
             );
-        } else if (scope_has_filter(scope)) {
+        } else if (scope_filters_profiles(scope)) {
             output_colored(
                 out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
                 "  Clean - no paths in profile\n"
@@ -1133,22 +1132,19 @@ static error_t *status_print_remote(
     }
 
     /* Build profile array to check */
-    string_array_t *all_local = NULL;
+    string_array_t all_local;
     const string_array_t *check = profiles;
 
     if (show_all_profiles) {
         /* Explicit request: show ALL local profiles (lightweight, no ref resolution) */
-        err = gitops_list_branches(repo, &all_local);
+        err = gitops_list_branches(repo, ctx->arena, &all_local);
         if (err) {
             return error_wrap(err, "Failed to list all profiles");
         }
-        check = all_local;
+        check = &all_local;
     }
 
-    if (check->count == 0) {
-        string_array_free(all_local);
-        return NULL;
-    }
+    if (check->count == 0) return NULL;
 
     /* Fetch if requested */
     if (!no_fetch) {
@@ -1217,7 +1213,7 @@ static error_t *status_print_remote(
     size_t no_remote = 0;
 
     for (size_t i = 0; i < check->count; i++) {
-        const char *profile = check->items[i];
+        const char *profile = check->entries[i];
 
         /* Analyze upstream state */
         upstream_info_t info;
@@ -1377,9 +1373,6 @@ static error_t *status_print_remote(
         output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote\n", no_remote);
     }
 
-    /* remote_name is arena-borrowed; no free here. */
-    string_array_free(all_local);
-
     return NULL;
 }
 
@@ -1396,11 +1389,6 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     const manifest_t *manifest = ctx->run.manifest; /* The view at dispatch */
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
-
-    /* Declare all resources at top and initialize to NULL/zero */
-    error_t *err = NULL;
-    workspace_t *ws = NULL;
-    scope_t *scope = NULL;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1420,34 +1408,31 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         .profiles      = opts->profiles,
         .profile_count = opts->profile_count,
     };
-    err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
-    if (err) goto cleanup;
+    scope_t *scope = NULL;
+    RETURN_IF_ERROR(scope_build(repo, state, &scope_inputs, ctx->arena, &scope));
 
     /* Load workspace for divergence analysis (only needed for local status)
      *
      * The workspace's profile set is the view's — the persistent enabled set —
      * so orphan detection is exact whatever -p narrowed.
      */
+    workspace_t *ws = NULL;
     if (opts->show_local) {
         workspace_options_t ws_opts = {
             .analyze_orphans   = true,
             .analyze_untracked = config->auto_detect_new_files
         };
-        err = workspace_load(
+        error_t *err = workspace_load(
             repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
         );
-        if (err) {
-            err = error_wrap(err, "Failed to load workspace");
-            goto cleanup;
-        }
+        if (err) return error_wrap(err, "Failed to load workspace");
 
         /* What the load owes the record — its observations, its confirmations,
          * the voids of orders the view took back (core/workspace.h workspace_flush)
          * — the confirmations seeding the fast path for subsequent status calls.
          * The flush keeps the failure of the transaction it takes, so status
          * renders what the load read whatever the flush met. */
-        err = workspace_flush(ws);
-        if (err) goto cleanup;
+        RETURN_IF_ERROR(workspace_flush(ws));
     }
 
     /* The enabled profiles and the last deployment of each */
@@ -1473,22 +1458,17 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         status_print_workspace(ws, scope, out);
     }
 
-    /* Show remote sync status (if requested) */
+    /* Show remote sync status (if requested). Non-fatal: there might be no remote
+     * configured. */
     if (opts->show_remote) {
-        err = status_print_remote(
+        error_free(
+            status_print_remote(
             ctx, scope_profiles(scope), opts->all_profiles, opts->no_fetch
+            )
         );
-        if (err) {
-            /* Non-fatal: might not have remote configured */
-            error_free(err);
-            err = NULL;
-        }
     }
 
-cleanup:
-    if (scope) scope_free(scope);
-
-    return err;
+    return NULL;
 }
 
 /* ══════════════════════════════════════════════════════════════════

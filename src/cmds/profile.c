@@ -173,13 +173,9 @@ static error_t *profile_list(
 
     /* Resource tracking for cleanup. remote_name/remote_url are arena-borrowed
      * when the --remote branch resolves them. */
-    string_array_t *all_branches = NULL;
-    string_array_t *available = NULL;
     const char *remote_name = NULL;
     const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
-    string_array_t *remote_branches = NULL;
-    string_array_t *remote_only = NULL;
     error_t *err = NULL;
 
     /* The enabled rows, where the handle holds them: a listing moves none of
@@ -187,19 +183,21 @@ static error_t *profile_list(
     state_profiles_t enabled_profiles = state_profiles(state);
 
     /* Every profile here */
-    err = gitops_list_branches(repo, &all_branches);
+    string_array_t all_branches;
+    err = gitops_list_branches(repo, ctx->arena, &all_branches);
     if (err) {
         err = error_wrap(err, "Failed to list branches");
         goto cleanup;
     }
 
     /* Separate into enabled and available */
-    available = string_array_new(0);
-    for (size_t i = 0; i < all_branches->count; i++) {
-        const char *profile = all_branches->items[i];
+    string_array_t available;
+    string_array_init(&available, ctx->arena);
+    for (size_t i = 0; i < all_branches.count; i++) {
+        const char *profile = all_branches.entries[i];
         if (state_enabled(state, profile)) continue;
 
-        string_array_push(available, profile);
+        string_array_push(&available, profile);
     }
 
     /* Print enabled profiles: the name, what the branch holds, and the binding
@@ -249,10 +247,10 @@ static error_t *profile_list(
      * the branch alone (core/profiles.h profile_needs_target). Two reads of one
      * branch, one failure arm: both open the same tree first, and a row that
      * would not count says so rather than marking nothing in silence. */
-    if (available->count > 0 && opts->show_available) {
+    if (available.count > 0 && opts->show_available) {
         output_section(out, OUTPUT_NORMAL, "Available (disabled)");
-        for (size_t i = 0; i < available->count; i++) {
-            const char *profile = available->items[i];
+        for (size_t i = 0; i < available.count; i++) {
+            const char *profile = available.entries[i];
             profile_stats_t stats = { 0 };
             bool needs_target = false;
             error_t *row_err = profile_get_stats(repo, profile, &stats);
@@ -305,8 +303,9 @@ static error_t *profile_list(
              * This contacts the remote server to get the current list of profiles,
              * ensuring we see newly added profiles that haven't been fetched yet.
              */
+            string_array_t remote_branches;
             remote_err = gitops_list_remote_branches(
-                repo, remote_name, xfer, &remote_branches
+                repo, remote_name, xfer, ctx->arena, &remote_branches
             );
             if (remote_err) {
                 output_warning(
@@ -314,20 +313,21 @@ static error_t *profile_list(
                     error_message(remote_err)
                 );
                 error_free(remote_err);
-            } else if (remote_branches->count > 0) {
+            } else if (remote_branches.count > 0) {
                 /* Filter out branches that already exist locally */
-                remote_only = string_array_new(remote_branches->count);
-                for (size_t ri = 0; ri < remote_branches->count; ri++) {
-                    if (!string_array_contains(all_branches, remote_branches->items[ri])) {
-                        string_array_push(remote_only, remote_branches->items[ri]);
+                string_array_t remote_only;
+                string_array_init_cap(&remote_only, ctx->arena, remote_branches.count);
+                for (size_t ri = 0; ri < remote_branches.count; ri++) {
+                    if (!string_array_contains(&all_branches, remote_branches.entries[ri])) {
+                        string_array_push(&remote_only, remote_branches.entries[ri]);
                     }
                 }
 
-                if (remote_only->count > 0) {
+                if (remote_only.count > 0) {
                     output_section(out, OUTPUT_NORMAL, "Remote (not fetched)");
-                    for (size_t i = 0; i < remote_only->count; i++) {
+                    for (size_t i = 0; i < remote_only.count; i++) {
                         output_print(
-                            out, OUTPUT_NORMAL, "  • %s\n", remote_only->items[i]
+                            out, OUTPUT_NORMAL, "  • %s\n", remote_only.entries[i]
                         );
                     }
                 }
@@ -337,11 +337,7 @@ static error_t *profile_list(
 
 cleanup:
     /* Cleanup all resources. remote_name/remote_url are arena-borrowed. */
-    string_array_free(remote_only);
-    string_array_free(remote_branches);
     transfer_context_free(xfer);
-    string_array_free(available);
-    string_array_free(all_branches);
 
     return err;
 }
@@ -365,7 +361,6 @@ static error_t *profile_fetch(
     const char *remote_name = NULL;
     const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
-    string_array_t *remote_branches = NULL;
     error_t *err = NULL;
 
     /* Counters for summary (not cleaned up) */
@@ -391,14 +386,17 @@ static error_t *profile_fetch(
 
     if (opts->fetch_all) {
         /* Query remote server for all available branches */
-        err = gitops_list_remote_branches(repo, remote_name, xfer, &remote_branches);
+        string_array_t remote_branches;
+        err = gitops_list_remote_branches(
+            repo, remote_name, xfer, ctx->arena, &remote_branches
+        );
         if (err) {
             err = error_wrap(err, "Failed to query remote branches");
             goto cleanup;
         }
 
-        for (size_t i = 0; i < remote_branches->count; i++) {
-            const char *branch_name = remote_branches->items[i];
+        for (size_t i = 0; i < remote_branches.count; i++) {
+            const char *branch_name = remote_branches.entries[i];
 
             output_info(out, OUTPUT_VERBOSE, "  Fetching %s...", branch_name);
 
@@ -446,9 +444,9 @@ static error_t *profile_fetch(
         }
 
         /* Pre-flight validation: query remote for available branches */
-        string_array_t *available_remote = NULL;
+        string_array_t available_remote;
         err = gitops_list_remote_branches(
-            repo, remote_name, xfer, &available_remote
+            repo, remote_name, xfer, ctx->arena, &available_remote
         );
         if (err) {
             err = error_wrap(err, "Failed to query remote branches");
@@ -459,17 +457,9 @@ static error_t *profile_fetch(
         bool has_missing = false;
         for (size_t i = 0; i < opts->profile_count; i++) {
             const char *profile = opts->profiles[i];
-            bool found = false;
 
             /* Check if profile exists on remote */
-            for (size_t j = 0; j < available_remote->count; j++) {
-                if (strcmp(available_remote->items[j], profile) == 0) {
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) {
+            if (!string_array_contains(&available_remote, profile)) {
                 output_error(
                     out, "Profile '%s' does not exist on remote '%s'",
                     profile, remote_name
@@ -480,23 +470,20 @@ static error_t *profile_fetch(
 
         /* If any profiles are missing, show available profiles and error */
         if (has_missing) {
-            if (available_remote->count > 0) {
+            if (available_remote.count > 0) {
                 output_section(out, OUTPUT_NORMAL, "Available profiles on remote");
-                for (size_t i = 0; i < available_remote->count; i++) {
+                for (size_t i = 0; i < available_remote.count; i++) {
                     output_print(
                         out, OUTPUT_NORMAL, "  • %s\n",
-                        available_remote->items[i]
+                        available_remote.entries[i]
                     );
                 }
             }
-            string_array_free(available_remote);
             err = ERROR(
                 ERR_NOT_FOUND, "One or more requested profiles not found on remote"
             );
             goto cleanup;
         }
-
-        string_array_free(available_remote);
 
         for (size_t i = 0; i < opts->profile_count; i++) {
             const char *profile = opts->profiles[i];
@@ -544,7 +531,6 @@ cleanup:
     transfer_summarize(xfer, out, OUTPUT_NORMAL);
 
     /* Cleanup all resources */
-    string_array_free(remote_branches);
     transfer_context_free(xfer);
 
     /* If there's an error, return it now */
@@ -632,9 +618,6 @@ static error_t *profile_enable(
     output_t *out = ctx->out;
 
     /* Resource tracking for cleanup */
-    string_array_t *all_branches = NULL;
-    string_array_t *to_enable = NULL;
-    string_array_t *to_enable_validated = NULL;
     hashmap_t *seen_set = NULL;
     manifest_t *after = NULL;
     const char *target = NULL; /* --target, absolute: what the row stores */
@@ -661,23 +644,19 @@ static error_t *profile_enable(
     /* Resolve the request set (--all → list of local branches; args → verbatim).
      * Both paths deposit into to_enable; Phase 1's filter loop decides which
      * ones are actually actionable. */
-    to_enable = string_array_new(0);
+    string_array_t to_enable;
 
     if (opts->all_profiles) {
         /* Enable every profile here, in the convention's order: a set the machine
          * enumerated has no other, and the rows appended below take the order
          * this list has. Named profiles keep the order typed; a row that exists
          * keeps its slot. */
-        err = gitops_list_branches(repo, &all_branches);
+        err = gitops_list_branches(repo, ctx->arena, &to_enable);
         if (err) {
             err = error_wrap(err, "Failed to list branches");
             goto cleanup;
         }
-        profile_order(all_branches);
-
-        for (size_t i = 0; i < all_branches->count; i++) {
-            string_array_push(to_enable, all_branches->items[i]);
-        }
+        profile_order(&to_enable);
     } else {
         /* Enable specified profiles */
         if (opts->profile_count == 0) {
@@ -688,21 +667,22 @@ static error_t *profile_enable(
             goto cleanup;
         }
 
+        string_array_init_cap(&to_enable, ctx->arena, opts->profile_count);
         for (size_t i = 0; i < opts->profile_count; i++) {
-            string_array_push(to_enable, opts->profiles[i]);
+            string_array_push(&to_enable, opts->profiles[i]);
         }
     }
 
     /* Fatal up-front: --target binds to a specific profile and cannot disambiguate
      * among many. Caught here before any state mutation. */
-    if (opts->target && to_enable->count > 1) {
+    if (opts->target && to_enable.count > 1) {
         output_error(out, "Cannot use --target with multiple profiles");
         output_hint(out, OUTPUT_NORMAL, "Enable each profile separately:");
 
-        for (size_t i = 0; i < to_enable->count; i++) {
+        for (size_t i = 0; i < to_enable.count; i++) {
             output_hint(
                 out, OUTPUT_NORMAL, "dotta profile enable %s --target <path>",
-                to_enable->items[i]
+                to_enable.entries[i]
             );
         }
         err = ERROR(ERR_INVALID_ARG, "Ambiguous --target usage");
@@ -729,10 +709,11 @@ static error_t *profile_enable(
      * skips, each with its own tally — unless the already-enabled profile came
      * with a differing --target, which is a retarget and stays in the run's work.
      * The surviving set lands in to_enable_validated. */
-    to_enable_validated = string_array_new(0);
+    string_array_t to_enable_validated;
+    string_array_init(&to_enable_validated, ctx->arena);
 
-    for (size_t i = 0; i < to_enable->count; i++) {
-        const char *profile = to_enable->items[i];
+    for (size_t i = 0; i < to_enable.count; i++) {
+        const char *profile = to_enable.entries[i];
 
         /* Silently dedupe duplicate args — we've already decided about this profile
          * earlier in this pass. */
@@ -749,7 +730,7 @@ static error_t *profile_enable(
                 const char *current = state_target(state, profile);
                 if (!current || !mount_same_target(current, target)) {
                     retarget = profile;
-                    string_array_push(to_enable_validated, profile);
+                    string_array_push(&to_enable_validated, profile);
                     continue;
                 }
                 /* The row's own directory, spelled another way: the binding stands
@@ -814,7 +795,7 @@ static error_t *profile_enable(
             continue;
         }
 
-        string_array_push(to_enable_validated, profile);
+        string_array_push(&to_enable_validated, profile);
     }
 
     /* Dry-run: preview what a live run would do, skip every state mutation. Dry-run
@@ -823,14 +804,14 @@ static error_t *profile_enable(
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
 
-        size_t would_enable = to_enable_validated->count - (retarget ? 1 : 0);
+        size_t would_enable = to_enable_validated.count - (retarget ? 1 : 0);
         if (would_enable > 0) {
             output_info(
                 out, OUTPUT_NORMAL, "Would enable %zu profile%s:",
                 would_enable, would_enable == 1 ? "" : "s"
             );
-            for (size_t i = 0; i < to_enable_validated->count; i++) {
-                const char *name = to_enable_validated->items[i];
+            for (size_t i = 0; i < to_enable_validated.count; i++) {
+                const char *name = to_enable_validated.entries[i];
                 if (retarget && strcmp(name, retarget) == 0) continue;
                 output_print(out, OUTPUT_NORMAL, "  - %s\n", name);
             }
@@ -841,7 +822,7 @@ static error_t *profile_enable(
                 retarget
             );
         }
-        if (to_enable_validated->count > 0) {
+        if (to_enable_validated.count > 0) {
             output_gap(out, OUTPUT_NORMAL);
             output_info(
                 out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy paths"
@@ -870,7 +851,7 @@ static error_t *profile_enable(
          * every requested profile was missing or needs a target, surface the
          * same error a live run would produce. Idempotent cases (all already
          * enabled) fall through to cleanup with err == NULL. */
-        if (to_enable_validated->count == 0 && (not_found > 0 || no_target > 0)) {
+        if (to_enable_validated.count == 0 && (not_found > 0 || no_target > 0)) {
             err = ERROR(
                 not_found > 0 ? ERR_NOT_FOUND : ERR_INVALID_ARG,
                 "No profiles were enabled"
@@ -883,10 +864,10 @@ static error_t *profile_enable(
      * together makes the "nothing validated → exit without touching state" path
      * explicit; the transaction opened by state_open then rolls back via state_free
      * on the no-op exit. */
-    if (to_enable_validated->count > 0) {
+    if (to_enable_validated.count > 0) {
         /* Phase 2: Write scope to state */
-        for (size_t i = 0; i < to_enable_validated->count; i++) {
-            const char *profile = to_enable_validated->items[i];
+        for (size_t i = 0; i < to_enable_validated.count; i++) {
+            const char *profile = to_enable_validated.entries[i];
 
             err = state_enable_profile(state, profile, target);
             if (err) {
@@ -912,11 +893,11 @@ static error_t *profile_enable(
         if (err) goto cleanup;
 
         manifest_diff_stats_t *stats = arena_calloc(
-            ctx->arena, to_enable_validated->count, sizeof(*stats)
+            ctx->arena, to_enable_validated.count, sizeof(*stats)
         );
 
         err = manifest_diff(
-            before, after, records, record_count, to_enable_validated, stats
+            before, after, records, record_count, &to_enable_validated, stats
         );
         if (err) {
             err = error_wrap(err, "Failed to diff manifest across enable");
@@ -934,8 +915,8 @@ static error_t *profile_enable(
             goto cleanup;
         }
 
-        for (size_t i = 0; i < to_enable_validated->count; i++) {
-            const char *name = to_enable_validated->items[i];
+        for (size_t i = 0; i < to_enable_validated.count; i++) {
+            const char *name = to_enable_validated.entries[i];
             if (retarget && strcmp(name, retarget) == 0) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  {green}✓{reset} Updated target for %s\n",
@@ -956,7 +937,7 @@ static error_t *profile_enable(
     output_gap(out, OUTPUT_NORMAL);
 
     {
-        size_t enabled_count = to_enable_validated->count - (retarget ? 1 : 0);
+        size_t enabled_count = to_enable_validated.count - (retarget ? 1 : 0);
         if (enabled_count > 0) {
             output_success(
                 out, OUTPUT_NORMAL, "Enabled %zu profile%s",
@@ -968,7 +949,7 @@ static error_t *profile_enable(
                 out, OUTPUT_NORMAL, "Updated deployment target for '%s'", retarget
             );
         }
-        if (to_enable_validated->count > 0) {
+        if (to_enable_validated.count > 0) {
             output_info(
                 out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy paths"
             );
@@ -999,7 +980,7 @@ static error_t *profile_enable(
      * which, for the reader; every error exits the same. Pure idempotent cases
      * (all already-enabled, or --all on an empty repo) fall through to cleanup
      * with err == NULL. */
-    if (to_enable_validated->count == 0 && (not_found > 0 || no_target > 0)) {
+    if (to_enable_validated.count == 0 && (not_found > 0 || no_target > 0)) {
         err = ERROR(
             not_found > 0 ? ERR_NOT_FOUND : ERR_INVALID_ARG,
             "No profiles were enabled"
@@ -1007,13 +988,10 @@ static error_t *profile_enable(
     }
 
 cleanup:
-    /* Cleanup all resources. seen_set freed before to_enable, whose strings it
-     * borrows as keys, to respect the borrow lifetime. */
+    /* Cleanup all resources. seen_set borrows its keys from to_enable, the command
+     * arena's, which outlives us. */
     manifest_free(after);
     if (seen_set) hashmap_free(seen_set, NULL);
-    string_array_free(to_enable_validated);
-    string_array_free(to_enable);
-    string_array_free(all_branches);
 
     return err;
 }
@@ -1055,7 +1033,6 @@ static error_t *profile_disable(
     output_t *out = ctx->out;
 
     /* Resource tracking for cleanup */
-    string_array_t *to_disable_validated = NULL;
     hashmap_t *seen_set = NULL;
     manifest_t *before = NULL;
     manifest_t *after = NULL;
@@ -1088,12 +1065,13 @@ static error_t *profile_disable(
      * and don't produce two rows in to_disable_validated. Only the explicit-args
      * path consults it; --all iterates the unique enabled set. */
     seen_set = hashmap_borrow(0);
-    to_disable_validated = string_array_new(0);
+    string_array_t to_disable_validated;
+    string_array_init(&to_disable_validated, ctx->arena);
 
     if (opts->all_profiles) {
         /* --all: every currently enabled profile is, by definition, valid. */
         for (size_t i = 0; i < enabled_profiles.count; i++) {
-            string_array_push(to_disable_validated, enabled_profiles.entries[i].name);
+            string_array_push(&to_disable_validated, enabled_profiles.entries[i].name);
         }
     } else {
         /* Disable specified profiles */
@@ -1114,7 +1092,7 @@ static error_t *profile_disable(
             hashmap_set(seen_set, profile, (void *) (uintptr_t) 1);
 
             if (state_enabled(state, profile)) {
-                string_array_push(to_disable_validated, profile);
+                string_array_push(&to_disable_validated, profile);
             } else {
                 output_info(
                     out, OUTPUT_VERBOSE, "  %s was not enabled", profile
@@ -1128,11 +1106,11 @@ static error_t *profile_disable(
      * copies, because Phase 3's first delete replaces the row cache state_target
      * lends from. NULL where the row had none. */
     const char **forgotten = arena_calloc(
-        ctx->arena, to_disable_validated->count, sizeof(*forgotten)
+        ctx->arena, to_disable_validated.count, sizeof(*forgotten)
     );
-    for (size_t i = 0; i < to_disable_validated->count; i++) {
+    for (size_t i = 0; i < to_disable_validated.count; i++) {
         const char *bound =
-            state_target(state, to_disable_validated->items[i]);
+            state_target(state, to_disable_validated.entries[i]);
         if (!bound) continue;
         char shown[PATH_MAX];
         output_format_path(bound, identity()->home, shown, sizeof(shown));
@@ -1145,15 +1123,15 @@ static error_t *profile_disable(
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
 
-        if (to_disable_validated->count > 0) {
+        if (to_disable_validated.count > 0) {
             output_info(
                 out, OUTPUT_NORMAL, "Would disable %zu profile%s:",
-                to_disable_validated->count,
-                to_disable_validated->count == 1 ? "" : "s"
+                to_disable_validated.count,
+                to_disable_validated.count == 1 ? "" : "s"
             );
-            for (size_t i = 0; i < to_disable_validated->count; i++) {
+            for (size_t i = 0; i < to_disable_validated.count; i++) {
                 output_print(
-                    out, OUTPUT_NORMAL, "  - %s", to_disable_validated->items[i]
+                    out, OUTPUT_NORMAL, "  - %s", to_disable_validated.entries[i]
                 );
                 if (forgotten[i]) {
                     output_print(
@@ -1180,7 +1158,7 @@ static error_t *profile_disable(
      * together makes the "nothing validated → exit without touching state" path
      * explicit; the transaction opened by state_open then rolls back via state_free
      * on the no-op exit. */
-    if (to_disable_validated->count > 0) {
+    if (to_disable_validated.count > 0) {
         /* Phase 2: The view before (see profile_enable).
          *
          * Unlike enable's, this build gates nothing: the disable is a membership
@@ -1199,12 +1177,12 @@ static error_t *profile_disable(
         }
 
         /* Phase 3: Write scope to state */
-        for (size_t i = 0; i < to_disable_validated->count; i++) {
-            err = state_disable_profile(state, to_disable_validated->items[i]);
+        for (size_t i = 0; i < to_disable_validated.count; i++) {
+            err = state_disable_profile(state, to_disable_validated.entries[i]);
             if (err) {
                 err = error_wrap(
                     err, "Failed to remove profile '%s' from state",
-                    to_disable_validated->items[i]
+                    to_disable_validated.entries[i]
                 );
                 goto cleanup;
             }
@@ -1227,10 +1205,10 @@ static error_t *profile_disable(
             err = state_records(state, ctx->arena, &records, &record_count);
             if (err) goto cleanup;
 
-            stats = arena_calloc(ctx->arena, to_disable_validated->count, sizeof(*stats));
+            stats = arena_calloc(ctx->arena, to_disable_validated.count, sizeof(*stats));
 
             err = manifest_diff(
-                before, after, records, record_count, to_disable_validated, stats
+                before, after, records, record_count, &to_disable_validated, stats
             );
             if (err) {
                 err = error_wrap(err, "Failed to diff manifest across disable");
@@ -1248,8 +1226,8 @@ static error_t *profile_disable(
             goto cleanup;
         }
 
-        for (size_t i = 0; i < to_disable_validated->count; i++) {
-            const char *name = to_disable_validated->items[i];
+        for (size_t i = 0; i < to_disable_validated.count; i++) {
+            const char *name = to_disable_validated.entries[i];
             output_styled(
                 out, OUTPUT_NORMAL, "  {green}✓{reset} Disabled %s\n", name
             );
@@ -1274,11 +1252,11 @@ static error_t *profile_disable(
      *     case is caught by the early exit. */
     output_gap(out, OUTPUT_NORMAL);
 
-    if (to_disable_validated->count > 0) {
+    if (to_disable_validated.count > 0) {
         output_success(
             out, OUTPUT_NORMAL, "Disabled %zu profile%s",
-            to_disable_validated->count,
-            to_disable_validated->count == 1 ? "" : "s"
+            to_disable_validated.count,
+            to_disable_validated.count == 1 ? "" : "s"
         );
         output_info(
             out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed paths"
@@ -1298,7 +1276,6 @@ cleanup:
     manifest_free(after);
     manifest_free(before);
     if (seen_set) hashmap_free(seen_set, NULL);
-    string_array_free(to_disable_validated);
 
     return err;
 }
@@ -1416,12 +1393,12 @@ static error_t *profile_reorder(
     output_endline(out, OUTPUT_VERBOSE);
 
     /* Update state with new order */
-    string_array_t new_order = {
-        .items    = opts->profiles,
-        .count    = opts->profile_count,
-        .capacity = opts->profile_count
-    };
-    error_t *err = state_reorder_profiles(state, &new_order);
+    string_array_t order;
+    string_array_init_cap(&order, ctx->arena, opts->profile_count);
+    for (size_t i = 0; i < opts->profile_count; i++) {
+        string_array_push(&order, opts->profiles[i]);
+    }
+    error_t *err = state_reorder_profiles(state, &order);
     if (err) {
         return error_wrap(err, "Failed to update state");
     }
@@ -1471,8 +1448,6 @@ static error_t *profile_validate(
     output_t *out = ctx->out;
 
     /* Resource tracking for cleanup */
-    string_array_t *missing = NULL;
-    string_array_t *deleted = NULL;
     hashmap_t *probed = NULL;
     error_t *err = NULL;
 
@@ -1500,7 +1475,8 @@ static error_t *profile_validate(
     output_section(out, OUTPUT_NORMAL, "Validating profile state");
 
     /* Check 1: Enabled profiles exist as branches */
-    missing = string_array_new(0);
+    string_array_t missing;
+    string_array_init(&missing, ctx->arena);
 
     for (size_t i = 0; i < enabled_profiles.count; i++) {
         const char *profile = enabled_profiles.entries[i].name;
@@ -1509,25 +1485,25 @@ static error_t *profile_validate(
         err = gitops_branch_exists(repo, profile, &exists);
         if (err) goto cleanup;
         if (!exists) {
-            string_array_push(missing, profile);
+            string_array_push(&missing, profile);
             has_issues = true;
         }
     }
 
-    if (missing->count > 0) {
+    if (missing.count > 0) {
         output_warning(
             out, OUTPUT_NORMAL, "Found %zu missing profile%s in state:",
-            missing->count, missing->count == 1 ? "" : "s"
+            missing.count, missing.count == 1 ? "" : "s"
         );
 
-        for (size_t i = 0; i < missing->count; i++) {
-            output_print(out, OUTPUT_NORMAL, "  • %s\n", missing->items[i]);
+        for (size_t i = 0; i < missing.count; i++) {
+            output_print(out, OUTPUT_NORMAL, "  • %s\n", missing.entries[i]);
         }
 
         if (opts->fix) {
             /* Remove missing profiles from state */
-            for (size_t i = 0; i < missing->count; i++) {
-                const char *profile = missing->items[i];
+            for (size_t i = 0; i < missing.count; i++) {
+                const char *profile = missing.entries[i];
                 err = state_disable_profile(state, profile);
                 if (err) {
                     err = error_wrap(
@@ -1564,7 +1540,8 @@ static error_t *profile_validate(
     err = state_records(state, ctx->arena, &records, &record_count);
     if (err) goto cleanup;
 
-    deleted = string_array_new(0);
+    string_array_t deleted;
+    string_array_init(&deleted, ctx->arena);
     probed = hashmap_borrow(16);   /* profile → (void *) 1 exists, (void *) 2 deleted */
 
     for (size_t i = 0; i < record_count; i++) {
@@ -1577,7 +1554,7 @@ static error_t *profile_validate(
             if (err) goto cleanup;
             known = exists ? (void *) 1 : (void *) 2;
             hashmap_set(probed, profile, known);
-            if (known == (void *) 2) string_array_push(deleted, profile);
+            if (known == (void *) 2) string_array_push(&deleted, profile);
         }
 
         if (known == (void *) 2) {
@@ -1591,17 +1568,17 @@ static error_t *profile_validate(
         output_warning(
             out, OUTPUT_NORMAL, "Found %zu entr%s from deleted profile%s in state:",
             orphaned_files, orphaned_files == 1 ? "y" : "ies",
-            deleted->count == 1 ? "" : "s"
+            deleted.count == 1 ? "" : "s"
         );
 
-        for (size_t i = 0; i < deleted->count; i++) {
+        for (size_t i = 0; i < deleted.count; i++) {
             size_t n = 0;
             for (size_t j = 0; j < record_count; j++) {
-                if (strcmp(records[j].profile, deleted->items[i]) == 0) n++;
+                if (strcmp(records[j].profile, deleted.entries[i]) == 0) n++;
             }
             output_print(
                 out, OUTPUT_NORMAL, "  • %zu entr%s from %s\n",
-                n, n == 1 ? "y" : "ies", deleted->items[i]
+                n, n == 1 ? "y" : "ies", deleted.entries[i]
             );
         }
 
@@ -1614,8 +1591,6 @@ cleanup:
     state_rollback(state);
 
     if (probed) hashmap_free(probed, NULL);
-    string_array_free(deleted);
-    string_array_free(missing);
 
     /* If there's an error, return it now */
     if (err) return err;

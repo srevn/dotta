@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
@@ -899,54 +900,47 @@ error_t *fs_create_dir_exclusive(
     return NULL;
 }
 
-error_t *fs_remove_dir(const char *path, bool recursive) {
-    RETURN_IF_ERROR(validate_path(path));
+/**
+ * A directory and everything beneath it, in one walk of fs_remove_dir
+ *
+ * Each frame lists its directory into the walk's scratch above a mark and returns
+ * the scratch to it once its entries are gone, so the scratch holds the listings
+ * of the directories from the walk's root down to this one, never the whole tree's.
+ * A failure leaves the scratch as it stands: the walk's driver frees it whole.
+ */
+static error_t *fs_remove_subtree(arena_t *scratch, const char *path) {
+    const arena_mark_t frame = arena_mark(scratch);
 
-    if (!fs_is_directory(path)) {
-        return NULL;  /* Not an error if doesn't exist */
-    }
+    string_array_t listing;
+    RETURN_IF_ERROR(fs_list_dir(path, scratch, &listing));
 
-    if (recursive) {
-        /* List and remove contents first */
-        string_array_t *entries = NULL;
-        error_t *err = fs_list_dir(path, &entries);
-        if (err) return err;
+    for (size_t i = 0; i < listing.count; i++) {
+        char *full_path = NULL;
+        RETURN_IF_ERROR(fs_path_join(path, listing.entries[i], &full_path));
 
-        for (size_t i = 0; i < entries->count; i++) {
-            const char *entry = entries->items[i];
-            char *full_path = NULL;
-            err = fs_path_join(path, entry, &full_path);
-            if (err) {
-                string_array_free(entries);
-                return err;
-            }
-
-            /* Use lstat to determine type WITHOUT following symlinks. This prevents
-             * symlink-traversal attacks where a symlink inside the tree points
-             * to a directory outside it - using stat() would follow the symlink
-             * and recursively delete the target directory's contents. */
-            struct stat st;
-            if (fs_lstat(full_path, &st) < 0) {
-                /* If lstat fails, try unlink as fallback */
-                err = (errno != ENOENT) ? error_from_errno(
-                    errno, "Failed to stat '%s'", full_path
-                    ) : NULL;
-            } else if (S_ISDIR(st.st_mode)) {
-                err = fs_remove_dir(full_path, true);
-            } else {
-                /* Regular file, symlink, or any other type: unlink */
-                err = fs_remove_file(full_path);
-            }
-
-            free(full_path);
-            if (err) {
-                string_array_free(entries);
-                return err;
-            }
+        /* Use lstat to determine type WITHOUT following symlinks. This prevents
+         * symlink-traversal attacks where a symlink inside the tree points to a
+         * directory outside it - using stat() would follow the symlink and
+         * recursively delete the target directory's contents. */
+        error_t *err = NULL;
+        struct stat st;
+        if (fs_lstat(full_path, &st) < 0) {
+            /* If lstat fails, try unlink as fallback */
+            err = (errno != ENOENT) ? error_from_errno(
+                errno, "Failed to stat '%s'", full_path
+                ) : NULL;
+        } else if (S_ISDIR(st.st_mode)) {
+            err = fs_remove_subtree(scratch, full_path);
+        } else {
+            /* Regular file, symlink, or any other type: unlink */
+            err = fs_remove_file(full_path);
         }
 
-        string_array_free(entries);
+        free(full_path);
+        if (err) return err;
     }
+
+    arena_reset(scratch, frame);
 
     /* Remove directory itself */
     if (fs_rmdir(path) < 0) {
@@ -957,6 +951,21 @@ error_t *fs_remove_dir(const char *path, bool recursive) {
     }
 
     return NULL;
+}
+
+error_t *fs_remove_dir(const char *path) {
+    RETURN_IF_ERROR(validate_path(path));
+
+    if (!fs_is_directory(path)) {
+        return NULL;  /* Not an error if doesn't exist */
+    }
+
+    /* The walk's one scratch, freed here whatever the walk met */
+    arena_t *scratch = arena_create(0);
+    error_t *err = fs_remove_subtree(scratch, path);
+    arena_free(scratch);
+
+    return err;
 }
 
 error_t *fs_clear_path(const char *path) {
@@ -972,7 +981,7 @@ error_t *fs_clear_path(const char *path) {
 
     if (S_ISDIR(st.st_mode)) {
         /* Directory - remove recursively */
-        return fs_remove_dir(path, true);
+        return fs_remove_dir(path);
     }
 
     /* File or symlink - use unlink */
@@ -1135,31 +1144,31 @@ error_t *fs_remove_empty_dir(const char *path) {
 
     /* Not empty by the kernel's definition; it may still be empty by ours. List
      * first — removing entries from an open DIR* leaves the rest of the walk
-     * unspecified. */
-    string_array_t *entries = NULL;
-    RETURN_IF_ERROR(fs_list_dir(path, &entries));
+     * unspecified — into a frame of this call's own, freed once the entries are
+     * judged and gone. */
+    arena_t *frame = arena_create(0);
+    string_array_t listing = { 0 };
+    error_t *err = fs_list_dir(path, frame, &listing);
 
     /* Two passes: refuse before touching anything. A directory refused here keeps
      * every entry it had, metadata included — the caller reports "not empty",
      * and nothing of the user's has moved. */
-    error_t *err = NULL;
-    for (size_t i = 0; i < entries->count; i++) {
-        if (!entry_is_removable_metadata(path, entries->items[i])) {
+    for (size_t i = 0; i < listing.count && !err; i++) {
+        if (!entry_is_removable_metadata(path, listing.entries[i])) {
             err = ERROR(ERR_CONFLICT, "Directory '%s' is not empty", path);
-            break;
         }
     }
 
-    for (size_t i = 0; i < entries->count && !err; i++) {
+    for (size_t i = 0; i < listing.count && !err; i++) {
         char *child = NULL;
-        err = fs_path_join(path, entries->items[i], &child);
+        err = fs_path_join(path, listing.entries[i], &child);
         if (!err) {
             err = fs_remove_file(child);
             free(child);
         }
     }
 
-    string_array_free(entries);
+    arena_free(frame);
     if (err) return err;
 
     /* An entry that appeared while the metadata was being cleared lands here,
@@ -1174,8 +1183,9 @@ error_t *fs_remove_empty_dir(const char *path) {
     return NULL;
 }
 
-error_t *fs_list_dir(const char *path, string_array_t **out) {
+error_t *fs_list_dir(const char *path, arena_t *arena, string_array_t *out) {
     RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     DIR *dir = fs_opendir(path);
@@ -1183,33 +1193,30 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
         return error_from_errno(errno, "Failed to open directory '%s'", path);
     }
 
-    string_array_t *entries = string_array_new(0);
-
+    /* errno cleared before every readdir: a NULL is the end, or the error it names */
+    string_array_t names;
+    string_array_init(&names, arena);
     struct dirent *entry;
-    errno = 0;
-    while ((entry = readdir(dir)) != NULL) {
+    for (errno = 0; (entry = readdir(dir)) != NULL; errno = 0) {
         /* Skip . and .. - no caller ever wants these */
         if (entry->d_name[0] == '.' && (entry->d_name[1] == '\0' ||
             (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
-            errno = 0;
             continue;
         }
 
-        string_array_push(entries, entry->d_name);
-        errno = 0;
+        string_array_push(&names, entry->d_name);
     }
 
     if (errno != 0) {
         int saved_errno = errno;
         closedir(dir);
-        string_array_free(entries);
         return error_from_errno(
             saved_errno, "Error reading directory '%s'", path
         );
     }
 
     closedir(dir);
-    *out = entries;
+    *out = names;
     return NULL;
 }
 

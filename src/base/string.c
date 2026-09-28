@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "base/arena.h"
+#include "base/error.h"
 #include "base/heap.h"
 
 bool str_equal(const char *a, const char *b) {
@@ -75,55 +77,39 @@ char *str_trim(char *str) {
     return str;
 }
 
-char *str_join(const char *const *strings, size_t count, const char *delimiter) {
-    if (!strings || count == 0) {
-        return heap_strdup("");
-    }
-
-    if (!delimiter) {
-        delimiter = "";
-    }
+char *str_join(
+    arena_t *arena, char *const *strings, size_t count, const char *delimiter
+) {
+    CHECK_NULL(arena);
+    if (!delimiter) delimiter = "";
 
     size_t delim_len = strlen(delimiter);
-    bool has_delimiter = (delim_len > 0);
 
-    /* Calculate total length. The strings, the delimiters between them and the
-     * terminator are one count, and one no memory could hold is exhaustion. */
-    size_t total_len = 0;
+    /* One pass sizes: the strings, the delimiters between them and the terminator
+     * are one byte count, and one no memory could hold is exhaustion. A string
+     * and a delimiter are each an object's length, so their sum cannot wrap. */
+    size_t total = 1;
     for (size_t i = 0; i < count; i++) {
-        if (strings[i]) {
-            size_t slen = strlen(strings[i]);
-            if (slen >= SIZE_MAX - total_len) {
-                heap_die(SIZE_MAX);
-            }
-            total_len += slen;
-        }
-        if (i < count - 1 && has_delimiter) {
-            if (delim_len >= SIZE_MAX - total_len) {
-                heap_die(SIZE_MAX);
-            }
-            total_len += delim_len;
-        }
+        size_t len = (strings[i] ? strlen(strings[i]) : 0) + (i > 0 ? delim_len : 0);
+        if (len > SIZE_MAX - total) heap_die(SIZE_MAX);
+        total += len;
     }
 
-    /* Allocate result */
-    char *result = heap_alloc(total_len + 1);
-
-    /* Build result */
-    char *ptr = result;
+    /* One pass fills */
+    char *joined = arena_alloc(arena, total);
+    char *at = joined;
     for (size_t i = 0; i < count; i++) {
+        if (i > 0) {
+            memcpy(at, delimiter, delim_len);
+            at += delim_len;
+        }
         if (strings[i]) {
             size_t len = strlen(strings[i]);
-            memcpy(ptr, strings[i], len);
-            ptr += len;
-        }
-
-        if (i < count - 1 && has_delimiter) {
-            memcpy(ptr, delimiter, delim_len);
-            ptr += delim_len;
+            memcpy(at, strings[i], len);
+            at += len;
         }
     }
+    *at = '\0';
 
-    *ptr = '\0';
-    return result;
+    return joined;
 }

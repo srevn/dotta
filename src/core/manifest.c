@@ -1722,7 +1722,7 @@ error_t *manifest_diff(
      * call. */
     hashmap_t *stats_map = hashmap_borrow(profiles->count > 0 ? profiles->count * 2 : 16);
     for (size_t i = 0; i < profiles->count; i++) {
-        const char *name = profiles->items[i];
+        const char *name = profiles->entries[i];
 
         /* Duplicate profile names would silently collapse: hashmap_set overwrites,
          * so the later occurrence's slot would receive all attribution and the

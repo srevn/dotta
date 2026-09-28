@@ -225,7 +225,8 @@ static error_t *remove_paths_candidates(
     for (size_t i = 0; i < pruned_dirs->count; i++) {
         const char *filesystem_path = NULL;
         error_t *resolve_err = mount_resolve(
-            ctx->run.mounts, profile, pruned_dirs->items[i], ctx->arena, &filesystem_path
+            ctx->run.mounts, profile, pruned_dirs->entries[i], ctx->arena,
+            &filesystem_path
         );
         if (resolve_err) {
             error_free(resolve_err);
@@ -350,12 +351,12 @@ static error_t *remove_resolve(
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
-    string_array_t *profile_files = NULL;
     metadata_t *metadata = NULL;
 
     /* The branch's claims, off the tree: its blobs, then the metadata's directory
      * claims. */
-    err = profile_list_tree_files(tree, &profile_files);
+    string_array_t profile_files;
+    err = profile_list_tree_files(tree, ctx->arena, &profile_files);
     if (err) {
         return error_wrap(err, "Failed to list files in profile");
     }
@@ -378,19 +379,18 @@ static error_t *remove_resolve(
     claim_t *claims = NULL;
     bool *taken = NULL;            /* beside claims[j]: an argument took it */
     size_t claim_count = 0;
-    if (profile_files->count + dir_count > 0) {
+    if (profile_files.count + dir_count > 0) {
         claims = arena_calloc(
-            ctx->arena, profile_files->count + dir_count, sizeof(claim_t)
+            ctx->arena, profile_files.count + dir_count, sizeof(claim_t)
         );
         taken = arena_calloc(
-            ctx->arena, profile_files->count + dir_count, sizeof(bool)
+            ctx->arena, profile_files.count + dir_count, sizeof(bool)
         );
     }
 
-    for (size_t i = 0; i < profile_files->count; i++) {
+    for (size_t i = 0; i < profile_files.count; i++) {
         claims[claim_count++] = (claim_t) {
-            .storage_path = arena_strdup(ctx->arena, profile_files->items[i]),
-            .kind = PATH_KIND_FILE
+            .storage_path = profile_files.entries[i], .kind = PATH_KIND_FILE
         };
     }
 
@@ -402,11 +402,7 @@ static error_t *remove_resolve(
          * tree holds as a blob cannot also stand as a directory claim — the tree's
          * blob outranks the stale item. Keeps every claim path unique, so one
          * argument takes one claim. */
-        bool held_as_blob = false;
-        for (size_t j = 0; j < profile_files->count && !held_as_blob; j++) {
-            held_as_blob = strcmp(profile_files->items[j], key) == 0;
-        }
-        if (held_as_blob) continue;
+        if (string_array_contains(&profile_files, key)) continue;
 
         claims[claim_count++] = (claim_t) {
             .storage_path = arena_strdup(ctx->arena, key), .kind = PATH_KIND_DIRECTORY
@@ -523,7 +519,6 @@ static error_t *remove_resolve(
 cleanup:
     /* Free all resources */
     if (metadata) metadata_free(metadata);
-    if (profile_files) string_array_free(profile_files);
 
     return err;
 }
@@ -853,7 +848,6 @@ static error_t *remove_paths(
     size_t claim_count = 0;
     metadata_t *metadata = NULL;        /* the branch's, from the resolver (owned) */
     overlaps_t overlaps = { 0 };        /* arena — the analysis's */
-    string_array_t pruned_dirs = { 0 }; /* Directory entries the metadata step pruned (storage paths) */
     char *message = NULL;
 
     /* CLI flags override config */
@@ -1037,6 +1031,8 @@ static error_t *remove_paths(
      * index answers that for every path a tree can hold — never the metadata
      * items, which omit unelevated symlinks — and the sheet's own tracked claims
      * answer it for the one path it cannot, an empty directory. */
+    string_array_t pruned_dirs;   /* Directory entries the metadata step pruned (storage paths) */
+    string_array_init(&pruned_dirs, ctx->arena);
     err = metadata_prune_ancestors(metadata, stage_index(stage), &pruned_dirs);
     if (err) {
         err = error_wrap(err, "Failed to prune redundant directories");
@@ -1224,7 +1220,6 @@ cleanup:
      * on error paths. */
     state_rollback(state);
     free(message);
-    string_array_deinit(&pruned_dirs);
     if (metadata) metadata_free(metadata);
     stage_free(stage);
 
@@ -1252,10 +1247,6 @@ static error_t *remove_profile(
     error_t *err = NULL;
     const char *remote_name = NULL;
     const char *remote_url = NULL;
-    string_array_t *all_profiles = NULL;
-    string_array_t *files = NULL;
-    string_array_t *hook_storage = NULL;
-    string_array_t *hook_filesystem = NULL;
     bool performed = false;
 
     /* CLI flags override config */
@@ -1288,27 +1279,27 @@ static error_t *remove_profile(
     }
 
     /* SAFETY: Prevent deletion of last remaining profile */
-    err = gitops_list_branches(repo, &all_profiles);
+    string_array_t all_profiles;
+    err = gitops_list_branches(repo, ctx->arena, &all_profiles);
     if (err) {
         err = error_wrap(err, "Failed to list profiles");
         goto cleanup;
     }
 
-    if (all_profiles->count <= 1) {
+    if (all_profiles.count <= 1) {
         err = ERROR(
             ERR_INVALID_ARG, "Cannot delete last remaining profile '%s'\n"
             "Hint: A repository must have at least one profile", opts->profile
         );
         goto cleanup;
     }
-    string_array_free(all_profiles);
-    all_profiles = NULL;
 
     /* The file list rides to the hook universe below; the preview and the
      * confirmation count through the count family instead — what the branch holds,
      * both kinds, one truth with `dotta list`. A stats failure is display-only:
      * the deletion must not refuse over a count. */
-    err = profile_list_files(repo, opts->profile, &files);
+    string_array_t files;
+    err = profile_list_files(repo, opts->profile, ctx->arena, &files);
     if (err) {
         err = error_wrap(err, "Failed to list files in profile '%s'", opts->profile);
         goto cleanup;
@@ -1482,10 +1473,8 @@ static error_t *remove_profile(
      * holds as a blob is the blob's, the stale item is skipped. A branch without
      * a sheet has no directory claims; a sheet that will not load degrades to
      * the files-only universe — the deletion does not refuse over it. */
-    hook_storage = string_array_new(0);
-    for (size_t i = 0; i < files->count; i++) {
-        string_array_push(hook_storage, files->items[i]);
-    }
+    string_array_t hook_storage;
+    string_array_clone(&files, ctx->arena, &hook_storage);
 
     metadata_t *branch_metadata = NULL;
     error_t *meta_err = metadata_load_from_branch(
@@ -1499,12 +1488,8 @@ static error_t *remove_profile(
             metadata_items(branch_metadata, &item_count);
         for (size_t i = 0; i < item_count; i++) {
             if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
-            bool held_as_blob = false;
-            for (size_t j = 0; j < files->count && !held_as_blob; j++) {
-                held_as_blob = strcmp(files->items[j], items[i]->key) == 0;
-            }
-            if (!held_as_blob) {
-                string_array_push(hook_storage, items[i]->key);
+            if (!string_array_contains(&files, items[i]->key)) {
+                string_array_push(&hook_storage, items[i]->key);
             }
         }
         metadata_free(branch_metadata);
@@ -1518,25 +1503,26 @@ static error_t *remove_profile(
      * the profile is enabled with a binding; otherwise, and on a resolve that
      * fails (malformed input — non-fatal here), the loop substitutes the storage
      * path so the hook sees a meaningful name. */
-    hook_filesystem = string_array_new(0);
-    for (size_t i = 0; i < hook_storage->count; i++) {
+    string_array_t hook_filesystem;
+    string_array_init(&hook_filesystem, ctx->arena);
+    for (size_t i = 0; i < hook_storage.count; i++) {
         const char *filesystem_path = NULL;
         error_t *conv_err = mount_resolve(
-            mounts, opts->profile, hook_storage->items[i], ctx->arena, &filesystem_path
+            mounts, opts->profile, hook_storage.entries[i], ctx->arena, &filesystem_path
         );
         if (conv_err) error_free(conv_err);
         string_array_push(
-            hook_filesystem, filesystem_path ? filesystem_path : hook_storage->items[i]
+            &hook_filesystem, filesystem_path ? filesystem_path : hook_storage.entries[i]
         );
     }
 
     /* Build hook invocation with the filesystem paths (consistent with the
-     * file-removal subcommand). The arrays live until cleanup. */
+     * file-removal subcommand). The arrays are the command arena's. */
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
         .profile    = opts->profile,
-        .files      = hook_filesystem->items,
-        .file_count = hook_filesystem->count,
+        .files      = hook_filesystem.entries,
+        .file_count = hook_filesystem.count,
         .dry_run    = opts->dry_run,
     };
 
@@ -1706,16 +1692,10 @@ static error_t *remove_profile(
     }
 
 cleanup:
-    /* Free all resources in reverse order of allocation. state is borrowed from
-     * the dispatcher — do not free it. state_rollback is a no-op if no transaction
-     * is active; this safely closes any partially-begun record-update or
-     * post-deletion transaction on an error path. */
+    /* state is borrowed from the dispatcher — do not free it. state_rollback is
+     * a no-op if no transaction is active; this safely closes any partially-begun
+     * record-update or post-deletion transaction on an error path. */
     state_rollback(state);
-
-    string_array_free(hook_filesystem);
-    string_array_free(hook_storage);
-    if (files) string_array_free(files);
-    if (all_profiles) string_array_free(all_profiles);
 
     return err;
 }

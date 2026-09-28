@@ -124,14 +124,13 @@ static error_t *list_profiles(
     bool verbose = output_is_verbose(out);
 
     /* Every profile here */
-    string_array_t *branches = NULL;
-    error_t *err = gitops_list_branches(repo, &branches);
+    string_array_t branches;
+    error_t *err = gitops_list_branches(repo, ctx->arena, &branches);
     if (err) {
         return error_wrap(err, "Failed to list branches");
     }
 
-    if (branches->count == 0) {
-        string_array_free(branches);
+    if (branches.count == 0) {
         output_info(out, OUTPUT_NORMAL, "No profiles found");
         return NULL;
     }
@@ -156,8 +155,8 @@ static error_t *list_profiles(
     /* Calculate max branch name length for column alignment */
     size_t max_name_len = 0;
     if (verbose || show_remote) {
-        for (size_t i = 0; i < branches->count; i++) {
-            const char *bname = branches->items[i];
+        for (size_t i = 0; i < branches.count; i++) {
+            const char *bname = branches.entries[i];
             size_t len = strlen(bname);
             if (len > max_name_len) {
                 max_name_len = len;
@@ -183,10 +182,10 @@ static error_t *list_profiles(
     size_t max_counts_len = 0;
     size_t max_size_len = 0;
     if (verbose) {
-        lines = heap_calloc(branches->count, sizeof(*lines));
+        lines = heap_calloc(branches.count, sizeof(*lines));
 
-        for (size_t i = 0; i < branches->count; i++) {
-            const char *bname = branches->items[i];
+        for (size_t i = 0; i < branches.count; i++) {
+            const char *bname = branches.entries[i];
 
             profile_stats_t stats = { 0 };
             err = profile_get_stats(repo, bname, &stats);
@@ -223,8 +222,8 @@ static error_t *list_profiles(
     output_section(out, OUTPUT_NORMAL, "Available profiles");
 
     /* List profiles */
-    for (size_t i = 0; i < branches->count; i++) {
-        const char *profile = branches->items[i];
+    for (size_t i = 0; i < branches.count; i++) {
+        const char *profile = branches.entries[i];
 
         bool is_enabled = state && state_enabled(state, profile);
         const char *indicator = is_enabled ? "* " : "  ";
@@ -328,7 +327,6 @@ static error_t *list_profiles(
     }
 
     free(lines);
-    string_array_free(branches);
 
     return NULL;
 }
@@ -339,14 +337,15 @@ static error_t *list_profiles(
  * Default: Just file paths Verbose: Add sizes and per-file last commit
  */
 static error_t *list_files(
-    git_repository *repo,
-    const cmd_list_options_t *opts,
-    output_t *out
+    const dotta_ctx_t *ctx,
+    const cmd_list_options_t *opts
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
     CHECK_NULL(opts->profile);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    output_t *out = ctx->out;
 
     bool verbose = output_is_verbose(out);
 
@@ -364,8 +363,8 @@ static error_t *list_files(
         );
     }
 
-    string_array_t *files = NULL;
-    err = profile_list_tree_files(tree, &files);
+    string_array_t files;
+    err = profile_list_tree_files(tree, ctx->arena, &files);
     if (err) {
         git_tree_free(tree);
         return error_wrap(
@@ -373,7 +372,7 @@ static error_t *list_files(
         );
     }
 
-    if (files->count == 0) {
+    if (files.count == 0) {
         /* Directory claims are not listed — no size, no history — but the count
          * of them keeps "nothing" honest for a branch whose whole content is
          * its claims. It is what the branch holds less the files, so it comes
@@ -416,7 +415,6 @@ static error_t *list_files(
                 out, OUTPUT_NORMAL, "No files in profile '%s'", opts->profile
             );
         }
-        string_array_free(files);
         git_tree_free(tree);
         return NULL;
     }
@@ -426,7 +424,7 @@ static error_t *list_files(
     output_gap(out, OUTPUT_NORMAL);
 
     /* Sort for consistent output */
-    string_array_sort(files);
+    string_array_sort(&files);
 
     /* What a verbose row reads beyond the name: the branch's claims, the history
      * behind each name, and the width the names need. All three are the whole
@@ -465,8 +463,8 @@ static error_t *list_files(
             err = NULL;
         }
 
-        for (size_t i = 0; i < files->count; i++) {
-            size_t len = strlen(files->items[i]);
+        for (size_t i = 0; i < files.count; i++) {
+            size_t len = strlen(files.entries[i]);
             if (len > max_path_len) {
                 max_path_len = len;
             }
@@ -479,8 +477,8 @@ static error_t *list_files(
 
     /* List files */
     size_t total_size = 0;
-    for (size_t i = 0; i < files->count; i++) {
-        const char *storage_path = files->items[i];
+    for (size_t i = 0; i < files.count; i++) {
+        const char *storage_path = files.entries[i];
 
         /* Print file path (with alignment in verbose mode) */
         if (verbose) {
@@ -588,14 +586,14 @@ static error_t *list_files(
         output_format_size(total_size, size_str, sizeof(size_str));
         output_print(
             out, OUTPUT_VERBOSE, "Total: %zu file%s, %s\n",
-            files->count,
-            files->count == 1 ? "" : "s", size_str
+            files.count,
+            files.count == 1 ? "" : "s", size_str
         );
     } else {
         output_print(
             out, OUTPUT_NORMAL, "Total: %zu file%s\n",
-            files->count,
-            files->count == 1 ? "" : "s"
+            files.count,
+            files.count == 1 ? "" : "s"
         );
     }
 
@@ -605,7 +603,6 @@ static error_t *list_files(
     }
     metadata_free(metadata);
     git_tree_free(tree);
-    string_array_free(files);
 
     return NULL;
 }
@@ -867,7 +864,6 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
 
     error_t *err = NULL;
@@ -886,7 +882,7 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
     if (opts->mode == LIST_PROFILES) {
         err = list_profiles(ctx, opts);
     } else if (opts->mode == LIST_FILES) {
-        err = list_files(repo, opts, out);
+        err = list_files(ctx, opts);
     } else if (opts->mode == LIST_FILE_HISTORY) {
         err = list_file_history(ctx, opts);
     } else {

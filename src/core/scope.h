@@ -42,11 +42,10 @@
  *
  * Lifetime and ownership
  * ----------------------
- * scope_t is command-scoped and immutable after scope_build returns. All
- * CLI-derived inputs are deep-copied; the caller may free its inputs immediately
- * after scope_build returns. scope_t is entirely self-contained, and nothing
- * borrows from it past its life — the workspace and the scope are freed in any
- * order.
+ * scope_t is a value of the arena scope_build is handed — the struct, both name
+ * lists and the compiled filters — immutable once built, and nothing frees one.
+ * Every CLI-derived input is copied there, so the caller's inputs may go once
+ * scope_build returns.
  *
  * Empty-enabled policy
  * --------------------
@@ -123,10 +122,9 @@ typedef struct scope_inputs {
  * @param repo   Repository (must not be NULL)
  * @param state  State handle (must not be NULL, borrowed for the call)
  * @param in     Inputs (must not be NULL)
- * @param arena  Borrowed allocator backing the compiled exclude ruleset
- *               and the path filter; must outlive the returned scope (must not
- *               be NULL)
- * @param out    Scope (must not be NULL, caller frees with scope_free)
+ * @param arena  Arena the scope lives in, and everything it holds (must not be
+ *               NULL)
+ * @param out    Scope (must not be NULL; left as it was on a refusal)
  * @return Error or NULL on success
  */
 error_t *scope_build(
@@ -137,11 +135,6 @@ error_t *scope_build(
     scope_t **out
 );
 
-/**
- * Free a scope. No-op on NULL.
- */
-void scope_free(scope_t *s);
-
 /* -------------------------------------------------------------------- */
 /* Definitional accessors                                               */
 /* -------------------------------------------------------------------- */
@@ -151,9 +144,7 @@ void scope_free(scope_t *s);
  *
  * The enabled profiles, validated against the branches, in precedence order.
  * Never the filter. Always non-NULL; the array may be empty (an empty view is a
- * valid state).
- *
- * The returned pointer is borrowed from scope_t and valid until scope_free.
+ * valid state). Borrowed from the scope.
  */
 const string_array_t *scope_enabled(const scope_t *s);
 
@@ -164,7 +155,7 @@ const string_array_t *scope_enabled(const scope_t *s);
  * Use this for hook context strings ("what the user asked for") and for verbose
  * output.
  *
- * Always non-NULL. Borrowed; valid until scope_free.
+ * Always non-NULL. Borrowed from the scope.
  */
 const string_array_t *scope_profiles(const scope_t *s);
 
@@ -183,7 +174,7 @@ const string_array_t *scope_profiles(const scope_t *s);
  * pathspec_entry_matches_at). Per-iteration path-vs-filter checks should use
  * scope_accepts_path instead.
  *
- * Borrowed; valid until scope_free.
+ * Borrowed from the scope.
  */
 const pathspec_t *scope_paths(const scope_t *s);
 
@@ -192,10 +183,10 @@ const pathspec_t *scope_paths(const scope_t *s);
 /* -------------------------------------------------------------------- */
 
 /** True if a CLI profile filter was given (-p). */
-bool scope_has_filter(const scope_t *s);
+bool scope_filters_profiles(const scope_t *s);
 
 /** True if CLI positional file arguments were given. */
-bool scope_has_paths(const scope_t *s);
+bool scope_filters_paths(const scope_t *s);
 
 /* -------------------------------------------------------------------- */
 /* Per-iteration predicates                                             */

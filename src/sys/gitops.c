@@ -183,25 +183,29 @@ error_t *gitops_branch_exists(
 }
 
 error_t *gitops_branch_blocker(
-    git_repository *repo, const char *name, char **out_blocker
+    git_repository *repo, const char *name, char *blocker, size_t size
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
-    CHECK_NULL(out_blocker);
+    CHECK_NULL(blocker);
+    CHECK_ARG(size > 0, "blocker buffer cannot be empty");
 
-    *out_blocker = NULL;
+    blocker[0] = '\0';
 
     /* Only a name Git accepts stands anywhere to be blocked: one it refuses is
      * refused here, in the branch rule's words, and never scanned. */
     char refname[DOTTA_REFNAME_MAX];
     RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), name));
 
-    string_array_t *branches = NULL;
-    RETURN_IF_ERROR(gitops_list_branches(repo, &branches));
+    /* The branches, in a frame of this call's own: the answer is copied out of
+     * it into the caller's buffer before it goes. */
+    arena_t *frame = arena_create(0);
+    string_array_t branches;
+    error_t *err = gitops_list_branches(repo, frame, &branches);
 
     size_t len = strlen(name);
-    for (size_t i = 0; i < branches->count; i++) {
-        const char *other = branches->items[i];
+    for (size_t i = 0; !err && i < branches.count; i++) {
+        const char *other = branches.entries[i];
         size_t other_len = strlen(other);
 
         /* Nested names: one is a folder the other lives in — the shorter matched
@@ -213,13 +217,16 @@ error_t *gitops_branch_blocker(
             && (other_len > len ? other[len] : name[other_len]) == '/';
 
         if (nested) {
-            *out_blocker = heap_strdup(other);
+            /* A listed branch is a ref name, which a caller's DOTTA_REFNAME_MAX
+             * buffer holds whole: a shorter buffer is the caller's bug. */
+            CHECK_ARG(other_len < size, "blocker buffer too small for a branch name");
+            memcpy(blocker, other, other_len + 1);
             break;
         }
     }
 
-    string_array_free(branches);
-    return NULL;
+    arena_free(frame);
+    return err;
 }
 
 /* What a walk of the loose store holds constant: the repository the lookups ask,
@@ -328,10 +335,11 @@ static error_t *walk_loose_refs(const loose_walk_t *walk, const char *dir) {
 }
 
 error_t *gitops_list_refs(
-    git_repository *repo, const char *namespace, string_array_t **out
+    git_repository *repo, const char *namespace, arena_t *arena, string_array_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(namespace);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
     CHECK_ARG(namespace[0] != '\0', "Reference namespace cannot be empty");
 
@@ -349,7 +357,8 @@ error_t *gitops_list_refs(
     git_reference_iterator *iter = NULL;
     int rc = git_reference_iterator_glob_new(&iter, repo, glob);
     if (rc < 0) return error_from_git(rc);
-    string_array_t *names = string_array_new(0);
+    string_array_t names;
+    string_array_init(&names, arena);
 
     error_t *err = NULL;
     for (;;) {
@@ -364,7 +373,7 @@ error_t *gitops_list_refs(
             err = error_from_git(rc);
             break;
         }
-        string_array_push(names, refname + strlen(namespace) + 1);
+        string_array_push(&names, refname + strlen(namespace) + 1);
     }
     git_reference_iterator_free(iter);
 
@@ -378,7 +387,7 @@ error_t *gitops_list_refs(
             .repo       = repo,
             .refname_at = strlen(dir) - strlen(namespace),
             .depth      = 1,
-            .names      = names,
+            .names      = &names,
         };
         for (const char *slash = strchr(namespace, '/'); slash;
             slash = strchr(slash + 1, '/')) {
@@ -387,27 +396,26 @@ error_t *gitops_list_refs(
         err = walk_loose_refs(&walk, dir);
         free(dir);
     }
-    if (err) {
-        string_array_free(names);
-        return err;
-    }
+    if (err) return err;
 
     *out = names;
     return NULL;
 }
 
-error_t *gitops_list_branches(git_repository *repo, string_array_t **out) {
+error_t *gitops_list_branches(git_repository *repo, arena_t *arena, string_array_t *out) {
     CHECK_NULL(repo);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    return gitops_list_refs(repo, "refs/heads", out);
+    return gitops_list_refs(repo, "refs/heads", arena, out);
 }
 
 error_t *gitops_list_remote_tracking(
-    git_repository *repo, const char *remote_name, string_array_t **out
+    git_repository *repo, const char *remote_name, arena_t *arena, string_array_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     char namespace[DOTTA_REFNAME_MAX];
@@ -416,12 +424,12 @@ error_t *gitops_list_remote_tracking(
     );
     if (err) return err;
 
-    string_array_t *names = NULL;
-    err = gitops_list_refs(repo, namespace, &names);
+    string_array_t names;
+    err = gitops_list_refs(repo, namespace, arena, &names);
     if (err) return err;
 
     /* Under the remote's namespace and not a branch of it: its symbolic HEAD. */
-    string_array_remove_value(names, "HEAD");
+    string_array_remove_value(&names, "HEAD");
 
     *out = names;
     return NULL;
@@ -705,7 +713,7 @@ error_t *gitops_fetch_branches(
         /* Each refspec's source is its branch's ref, spelled where every one is. */
         char refname[DOTTA_REFNAME_MAX];
         err_result = gitops_branch_refname(
-            refname, sizeof(refname), branches->items[i]
+            refname, sizeof(refname), branches->entries[i]
         );
         if (err_result) goto cleanup;
 
@@ -715,12 +723,12 @@ error_t *gitops_fetch_branches(
         /* Build refspec: refs/heads/branch:refs/remotes/origin/branch */
         error_t *err_build = gitops_build_refname(
             refspecs[i], DOTTA_REFSPEC_MAX, "%s:refs/remotes/%s/%s",
-            refname, remote_name, branches->items[i]
+            refname, remote_name, branches->entries[i]
         );
         if (err_build) {
             err_result = error_wrap(
                 err_build, "Invalid branch/remote name '%s/%s'",
-                remote_name, branches->items[i]
+                remote_name, branches->entries[i]
             );
             goto cleanup;
         }
@@ -899,22 +907,18 @@ error_t *gitops_delete_remote_branch(
 }
 
 error_t *gitops_list_remote_branches(
-    git_repository *repo, const char *remote_name,
-    transfer_context_t *xfer, string_array_t **out_branches
+    git_repository *repo, const char *remote_name, transfer_context_t *xfer,
+    arena_t *arena, string_array_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(xfer);
-    CHECK_NULL(out_branches);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
 
     git_remote *remote = NULL;
-    string_array_t *branches = string_array_new(0);
-
     int git_err = git_remote_lookup(&remote, repo, remote_name);
-    if (git_err < 0) {
-        string_array_free(branches);
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     /* git_remote_connect + git_remote_ls transfer no byte payload, so the progress
      * callback never fires; GIT_DIRECTION_FETCH keeps the credential path aligned
@@ -930,7 +934,6 @@ error_t *gitops_list_remote_branches(
     transfer_op_end(xfer, git_err);
     if (git_err < 0) {
         git_remote_free(remote);
-        string_array_free(branches);
         return error_from_git(git_err);
     }
 
@@ -940,13 +943,14 @@ error_t *gitops_list_remote_branches(
     if (git_err < 0) {
         git_remote_disconnect(remote);
         git_remote_free(remote);
-        string_array_free(branches);
         return error_from_git(git_err);
     }
 
     static const char heads_prefix[] = "refs/heads/";
     const size_t prefix_len = sizeof(heads_prefix) - 1;
 
+    string_array_t branches;
+    string_array_init(&branches, arena);
     for (size_t i = 0; i < refs_len; i++) {
         const char *refname = refs[i]->name;
 
@@ -960,13 +964,13 @@ error_t *gitops_list_remote_branches(
             continue;
         }
 
-        string_array_push(branches, branch_name);
+        string_array_push(&branches, branch_name);
     }
 
     git_remote_disconnect(remote);
     git_remote_free(remote);
 
-    *out_branches = branches;
+    *out = branches;
     return NULL;
 }
 

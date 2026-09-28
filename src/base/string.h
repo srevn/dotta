@@ -90,16 +90,22 @@ size_t str_path_parent_len(const char *path);
 char *str_trim(char *str);
 
 /**
- * Join array of strings with delimiter
+ * Join a slice of strings with a delimiter, into an arena
  *
- * A joined length no memory could hold is exhaustion (base/heap.h heap_die).
+ * The delimiter stands between every two positions; a NULL string is an empty
+ * one. A joined length no memory could hold is exhaustion (base/heap.h heap_die).
+ * The slice is an argv's type, so a string array's entries and a command's
+ * arguments pass without a cast.
  *
- * @param strings Array of strings
+ * @param arena Arena the joined string lives in (must not be NULL)
+ * @param strings The strings (may be NULL when count is 0)
  * @param count Number of strings
- * @param delimiter Delimiter to insert between strings
- * @return Newly allocated joined string (must be freed); never NULL
+ * @param delimiter Delimiter to insert between strings (NULL is none)
+ * @return The joined string, "" for none; never NULL
  */
-char *str_join(const char *const *strings, size_t count, const char *delimiter);
+char *str_join(
+    arena_t *arena, char *const *strings, size_t count, const char *delimiter
+);
 
 /**
  * RAII cleanup for strings

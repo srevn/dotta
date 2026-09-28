@@ -1,21 +1,22 @@
 /**
  * array.h - Dynamic arrays
  *
- * Two vectors, with different owners:
+ * Two vectors, each living in the arena it was made in and going with it: nothing
+ * releases an array.
  *
- *   string_array_t — owns each element string (push duplicates, deinit frees);
- *                    the heap's, with matching init/deinit and new/free pairs.
- *   ptr_array_t    — borrows every pointer it holds; its spine lives in the
- *                    arena it was made in, and goes with it: nothing releases a
- *                    pointer array.
+ *   string_array_t — keeps a copy of every string it is handed, beside its spine;
+ *                    entries[count] is NULL after every change, so the array is
+ *                    an argv or an envp as it stands.
+ *   ptr_array_t    — borrows every pointer it holds.
  *
  * Both structs are transparent: direct field access is the intended usage.
  *
- * A pointer array remembers its arena. ptr_array_init names it once, where the
- * array is made — the one place its lifetime is known — and every growth takes
+ * An array remembers its arena. Its init names it once, where the array is made
+ * — the one place its lifetime is known — and every growth and every copy takes
  * its room there, so no push names an arena and a callee that fills a caller's
- * array takes none. A zeroed array ({ 0 }) is empty and may be read; a push to
- * one dies at its site.
+ * array takes none. The strings of one string array therefore share one lifetime,
+ * whatever their sources' were. A zeroed array ({ 0 }) is empty and may be read;
+ * a push to one dies at its site.
  *
  * Growth cannot fail: a push, a reserve or a clone succeeds or the run dies of
  * exhaustion (base/heap.h, base/arena.h), so none of them answers anything, and
@@ -27,87 +28,96 @@
 
 #include <types.h>
 
-/**
- * Initialize array to empty state.
- * Equivalent to zero-initialization: string_array_t arr = {0};
- */
-void string_array_init(string_array_t *arr);
+/* === string_array_t — names, each a copy in the arena it was made in === */
 
 /**
- * Initialize array with pre-allocated capacity.
+ * Make an empty string array whose spine and copies live in `arena`
  *
- * @param arr Array to initialize
- * @param cap Desired initial capacity
+ * @param arr   Array to initialize (must not be NULL)
+ * @param arena Arena every growth and every copy takes its room from (must not
+ *              be NULL)
  */
-void string_array_init_cap(string_array_t *arr, size_t cap);
+void string_array_init(string_array_t *arr, arena_t *arena);
 
 /**
- * Release all owned memory (strings + backing array). Resets struct to zero state.
- * Safe to call on zero-initialized or already-deinitialized arrays. No-op on NULL.
- */
-void string_array_deinit(string_array_t *arr);
-
-/**
- * Allocate and initialize a new array on the heap.
+ * Make an empty string array with room for `cap` strings, in `arena`
  *
- * @param cap Initial capacity (0 for no pre-allocation)
- * @return New array; never NULL
- */
-string_array_t *string_array_new(size_t cap);
-
-/**
- * Deinitialize and free a heap-allocated array. No-op on NULL.
- */
-void string_array_free(string_array_t *arr);
-
-/**
- * Callback-compatible free for use with hashmap_free() and similar APIs. Casts
- * void* to string_array_t* and calls string_array_free().
- */
-void string_array_free_cb(void *ptr);
-
-/**
- * Append a copy of str to the array.
+ * Pushes up to `cap` move nothing: string_array_init, then string_array_reserve.
  *
- * @param arr Array (must not be NULL)
- * @param str String to copy and append (must not be NULL)
+ * @param arr   Array to initialize (must not be NULL)
+ * @param arena Arena every growth and every copy takes its room from (must not
+ *              be NULL)
+ * @param cap   Strings to make room for (0 makes none)
+ */
+void string_array_init_cap(string_array_t *arr, arena_t *arena, size_t cap);
+
+/**
+ * Append a copy of `str`, made in the array's arena
+ *
+ * The source may change or go once the push returns: the array holds its own
+ * copy. The spine grows in the array's arena (base/arena.h arena_grow), so a
+ * pointer kept into the old spine is stale after a push that grew; a string the
+ * array holds never moves.
+ *
+ * @param arr Array (must not be NULL; given its arena by string_array_init)
+ * @param str String to copy (must not be NULL)
  */
 void string_array_push(string_array_t *arr, const char *str);
 
 /**
- * Append str to the array, transferring ownership. str must be heap-allocated.
+ * Append a string formatted into the array's arena
  *
- * @param arr Array (must not be NULL)
- * @param str Heap-allocated string (must not be NULL, ownership transferred)
+ * string_array_push of what arena_str_format would answer, with no second copy.
+ * The format is dotta's own, so one that cannot be formatted is its writer's bug.
+ *
+ * @param arr Array (must not be NULL; given its arena by string_array_init)
+ * @param fmt Format string (must not be NULL)
  */
-void string_array_push_owned(string_array_t *arr, char *str);
+void string_array_pushf(string_array_t *arr, const char *fmt, ...)
+__attribute__((format(printf, 2, 3)));
 
 /**
- * Ensure capacity for at least cap elements without reallocation.
+ * Make room for at least `cap` strings and the terminator after them, in the
+ * array's arena
+ *
+ * @param arr Array (must not be NULL; given its arena by string_array_init)
+ * @param cap Strings the array must hold without a growth (0 makes none)
  */
 void string_array_reserve(string_array_t *arr, size_t cap);
 
 /**
- * Remove element at index, shifting subsequent elements left. O(n). No-op if
- * arr is NULL or index is out of bounds.
+ * Copy `src` into `arena`: the spine and every string
+ *
+ * The clone is a value of `arena` alone, so a clone into a longer-lived arena
+ * is how names outlive the arena they were listed in.
+ *
+ * @param src   Source array (must not be NULL)
+ * @param arena Arena the clone lives in (must not be NULL)
+ * @param dst   Destination, overwritten (must not be NULL)
+ */
+void string_array_clone(const string_array_t *src, arena_t *arena, string_array_t *dst);
+
+/**
+ * Remove the string at index, shifting those after it left. O(n). The string
+ * stays its arena's. No-op if arr is NULL or index is out of bounds.
  */
 void string_array_remove(string_array_t *arr, size_t index);
 
 /**
- * Remove element at index by swapping with the last element. O(1). Does not
+ * Remove the string at index by moving the last into its place. O(1). Does not
  * preserve order. No-op if arr is NULL or index is out of bounds.
  */
 void string_array_swap_remove(string_array_t *arr, size_t index);
 
 /**
- * Remove first occurrence of str (strcmp match).
+ * Remove the first occurrence of str (strcmp match).
  *
  * @return true if found and removed, false otherwise
  */
 bool string_array_remove_value(string_array_t *arr, const char *str);
 
 /**
- * Remove all elements, freeing each string. Retains allocated capacity.
+ * Empty the array; its room stays. No-op on NULL.
  */
 void string_array_clear(string_array_t *arr);
 
@@ -119,48 +129,19 @@ void string_array_clear(string_array_t *arr);
 bool string_array_contains(const string_array_t *arr, const char *str);
 
 /**
- * Sort elements lexicographically in place (strcmp order).
+ * Sort the strings lexicographically in place (strcmp order).
  */
 void string_array_sort(string_array_t *arr);
 
 /**
- * Deep-copy src into dst. dst is initialized by this function — caller must deinit
- * any previous contents before calling to avoid leaks.
+ * Join the strings with a delimiter, into `arena` (base/string.h str_join)
  *
- * @param src Source array (must not be NULL)
- * @param dst Destination (must not be NULL, overwritten)
+ * @param arena     Arena the joined string lives in (must not be NULL)
+ * @param arr       Array (NULL or empty joins to "")
+ * @param delimiter Separator between two strings (NULL is none)
+ * @return The joined string; never NULL
  */
-void string_array_clone(const string_array_t *src, string_array_t *dst);
-
-/**
- * Join array elements into a single delimiter-separated string.
- *
- * @param arr Array (NULL or empty joins to "")
- * @param delimiter Separator between elements (NULL treated as empty)
- * @return Heap-allocated string; never NULL
- */
-char *string_array_join(const string_array_t *arr, const char *delimiter);
-
-/** Cleanup helper for heap-allocated arrays (string_array_t *) */
-static inline void cleanup_string_array(string_array_t **arr) {
-    if (arr && *arr) {
-        string_array_free(*arr);
-        *arr = NULL;
-    }
-}
-
-/** Cleanup helper for stack/embedded arrays (string_array_t) */
-static inline void cleanup_string_array_val(string_array_t *arr) {
-    if (arr) {
-        string_array_deinit(arr);
-    }
-}
-
-/** For heap-allocated: string_array_t *p STRING_ARRAY_CLEANUP = ...; */
-#define STRING_ARRAY_CLEANUP __attribute__((cleanup(cleanup_string_array)))
-
-/** For stack/embedded: string_array_t arr STRING_ARRAY_AUTO = {0}; */
-#define STRING_ARRAY_AUTO __attribute__((cleanup(cleanup_string_array_val)))
+char *string_array_join(arena_t *arena, const string_array_t *arr, const char *delimiter);
 
 /* === ptr_array_t — borrowed pointers, in the arena it was made in === */
 

@@ -12,7 +12,6 @@
 #include <unistd.h>
 
 #include "base/args.h"
-#include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/gitignore.h"
@@ -846,8 +845,6 @@ static error_t *test_path_ignore(
      * never reads an uninitialised one. */
     manifest_t *view = NULL;
     source_filter_t *source_filter = NULL;
-    ignore_rules_t *ignore_rules = NULL;
-    string_array_t *enabled = NULL;
 
     /* The key the user named, fixed for every asker: the resolver's sum, its
      * tag the whole condition the loop's arms read and its member the argument's
@@ -917,7 +914,9 @@ static error_t *test_path_ignore(
     }
 
     /* Layered-rules builder — the baseline compiled once, each profile's ruleset
-     * composed on first request; no CLI layer, for --test takes no -e. */
+     * composed on first request; no CLI layer, for --test takes no -e. The arena's,
+     * with nothing for the cleanup to release. */
+    ignore_rules_t *ignore_rules = NULL;
     err = ignore_rules_create(repo, config, NULL, ctx->arena, &ignore_rules);
     if (err) {
         err = error_wrap(err, "Failed to build ignore rules");
@@ -932,17 +931,18 @@ static error_t *test_path_ignore(
      * and the summary key on. */
     const char *const *askers = &specific_profile;
     size_t asker_count = 1;
+    string_array_t enabled = { 0 };
 
     if (!specific_profile) {
-        err = profile_resolve_enabled(repo, state, &enabled);
+        err = profile_resolve_enabled(repo, state, ctx->arena, &enabled);
         if (err) {
             err = error_wrap(err, "Failed to load profiles");
             goto cleanup;
         }
 
-        if (enabled->count > 0) {
-            askers = (const char *const *) enabled->items;
-            asker_count = enabled->count;
+        if (enabled.count > 0) {
+            askers = (const char *const *) enabled.entries;
+            asker_count = enabled.count;
             output_info(out, OUTPUT_NORMAL, "Testing path: %s", test_path);
             output_info(out, OUTPUT_NORMAL, "Enabled profiles: %zu", asker_count);
             output_gap(out, OUTPUT_NORMAL);
@@ -1042,7 +1042,7 @@ static error_t *test_path_ignore(
         }
     }
 
-    if (enabled && enabled->count > 0) {
+    if (enabled.count > 0) {
         output_gap(out, OUTPUT_NORMAL);
         if (any_ignored) {
             output_info(
@@ -1056,7 +1056,6 @@ static error_t *test_path_ignore(
 
 cleanup:
     source_filter_free(source_filter);
-    string_array_free(enabled);
     manifest_free(view);
     return err;
 }

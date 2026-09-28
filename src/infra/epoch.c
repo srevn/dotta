@@ -40,7 +40,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "base/array.h"
+#include "base/arena.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "crypto/keymgr.h"
@@ -764,9 +764,11 @@ static int epoch_walk_cb(
 static error_t *walk_ciphertext(
     git_repository *repo, epoch_ciphertext_fn fn, void *payload
 ) {
-    string_array_t *branches = NULL;
-    error_t *err = gitops_list_branches(repo, &branches);
-    if (err) return err;
+    /* The branches, in a frame of the walk's own: a listing read inside the loop
+     * and dropped with it */
+    arena_t *frame = arena_create(0);
+    string_array_t branches = { 0 };
+    error_t *err = gitops_list_branches(repo, frame, &branches);
 
     hashmap_t *seen = hashmap_create(0);
 
@@ -775,8 +777,8 @@ static error_t *walk_ciphertext(
     };
     git_revwalk *walker = NULL;
 
-    for (size_t i = 0; i < branches->count && !walk.stopped; i++) {
-        const char *branch = branches->items[i];
+    for (size_t i = 0; !err && i < branches.count && !walk.stopped; i++) {
+        const char *branch = branches.entries[i];
         walk.branch = branch;
 
         char refname[DOTTA_REFNAME_MAX];
@@ -861,16 +863,17 @@ static error_t *walk_ciphertext(
         walker = NULL;
     }
 
-    /* Falling out of the loop is the walk finished: every assignment to `err`
-     * inside it goes straight to the label, so `err` is still the listing's NULL.
-     * A reader of a fail-closed walk should not have to re-derive that. */
+    /* Falling out of the loop is the walk finished, or the listing refused before
+     * it began: every assignment to `err` inside the loop goes straight to the
+     * label, so `err` is the listing's answer. A reader of a fail-closed walk
+     * should not have to re-derive that. */
 
 cleanup:
     if (walker) {
         git_revwalk_free(walker);
     }
     hashmap_free(seen, NULL);
-    string_array_free(branches);
+    arena_free(frame);
     return err;
 }
 

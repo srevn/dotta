@@ -406,17 +406,18 @@ error_t *fs_create_dir_exclusive(
 );
 
 /**
- * Remove directory
+ * Remove a directory and its whole subtree
  *
- * With `recursive`, this deletes the whole subtree — every path beneath `path`,
- * tracked or not. Callers that may only remove the directory itself want
- * fs_remove_empty_dir, which refuses rather than descends.
+ * Every path beneath `path` goes, tracked or not, entered by lstat so a link
+ * inside is removed and never followed. The walk's listings live in a scratch
+ * of its own, freed before the answer. Absence is success. Callers that may only
+ * remove the directory itself want fs_remove_empty_dir, which refuses rather
+ * than descends.
  *
  * @param path Directory path (must not be NULL)
- * @param recursive Remove contents recursively if true
  * @return Error or NULL on success
  */
-error_t *fs_remove_dir(const char *path, bool recursive);
+error_t *fs_remove_dir(const char *path);
 
 /**
  * Clear path for replacement (remove file, symlink, or directory)
@@ -525,7 +526,7 @@ bool fs_is_directory_empty(const char *path);
  * probes presence first (cleanup_execute does, with fs_lstat_occupant).
  *
  * Never recurses. For a directory whose whole subtree is dotta's to delete, that
- * is fs_remove_dir(path, true).
+ * is fs_remove_dir.
  *
  * @param path Directory path (must not be NULL)
  * @return Error or NULL on success
@@ -535,11 +536,15 @@ error_t *fs_remove_empty_dir(const char *path);
 /**
  * List directory contents (excludes . and ..)
  *
- * @param path Directory path (must not be NULL)
- * @param out String array of filenames (must not be NULL)
+ * The listing is a value of `arena`, the names copied there as read. On a failure
+ * `out` is left as it was, and what was read so far stays the arena's.
+ *
+ * @param path  Directory path (must not be NULL)
+ * @param arena Arena the listing lives in (must not be NULL)
+ * @param out   The names, in readdir's order (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_list_dir(const char *path, string_array_t **out);
+error_t *fs_list_dir(const char *path, arena_t *arena, string_array_t *out);
 
 /* The depth a recursive walk of this filesystem is bounded to. The directory a
  * walk starts at is depth 0, frames 0 through 127 enumerate, and a frame at depth

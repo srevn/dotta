@@ -388,7 +388,8 @@ typedef struct {
  * on the way to a planned path — either class, since the plan holds the tracked
  * ones and the ancestors pass is where a derived claim is ever acted on at all
  * (see deploy_preflight). Every array is always allocated, so a consumer reads
- * counts and needs no NULL guard.
+ * counts and needs no NULL guard. A value of the arena it was decided in, as
+ * every array it holds is: nothing frees one.
  */
 typedef struct {
     /* The rows the run does not deploy, both kinds, in decision order — directories
@@ -405,7 +406,7 @@ typedef struct {
     /* Anomalies met while deciding — the run goes on; the caller prints them.
      * Only rows the run will touch contribute: a skipped row's ownership is not
      * resolved, so it can neither warn nor fail strict_ownership. */
-    string_array_t *warnings;
+    string_array_t warnings;
 
     /* The how — one per row the run WILL deploy */
     deploy_verdicts_t directories;       /* Pending directory rows, parents first */
@@ -549,8 +550,8 @@ typedef struct {
  * so the caller's summary keeps them apart from the created count. A parent no
  * row claims has no receipt and no record.
  *
- * Free with deploy_result_free, before deploy_preflight_result_free — the outcomes
- * borrow the verdicts.
+ * Free with deploy_result_free; the outcomes borrow the verdicts, which outlive
+ * it in their arena.
  */
 typedef struct {
     deploy_outcomes_t deployed;      /* Files written or linked, each with its write's stat */
@@ -750,9 +751,9 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * @param ws Workspace with pre-loaded divergence analysis (must not be NULL)
  * @param plan Deployment plan (must not be NULL)
  * @param opts Deployment options (must not be NULL)
- * @param out Pre-flight results (must not be NULL; caller frees with
- *        deploy_preflight_result_free, after deploy_result_free — the receipt
- *        borrows the verdicts)
+ * @param arena Arena the results and every array they hold live in (must not be
+ *        NULL)
+ * @param out Pre-flight results (must not be NULL; left as it was on a failure)
  * @return Error or NULL on success (a skip is not an error; a strict_ownership
  *         failure is)
  */
@@ -760,6 +761,7 @@ error_t *deploy_preflight(
     const workspace_t *ws,
     const deploy_plan_t *plan,
     const deploy_options_t *opts,
+    arena_t *arena,
     deploy_preflight_result_t **out
 );
 
@@ -838,13 +840,6 @@ error_t *deploy_execute(
     arena_t *arena,
     deploy_result_t **out
 );
-
-/**
- * Free pre-flight results
- *
- * @param verdicts Verdicts to free (can be NULL)
- */
-void deploy_preflight_result_free(deploy_preflight_result_t *verdicts);
 
 /**
  * Free deployment results

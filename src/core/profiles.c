@@ -15,7 +15,6 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
-#include "base/heap.h"
 #include "base/string.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
@@ -73,7 +72,7 @@ static void match_hierarchical_profiles(
     size_t prefix_len = strlen(prefix);
 
     for (size_t i = 0; i < available->count; i++) {
-        const char *profile = available->items[i];
+        const char *profile = available->entries[i];
 
         /* Check if branch starts with prefix */
         if (!str_starts_with(profile, prefix)) {
@@ -104,7 +103,7 @@ static int profile_rank(const char *name) {
     return 1;
 }
 
-static int profile_order_cmp(const void *a, const void *b) {
+static int profile_rank_order(const void *a, const void *b) {
     const char *x = *(const char *const *) a;
     const char *y = *(const char *const *) b;
 
@@ -121,34 +120,33 @@ void profile_order(string_array_t *names) {
         return;
     }
 
-    qsort(names->items, names->count, sizeof(char *), profile_order_cmp);
+    qsort(names->entries, names->count, sizeof(*names->entries), profile_rank_order);
 }
 
 /**
  * Detect matching profile names from a list of available branches
  */
-string_array_t *profile_detect(const string_array_t *available_branches) {
+string_array_t profile_detect(arena_t *arena, const string_array_t *available_branches) {
     CHECK_NULL(available_branches);
 
-    string_array_t *profiles = string_array_new(0);
+    string_array_t profiles;
+    string_array_init(&profiles, arena);
 
     /* 1. "global" — always first if present */
     if (string_array_contains(available_branches, "global")) {
-        string_array_push(profiles, "global");
+        string_array_push(&profiles, "global");
     }
 
-    /* 2. OS-specific profiles (darwin, linux, freebsd, ...) */
+    /* 2. OS-specific profiles (darwin, linux, freebsd, ...), the system's name
+     *    lowered where uname wrote it */
     struct utsname uts;
     if (uname(&uts) == 0) {
-        char *os_name = heap_strdup(uts.sysname);
-
         /* Safe tolower: cast to unsigned char to avoid UB with negative values */
-        for (char *p = os_name; *p; p++) {
+        for (char *p = uts.sysname; *p; p++) {
             *p = (char) tolower((unsigned char) *p);
         }
 
-        match_hierarchical_profiles(available_branches, os_name, profiles);
-        free(os_name);
+        match_hierarchical_profiles(available_branches, uts.sysname, &profiles);
     }
     /* Non-fatal: skip OS profiles if uname() fails */
 
@@ -162,7 +160,7 @@ string_array_t *profile_detect(const string_array_t *available_branches) {
             host_prefix, sizeof(host_prefix), "hosts/%s", hostname
         );
         if (ret >= 0 && (size_t) ret < sizeof(host_prefix)) {
-            match_hierarchical_profiles(available_branches, host_prefix, profiles);
+            match_hierarchical_profiles(available_branches, host_prefix, &profiles);
         }
     }
     /* Non-fatal: continue if gethostname() fails */
@@ -171,7 +169,7 @@ string_array_t *profile_detect(const string_array_t *available_branches) {
      * the order they are seeded in. Each step appends in branch-listing order,
      * so the one sort is what makes the answer the convention's — the same sort
      * every --all runs over its own set. */
-    profile_order(profiles);
+    profile_order(&profiles);
 
     return profiles;
 }
@@ -182,19 +180,24 @@ string_array_t *profile_detect(const string_array_t *available_branches) {
 error_t *profile_resolve_enabled(
     git_repository *repo,
     const state_t *state,
-    string_array_t **out
+    arena_t *arena,
+    string_array_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     /* The enabled rows, where the handle holds them: nothing below moves them
      * (core/state.h state_profiles) */
     state_profiles_t enabled_profiles = state_profiles(state);
 
-    error_t *err = NULL;
-    string_array_t *valid_profiles = string_array_new(0);
-    string_array_t *missing_profiles = string_array_new(0);
+    /* Both lists are the answer's arena's: the missing ones only for the warning
+     * below */
+    string_array_t valid_profiles;
+    string_array_t missing_profiles;
+    string_array_init(&valid_profiles, arena);
+    string_array_init(&missing_profiles, arena);
 
     /* Validate: check which profiles still exist as local branches — one that
      * does not is warned about below and filtered out */
@@ -202,12 +205,9 @@ error_t *profile_resolve_enabled(
         const char *profile = enabled_profiles.entries[i].name;
 
         bool exists = false;
-        err = gitops_branch_exists(repo, profile, &exists);
-        if (err) {
-            err = error_wrap(err, "Failed to validate state profiles");
-            goto cleanup;
-        }
-        string_array_push(exists ? valid_profiles : missing_profiles, profile);
+        error_t *err = gitops_branch_exists(repo, profile, &exists);
+        if (err) return error_wrap(err, "Failed to validate state profiles");
+        string_array_push(exists ? &valid_profiles : &missing_profiles, profile);
     }
 
     /* Warn about missing profiles (diagnostic message)
@@ -216,12 +216,12 @@ error_t *profile_resolve_enabled(
      * without access to an output_t. This is consistent with other core modules
      * (deploy.c, workspace.c) that also write diagnostic warnings to stderr.
      */
-    if (missing_profiles->count > 0) {
+    if (missing_profiles.count > 0) {
         fprintf(
             stderr, "Warning: State references non-existent profiles:\n"
         );
-        for (size_t i = 0; i < missing_profiles->count; i++) {
-            fprintf(stderr, "  • %s\n", missing_profiles->items[i]);
+        for (size_t i = 0; i < missing_profiles.count; i++) {
+            fprintf(stderr, "  • %s\n", missing_profiles.entries[i]);
         }
         fprintf(
             stderr, "\nHint: Run 'dotta profile validate' to fix state,\n"
@@ -229,16 +229,8 @@ error_t *profile_resolve_enabled(
         );
     }
 
-    string_array_free(missing_profiles);
     *out = valid_profiles;
-
     return NULL;
-
-cleanup:
-    string_array_free(valid_profiles);
-    string_array_free(missing_profiles);
-
-    return err;
 }
 
 /**
@@ -258,7 +250,7 @@ error_t *profile_resolve_commit(
     CHECK_NULL(out_profile);
 
     for (size_t i = 0; i < enabled_profiles->count; i++) {
-        const char *profile = enabled_profiles->items[i];
+        const char *profile = enabled_profiles->entries[i];
         git_commit *commit = NULL;
 
         error_t *err = gitops_resolve_commit_in_branch(
@@ -404,13 +396,17 @@ static int tree_walk_callback(
  */
 error_t *profile_list_tree_files(
     const git_tree *tree,
-    string_array_t **out
+    arena_t *arena,
+    string_array_t *out
 ) {
     CHECK_NULL(tree);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
+    string_array_t paths;
+    string_array_init(&paths, arena);
     struct walk_data data = {
-        .paths = string_array_new(0),
+        .paths = &paths,
         .error = NULL
     };
 
@@ -423,12 +419,9 @@ error_t *profile_list_tree_files(
         error_free(err);
         err = data.error;
     }
-    if (err) {
-        string_array_free(data.paths);
-        return err;
-    }
+    if (err) return err;
 
-    *out = data.paths;
+    *out = paths;
     return NULL;
 }
 
@@ -438,7 +431,8 @@ error_t *profile_list_tree_files(
 error_t *profile_list_files(
     git_repository *repo,
     const char *profile,
-    string_array_t **out
+    arena_t *arena,
+    string_array_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
@@ -452,7 +446,7 @@ error_t *profile_list_files(
         );
     }
 
-    err = profile_list_tree_files(tree, out);
+    err = profile_list_tree_files(tree, arena, out);
     git_tree_free(tree);
     return err;
 }
@@ -806,8 +800,9 @@ error_t *profile_build_filesystem_index(
 
     *out_index = NULL;
 
-    string_array_t *branches = NULL;
-    error_t *err = gitops_list_branches(repo, &branches);
+    /* The branches, in the arena the index lives in */
+    string_array_t branches;
+    error_t *err = gitops_list_branches(repo, arena, &branches);
     if (err) return err;
 
     /* Every placed row of every branch, gathered before any of it is keyed: the
@@ -815,12 +810,12 @@ error_t *profile_build_filesystem_index(
      * list of them. */
     ptr_array_t rows;
     ptr_array_init(&rows, arena);
-    for (size_t i = 0; i < branches->count && !err; i++) {
-        if (exclude && strcmp(branches->items[i], exclude) == 0) continue;
+    for (size_t i = 0; i < branches.count && !err; i++) {
+        if (exclude && strcmp(branches.entries[i], exclude) == 0) continue;
 
         manifest_t *view = NULL;
         err = manifest_build_branch(
-            repo, branches->items[i], mounts, arena, &view
+            repo, branches.entries[i], mounts, arena, &view
         );
         if (err) break;
 
@@ -830,7 +825,6 @@ error_t *profile_build_filesystem_index(
         }
         manifest_free(view);
     }
-    string_array_free(branches);
     if (err) return err;
 
     /* The runs, typed once: a ptr_array holds void *, and every read below is a
@@ -998,19 +992,21 @@ error_t *profile_discover_claims(
 
     *out = (profile_claims_t){ 0 };
 
-    string_array_t *branches = NULL;
-    error_t *err = gitops_list_branches(repo, &branches);
+    /* The branches, in the arena the claims live in, so a claim borrows its
+     * branch's name from the listing */
+    string_array_t branches;
+    error_t *err = gitops_list_branches(repo, arena, &branches);
     if (err) return err;
 
     /* At most one claim per branch: a branch names a path once and holds a name
      * once. */
     profile_claim_t *claims = arena_calloc(
-        arena, branches->count, sizeof(*claims)
+        arena, branches.count, sizeof(*claims)
     );
 
     size_t count = 0;
-    for (size_t i = 0; i < branches->count; i++) {
-        const char *branch = branches->items[i];
+    for (size_t i = 0; i < branches.count; i++) {
+        const char *branch = branches.entries[i];
         const char *storage_path = NULL;
 
         /* Two keys, and each names its own search: the branch's view of its tip,
@@ -1025,12 +1021,11 @@ error_t *profile_discover_claims(
         if (err) break;
         if (!storage_path) continue;
 
-        /* The branch name outlives the list freed below; the claim's name is
-         * the arena's already — the row's own, or the argument's. */
-        claims[count++] = (profile_claim_t){ arena_strdup(arena, branch), storage_path };
+        /* Both names are the arena's already: the branch's the listing's, the
+         * claim's the row's own or the argument's. */
+        claims[count++] = (profile_claim_t){ branch, storage_path };
     }
 
-    string_array_free(branches);
     if (err) return err;
 
     /* The argument in its own key — whatever the enumeration held, this loop

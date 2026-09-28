@@ -63,12 +63,16 @@ typedef enum {
 } error_code_t;
 
 /**
- * String array - dynamic array of strings
+ * String array - names, each a copy in the arena the array was made in
+ *
+ * entries[count] is NULL whenever entries is not, so the entries are an argv or
+ * an envp as they stand once anything was pushed or reserved.
  */
 typedef struct {
-    char **items;
+    char **entries;
     size_t count;
     size_t capacity;
+    arena_t *arena;       /* where the spine and every copy live; NULL until string_array_init */
 } string_array_t;
 
 /**

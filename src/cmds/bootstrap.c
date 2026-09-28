@@ -310,7 +310,7 @@ static void bootstrap_list(
     output_section(out, OUTPUT_NORMAL, "Bootstrap scripts");
 
     for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile = profiles->items[i];
+        const char *profile = profiles->entries[i];
         if (bootstrap_exists(repo, profile)) {
             output_styled(
                 out, OUTPUT_NORMAL,
@@ -344,17 +344,14 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
     output_t *out = ctx->out;
 
     error_t *err = NULL;
-    string_array_t *profiles = NULL;
-    string_array_t found STRING_ARRAY_AUTO = { 0 };
 
     /* Handle --edit flag */
     if (opts->edit) {
         /* Check profile count */
         if (opts->profile_count > 1) {
-            err = ERROR(
+            return ERROR(
                 ERR_INVALID_ARG, "Can only edit one profile at a time"
             );
-            goto cleanup;
         }
 
         /* Default to 'global' profile if none specified */
@@ -364,61 +361,58 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
         /* Edit the bootstrap script */
         err = bootstrap_edit(repo, profile_to_edit, out);
         if (err) {
-            err = error_wrap(err, "Failed to edit bootstrap script");
+            return error_wrap(err, "Failed to edit bootstrap script");
         }
-        goto cleanup;
+        return NULL;
     }
 
     /* Resolve profile names — all branches produce string_array_t (name-only).
      * Bootstrap only needs profile names, not Git trees. */
+    string_array_t profiles;
     if (opts->profile_count > 0) {
         /* Explicit profiles: each must be here — a script asked for by a name
          * that is not a profile is a typo, not a skip */
-        profiles = string_array_new(opts->profile_count);
+        string_array_init_cap(&profiles, ctx->arena, opts->profile_count);
         for (size_t i = 0; i < opts->profile_count; i++) {
-            err = profile_require(repo, opts->profiles[i]);
-            if (err) goto cleanup;
-            string_array_push(profiles, opts->profiles[i]);
+            RETURN_IF_ERROR(profile_require(repo, opts->profiles[i]));
+            string_array_push(&profiles, opts->profiles[i]);
         }
     } else if (opts->all_profiles) {
         /* Every profile here, run in the convention's order: a set the machine
          * enumerated has no other, and a base's script belongs before its
          * variants'. Named profiles run in the order given; the enabled set below
          * runs in the machine's. */
-        err = gitops_list_branches(repo, &profiles);
+        err = gitops_list_branches(repo, ctx->arena, &profiles);
         if (err) {
-            err = error_wrap(err, "Failed to list all profiles");
-            goto cleanup;
+            return error_wrap(err, "Failed to list all profiles");
         }
-        profile_order(profiles);
+        profile_order(&profiles);
     } else {
         /* Use enabled profiles from state */
-        err = profile_resolve_enabled(repo, state, &profiles);
-        if (err) goto cleanup;
+        RETURN_IF_ERROR(profile_resolve_enabled(repo, state, ctx->arena, &profiles));
 
         /* No profiles enabled — expected case, show guidance */
-        if (profiles->count == 0) {
+        if (profiles.count == 0) {
             output_info(out, OUTPUT_NORMAL, "No enabled profiles found.");
             output_hint(out, OUTPUT_NORMAL, "Enable profiles first:");
             output_hintline(out, OUTPUT_NORMAL, "  dotta profile enable <name>");
-            goto cleanup;
+            return NULL;
         }
     }
 
     /* Handle --list flag */
     if (opts->list) {
-        bootstrap_list(repo, profiles, out);
-        goto cleanup;
+        bootstrap_list(repo, &profiles, out);
+        return NULL;
     }
 
     /* Handle --show flag */
     if (opts->show) {
         /* Check profile count */
         if (opts->profile_count > 1) {
-            err = ERROR(
+            return ERROR(
                 ERR_INVALID_ARG, "Can only show one profile at a time"
             );
-            goto cleanup;
         }
 
         /* Default to 'global' profile if none specified */
@@ -428,16 +422,18 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
         /* Show the bootstrap script */
         err = bootstrap_show(repo, profile_to_show, out);
         if (err) {
-            err = error_wrap(err, "Failed to show bootstrap script");
+            return error_wrap(err, "Failed to show bootstrap script");
         }
-        goto cleanup;
+        return NULL;
     }
 
     /* Single-pass filter: collect profiles that actually have a script. Display
      * list and pass straight into bootstrap_fire — no double tree-walk. */
-    for (size_t i = 0; i < profiles->count; i++) {
-        if (bootstrap_exists(repo, profiles->items[i])) {
-            string_array_push(&found, profiles->items[i]);
+    string_array_t found;
+    string_array_init(&found, ctx->arena);
+    for (size_t i = 0; i < profiles.count; i++) {
+        if (bootstrap_exists(repo, profiles.entries[i])) {
+            string_array_push(&found, profiles.entries[i]);
         }
     }
 
@@ -447,13 +443,13 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
         );
         output_section(out, OUTPUT_NORMAL, "Profiles checked");
 
-        for (size_t i = 0; i < profiles->count; i++) {
-            output_print(out, OUTPUT_NORMAL, "  - %s\n", profiles->items[i]);
+        for (size_t i = 0; i < profiles.count; i++) {
+            output_print(out, OUTPUT_NORMAL, "  - %s\n", profiles.entries[i]);
         }
         output_gap(out, OUTPUT_NORMAL);
         output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
         output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap <profile> --edit");
-        goto cleanup;
+        return NULL;
     }
 
     /* Display what will be executed */
@@ -461,7 +457,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
     for (size_t i = 0; i < found.count; i++) {
         output_styled(
             out, OUTPUT_NORMAL, "  {green}✓{reset} %s/%s\n",
-            found.items[i], BOOTSTRAP_SCRIPT_NAME
+            found.entries[i], BOOTSTRAP_SCRIPT_NAME
         );
     }
     output_gap(out, OUTPUT_NORMAL);
@@ -471,7 +467,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
         bool confirmed = output_confirm(out, "Execute bootstrap scripts?", false);
         if (!confirmed) {
             output_info(out, OUTPUT_NORMAL, "Bootstrap cancelled.");
-            goto cleanup;
+            return NULL;
         }
     }
 
@@ -493,8 +489,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
             error_free(err);
             err = NULL;
         } else {
-            err = error_wrap(err, "Bootstrap failed");
-            goto cleanup;
+            return error_wrap(err, "Bootstrap failed");
         }
     }
 
@@ -511,9 +506,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
         output_hintline(out, OUTPUT_NORMAL, "  View state:      dotta status");
     }
 
-cleanup:
-    if (profiles) string_array_free(profiles);
-    return err;
+    return NULL;
 }
 
 /* ══════════════════════════════════════════════════════════════════

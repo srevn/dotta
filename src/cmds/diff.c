@@ -1384,7 +1384,7 @@ static error_t *diff_workspace(
          * update's, which names no whole to qualify. */
         if (total_diff_count == 0 && !opts->name_only) {
             if (opts->direction == DIFF_UPSTREAM) {
-                if (scope_has_filter(scope) || scope_has_paths(scope)) {
+                if (scope_filters_profiles(scope) || scope_filters_paths(scope)) {
                     output_info(out, OUTPUT_NORMAL, "No differences in scope");
                 } else {
                     output_info(
@@ -1418,7 +1418,6 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
     output_t *out = ctx->out;
 
-    error_t *err = NULL;
     scope_t *scope = NULL;
 
     /* Build operation scope
@@ -1430,7 +1429,7 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
      *                    answers both arms with a view give).
      *   the predicates — the workspace arm's presentation (scope_accepts_path,
      *                    scope_accepts_profile) and what its empty line claims
-     *                    (scope_has_filter, scope_has_paths).
+     *                    (scope_filters_profiles, scope_filters_paths).
      */
     scope_inputs_t scope_inputs = {
         .profiles      = opts->profiles,
@@ -1438,13 +1437,12 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         .files         = opts->files,
         .file_count    = opts->file_count,
     };
-    err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
-    if (err) goto cleanup;
+    RETURN_IF_ERROR(scope_build(repo, state, &scope_inputs, ctx->arena, &scope));
 
     if (scope_enabled(scope)->count == 0) {
         output_info(out, OUTPUT_NORMAL, "No enabled profiles found");
         output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
-        goto cleanup;
+        return NULL;
     }
 
     /* Route to diff implementation based on mode. All historical and workspace
@@ -1453,24 +1451,19 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     switch (opts->mode) {
         case DIFF_COMMIT_TO_COMMIT:
             /* Diff two commits — historical mode, path filter only */
-            err = diff_commits(ctx, opts->commit1, opts->commit2, scope, opts);
-            goto cleanup;
+            return diff_commits(ctx, opts->commit1, opts->commit2, scope, opts);
 
         case DIFF_COMMIT_TO_WORKSPACE:
             /* Commit-to-workspace — historical mode, path filter only */
-            err = diff_commit_to_workspace(ctx, opts->commit1, scope, opts);
-            goto cleanup;
+            return diff_commit_to_workspace(ctx, opts->commit1, scope, opts);
 
         case DIFF_WORKSPACE:
             /* Workspace diff — full scope (profile + path dimensions) */
-            err = diff_workspace(ctx, scope, opts);
-            goto cleanup;
+            return diff_workspace(ctx, scope, opts);
     }
 
-cleanup:
-    if (scope) scope_free(scope);
-
-    return err;
+    /* Unreachable once every enum value is handled */
+    return NULL;
 }
 
 /* ══════════════════════════════════════════════════════════════════

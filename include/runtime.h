@@ -445,19 +445,33 @@ typedef struct dotta_run {
  *     the pointer — never call `arena_free(ctx->arena)`.
  *
  *   - Frame-scope. An arena a function makes and frees itself, whose pointer
- *     never leaves it. Two instances. `core/workspace.c`'s untracked walk creates
- *     one per directory frame and resets it before each entry, because an entry
- *     that is named and then excluded is neither an offer nor a row, and its
- *     joined path and the namer's two strings all outlive the decision that
- *     discarded it: 20,000 ignored files beneath one tracked directory measured
- *     4.1 MB of peak RSS at the shape that composed names by hand, 20.3 MB against
- *     `ctx->arena`, and 4.1 MB with the frame's own; every string that outlives
- *     a frame is copied at the one door it leaves through
- *     (workspace_add_untracked). `core/profiles.c`'s profile_needs_target builds
- *     one branch's view to read one bool off it: against `ctx->arena` the editor
- *     would keep a view per local branch for the length of its session and the
- *     listing one per available row — 1.8 MB of heap at six branches of 1,000
- *     paths, for six bools.
+ *     never leaves the call that made it, for one of two reasons.
+ *
+ *     A lifetime shorter than the command's, earned by a number.
+ *     `core/workspace.c`'s untracked walk creates one per directory frame and
+ *     resets it before each entry, because an entry that is named and then excluded
+ *     is neither an offer nor a row, and its joined path and the namer's two
+ *     strings all outlive the decision that discarded it: 20,000 ignored files
+ *     beneath one tracked directory measured 4.1 MB of peak RSS at the shape
+ *     that composed names by hand, 20.3 MB against `ctx->arena`, and 4.1 MB with
+ *     the frame's own; every string that outlives a frame is copied at the one
+ *     door it leaves through (workspace_add_untracked). `core/profiles.c`'s
+ *     profile_needs_target builds one branch's view to read one bool off it:
+ *     against `ctx->arena` the editor would keep a view per local branch for
+ *     the length of its session and the listing one per available row — 1.8 MB
+ *     of heap at six branches of 1,000 paths, for six bools.
+ *
+ *     Or no arena in reach: a function whose answer is not memory keeps what it
+ *     builds and drops within the call in a frame of its own — a spawn's
+ *     environment (`utils/hooks.c` hook_execute, `utils/bootstrap.c` run_live),
+ *     a run's own lists (`utils/bootstrap.c` bootstrap_fire), a listing read to
+ *     decide (`sys/filesystem.c` fs_remove_empty_dir, `sys/gitops.c`
+ *     gitops_branch_blocker, `infra/epoch.c` walk_ciphertext), a walk's listings
+ *     (`sys/filesystem.c` fs_remove_dir, one scratch its recursion marks and
+ *     rewinds per directory; `cmds/add.c` add_collect, one per directory). A
+ *     function whose answer is memory takes the arena its answer lives in instead,
+ *     and a callee that fills a caller's container takes none: the container
+ *     remembers its arena (base/array.h).
  *
  * Adding a fourth requires the evidence that one has: a genuinely sub-command
  * lifetime in code, and a number. Hypothesised need is not enough; a primitive

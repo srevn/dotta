@@ -19,10 +19,10 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
-#include "base/heap.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "sys/bootstrap.h"
@@ -34,67 +34,34 @@
 #define BOOTSTRAP_TIMEOUT_SECONDS 600
 
 /**
- * Free a NULL-terminated environment array of `count` heap strings. No-op on
- * NULL input; callers can free unconditionally.
+ * The DOTTA_* environment for a live bootstrap script, layered on top of a filtered
+ * copy of the parent's environment (DOTTA_* stripped to prevent shadowing), as
+ * a string array in `arena`: an envp as it stands.
  */
-static void env_free(char **env, size_t count) {
-    if (!env) return;
-    for (size_t i = 0; i < count; i++) free(env[i]);
-    free(env);
-}
-
-/**
- * Build the DOTTA_* environment for a bootstrap script, layered on top of a
- * filtered copy of the parent's environment (DOTTA_* stripped to prevent
- * shadowing).
- *
- * Returns a NULL-terminated `char **` suitable for execve; *out_count is the
- * number of non-NULL entries, and the caller frees via env_free().
- *
- * All string inputs are required to be non-NULL — the helper is static and has
- * a single caller that validates upstream.
- */
-static char **env_build(
+static void bootstrap_env(
     const char *repo_dir,
     const char *profile,
     const char *all_profiles,
-    bool dry_run,
-    size_t *out_count
+    arena_t *arena,
+    string_array_t *env
 ) {
     extern char **environ;
 
-    /* Single-walk build with realloc-grow. */
-    size_t cap = 64;
-    char **env = heap_calloc(cap, sizeof(*env));
-    size_t n = 0;
+    string_array_init(env, arena);
 
-    /* Append `value` to env, growing the array on demand. */
-    #define APPEND(value) do { \
-        if (n + 1 >= cap) { \
-            cap *= 2; \
-            env = heap_realloc(env, cap * sizeof(*env)); \
-        } \
-        env[n++] = (value); \
-    } while (0)
-
-    APPEND(heap_str_format("DOTTA_REPO_DIR=%s", repo_dir));
-    APPEND(heap_str_format("DOTTA_PROFILE=%s", profile));
-    APPEND(heap_str_format("DOTTA_PROFILES=%s", all_profiles));
-    APPEND(heap_str_format("DOTTA_DRY_RUN=%s", dry_run ? "1" : "0"));
+    /* DOTTA_DRY_RUN is the live path's: a dry run spawns nothing */
+    string_array_pushf(env, "DOTTA_REPO_DIR=%s", repo_dir);
+    string_array_pushf(env, "DOTTA_PROFILE=%s", profile);
+    string_array_pushf(env, "DOTTA_PROFILES=%s", all_profiles);
+    string_array_push(env, "DOTTA_DRY_RUN=0");
 
     /* Passthrough parent env, skipping DOTTA_* to preserve the invariant that
      * our four variables are the authoritative DOTTA_* surface visible to the
      * child. */
     for (char **e = environ; *e; e++) {
         if (str_starts_with(*e, "DOTTA_")) continue;
-        APPEND(heap_strdup(*e));
+        string_array_push(env, *e);
     }
-
-    #undef APPEND
-
-    env[n] = NULL;
-    *out_count = n;
-    return env;
 }
 
 /**
@@ -145,8 +112,7 @@ static error_t *run_live(
     const char *all_profiles
 ) {
     char *temp_path = NULL;
-    char **env = NULL;
-    size_t env_count = 0;
+    arena_t *frame = NULL;
     process_result_t result = { 0 };
     error_t *err = NULL;
 
@@ -156,9 +122,11 @@ static error_t *run_live(
         goto cleanup;
     }
 
-    env = env_build(
-        repo_dir, profile, all_profiles, /*dry_run=*/ false, &env_count
-    );
+    /* The script's environment, in a frame of the spawn's own: read by the child
+     * at its exec, and dropped with the frame once the script has run */
+    frame = arena_create(0);
+    string_array_t env;
+    bootstrap_env(repo_dir, profile, all_profiles, frame, &env);
 
     /* Run the script from the invoker's HOME (sys/identity — under sudo the user's,
      * not /root) so it behaves like a normal interactive shell session: relative
@@ -167,7 +135,7 @@ static error_t *run_live(
     char *argv[] = { temp_path, NULL };
     process_spec_t spec = {
         .argv              = argv,
-        .envp              = env,
+        .envp              = env.entries,
         .stdin_policy      = PROCESS_STDIN_INHERIT,
         .capture           = false,
         .stream_fd         = STDOUT_FILENO,
@@ -184,7 +152,7 @@ static error_t *run_live(
 
 cleanup:
     process_result_deinit(&result);
-    env_free(env, env_count);
+    arena_free(frame);
     if (temp_path) {
         unlink(temp_path);
         free(temp_path);
@@ -230,13 +198,18 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
      * being run, not every profile the user named — matching the "[N/M]" progress
      * numbering, so no script is misled about peers that are not participating. */
     const string_array_t *profiles = spec->profiles;
-    char *all_profiles = string_array_join(profiles, " ");
 
-    /* The failed profiles' names, for the end-of-run summary */
-    string_array_t failed STRING_ARRAY_AUTO = { 0 };
+    /* The run's own lists — the names joined for DOTTA_PROFILES, and the failed
+     * profiles' for the end-of-run summary — in a frame of the run's own, freed
+     * at its one exit */
+    arena_t *frame = arena_create(0);
+    const char *all_profiles = string_array_join(frame, profiles, " ");
+    string_array_t failed;
+    string_array_init(&failed, frame);
+    error_t *err = NULL;
 
     for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile = profiles->items[i];
+        const char *profile = profiles->entries[i];
 
         output_print(
             out, OUTPUT_NORMAL, "[%zu/%zu] Running %s/%s...\n",
@@ -269,10 +242,8 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
         );
 
         if (spec->stop_on_error) {
-            free(all_profiles);
-            return error_wrap(
-                step_err, "Bootstrap failed for profile '%s'", profile
-            );
+            err = error_wrap(step_err, "Bootstrap failed for profile '%s'", profile);
+            break;
         }
 
         /* Continue-on-error: remember for the summary, then free the per-step
@@ -281,21 +252,24 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
         error_free(step_err);
     }
 
-    free(all_profiles);
+    /* The summary, of a run that went on past its failures: a stop pushed none,
+     * and its one failure is the answer already */
+    if (failed.count > 0) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_warning(
+            out, OUTPUT_NORMAL, "%zu bootstrap script%s failed:",
+            failed.count, failed.count == 1 ? "" : "s"
+        );
+        for (size_t i = 0; i < failed.count; i++) {
+            output_print(out, OUTPUT_NORMAL, "  - %s\n", failed.entries[i]);
+        }
 
-    if (failed.count == 0) return NULL;
-
-    output_gap(out, OUTPUT_NORMAL);
-    output_warning(
-        out, OUTPUT_NORMAL, "%zu bootstrap script%s failed:",
-        failed.count, failed.count == 1 ? "" : "s"
-    );
-    for (size_t i = 0; i < failed.count; i++) {
-        output_print(out, OUTPUT_NORMAL, "  - %s\n", failed.items[i]);
+        err = ERROR(
+            ERR_INTERNAL, "%zu of %zu bootstrap script%s failed",
+            failed.count, profiles->count, failed.count == 1 ? "" : "s"
+        );
     }
 
-    return ERROR(
-        ERR_INTERNAL, "%zu of %zu bootstrap script%s failed",
-        failed.count, profiles->count, failed.count == 1 ? "" : "s"
-    );
+    arena_free(frame);
+    return err;
 }

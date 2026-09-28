@@ -82,8 +82,8 @@ typedef enum {
     INTERACTIVE_EXIT_ERROR    /* Quit on error; out_err carries the cause */
 } interactive_result_t;
 
-/* Save-time diff plan. Pointer arrays live in the caller's arena; new_order owns
- * its strings via string_array_deinit. */
+/* Save-time diff plan. Pointer arrays live in the caller's arena, and so does
+ * new_order, each name in it a copy made there. */
 typedef struct {
     string_array_t new_order;  /* Ordered enabled names, in display order */
     item_t **new_order_items;  /* Parallel pointers into view->items (same indexing as new_order) */
@@ -139,18 +139,18 @@ static void prompt_open_edit(prompt_t *p, size_t item_index, const char *current
 
 /* Allocate view->items and populate name/enabled. */
 static error_t *build_items(
-    git_repository *repo, state_t *deploy_state, view_t *view
+    git_repository *repo, state_t *deploy_state, arena_t *arena, view_t *view
 ) {
     error_t *err = NULL;
-    string_array_t *all_profiles = NULL;
+    string_array_t all_profiles;
     hashmap_t *profile_map = NULL;
     bool *used = NULL;
     size_t item_idx = 0;
 
-    err = gitops_list_branches(repo, &all_profiles);
+    err = gitops_list_branches(repo, arena, &all_profiles);
     if (err) goto cleanup;
 
-    if (all_profiles->count == 0) {
+    if (all_profiles.count == 0) {
         err = error_create(ERR_NOT_FOUND, "no profiles found in repository");
         goto cleanup;
     }
@@ -165,12 +165,12 @@ static error_t *build_items(
     /* Hash map for O(1) lookups. Store (i + 1) so index 0 doesn't collide with
      * the "not found" NULL return. */
     profile_map = hashmap_borrow(0);
-    for (size_t i = 0; i < all_profiles->count; i++) {
-        hashmap_set(profile_map, all_profiles->items[i], (void *) (uintptr_t) (i + 1));
+    for (size_t i = 0; i < all_profiles.count; i++) {
+        hashmap_set(profile_map, all_profiles.entries[i], (void *) (uintptr_t) (i + 1));
     }
 
-    used = heap_calloc(all_profiles->count, sizeof(bool));
-    view->items = heap_calloc(all_profiles->count, sizeof(item_t));
+    used = heap_calloc(all_profiles.count, sizeof(bool));
+    view->items = heap_calloc(all_profiles.count, sizeof(item_t));
 
     /* Pass A: enabled profiles in their saved order. */
     for (size_t i = 0; i < enabled_profiles.count; i++) {
@@ -188,16 +188,15 @@ static error_t *build_items(
     }
 
     /* Pass B: remaining profiles, disabled, in list order. */
-    for (size_t i = 0; i < all_profiles->count; i++) {
+    for (size_t i = 0; i < all_profiles.count; i++) {
         if (used[i]) continue;
-        view->items[item_idx].name = heap_strdup(all_profiles->items[i]);
+        view->items[item_idx].name = heap_strdup(all_profiles.entries[i]);
         view->items[item_idx].enabled = false;
         item_idx++;
     }
 
 cleanup:
     view->item_count = item_idx;
-    string_array_free(all_profiles);
     hashmap_free(profile_map, NULL);
     free(used);
     return err;
@@ -259,11 +258,11 @@ static inline void view_cleanup(view_t **v) {
 #define VIEW_AUTO __attribute__((cleanup(view_cleanup)))
 
 static error_t *view_create(
-    git_repository *repo, state_t *deploy_state, view_t **out
+    git_repository *repo, state_t *deploy_state, arena_t *arena, view_t **out
 ) {
     view_t *view = heap_calloc(1, sizeof(view_t));
 
-    error_t *err = build_items(repo, deploy_state, view);
+    error_t *err = build_items(repo, deploy_state, arena, view);
     if (err) {
         view_free(view);
         return err;
@@ -297,16 +296,11 @@ static void move_down(view_t *view) {
 
 /* --- Save plan --- */
 
-static inline void plan_cleanup(plan_t *p) {
-    if (p) {
-        string_array_deinit(&p->new_order);
-    }
-}
-#define PLAN_AUTO __attribute__((cleanup(plan_cleanup)))
-
 /* Phase: collect enabled rows in display order. Pure view sweep; no state
  * interaction. */
 static void plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
+    string_array_init(&plan->new_order, arena);
+
     if (view->item_count > 0) {
         plan->new_order_items = arena_calloc(
             arena, view->item_count, sizeof(*plan->new_order_items)
@@ -345,18 +339,11 @@ static void plan_classify(
         );
     }
 
-    /* Walk persisted; nested linear scan beats a hashmap on these tiny sets
-     * (typically < 10 profiles). */
+    /* Walk persisted; a linear search beats a hashmap on these tiny sets (typically
+     * < 10 profiles). */
     for (size_t i = 0; i < persisted.count; i++) {
         const char *p_name = persisted.entries[i].name;
-        bool retained = false;
-        for (size_t j = 0; j < plan->new_order.count; j++) {
-            if (strcmp(plan->new_order.items[j], p_name) == 0) {
-                retained = true;
-                break;
-            }
-        }
-        if (retained) continue;
+        if (string_array_contains(&plan->new_order, p_name)) continue;
 
         plan->removal_names[plan->removal_count++] = arena_strdup(arena, p_name);
     }
@@ -489,7 +476,7 @@ static error_t *plan_check(
 static error_t *save_order(
     git_repository *repo, state_t *deploy_state, arena_t *arena, view_t *view
 ) {
-    plan_t plan PLAN_AUTO = { 0 };
+    plan_t plan = { 0 };
     plan_collect(arena, view, &plan);
 
     /* Refuse a save that would empty enabled_profiles. Checked here — after collect
@@ -946,7 +933,7 @@ static error_t *interactive_run(
     if (err) return err;
 
     view_t *view VIEW_AUTO = NULL;
-    err = view_create(repo, deploy_state, &view);
+    err = view_create(repo, deploy_state, arena, &view);
     if (err) return err;
 
     err = check_screen(view);

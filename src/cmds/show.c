@@ -12,7 +12,6 @@
 #include <time.h>
 
 #include "base/args.h"
-#include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/output.h"
@@ -591,7 +590,6 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     output_t *out = ctx->out;
 
     error_t *err = NULL;
-    string_array_t *profiles = NULL;
     manifest_t *manifest = NULL;
     git_tree *tree = NULL;
     git_commit *source = NULL;
@@ -618,12 +616,13 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             );
             if (err) goto cleanup;
         } else {
-            err = profile_resolve_enabled(repo, state, &profiles);
+            string_array_t profiles;
+            err = profile_resolve_enabled(repo, state, ctx->arena, &profiles);
             if (err) {
                 err = error_wrap(err, "Failed to load profiles");
                 goto cleanup;
             }
-            if (profiles->count == 0) {
+            if (profiles.count == 0) {
                 err = ERROR(
                     ERR_NOT_FOUND,
                     "No enabled profiles found\n\n"
@@ -637,7 +636,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             }
 
             err = profile_resolve_commit(
-                repo, profiles, opts->commit, &source, &profile
+                repo, &profiles, opts->commit, &source, &profile
             );
             if (err) goto cleanup;
         }
@@ -775,7 +774,6 @@ cleanup:
     git_commit_free(source);
     git_tree_free(tree);
     manifest_free(manifest);
-    string_array_free(profiles);
 
     return err;
 }

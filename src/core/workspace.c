@@ -2390,13 +2390,15 @@ static error_t *scan_directory_for_untracked(
         return NULL;
     }
 
-    /* The whole listing, and the stream closed with it: one open at a time down
-     * the recursion rather than one per frame, and the errno discipline is
-     * fs_list_dir's. The frames hold entry names where they held directory streams,
-     * which is the trade add's walk already made — a deep walk no longer holds
-     * one descriptor per level, and pays for the names instead. */
-    string_array_t *listing = NULL;
-    error_t *err = fs_list_dir(directory, &listing);
+    /* The frame's scratch. The listing comes first, below the entry mark: the
+     * whole of it, and the stream closed with it — one open at a time down the
+     * recursion rather than one per frame, the errno discipline fs_list_dir's.
+     * The frames hold entry names where they held directory streams, which is
+     * the trade add's walk already made — a deep walk no longer holds one
+     * descriptor per level, and pays for the names instead. */
+    arena_t *scratch = arena_create(0);
+    string_array_t listing;
+    error_t *err = fs_list_dir(directory, scratch, &listing);
     if (err) {
         switch (error_code(err)) {
             case ERR_NOT_FOUND:  /* it left between the look that found it and this listing */
@@ -2410,16 +2412,16 @@ static error_t *scan_directory_for_untracked(
                 break;
         }
         error_free(err);
+        arena_free(scratch);
         return NULL;
     }
 
-    /* The frame's strings — one entry's join, the namer's copy and its answer —
-     * reset before the next entry. What outlives the frame is an offer's, copied
-     * at its door (workspace_add_untracked); a frame beneath this one allocates
-     * in a scratch of its own, so this frame's `child` stands as that frame's
-     * `directory` for the whole subtree (include/runtime.h). */
-    arena_t *scratch = arena_create(0);
-    const arena_mark_t empty = arena_mark(scratch);
+    /* Above the listing, the entry's strings — its join, the namer's copy and
+     * its answer — reset before the next entry. What outlives the frame is an
+     * offer's, copied at its door (workspace_add_untracked); a frame beneath
+     * this one allocates in a scratch of its own, so this frame's `child` stands
+     * as that frame's `directory` for the whole subtree (include/runtime.h). */
+    const arena_mark_t entry = arena_mark(scratch);
 
     /* "/" is the one directory whose spelling ends in its separator, and a tracked
      * directory can stand there: `add p /` writes a `root` item, a `home` or
@@ -2430,11 +2432,11 @@ static error_t *scan_directory_for_untracked(
      * reads the same rule (cmds/add.c add_collect). */
     const char *separator = directory[1] ? "/" : "";
 
-    for (size_t i = 0; i < listing->count; i++) {
-        arena_reset(scratch, empty);
+    for (size_t i = 0; i < listing.count; i++) {
+        arena_reset(scratch, entry);
 
         const char *child = arena_str_format(
-            scratch, "%s%s%s", directory, separator, listing->items[i]
+            scratch, "%s%s%s", directory, separator, listing.entries[i]
         );
 
         /* The view's word at the child's own key, before any look. A claim that
@@ -2563,7 +2565,6 @@ static error_t *scan_directory_for_untracked(
 
 cleanup:
     arena_free(scratch);
-    string_array_free(listing);
 
     return err;
 }

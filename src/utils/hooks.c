@@ -8,8 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/arena.h"
+#include "base/array.h"
 #include "base/error.h"
-#include "base/heap.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "sys/filesystem.h"
@@ -115,86 +116,40 @@ static error_t *hook_get_path(
 }
 
 /**
- * Build environment variables for hook
- *
- * Creates environment array with DOTTA_* variables and filtered system environment.
- * Caller must free with free_hook_env().
+ * The hook's environment, a string array in `arena`: the DOTTA_* surface, the
+ * command's extras, then the process's own environment with its DOTTA_* left
+ * out, so the surface above cannot be shadowed. An envp as it stands — it always
+ * holds DOTTA_DRY_RUN and DOTTA_FILE_COUNT, so its spine exists and is ended.
  */
-static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
-    CHECK_NULL(context);
-
+static void hook_env(const hook_context_t *context, arena_t *arena, string_array_t *env) {
     extern char **environ;
 
-    /* Single-walk build with realloc-grow. */
-    size_t cap = 64;
-    char **env = heap_calloc(cap, sizeof(*env));
-    size_t n = 0;
-
-    /* Append `value` to env, growing the array on demand. */
-    #define APPEND(value) do { \
-        if (n + 1 >= cap) { \
-            cap *= 2; \
-            env = heap_realloc(env, cap * sizeof(*env)); \
-        } \
-        env[n++] = (value); \
-    } while (0)
+    string_array_init(env, arena);
 
     /* DOTTA_* surface — three optional, two always-on, then per-file. */
-    if (context->repo_dir) {
-        APPEND(heap_str_format("DOTTA_REPO_DIR=%s", context->repo_dir));
-    }
-    if (context->command) {
-        APPEND(heap_str_format("DOTTA_COMMAND=%s", context->command));
-    }
-    if (context->profile) {
-        APPEND(heap_str_format("DOTTA_PROFILE=%s", context->profile));
-    }
+    if (context->repo_dir) string_array_pushf(env, "DOTTA_REPO_DIR=%s", context->repo_dir);
+    if (context->command) string_array_pushf(env, "DOTTA_COMMAND=%s", context->command);
+    if (context->profile) string_array_pushf(env, "DOTTA_PROFILE=%s", context->profile);
 
-    APPEND(heap_str_format("DOTTA_DRY_RUN=%s", context->dry_run ? "1" : "0"));
-    APPEND(heap_str_format("DOTTA_FILE_COUNT=%zu", context->file_count));
+    string_array_pushf(env, "DOTTA_DRY_RUN=%s", context->dry_run ? "1" : "0");
+    string_array_pushf(env, "DOTTA_FILE_COUNT=%zu", context->file_count);
 
     /* Indexed file variables: DOTTA_FILE_0, DOTTA_FILE_1, ... */
-    if (context->files && context->file_count > 0) {
-        for (size_t i = 0; i < context->file_count; i++) {
-            APPEND(heap_str_format("DOTTA_FILE_%zu=%s", i, context->files[i]));
-        }
+    for (size_t i = 0; i < context->file_count; i++) {
+        string_array_pushf(env, "DOTTA_FILE_%zu=%s", i, context->files[i]);
     }
 
     /* Per-command extras (e.g. DOTTA_REMOTE for sync). Appended before the environ
      * pass-through so the DOTTA_* filter at the next step doesn't shadow them
      * with stale process-env values. */
-    if (context->extras) {
-        for (char *const *e = context->extras; *e; e++) {
-            APPEND(heap_strdup(*e));
-        }
-    }
+    for (char *const *e = context->extras; e && *e; e++) string_array_push(env, *e);
 
     /* Copy system environment variables (PATH, HOME, etc.) — DOTTA_* are skipped
      * so our authoritative surface above isn't shadowed. */
     for (char **e = environ; *e; e++) {
         if (str_starts_with(*e, "DOTTA_")) continue;
-        APPEND(heap_strdup(*e));
+        string_array_push(env, *e);
     }
-
-    #undef APPEND
-
-    /* NULL-terminate */
-    env[n] = NULL;
-    *env_count = n;
-
-    return env;
-}
-
-/**
- * Free environment array
- */
-static void free_hook_env(char **env, size_t count) {
-    if (!env) return;
-
-    for (size_t i = 0; i < count; i++) {
-        free(env[i]);
-    }
-    free(env);
 }
 
 /**
@@ -224,8 +179,7 @@ static error_t *hook_execute(
     }
 
     char *hook_path = NULL;
-    char **env = NULL;
-    size_t env_count = 0;
+    arena_t *frame = NULL;
     error_t *err = NULL;
 
     err = hook_get_path(config, type, &hook_path);
@@ -262,12 +216,16 @@ static error_t *hook_execute(
         goto cleanup;
     }
 
-    env = build_hook_env(context, &env_count);
+    /* The spawn's environment, in a frame of the spawn's own: read by the child
+     * at its exec, and dropped with the frame once the hook has run */
+    frame = arena_create(0);
+    string_array_t env;
+    hook_env(context, frame, &env);
 
     char *argv[] = { hook_path, NULL };
     process_spec_t spec = {
         .argv              = argv,
-        .envp              = env,
+        .envp              = env.entries,
         .stdin_policy      = PROCESS_STDIN_DEVNULL,
         .capture           = (result_out != NULL),
         .stream_fd         = -1,
@@ -324,7 +282,7 @@ static error_t *hook_execute(
     process_result_deinit(&result);
 
 cleanup:
-    if (env) free_hook_env(env, env_count);
+    arena_free(frame);
     free(hook_path);
 
     return err;

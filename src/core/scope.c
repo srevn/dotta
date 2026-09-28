@@ -4,13 +4,10 @@
 
 #include "core/scope.h"
 
-#include <stdlib.h>
-#include <string.h>
-
+#include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/gitignore.h"
-#include "base/heap.h"
 #include "core/ignore.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -20,22 +17,19 @@
 /**
  * Internal scope representation.
  *
- * `enabled` and `filter` are owned by scope_t and freed in scope_free. `profiles`
- * is a borrowed pointer into either `enabled` or `filter` — set once during build,
- * dangles after scope_free returns (which is fine: no one is meant to dereference
- * it post-free).
- *
- * `paths` and `excludes_ruleset` are arena-borrowed (typically from `ctx->arena`);
- * released by arena_free, not scope_free. The excludes are the -e layer core/ignore
- * compiles (ignore_excludes_compile) — the rules add's builder takes as its top
- * layer, asked alone here (scope_is_excluded).
+ * A value of the arena scope_build is handed, as everything it holds is: the
+ * two name lists, the path filter and the exclude layer. `profiles` points at
+ * one of the two lists — the filter when -p was given, else the enabled set —
+ * set once during build. The excludes are the -e layer core/ignore compiles
+ * (ignore_excludes_compile) — the rules add's builder takes as its top layer,
+ * asked alone here (scope_is_excluded).
  */
 struct scope {
-    string_array_t *enabled;            /* Persistent enabled set; non-NULL, may be empty */
-    string_array_t *filter;             /* CLI filter; NULL when no -p */
-    const gitignore_ruleset_t *excludes_ruleset; /* The -e layer; arena-borrowed; NULL when no excludes */
-    pathspec_t *paths;                  /* CLI path filter; arena-borrowed; NULL when no positional args */
-    const string_array_t *profiles;     /* Borrowed: filter if set, else enabled */
+    string_array_t enabled;             /* Persistent enabled set; may be empty */
+    string_array_t filter;              /* CLI filter: every name -p gave, each enabled; empty without -p */
+    const gitignore_ruleset_t *excludes_ruleset; /* The -e layer; NULL when no excludes */
+    pathspec_t *paths;                  /* CLI path filter; NULL when no positional args */
+    const string_array_t *profiles;     /* &filter when -p was given, else &enabled */
 };
 
 /* -------------------------------------------------------------------- */
@@ -52,18 +46,15 @@ error_t *scope_build(
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    *out = NULL;
-
-    scope_t *s = heap_calloc(1, sizeof(*s));
-    error_t *err = NULL;
+    /* The scope and everything it holds are the arena's: nothing frees one, and
+     * a refusal below leaves only the arena's bytes behind */
+    scope_t *s = arena_calloc(arena, 1, sizeof(*s));
 
     /* 1. The enabled set, which may be empty: an empty scope is not an error
      *    ("Empty-enabled policy", scope.h). */
-    err = profile_resolve_enabled(repo, state, &s->enabled);
-    if (err) {
-        err = error_wrap(err, "Failed to resolve enabled profiles");
-        goto fail;
-    }
+    error_t *err = profile_resolve_enabled(repo, state, arena, &s->enabled);
+    if (err) return error_wrap(err, "Failed to resolve enabled profiles");
+    s->profiles = &s->enabled;
 
     /* 2. The CLI filter: every name must be enabled here. That is the one question
      *    — the enabled set was checked against the branches on the way in, so a
@@ -73,59 +64,42 @@ error_t *scope_build(
      *    the refusing verb, one lookup paid only here: when it does not refuse,
      *    the branch is here and the fact is that it is not enabled. */
     if (in->profile_count > 0) {
-        s->filter = string_array_new(in->profile_count);
+        string_array_init_cap(&s->filter, arena, in->profile_count);
 
         for (size_t i = 0; i < in->profile_count; i++) {
             const char *name = in->profiles[i];
-            if (!string_array_contains(s->enabled, name)) {
-                err = profile_require(repo, name);
-                if (!err) {
-                    err = ERROR(
-                        ERR_INVALID_ARG, "Profile '%s' is not enabled\n"
-                        "Hint: Run 'dotta profile enable %s' first", name, name
-                    );
-                }
-                goto fail;
+            if (!string_array_contains(&s->enabled, name)) {
+                RETURN_IF_ERROR(profile_require(repo, name));
+                return ERROR(
+                    ERR_INVALID_ARG, "Profile '%s' is not enabled\n"
+                    "Hint: Run 'dotta profile enable %s' first", name, name
+                );
             }
-            string_array_push(s->filter, name);
+            string_array_push(&s->filter, name);
         }
-    }
 
-    /* 3. The profiles pointer — scope_profiles' answer. Valid as long as scope
-     *    is alive. */
-    s->profiles = s->filter ? s->filter : s->enabled;
+        /* 3. The filter is the scope's face — scope_profiles' answer — where it
+         *    was given. */
+        s->profiles = &s->filter;
+    }
 
     /* 4. The path filter: one matcher over both keys a managed path has, each
      *    input read in the key its own shape names (infra/pathspec). */
     if (in->file_count > 0) {
         err = pathspec_create(in->files, in->file_count, arena, &s->paths);
-        if (err) {
-            err = error_wrap(err, "Failed to build path filter");
-            goto fail;
-        }
+        if (err) return error_wrap(err, "Failed to build path filter");
     }
 
     /* 5. The -e layer, compiled once (core/ignore): a pattern the grammar refuses
      *    refuses the scope, under the flag's name. */
-    err = ignore_excludes_compile(
+    RETURN_IF_ERROR(
+        ignore_excludes_compile(
         in->exclude_patterns, in->exclude_count, arena, &s->excludes_ruleset
+        )
     );
-    if (err) goto fail;
 
     *out = s;
     return NULL;
-
-fail:
-    scope_free(s);
-    return err;
-}
-
-void scope_free(scope_t *s) {
-    if (!s) return;
-    string_array_free(s->enabled);
-    string_array_free(s->filter);
-    /* s->paths and s->excludes_ruleset are the arena's; s->profiles is a borrow. */
-    free(s);
 }
 
 /* -------------------------------------------------------------------- */
@@ -133,7 +107,7 @@ void scope_free(scope_t *s) {
 /* -------------------------------------------------------------------- */
 
 const string_array_t *scope_enabled(const scope_t *s) {
-    return s->enabled;
+    return &s->enabled;
 }
 
 const string_array_t *scope_profiles(const scope_t *s) {
@@ -148,11 +122,11 @@ const pathspec_t *scope_paths(const scope_t *s) {
 /* Build-shape predicates                                               */
 /* -------------------------------------------------------------------- */
 
-bool scope_has_filter(const scope_t *s) {
-    return s->filter != NULL;
+bool scope_filters_profiles(const scope_t *s) {
+    return s->filter.count > 0;
 }
 
-bool scope_has_paths(const scope_t *s) {
+bool scope_filters_paths(const scope_t *s) {
     return s->paths != NULL;
 }
 
@@ -165,12 +139,7 @@ bool scope_accepts_profile(const scope_t *s, const char *profile) {
     if (!profile) return false;
 
     /* No CLI filter → every non-NULL profile is in scope. */
-    if (!s->filter) return true;
-
-    for (size_t i = 0; i < s->filter->count; i++) {
-        if (strcmp(profile, s->filter->items[i]) == 0) return true;
-    }
-    return false;
+    return s->filter.count == 0 || string_array_contains(&s->filter, profile);
 }
 
 bool scope_accepts_path(

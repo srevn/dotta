@@ -488,8 +488,8 @@ static void apply_print_deploy_preview(
     /* The caveats on the promise. Past the early return by the invariant above:
      * only a row the run touches contributes one, and an ancestor is decided
      * only above a deployable row. */
-    for (size_t i = 0; i < verdicts->warnings->count; i++) {
-        output_warning(out, OUTPUT_NORMAL, "%s", verdicts->warnings->items[i]);
+    for (size_t i = 0; i < verdicts->warnings.count; i++) {
+        output_warning(out, OUTPUT_NORMAL, "%s", verdicts->warnings.entries[i]);
     }
 }
 
@@ -1831,13 +1831,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     error_t *err = NULL;
     scope_t *scope = NULL;
     workspace_t *ws = NULL;
-    deploy_plan_t *deploy_plan = NULL;                 /* Items borrow from ws; free before ws */
-    cleanup_plan_t *cleanup_plan = NULL;               /* Items borrow from ws; free before ws */
-    deploy_preflight_result_t *deploy_verdicts = NULL; /* Fates borrow items from ws; free after deploy_result */
+    deploy_plan_t *deploy_plan = NULL;                 /* Items borrow from ws */
+    cleanup_plan_t *cleanup_plan = NULL;               /* Items borrow from ws */
+    deploy_preflight_result_t *deploy_verdicts = NULL; /* Fates borrow items from ws */
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
-    char *profiles_str = NULL;
-    deploy_result_t *deploy_result = NULL;   /* Outcomes borrow the fates; free first */
-    cleanup_result_t *cleanup_result = NULL; /* Outcomes borrow the verdicts; free first */
+    deploy_result_t *deploy_result = NULL;   /* Outcomes borrow the fates */
+    cleanup_result_t *cleanup_result = NULL; /* Outcomes borrow the verdicts */
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1852,8 +1851,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *                    last profile, then apply" workflow.
      *   scope_profiles — operation face (the verbose listing, hook context).
      *
-     *   scope_has_filter / scope_has_paths / scope_paths — the build's shape,
-     *                    for the wording of the no-match warning and the
+     *   scope_filters_profiles / scope_filters_paths / scope_paths — the build's
+     *                    shape, for the wording of the no-match warning and the
      *                    nothing-to-do exit.
      *
      * The per-iteration predicates are the two planners' (deploy_plan_build,
@@ -1883,11 +1882,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     for (size_t i = 0; i < scope_profiles(scope)->count; i++) {
         output_styled(
             out, OUTPUT_VERBOSE, "  {cyan}•{reset} %s\n",
-            scope_profiles(scope)->items[i]
+            scope_profiles(scope)->entries[i]
         );
     }
 
-    if (scope_has_paths(scope)) {
+    if (scope_filters_paths(scope)) {
         size_t filter_count = pathspec_count(scope_paths(scope));
         output_gap(out, OUTPUT_VERBOSE);
         output_print(
@@ -1895,9 +1894,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             filter_count, filter_count == 1 ? "" : "s"
         );
     }
-
-    /* The hooks' profile list, joined beside the scope it reads */
-    profiles_str = string_array_join(scope_profiles(scope), " ");
 
     /* Load workspace (partitions the view's rows and runs divergence analysis)
      *
@@ -2172,7 +2168,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * rows count as matched — the filter found them). Asked after both planners:
      * a path can name an orphan as well as an active row, and finding either is
      * a match. */
-    if (scope_has_paths(scope) && deploy_plan_item_count(deploy_plan) == 0 &&
+    if (scope_filters_paths(scope) && deploy_plan_item_count(deploy_plan) == 0 &&
         cleanup_plan_item_count(cleanup_plan) == 0) {
         output_warning(
             out, OUTPUT_NORMAL, "No matching paths found in enabled profiles"
@@ -2532,7 +2528,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 /* The report above named what and why; this only has to avoid
                  * claiming the work was never there. */
                 output_info(out, OUTPUT_NORMAL, "Nothing left to deploy");
-            } else if (scope_has_filter(scope) || scope_has_paths(scope)) {
+            } else if (scope_filters_profiles(scope) || scope_filters_paths(scope)) {
                 output_info(out, OUTPUT_NORMAL, "Nothing to deploy (no pending work in scope)");
             } else {
                 output_info(out, OUTPUT_NORMAL, "Nothing to deploy (workspace is clean)");
@@ -2588,7 +2584,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .strict_ownership = config->strict_ownership,
     };
 
-    err = deploy_preflight(ws, deploy_plan, &deploy_opts, &deploy_verdicts);
+    err = deploy_preflight(ws, deploy_plan, &deploy_opts, ctx->arena, &deploy_verdicts);
     if (err) {
         err = error_wrap(err, "Pre-flight checks failed");
         goto cleanup;
@@ -2659,7 +2655,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Build hook invocation with the scope's profiles */
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_APPLY,
-        .profile    = profiles_str,
+        .profile    = string_array_join(ctx->arena, scope_profiles(scope), " "),
         .files      = NULL,
         .file_count = 0,
         .dry_run    = opts->dry_run,
@@ -2896,14 +2892,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
 cleanup:
-    /* What the engines hold on the heap, in reverse construction order, deploy's
-     * receipt before the fates it borrows. None frees an item: the workspace,
-     * its items and both plans are the arena's (core/deploy.h, core/cleanup.h). */
+    /* What the engines hold on the heap: their two receipts, in either order —
+     * each borrows only what the arena holds. None frees an item: the workspace,
+     * its items, both plans and both engines' verdicts are the arena's
+     * (core/deploy.h, core/cleanup.h). */
     if (deploy_result) deploy_result_free(deploy_result);
-    if (deploy_verdicts) deploy_preflight_result_free(deploy_verdicts);
     if (cleanup_result) cleanup_result_free(cleanup_result);
-    if (profiles_str) free(profiles_str);
-    if (scope) scope_free(scope);
 
     return err;
 }

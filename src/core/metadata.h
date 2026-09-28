@@ -480,7 +480,8 @@ bool metadata_remove_item(
  * @param metadata Metadata collection (must not be NULL; mutated in place)
  * @param index Post-edit index — the stage's, after every put and removal (must
  *              not be NULL)
- * @param pruned Receives the keys pruned, appended (must not be NULL)
+ * @param pruned Receives the keys pruned, appended as copies in the array's arena
+ *               (must not be NULL; given its arena by string_array_init)
  * @return Error or NULL on success
  */
 error_t *metadata_prune_ancestors(
@@ -645,7 +646,8 @@ error_t *metadata_capture_directory(
  * @param arena Arena the rungs' paths are spelled into (must not be NULL)
  * @param captured Count of rungs whose claim this call authored or changed, added
  *                 to (must not be NULL)
- * @param retired Keys this call retired, appended (must not be NULL)
+ * @param retired Keys this call retired, appended as copies in the array's arena
+ *                (must not be NULL; given its arena by string_array_init)
  * @return Error or NULL on success
  */
 error_t *metadata_capture_ancestors(

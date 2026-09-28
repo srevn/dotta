@@ -255,9 +255,7 @@ static void transfer_commit_credential_decision(transfer_context_t *ctx) {
  * Free transfer context
  */
 void transfer_context_free(transfer_context_t *ctx) {
-    if (!ctx) {
-        return;
-    }
+    if (!ctx) return;
 
     transfer_commit_credential_decision(ctx);
 
@@ -559,9 +557,7 @@ int transfer_progress_callback(
     const git_indexer_progress *stats,
     void *payload
 ) {
-    if (!stats || !payload) {
-        return 0;
-    }
+    if (!stats || !payload) return 0;
 
     transfer_context_t *ctx = (transfer_context_t *) payload;
 
@@ -626,9 +622,7 @@ int transfer_push_progress_callback(
     size_t bytes,
     void *payload
 ) {
-    if (!payload) {
-        return 0;
-    }
+    if (!payload) return 0;
 
     transfer_context_t *ctx = (transfer_context_t *) payload;
 

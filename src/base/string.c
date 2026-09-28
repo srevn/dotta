@@ -15,25 +15,19 @@ bool str_equal(const char *a, const char *b) {
 }
 
 bool str_starts_with(const char *str, const char *prefix) {
-    if (!str || !prefix) {
-        return false;
-    }
+    if (!str || !prefix) return false;
 
     /* No need to check str length */
     return strncmp(str, prefix, strlen(prefix)) == 0;
 }
 
 bool str_ends_with(const char *str, const char *suffix) {
-    if (!str || !suffix) {
-        return false;
-    }
+    if (!str || !suffix) return false;
 
     size_t str_len = strlen(str);
     size_t suffix_len = strlen(suffix);
 
-    if (suffix_len > str_len) {
-        return false;
-    }
+    if (suffix_len > str_len) return false;
 
     return strcmp(str + (str_len - suffix_len), suffix) == 0;
 }
@@ -45,17 +39,13 @@ bool str_path_beneath(const char *path, const char *dir, size_t dir_len) {
 size_t str_path_parent_len(const char *path) {
     const char *slash = strrchr(path, '/');
 
-    if (!slash) {
-        return 0;
-    }
+    if (!slash) return 0;
 
     return (slash == path) ? 1 : (size_t) (slash - path);
 }
 
 char *str_trim(char *str) {
-    if (!str) {
-        return NULL;
-    }
+    if (!str) return NULL;
 
     /* Trim leading whitespace */
     char *start = str;

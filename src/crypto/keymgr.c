@@ -224,9 +224,7 @@ error_t *keymgr_create(
 }
 
 void keymgr_free(keymgr *km) {
-    if (!km) {
-        return;
-    }
+    if (!km) return;
     evict_slot(km);
     clear_refusal(km);
     secure_free(km, sizeof(*km));
@@ -360,9 +358,7 @@ static error_t *derive_and_check(
         (const uint8_t *) passphrase, passphrase_len,
         &km->epoch, out->master
     );
-    if (err) {
-        goto fail;
-    }
+    if (err) goto fail;
 
     if (in_hand) {
         trial.tried++;
@@ -380,21 +376,15 @@ static error_t *derive_and_check(
     if (km->source) {
         bool accepted = false;
         err = km->source(km->repo, &km->epoch, trial_opens, &trial, &accepted);
-        if (err) {
-            goto fail;
-        }
-        if (accepted) {
-            return NULL;
-        }
+        if (err) goto fail;
+        if (accepted) return NULL;
     }
 
     /* Nothing was shown to the master, so nothing can refuse it: an operation
      * with no blob in hand against a repository whose ciphertext the source found
      * none of, or a keymgr with no source at all (the unit suites' shape). The
      * caller confirmed it, or the environment asserted it. */
-    if (trial.tried == 0) {
-        return NULL;
-    }
+    if (trial.tried == 0) return NULL;
 
     /* ERR_LOCKED, not the cipher's ERR_CRYPTO: the run is left with no master —
      * every row after this one re-issues the same refusal — and a key is what
@@ -481,9 +471,7 @@ static error_t *prompt_and_verify(
             km, "The passphrase", passphrase, passphrase_len, in_hand, out
         );
         secure_free(passphrase, passphrase_len + 1);
-        if (!err) {
-            return NULL;
-        }
+        if (!err) return NULL;
         /* A wrong passphrase — derive_and_check's ERR_LOCKED — is re-asked at a
          * terminal; a derivation or a walk that failed on its own is refused at
          * once. */
@@ -752,18 +740,14 @@ bool keymgr_witness(
 }
 
 bool keymgr_clear(keymgr *km) {
-    if (!km) {
-        return false;
-    }
+    if (!km) return false;
 
     evict_slot(km);
     return session_clear(&km->epoch);
 }
 
 void keymgr_rekey(keymgr *km, const kdf_epoch_t *epoch) {
-    if (!km || !epoch) {
-        return;
-    }
+    if (!km || !epoch) return;
 
     /* What this keymgr holds under the old epoch goes: the master, which derives
      * from it, and the refusal, which was about its ciphertext — the new one is
@@ -817,9 +801,7 @@ error_t *keymgr_encrypt(
     /* No blob in hand: a fresh master is verified against what the repository
      * holds, or confirmed when it holds nothing. */
     error_t *err = acquire_subkeys(km, profile, NULL, mac_key, prf_key);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     err = cipher_encrypt(
         plaintext, plaintext_len, mac_key, prf_key, storage_path,
@@ -857,9 +839,7 @@ error_t *keymgr_decrypt(
      * plain memcmp. */
     uint8_t blob_fp[KDF_EPOCH_FP_SIZE];
     error_t *err = cipher_read_header(ciphertext, ciphertext_len, blob_fp);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
     if (memcmp(blob_fp, km->epoch_fp, KDF_EPOCH_FP_SIZE) != 0) {
         return ERROR(
             ERR_CRYPTO,
@@ -883,9 +863,7 @@ error_t *keymgr_decrypt(
         .storage_path = storage_path,
     };
     err = acquire_subkeys(km, profile, &in_hand, mac_key, prf_key);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     err = cipher_decrypt(
         ciphertext, ciphertext_len, mac_key, prf_key, storage_path,

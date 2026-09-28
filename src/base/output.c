@@ -418,9 +418,7 @@ void output_set_verbosity(output_t *ctx, output_verbosity_t verbosity) {
 }
 
 void output_set_stream(output_t *ctx, FILE *stream) {
-    if (!ctx || !stream) {
-        return;
-    }
+    if (!ctx || !stream) return;
 
     ctx->stream = stream;
     ctx->color_enabled = should_enable_colors(ctx->color_mode, stream);

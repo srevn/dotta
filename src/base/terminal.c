@@ -98,9 +98,7 @@ error_t *terminal_init(terminal_t **out) {
 }
 
 void terminal_restore(terminal_t *term) {
-    if (!term) {
-        return;
-    }
+    if (!term) return;
 
     /* Restore original terminal settings, and disarm them once they are back */
     if (term->raw_mode_enabled) {

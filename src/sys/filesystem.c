@@ -474,9 +474,7 @@ error_t *fs_write_file_raw(
     /* Ensure parent directory exists */
     char *parent = NULL;
     error_t *err = fs_get_parent_dir(path, &parent);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     if (parent && !fs_exists(parent)) {
         err = fs_create_dir(parent, true);
@@ -568,9 +566,7 @@ error_t *fs_copy_file(const char *src, const char *dst) {
     /* Get source permissions */
     mode_t mode;
     error_t *err = fs_get_permissions(src, &mode);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Read source */
     buffer_t content = BUFFER_INIT;
@@ -635,16 +631,12 @@ error_t *fs_create_dir(const char *path, bool parents) {
         /* Create parent first */
         char *parent = NULL;
         error_t *err = fs_get_parent_dir(path, &parent);
-        if (err) {
-            return err;
-        }
+        if (err) return err;
 
         if (parent && !fs_is_directory(parent)) {
             err = fs_create_dir(parent, true);
             free(parent);
-            if (err) {
-                return err;
-            }
+            if (err) return err;
         } else {
             free(parent);
         }
@@ -678,17 +670,13 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
         if (parents) {
             char *parent = NULL;
             error_t *err = fs_get_parent_dir(path, &parent);
-            if (err) {
-                return err;
-            }
+            if (err) return err;
 
             if (parent && !fs_is_directory(parent)) {
                 /* Use default 0755 for parent directories */
                 err = fs_create_dir(parent, true);
                 free(parent);
-                if (err) {
-                    return err;
-                }
+                if (err) return err;
             } else {
                 free(parent);
             }
@@ -922,9 +910,7 @@ error_t *fs_remove_dir(const char *path, bool recursive) {
         /* List and remove contents first */
         string_array_t *entries = NULL;
         error_t *err = fs_list_dir(path, &entries);
-        if (err) {
-            return err;
-        }
+        if (err) return err;
 
         for (size_t i = 0; i < entries->count; i++) {
             const char *entry = entries->items[i];
@@ -1174,9 +1160,7 @@ error_t *fs_remove_empty_dir(const char *path) {
     }
 
     string_array_free(entries);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* An entry that appeared while the metadata was being cleared lands here,
      * and it is the same refusal by another route. */

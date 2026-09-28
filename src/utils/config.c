@@ -284,9 +284,7 @@ static error_t *config_get_path(char **out) {
     /* Use default location */
     char *config_dir = NULL;
     error_t *err = fs_expand_tilde(DEFAULT_CONFIG_DIR, &config_dir);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     err = fs_path_join(config_dir, DEFAULT_CONFIG_FILE, out);
     free(config_dir);

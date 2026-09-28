@@ -458,9 +458,7 @@ static error_t *present_diffs_for_direction(
 
         /* Show the diff (content already analyzed by workspace) */
         err = show_file_diff_from_workspace(item, cache, direction, opts, out);
-        if (err) {
-            return err;
-        }
+        if (err) return err;
 
         (*diff_count)++;
 
@@ -543,9 +541,7 @@ static error_t *print_diff_stats(
 
     git_diff_stats *stats = NULL;
     error_t *err = gitops_diff_get_stats(diff, &stats);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     size_t files_changed = git_diff_stats_files_changed(stats);
     size_t insertions = git_diff_stats_insertions(stats);
@@ -966,9 +962,7 @@ static error_t *diff_commit_to_workspace(
      * profile that will not read cancels the diff rather than let a later one
      * answer in its place (core/profiles.h). */
     err = profile_resolve_commit(repo, profiles, commit_ref, &commit, &profile);
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Step 2: Print commit header */
     char oid_str[8];
@@ -1033,9 +1027,7 @@ static error_t *diff_commit_to_workspace(
     err = compare_tree_files_to_filesystem(
         historical, file_filter, opts, cache, out, &diff_count
     );
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Under a filter the comparison passed over every row outside it, so an empty
      * one claims the scope, in the workspace arm's words; else the whole */
@@ -1115,17 +1107,13 @@ static int select_delta(
     delta_select_t *sel = payload;
     const char *path = delta->new_file.path;
 
-    if (!label_prefixes(path)) {
-        return 1;
-    }
+    if (!label_prefixes(path)) return 1;
 
     const char *filesystem_path = NULL;
     sel->err = mount_resolve(
         sel->mounts, sel->profile, path, sel->arena, &filesystem_path
     );
-    if (sel->err) {
-        return -1;
-    }
+    if (sel->err) return -1;
 
     return pathspec_matches(
         sel->filter, filesystem_path, path, PATH_KIND_FILE
@@ -1188,16 +1176,12 @@ static error_t *diff_commits(
     err = profile_resolve_commit(
         repo, profiles, commit1_ref, &commit1, &profile1_name
     );
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     err = profile_resolve_commit(
         repo, profiles, commit2_ref, &commit2, &profile2_name
     );
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Validate both commits are from the same profile. Dotta profiles are orphan
      * branches — comparing commits across profiles would diff two completely

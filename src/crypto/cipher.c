@@ -153,9 +153,7 @@ error_t *cipher_read_header(
     CHECK_NULL(out_epoch_fp);
 
     error_t *err = validate_header(data, data_len);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     memcpy(out_epoch_fp, &data[CIPHER_OFFSET_EPOCH_FP], KDF_EPOCH_FP_SIZE);
 

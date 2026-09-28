@@ -79,9 +79,7 @@ static sync_results_t *sync_results_create(size_t profile_count) {
  * Free sync results
  */
 static void sync_results_free(sync_results_t *results) {
-    if (!results) {
-        return;
-    }
+    if (!results) return;
 
     for (size_t i = 0; i < results->profile_count; i++) {
         free(results->profiles[i].profile);
@@ -128,9 +126,7 @@ static error_t *pull_branch_ff(
     err = gitops_branch_refname(
         local_refname, sizeof(local_refname), branch_name
     );
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     err = gitops_build_refname(
         remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
@@ -147,9 +143,7 @@ static error_t *pull_branch_ff(
     git_reference *remote_ref = NULL;
 
     int git_err = git_reference_lookup(&local_ref, repo, local_refname);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     git_err = git_reference_lookup(&remote_ref, repo, remote_refname);
     if (git_err < 0) {
@@ -202,9 +196,7 @@ static error_t *pull_branch_ff(
     git_reference_free(local_ref);
     git_reference_free(remote_ref);
 
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     git_reference_free(updated_ref);
     *updated = true;
@@ -1282,9 +1274,7 @@ static error_t *sync_failure(const sync_results_t *results) {
         if (results->profiles[i].outcome == SYNC_OUTCOME_FAILED) failed++;
     }
 
-    if (failed == 0) {
-        return NULL;
-    }
+    if (failed == 0) return NULL;
 
     /* The plural agrees with the total, which is the noun it qualifies: "1 of 2
      * profiles failed", "1 of 1 profile failed". */
@@ -1591,9 +1581,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     err = gitops_resolve_default_remote(
         repo, ctx->arena, &remote_name, &remote_url
     );
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Validate workspace - sync requires clean workspace (no uncommitted changes)
      *
@@ -1971,9 +1959,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     err = sync_fetch_phase(
         repo, remote_name, scope, results, out, xfer
     );
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Phase 2: Analyze branch states */
     sync_analyze_phase(repo, remote_name, scope, results, out);
@@ -2022,9 +2008,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         output_clear_line(out);
     }
 
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Manifest block — the view after the Git phase, diffed against the view
      * before it. A true delta in both modes: a local external commit that predates

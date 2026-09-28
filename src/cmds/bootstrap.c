@@ -82,9 +82,7 @@ static error_t *bootstrap_create_template(
     CHECK_NULL(profile);
 
     error_t *err = profile_require(repo, profile);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Check if script already exists in Git */
     if (bootstrap_exists(repo, profile)) {
@@ -97,9 +95,7 @@ static error_t *bootstrap_create_template(
     /* The profile's stage: the script goes on it, executable, in one commit */
     char refname[DOTTA_REFNAME_MAX];
     err = gitops_branch_refname(refname, sizeof(refname), profile);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     stage_t *stage = NULL;
     err = stage_open(repo, refname, &stage);
@@ -158,9 +154,7 @@ static error_t *bootstrap_edit(
     /* Create the script from the template if none exists yet. */
     if (!bootstrap_exists(repo, profile)) {
         err = bootstrap_create_template(repo, profile);
-        if (err) {
-            return err;
-        }
+        if (err) return err;
         output_success(
             out, OUTPUT_NORMAL,
             "Created bootstrap script for profile '%s'", profile

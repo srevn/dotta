@@ -30,9 +30,7 @@ error_t *resolve_init(
     /* Get current branch OID for rollback */
     git_oid saved_oid;
     error_t *err = gitops_resolve_branch_head_oid(repo, branch_name, &saved_oid);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Initialize context */
     ctx->repo = repo;
@@ -58,9 +56,7 @@ static error_t *resolve_rebase_inmemory(
     error_t *err = gitops_resolve_remote_branch_oid(
         ctx->repo, ctx->remote_name, ctx->branch_name, &remote_oid
     );
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Perform in-memory rebase (never touches HEAD) */
     git_oid rebased_oid;
@@ -113,9 +109,7 @@ static error_t *resolve_merge_trees(
     error_t *err = gitops_resolve_remote_branch_oid(
         ctx->repo, ctx->remote_name, ctx->branch_name, &remote_oid
     );
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Find merge base */
     git_oid merge_base_oid;
@@ -251,9 +245,7 @@ static error_t *resolve_theirs(resolve_context_t *ctx, git_oid *out_oid) {
     error_t *err = gitops_resolve_remote_branch_oid(
         ctx->repo, ctx->remote_name, ctx->branch_name, &remote_oid
     );
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Update local branch to point to remote commit */
     char reflog_msg[DOTTA_MESSAGE_MAX];

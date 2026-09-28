@@ -64,12 +64,8 @@ static error_t *ensure_repository_adoptable(git_repository *repo, const char *pa
 
     bool declared = false;
     error_t *err = repo_is_store(repo, &declared);
-    if (err) {
-        return err;
-    }
-    if (declared) {
-        return NULL;
-    }
+    if (err) return err;
+    if (declared) return NULL;
 
     /* Any reference at all is history this run did not write, and the listing
      * that says there is none is complete or an error (sys/gitops.h): a `refs`
@@ -86,9 +82,7 @@ static error_t *ensure_repository_adoptable(git_repository *repo, const char *pa
     size_t ref_count = refs->count;
     string_array_free(refs);
 
-    if (ref_count == 0) {
-        return NULL;
-    }
+    if (ref_count == 0) return NULL;
 
     return ERROR(
         ERR_CONFLICT,
@@ -112,16 +106,12 @@ static error_t *init_state(git_repository *repo) {
 
     state_t *state = NULL;
     error_t *err = state_open(repo, &state);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     err = state_save(state);
     state_free(state);
 
-    if (err) {
-        return error_wrap(err, "Failed to save initial state");
-    }
+    if (err) return error_wrap(err, "Failed to save initial state");
 
     return NULL;
 }
@@ -167,9 +157,7 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
      * configured location otherwise — one answer, expanded, absolute and with
      * its parents made (utils/repo.h). */
     err = repo_create_target(config, opts->repo_path, &path, &elsewhere);
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* The store: opened where a repository stands, made where nothing does. Only
      * an absence is created over — a repository that would not open for another
@@ -190,9 +178,7 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     /* Whose repository is this? Asked before the first step below writes, so a
      * refusal leaves it exactly as it was found. */
     err = ensure_repository_adoptable(repo, path);
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /*
      * Idempotent setup. Each step is safe to re-run on an existing repository:
@@ -202,15 +188,11 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     /* Declared dotta's: the marker repo_open reads, and the reflog a bare
      * repository does not keep by default (utils/repo.h). */
     err = repo_declare_store(repo);
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* state.db schema (state_open creates if missing) */
     err = init_state(repo);
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* The repository's epoch at refs/dotta/epoch, minted at the preset's strength.
      * Idempotent — keeps an existing valid one; one that yields no epoch is

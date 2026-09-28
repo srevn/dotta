@@ -49,9 +49,7 @@ static const char *const PROTECTED_META_FILES[] = {
  * @return true if file is a protected meta-file, false otherwise
  */
 static bool is_protected_meta_file(const char *storage_path) {
-    if (!storage_path) {
-        return false;
-    }
+    if (!storage_path) return false;
 
     for (int i = 0; PROTECTED_META_FILES[i] != NULL; i++) {
         if (strcmp(storage_path, PROTECTED_META_FILES[i]) == 0) {

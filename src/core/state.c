@@ -830,9 +830,7 @@ const char *state_target(
  * @return true if profile is enabled, false otherwise
  */
 bool state_enabled(const state_t *state, const char *profile) {
-    if (!state || !profile) {
-        return false;
-    }
+    if (!state || !profile) return false;
 
     return state_find_profile(state, profile) != NULL;
 }
@@ -1441,9 +1439,7 @@ error_t *state_resume(state_t *state) {
  * Roll back a transaction started by state_begin()
  */
 void state_rollback(state_t *state) {
-    if (!state || !state->db || !state->in_transaction) {
-        return;
-    }
+    if (!state || !state->db || !state->in_transaction) return;
 
     /* The handle's account decides it, not SQLite's: after a transaction SQLite
      * ended itself this ROLLBACK finds none, and what follows still runs. */
@@ -1476,9 +1472,7 @@ bool state_locked(const state_t *state) {
  * @param state State to free (can be NULL)
  */
 void state_free(state_t *state) {
-    if (!state) {
-        return;
-    }
+    if (!state) return;
 
     /* A transaction still open (error path cleanup) is rolled back as any other
      * is, its rows going back with it, so the one read left is the handle's */

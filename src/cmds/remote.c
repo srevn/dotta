@@ -21,9 +21,7 @@
  * Remote names must be alphanumeric with hyphens and underscores only.
  */
 static bool validate_remote_name(const char *name) {
-    if (!name || name[0] == '\0') {
-        return false;
-    }
+    if (!name || name[0] == '\0') return false;
 
     for (const char *p = name; *p; p++) {
         if (!isalnum(*p) && *p != '-' && *p != '_') {
@@ -43,15 +41,11 @@ static bool validate_remote_name(const char *name) {
  * - Local paths: absolute (/path) or relative (./path, ../path)
  */
 static bool validate_remote_url(const char *url) {
-    if (!url || !*url) {
-        return false;
-    }
+    if (!url || !*url) return false;
 
     /* Reject whitespace */
     for (const char *p = url; *p; p++) {
-        if (isspace((unsigned char) *p)) {
-            return false;
-        }
+        if (isspace((unsigned char) *p)) return false;
     }
 
     /* URL-style: scheme://... */
@@ -106,9 +100,7 @@ static error_t *remote_list(
 
     git_strarray remotes = { 0 };
     int git_err = git_remote_list(&remotes, repo);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     if (remotes.count == 0) {
         output_info(out, OUTPUT_NORMAL, "No remotes configured");
@@ -211,9 +203,7 @@ static error_t *remote_add(
     /* Create remote */
     git_remote *remote = NULL;
     git_err = git_remote_create(&remote, repo, name, url);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     git_remote_free(remote);
 
@@ -249,9 +239,7 @@ static error_t *remote_remove(
 
     /* Delete remote */
     git_err = git_remote_delete(repo, name);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     /* Success message */
     output_success(
@@ -296,9 +284,7 @@ static error_t *remote_set_url(
 
     /* Set new URL */
     git_err = git_remote_set_url(repo, name, new_url);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     /* Success message */
     output_success(
@@ -370,9 +356,7 @@ static error_t *remote_rename(
 
     git_strarray_dispose(&problems);
 
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     /* Success message */
     output_success(

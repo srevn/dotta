@@ -32,9 +32,7 @@
  */
 static bool is_valid_credential_field(const char *field) {
     /* Defensive check - caller should ensure non-NULL */
-    if (!field) {
-        return false;
-    }
+    if (!field) return false;
 
     /* Scan for protocol-breaking characters */
     for (const char *p = field; *p; p++) {
@@ -62,9 +60,7 @@ static bool is_valid_credential_field(const char *field) {
  * by the helper.
  */
 static bool is_valid_host(const char *host) {
-    if (!host || !*host) {
-        return false;
-    }
+    if (!host || !*host) return false;
 
     /* Bracketed IPv6 form */
     if (host[0] == '[') {
@@ -579,9 +575,7 @@ static char *find_ssh_key(void) {
     for (int i = 0; key_names[i] != NULL; i++) {
         char *key_path = heap_str_format("%s/%s", home, key_names[i]);
 
-        if (file_exists(key_path)) {
-            return key_path;
-        }
+        if (file_exists(key_path)) return key_path;
 
         free(key_path);
     }

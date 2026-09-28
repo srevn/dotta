@@ -95,9 +95,7 @@ typedef struct {
 /* --- Items --- */
 
 static void free_items(item_t *items, size_t count) {
-    if (!items) {
-        return;
-    }
+    if (!items) return;
     for (size_t i = 0; i < count; i++) {
         free(items[i].name);
         free(items[i].target);
@@ -246,9 +244,7 @@ static void read_targets(
 }
 
 static void view_free(view_t *view) {
-    if (!view) {
-        return;
-    }
+    if (!view) return;
     free_items(view->items, view->item_count);
     buffer_deinit(&view->prompt.buffer);
     free(view);
@@ -286,18 +282,14 @@ static error_t *view_create(
 /* --- Reorder --- */
 
 static void move_up(view_t *view) {
-    if (view->cursor == 0) {
-        return;
-    }
+    if (view->cursor == 0) return;
     swap_items(view->items, view->cursor, view->cursor - 1);
     view->cursor--;
     view->modified = true;
 }
 
 static void move_down(view_t *view) {
-    if (view->cursor + 1 >= view->item_count) {
-        return;
-    }
+    if (view->cursor + 1 >= view->item_count) return;
     swap_items(view->items, view->cursor, view->cursor + 1);
     view->cursor++;
     view->modified = true;

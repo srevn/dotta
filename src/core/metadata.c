@@ -74,9 +74,7 @@ metadata_t *metadata_create_empty(void) {
  * Free metadata item
  */
 void metadata_item_free(metadata_item_t *item) {
-    if (!item) {
-        return;
-    }
+    if (!item) return;
 
     free(item->key);
     free(item->owner);
@@ -91,9 +89,7 @@ void metadata_item_free(metadata_item_t *item) {
  * Frees every item it holds and the structure itself.
  */
 void metadata_free(metadata_t *metadata) {
-    if (!metadata) {
-        return;
-    }
+    if (!metadata) return;
 
     /* Free index first — it borrows the key pointer of every item */
     hashmap_free(metadata->index, NULL);
@@ -306,9 +302,7 @@ const metadata_item_t *metadata_lookup(
     const metadata_t *metadata,
     const char *key
 ) {
-    if (!metadata || !key) {
-        return NULL;
-    }
+    if (!metadata || !key) return NULL;
 
     return hashmap_get(metadata->index, key);
 }
@@ -317,9 +311,7 @@ const metadata_item_t *metadata_directory_beneath(
     const metadata_t *metadata,
     const char *storage_path
 ) {
-    if (!metadata || !storage_path) {
-        return NULL;
-    }
+    if (!metadata || !storage_path) return NULL;
 
     size_t count = 0;
     const metadata_item_t *const *items = metadata_items(metadata, &count);
@@ -369,17 +361,13 @@ bool metadata_remove_item(
     metadata_t *metadata,
     const char *key
 ) {
-    if (!metadata || !key) {
-        return false;
-    }
+    if (!metadata || !key) return false;
 
     /* The index answers identity. A key the collection does not hold is answered
      * here and costs one probe — the walk below is for position, and there is
      * no position to find. */
     metadata_item_t *item = hashmap_get(metadata->index, key);
-    if (!item) {
-        return false;
-    }
+    if (!item) return false;
 
     /* Only the spine carries position, so only a walk gives it. What the index
      * bought is the comparison: the item is already named, so this reads the
@@ -388,9 +376,7 @@ bool metadata_remove_item(
      * its update arm mutates the standing item in place, so the value the index
      * holds is the pointer some spine slot holds. */
     for (size_t i = 0; i < metadata->count; i++) {
-        if (metadata->items[i] != item) {
-            continue;
-        }
+        if (metadata->items[i] != item) continue;
 
         /* Unpublish before freeing: the index borrows this item's key, so the
          * removal's own strcmp reads it. */
@@ -779,9 +765,7 @@ static error_t *capture_ancestor(
 
     /* A rung this machine cannot place — an unbound custom/ name — has no answer
      * to give, the same silence as a rung nothing stands at. */
-    if (!filesystem_path) {
-        return NULL;
-    }
+    if (!filesystem_path) return NULL;
 
     struct stat st;
     fs_occupant_t occupant = fs_lstat_occupant(filesystem_path, &st);
@@ -864,9 +848,7 @@ error_t *metadata_capture_ancestors(
      * by where the scan starts and the leaf by where it ends — arithmetic, not
      * a special case — so a path directly beneath a mount root climbs nowhere. */
     const char *first = strchr(label_tail(storage_path), '/');
-    if (!first) {
-        return NULL;
-    }
+    if (!first) return NULL;
 
     /* Every rung is a prefix of the leaf's own name, so one copy spells them
      * all: each separator truncates it in place and is restored before the next

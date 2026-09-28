@@ -993,9 +993,7 @@ static error_t *add_capture(
         );
     }
     content_capture_free(&capture);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* The claim from the capture's own look, sealed as the capture says: its
      * write-time invariant makes that verdict the byte truth (a plaintext that

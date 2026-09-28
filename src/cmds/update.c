@@ -127,9 +127,7 @@ static error_t *update_capture(
         prior_kind != CONTENT_PLAINTEXT,
         &should_encrypt
     );
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* The entry the file becomes: read → seal as decided → the bytes, the mode
      * and the fstat of the descriptor they came off, bytes and look one inode
@@ -414,9 +412,7 @@ static error_t *update_profile(
     *out_processed = 0;
     commit->profile = profile;
 
-    if (item_count == 0 && row_count == 0) {
-        return NULL;
-    }
+    if (item_count == 0 && row_count == 0) return NULL;
 
     /* Initialize all resources to NULL for goto cleanup */
     metadata_t *metadata = NULL;
@@ -457,9 +453,7 @@ static error_t *update_profile(
                      * it, so a path the stage lacks is the model's error, not a
                      * no-op. */
                     err = stage_remove(stage, item->storage_path);
-                    if (err) {
-                        goto cleanup;
-                    }
+                    if (err) goto cleanup;
                     /* Remove metadata entry if it exists */
                     metadata_remove_item(metadata, item->storage_path);
                     ptr_array_push(&commit->deleted, item);
@@ -735,9 +729,7 @@ static error_t *update_profile(
      * which is how the remedy for a rung the world moved under works at all. */
     size_t path_count = commit->captured_count + commit->deleted.count +
         commit->claimed + commit->retired.count;
-    if (path_count == 0) {
-        goto cleanup;
-    }
+    if (path_count == 0) goto cleanup;
 
     /* Prune redundant directory entries.
      *
@@ -903,9 +895,7 @@ static error_t *update_write_record(
     CHECK_NULL(ctx);
 
     /* Nothing landed: nothing to write, and no lock to take for it */
-    if (commit_count == 0) {
-        return NULL;
-    }
+    if (commit_count == 0) return NULL;
 
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;
@@ -917,9 +907,7 @@ static error_t *update_write_record(
 
     /* The lock, and every decision below made under it (state_begin) */
     error_t *err = state_begin(state);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* The post-commit view, once */
     err = manifest_build(repo, state, ctx->arena, &manifest);
@@ -1895,9 +1883,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             output_info(out, OUTPUT_NORMAL, "Record updated");
         }
 
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
     /* Execute post-update hook (the hooks layer suppresses it on a dry run) */

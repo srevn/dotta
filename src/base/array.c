@@ -30,18 +30,14 @@ void string_array_init_cap(string_array_t *arr, size_t cap) {
 
     *arr = (string_array_t){ 0 };
 
-    if (cap == 0) {
-        return;
-    }
+    if (cap == 0) return;
 
     arr->items = heap_calloc(cap, sizeof(char *));
     arr->capacity = cap;
 }
 
 void string_array_deinit(string_array_t *arr) {
-    if (!arr) {
-        return;
-    }
+    if (!arr) return;
 
     for (size_t i = 0; i < arr->count; i++) {
         free(arr->items[i]);
@@ -61,9 +57,7 @@ string_array_t *string_array_new(size_t cap) {
 }
 
 void string_array_free(string_array_t *arr) {
-    if (!arr) {
-        return;
-    }
+    if (!arr) return;
     string_array_deinit(arr);
     free(arr);
 }
@@ -75,9 +69,7 @@ void string_array_free_cb(void *ptr) {
 /* --- Internal --- */
 
 static void string_array_ensure_capacity(string_array_t *arr) {
-    if (arr->count < arr->capacity) {
-        return;
-    }
+    if (arr->count < arr->capacity) return;
 
     /* The capacity's bytes stand in memory, so its double cannot wrap; the double's
      * bytes can, and that is exhaustion. */
@@ -110,9 +102,7 @@ void string_array_push_owned(string_array_t *arr, char *str) {
 void string_array_reserve(string_array_t *arr, size_t cap) {
     CHECK_NULL(arr);
 
-    if (cap <= arr->capacity) {
-        return;
-    }
+    if (cap <= arr->capacity) return;
 
     if (cap > SIZE_MAX / sizeof(char *)) {
         heap_die(SIZE_MAX);
@@ -123,9 +113,7 @@ void string_array_reserve(string_array_t *arr, size_t cap) {
 }
 
 void string_array_remove(string_array_t *arr, size_t index) {
-    if (!arr || index >= arr->count) {
-        return;
-    }
+    if (!arr || index >= arr->count) return;
 
     free(arr->items[index]);
     arr->count--;
@@ -139,9 +127,7 @@ void string_array_remove(string_array_t *arr, size_t index) {
 }
 
 void string_array_swap_remove(string_array_t *arr, size_t index) {
-    if (!arr || index >= arr->count) {
-        return;
-    }
+    if (!arr || index >= arr->count) return;
 
     free(arr->items[index]);
     arr->count--;
@@ -152,9 +138,7 @@ void string_array_swap_remove(string_array_t *arr, size_t index) {
 }
 
 bool string_array_remove_value(string_array_t *arr, const char *str) {
-    if (!arr || !str) {
-        return false;
-    }
+    if (!arr || !str) return false;
 
     for (size_t i = 0; i < arr->count; i++) {
         if (strcmp(arr->items[i], str) == 0) {
@@ -167,9 +151,7 @@ bool string_array_remove_value(string_array_t *arr, const char *str) {
 }
 
 void string_array_clear(string_array_t *arr) {
-    if (!arr) {
-        return;
-    }
+    if (!arr) return;
 
     for (size_t i = 0; i < arr->count; i++) {
         free(arr->items[i]);
@@ -180,14 +162,10 @@ void string_array_clear(string_array_t *arr) {
 /* --- Query --- */
 
 bool string_array_contains(const string_array_t *arr, const char *str) {
-    if (!arr || !str) {
-        return false;
-    }
+    if (!arr || !str) return false;
 
     for (size_t i = 0; i < arr->count; i++) {
-        if (strcmp(arr->items[i], str) == 0) {
-            return true;
-        }
+        if (strcmp(arr->items[i], str) == 0) return true;
     }
 
     return false;
@@ -200,9 +178,7 @@ static int cmp_strings(const void *a, const void *b) {
 }
 
 void string_array_sort(string_array_t *arr) {
-    if (!arr || arr->count < 2) {
-        return;
-    }
+    if (!arr || arr->count < 2) return;
     qsort(arr->items, arr->count, sizeof(char *), cmp_strings);
 }
 
@@ -214,9 +190,7 @@ void string_array_clone(const string_array_t *src, string_array_t *dst) {
 
     *dst = (string_array_t){ 0 };
 
-    if (src->count == 0) {
-        return;
-    }
+    if (src->count == 0) return;
 
     dst->items = heap_calloc(src->count, sizeof(char *));
     dst->capacity = src->count;
@@ -228,9 +202,7 @@ void string_array_clone(const string_array_t *src, string_array_t *dst) {
 }
 
 char *string_array_join(const string_array_t *arr, const char *delimiter) {
-    if (!arr || arr->count == 0) {
-        return heap_strdup("");
-    }
+    if (!arr || arr->count == 0) return heap_strdup("");
 
     size_t delim_len = delimiter ? strlen(delimiter) : 0;
 
@@ -295,18 +267,14 @@ void ptr_array_init_cap(ptr_array_t *arr, size_t cap) {
 
     *arr = (ptr_array_t){ 0 };
 
-    if (cap == 0) {
-        return;
-    }
+    if (cap == 0) return;
 
     arr->items = heap_calloc(cap, sizeof(void *));
     arr->capacity = cap;
 }
 
 void ptr_array_deinit(ptr_array_t *arr) {
-    if (!arr) {
-        return;
-    }
+    if (!arr) return;
 
     free(arr->items);
     *arr = (ptr_array_t){ 0 };
@@ -322,9 +290,7 @@ ptr_array_t *ptr_array_new(size_t cap) {
 }
 
 void ptr_array_free(ptr_array_t *arr) {
-    if (!arr) {
-        return;
-    }
+    if (!arr) return;
     ptr_array_deinit(arr);
     free(arr);
 }
@@ -336,9 +302,7 @@ void ptr_array_free_cb(void *ptr) {
 /* --- Internal --- */
 
 static void ptr_array_ensure_capacity(ptr_array_t *arr) {
-    if (arr->count < arr->capacity) {
-        return;
-    }
+    if (arr->count < arr->capacity) return;
 
     /* The capacity's bytes stand in memory, so its double cannot wrap; the double's
      * bytes can, and that is exhaustion. */
@@ -365,9 +329,7 @@ void ptr_array_push(ptr_array_t *arr, const void *p) {
 void ptr_array_reserve(ptr_array_t *arr, size_t cap) {
     CHECK_NULL(arr);
 
-    if (cap <= arr->capacity) {
-        return;
-    }
+    if (cap <= arr->capacity) return;
 
     if (cap > SIZE_MAX / sizeof(void *)) {
         heap_die(SIZE_MAX);
@@ -378,9 +340,7 @@ void ptr_array_reserve(ptr_array_t *arr, size_t cap) {
 }
 
 void ptr_array_clear(ptr_array_t *arr) {
-    if (!arr) {
-        return;
-    }
+    if (!arr) return;
     arr->count = 0;
 }
 

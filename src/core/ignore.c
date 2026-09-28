@@ -503,9 +503,7 @@ error_t *ignore_seed_baseline(git_repository *repo) {
      * the file's. */
     bool seeded = false;
     RETURN_IF_ERROR(gitops_reference_exists(repo, BASELINE_REF, &seeded));
-    if (seeded) {
-        return NULL;
-    }
+    if (seeded) return NULL;
 
     /* A root commit on an orphan's stage. A ref that appeared since the look —
      * two inits racing — is refused at the open or at the commit. */

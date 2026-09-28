@@ -1163,9 +1163,7 @@ static error_t *validate_content(
                     repo, &e->blob_oid, GIT_FILEMODE_BLOB, e->storage_path,
                     profile, keymgr, &e->content
                 );
-                if (err) {
-                    return err;
-                }
+                if (err) return err;
                 e->content_held = true;
                 break;
             }

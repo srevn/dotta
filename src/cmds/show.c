@@ -483,9 +483,7 @@ static error_t *show_commit(
 
     /* Generate diff between parent and commit */
     err = gitops_diff_trees(repo, parent_tree, commit_tree, NULL, &diff);
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Commit header with color (matching diff command style) */
     char oid_str[8];

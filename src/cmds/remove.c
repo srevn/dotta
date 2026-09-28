@@ -433,9 +433,7 @@ static error_t *remove_resolve(
         path_input_t arg;
         err = path_input_resolve(input_paths[i], ctx->arena, &arg);
         if (err) {
-            if (!opts->force) {
-                goto cleanup;
-            }
+            if (!opts->force) goto cleanup;
             /* With --force, skip this path */
             output_warning(
                 out, OUTPUT_VERBOSE, "Skipping invalid path '%s': %s",
@@ -747,19 +745,13 @@ static bool remove_confirm_paths(
     const config_t *config,
     output_t *out
 ) {
-    if (!claims || !opts || !out) {
-        return false;
-    }
+    if (!claims || !opts || !out) return false;
 
     /* Skip confirmation if --force */
-    if (opts->force) {
-        return true;
-    }
+    if (opts->force) return true;
 
     /* Skip confirmation for dry run */
-    if (opts->dry_run) {
-        return true;
-    }
+    if (opts->dry_run) return true;
 
     /* Check config threshold */
     size_t threshold = 5; /* Default threshold */
@@ -768,9 +760,7 @@ static bool remove_confirm_paths(
     }
 
     /* No confirmation needed for small operations below threshold */
-    if (claim_count < threshold) {
-        return true;
-    }
+    if (claim_count < threshold) return true;
 
     size_t files = 0, dirs = 0;
     for (size_t i = 0; i < claim_count; i++) {
@@ -812,14 +802,10 @@ static bool remove_confirm_profile(
     const config_t *config,
     output_t *out
 ) {
-    if (!profile || !out) {
-        return false;
-    }
+    if (!profile || !out) return false;
 
     /* Skip confirmation if --force */
-    if (opts->force) {
-        return true;
-    }
+    if (opts->force) return true;
 
     output_gap(out, OUTPUT_NORMAL);
     output_warning(
@@ -895,9 +881,7 @@ static error_t *remove_paths(
         ctx, stage_tree(stage), opts->profile, opts->paths, opts->path_count, opts,
         &claims, &claim_count, &metadata
     );
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* What the removal shares with the other branches (critical safety check).
      * Advisory: the untrack proceeds without the section and says why, since a

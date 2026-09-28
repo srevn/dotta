@@ -83,9 +83,7 @@ error_t *gitops_get_signature(git_signature **out, git_repository *repo) {
     snprintf(email, sizeof(email), "%s@%s", user, hostname);
 
     int err = git_signature_now(out, user, email);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     return NULL;
 }
@@ -122,9 +120,7 @@ error_t *gitops_open_repository(git_repository **out, const char *path) {
             "Repository at %s is not owned by the current user", path
         );
     }
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     return NULL;
 }
@@ -138,9 +134,7 @@ error_t *gitops_init_repository(git_repository **out, const char *path) {
     opts.flags = GIT_REPOSITORY_INIT_BARE | GIT_REPOSITORY_INIT_MKPATH;
 
     int err = git_repository_init_ext(out, path, &opts);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     return NULL;
 }
@@ -168,9 +162,7 @@ error_t *gitops_reference_exists(
         *exists = false;
         return NULL;
     }
-    if (rc < 0) {
-        return error_from_git(rc);
-    }
+    if (rc < 0) return error_from_git(rc);
     git_reference_free(ref);
 
     *exists = true;
@@ -268,9 +260,7 @@ typedef struct {
 static error_t *walk_loose_refs(const loose_walk_t *walk, const char *dir) {
     DIR *d = fs_opendir(dir);
     if (!d) {
-        if (errno == ENOENT) {
-            return NULL;
-        }
+        if (errno == ENOENT) return NULL;
         return error_from_errno(errno, "Cannot read the refs under '%s'", dir);
     }
 
@@ -296,9 +286,7 @@ static error_t *walk_loose_refs(const loose_walk_t *walk, const char *dir) {
                 int rc = git_reference_lookup(
                     &ref, walk->repo, path + walk->refname_at
                 );
-                if (rc == GIT_ENOTFOUND) {
-                    break;
-                }
+                if (rc == GIT_ENOTFOUND) break;
                 if (rc < 0) {
                     err = error_from_git(rc);
                     break;
@@ -329,9 +317,7 @@ static error_t *walk_loose_refs(const loose_walk_t *walk, const char *dir) {
         }
 
         free(path);
-        if (err) {
-            break;
-        }
+        if (err) break;
     }
 
     if (!err && errno != 0) {
@@ -362,9 +348,7 @@ error_t *gitops_list_refs(
 
     git_reference_iterator *iter = NULL;
     int rc = git_reference_iterator_glob_new(&iter, repo, glob);
-    if (rc < 0) {
-        return error_from_git(rc);
-    }
+    if (rc < 0) return error_from_git(rc);
     string_array_t *names = string_array_new(0);
 
     error_t *err = NULL;
@@ -430,15 +414,11 @@ error_t *gitops_list_remote_tracking(
     error_t *err = gitops_build_refname(
         namespace, sizeof(namespace), "refs/remotes/%s", remote_name
     );
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     string_array_t *names = NULL;
     err = gitops_list_refs(repo, namespace, &names);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Under the remote's namespace and not a branch of it: its symbolic HEAD. */
     string_array_remove_value(names, "HEAD");
@@ -538,9 +518,7 @@ static error_t *resolve_ref_to_tree(
         git_commit *commit = (git_commit *) obj;
         err = git_commit_tree(out_tree, commit);
         git_object_free(obj);
-        if (err < 0) {
-            return error_from_git(err);
-        }
+        if (err < 0) return error_from_git(err);
     } else if (obj_type == GIT_OBJECT_TREE) {
         *out_tree = (git_tree *) obj;
     } else {
@@ -578,9 +556,7 @@ error_t *gitops_load_branch_tree(
     error_t *err = gitops_branch_refname(
         refname, sizeof(refname), branch_name
     );
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     return resolve_ref_to_tree(repo, refname, out_tree, out_oid);
 }
@@ -592,9 +568,7 @@ error_t *gitops_tree_walk(
     CHECK_NULL(callback);
 
     int err = git_tree_walk(tree, GIT_TREEWALK_PRE, callback, payload);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     return NULL;
 }
@@ -641,9 +615,7 @@ error_t *gitops_fetch_remote(
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     git_fetch_options fetch_opts;
     git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
@@ -657,9 +629,7 @@ error_t *gitops_fetch_remote(
     transfer_op_end(xfer, err);
     git_remote_free(remote);
 
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
     return NULL;
 }
 
@@ -678,9 +648,7 @@ error_t *gitops_fetch_branch(
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     git_fetch_options fetch_opts;
     git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
@@ -709,9 +677,7 @@ error_t *gitops_fetch_branch(
     transfer_op_end(xfer, err);
     git_remote_free(remote);
 
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
     return NULL;
 }
 
@@ -728,9 +694,7 @@ error_t *gitops_fetch_branches(
     /* Look up remote once */
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     /* Build array of refspecs for all branches */
     char **refspecs = heap_calloc(branches->count, sizeof(char *));
@@ -806,9 +770,7 @@ error_t *gitops_push_branch(
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     git_push_options push_opts;
     git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
@@ -835,9 +797,7 @@ error_t *gitops_push_branch(
     transfer_op_end(xfer, err);
     git_remote_free(remote);
 
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     return NULL;
 }
@@ -857,9 +817,7 @@ error_t *gitops_force_push_branch(
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     git_push_options push_opts;
     git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
@@ -887,9 +845,7 @@ error_t *gitops_force_push_branch(
     transfer_op_end(xfer, err);
     git_remote_free(remote);
 
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     return NULL;
 }
@@ -909,9 +865,7 @@ error_t *gitops_delete_remote_branch(
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     git_push_options push_opts;
     git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
@@ -939,9 +893,7 @@ error_t *gitops_delete_remote_branch(
     transfer_op_end(xfer, err);
     git_remote_free(remote);
 
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     return NULL;
 }
@@ -1027,9 +979,7 @@ error_t *gitops_get_remote_url(
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     const char *url = git_remote_url(remote);
     if (!url) {
@@ -1059,9 +1009,7 @@ error_t *gitops_resolve_default_remote(
 
     git_strarray remotes = { 0 };
     int git_err = git_remote_list(&remotes, repo);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     if (remotes.count == 0) {
         git_strarray_dispose(&remotes);
@@ -1100,9 +1048,7 @@ error_t *gitops_resolve_default_remote(
     if (out_url) {
         git_remote *remote = NULL;
         int lookup_err = git_remote_lookup(&remote, repo, name);
-        if (lookup_err < 0) {
-            return error_from_git(lookup_err);
-        }
+        if (lookup_err < 0) return error_from_git(lookup_err);
 
         /* Copied before the remote goes: the URL is the remote's, and NULL where
          * it has none. */
@@ -1128,9 +1074,7 @@ error_t *gitops_create_reference(
 
     git_reference *ref = NULL;
     int err = git_reference_create(&ref, repo, name, oid, force, NULL);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     git_reference_free(ref);
 
@@ -1172,9 +1116,7 @@ error_t *gitops_resolve_branch_head_oid(
     error_t *err = gitops_branch_refname(
         refname, sizeof(refname), branch_name
     );
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     return gitops_resolve_reference_oid(repo, refname, out);
 }
@@ -1217,9 +1159,7 @@ error_t *gitops_blob_view_open(
 
     git_blob *blob = NULL;
     int git_err = git_blob_lookup(&blob, repo, oid);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     out->_handle = blob;
     out->data = git_blob_rawcontent(blob);
@@ -1232,9 +1172,7 @@ error_t *gitops_blob_view_open(
  * Close a blob view
  */
 void gitops_blob_view_close(gitops_blob_view_t *view) {
-    if (!view || !view->_handle) {
-        return;
-    }
+    if (!view || !view->_handle) return;
 
     git_blob_free(view->_handle);
     *view = (gitops_blob_view_t){ 0 };
@@ -1254,9 +1192,7 @@ error_t *gitops_read_blob_content(
 
     gitops_blob_view_t view;
     error_t *err = gitops_blob_view_open(repo, oid, &view);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     void *content = heap_alloc(view.size + 1);
 
@@ -1289,9 +1225,7 @@ error_t *gitops_resolve_commit_in_branch(
     error_t *err_build = gitops_branch_refname(
         ref_name, sizeof(ref_name), branch_name
     );
-    if (err_build) {
-        return err_build;
-    }
+    if (err_build) return err_build;
 
     /* Look up the branch and capture its tip OID by value.
      *
@@ -1439,16 +1373,12 @@ error_t *gitops_get_tree_from_commit(
     /* Lookup commit */
     git_commit *commit = NULL;
     int err = git_commit_lookup(&commit, repo, commit_oid);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     /* Get tree from commit */
     err = git_commit_tree(out_tree, commit);
     git_commit_free(commit);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     return NULL;
 }
@@ -1531,9 +1461,7 @@ error_t *gitops_merge_trees_safe(
     git_tree_free(our_tree);
     git_tree_free(ancestor_tree);
 
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     *out_index = index;
     return NULL;
@@ -1568,16 +1496,12 @@ error_t *gitops_create_merge_commit(
      */
     git_oid tree_oid;
     int err = git_index_write_tree_to(&tree_oid, index, repo);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     /* Lookup tree object */
     git_tree *tree = NULL;
     err = git_tree_lookup(&tree, repo, &tree_oid);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     /* Get signature with fallback */
     git_signature *sig = NULL;
@@ -1599,9 +1523,7 @@ error_t *gitops_create_merge_commit(
     git_signature_free(sig);
     git_tree_free(tree);
 
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    if (err < 0) return error_from_git(err);
 
     return NULL;
 }
@@ -1627,9 +1549,7 @@ error_t *gitops_rebase_inmemory_safe(
 
     /* Create annotated commits for rebase */
     git_err = git_annotated_commit_lookup(&branch_commit, repo, branch_oid);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     git_err = git_annotated_commit_lookup(&onto_commit, repo, onto_oid);
     if (git_err < 0) {
@@ -1648,9 +1568,7 @@ error_t *gitops_rebase_inmemory_safe(
     git_annotated_commit_free(onto_commit);
     git_annotated_commit_free(branch_commit);
 
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     /* Get signature once for all rebase operations */
     err = gitops_get_signature(&sig, repo);
@@ -1709,9 +1627,7 @@ error_t *gitops_rebase_inmemory_safe(
     git_err = git_rebase_finish(rebase, NULL);
     git_rebase_free(rebase);
 
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     /* Return the final commit OID */
     git_oid_cpy(out_oid, &commit_oid);
@@ -1733,16 +1649,12 @@ error_t *gitops_update_branch_reference(
     /* Build reference name */
     char refname[DOTTA_REFNAME_MAX];
     error_t *err = gitops_branch_refname(refname, sizeof(refname), branch_name);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Lookup existing reference */
     git_reference *ref = NULL;
     int git_err = git_reference_lookup(&ref, repo, refname);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     /* Update reference to new OID with reflog message This is an atomic operation
      * that updates the branch without touching HEAD
@@ -1751,9 +1663,7 @@ error_t *gitops_update_branch_reference(
     git_err = git_reference_set_target(&new_ref, ref, new_oid, reflog_msg);
     git_reference_free(ref);
 
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     git_reference_free(new_ref);
     return NULL;
@@ -1774,9 +1684,7 @@ error_t *gitops_diff_trees(
     int ret = git_diff_tree_to_tree(
         out_diff, repo, old_tree, new_tree, opts
     );
-    if (ret < 0) {
-        return error_from_git(ret);
-    }
+    if (ret < 0) return error_from_git(ret);
 
     return NULL;
 }
@@ -1788,9 +1696,7 @@ error_t *gitops_diff_get_stats(
     CHECK_NULL(out_stats);
 
     int ret = git_diff_get_stats(out_stats, diff);
-    if (ret < 0) {
-        return error_from_git(ret);
-    }
+    if (ret < 0) return error_from_git(ret);
 
     return NULL;
 }

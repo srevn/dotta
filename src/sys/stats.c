@@ -209,15 +209,11 @@ static error_t *walk_commits(
      * carries it — git_revwalk_push copies what it is given. */
     git_oid head_oid;
     error_t *err = gitops_resolve_branch_head_oid(repo, branch_name, &head_oid);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Create revwalker */
     int git_err = git_revwalk_new(&walker, repo);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     git_err = git_revwalk_push(walker, &head_oid);
     if (git_err < 0) {
@@ -419,9 +415,7 @@ error_t *stats_get_blob_size(
     /* Get object database */
     git_odb *odb = NULL;
     int git_err = git_repository_odb(&odb, repo);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     error_t *err = stats_get_blob_size_with_odb(odb, blob_oid, out);
     git_odb_free(odb);
@@ -443,9 +437,7 @@ error_t *stats_get_blob_size_with_odb(
     size_t size;
     git_object_t type;
     int git_err = git_odb_read_header(&size, &type, odb, blob_oid);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     if (type != GIT_OBJECT_BLOB) {
         return ERROR(ERR_INVALID_ARG, "Object is not a blob");
@@ -576,9 +568,7 @@ const commit_info_t *stats_file_commit_map_get(
     const file_commit_map_t *map,
     const char *file_path
 ) {
-    if (!map || !file_path) {
-        return NULL;
-    }
+    if (!map || !file_path) return NULL;
 
     return (const commit_info_t *) hashmap_get(map->map, file_path);
 }

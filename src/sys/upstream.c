@@ -36,9 +36,7 @@ error_t *upstream_analyze_profile(
     err = gitops_branch_refname(
         local_refname, sizeof(local_refname), profile_name
     );
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     err = gitops_build_refname(
         remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
@@ -98,9 +96,7 @@ error_t *upstream_analyze_profile(
     git_reference_free(local_ref);
     git_reference_free(remote_ref);
 
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     out->ahead = ahead;
     out->behind = behind;
@@ -163,9 +159,7 @@ error_t *upstream_discover_branches(
     /* Get all remote tracking branches */
     string_array_t *remote_branches = NULL;
     error_t *err = gitops_list_remote_tracking(repo, remote_name, &remote_branches);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Get all local branches */
     string_array_t *local_branches = NULL;
@@ -215,9 +209,7 @@ error_t *upstream_ensure_tracking_branch(
      * the ref write whose own message names only one of the two. */
     char *blocker = NULL;
     error_t *err = gitops_branch_blocker(repo, branch_name, &blocker);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
     if (blocker) {
         error_t *conflict = ERROR(
             ERR_CONFLICT,
@@ -233,18 +225,14 @@ error_t *upstream_ensure_tracking_branch(
     err = gitops_resolve_remote_branch_oid(
         repo, remote_name, branch_name, &target_oid
     );
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Create local branch pointing to the same commit */
     char local_refname[DOTTA_REFNAME_MAX];
     err = gitops_branch_refname(
         local_refname, sizeof(local_refname), branch_name
     );
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     return gitops_create_reference(repo, local_refname, &target_oid, false);
 }

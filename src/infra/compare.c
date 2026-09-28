@@ -517,9 +517,7 @@ cleanup:
  * Free a rendering's text and reset it
  */
 void compare_diff_deinit(file_diff_t *diff) {
-    if (!diff) {
-        return;
-    }
+    if (!diff) return;
 
     free(diff->diff_text);
     *diff = (file_diff_t){ 0 };

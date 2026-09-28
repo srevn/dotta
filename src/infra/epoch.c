@@ -77,9 +77,7 @@ static error_t *resolve_epoch_tree(
             EPOCH_REF
         );
     }
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     /* Peel through any annotated-tag layers down to the commit. The ref is created
      * as a direct commit by epoch_init, but peeling defends against future shapes
@@ -138,9 +136,7 @@ static error_t *read_epoch_blob(
 
     git_blob *blob = NULL;
     int git_err = git_blob_lookup(&blob, repo, git_tree_entry_id(entry));
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     git_object_size_t got = git_blob_rawsize(blob);
     if (got != size) {
@@ -174,17 +170,13 @@ static error_t *read_epoch_tree(
     error_t *err = read_epoch_blob(
         repo, tree, EPOCH_SALT_BLOB, KDF_SALT_SIZE, out->salt
     );
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     uint8_t params[KDF_PARAMS_SIZE];
     err = read_epoch_blob(
         repo, tree, EPOCH_PARAMS_BLOB, KDF_PARAMS_SIZE, params
     );
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     kdf_params_load(params, &out->memory_mib, &out->passes);
     err = kdf_validate_params(out->memory_mib, out->passes);
@@ -401,18 +393,12 @@ error_t *epoch_push(
      * repo may not have one yet. */
     bool exists = false;
     error_t *err = gitops_reference_exists(repo, EPOCH_REF, &exists);
-    if (err) {
-        return err;
-    }
-    if (!exists) {
-        return NULL;
-    }
+    if (err) return err;
+    if (!exists) return NULL;
 
     git_remote *remote = NULL;
     int git_err = git_remote_lookup(&remote, repo, remote_name);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     git_push_options push_opts;
     git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
@@ -482,16 +468,12 @@ static error_t *probe_remote_epoch(
         remote, GIT_DIRECTION_FETCH, &callbacks, NULL, NULL
     );
     transfer_op_end(xfer, git_err);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     const git_remote_head **heads = NULL;
     size_t heads_len = 0;
     git_err = git_remote_ls(&heads, &heads_len, remote);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     for (size_t i = 0; i < heads_len; i++) {
         if (heads[i] == NULL || heads[i]->name == NULL
@@ -516,9 +498,7 @@ error_t *epoch_fetch(
 
     git_remote *remote = NULL;
     int git_err = git_remote_lookup(&remote, repo, remote_name);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     /* Look before taking. The advertisement gives a clean ERR_NOT_FOUND surface
      * for "this remote is not a dotta repository", where asking for a ref the
@@ -786,9 +766,7 @@ static error_t *walk_ciphertext(
 ) {
     string_array_t *branches = NULL;
     error_t *err = gitops_list_branches(repo, &branches);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     hashmap_t *seen = hashmap_create(0);
 
@@ -803,9 +781,7 @@ static error_t *walk_ciphertext(
 
         char refname[DOTTA_REFNAME_MAX];
         err = gitops_branch_refname(refname, sizeof(refname), branch);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
 
         int git_err = git_revwalk_new(&walker, repo);
         if (git_err < 0) {
@@ -982,9 +958,7 @@ static error_t *epoch_find_cb(
     };
     bool accepted = false;
     error_t *err = find->accept(find->self, &witness, &accepted);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
     if (accepted) {
         find->accepted = true;
         *stop = true;
@@ -1062,9 +1036,7 @@ static error_t *decide_divergence(
 
         bool any = false;
         error_t *cerr = local_has_ciphertext(repo, NULL, &any);
-        if (cerr) {
-            return cerr;
-        }
+        if (cerr) return cerr;
         *out_decision = any ? EPOCH_RECONCILE_DAMAGED : EPOCH_RECONCILE_ADOPT;
         return NULL;
     }
@@ -1075,9 +1047,7 @@ static error_t *decide_divergence(
 
     bool keyed = false;
     error_t *cerr = local_has_ciphertext(repo, fp, &keyed);
-    if (cerr) {
-        return cerr;
-    }
+    if (cerr) return cerr;
     *out_decision = keyed ? EPOCH_RECONCILE_CONFLICT : EPOCH_RECONCILE_ADOPT;
     return NULL;
 }
@@ -1112,9 +1082,7 @@ static error_t *inspect_remote_epoch(
 
     git_remote *remote = NULL;
     int git_err = git_remote_lookup(&remote, repo, remote_name);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     bool present = false;
     git_oid remote_oid;
@@ -1140,9 +1108,7 @@ static error_t *inspect_remote_epoch(
         *out_status = EPOCH_REMOTE_DIVERGENT;
         return NULL;
     }
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    if (git_err < 0) return error_from_git(git_err);
 
     *out_status = git_oid_equal(&local_oid, &remote_oid)
         ? EPOCH_REMOTE_EQUAL

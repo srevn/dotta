@@ -57,9 +57,7 @@ struct content_cache {
  */
 static void content_secure_free(void *ptr) {
     buffer_t *buf = ptr;
-    if (!buf) {
-        return;
-    }
+    if (!buf) return;
 
     /* Zero sensitive plaintext data before freeing (defense in depth) */
     if (buf->data && buf->size > 0) {
@@ -152,9 +150,7 @@ size_t content_estimated_plaintext_size(size_t blob_size, bool encrypted) {
      * else blob_size is the only honest number. A blob of exactly the overhead
      * is an empty plaintext sealed; only a blob shorter than that — a truncated
      * one, which the cipher refuses — keeps its raw size. */
-    if (!encrypted) {
-        return blob_size;
-    }
+    if (!encrypted) return blob_size;
 
     return blob_size >= CIPHER_OVERHEAD ? blob_size - CIPHER_OVERHEAD
                                         : blob_size;
@@ -515,9 +511,7 @@ error_t *content_compare_blob_to_disk(
 }
 
 void content_cache_free(content_cache_t *cache) {
-    if (!cache) {
-        return;
-    }
+    if (!cache) return;
 
     /* Free all cached buffers with secure cleanup
      * SECURITY: content_secure_free() zeroes plaintext memory before freeing.
@@ -533,9 +527,7 @@ void content_cache_free(content_cache_t *cache) {
 error_t *content_require_encryption(const keymgr *keymgr, const char *storage_path) {
     CHECK_NULL(storage_path);
 
-    if (keymgr) {
-        return NULL;
-    }
+    if (keymgr) return NULL;
 
     return error_wrap(
         ERROR(ERR_LOCKED, "%s", ENCRYPTION_DISABLED),
@@ -726,9 +718,7 @@ error_t *content_capture_link(const char *filesystem_path, content_capture_t *ou
 }
 
 void content_capture_free(content_capture_t *capture) {
-    if (!capture) {
-        return;
-    }
+    if (!capture) return;
 
     /* Content's rule for every buffer it releases, and nothing else: the look,
      * the mode and the verdict are values, and both callers read them past this

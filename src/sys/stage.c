@@ -289,9 +289,7 @@ static error_t *put_entry(git_index *index, const git_index_entry *entry) {
 
     /* The same path already an entry: replaced — the upsert every writer wants. */
     rc = git_index_add(index, entry);
-    if (rc == 0) {
-        return NULL;
-    }
+    if (rc == 0) return NULL;
 
     /* The index class is exact here: the mode is checked above and both collisions
      * refused, so on this path it is raised by the path rule alone. The 1.5 floor
@@ -366,9 +364,7 @@ error_t *stage_admit_subtree(const stage_admission_t *adm, const char *path) {
 }
 
 void stage_admission_free(stage_admission_t *adm) {
-    if (!adm) {
-        return;
-    }
+    if (!adm) return;
 
     git_index_free(adm->index);
     free(adm);

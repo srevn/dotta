@@ -231,9 +231,7 @@ error_t *source_filter_is_excluded(
     int rc = git_ignore_path_is_ignored(&ignored, f->repo, query);
     free(query);
 
-    if (rc < 0) {
-        return error_from_git(rc);
-    }
+    if (rc < 0) return error_from_git(rc);
 
     *out = (ignored == 1);
     return NULL;

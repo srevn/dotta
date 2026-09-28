@@ -288,9 +288,7 @@ cleanup:
  * Free a plan — bucket buffers only; the items belong to the workspace
  */
 void deploy_plan_free(deploy_plan_t *plan) {
-    if (!plan) {
-        return;
-    }
+    if (!plan) return;
 
     ptr_array_deinit(&plan->files.pending);
     ptr_array_deinit(&plan->files.clean);
@@ -607,9 +605,7 @@ static void check_ancestry(
 ) {
     const workspace_squatted_t *above = workspace_squatted_ancestor(ws, path);
 
-    if (!above) {
-        return;
-    }
+    if (!above) return;
 
     /* Deployable: the directory pass converges the ancestor first */
     if (directory_is_deployable(verdicts, above->filesystem_path)) {
@@ -782,9 +778,7 @@ static error_t *resolve_deployment_ownership(
     /* The word as this host's ids, the pair the write applies whatever the run
      * holds */
     error_t *err = metadata_ownership(row->owner, row->group, out_uid, out_gid);
-    if (!err) {
-        return NULL;
-    }
+    if (!err) return NULL;
 
     /* ERR_NOT_FOUND only: a name this system does not know. Fatal under
      * strict_ownership, a configuration or environment mismatch the user asked
@@ -1268,9 +1262,7 @@ static mode_t working_mode(mode_t mode) {
  * pass the directory row's own filesystem_path.
  */
 static void hold_directory(deploy_run_t *run, const char *path, mode_t mode) {
-    if (working_mode(mode) == mode) {
-        return;
-    }
+    if (working_mode(mode) == mode) return;
 
     held_directory_t *held = heap_alloc(sizeof(*held));
     held->path = path;
@@ -1515,9 +1507,7 @@ static error_t *ensure_parents(deploy_run_t *run, const char *path) {
     }
     err = open_landing_directory(run, scratch, occ, &st);
     scratch[len] = saved;
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Every slash past the ancestor ends one missing parent; the final component
      * is the planned path itself. */
@@ -1584,9 +1574,7 @@ static error_t *deploy_file(
 
     /* Land the path: parents first, whichever arm writes it */
     err = ensure_parents(run, file->filesystem_path);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Handle symlinks - these are never encrypted, so handle separately */
     if (file->type == PATH_TYPE_SYMLINK) {
@@ -1900,9 +1888,7 @@ error_t *deploy_execute(
  * The items they all point at belong to the workspace.
  */
 void deploy_preflight_result_free(deploy_preflight_result_t *verdicts) {
-    if (!verdicts) {
-        return;
-    }
+    if (!verdicts) return;
 
     string_array_free(verdicts->warnings);
     free(verdicts->directories.entries);
@@ -1917,9 +1903,7 @@ void deploy_preflight_result_free(deploy_preflight_result_t *verdicts) {
  * owned causes. The verdicts they all point at belong to the preflight result.
  */
 void deploy_result_free(deploy_result_t *result) {
-    if (!result) {
-        return;
-    }
+    if (!result) return;
 
     for (size_t i = 0; i < result->failed.count; i++) {
         error_free(result->failed.entries[i].error);

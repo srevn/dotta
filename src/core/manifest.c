@@ -196,9 +196,7 @@ static void manifest_apply_claim(
     const metadata_item_t *claim,
     arena_t *arena
 ) {
-    if (!claim) {
-        return;
-    }
+    if (!claim) return;
 
     /* owner/group apply to every blob row, links included: the ownership claim
      * is true regardless of what the path became. A name the claim does not make

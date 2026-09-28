@@ -50,9 +50,7 @@ static void print_upstream_state(
     output_t *out,
     const upstream_info_t *info
 ) {
-    if (!info) {
-        return;
-    }
+    if (!info) return;
 
     const char *symbol = upstream_state_symbol(info->state);
     output_color_t color = upstream_state_color(info->state);
@@ -624,9 +622,7 @@ static bool format_time(git_time_t timestamp, char *buf, size_t buf_size) {
     time_t t = (time_t) timestamp;
 
     struct tm tm_info;
-    if (!localtime_r(&t, &tm_info)) {
-        return false;
-    }
+    if (!localtime_r(&t, &tm_info)) return false;
     strftime(buf, buf_size, "%a %b %d %H:%M:%S %Y", &tm_info);
 
     return true;

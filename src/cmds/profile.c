@@ -548,9 +548,7 @@ cleanup:
     transfer_context_free(xfer);
 
     /* If there's an error, return it now */
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Summary (only shown on success) */
     output_gap(out, OUTPUT_NORMAL);

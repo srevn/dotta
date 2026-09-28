@@ -61,9 +61,7 @@ error_t *repo_create_target(
     char *configured = NULL;
     error_t *err = fs_make_absolute(resolved, &configured);
     free(resolved);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     char *path = NULL;
     if (explicit_path == NULL) {
@@ -120,9 +118,7 @@ error_t *repo_declare_store(git_repository *repo) {
     /* The layered handle writes at its write level, the repository's own file. */
     git_config *config = NULL;
     int rc = git_repository_config(&config, repo);
-    if (rc < 0) {
-        return error_from_git(rc);
-    }
+    if (rc < 0) return error_from_git(rc);
 
     rc = git_config_set_bool(config, "dotta.store", 1);
     if (rc < 0) {
@@ -132,9 +128,7 @@ error_t *repo_declare_store(git_repository *repo) {
 
     rc = git_config_set_bool(config, "core.logAllRefUpdates", 1);
     git_config_free(config);
-    if (rc < 0) {
-        return error_from_git(rc);
-    }
+    if (rc < 0) return error_from_git(rc);
 
     return NULL;
 }
@@ -148,9 +142,7 @@ error_t *repo_is_store(git_repository *repo, bool *out) {
 
     git_config *config = NULL;
     int rc = git_repository_config(&config, repo);
-    if (rc < 0) {
-        return error_from_git(rc);
-    }
+    if (rc < 0) return error_from_git(rc);
 
     /* The repository's own level, cut out of the layered handle (the header). */
     git_config *local = NULL;
@@ -159,9 +151,7 @@ error_t *repo_is_store(git_repository *repo, bool *out) {
     if (rc == GIT_ENOTFOUND) {
         return ERROR(ERR_GIT, "Cannot read the repository's config file");
     }
-    if (rc < 0) {
-        return error_from_git(rc);
-    }
+    if (rc < 0) return error_from_git(rc);
 
     int declared = 0;
     rc = git_config_get_bool(&declared, local, "dotta.store");
@@ -170,9 +160,7 @@ error_t *repo_is_store(git_repository *repo, bool *out) {
         *out = false;
         return NULL;
     }
-    if (rc < 0) {
-        return error_from_git(rc);
-    }
+    if (rc < 0) return error_from_git(rc);
 
     *out = declared != 0;
     return NULL;
@@ -199,9 +187,7 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
 
     /* Resolve repository path — resolve_repo_path names its own failure. */
     err = resolve_repo_path(config, &repo_path);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Where the path came from, when it did not come from the default — for the
      * refusals below that send the user to 'dotta init' or to DOTTA_REPO_DIR.

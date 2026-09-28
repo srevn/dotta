@@ -128,9 +128,7 @@ cleanup_plan_t *cleanup_plan_build(
 }
 
 void cleanup_plan_free(cleanup_plan_t *plan) {
-    if (!plan) {
-        return;
-    }
+    if (!plan) return;
 
     ptr_array_deinit(&plan->files);
     ptr_array_deinit(&plan->directories);
@@ -536,9 +534,7 @@ cleanup_preflight_result_t *cleanup_preflight(
 }
 
 void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts) {
-    if (!verdicts) {
-        return;
-    }
+    if (!verdicts) return;
 
     ptr_array_deinit(&verdicts->prunable_files);
     ptr_array_deinit(&verdicts->refused_files);
@@ -709,9 +705,7 @@ cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts) {
 }
 
 void cleanup_result_free(cleanup_result_t *result) {
-    if (!result) {
-        return;
-    }
+    if (!result) return;
 
     for (size_t i = 0; i < result->failed.count; i++) {
         error_free(result->failed.entries[i].error);

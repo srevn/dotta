@@ -88,9 +88,7 @@
 static void apply_print_deploy_skips(
     output_t *out, const deploy_preflight_result_t *verdicts
 ) {
-    if (verdicts->skipped.count == 0) {
-        return;
-    }
+    if (verdicts->skipped.count == 0) return;
 
     output_section(out, OUTPUT_NORMAL, "Skipped paths");
 
@@ -370,9 +368,7 @@ static void apply_print_deploy_preview(
         }
     }
 
-    if (files->count + dirs->count == 0) {
-        return;
-    }
+    if (files->count + dirs->count == 0) return;
 
     output_section(out, OUTPUT_NORMAL, "Deployment");
 
@@ -1434,9 +1430,7 @@ static void apply_print_cleanup_skips(
 ) {
     workspace_items_t skipped = workspace_items(&verdicts->skipped_files);
 
-    if (skipped.count == 0) {
-        return;
-    }
+    if (skipped.count == 0) return;
 
     output_section(out, OUTPUT_NORMAL, "Skipped orphaned files");
 
@@ -1547,9 +1541,7 @@ static void apply_print_cleanup_refused(
     };
     size_t total = kinds[0].count + kinds[1].count;
 
-    if (total == 0) {
-        return;
-    }
+    if (total == 0) return;
 
     output_section(out, OUTPUT_NORMAL, "Orphaned paths needing root");
 

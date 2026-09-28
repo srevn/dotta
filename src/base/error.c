@@ -47,9 +47,7 @@ error_t *error_create(error_code_t code, const char *fmt, ...) {
 }
 
 error_t *error_wrap(error_t *cause, const char *fmt, ...) {
-    if (!cause) {
-        return NULL;
-    }
+    if (!cause) return NULL;
 
     va_list args;
     va_start(args, fmt);
@@ -109,23 +107,17 @@ void error_free(error_t *err) {
 }
 
 const char *error_message(const error_t *err) {
-    if (!err) {
-        return NULL;
-    }
+    if (!err) return NULL;
     return err->message;
 }
 
 error_code_t error_code(const error_t *err) {
-    if (!err) {
-        return OK;
-    }
+    if (!err) return OK;
     return err->code;
 }
 
 const error_t *error_root(const error_t *err) {
-    if (!err) {
-        return NULL;
-    }
+    if (!err) return NULL;
     while (err->cause) {
         err = err->cause;
     }
@@ -133,9 +125,7 @@ const error_t *error_root(const error_t *err) {
 }
 
 void error_print(const error_t *err, FILE *stream) {
-    if (!err) {
-        return;
-    }
+    if (!err) return;
 
     fprintf(
         stream, "Error: %s\n",

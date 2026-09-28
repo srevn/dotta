@@ -189,9 +189,7 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
  * Free environment array
  */
 static void free_hook_env(char **env, size_t count) {
-    if (!env) {
-        return;
-    }
+    if (!env) return;
 
     for (size_t i = 0; i < count; i++) {
         free(env[i]);

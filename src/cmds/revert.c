@@ -651,9 +651,7 @@ static metadata_item_t *claim_to_restore(
          * — revert restores history, it does not reinterpret it; whatever the
          * entry carries, the view adjudicates against the tree. No entry → the
          * write's retire arm takes the standing item. */
-        if (!recorded) {
-            return NULL;
-        }
+        if (!recorded) return NULL;
         return metadata_item_clone(recorded, restored_name);
     }
 

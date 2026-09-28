@@ -36,9 +36,7 @@ static void buffer_grow(buffer_t *buf, size_t len) {
     }
 
     size_t needed = buf->size + len + 1;
-    if (needed <= buf->capacity) {
-        return;
-    }
+    if (needed <= buf->capacity) return;
 
     /* Growth strategy: double from current or MIN_CAPACITY, whichever is larger.
      * A reserve leaves behind an exact capacity that is no power of anything;
@@ -67,9 +65,7 @@ void buffer_reserve(buffer_t *buf, size_t alloc) {
     }
 
     size_t needed = alloc + 1;
-    if (needed <= buf->capacity) {
-        return;
-    }
+    if (needed <= buf->capacity) return;
 
     buf->data = heap_realloc(buf->data, needed);
     buf->capacity = needed;

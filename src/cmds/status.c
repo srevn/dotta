@@ -337,9 +337,7 @@ static void status_print_workspace(
     /* A load holding none is clean (workspace_diverged), and says so only when
      * asked. One holding any opens the section whatever the filter reaches: a
      * filtered profile that reads Clean still counts the divergence it hides. */
-    if (all_items.count == 0 && !output_is_verbose(out)) {
-        return;
-    }
+    if (all_items.count == 0 && !output_is_verbose(out)) return;
 
     /* The status line, one fold whatever the filter: the diverged items the filter
      * reaches, those of them dotta could not verify, and those it hides. A scope

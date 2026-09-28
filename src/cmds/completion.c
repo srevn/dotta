@@ -327,9 +327,7 @@ static size_t commits_walk(
         git_object *obj = NULL;
         int git_err = git_reference_peel(&obj, ref, GIT_OBJECT_COMMIT);
         git_reference_free(ref);
-        if (git_err != 0) {
-            continue;
-        }
+        if (git_err != 0) continue;
 
         git_revwalk *walker = NULL;
         if (git_revwalk_new(&walker, repo) != 0) {

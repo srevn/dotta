@@ -571,9 +571,7 @@ static workspace_state_t classify_absent(
     const manifest_row_t *row,
     const state_record_t *record
 ) {
-    if (manifest_is_derived(row)) {
-        return WORKSPACE_STATE_UNDEPLOYED;
-    }
+    if (manifest_is_derived(row)) return WORKSPACE_STATE_UNDEPLOYED;
 
     return record && record->kind == workspace_type_occupant(row->type)
            ? WORKSPACE_STATE_DELETED
@@ -1311,9 +1309,7 @@ typedef struct {
  */
 static void authority_cache_free(void *value) {
     authority_cache_t *cached = value;
-    if (!cached) {
-        return;
-    }
+    if (!cached) return;
     metadata_free(cached->metadata);   /* NULL-safe */
     git_tree_free(cached->tree);       /* NULL-safe */
     free(cached);
@@ -2883,9 +2879,7 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
      * — the route's reading for the diverged items included (workspace_list) —
      * and the record keeps the profile dotta actually deployed under, which is
      * what a record is for. */
-    if (!row->tracked) {
-        return;
-    }
+    if (!row->tracked) return;
 
     /* The claim, by the one rule the file analysis asks too
      * (workspace_analyze_claim): the look stands at the row's kind, since absence
@@ -3227,9 +3221,7 @@ const workspace_item_t *workspace_find(
     const workspace_t *ws,
     const char *filesystem_path
 ) {
-    if (!ws || !filesystem_path) {
-        return NULL;
-    }
+    if (!ws || !filesystem_path) return NULL;
 
     /* An active path's item, the clean ones too; else an orphan's, of the prefix
      * the load analyzed — every orphan or none, the bound the diverged items
@@ -3247,9 +3239,7 @@ const workspace_squatted_t *workspace_squatted_ancestor(
     const workspace_t *ws,
     const char *path
 ) {
-    if (!ws || !path) {
-        return NULL;
-    }
+    if (!ws || !path) return NULL;
 
     /* The view-only face of the one scan (workspace_squatter_above), lent whole:
      * a record's memory reaches the orphans alone, which carry the fact themselves

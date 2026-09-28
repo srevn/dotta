@@ -281,36 +281,24 @@ const mount_root_t *mount_root_of(
     return NULL;
 }
 
-error_t *mount_resolve(
-    const mount_table_t *table, const char *profile, const char *storage_path,
-    arena_t *arena, const char **out_filesystem_path
+const char *mount_resolve(
+    arena_t *arena, const mount_table_t *table, const char *profile,
+    const char *storage_path
 ) {
+    CHECK_NULL(arena);
     CHECK_NULL(table);
     CHECK_NULL(storage_path);
-    CHECK_NULL(arena);
-    CHECK_NULL(out_filesystem_path);
 
-    *out_filesystem_path = NULL;
-
-    /* Storage paths arriving here are validated at their write boundary —
-     * metadata.json parse (metadata.c), Git tree commit (add.c, update.c validate
-     * before commit), state DB INSERT (validated upstream), or an explicit
-     * CLI-input check at the calling site (add.c). The split below tolerates
-     * any non-validated leading-label input by surfacing ERR_INTERNAL — but the
-     * invariant is upstream, not here. */
+    /* Validated where it was read (the header), so a path under no label is the
+     * caller's bug. */
     label_split_t split = label_split(storage_path);
-    if (!split.tail) {
-        return ERROR(
-            ERR_INTERNAL, "mount_resolve received non-storage path '%s'",
-            storage_path
-        );
-    }
+    CHECK_ARG(split.tail != NULL, "storage_path stands under no label");
 
     /* The find, whose absence is this verb's: only CUSTOM can miss — HOME and
      * the sentinel are unconditional (mount_table_build adds them every time) —
      * and a CUSTOM miss means the profile has no --target on this machine, e.g.
      * a clone before the user has configured one. The answer is that absence
-     * itself; malformed-input failures surfaced as ERR_INTERNAL above. */
+     * itself. */
     const mount_root_t *root = mount_root_of(table, profile, split.label);
     if (!root) return NULL;
 
@@ -325,9 +313,7 @@ error_t *mount_resolve(
      * No prefix ends in a slash — the root directory's is "", HOME is folded by
      * the identity (sys/identity), and a target is absolute and folded, the build's
      * own refusal (mount_table_build) — so the join is unconditional. */
-    *out_filesystem_path = *split.tail
+    return *split.tail
         ? arena_str_format(arena, "%s/%s", join_prefix(root), split.tail)
         : arena_strdup(arena, root->filesystem_path);
-
-    return NULL;
 }

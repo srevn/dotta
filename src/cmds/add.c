@@ -1406,12 +1406,9 @@ static error_t *add_write_record(
      * is this profile's word about its own claim, never about the path — and an
      * unbound claim names nothing on this machine to retire. */
     for (size_t i = 0; i < retired->count; i++) {
-        const char *filesystem_path = NULL;
-
-        err = mount_resolve(
-            mounts, profile, retired->entries[i], ctx->arena, &filesystem_path
+        const char *filesystem_path = mount_resolve(
+            ctx->arena, mounts, profile, retired->entries[i]
         );
-        if (err) goto cleanup;
         if (!filesystem_path || manifest_lookup(manifest, filesystem_path)) continue;
 
         err = state_retire(state, filesystem_path);
@@ -1750,11 +1747,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * or the flag's. A custom/ path with no binding names nothing on
              * this machine, and the way to give it one is the flag. The table's
              * answer is absolute and the arena's already. */
-            err = mount_resolve(mounts, opts->profile, typed, ctx->arena, &filesystem_path);
-            if (err) {
-                err = error_wrap(err, "Failed to convert storage path '%s'", file);
-                goto cleanup;
-            }
+            filesystem_path = mount_resolve(ctx->arena, mounts, opts->profile, typed);
             if (!filesystem_path) {
                 err = ERROR(
                     ERR_INVALID_ARG,

@@ -399,36 +399,37 @@ const mount_root_t *mount_root_of(
  *
  * Absence is the find's own, handed on unchanged: mount_root_of answers no root
  * of the name's label for this asker, so the two have one producer and one reading
- * between them. `*out_filesystem_path` is then NULL — the claim is `custom/`
- * and the profile has no target on this machine, a clone before the target is
- * chosen, a sync that pulled another machine's claims — which is how every lookup
- * in the tree answers an absence (manifest_lookup, state_target, hashmap_get),
- * and the callers read it as the fact it is: the manifest's claim routine skips
- * the claim and records it on the view (manifest_unbound, the health channel);
- * user-facing contexts fall back to a display spelling (remove.c) or let a hint
- * stand in (ignore.c). HOME and ROOT lookups always answer — those entries are
- * unconditional in every well-formed mount table. `*out_filesystem_path` is NULL
- * on entry, so it is NULL after an error too.
+ * between them. The answer is then NULL — the claim is `custom/` and the profile
+ * has no target on this machine, a clone before the target is chosen, a sync
+ * that pulled another machine's claims — which is how every lookup in the tree
+ * answers an absence (manifest_lookup, state_target, hashmap_get), and the callers
+ * read it as the fact it is: the manifest's claim routine skips the claim and
+ * records it on the view (manifest_unbound, the health channel); user-facing
+ * contexts fall back to a display spelling (remove.c) or let a hint stand in
+ * (ignore.c). HOME and ROOT lookups always answer — those entries are unconditional
+ * in every well-formed mount table.
  *
- * Errors:
- *   - ERR_INTERNAL when `storage_path` lacks a known label (the input boundary
- *     is supposed to validate before reaching here; this guards against contract
- *     drift).
+ * Nothing else can happen, so nothing here fails. A storage path is validated
+ * where it is read, not only where it was written (infra/label.h
+ * label_validate_storage): a sheet's keys at its parse (core/metadata.c
+ * metadata_from_json), a tree's entries at their walk (core/profiles.c
+ * tree_entry_content_path, core/manifest.c manifest_claim_blob), an argument at
+ * its resolver (infra/path.h path_input_resolve), and the state's column by its
+ * own constraint (core/state.c storage_spelling). One under no label is a caller's
+ * bug, and dies.
  *
+ * @param arena        Arena the answer is spelled in (must not be NULL)
  * @param table        Mount table (must not be NULL)
  * @param profile      Owning profile (may be NULL for home/ and root/ paths)
  * @param storage_path Storage-format path (must not be NULL, validated)
- * @param arena        Arena that owns the answer
- * @param out_filesystem_path Arena-borrowed filesystem path; NULL for a custom/
- *                            claim the profile cannot place here (must not be NULL)
- * @return Error or NULL on success
+ * @return The filesystem path, in `arena`; NULL for a custom/ claim the profile
+ *         cannot place here
  */
-error_t *mount_resolve(
+const char *mount_resolve(
+    arena_t *arena,
     const mount_table_t *table,
     const char *profile,
-    const char *storage_path,
-    arena_t *arena,
-    const char **out_filesystem_path
+    const char *storage_path
 );
 
 #endif /* DOTTA_MOUNT_H */

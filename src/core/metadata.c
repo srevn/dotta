@@ -737,10 +737,7 @@ static error_t *capture_ancestor(
      * the cross-check this shape deleted used to assert. One producer places a
      * name (infra/mount.h mount_resolve); the cost is one table scan per rung
      * per leaf, bounded by the profile count. */
-    const char *filesystem_path = NULL;
-    RETURN_IF_ERROR(
-        mount_resolve(mounts, profile, storage_path, arena, &filesystem_path)
-    );
+    const char *filesystem_path = mount_resolve(arena, mounts, profile, storage_path);
 
     /* A rung this machine cannot place — an unbound custom/ name — has no answer
      * to give, the same silence as a rung nothing stands at. */

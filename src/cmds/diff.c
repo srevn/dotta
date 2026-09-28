@@ -1025,15 +1025,13 @@ cleanup:
  * The filter, and what a delta's path is resolved through — the profile the range
  * belongs to and this machine's table, under which a past tree's names are placed
  * where the binding stands now, as the commit-to-workspace arm places them
- * (manifest_build_tree). A resolve that fails cancels the diff and is kept here,
- * the error libgit2's wrapped cancel is replaced with.
+ * (manifest_build_tree).
  */
 typedef struct {
     const pathspec_t *filter;       /* never NULL: the callback is installed under a filter alone */
     const mount_table_t *mounts;
     const char *profile;
     arena_t *arena;                 /* the paths' lifetime: the command's */
-    error_t *err;                   /* a resolve that failed; NULL until one does */
 } delta_select_t;
 
 /**
@@ -1041,15 +1039,15 @@ typedef struct {
  *
  * libgit2's notify callback, called for every delta before it is inserted into
  * the diff (an unmodified pair never reaches it): 0 keeps the delta, a positive
- * return drops it, a negative one cancels the diff. The one matcher every other
- * filter site reads decides here too, by both of the delta's names — its storage
- * path, and the filesystem path the profile's binding gives it, NULL for a claim
- * this machine cannot place, which a storage-shaped entry alone then selects —
- * so a commit range and the workspace read one filter alike: a filesystem filter
- * selects the deltas standing beneath it whatever label they carry, a pattern
- * is anchored where gitignore anchors it, and `*` stops at a slash. Handing libgit2
- * the entries as its own pathspec read them by fnmatch instead, where
- * `home/<star>.lua` reached `home/dir/b.lua`.
+ * return drops it. The one matcher every other filter site reads decides here
+ * too, by both of the delta's names — its storage path, and the filesystem path
+ * the profile's binding gives it, NULL for a claim this machine cannot place,
+ * which a storage-shaped entry alone then selects — so a commit range and the
+ * workspace read one filter alike: a filesystem filter selects the deltas standing
+ * beneath it whatever label they carry, a pattern is anchored where gitignore
+ * anchors it, and `*` stops at a slash. Handing libgit2 the entries as its own
+ * pathspec read them by fnmatch instead, where `home/<star>.lua` reached
+ * `home/dir/b.lua`.
  *
  * Installed only when a filter was given: the diff under none holds every delta,
  * the repository's own files included, and prints as it always has. Under a filter
@@ -1063,7 +1061,7 @@ typedef struct {
  * @param delta    The delta about to be inserted
  * @param matched  libgit2's own pathspec match (none is set; unread)
  * @param payload  The selection (delta_select_t)
- * @return 0 to keep the delta, 1 to drop it, -1 to cancel the diff
+ * @return 0 to keep the delta, 1 to drop it
  */
 static int select_delta(
     const git_diff *diff, const git_diff_delta *delta, const char *matched,
@@ -1077,11 +1075,7 @@ static int select_delta(
 
     if (!label_prefixes(path)) return 1;
 
-    const char *filesystem_path = NULL;
-    sel->err = mount_resolve(
-        sel->mounts, sel->profile, path, sel->arena, &filesystem_path
-    );
-    if (sel->err) return -1;
+    const char *filesystem_path = mount_resolve(sel->arena, sel->mounts, sel->profile, path);
 
     return pathspec_matches(
         sel->filter, filesystem_path, path, PATH_KIND_FILE
@@ -1199,8 +1193,7 @@ static error_t *diff_commits(
 
     /* Generate the diff, the filter selecting each delta on its way in. The
      * selection is borrowed for the call: libgit2 reads the payload only while
-     * generating. A resolve that failed cancelled the diff, and its own error
-     * replaces the cancel libgit2 reports. */
+     * generating. */
     delta_select_t selection = {
         .filter = file_filter, .mounts = mounts, .profile = profile1_name,
         .arena  = arena
@@ -1214,10 +1207,6 @@ static error_t *diff_commits(
 
     err = gitops_diff_trees(repo, tree1, tree2, &diff_opts, &diff);
     if (err) {
-        if (selection.err) {
-            error_free(err);
-            err = selection.err;
-        }
         err = error_wrap(err, "Failed to generate diff");
         goto cleanup;
     }

@@ -844,19 +844,11 @@ static int manifest_claim_blob(
      * on the view (manifest_unbound) so the health consumers surface it; it is
      * never dropped in silence. Record-safe by construction: a record can only
      * exist where a binding existed at write time, so no record ever joins a
-     * skipped claim and no orphan can be manufactured here. A genuine error (a
-     * malformed path) propagates via the err branch. */
-    const char *filesystem_path = NULL;
-    err = mount_resolve(
-        ctx->mounts, ctx->profile, storage_path, ctx->arena, &filesystem_path
+     * skipped claim and no orphan can be manufactured here. The shape was checked
+     * above, so the label is one. */
+    const char *filesystem_path = mount_resolve(
+        ctx->arena, ctx->mounts, ctx->profile, storage_path
     );
-    if (err) {
-        ctx->error = error_wrap(
-            err, "Failed to convert path '%s' from profile '%s'",
-            storage_path, ctx->profile
-        );
-        return -1;
-    }
     if (!filesystem_path) {
         manifest_note_unbound(
             ctx->manifest, ctx->profile, storage_path, PATH_KIND_FILE, ctx->arena
@@ -1048,18 +1040,10 @@ static error_t *manifest_contribute(
          * free of two rows under one name. */
         if (hashmap_has(contradicted, item->key)) continue;
 
-        /* Resolve before placing so the error path places nothing. */
-        const char *filesystem_path = NULL;
-        err = mount_resolve(
-            manifest->mounts, c->profile, item->key, arena, &filesystem_path
+        /* Resolve before placing: a name this machine cannot place places nothing. */
+        const char *filesystem_path = mount_resolve(
+            arena, manifest->mounts, c->profile, item->key
         );
-        if (err) {
-            err = error_wrap(
-                err, "Failed to convert path '%s' from profile '%s'",
-                item->key, c->profile
-            );
-            break;
-        }
         if (!filesystem_path) {
             /* The blob side's degrade contract, DIRECTORY kind: recorded, not
              * placed. The item's key is the metadata's, freed with it — the note
@@ -1118,7 +1102,6 @@ static error_t *manifest_contribute(
             ptr_array_push(&contenders, row);
         }
     }
-    if (err) goto cleanup;
 
     /* Every path this profile named twice, decided once. */
     err = manifest_settle(manifest, c, &contenders, arena);

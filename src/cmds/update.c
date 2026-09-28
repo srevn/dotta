@@ -951,12 +951,9 @@ static error_t *update_write_record(
         const string_array_t *let_go[] = { &commit->pruned, &commit->retired };
         for (size_t b = 0; b < sizeof(let_go) / sizeof(let_go[0]); b++) {
             for (size_t i = 0; i < let_go[b]->count; i++) {
-                const char *filesystem_path = NULL;
-                err = mount_resolve(
-                    mounts, commit->profile, let_go[b]->entries[i], ctx->arena,
-                    &filesystem_path
+                const char *filesystem_path = mount_resolve(
+                    ctx->arena, mounts, commit->profile, let_go[b]->entries[i]
                 );
-                if (err) goto cleanup;
                 /* An unbound claim resolves nowhere on this machine: no filesystem
                  * path, so nothing to look up and no record of this run's to
                  * retire. Whatever record a once-bound era may have left is an

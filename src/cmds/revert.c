@@ -843,15 +843,9 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * only key there is: the commit is asked for it alone, nothing can be shown
      * to collide with it, and two such names are both manifest_unbound — the
      * namespace's own hole, and not a revert-shaped one. */
-    const char *filesystem_path = NULL;
-    if (arg.key == PATH_KEY_FILESYSTEM) {
-        filesystem_path = arg.filesystem_path;
-    } else {
-        err = mount_resolve(
-            mounts, profile, arg.storage_path, ctx->arena, &filesystem_path
-        );
-        if (err) goto cleanup;
-    }
+    const char *filesystem_path = arg.key == PATH_KEY_FILESYSTEM
+        ? arg.filesystem_path
+        : mount_resolve(ctx->arena, mounts, profile, arg.storage_path);
 
     /* Step 8: the entry the commit holds, and the name it stands under — asked
      * in the key the user named, of the commit alone. It is the whole authority

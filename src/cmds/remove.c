@@ -217,19 +217,12 @@ static error_t *remove_paths_candidates(
     }
 
     /* The entries the metadata step pruned: nobody asked for them, so the flag
-     * does not speak to them. A resolve that fails here skips the path — Git
-     * stands, and an unsettled record is the orphan the next apply reads and
-     * releases. */
+     * does not speak to them. One this machine cannot place stands nowhere, and
+     * no record of this run's can be there. */
     for (size_t i = 0; i < pruned_dirs->count; i++) {
-        const char *filesystem_path = NULL;
-        error_t *resolve_err = mount_resolve(
-            ctx->run.mounts, profile, pruned_dirs->entries[i], ctx->arena,
-            &filesystem_path
+        const char *filesystem_path = mount_resolve(
+            ctx->arena, ctx->run.mounts, profile, pruned_dirs->entries[i]
         );
-        if (resolve_err) {
-            error_free(resolve_err);
-            continue;
-        }
         if (!filesystem_path) continue;
         const state_record_t *record = state_find_record(records, record_count, filesystem_path);
         if (!record || strcmp(record->profile, profile) != 0) continue;
@@ -412,14 +405,12 @@ static error_t *remove_resolve(
      * it. A custom/ claim under a profile with no target here stands nowhere
      * and gets none — a miss the filesystem arm below reads as "not this claim".
      * Every path here is a validated storage path (the tree walk's own gate and
-     * the sheet's parse both refuse anything else), so the only failure left is
-     * a broken contract, and that is nobody's to swallow. */
+     * the sheet's parse both refuse anything else), so the resolve has no failure
+     * left to answer. */
     for (size_t j = 0; j < claim_count; j++) {
-        err = mount_resolve(
-            mounts, profile, claims[j].storage_path, ctx->arena,
-            &claims[j].filesystem_path
+        claims[j].filesystem_path = mount_resolve(
+            ctx->arena, mounts, profile, claims[j].storage_path
         );
-        if (err) goto cleanup;
     }
 
     /* Match each argument, marking the claims it takes */
@@ -1489,17 +1480,14 @@ static error_t *remove_profile(
      *
      * Borrows the run's mount table. HOME and ROOT are always present, so home/
      * and root/ paths resolve unconditionally. CUSTOM paths resolve only when
-     * the profile is enabled with a binding; otherwise, and on a resolve that
-     * fails (malformed input — non-fatal here), the loop substitutes the storage
-     * path so the hook sees a meaningful name. */
+     * the profile is enabled with a binding; otherwise the loop substitutes the
+     * storage path so the hook sees a meaningful name. */
     string_array_t hook_filesystem;
     string_array_init(&hook_filesystem, ctx->arena);
     for (size_t i = 0; i < hook_storage.count; i++) {
-        const char *filesystem_path = NULL;
-        error_t *conv_err = mount_resolve(
-            mounts, opts->profile, hook_storage.entries[i], ctx->arena, &filesystem_path
+        const char *filesystem_path = mount_resolve(
+            ctx->arena, mounts, opts->profile, hook_storage.entries[i]
         );
-        if (conv_err) error_free(conv_err);
         string_array_push(
             &hook_filesystem, filesystem_path ? filesystem_path : hook_storage.entries[i]
         );

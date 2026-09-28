@@ -987,8 +987,7 @@ static error_t *test_path_ignore(
         if (arg.key == PATH_KEY_STORAGE) {
             /* Where this asker's target puts the name, and what stands there: a
              * custom/ name places only under a profile with a target. */
-            err = mount_resolve(mounts, asker, arg.storage_path, ctx->arena, &filesystem_path);
-            if (err) goto cleanup;
+            filesystem_path = mount_resolve(ctx->arena, mounts, asker, arg.storage_path);
             is_directory = stands_as_directory(
                 who, test_path, filesystem_path, trailing_slash, out
             );

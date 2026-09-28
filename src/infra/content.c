@@ -57,7 +57,6 @@ struct content_cache {
  */
 static void content_secure_free(void *ptr) {
     buffer_t *buf = ptr;
-    if (!buf) return;
 
     /* Zero sensitive plaintext data before freeing (defense in depth) */
     if (buf->data && buf->size > 0) {

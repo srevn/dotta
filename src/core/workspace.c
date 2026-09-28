@@ -1300,7 +1300,6 @@ typedef struct {
  */
 static void authority_cache_free(void *value) {
     authority_cache_t *cached = value;
-    if (!cached) return;
     metadata_free(cached->metadata);   /* NULL-safe */
     git_tree_free(cached->tree);       /* NULL-safe */
     free(cached);

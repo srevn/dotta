@@ -68,8 +68,9 @@ void credential_url_deinit(credential_url_t *u);
  * Try SSH-based credential acquisition (agent first, then on-disk key).
  *
  * Stateless: each call attempts the SSH agent once and falls back to a file-system
- * key search. Encrypted on-disk keys without an agent are not supported (see
- * project notes on F6).
+ * key search. Encrypted on-disk keys without an agent are not supported: the
+ * key is offered with no passphrase, so the user loads it with ssh-add or the
+ * helper path answers instead (sys/credentials.c).
  *
  * @param out               libgit2 credential output (required)
  * @param url               Remote URL — used to default the SSH user to

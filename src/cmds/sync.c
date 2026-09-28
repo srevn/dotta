@@ -767,7 +767,7 @@ static error_t handle_diverged(
                 }
             }
             result->outcome = SYNC_OUTCOME_DIVERGED;
-            break;
+            return NULL;
         }
 
         /* Non-WARN strategies own their outcome inside the inner handler. */
@@ -790,18 +790,18 @@ static error_t handle_diverged(
                 repo, remote_name, result, out, confirm_destructive,
                 xfer, no_push
             );
-            break;
+            return NULL;
         }
 
         case SYNC_STRATEGY_THEIRS: {
             handle_diverged_theirs(
                 repo, remote_name, result, out, confirm_destructive
             );
-            break;
+            return NULL;
         }
     }
 
-    return NULL;
+    CHECK_ARG(false, "a divergence strategy no enumerator names");
 }
 
 /**

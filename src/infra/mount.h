@@ -240,11 +240,10 @@ typedef struct {
  * own array owes the same.
  *
  * Lifetime:
- *   - Output is allocated entirely from `arena`, every string included: the table
- *     borrows nothing from `mounts`, so it is a value for the arena's lifetime
- *     — readable after the rows it was built from have moved.
- *   - The home is copied into the arena at build time, immune to later setenv
- *     mutations.
+ *   - Output is allocated from `arena`, every string but HOME's, which is the
+ *     identity's — the process's, immutable (sys/identity.h): the table borrows
+ *     nothing from `mounts`, so it is a value for the arena's lifetime — readable
+ *     after the rows it was built from have moved.
  *
  * Errors:
  *   - ERR_INVALID_ARG when a mount names no profile, or names a target that is

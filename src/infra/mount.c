@@ -251,11 +251,10 @@ error_t mount_table_build(
 
     /* The invoker's HOME as the identity spells it (sys/identity), "/" included
      * — a container's bare uid, which then stands at the sentinel's own directory
-     * and loses the naming tie to it. */
-    const identity_t *id = identity();
-    const char *home = arena_strdup(arena, id->home);
+     * and loses the naming tie to it. Borrowed: the identity's is the process's,
+     * immutable, and outlives every table. */
     roots[n++] = (mount_root_t){
-        .label = LABEL_HOME, .filesystem_path = home, .profile = NULL,
+        .label = LABEL_HOME, .filesystem_path = identity()->home, .profile = NULL,
     };
     /* The sentinel: every absolute path stands under the root directory at depth
      * zero, so the fallback needs no case of its own anywhere. A literal, not

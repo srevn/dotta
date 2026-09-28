@@ -1435,7 +1435,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(commit));
         snprintf(commit_suffix, sizeof(commit_suffix), " @ %s", oid_str);
     } else {
-        err = gitops_load_branch_tree(repo, opts->profile, &tree, NULL);
+        err = gitops_load_branch_tree(repo, opts->profile, &tree);
         if (err) {
             err = error_wrap(
                 err, "Failed to load tree for profile '%s'", opts->profile

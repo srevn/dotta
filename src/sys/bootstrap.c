@@ -37,7 +37,7 @@ static error_t load_bootstrap_entry(
     const git_tree_entry **out_entry
 ) {
     git_tree *tree = NULL;
-    error_t err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+    error_t err = gitops_load_branch_tree(repo, profile, &tree);
     if (err) {
         return error_wrap(
             err, "Failed to load tree for profile '%s'", profile
@@ -102,7 +102,7 @@ bool bootstrap_exists(git_repository *repo, const char *profile) {
     if (!exists) return false;
 
     git_tree *tree = NULL;
-    err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+    err = gitops_load_branch_tree(repo, profile, &tree);
     if (err) {
         return false;
     }

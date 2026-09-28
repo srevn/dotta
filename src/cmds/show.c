@@ -232,7 +232,7 @@ static error_t show_source(
     *out_commit = NULL;
 
     if (!commit_ref) {
-        error_t err = gitops_load_branch_tree(repo, profile, out_tree, NULL);
+        error_t err = gitops_load_branch_tree(repo, profile, out_tree);
         if (err) {
             return error_wrap(err, "Failed to load tree for profile '%s'", profile);
         }

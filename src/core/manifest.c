@@ -1262,7 +1262,7 @@ error_t manifest_build(
 
         /* Load tree for this profile (scoped to iteration). */
         git_tree *tree = NULL;
-        err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+        err = gitops_load_branch_tree(repo, profile, &tree);
         if (err) {
             return error_wrap(
                 err, "Failed to load tree for profile '%s'", profile
@@ -1344,7 +1344,7 @@ error_t manifest_build_branch(
     *out = NULL;
 
     git_tree *tree = NULL;
-    error_t err = gitops_load_branch_tree(repo, branch, &tree, NULL);
+    error_t err = gitops_load_branch_tree(repo, branch, &tree);
     if (err) {
         return error_wrap(err, "Failed to load tree for profile '%s'", branch);
     }

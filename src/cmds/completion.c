@@ -263,7 +263,7 @@ void completion_refspecs(
         const char *branch = branches.entries[i];
 
         git_tree *tree = NULL;
-        error_t load_err = gitops_load_branch_tree(repo, branch, &tree, NULL);
+        error_t load_err = gitops_load_branch_tree(repo, branch, &tree);
         if (load_err) continue;  /* not a branch, or unloadable: silent */
 
         walk.branch = branch;

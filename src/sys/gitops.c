@@ -473,17 +473,14 @@ error_t gitops_delete_branch(git_repository *repo, const char *name) {
  */
 
 /**
- * Resolve a Git reference to its tree, optionally capturing the peeled OID
+ * Resolve a Git reference to its tree
  *
- * Shared implementation for gitops_load_tree and gitops_load_branch_tree. The
- * OID captured (when out_oid is non-NULL) is the peeled object's OID: the commit
- * OID for commit-backed branches, the tree OID for orphan-tree branches. This
- * matches the OID that the old profile_load captured via the same
- * git_reference_peel(ANY) path, ensuring staleness detection consistency.
+ * Shared implementation for gitops_load_tree and gitops_load_branch_tree: the
+ * reference peeled to whatever it names — a commit's tree for a commit-backed
+ * branch, the tree itself for an orphan-tree one.
  */
 static error_t resolve_ref_to_tree(
-    git_repository *repo, const char *ref_name, git_tree **out_tree,
-    git_oid *out_oid
+    git_repository *repo, const char *ref_name, git_tree **out_tree
 ) {
     /* Get reference */
     git_reference *ref = NULL;
@@ -504,11 +501,6 @@ static error_t resolve_ref_to_tree(
             error_from_git(err), "Failed to peel reference '%s'",
             ref_name
         );
-    }
-
-    /* Capture peeled OID before consuming the object */
-    if (out_oid) {
-        git_oid_cpy(out_oid, git_object_id(obj));
     }
 
     /* Handle different object types */
@@ -544,12 +536,11 @@ error_t gitops_load_tree(
     CHECK_NULL(out);
     CHECK_ARG(ref_name[0] != '\0', "Reference name cannot be empty");
 
-    return resolve_ref_to_tree(repo, ref_name, out, NULL);
+    return resolve_ref_to_tree(repo, ref_name, out);
 }
 
 error_t gitops_load_branch_tree(
-    git_repository *repo, const char *branch_name, git_tree **out_tree,
-    git_oid *out_oid
+    git_repository *repo, const char *branch_name, git_tree **out_tree
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(branch_name);
@@ -561,7 +552,7 @@ error_t gitops_load_branch_tree(
     );
     if (err) return err;
 
-    return resolve_ref_to_tree(repo, refname, out_tree, out_oid);
+    return resolve_ref_to_tree(repo, refname, out_tree);
 }
 
 error_t gitops_tree_walk(

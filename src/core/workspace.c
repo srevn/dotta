@@ -1398,7 +1398,7 @@ static orphan_authority_t compute_orphan_authority(
          * for the pass. Stored on success alone, so a failed load is retried by
          * the next row instead of condemning the whole profile. */
         git_tree *tree = NULL;
-        error_t err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+        error_t err = gitops_load_branch_tree(repo, profile, &tree);
         if (err) {
             return ORPHAN_AUTHORITY_UNVERIFIED;
         }

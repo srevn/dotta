@@ -299,24 +299,20 @@ error_t gitops_delete_branch(git_repository *repo, const char *name);
 error_t gitops_load_tree(git_repository *repo, const char *ref_name, git_tree **out);
 
 /**
- * Load tree from a branch by name, optionally capturing the peeled HEAD OID
+ * Load tree from a branch by name
  *
  * Convenience wrapper: builds "refs/heads/<branch_name>" and resolves to tree.
- * When out_oid is non-NULL, atomically captures the peeled OID from the same
- * git_reference_peel that produces the tree — no separate ref lookup needed.
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
  * @param out_tree Tree object (must not be NULL, caller must free with
  *                 git_tree_free)
- * @param out_oid Peeled HEAD OID (can be NULL to skip)
  * @return Error or NULL on success
  */
 error_t gitops_load_branch_tree(
     git_repository *repo,
     const char *branch_name,
-    git_tree **out_tree,
-    git_oid *out_oid
+    git_tree **out_tree
 );
 
 /**

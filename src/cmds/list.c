@@ -346,7 +346,7 @@ static error_t list_files(
     if (err) return err;
 
     git_tree *tree = NULL;
-    err = gitops_load_branch_tree(repo, opts->profile, &tree, NULL);
+    err = gitops_load_branch_tree(repo, opts->profile, &tree);
     if (err) {
         return error_wrap(
             err, "Failed to list files in profile '%s'", opts->profile
@@ -650,7 +650,7 @@ static error_t list_file_history(
          * pre-check below reads (core/profiles.h profile_claim_name). */
         RETURN_IF_ERROR(profile_require(repo, profile));
 
-        err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+        err = gitops_load_branch_tree(repo, profile, &tree);
         if (err) {
             return error_wrap(err, "Failed to load tree for profile '%s'", profile);
         }
@@ -720,7 +720,7 @@ static error_t list_file_history(
         profile = row->profile;
         storage_path = row->storage_path;
 
-        err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+        err = gitops_load_branch_tree(repo, profile, &tree);
         if (err) {
             return error_wrap(err, "Failed to load tree for profile '%s'", profile);
         }

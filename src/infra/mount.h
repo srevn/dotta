@@ -53,7 +53,7 @@
  * (infra/path.h). And where acting on a string alone would duplicate or destroy:
  * the scan's roots and its leaf probe, and cleanup's guard (core/workspace.c).
  *
- * Every root's spelling is absolute and folded (sys/filesystem.h fs_is_folded),
+ * Every root's spelling is absolute and folded (base/string.h str_path_folded),
  * each established where it is made: the sentinel's is the literal "/", HOME's
  * is the identity's (sys/identity, normalized at identity_init), and a row's
  * target is normalized and validated where it is written (the binders,
@@ -130,7 +130,7 @@
  * (the interactive save's validate, on text a resolve refused).
  *
  * Refuses, in order, one message each:
- *  - a spelling that is not absolute and folded (sys/filesystem.h fs_is_folded)
+ *  - a spelling that is not absolute and folded (base/string.h str_path_folded)
  *    — the shape every key has
  *  - a path that does not stand (a link to nothing named as such), or that is
  *    not a directory — one stat, through a link standing at the spelling: a binding
@@ -196,7 +196,7 @@ typedef struct mount_table mount_table_t;
  *   the machine-wide name this module does not produce. mount_table_build refuses
  *   one.
  * - target: where the profile's custom/ tree stands, as its binder wrote it —
- *   absolute and folded (sys/filesystem.h fs_is_folded), "/" included, which
+ *   absolute and folded (base/string.h str_path_folded), "/" included, which
  *   the table keeps as it stands — and the key of every custom/ path beneath
  *   it. NULL or empty contributes no mount: the profile is bound nowhere in that
  *   table. Any other string is refused at the build (mount_table_build).

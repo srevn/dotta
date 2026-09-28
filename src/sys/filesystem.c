@@ -20,6 +20,7 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
+#include "base/string.h"
 #include "sys/identity.h"
 
 /* Buffer size for file I/O */
@@ -880,8 +881,9 @@ error_t fs_create_dir_exclusive(
  *
  * Each frame lists its directory into the walk's scratch above a mark and returns
  * the scratch to it once its entries are gone, so the scratch holds the listings
- * of the directories from the walk's root down to this one, never the whole tree's.
- * A failure leaves the scratch as it stands: the walk's driver frees it whole.
+ * of the directories from the walk's root down to this one, never the whole tree's;
+ * an entry's path stands above a second mark, gone at the next entry. A failure
+ * leaves the scratch as it stands: the walk's driver frees it whole.
  */
 static error_t fs_remove_subtree(arena_t *scratch, const char *path) {
     const arena_mark_t frame = arena_mark(scratch);
@@ -889,9 +891,10 @@ static error_t fs_remove_subtree(arena_t *scratch, const char *path) {
     string_array_t listing;
     RETURN_IF_ERROR(fs_list_dir(path, scratch, &listing));
 
+    const arena_mark_t entry = arena_mark(scratch);
     for (size_t i = 0; i < listing.count; i++) {
-        char *full_path = NULL;
-        RETURN_IF_ERROR(fs_path_join(path, listing.entries[i], &full_path));
+        arena_reset(scratch, entry);
+        const char *full_path = str_path_join(scratch, path, listing.entries[i]);
 
         /* Use lstat to determine type WITHOUT following symlinks. This prevents
          * symlink-traversal attacks where a symlink inside the tree points to a
@@ -910,8 +913,6 @@ static error_t fs_remove_subtree(arena_t *scratch, const char *path) {
             /* Regular file, symlink, or any other type: unlink */
             err = fs_remove_file(full_path);
         }
-
-        free(full_path);
         if (err) return err;
     }
 
@@ -1000,19 +1001,14 @@ static bool entry_is_removable_metadata(const char *dir, const char *name) {
         return false;
     }
 
-    /* Not metadata when it cannot be named: the join's error is dropped, one
-     * per entry it refuses — an empty name, which no metadata name is. */
-    char *child = NULL;
-    error_t err = fs_path_join(dir, name, &child);
-    if (err) {
-        return false;
-    }
+    /* Not metadata when it cannot be named: a path past PATH_MAX, the kernel's
+     * own bound, which no lstat would answer for either. */
+    char child[PATH_MAX];
+    int n = snprintf(child, sizeof(child), "%s/%s", dir, name);
+    if (n < 0 || (size_t) n >= sizeof(child)) return false;
 
     struct stat st;
-    bool removable = (fs_lstat(child, &st) == 0) && S_ISREG(st.st_mode);
-
-    free(child);
-    return removable;
+    return fs_lstat(child, &st) == 0 && S_ISREG(st.st_mode);
 }
 
 fs_emptiness_t fs_directory_emptiness(
@@ -1066,25 +1062,18 @@ fs_emptiness_t fs_directory_emptiness(
         /* Skip what the caller vouches for. Its full path, because the caller
          * reasons about paths, not about basenames. */
         if (vouch) {
-            char *child = NULL;
-            error_t err = fs_path_join(path, entry->d_name, &child);
-            if (err) {
+            char child[PATH_MAX];
+            int n = snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+            if (n < 0 || (size_t) n >= sizeof(child)) {
                 /* Cannot name it, so cannot let the caller vouch for it — and
                  * an entry nobody could be asked about is not an entry nobody
                  * vouched for. The walk is incomplete, which is what the read
-                 * error above answers too: nothing can be said. The join's error
-                 * is dropped, at most one per directory asked — only an empty
-                 * name draws one, which readdir never hands out. */
+                 * error above answers too: nothing can be said. Only a path past
+                 * PATH_MAX, the kernel's own bound, meets this. */
                 answer = FS_DIR_UNREADABLE;
                 break;
             }
-
-            bool vouched = vouch(child, ctx);
-            free(child);
-
-            if (vouched) {
-                continue;
-            }
+            if (vouch(child, ctx)) continue;
         }
 
         /* Found a real entry - directory is not empty */
@@ -1137,12 +1126,7 @@ error_t fs_remove_empty_dir(const char *path) {
     }
 
     for (size_t i = 0; i < listing.count && !err; i++) {
-        char *child = NULL;
-        err = fs_path_join(path, listing.entries[i], &child);
-        if (!err) {
-            err = fs_remove_file(child);
-            free(child);
-        }
+        err = fs_remove_file(str_path_join(frame, path, listing.entries[i]));
     }
 
     arena_free(frame);
@@ -1202,20 +1186,22 @@ error_t fs_list_dir(const char *path, arena_t *arena, string_array_t *out) {
  */
 
 /* pwd -L's rule: $PWD is the working directory when it is the fold's own spelling
- * (fs_is_folded) and names the directory the process is in — one device and inode
- * with ".". It is carried as it stands, so anything the fold would move is refused
- * with it: a `..` behind a symlink folds to a directory other than the one it
- * named, and a doubled slash misses every prefix a reader tests it against. Every
- * shell writes a fixed point; only a hand-set variable is refused here. */
+ * (str_path_folded) and names the directory the process is in — one device and
+ * inode with ".". It is carried as it stands, so anything the fold would move
+ * is refused with it: a `..` behind a symlink folds to a directory other than
+ * the one it named, and a doubled slash misses every prefix a reader tests it
+ * against. Every shell writes a fixed point; only a hand-set variable is refused
+ * here. */
 static bool pwd_is_here(const char *pwd) {
-    if (!fs_is_folded(pwd)) return false;
+    if (!str_path_folded(pwd)) return false;
 
     struct stat named, here;
     return fs_stat(pwd, &named) == 0 && fs_stat(".", &here) == 0 &&
            named.st_dev == here.st_dev && named.st_ino == here.st_ino;
 }
 
-error_t fs_working_directory(char **out) {
+error_t fs_working_directory(arena_t *arena, const char **out) {
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     /* The shell's spelling where it set one that stands, the kernel's otherwise. */
@@ -1228,26 +1214,26 @@ error_t fs_working_directory(char **out) {
         cwd = physical;
     }
 
-    *out = heap_strdup(cwd);
+    *out = arena_strdup(arena, cwd);
 
     return NULL;
 }
 
-error_t fs_make_absolute(const char *path, char **out) {
+error_t fs_make_absolute(const char *path, arena_t *arena, const char **out) {
     RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     if (path[0] == '/') {
-        *out = heap_strdup(path);
+        *out = arena_strdup(arena, path);
         return NULL;
     }
 
-    char *cwd = NULL;
-    RETURN_IF_ERROR(fs_working_directory(&cwd));
-    error_t err = fs_path_join(cwd, path, out);
-    free(cwd);
+    const char *cwd = NULL;
+    RETURN_IF_ERROR(fs_working_directory(arena, &cwd));
+    *out = str_path_join(arena, cwd, path);
 
-    return err;
+    return NULL;
 }
 
 error_t fs_canonicalize_path(const char *path, char **out) {
@@ -1262,82 +1248,6 @@ error_t fs_canonicalize_path(const char *path, char **out) {
     *out = heap_strdup(resolved);
 
     return NULL;
-}
-
-error_t fs_normalize_path(const char *path, char **out) {
-    RETURN_IF_ERROR(validate_path(path));
-    CHECK_NULL(out);
-
-    size_t len = strlen(path);
-    bool is_absolute = (path[0] == '/');
-
-    /* Component stack: pointers into original string */
-    typedef struct { const char *s; size_t n; } comp_t;
-    comp_t *stack = heap_calloc(len / 2 + 2, sizeof *stack);
-
-    /* Parse path and resolve . and ..  */
-    size_t depth = 0;
-    size_t dotdots = 0; /* leading ".." count */
-    const char *rel = path;
-
-    while (*rel) {
-        while (*rel == '/') rel++;
-        if (!*rel) break;
-
-        const char *seg = rel;
-        while (*rel && *rel != '/') rel++;
-        size_t n = (size_t) (rel - seg);
-
-        if (n == 1 && seg[0] == '.') continue;
-        if (n == 2 && seg[0] == '.' && seg[1] == '.') {
-            if (depth > 0) depth--;
-            else if (!is_absolute) dotdots++;
-            continue;
-        }
-
-        stack[depth++] = (comp_t){ seg, n };
-    }
-
-    /* Build result (normalization never lengthens) */
-    char *result = heap_alloc(len + 2);
-
-    char *w = result;
-    if (is_absolute) *w++ = '/';
-    for (size_t i = 0; i < dotdots; i++) {
-        if (i > 0) *w++ = '/';
-        *w++ = '.'; *w++ = '.';
-    }
-
-    for (size_t i = 0; i < depth; i++) {
-        if (i > 0 || dotdots > 0) *w++ = '/';
-        memcpy(w, stack[i].s, stack[i].n);
-        w += stack[i].n;
-    }
-
-    if (w == result) *w++ = '.';
-    *w = '\0';
-
-    free(stack);
-    *out = result;
-    return NULL;
-}
-
-bool fs_is_folded(const char *path) {
-    if (!path || path[0] != '/') return false;
-
-    /* Every separator decides the component that follows it: an empty one (a
-     * doubled slash, or a trailing one past the root), a `.` or a `..`. A component
-     * is one of those by its first bytes and whatever ends it, so the walk reads
-     * neither a length nor a token. */
-    for (const char *p = path; *p; p++) {
-        if (*p != '/') continue;
-        if (p[1] == '/' || (p[1] == '\0' && p != path)) return false;
-        if (p[1] != '.') continue;
-        if (p[2] == '\0' || p[2] == '/') return false;
-        if (p[2] == '.' && (p[3] == '\0' || p[3] == '/')) return false;
-    }
-
-    return true;
 }
 
 char *fs_parent_dir(const char *path) {
@@ -1355,64 +1265,20 @@ char *fs_parent_dir(const char *path) {
     return len == 0 ? heap_strdup(".") : heap_strndup(path, len);
 }
 
-error_t fs_path_join(const char *base, const char *component, char **out) {
-    RETURN_IF_ERROR(validate_path(base));
-    RETURN_IF_ERROR(validate_path(component));
-    CHECK_NULL(out);
-
-    /* Calculate length */
-    size_t base_len = strlen(base);
-    size_t comp_len = strlen(component);
-
-    /* Determine if we need a separator slash:
-     * - Don't add if base ends with '/'
-     * - Don't add if component starts with '/'
-     * - Don't add if base is empty
-     * - Otherwise add one */
-    bool needs_slash = (base_len > 0 && base[base_len - 1] != '/' &&
-        (comp_len == 0 || component[0] != '/'));
-
-    /* Special case: if base is "/" and component starts with "/" */
-    size_t comp_offset = 0;
-    if (base_len == 1 && base[0] == '/' && comp_len > 0 && component[0] == '/') {
-        comp_offset = 1;  /* Skip leading slash in component */
-        comp_len--;
-    }
-
-    size_t total_len = base_len + comp_len + (needs_slash ? 1 : 0);
-
-    /* Allocate */
-    char *result = heap_alloc(total_len + 1);
-
-    /* Build path */
-    char *ptr = result;
-    memcpy(ptr, base, base_len);
-    ptr += base_len;
-
-    if (needs_slash) {
-        *ptr++ = '/';
-    }
-
-    memcpy(ptr, component + comp_offset, comp_len);
-    ptr[comp_len] = '\0';
-
-    *out = result;
-    return NULL;
-}
-
-error_t fs_expand_tilde(const char *path, char **out) {
+error_t fs_expand_tilde(const char *path, arena_t *arena, const char **out) {
     CHECK_NULL(path);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     if (path[0] != '~') {
-        *out = heap_strdup(path);
+        *out = arena_strdup(arena, path);
         return NULL;
     }
 
     const char *home = identity()->home;
     const char *rest = path + 1;  /* skip ~ */
     if (rest[0] == '\0' || (rest[0] == '/' && rest[1] == '\0')) {
-        *out = heap_strdup(home);
+        *out = arena_strdup(arena, home);
         return NULL;
     }
     if (rest[0] != '/') {
@@ -1422,7 +1288,9 @@ error_t fs_expand_tilde(const char *path, char **out) {
         );
     }
 
-    return fs_path_join(home, rest + 1, out);
+    /* The tail's own separators fold into the one the join writes */
+    *out = str_path_join(arena, home, rest);
+    return NULL;
 }
 
 /**

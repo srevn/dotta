@@ -74,8 +74,10 @@ const char *config_repo_dir_from_env(void);
  *   1. DOTTA_REPO_DIR environment variable (config_repo_dir_from_env)
  *   2. Config file repo_dir
  *   3. Default: ~/.local/share/dotta/repo
+ *
+ * Expanded under HOME, into `arena`.
  */
-error_t config_get_repo_dir(const config_t *config, char **out);
+error_t config_get_repo_dir(const config_t *config, arena_t *arena, const char **out);
 
 /**
  * The divergence strategies, by the word [sync] diverged_strategy and `sync

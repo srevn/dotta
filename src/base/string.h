@@ -82,6 +82,75 @@ bool str_path_beneath(const char *path, const char *dir, size_t dir_len);
 size_t str_path_parent_len(const char *path);
 
 /**
+ * Join a directory and a name, into an arena
+ *
+ * One separator at the seam, whatever either side carries there: the directory's
+ * trailing separators and the name's leading ones fold into it, so the root joins
+ * as every directory does ("/" and "x" is "/x"), and a name spelled from the
+ * root joins as a relative one does ("/t" and "/etc/x" is "/t/etc/x" — the
+ * re-rooting under add's --target reads it so). Nothing else is folded: a `.`,
+ * a `..` or a doubled separator inside either side stands, for str_path_normalize.
+ *
+ * @param arena Arena the joined path lives in (must not be NULL)
+ * @param dir Directory (must not be NULL or empty)
+ * @param name Name beneath it (must not be NULL or empty)
+ * @return The joined path; never NULL
+ */
+char *str_path_join(arena_t *arena, const char *dir, const char *name);
+
+/**
+ * Fold a path lexically, into an arena
+ *
+ * `.` components and empty ones (a doubled or a trailing separator) go, and a
+ * `..` takes the component before it — by the string alone, never by asking the
+ * filesystem, so a `..` after a symlink takes the link's name rather than stepping
+ * out of what it reaches. An absolute path keeps its root, where a `..` has nothing
+ * to take; a relative one keeps the leading `..`s nothing before them takes,
+ * and folds to "." when nothing is left. The answer is never longer than the
+ * path, and for an absolute one it is the fold's own spelling (str_path_folded).
+ *
+ * Examples:
+ *   /home/user/project/../file   -> /home/user/file
+ *   /home/user/./config/         -> /home/user/config
+ *   /home/user/../../../etc      -> /etc
+ *   ./foo/../bar                 -> bar
+ *   ../a/../../b                 -> ../../b
+ *   a/..                         -> .
+ *
+ * @param arena Arena the folded path lives in (must not be NULL)
+ * @param path Path (must not be NULL or empty)
+ * @return The folded path; never NULL
+ */
+char *str_path_normalize(arena_t *arena, const char *path);
+
+/**
+ * Is this path the fold's own spelling?
+ *
+ * Absolute, with no empty, `.` or `..` component — "/" or "/a/b": what
+ * str_path_normalize returns for an absolute input, and returns unchanged for
+ * one of these. The shape every key has (infra/mount.h): a root's spelling is
+ * one, and so is a root's spelling joined with a tail. A relative path answers
+ * no whatever it spells — the fold keeps a leading `..` on one, and every reader
+ * here asks of an absolute path, which the fold joins a relative one onto first
+ * (sys/filesystem.h fs_make_absolute, infra/path.h path_input_filesystem_path).
+ * NULL answers no: getenv's answer flows in (sys/filesystem.h
+ * fs_working_directory).
+ *
+ * Pure: no allocation, no filesystem. Readers: the working directory's pwd -L
+ * rule (sys/filesystem.h fs_working_directory); a deployment target's shape at
+ * the binders and the mount table's own precondition (infra/mount.h
+ * mount_validate_target, mount_table_build); and the invoker's HOME, which
+ * sys/identity produces by folding rather than asking. The store spells the same
+ * rule in its own language on the column that holds a target (core/state.c),
+ * and one list of shapes is driven through both (tests/test-mount.c,
+ * tests/test-state.c), and through this predicate itself (tests/test-string.c).
+ *
+ * @param path Path, or NULL
+ * @return true iff path is absolute and the fold would return it unchanged
+ */
+bool str_path_folded(const char *path);
+
+/**
  * Trim whitespace from both ends of string (in-place)
  *
  * @param str String to trim (modified in place)

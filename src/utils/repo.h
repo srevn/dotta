@@ -56,10 +56,11 @@
  * continues without config (env var and default are still respected).
  *
  * @param config Loaded configuration (must not be NULL)
- * @param out Resolved repository path (caller must free)
+ * @param arena Arena the path lives in (must not be NULL)
+ * @param out Resolved repository path, the arena's (must not be NULL)
  * @return Error or NULL on success
  */
-error_t resolve_repo_path(const config_t *config, char **out);
+error_t resolve_repo_path(const config_t *config, arena_t *arena, const char **out);
 
 /**
  * Where a create-style command puts the repository
@@ -88,18 +89,20 @@ error_t resolve_repo_path(const config_t *config, char **out);
  * about the repository just created.
  *
  * @param config        Loaded configuration (must not be NULL)
+ * @param arena         Arena both answers live in (must not be NULL)
  * @param explicit_path The command's positional, or NULL for the configured
  *                      location
- * @param out_path      Resolved absolute path (must not be NULL, caller frees)
+ * @param out_path      Resolved absolute path, the arena's (must not be NULL)
  * @param out_elsewhere Optional: the configured location when out_path is not
- *                      it, NULL otherwise (can be NULL; caller frees)
+ *                      it, NULL otherwise (can be NULL)
  * @return Error or NULL on success
  */
 error_t repo_create_target(
     const config_t *config,
+    arena_t *arena,
     const char *explicit_path,
-    char **out_path,
-    char **out_elsewhere
+    const char **out_path,
+    const char **out_elsewhere
 );
 
 /**
@@ -176,14 +179,18 @@ error_t repo_is_store(git_repository *repo, bool *out);
  *
  * OWNERSHIP:
  * - Caller must free repository with git_repository_free()
- * - Caller must free path_out (if requested) with free()
+ * - The path is the arena's
  * - On error, outputs are not modified
  *
  * @param config Loaded configuration (must not be NULL)
+ * @param arena Arena the resolved path lives in (must not be NULL)
  * @param repo_out Repository handle (must not be NULL, caller must free)
- * @param path_out Optional resolved path (can be NULL, caller must free if set)
+ * @param path_out Optional resolved path, the arena's (can be NULL)
  * @return Error or NULL on success
  */
-error_t repo_open(const config_t *config, git_repository **repo_out, char **path_out);
+error_t repo_open(
+    const config_t *config, arena_t *arena, git_repository **repo_out,
+    const char **path_out
+);
 
 #endif /* DOTTA_REPO_H */

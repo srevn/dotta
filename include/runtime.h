@@ -347,9 +347,9 @@ typedef struct dotta_needs {
  *     threading it out costs nothing and gives commands that need both (bootstrap,
  *     which exports DOTTA_REPO_DIR to child scripts) a single source of truth
  *     instead of a second `resolve_repo_path` call; a command that needs only
- *     the path (git) declares PATH and the run never opens. An arena copy: the
- *     run holds only borrowed or arena-owned strings, and `close_run` frees no
- *     `const char *`.
+ *     the path (git) declares PATH and the run never opens. The command arena's,
+ *     resolved into it: the run holds only borrowed or arena-owned strings, and
+ *     `close_run` frees no `const char *`.
  *   - `state` is the handle in the declared shape; dispatch closes it on return
  *     (`state_free` rolls back any uncommitted transaction).
  *   - `mounts` is a value: built into the command arena from the state's rows
@@ -399,7 +399,7 @@ typedef struct dotta_needs {
  */
 typedef struct dotta_run {
     struct git_repository *repo;        /* needs->repo == OPEN */
-    const char *repo_path;              /* needs->repo != NONE; an arena copy */
+    const char *repo_path;              /* needs->repo != NONE; the command arena's */
     state_t *state;                     /* needs->state != NONE; the READ or WRITE shape */
     const mount_table_t *mounts;        /* needs->mounts; this machine's topology at dispatch */
     keymgr *keymgr;                     /* needs->crypto != NONE, and only if encryption is on */

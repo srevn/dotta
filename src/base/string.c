@@ -46,6 +46,94 @@ size_t str_path_parent_len(const char *path) {
     return (slash == path) ? 1 : (size_t) (slash - path);
 }
 
+char *str_path_join(arena_t *arena, const char *dir, const char *name) {
+    CHECK_NULL(arena);
+    CHECK_NULL(dir);
+    CHECK_NULL(name);
+    CHECK_ARG(dir[0] != '\0' && name[0] != '\0', "a join with an empty side");
+
+    /* The seam's separators, both sides' — the root's one included — are the
+     * one written between them. Two objects' lengths and two bytes cannot wrap. */
+    size_t dir_len = strlen(dir);
+    while (dir_len > 0 && dir[dir_len - 1] == '/') dir_len--;
+    while (*name == '/') name++;
+    size_t name_len = strlen(name);
+
+    char *joined = arena_alloc(arena, dir_len + 1 + name_len + 1);
+    memcpy(joined, dir, dir_len);
+    joined[dir_len] = '/';
+    memcpy(joined + dir_len + 1, name, name_len + 1);
+
+    return joined;
+}
+
+char *str_path_normalize(arena_t *arena, const char *path) {
+    CHECK_NULL(arena);
+    CHECK_NULL(path);
+    CHECK_ARG(path[0] != '\0', "the fold of an empty path");
+
+    /* Written in place, never longer than the path: a component is kept as it
+     * is met, and a `..` takes back the last one kept. The floor is what no `..`
+     * reaches below — an absolute path's root, and a relative path's leading
+     * `..`s, which rise with it as each is kept. */
+    bool absolute = path[0] == '/';
+    char *folded = arena_alloc(arena, strlen(path) + 1);
+    char *w = folded;
+    if (absolute) *w++ = '/';
+    char *floor = w;
+
+    for (const char *r = path; *r;) {
+        while (*r == '/') r++;
+        if (!*r) break;
+
+        const char *seg = r;
+        while (*r && *r != '/') r++;
+        size_t n = (size_t) (r - seg);
+
+        if (n == 1 && seg[0] == '.') continue;
+        if (n == 2 && seg[0] == '.' && seg[1] == '.') {
+            if (w > floor) {
+                /* The last component kept goes, and the separator before it */
+                while (w > floor && w[-1] != '/') w--;
+                if (w > floor) w--;
+            } else if (!absolute) {
+                if (w > folded) *w++ = '/';
+                *w++ = '.';
+                *w++ = '.';
+                floor = w;
+            }
+            continue;
+        }
+
+        if (w > folded && w[-1] != '/') *w++ = '/';
+        memcpy(w, seg, n);
+        w += n;
+    }
+
+    if (w == folded) *w++ = '.';
+    *w = '\0';
+
+    return folded;
+}
+
+bool str_path_folded(const char *path) {
+    if (!path || path[0] != '/') return false;
+
+    /* Every separator decides the component that follows it: an empty one (a
+     * doubled slash, or a trailing one past the root), a `.` or a `..`. A component
+     * is one of those by its first bytes and whatever ends it, so the walk reads
+     * neither a length nor a token. */
+    for (const char *p = path; *p; p++) {
+        if (*p != '/') continue;
+        if (p[1] == '/' || (p[1] == '\0' && p != path)) return false;
+        if (p[1] != '.') continue;
+        if (p[2] == '\0' || p[2] == '/') return false;
+        if (p[2] == '.' && (p[3] == '\0' || p[3] == '/')) return false;
+    }
+
+    return true;
+}
+
 char *str_trim(char *str) {
     if (!str) return NULL;
 

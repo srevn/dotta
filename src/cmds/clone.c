@@ -19,12 +19,12 @@
 #include <config.h>
 #include <git2.h>
 #include <stdio.h>
-#include <stdlib.h>
 
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "base/string.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -241,17 +241,10 @@ static void rollback_clone_dir(
     error_t err = NULL;
 
     if (path_preexisted) {
-        string_array_t listing;
+        string_array_t listing = { 0 };
         err = fs_list_dir(path, ctx->arena, &listing);
-        if (!err) {
-            for (size_t i = 0; i < listing.count && !err; i++) {
-                char *child = NULL;
-                err = fs_path_join(path, listing.entries[i], &child);
-                if (!err) {
-                    err = fs_clear_path(child);
-                    free(child);
-                }
-            }
+        for (size_t i = 0; i < listing.count && !err; i++) {
+            err = fs_clear_path(str_path_join(ctx->arena, path, listing.entries[i]));
         }
     } else {
         err = fs_remove_dir(path);
@@ -282,8 +275,8 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     error_t err = NULL;
     git_repository *repo = NULL;
-    char *local_path = NULL;
-    char *elsewhere = NULL;
+    const char *local_path = NULL;
+    const char *elsewhere = NULL;
     bool path_preexisted = false;
     bool clone_landed = false;
     transfer_context_t *xfer = NULL;
@@ -299,7 +292,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * its parents made (utils/repo.h). Absolute matters twice over here: the
      * bootstrap below hands it to a script as $DOTTA_REPO_DIR, and the rollback
      * removes it. */
-    err = repo_create_target(config, opts->path, &local_path, &elsewhere);
+    err = repo_create_target(config, ctx->arena, opts->path, &local_path, &elsewhere);
     if (err) goto cleanup;
 
     output_section(out, OUTPUT_NORMAL, "Cloning dotta repository");
@@ -685,9 +678,6 @@ cleanup:
     if (err && clone_landed) {
         rollback_clone_dir(ctx, local_path, path_preexisted);
     }
-
-    free(local_path);
-    free(elsewhere);
 
     return err;
 }

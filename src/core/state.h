@@ -46,7 +46,7 @@
  * - Prepared statements kept for the connection's life, for every write that
  *   binds a value
  * - A path-keyed table holds keys alone — absolute and folded, the shape
- *   mount_resolve spells every key in (sys/filesystem.h fs_is_folded), and whole
+ *   mount_resolve spells every key in (base/string.h str_path_folded), and whole
  *   — and refuses any other where a hand makes the edit (key_spelling). The shape
  *   and never the length: a key longer than PATH_MAX is the kernel's to refuse,
  *   at the call that meets it

@@ -1601,7 +1601,7 @@ static bool same_entry(const char *path, const char *other, const struct stat *s
     struct stat other_parent;
 
     /* The names by bytes, each read from its key's last separator on — a key is
-     * absolute (sys/filesystem.h fs_is_folded), so it holds one — then the
+     * absolute (base/string.h str_path_folded), so it holds one — then the
      * directories by identity */
     return strcmp(strrchr(path, '/'), strrchr(other, '/')) == 0 &&
            stat_parent(path, &parent) && stat_parent(other, &other_parent) &&

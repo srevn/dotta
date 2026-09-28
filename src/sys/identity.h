@@ -40,7 +40,7 @@
  * unset, empty, or, under root obtained for a user, root's own home (`-H`, `-i`
  * and always_set_home rewrite it to root's; that is sudo's doing, not the user's),
  * in which case the invoker's passwd entry answers. Absolute and folded
- * (sys/filesystem.h fs_is_folded, by normalizing here rather than refusing): a
+ * (base/string.h str_path_folded, by normalizing here rather than refusing): a
  * key under HOME is HOME's spelling and a tail (infra/mount.h), and a doubled
  * slash inside HOME would be a spelling no folded argument matches. It is one
  * of the mount table's three root spellings, each established where it is made.

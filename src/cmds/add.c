@@ -214,7 +214,7 @@ typedef struct {
  */
 static bool add_inside(const char *input, const char *target, arena_t *arena) {
     /* The folded prefix, grown one component at a time, with "." dropped and
-     * ".." popping — the fold fs_normalize_path performs over a whole argument,
+     * ".." popping — the fold str_path_normalize performs over a whole argument,
      * applied per prefix so the prefixes exist to be asked about. Folding never
      * grows a path, so the argument's own length plus a leading slash and a
      * terminator bounds it, absolute or not. */
@@ -307,30 +307,24 @@ static error_t add_spell(
      * from. Three spellings are the shell's own and are never re-rooted — a tilde
      * path, a path spelled from here, and an empty argument, which is no path
      * in any grammar and which the argument's door is the one place to say so
-     * of, rather than the joiner refusing it by accident of validating its own
-     * component. A host-absolute path is the jail's unless a prefix of it is
-     * the target — something only an absolute spelling can be, since folding a
-     * bare relative path onto the root to ask would read `etc/foo` under `--target
-     * /etc` as the target itself — and a bare relative path is the jail's outright.
-     * The join reads a host-absolute input's leading '/' as its own separator,
-     * so `/etc/foo` and `etc/foo` both land at <target>/etc/foo, and it composes
-     * under the target as the row spells it, which is the spelling the refusal
-     * below prints. */
-    char *composed = NULL;
+     * of: the join takes no empty name. A host-absolute path is the jail's unless
+     * a prefix of it is the target — something only an absolute spelling can
+     * be, since folding a bare relative path onto the root to ask would read
+     * `etc/foo` under `--target /etc` as the target itself — and a bare relative
+     * path is the jail's outright. The join reads a host-absolute input's leading
+     * '/' as its own separator, so `/etc/foo` and `etc/foo` both land at
+     * <target>/etc/foo, and it composes under the target as the row spells it,
+     * which is the spelling the refusal below prints. */
+    const char *composed = input;
     if (target && input[0] != '~' && input[0] != '.' && input[0] != '\0') {
         bool inside = input[0] == '/' && add_inside(input, target, arena);
-        if (!inside) {
-            RETURN_IF_ERROR(fs_path_join(target, input, &composed));
-        }
+        if (!inside) composed = str_path_join(arena, target, input);
     }
 
-    /* The answer is the arena's: the caller keys, names and walks from it, and
-     * nothing here outlives the call — which is what lets the refusal below simply
-     * return, where a malloc'd answer had to be freed and nulled first. */
+    /* The answer is the arena's, as the composition it reads is: the caller keys,
+     * names and walks from it, and the refusal below simply returns. */
     const char *spelled = NULL;
-    error_t err = path_input_filesystem_path(composed ? composed : input, arena, &spelled);
-    free(composed);
-    if (err) return err;
+    RETURN_IF_ERROR(path_input_filesystem_path(composed, arena, &spelled));
 
     /* One check for every escape, whatever the shape: `..` walked out of a path
      * that started inside, or a path spelled from here while the user stands

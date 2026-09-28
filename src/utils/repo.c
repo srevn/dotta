@@ -4,10 +4,10 @@
 
 #include "utils/repo.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 #include "base/error.h"
+#include "base/string.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "utils/config.h"
@@ -15,27 +15,20 @@
 /**
  * Resolve repository path
  */
-error_t resolve_repo_path(const config_t *config, char **out) {
+error_t resolve_repo_path(const config_t *config, arena_t *arena, const char **out) {
     CHECK_NULL(config);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     /* Resolve repository directory using full priority chain:
      * 1. DOTTA_REPO_DIR environment variable
      * 2. Config file repo_dir setting
      * 3. Default: ~/.local/share/dotta/repo */
-    char *repo_dir = NULL;
-    error_t err = config_get_repo_dir(config, &repo_dir);
-    if (err) {
-        /* Path expansion failed (e.g., invalid home directory). This is a genuine
-         * error that should be propagated.
-         */
-        return error_wrap(
-            err, "Failed to resolve repository path"
-        );
-    }
+    error_t err = config_get_repo_dir(config, arena, out);
 
-    *out = repo_dir;
-    return NULL;
+    /* Path expansion failed (e.g., invalid home directory). This is a genuine
+     * error that should be propagated. */
+    return err ? error_wrap(err, "Failed to resolve repository path") : NULL;
 }
 
 /**
@@ -43,11 +36,13 @@ error_t resolve_repo_path(const config_t *config, char **out) {
  */
 error_t repo_create_target(
     const config_t *config,
+    arena_t *arena,
     const char *explicit_path,
-    char **out_path,
-    char **out_elsewhere
+    const char **out_path,
+    const char **out_elsewhere
 ) {
     CHECK_NULL(config);
+    CHECK_NULL(arena);
     CHECK_NULL(out_path);
 
     /* Where this machine's repository lives, in the one shape the comparison at
@@ -55,54 +50,30 @@ error_t repo_create_target(
      * the whole reason the answer means anything: `resolve_repo_path` expands
      * `~`, and `fs_make_absolute` settles a relative repo_dir against the current
      * directory exactly as it settles a relative positional below. */
-    char *resolved = NULL;
-    RETURN_IF_ERROR(resolve_repo_path(config, &resolved));
+    const char *resolved = NULL;
+    RETURN_IF_ERROR(resolve_repo_path(config, arena, &resolved));
 
-    char *configured = NULL;
-    error_t err = fs_make_absolute(resolved, &configured);
-    free(resolved);
-    if (err) return err;
+    const char *configured = NULL;
+    RETURN_IF_ERROR(fs_make_absolute(resolved, arena, &configured));
 
-    char *path = NULL;
-    if (explicit_path == NULL) {
-        /* No positional: the configured location is the answer, already in hand
-         * and already normalised. */
-        path = configured;
-        configured = NULL;
-    } else {
-        char *expanded = NULL;
-        err = fs_expand_tilde(explicit_path, &expanded);
-        if (!err) {
-            err = fs_make_absolute(expanded, &path);
-            free(expanded);
-        }
-        if (err) {
-            free(configured);
-            return err;
-        }
+    /* No positional: the configured location is the answer, already in hand and
+     * already normalised. */
+    const char *path = configured;
+    if (explicit_path != NULL) {
+        const char *expanded = NULL;
+        RETURN_IF_ERROR(fs_expand_tilde(explicit_path, arena, &expanded));
+        RETURN_IF_ERROR(fs_make_absolute(expanded, arena, &path));
     }
 
     /* The directory holding the repository, not the repository: the clone refuses
      * a target that is not empty, and the init makes its own leaf
      * (gitops_init_repository), so neither caller wants this to reach it. */
-    err = fs_ensure_parent_dirs(path);
-    if (err) {
-        free(configured);
-        free(path);
-        return err;
-    }
+    RETURN_IF_ERROR(fs_ensure_parent_dirs(path));
 
     /* An explicit path may still name the configured location — `dotta clone
      * <url> "$DOTTA_REPO_DIR"` does — and that is not elsewhere. */
-    if (configured != NULL && strcmp(path, configured) == 0) {
-        free(configured);
-        configured = NULL;
-    }
-
     if (out_elsewhere != NULL) {
-        *out_elsewhere = configured;
-    } else {
-        free(configured);
+        *out_elsewhere = strcmp(path, configured) == 0 ? NULL : configured;
     }
 
     *out_path = path;
@@ -177,16 +148,20 @@ error_t repo_is_store(git_repository *repo, bool *out) {
 /**
  * Open dotta's store
  */
-error_t repo_open(const config_t *config, git_repository **repo_out, char **path_out) {
+error_t repo_open(
+    const config_t *config, arena_t *arena, git_repository **repo_out,
+    const char **path_out
+) {
     CHECK_NULL(config);
+    CHECK_NULL(arena);
     CHECK_NULL(repo_out);
 
-    char *repo_path = NULL;
+    const char *repo_path = NULL;
     git_repository *repo = NULL;
     error_t err = NULL;
 
     /* Resolve repository path — resolve_repo_path names its own failure. */
-    err = resolve_repo_path(config, &repo_path);
+    err = resolve_repo_path(config, arena, &repo_path);
     if (err) return err;
 
     /* Where the path came from, when it did not come from the default — for the
@@ -209,8 +184,6 @@ error_t repo_open(const config_t *config, git_repository **repo_out, char **path
      */
     err = gitops_open_repository(&repo, repo_path);
     if (err) {
-        error_t answer;
-
         if (error_code(err) == ERR_NOT_FOUND) {
             /* Which of the two it is. libgit2 words them identically — "could
              * not find repository at X" for an empty directory, for a store it
@@ -223,41 +196,32 @@ error_t repo_open(const config_t *config, git_repository **repo_out, char **path
              * unstattable because the directory cannot be looked into, there is
              * a repository here that could not be read, and the answer to an
              * absence is the one answer that must not be offered for it. */
-            char *head = NULL;
-            error_t join_err = fs_path_join(repo_path, "HEAD", &head);
-            bool absent = !join_err
-                && fs_lstat_occupant(head, NULL) == FS_OCCUPANT_NONE;
-            free(head);
-
-            if (absent) {
-                answer = ERROR(
+            const char *head = str_path_join(arena, repo_path, "HEAD");
+            if (fs_lstat_occupant(head, NULL) == FS_OCCUPANT_NONE) {
+                return ERROR(
                     ERR_NOT_FOUND, "No dotta repository found at: %s\n\n"
                     "Run 'dotta init' to create a new repository%s%s",
                     repo_path, env_note, env_value
                 );
-            } else {
-                answer = ERROR(
-                    ERR_GIT, "Cannot read the repository at: %s\n\n"
-                    "Check its ownership and permissions. " REPO_RECLAIM_HINT
-                    "%s%s", repo_path, repo_path, env_note, env_value
-                );
             }
-        } else if (error_code(err) == ERR_PERMISSION) {
+            return ERROR(
+                ERR_GIT, "Cannot read the repository at: %s\n\n"
+                "Check its ownership and permissions. " REPO_RECLAIM_HINT
+                "%s%s", repo_path, repo_path, env_note, env_value
+            );
+        }
+        if (error_code(err) == ERR_PERMISSION) {
             /* libgit2's owner check (CVE-2022-24765): the repository is another
              * user's — any other user's, which is why the hint says "could" —
              * and root is the one owner an older dotta could have made of it,
              * since the repository is per-user by design. After the drop, root's
              * own is one too. */
-            answer = error_wrap(
+            return error_wrap(
                 err, "Cannot open the repository at: %s\n" REPO_RECLAIM_HINT,
                 repo_path, repo_path
             );
-        } else {
-            answer = error_wrap(err, "Failed to open repository at: %s", repo_path);
         }
-
-        free(repo_path);
-        return answer;
+        return error_wrap(err, "Failed to open repository at: %s", repo_path);
     }
 
     /*
@@ -273,7 +237,6 @@ error_t repo_open(const config_t *config, git_repository **repo_out, char **path
     if (err) {
         err = error_wrap(err, "Cannot open the repository at: %s", repo_path);
         git_repository_free(repo);
-        free(repo_path);
         return err;
     }
     if (!declared) {
@@ -283,17 +246,12 @@ error_t repo_open(const config_t *config, git_repository **repo_out, char **path
             "store%s%s", repo_path, env_note, env_value
         );
         git_repository_free(repo);
-        free(repo_path);
         return err;
     }
 
     /* Success - set outputs */
     *repo_out = repo;
-    if (path_out) {
-        *path_out = repo_path;
-    } else {
-        free(repo_path);
-    }
+    if (path_out) *path_out = repo_path;
 
     return NULL;
 }

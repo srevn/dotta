@@ -154,15 +154,12 @@ static error_t open_run(
     /* The repository, in the declared shape. OPEN opens it and gets the path
      * opening it resolved; PATH resolves the path and opens nothing, which is
      * what lets the pass-through run over a repository dotta cannot open. Either
-     * way the run keeps an arena copy so it holds no heap string. */
+     * way the path is the command arena's. */
     if (needs->repo != DOTTA_REPO_NONE) {
-        char *repo_path = NULL;
-        err = (needs->repo == DOTTA_REPO_OPEN) ? repo_open(config, &run->repo, &repo_path)
-                                               : resolve_repo_path(config, &repo_path);
+        err = (needs->repo == DOTTA_REPO_OPEN)
+            ? repo_open(config, arena, &run->repo, &run->repo_path)
+            : resolve_repo_path(config, arena, &run->repo_path);
         if (err) goto done;
-
-        run->repo_path = arena_strdup(arena, repo_path);
-        free(repo_path);
     }
 
     /* State, in the shape the spec declares — narrowed where this invocation is

@@ -26,6 +26,7 @@
 
 #include "base/arena.h"
 #include "base/error.h"
+#include "base/string.h"
 #include "sys/filesystem.h"
 
 static identity_t self;
@@ -212,12 +213,9 @@ error_t identity_init(arena_t *arena) {
         );
     }
 
-    /* The normalised spelling, the arena's: the lexical fold answers on the heap
-     * (sys/filesystem.h fs_normalize_path), copied once and let go. */
-    char *normalized = NULL;
-    RETURN_IF_ERROR(fs_normalize_path(home, &normalized));
-    self.home = arena_strdup(arena, normalized);
-    free(normalized);
+    /* The normalised spelling, folded into the arena (base/string.h
+     * str_path_normalize). */
+    self.home = str_path_normalize(arena, home);
 
     /* The drop, where root was obtained for a user, and before the groups are
      * read: the list below is what the kernel checks the invoker's chown against,

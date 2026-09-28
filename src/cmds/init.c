@@ -129,8 +129,8 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
 
     git_repository *repo = NULL;
     error_t err = NULL;
-    char *path = NULL;
-    char *elsewhere = NULL;
+    const char *path = NULL;
+    const char *elsewhere = NULL;
 
     /* Handle quiet flag */
     if (opts->quiet) {
@@ -157,7 +157,7 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     /* Where the repository goes: the positional when one was given, this machine's
      * configured location otherwise — one answer, expanded, absolute and with
      * its parents made (utils/repo.h). */
-    err = repo_create_target(config, opts->repo_path, &path, &elsewhere);
+    err = repo_create_target(config, ctx->arena, opts->repo_path, &path, &elsewhere);
     if (err) goto cleanup;
 
     /* The store: opened where a repository stands, made where nothing does. Only
@@ -272,8 +272,6 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
 
 cleanup:
     if (repo) git_repository_free(repo);
-    free(path);
-    free(elsewhere);
 
     return err;
 }

@@ -14,6 +14,7 @@
 
 #include "base/arena.h"
 #include "base/error.h"
+#include "base/string.h"
 #include "infra/label.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
@@ -27,7 +28,7 @@ error_t mount_validate_target(const char *target) {
      * names the whole rule for it. "/" is included: a target at the root is a
      * binding like any other, and the table keeps it as it stands
      * (mount_table_build). */
-    if (!fs_is_folded(target)) {
+    if (!str_path_folded(target)) {
         return ERROR(
             ERR_INVALID_ARG,
             "Target must be an absolute path with no '.', '..', '//' or "
@@ -209,7 +210,7 @@ error_t mount_table_build(
      * Establishing it here is what lets namespace_holds read `m->profile` as
      * the whole of whose a root is, for both views at once. The target is the
      * type's contract too, and is refused when it is not absolute and folded
-     * (sys/filesystem.h fs_is_folded): a relative row is no path on this machine,
+     * (base/string.h str_path_folded): a relative row is no path on this machine,
      * and a `//`, a `.` or a trailing slash would key claims no argument can
      * spell. Neither reaches here — a row's target is the store's, whose column
      * holds no other shape (core/state.c), and a command's own binding passed
@@ -227,7 +228,7 @@ error_t mount_table_build(
         }
         const char *raw = mounts[i].target;
         if (!raw) continue;
-        if (!fs_is_folded(raw)) {
+        if (!str_path_folded(raw)) {
             return ERROR(
                 ERR_INVALID_ARG, "A binding's target is an absolute, folded path "
                 "(profile '%s': '%s')", mounts[i].profile, raw

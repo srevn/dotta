@@ -24,21 +24,19 @@
  * One dispatch: the resolver reads the storage grammar itself and hands every
  * filesystem spelling (absolute, tilde, relative) to the argument's door, whose
  * answer is the key. The grammar of a name (infra/label.h: label_prefixes,
- * label_validate_storage), the filesystem primitives (fs_expand_tilde,
- * fs_working_directory, fs_path_join, fs_normalize_path) and HOME's two spellings
- * (sys/identity) are delegated to the layers below. The table of roots is not
- * among them: no root's spelling is read here and no root's noun, so this file
- * names no place (infra/path.h).
+ * label_validate_storage), the filesystem's two readings (fs_expand_tilde,
+ * fs_working_directory), the path's algebra (base/string.h: str_path_join,
+ * str_path_normalize) and HOME's two spellings (sys/identity) are delegated to
+ * the layers below. The table of roots is not among them: no root's spelling is
+ * read here and no root's noun, so this file names no place (infra/path.h).
  */
 
 #include "infra/path.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 #include "base/arena.h"
 #include "base/error.h"
-#include "base/heap.h"
 #include "base/string.h"
 #include "infra/label.h"
 #include "sys/filesystem.h"
@@ -77,8 +75,8 @@ error_t path_input_resolve(
      * the rule taking the word and refusing the marker (infra/label.h
      * label_validate_storage). A trailing '/' is the same path spelled as a
      * directory — the UI's own listings print directory claims slash-marked —
-     * and the filesystem arm below sheds its own inside fs_normalize_path; shedding
-     * here keeps the two surface forms resolving alike. */
+     * and the filesystem arm below sheds its own inside the fold; shedding here
+     * keeps the two surface forms resolving alike. */
     if (label_prefixes(input)) {
         size_t len = strlen(input);
         while (input[len - 1] == '/') len--;
@@ -145,9 +143,9 @@ error_t path_input_resolve(
  * is a link to its own descendant, which the kernel refuses as a loop. In each,
  * the directory stands as the shell spelled it.
  */
-static error_t path_working_directory(char **out) {
-    char *cwd = NULL;
-    RETURN_IF_ERROR(fs_working_directory(&cwd));
+static error_t path_working_directory(arena_t *arena, const char **out) {
+    const char *cwd = NULL;
+    RETURN_IF_ERROR(fs_working_directory(arena, &cwd));
     *out = cwd;
 
     const identity_t *id = identity();
@@ -164,8 +162,7 @@ static error_t path_working_directory(char **out) {
     }
 
     /* The tail carries its own separator, and HOME's own directory has none. */
-    *out = heap_str_format("%s%s", home, cwd + len);
-    free(cwd);
+    *out = arena_str_format(arena, "%s%s", home, cwd + len);
 
     return NULL;
 }
@@ -181,36 +178,23 @@ error_t path_input_filesystem_path(const char *input, arena_t *arena, const char
         return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
     }
 
-    /* Three spellings, one pipeline: the tilde expands (a path without one is
-     * duplicated verbatim, fs_expand_tilde's contract), a path still relative
-     * joins the working directory, and `.`, `..` and doubled slashes fold out
-     * lexically. */
-    char *expanded = NULL;
-    error_t err = fs_expand_tilde(input, &expanded);
-    if (err) return err;
+    /* Three spellings, one pipeline, each step's answer the arena's: the tilde
+     * expands (a path without one is copied verbatim, fs_expand_tilde's contract),
+     * a path still relative joins the working directory, and `.`, `..` and doubled
+     * slashes fold out lexically. */
+    const char *path = NULL;
+    RETURN_IF_ERROR(fs_expand_tilde(input, arena, &path));
 
     /* An absolute spelling — typed, or the tilde's — is the user's own and stands.
      * A relative one joins the working directory, spelled for a key before the
      * join so that the tail stays the user's own too. */
-    char *absolute = NULL;
-    if (expanded[0] == '/') {
-        absolute = expanded;
-    } else {
-        char *cwd = NULL;
-        err = path_working_directory(&cwd);
-        if (!err) err = fs_path_join(cwd, expanded, &absolute);
-        free(cwd);
-        free(expanded);
-        if (err) return err;
+    if (path[0] != '/') {
+        const char *cwd = NULL;
+        RETURN_IF_ERROR(path_working_directory(arena, &cwd));
+        path = str_path_join(arena, cwd, path);
     }
 
-    char *normalized = NULL;
-    err = fs_normalize_path(absolute, &normalized);
-    free(absolute);
-    if (err) return err;
-
-    *out = arena_strdup(arena, normalized);
-    free(normalized);
+    *out = str_path_normalize(arena, path);
 
     return NULL;
 }

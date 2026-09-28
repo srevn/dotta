@@ -376,27 +376,22 @@ error_t gitops_list_refs(
         string_array_push(&names, refname + strlen(namespace) + 1);
     }
     git_reference_iterator_free(iter);
-
-    /* The loose store beneath it, read whole. */
-    char *dir = NULL;
-    if (!err) {
-        err = fs_path_join(git_repository_commondir(repo), namespace, &dir);
-    }
-    if (!err) {
-        loose_walk_t walk = {
-            .repo       = repo,
-            .refname_at = strlen(dir) - strlen(namespace),
-            .depth      = 1,
-            .names      = &names,
-        };
-        for (const char *slash = strchr(namespace, '/'); slash;
-            slash = strchr(slash + 1, '/')) {
-            walk.depth++;
-        }
-        err = walk_loose_refs(&walk, dir);
-        free(dir);
-    }
     if (err) return err;
+
+    /* The loose store beneath it, read whole: its directory is spelled in the
+     * answer's arena, beside the names. */
+    const char *dir = str_path_join(arena, git_repository_commondir(repo), namespace);
+    loose_walk_t walk = {
+        .repo       = repo,
+        .refname_at = strlen(dir) - strlen(namespace),
+        .depth      = 1,
+        .names      = &names,
+    };
+    for (const char *slash = strchr(namespace, '/'); slash;
+        slash = strchr(slash + 1, '/')) {
+        walk.depth++;
+    }
+    RETURN_IF_ERROR(walk_loose_refs(&walk, dir));
 
     *out = names;
     return NULL;

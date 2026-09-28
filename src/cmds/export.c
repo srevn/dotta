@@ -327,7 +327,7 @@ static metadata_t *load_sheet(
  *
  * A copy with no name of its own is the destination itself: the filesystem root
  * has no last segment, and there is nothing for a directory destination to nest
- * the copy under. Asked before the join, which refuses an empty component.
+ * the copy under. Asked before the join, which takes no empty name.
  */
 static error_t dest_resolve(
     const char *dest,
@@ -335,23 +335,14 @@ static error_t dest_resolve(
     arena_t *arena,
     const char **out
 ) {
-    char *expanded = NULL;
-    error_t err = fs_expand_tilde(dest, &expanded);
-    if (err) return err;
+    const char *expanded = NULL;
+    RETURN_IF_ERROR(fs_expand_tilde(dest, arena, &expanded));
 
-    char *final = expanded;
     size_t len = strlen(expanded);
-    if (name[0] != '\0' &&
-        (fs_is_directory(expanded) || (len > 0 && expanded[len - 1] == '/'))) {
-        char *joined = NULL;
-        err = fs_path_join(expanded, name, &joined);
-        free(expanded);
-        if (err) return err;
-        final = joined;
-    }
+    bool beneath = name[0] != '\0' &&
+        (fs_is_directory(expanded) || (len > 0 && expanded[len - 1] == '/'));
 
-    *out = arena_strdup(arena, final);
-    free(final);
+    *out = beneath ? str_path_join(arena, expanded, name) : expanded;
     return NULL;
 }
 

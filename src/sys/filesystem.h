@@ -579,23 +579,24 @@ error_t fs_ensure_parent_dirs(const char *path);
 /**
  * The working directory, spelled as the shell spells it
  *
- * $PWD by pwd -L's rule — the fold's own spelling (fs_is_folded), one device
- * and inode with "." — and getcwd's physical path when the shell set none, or
- * it has gone stale, or it is not folded (every shell writes a fixed point; a
- * hand-set variable may not). Logical, because a path names the entry it is reached
- * through: a link in the working directory's path (`~/.config`) stays the entry
- * it is, as an absolute argument typed through it does. Physical only where nothing
- * spelled it — a sudo that dropped $PWD, a cron, an env -i.
+ * $PWD by pwd -L's rule — the fold's own spelling (base/string.h str_path_folded),
+ * one device and inode with "." — and getcwd's physical path when the shell set
+ * none, or it has gone stale, or it is not folded (every shell writes a fixed
+ * point; a hand-set variable may not). Logical, because a path names the entry
+ * it is reached through: a link in the working directory's path (`~/.config`)
+ * stays the entry it is, as an absolute argument typed through it does. Physical
+ * only where nothing spelled it — a sudo that dropped $PWD, a cron, an env -i.
  *
  * Readers: fs_make_absolute, which joins a relative path onto it; and the
  * argument's door (infra/path.h path_input_filesystem_path), which spells it
  * under HOME before it joins — the one reader that reads the kernel's spelling
  * back.
  *
- * @param out The directory (caller frees, must not be NULL)
+ * @param arena Arena the directory is spelled into (must not be NULL)
+ * @param out The directory, the arena's (must not be NULL)
  * @return Error or NULL on success
  */
-error_t fs_working_directory(char **out);
+error_t fs_working_directory(arena_t *arena, const char **out);
 
 /**
  * Make path absolute without resolving symlinks
@@ -605,7 +606,7 @@ error_t fs_working_directory(char **out);
  * absolute path stands, and a relative one is joined onto the working directory
  * as the shell spells it (fs_working_directory). A pure string operation past
  * that one look: the path need not exist, and the argument's own `.` and `..`
- * are kept for the caller's fs_normalize_path.
+ * are kept for the caller's fold (base/string.h str_path_normalize).
  *
  * Readers: the store's own path (utils/repo.c, a relative repository path
  * configured or positional). A CLI argument that names a key is the argument's
@@ -619,10 +620,12 @@ error_t fs_working_directory(char **out);
  *   ./x, .            -> /current/dir/./x, /current/dir/.
  *
  * @param path Input path (must not be NULL, must not contain ~)
- * @param out Absolute path (caller frees, must not be NULL)
+ * @param arena Arena the answer lives in, the working directory beside it (must
+ *        not be NULL)
+ * @param out Absolute path, the arena's (must not be NULL)
  * @return Error or NULL on success
  */
-error_t fs_make_absolute(const char *path, char **out);
+error_t fs_make_absolute(const char *path, arena_t *arena, const char **out);
 
 /**
  * Canonicalize path (resolve symlinks, . and ..)
@@ -636,68 +639,6 @@ error_t fs_make_absolute(const char *path, char **out);
  * @return Error or NULL on success
  */
 error_t fs_canonicalize_path(const char *path, char **out);
-
-/**
- * Normalize path by resolving . and .. components (no filesystem access)
- *
- * This function performs pure string manipulation to resolve `.` and `..` path
- * components WITHOUT accessing the filesystem. Unlike fs_canonicalize_path()
- * which requires the path to exist, this function works on any path string.
- *
- * Use cases:
- * - Normalizing paths before prefix comparison (e.g., HOME detection)
- * - Processing user input that may not exist yet
- * - Resolving relative paths joined with CWD
- *
- * Behavior:
- * - Removes all `.` components (current directory references)
- * - Resolves `..` by removing the preceding component
- * - Preserves leading `/` for absolute paths
- * - Collapses multiple consecutive slashes to single slash
- * - `..` at root level is ignored (cannot go above root)
- *
- * Examples:
- *   /home/user/project/../file   -> /home/user/file
- *   /home/user/./config          -> /home/user/config
- *   /home/user/../../../etc      -> /etc
- *   ./foo/../bar                 -> bar
- *   foo/bar/../baz               -> foo/baz
- *
- * Limitations:
- * - Does NOT resolve symlinks (use fs_canonicalize_path for that)
- * - Does NOT validate path existence
- * - Does NOT handle tilde expansion (expand ~ before calling)
- *
- * @param path Path to normalize (must not be NULL)
- * @param out Normalized path (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t fs_normalize_path(const char *path, char **out);
-
-/**
- * Is this path the fold's own spelling?
- *
- * Absolute, with no empty, `.` or `..` component — "/" or "/a/b": what
- * fs_normalize_path returns for an absolute input, and returns unchanged for
- * one of these. The shape every key has (infra/mount.h): a root's spelling is
- * one, and so is a root's spelling joined with a tail. A relative path answers
- * no whatever it spells — the fold keeps a leading `..` on one, and every reader
- * here asks of an absolute path, which the fold joins a relative one onto first
- * (fs_make_absolute, infra/path.h path_input_filesystem_path). NULL answers no:
- * getenv's answer flows in (fs_working_directory).
- *
- * Pure: no allocation, no filesystem. Readers: the working directory's pwd -L
- * rule (fs_working_directory); a deployment target's shape at the binders and
- * the mount table's own precondition (infra/mount.h mount_validate_target,
- * mount_table_build); and the invoker's HOME, which sys/identity produces by
- * normalizing rather than asking. The store spells the same rule in its own
- * language on the column that holds a target (core/state.c), and one list of
- * shapes is driven through both (tests/test-mount.c, tests/test-state.c).
- *
- * @param path Path, or NULL
- * @return true iff path is absolute and the fold would return it unchanged
- */
-bool fs_is_folded(const char *path);
 
 /**
  * The directory a path stands in
@@ -719,16 +660,6 @@ bool fs_is_folded(const char *path);
 char *fs_parent_dir(const char *path);
 
 /**
- * Join path components
- *
- * @param base Base path (must not be NULL)
- * @param component Component to append (must not be NULL)
- * @param out Joined path (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t fs_path_join(const char *base, const char *component, char **out);
-
-/**
  * Expand a leading tilde to the invoker's home (sys/identity).
  *
  * Examples:
@@ -736,14 +667,17 @@ error_t fs_path_join(const char *base, const char *component, char **out);
  *   ~/foo/bar -> /home/user/foo/bar
  *   ~         -> /home/user          (so does ~/)
  *
- * Inputs without a leading '~' are duplicated verbatim. ~user/foo (other-user
- * expansion) is rejected.
+ * The tail joins HOME at one separator (base/string.h str_path_join), so `~//x`
+ * is `~/x`. Inputs without a leading '~' are copied verbatim — into the arena,
+ * like every answer, so no answer shares its lifetime with the caller's input.
+ * ~user/foo (other-user expansion) is refused.
  *
  * @param path Path with optional ~ prefix (must not be NULL)
- * @param out  Expanded path (must not be NULL, caller must free)
+ * @param arena Arena the expanded path lives in (must not be NULL)
+ * @param out  Expanded path, the arena's (must not be NULL)
  * @return Error or NULL on success
  */
-error_t fs_expand_tilde(const char *path, char **out);
+error_t fs_expand_tilde(const char *path, arena_t *arena, const char **out);
 
 /**
  * Symlink operations

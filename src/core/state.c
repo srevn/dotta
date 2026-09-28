@@ -29,6 +29,7 @@
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/heap.h"
+#include "base/string.h"
 #include "sys/filesystem.h"
 
 /* The database header's two fields that are the application's (SQLite's file
@@ -126,6 +127,11 @@ struct state {
 /**
  * Get database file path
  *
+ * The store's database beside its objects, in the directory libgit2 names. The
+ * handle's own string, freed by state_free: no arena is in reach of a handle.
+ * libgit2 spells every directory it keeps with its separator, but its header
+ * promises no such thing, so one is written where the spelling lacks it.
+ *
  * @param repo Repository (must not be NULL)
  * @param out Output path (must not be NULL, caller must free)
  * @return Error or NULL on success
@@ -139,7 +145,10 @@ static error_t get_db_path(git_repository *repo, char **out) {
         return ERROR(ERR_GIT, "Failed to get repository path");
     }
 
-    return fs_path_join(git_dir, STATE_DB_NAME, out);
+    *out = heap_str_format(
+        "%s%s" STATE_DB_NAME, git_dir, str_ends_with(git_dir, "/") ? "" : "/"
+    );
+    return NULL;
 }
 
 /**
@@ -212,7 +221,7 @@ static fs_occupant_t state_kind_from_text(const char *text) {
 
 /**
  * The spelling every path the store keeps is held to: absolute and folded, "/"
- * included — the rule sys/filesystem.h fs_is_folded holds in C, which the binders
+ * included — the rule base/string.h str_path_folded holds in C, which the binders
  * validate a target by (infra/mount.h mount_validate_target) and mount_resolve
  * spells every key in — and whole: no NUL, so the string C reads is the one SQLite
  * stores, and every clause judges all of it. Two constraints compose it,

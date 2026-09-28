@@ -19,8 +19,7 @@
 /* Default values */
 #define DEFAULT_REPO_DIR "~/.local/share/dotta/repo"
 #define DEFAULT_HOOKS_DIR "~/.config/dotta/hooks"
-#define DEFAULT_CONFIG_DIR "~/.config/dotta"
-#define DEFAULT_CONFIG_FILE "config.toml"
+#define DEFAULT_CONFIG_FILE "~/.config/dotta/config.toml"
 
 /*
  * The readers of one value, one per kind of key. Each reads the value in its
@@ -263,24 +262,14 @@ config_t *config_create_default(arena_t *arena) {
 }
 
 /**
- * The configuration file's path: $DOTTA_CONFIG_FILE when it is set, else the
- * default location.
+ * The configuration file's path, in the arena: $DOTTA_CONFIG_FILE when it is
+ * set, else the default location — either expanded under HOME.
  */
-static error_t config_get_path(char **out) {
-    /* Check environment variable */
+static error_t config_get_path(arena_t *arena, const char **out) {
     const char *env_path = getenv("DOTTA_CONFIG_FILE");
-    if (env_path && env_path[0] != '\0') {
-        return fs_expand_tilde(env_path, out);
-    }
+    const char *spelled = env_path && env_path[0] != '\0' ? env_path : DEFAULT_CONFIG_FILE;
 
-    /* Use default location */
-    char *config_dir = NULL;
-    error_t err = fs_expand_tilde(DEFAULT_CONFIG_DIR, &config_dir);
-    if (err) return err;
-
-    err = fs_path_join(config_dir, DEFAULT_CONFIG_FILE, out);
-    free(config_dir);
-    return err;
+    return fs_expand_tilde(spelled, arena, out);
 }
 
 /**
@@ -451,8 +440,8 @@ error_t config_load(arena_t *arena, config_t **out) {
 
     *out = NULL;
 
-    char *path = NULL;
-    RETURN_IF_ERROR(config_get_path(&path));
+    const char *path = NULL;
+    RETURN_IF_ERROR(config_get_path(arena, &path));
 
     /* Start with defaults */
     config_t *config = config_create_default(arena);
@@ -464,13 +453,10 @@ error_t config_load(arena_t *arena, config_t **out) {
     /* Every failure is wrapped once, with the file: the chain beneath it names
      * what in the file, and why. A refused configuration's parts stay in the
      * arena, which its owner frees whole. */
-    if (err) {
-        err = error_wrap(err, "Failed to load configuration '%s'", path);
-    } else {
-        *out = config;
-    }
-    free(path);
-    return err;
+    if (err) return error_wrap(err, "Failed to load configuration '%s'", path);
+
+    *out = config;
+    return NULL;
 }
 
 const char *config_repo_dir_from_env(void) {
@@ -478,22 +464,23 @@ const char *config_repo_dir_from_env(void) {
     return (dir && dir[0] != '\0') ? dir : NULL;
 }
 
-error_t config_get_repo_dir(const config_t *config, char **out) {
+error_t config_get_repo_dir(const config_t *config, arena_t *arena, const char **out) {
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     /* Priority 1: Environment variable */
     const char *env_dir = config_repo_dir_from_env();
     if (env_dir) {
-        return fs_expand_tilde(env_dir, out);
+        return fs_expand_tilde(env_dir, arena, out);
     }
 
     /* Priority 2: Config file */
     if (config) {
-        return fs_expand_tilde(config->repo_dir, out);
+        return fs_expand_tilde(config->repo_dir, arena, out);
     }
 
     /* Priority 3: Default */
-    return fs_expand_tilde(DEFAULT_REPO_DIR, out);
+    return fs_expand_tilde(DEFAULT_REPO_DIR, arena, out);
 }
 
 const config_strategy_t config_strategies[CONFIG_STRATEGY_COUNT] = {

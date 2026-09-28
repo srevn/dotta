@@ -14,12 +14,14 @@
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "base/output.h"
+#include "base/string.h"
 #include "sys/filesystem.h"
+#include "sys/identity.h"
 
-/* Default values */
-#define DEFAULT_REPO_DIR "~/.local/share/dotta/repo"
-#define DEFAULT_HOOKS_DIR "~/.config/dotta/hooks"
-#define DEFAULT_CONFIG_FILE "~/.config/dotta/config.toml"
+/* Default locations, beneath the invoker's HOME (sys/identity) */
+#define DEFAULT_REPO_DIR ".local/share/dotta/repo"
+#define DEFAULT_HOOKS_DIR ".config/dotta/hooks"
+#define DEFAULT_CONFIG_FILE ".config/dotta/config.toml"
 
 /*
  * The readers of one value, one per kind of key. Each reads the value in its
@@ -100,21 +102,26 @@ static error_t read_string(
     return NULL;
 }
 
-/* A path: a string, and not an empty one — leaving the key out is how the default
- * is asked for. */
+/* A directory: a string, and not an empty one — leaving the key out is how the
+ * default is asked for — read as the shell reads a path, into the arena
+ * (sys/filesystem.h fs_make_absolute): every reader of the key, and every child
+ * it is handed to, meets the one absolute, folded spelling settled here. */
 static error_t read_path(
     toml_datum_t value, const char *section, const char *key, arena_t *arena,
     const char **out
 ) {
-    RETURN_IF_ERROR(read_string(value, section, key, arena, out));
+    const char *text = NULL;
+    RETURN_IF_ERROR(read_text(value, section, key, &text));
 
-    if (**out == '\0') {
+    if (text[0] == '\0') {
         return ERROR(
             ERR_INVALID_ARG, "Invalid [%s] %s: an empty path (leave the key out "
             "for the default)", section, key
         );
     }
-    return NULL;
+
+    error_t err = fs_make_absolute(text, arena, out);
+    return err ? error_wrap(err, "Invalid [%s] %s", section, key) : NULL;
 }
 
 /* The three settings of a few words, each read as the value its word names by
@@ -206,16 +213,17 @@ config_t *config_create_default(arena_t *arena) {
     CHECK_NULL(arena);
 
     /* The configuration is its arena's: the struct, every value read into it
-     * and both compiled rulesets. A default is a literal. */
+     * and both compiled rulesets. A default is a literal, or a location beneath
+     * HOME spelled there. */
     config_t *config = arena_calloc(arena, 1, sizeof(*config));
 
     /* Set defaults */
-    config->repo_dir = DEFAULT_REPO_DIR;
+    config->repo_dir = str_path_join(arena, identity()->home, DEFAULT_REPO_DIR);
     config->strict_mode = false;
     config->strict_ownership = false;
     config->auto_detect_new_files = true;  /* Default: detect new files */
 
-    config->hooks_dir = DEFAULT_HOOKS_DIR;
+    config->hooks_dir = str_path_join(arena, identity()->home, DEFAULT_HOOKS_DIR);
     config->hook_timeout = 30;  /* Default: 30 seconds */
     config->pre_apply = true;
     config->post_apply = true;
@@ -263,13 +271,14 @@ config_t *config_create_default(arena_t *arena) {
 
 /**
  * The configuration file's path, in the arena: $DOTTA_CONFIG_FILE when it is
- * set, else the default location — either expanded under HOME.
+ * set, its tilde expanded, else the default location beneath HOME.
  */
 static error_t config_get_path(arena_t *arena, const char **out) {
     const char *env_path = getenv("DOTTA_CONFIG_FILE");
-    const char *spelled = env_path && env_path[0] != '\0' ? env_path : DEFAULT_CONFIG_FILE;
+    if (env_path && env_path[0] != '\0') return fs_expand_tilde(env_path, arena, out);
 
-    return fs_expand_tilde(spelled, arena, out);
+    *out = str_path_join(arena, identity()->home, DEFAULT_CONFIG_FILE);
+    return NULL;
 }
 
 /**
@@ -455,6 +464,14 @@ error_t config_load(arena_t *arena, config_t **out) {
      * arena, which its owner frees whole. */
     if (err) return error_wrap(err, "Failed to load configuration '%s'", path);
 
+    /* The variable outranks the file and the default: the store's directory it
+     * names, settled as the file's is. */
+    const char *env_dir = config_repo_dir_from_env();
+    if (env_dir) {
+        err = fs_make_absolute(env_dir, arena, &config->repo_dir);
+        if (err) return error_wrap(err, "Invalid DOTTA_REPO_DIR");
+    }
+
     *out = config;
     return NULL;
 }
@@ -462,25 +479,6 @@ error_t config_load(arena_t *arena, config_t **out) {
 const char *config_repo_dir_from_env(void) {
     const char *dir = getenv("DOTTA_REPO_DIR");
     return (dir && dir[0] != '\0') ? dir : NULL;
-}
-
-error_t config_get_repo_dir(const config_t *config, arena_t *arena, const char **out) {
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
-
-    /* Priority 1: Environment variable */
-    const char *env_dir = config_repo_dir_from_env();
-    if (env_dir) {
-        return fs_expand_tilde(env_dir, arena, out);
-    }
-
-    /* Priority 2: Config file */
-    if (config) {
-        return fs_expand_tilde(config->repo_dir, arena, out);
-    }
-
-    /* Priority 3: Default */
-    return fs_expand_tilde(DEFAULT_REPO_DIR, arena, out);
 }
 
 const config_strategy_t config_strategies[CONFIG_STRATEGY_COUNT] = {

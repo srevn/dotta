@@ -37,6 +37,14 @@
  * is no array, and an entry that is no string, holds a NUL or makes no rule
  * (base/gitignore.h), refuse the load, the entry named by its line and column.
  *
+ * The two directories are settled here too, each read as the shell reads a path
+ * (sys/filesystem.h fs_make_absolute: the tilde expanded, a relative one joined
+ * onto the working directory, the whole folded), so every reader meets one
+ * spelling: [hooks] hooks_dir, and the store's — DOTTA_REPO_DIR where it is set,
+ * else [core] repo_dir, else the default beneath HOME. A `~user` spelling is
+ * refused here, named by its key or by the variable, whether or not the command
+ * would have read it.
+ *
  * @param arena The arena the configuration lives in — the process's, main's
  *              (include/runtime.h); a refused load leaves its parts there (must
  *              not be NULL)
@@ -49,7 +57,9 @@ error_t config_load(arena_t *arena, config_t **out);
  * The configuration with every key at its default
  *
  * Made in `arena`, which then holds the struct, every value config_load reads
- * into it and both compiled rulesets; a default is a literal. Nothing frees a
+ * into it and both compiled rulesets; a default is a literal, or a directory
+ * spelled beneath the invoker's HOME — so the identity is established first
+ * (sys/identity.h identity_init), as main() orders it. Nothing frees a
  * configuration: it goes with its arena.
  *
  * @param arena The arena it lives in (must not be NULL)
@@ -60,24 +70,12 @@ config_t *config_create_default(arena_t *arena);
 /**
  * DOTTA_REPO_DIR as the environment sets it, or NULL
  *
- * The one reader of the variable: config_get_repo_dir's first priority, and
- * repo_open's note when the path it resolved holds no repository — the same reader,
- * so the note cannot name an origin the resolution did not use. Raw and borrowed
- * from the environment, unexpanded; an empty value is NULL.
+ * The one reader of the variable: config_load's override of the store's directory,
+ * and repo_open's note when that directory holds no repository — the same reader,
+ * so the note cannot name an origin the load did not use. Raw and borrowed from
+ * the environment, unexpanded; an empty value is NULL.
  */
 const char *config_repo_dir_from_env(void);
-
-/**
- * Get repository directory from config or environment
- *
- * Priority:
- *   1. DOTTA_REPO_DIR environment variable (config_repo_dir_from_env)
- *   2. Config file repo_dir
- *   3. Default: ~/.local/share/dotta/repo
- *
- * Expanded under HOME, into `arena`.
- */
-error_t config_get_repo_dir(const config_t *config, arena_t *arena, const char **out);
 
 /**
  * The divergence strategies, by the word [sync] diverged_strategy and `sync

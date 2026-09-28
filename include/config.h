@@ -44,13 +44,13 @@ typedef enum {
  */
 struct config {
     /* [core] */
-    const char *repo_dir;        /* Repository directory path */
+    const char *repo_dir;        /* The store's directory: DOTTA_REPO_DIR, else this key, else the default — absolute, folded */
     bool strict_mode;            /* Refuse where the repo's state would otherwise be proceeded past */
     bool strict_ownership;       /* An ownership claim this system cannot resolve aborts */
     bool auto_detect_new_files;  /* Auto-detect new files in tracked directories */
 
     /* [hooks] */
-    const char *hooks_dir;        /* Directory containing hook scripts */
+    const char *hooks_dir;        /* Directory containing hook scripts — absolute, folded */
     int32_t hook_timeout;         /* Hook execution timeout in seconds (default: 30, 0 = no timeout) */
     bool pre_apply;               /* Enable pre-apply hook */
     bool post_apply;              /* Enable post-apply hook */

@@ -84,28 +84,27 @@ typedef struct args_command args_command_t;
 /**
  * The shape a command opens the repository in
  *
- * OPEN is `repo_open`: the libgit2 handle, and the path that opening it resolved.
- * PATH is `resolve_repo_path` alone — the path from the config, with no open at
- * all — for a command that never touches the handle because it forks the real
- * git over the directory (git).
+ * OPEN is `repo_open`: the libgit2 handle over the store's directory the
+ * configuration settled (`config->repo_dir`). PATH is that directory alone, with
+ * no open at all — for a command that never touches the handle because it forks
+ * the real git over the directory (git).
  *
- * The split is not a saved open. Everything `repo_open` does past resolving the
- * path is dotta asserting its own model of the repository: libgit2's open, which
- * reads files of the user's that dotta itself commonly deploys (~/.gitconfig)
- * and can refuse over one of them, and then the store's own declaration
- * (utils/repo.h). The pass-through is what a user reaches for when that model
- * does not hold — `dotta git show global:home/.gitconfig` is the way back to
- * the committed copy of the file that broke the open — so it cannot be gated on
- * the model holding: an opening pass-through would answer that remedy with the
- * very error the remedy is for.
+ * The split is not a saved open. Everything `repo_open` does is dotta asserting
+ * its own model of the repository: libgit2's open, which reads files of the user's
+ * that dotta itself commonly deploys (~/.gitconfig) and can refuse over one of
+ * them, and then the store's own declaration (utils/repo.h). The pass-through
+ * is what a user reaches for when that model does not hold — `dotta git show
+ * global:home/.gitconfig` is the way back to the committed copy of the file that
+ * broke the open — so it cannot be gated on the model holding: an opening
+ * pass-through would answer that remedy with the very error the remedy is for.
  *
  * CREATE-style commands (init, clone) declare NONE and open the repository
  * themselves, because it does not exist before dispatch runs.
  */
 typedef enum dotta_repo_mode {
     DOTTA_REPO_NONE,   /* No repository member */
-    DOTTA_REPO_PATH,   /* resolve_repo_path: the path, and no open */
-    DOTTA_REPO_OPEN    /* repo_open: the handle, and the path it resolved */
+    DOTTA_REPO_PATH,   /* The store's directory, and no open */
+    DOTTA_REPO_OPEN    /* repo_open: the handle, and the directory it opened */
 } dotta_repo_mode_t;
 
 /**
@@ -343,13 +342,11 @@ typedef struct dotta_needs {
  * into core; commands never free a member.
  *
  *   - `repo_path` is non-NULL iff `repo` was declared at all, and `repo` itself
- *     only at OPEN. `repo_open` already resolves the path to open the repo, so
- *     threading it out costs nothing and gives commands that need both (bootstrap,
- *     which exports DOTTA_REPO_DIR to child scripts) a single source of truth
- *     instead of a second `resolve_repo_path` call; a command that needs only
- *     the path (git) declares PATH and the run never opens. The command arena's,
- *     resolved into it: the run holds only borrowed or arena-owned strings, and
- *     `close_run` frees no `const char *`.
+ *     only at OPEN: the store's directory the configuration settled
+ *     (`config->repo_dir`), borrowed from the process arena. A command that needs
+ *     only the path (git) declares PATH and the run never opens. The run holds
+ *     only borrowed or arena-owned strings, and `close_run` frees no `const char
+ *     *`.
  *   - `state` is the handle in the declared shape; dispatch closes it on return
  *     (`state_free` rolls back any uncommitted transaction).
  *   - `mounts` is a value: built into the command arena from the state's rows
@@ -399,7 +396,7 @@ typedef struct dotta_needs {
  */
 typedef struct dotta_run {
     struct git_repository *repo;        /* needs->repo == OPEN */
-    const char *repo_path;              /* needs->repo != NONE; the command arena's */
+    const char *repo_path;              /* needs->repo != NONE; the configuration's repo_dir, borrowed */
     state_t *state;                     /* needs->state != NONE; the READ or WRITE shape */
     const mount_table_t *mounts;        /* needs->mounts; this machine's topology at dispatch */
     keymgr *keymgr;                     /* needs->crypto != NONE, and only if encryption is on */

@@ -599,30 +599,32 @@ error_t fs_ensure_parent_dirs(const char *path);
 error_t fs_working_directory(arena_t *arena, const char **out);
 
 /**
- * Make path absolute without resolving symlinks
+ * A path as the shell reads it: absolute and folded, no link resolved
  *
- * Unlike fs_canonicalize_path() which uses realpath() and resolves all symlinks,
- * this function makes a path absolute while preserving symlink locations: an
- * absolute path stands, and a relative one is joined onto the working directory
- * as the shell spells it (fs_working_directory). A pure string operation past
- * that one look: the path need not exist, and the argument's own `.` and `..`
- * are kept for the caller's fold (base/string.h str_path_normalize).
+ * A leading tilde expands under HOME (fs_expand_tilde, whose `~user` refusal is
+ * this function's one), a relative path joins the working directory as the shell
+ * spells it (fs_working_directory), and the whole folds lexically (base/string.h
+ * str_path_normalize). Unlike fs_canonicalize_path, which resolves every link
+ * through realpath(3), a link stays the entry it is reached through, and the
+ * path need not exist: past the one look at the working directory, a string's
+ * operation.
  *
- * Readers: the store's own path (utils/repo.c, a relative repository path
- * configured or positional). A CLI argument that names a key is the argument's
- * door's (infra/path.h), which spells the working directory for a key before it
- * joins.
+ * Readers: the store's directory, the one reading its two sources share so that
+ * the two can be compared — the configured one, settled at load (utils/config.c),
+ * and a create-style command's positional (utils/repo.c repo_create_target);
+ * and the hooks' directory beside it. A CLI argument that names a key is the
+ * argument's door's instead (infra/path.h), which spells the working directory
+ * for a key before it joins.
  *
  * Examples:
  *   /home/user/mylink -> /home/user/mylink (even if mylink is a symlink)
+ *   ~/x/../y          -> /home/user/y
  *   mylink            -> /current/dir/mylink
- *   relative/path     -> /current/dir/relative/path
- *   ./x, .            -> /current/dir/./x, /current/dir/.
+ *   ./x, ., ../y      -> /current/dir/x, /current/dir, /current/y
  *
- * @param path Input path (must not be NULL, must not contain ~)
- * @param arena Arena the answer lives in, the working directory beside it (must
- *        not be NULL)
- * @param out Absolute path, the arena's (must not be NULL)
+ * @param path Input path (must not be NULL; the empty string is refused)
+ * @param arena Arena the answer lives in, its steps beside it (must not be NULL)
+ * @param out Absolute, folded path, the arena's (must not be NULL)
  * @return Error or NULL on success
  */
 error_t fs_make_absolute(const char *path, arena_t *arena, const char **out);

@@ -8,13 +8,11 @@
  * and HEAD is git's alone, written once by the init and never read (sys/gitops.h,
  * gitops_init_repository).
  *
- * Where it is, this machine decides:
- * 1. DOTTA_REPO_DIR environment variable (highest priority)
- * 2. Config file setting (~/.config/dotta/config.toml)
- * 3. Default location: ~/.local/share/dotta/repo
- *
- * This is different from git's behavior - dotta uses a centralized repository,
- * not discovery from current working directory.
+ * Where it is, this machine decides, and the configuration settles it once, at
+ * load (utils/config.h config_load): DOTTA_REPO_DIR where it is set, else [core]
+ * repo_dir, else ~/.local/share/dotta/repo — absolute and folded, in
+ * `config->repo_dir`. This is different from git's behavior - dotta uses a
+ * centralized repository, not discovery from current working directory.
  *
  * What makes a directory the store is a fact its maker writes into the store's
  * own config, the way git writes `core.bare`:
@@ -31,7 +29,7 @@
  * the remote side, where `dotta clone` gates on the ref being advertised.
  *
  * Which *directory* the store is is `git_repository_path` on the open handle
- * and not `resolve_repo_path`: the two name one directory for the bare repository
+ * and not `config->repo_dir`: the two name one directory for the bare repository
  * dotta makes and two for a non-bare one a hand declared, where the store's own
  * files sit in the `.git/` and the path resolves to the worktree beside it. One
  * reader — core/state.c get_db_path, joining the database onto it.
@@ -44,48 +42,31 @@
 #include <types.h>
 
 /**
- * Resolve repository path
- *
- * Determines the dotta repository location based on:
- * 1. DOTTA_REPO_DIR environment variable (always highest priority)
- * 2. Config file repo_dir setting
- * 3. Default: ~/.local/share/dotta/repo
- *
- * The path is always expanded (~ becomes absolute path). If the config file exists
- * but fails to parse/validate, a warning is emitted to stderr and the resolution
- * continues without config (env var and default are still respected).
- *
- * @param config Loaded configuration (must not be NULL)
- * @param arena Arena the path lives in (must not be NULL)
- * @param out Resolved repository path, the arena's (must not be NULL)
- * @return Error or NULL on success
- */
-error_t resolve_repo_path(const config_t *config, arena_t *arena, const char **out);
-
-/**
  * Where a create-style command puts the repository
  *
- * `resolve_repo_path` answers "where does this machine's repository live"; this
+ * `config->repo_dir` answers "where does this machine's repository live"; this
  * answers "where does a command that creates one put it". Two questions, two
  * tails: only the second has a positional to honour, parent directories to make,
  * and a caller to warn.
  *
  * `explicit_path` is the command's optional positional (`init [path]`, `clone
  * <url> [path]`); NULL means "wherever this machine's repository lives", which
- * is `resolve_repo_path` and nothing else. Both branches expand `~`, settle a
- * relative path against the current directory, and create the parent directories
+ * is `config->repo_dir` and nothing else. Both are read by one function
+ * (sys/filesystem.h fs_make_absolute: `~` expanded, a relative path settled against
+ * the current directory, the whole folded), and both get their parent directories
  * — an explicit path is not a lesser path, and each of the two commands used to
- * drop a different one of those three steps: a quoted `dotta init "~/dotfiles"`
- * created a literal `./~/dotfiles`, and `dotta clone` re-derived the implicit
- * branch without $DOTTA_REPO_DIR in it.
+ * drop a different step: a quoted `dotta init "~/dotfiles"` created a literal
+ * `./~/dotfiles`, and `dotta clone` re-derived the implicit branch without
+ * $DOTTA_REPO_DIR in it.
  *
  * `*out_elsewhere` is where later commands will look, set only when that is not
  * `*out_path` — NULL when the two are the same place, so a non-NULL answer is
  * exactly "this repository is somewhere dotta will not find it". Both sides are
- * normalised here, by one function, which is what makes the comparison mean
- * anything. The caller says so on success, because nothing else will: every later
- * command resolves the configured location and stops there, so a `dotta status`
- * run straight afterwards answers "No dotta repository found... Run 'dotta init'"
+ * read by that one function, which is what makes the comparison mean anything:
+ * `./repo`, `repo/` and the configured spelling of one directory are one string.
+ * The caller says so on success, because nothing else will: every later command
+ * resolves the configured location and stops there, so a `dotta status` run
+ * straight afterwards answers "No dotta repository found... Run 'dotta init'"
  * about the repository just created.
  *
  * @param config        Loaded configuration (must not be NULL)
@@ -144,18 +125,13 @@ error_t repo_is_store(git_repository *repo, bool *out);
 /**
  * Open dotta's store
  *
- * Resolves the store's path, opens it, and reads its declaration (repo_is_store):
- * a repository that does not carry one is somebody's — a project with a working
- * tree, a mirror, the checked-out store an older dotta kept — and refused with
- * ERR_NOT_FOUND naming the path, `dotta init` and DOTTA_REPO_DIR. This is the
- * standard way to open the store for dotta commands — the pass-through (`dotta
- * git`) is the one that deliberately does not, taking only the path
- * (`dotta_repo_mode_t` in include/runtime.h).
- *
- * RESOLUTION ORDER:
- * 1. DOTTA_REPO_DIR environment variable
- * 2. Config file repo_dir setting
- * 3. Default: ~/.local/share/dotta/repo
+ * Opens the store's directory the configuration settled (`config->repo_dir`),
+ * and reads its declaration (repo_is_store): a repository that does not carry
+ * one is somebody's — a project with a working tree, a mirror, the checked-out
+ * store an older dotta kept — and refused with ERR_NOT_FOUND naming the path,
+ * `dotta init` and DOTTA_REPO_DIR. This is the standard way to open the store
+ * for dotta commands — the pass-through (`dotta git`) is the one that deliberately
+ * does not, taking only the path (`dotta_repo_mode_t` in include/runtime.h).
  *
  * THE OPEN IS THE PRESENCE TEST: there is no separate "is a repository here"
  * question — asking it means opening, and a predicate that opens and throws the
@@ -179,18 +155,12 @@ error_t repo_is_store(git_repository *repo, bool *out);
  *
  * OWNERSHIP:
  * - Caller must free repository with git_repository_free()
- * - The path is the arena's
- * - On error, outputs are not modified
+ * - On error, the output is not modified
  *
  * @param config Loaded configuration (must not be NULL)
- * @param arena Arena the resolved path lives in (must not be NULL)
  * @param repo_out Repository handle (must not be NULL, caller must free)
- * @param path_out Optional resolved path, the arena's (can be NULL)
  * @return Error or NULL on success
  */
-error_t repo_open(
-    const config_t *config, arena_t *arena, git_repository **repo_out,
-    const char **path_out
-);
+error_t repo_open(const config_t *config, git_repository **repo_out);
 
 #endif /* DOTTA_REPO_H */

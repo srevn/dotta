@@ -4,32 +4,14 @@
 
 #include "utils/repo.h"
 
+#include <limits.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "base/error.h"
-#include "base/string.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "utils/config.h"
-
-/**
- * Resolve repository path
- */
-error_t resolve_repo_path(const config_t *config, arena_t *arena, const char **out) {
-    CHECK_NULL(config);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
-
-    /* Resolve repository directory using full priority chain:
-     * 1. DOTTA_REPO_DIR environment variable
-     * 2. Config file repo_dir setting
-     * 3. Default: ~/.local/share/dotta/repo */
-    error_t err = config_get_repo_dir(config, arena, out);
-
-    /* Path expansion failed (e.g., invalid home directory). This is a genuine
-     * error that should be propagated. */
-    return err ? error_wrap(err, "Failed to resolve repository path") : NULL;
-}
 
 /**
  * Where a create-style command puts the repository
@@ -45,24 +27,15 @@ error_t repo_create_target(
     CHECK_NULL(arena);
     CHECK_NULL(out_path);
 
-    /* Where this machine's repository lives, in the one shape the comparison at
-     * the end can trust. Both sides are normalised by this function, which is
-     * the whole reason the answer means anything: `resolve_repo_path` expands
-     * `~`, and `fs_make_absolute` settles a relative repo_dir against the current
-     * directory exactly as it settles a relative positional below. */
-    const char *resolved = NULL;
-    RETURN_IF_ERROR(resolve_repo_path(config, arena, &resolved));
-
-    const char *configured = NULL;
-    RETURN_IF_ERROR(fs_make_absolute(resolved, arena, &configured));
-
-    /* No positional: the configured location is the answer, already in hand and
-     * already normalised. */
+    /* Where this machine's repository lives, and where the positional puts one,
+     * in the one shape the comparison at the end can trust: both are read by
+     * fs_make_absolute — the configured one at load, the positional here — so
+     * the two spellings of one directory are one string. No positional: the
+     * configured location is the answer. */
+    const char *configured = config->repo_dir;
     const char *path = configured;
     if (explicit_path != NULL) {
-        const char *expanded = NULL;
-        RETURN_IF_ERROR(fs_expand_tilde(explicit_path, arena, &expanded));
-        RETURN_IF_ERROR(fs_make_absolute(expanded, arena, &path));
+        RETURN_IF_ERROR(fs_make_absolute(explicit_path, arena, &path));
     }
 
     /* The directory holding the repository, not the repository: the clone refuses
@@ -148,26 +121,18 @@ error_t repo_is_store(git_repository *repo, bool *out) {
 /**
  * Open dotta's store
  */
-error_t repo_open(
-    const config_t *config, arena_t *arena, git_repository **repo_out,
-    const char **path_out
-) {
+error_t repo_open(const config_t *config, git_repository **repo_out) {
     CHECK_NULL(config);
-    CHECK_NULL(arena);
     CHECK_NULL(repo_out);
 
-    const char *repo_path = NULL;
+    /* The store's directory, settled at load (utils/config.h) */
+    const char *repo_path = config->repo_dir;
     git_repository *repo = NULL;
-    error_t err = NULL;
-
-    /* Resolve repository path — resolve_repo_path names its own failure. */
-    err = resolve_repo_path(config, arena, &repo_path);
-    if (err) return err;
 
     /* Where the path came from, when it did not come from the default — for the
      * refusals below that send the user to 'dotta init' or to DOTTA_REPO_DIR.
-     * The reader config_get_repo_dir's priority 1 has, so the note cannot name
-     * an origin the resolution did not use. */
+     * The reader config_load's override has, so the note cannot name an origin
+     * the load did not use. */
     const char *env_repo = config_repo_dir_from_env();
     const char *env_note = env_repo ? "\nDOTTA_REPO_DIR is set to: " : "";
     const char *env_value = env_repo ? env_repo : "";
@@ -182,7 +147,7 @@ error_t repo_open(
      * with a broken ~/.gitconfig to run 'dotta init' costs them the repository
      * they still have.
      */
-    err = gitops_open_repository(&repo, repo_path);
+    error_t err = gitops_open_repository(&repo, repo_path);
     if (err) {
         if (error_code(err) == ERR_NOT_FOUND) {
             /* Which of the two it is. libgit2 words them identically — "could
@@ -193,11 +158,14 @@ error_t repo_open(
              * gone, the directory holds no repository (nothing there, a directory
              * of other things, a store a hand stripped of its HEAD, which 'dotta
              * init' recreates with refs, epoch and record intact); present, or
-             * unstattable because the directory cannot be looked into, there is
-             * a repository here that could not be read, and the answer to an
-             * absence is the one answer that must not be offered for it. */
-            const char *head = str_path_join(arena, repo_path, "HEAD");
-            if (fs_lstat_occupant(head, NULL) == FS_OCCUPANT_NONE) {
+             * unstattable because the directory cannot be looked into — or a
+             * spelling past PATH_MAX, which no lstat could answer — there is a
+             * repository here that could not be read, and the answer to an absence
+             * is the one answer that must not be offered for it. */
+            char head[PATH_MAX];
+            int n = snprintf(head, sizeof(head), "%s/HEAD", repo_path);
+            if (n >= 0 && (size_t) n < sizeof(head) &&
+                fs_lstat_occupant(head, NULL) == FS_OCCUPANT_NONE) {
                 return ERROR(
                     ERR_NOT_FOUND, "No dotta repository found at: %s\n\n"
                     "Run 'dotta init' to create a new repository%s%s",
@@ -249,9 +217,6 @@ error_t repo_open(
         return err;
     }
 
-    /* Success - set outputs */
     *repo_out = repo;
-    if (path_out) *path_out = repo_path;
-
     return NULL;
 }

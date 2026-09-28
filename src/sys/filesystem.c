@@ -1224,15 +1224,18 @@ error_t fs_make_absolute(const char *path, arena_t *arena, const char **out) {
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    if (path[0] == '/') {
-        *out = arena_strdup(arena, path);
-        return NULL;
+    /* The shell's order: the tilde, then the working directory beneath a path
+     * still relative, then the fold over the whole. */
+    const char *expanded = NULL;
+    RETURN_IF_ERROR(fs_expand_tilde(path, arena, &expanded));
+
+    if (expanded[0] != '/') {
+        const char *cwd = NULL;
+        RETURN_IF_ERROR(fs_working_directory(arena, &cwd));
+        expanded = str_path_join(arena, cwd, expanded);
     }
 
-    const char *cwd = NULL;
-    RETURN_IF_ERROR(fs_working_directory(arena, &cwd));
-    *out = str_path_join(arena, cwd, path);
-
+    *out = str_path_normalize(arena, expanded);
     return NULL;
 }
 

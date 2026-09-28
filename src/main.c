@@ -151,15 +151,15 @@ static error_t open_run(
 
     error_t err = NULL;
 
-    /* The repository, in the declared shape. OPEN opens it and gets the path
-     * opening it resolved; PATH resolves the path and opens nothing, which is
-     * what lets the pass-through run over a repository dotta cannot open. Either
-     * way the path is the command arena's. */
+    /* The repository, in the declared shape: the store's directory the
+     * configuration settled, which OPEN opens and PATH does not — what lets the
+     * pass-through run over a repository dotta cannot open. */
     if (needs->repo != DOTTA_REPO_NONE) {
-        err = (needs->repo == DOTTA_REPO_OPEN)
-            ? repo_open(config, arena, &run->repo, &run->repo_path)
-            : resolve_repo_path(config, arena, &run->repo_path);
-        if (err) goto done;
+        run->repo_path = config->repo_dir;
+        if (needs->repo == DOTTA_REPO_OPEN) {
+            err = repo_open(config, &run->repo);
+            if (err) goto done;
+        }
     }
 
     /* State, in the shape the spec declares — narrowed where this invocation is
@@ -340,9 +340,7 @@ static int run_spec(
      * dispatch goes to its handler). */
     const args_command_t *resolved = cmd;
 
-    /* Passthrough commands (e.g. `git`) skip parsing but still open their run,
-     * so the repository path reaches dispatch without a second
-     * `resolve_repo_path`. */
+    /* Passthrough commands (e.g. `git`) skip parsing but still open their run. */
     void *opts = NULL;
     if (!cmd->passthrough) {
         if (cmd->opts_size > 0) {

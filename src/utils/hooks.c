@@ -89,27 +89,6 @@ static bool hook_is_enabled(const config_t *config, hook_type_t type) {
 }
 
 /**
- * Get hook script path, in the arena
- */
-static error_t hook_get_path(
-    const config_t *config, hook_type_t type, arena_t *arena, const char **out
-) {
-    CHECK_NULL(config);
-    CHECK_NULL(out);
-
-    /* Get hooks directory */
-    const char *hooks_dir = NULL;
-    error_t err = fs_expand_tilde(config->hooks_dir, arena, &hooks_dir);
-    if (err) {
-        return error_wrap(err, "Failed to resolve hooks directory");
-    }
-
-    /* Build hook script path */
-    *out = str_path_join(arena, hooks_dir, hook_type_name(type));
-    return NULL;
-}
-
-/**
  * The hook's environment, a string array in `arena`: the DOTTA_* surface, the
  * command's extras, then the process's own environment with its DOTTA_* left
  * out, so the surface above cannot be shadowed. An envp as it stands — it always
@@ -175,11 +154,10 @@ static error_t hook_execute(
     /* The hook's path and the spawn's environment, in a frame of the call's own:
      * the path read by the checks below and the child's exec, the environment
      * by the child at its exec, both dropped with the frame once the hook has
-     * run */
+     * run. The directory is the one the configuration settled (utils/config.h). */
     arena_t *frame = arena_create(0);
-    const char *hook_path = NULL;
-    error_t err = hook_get_path(config, type, frame, &hook_path);
-    if (err) goto cleanup;
+    const char *hook_path = str_path_join(frame, config->hooks_dir, hook_type_name(type));
+    error_t err = NULL;
 
     /* Missing hook is not an error — silently skip. */
     if (!fs_file_exists(hook_path)) goto cleanup;

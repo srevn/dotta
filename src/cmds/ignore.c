@@ -998,10 +998,9 @@ static error_t test_path_ignore(
             /* What this asker calls the path: the claims it holds above it, else
              * its own roots — the word alone at one of them, whose tail is ""
              * and which no rule reaches. */
-            const char *name = NULL;
-            err = manifest_name(view, asker, filesystem_path, NULL, ctx->arena, &name);
-            if (err) goto cleanup;
-            subject = label_tail(name);
+            subject = label_tail(
+                manifest_name(ctx->arena, view, asker, filesystem_path, NULL)
+            );
         }
 
         output_info(

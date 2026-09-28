@@ -355,9 +355,7 @@ typedef struct {
  * terminates because the ascent reads rungs strictly above the path it is asked
  * about, so every turn is a strictly shorter path and the depth is bounded by
  * the rungs; it is entered at all only where a group stands. */
-static error_t manifest_ascend(
-    const naming_t *n, const char *filesystem_path, const char **out_storage
-);
+static const char *manifest_ascend(const naming_t *n, const char *filesystem_path);
 
 /**
  * A row as a namer reads it
@@ -403,32 +401,18 @@ static manifest_claim_t manifest_row_claim(const manifest_row_t *row) {
  * @param filesystem_path The path the group contends for (must not be NULL)
  * @param group Every name the profile holds there, NULL-terminated, in name order
  *              (must not be NULL, and must hold at least one row)
- * @param out_kept The row whose name stands (must not be NULL)
- * @return Error or NULL on success
+ * @return The row whose name stands; never NULL
  */
-static error_t manifest_decide(
-    const naming_t *n,
-    const char *filesystem_path,
-    manifest_row_t **group,
-    manifest_row_t **out_kept
+static manifest_row_t *manifest_decide(
+    const naming_t *n, const char *filesystem_path, manifest_row_t **group
 ) {
-    const char *fresh = NULL;
-    error_t err = manifest_ascend(n, filesystem_path, &fresh);
-    if (err) {
-        return error_wrap(
-            err, "Failed to name '%s' for profile '%s'", filesystem_path, n->profile
-        );
-    }
+    const char *fresh = manifest_ascend(n, filesystem_path);
 
     /* The fresh name if a member is it, else the bytewise-least. */
-    *out_kept = group[0];
     for (size_t g = 0; group[g]; g++) {
-        if (strcmp(group[g]->storage_path, fresh) != 0) continue;
-        *out_kept = group[g];
-        break;
+        if (strcmp(group[g]->storage_path, fresh) == 0) return group[g];
     }
-
-    return NULL;
+    return group[0];
 }
 
 /**
@@ -476,37 +460,20 @@ static error_t manifest_decide(
  *
  * @param n What the question is asked under (must not be NULL)
  * @param filesystem_path The path to read (must not be NULL)
- * @param out The claim standing there, a NULL name when none does (must not be
- *            NULL)
- * @return Error or NULL on success
+ * @return The claim standing there, a NULL name when none does
  */
-static error_t manifest_standing(
-    const naming_t *n, const char *filesystem_path, manifest_claim_t *out
-) {
-    *out = (manifest_claim_t){ 0 };
-
+static manifest_claim_t manifest_standing(const naming_t *n, const char *filesystem_path) {
     const contribution_t *c = n->c;
 
     manifest_row_t **group =
         c && c->contested ? hashmap_get(c->contested, filesystem_path) : NULL;
-    if (group) {
-        manifest_row_t *kept = NULL;
-        error_t err = manifest_decide(n, filesystem_path, group, &kept);
-        if (err) return err;
-
-        *out = manifest_row_claim(kept);
-        return NULL;
-    }
+    if (group) return manifest_row_claim(manifest_decide(n, filesystem_path, group));
 
     const manifest_claim_t *staged =
         n->pending ? hashmap_get(n->pending, filesystem_path) : NULL;
-    if (staged) {
-        *out = *staged;
-        return NULL;
-    }
+    if (staged) return *staged;
 
-    *out = manifest_row_claim(c ? hashmap_get(c->index, filesystem_path) : NULL);
-    return NULL;
+    return manifest_row_claim(c ? hashmap_get(c->index, filesystem_path) : NULL);
 }
 
 /**
@@ -556,14 +523,9 @@ static error_t manifest_standing(
  *
  * @param n What the question is asked under (must not be NULL)
  * @param filesystem_path Absolute path (must not be NULL)
- * @param out_storage The composed name, never NULL on success (must not be NULL)
- * @return Error or NULL on success
+ * @return The composed name; never NULL
  */
-static error_t manifest_ascend(
-    const naming_t *n, const char *filesystem_path, const char **out_storage
-) {
-    *out_storage = NULL;
-
+static const char *manifest_ascend(const naming_t *n, const char *filesystem_path) {
     /* The roots' whole answer, asked once. The sentinel encloses every absolute
      * path, so one nothing encloses is not a path at all, and no claim is read
      * for a caller's bug. */
@@ -581,11 +543,7 @@ static error_t manifest_ascend(
 
         /* What stands at this rung, and only a directory naming what lies beneath
          * it. */
-        manifest_claim_t claim = { 0 };
-        error_t err = manifest_standing(n, rung, &claim);
-        if (err) return err;
-
-        const char *above = manifest_claim_beneath(claim);
+        const char *above = manifest_claim_beneath(manifest_standing(n, rung));
         if (!above) continue;
 
         /* Past the rung and its separator — which the root directory, being its
@@ -596,14 +554,12 @@ static error_t manifest_ascend(
         const char *past = filesystem_path + len;
         if (*past == '/') past++;
 
-        *out_storage = arena_str_format(n->arena, "%s/%s", above, past);
-        return NULL;
+        return arena_str_format(n->arena, "%s/%s", above, past);
     }
 
     /* Nothing of the profile's above it: the root's own label, and the tail —
      * the word alone at the root itself. */
-    *out_storage = label_compose(n->arena, root->label, tail);
-    return NULL;
+    return label_compose(n->arena, root->label, tail);
 }
 
 /**
@@ -666,15 +622,14 @@ static int name_order(const void *a, const void *b) {
  * @param c The contribution being settled (must not be NULL)
  * @param contenders The rows that met a path already named (must not be NULL)
  * @param arena Arena for the groups and the composed names (must not be NULL)
- * @return Error or NULL on success
  */
-static error_t manifest_settle(
+static void manifest_settle(
     manifest_t *manifest,
     contribution_t *c,
     ptr_array_t *contenders,
     arena_t *arena
 ) {
-    if (contenders->count == 0) return NULL;
+    if (contenders->count == 0) return;
 
     /* The index of the groups, allocated where the first one is about to exist:
      * a contribution with no contender never has one, and the readers test the
@@ -712,9 +667,7 @@ static error_t manifest_settle(
         for (size_t g = 0; g < count; g++) group[g + 1] = rows[i + g];
         qsort(group, count + 1, sizeof(*group), name_order);
 
-        manifest_row_t *kept = NULL;
-        error_t err = manifest_decide(&n, filesystem_path, group, &kept);
-        if (err) return err;
+        manifest_row_t *kept = manifest_decide(&n, filesystem_path, group);
 
         hashmap_set(c->index, filesystem_path, kept);
 
@@ -733,8 +686,6 @@ static error_t manifest_settle(
 
         i += count;
     }
-
-    return NULL;
 }
 
 /**
@@ -1104,8 +1055,7 @@ static error_t manifest_contribute(
     }
 
     /* Every path this profile named twice, decided once. */
-    err = manifest_settle(manifest, c, &contenders, arena);
-    if (err) goto cleanup;
+    manifest_settle(manifest, c, &contenders, arena);
 
     /* The contribution's rows: what the index points at, in claim order. A name
      * that lost and a derived claim an explicit one retook stay in the arena
@@ -1544,20 +1494,16 @@ bool manifest_holds_name(
  * copies, which costs one strdup and buys the absence of a contract where three
  * lifetimes meet.
  */
-error_t manifest_name(
+const char *manifest_name(
+    arena_t *arena,
     const manifest_t *manifest,
     const char *profile,
     const char *filesystem_path,
-    const hashmap_t *pending,
-    arena_t *arena,
-    const char **out_storage
+    const hashmap_t *pending
 ) {
+    CHECK_NULL(arena);
     CHECK_NULL(manifest);
     CHECK_NULL(filesystem_path);
-    CHECK_NULL(arena);
-    CHECK_NULL(out_storage);
-
-    *out_storage = NULL;
 
     const naming_t n = {
         .c       = manifest_contribution(manifest, profile),
@@ -1567,16 +1513,10 @@ error_t manifest_name(
         .arena   = arena,
     };
 
-    manifest_claim_t here = { 0 };
-    error_t err = manifest_standing(&n, filesystem_path, &here);
-    if (err) return err;
+    manifest_claim_t here = manifest_standing(&n, filesystem_path);
+    if (here.storage_path) return arena_strdup(arena, here.storage_path);
 
-    if (here.storage_path) {
-        *out_storage = arena_strdup(arena, here.storage_path);
-        return NULL;
-    }
-
-    return manifest_ascend(&n, filesystem_path, out_storage);
+    return manifest_ascend(&n, filesystem_path);
 }
 
 /**

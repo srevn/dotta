@@ -877,8 +877,7 @@ error_t profile_claim_name(
     *out_storage = NULL;
 
     manifest_t *view = NULL;
-    error_t err = manifest_build_tree(repo, tree, profile, mounts, arena, &view);
-    if (err) return err;
+    RETURN_IF_ERROR(manifest_build_tree(repo, tree, profile, mounts, arena, &view));
 
     /* The claim standing there, before the name one would take: a derived claim
      * is held and names nothing, so the ascent climbs past it and would answer
@@ -886,12 +885,9 @@ error_t profile_claim_name(
      * place — its label's word at a root of its own. Either answer is the arena's,
      * as the view is. */
     const manifest_row_t *row = manifest_lookup_claim(view, profile, filesystem_path);
-    if (row) {
-        *out_storage = row->storage_path;
-        return NULL;
-    }
-
-    return manifest_name(view, profile, filesystem_path, NULL, arena, out_storage);
+    *out_storage = row ? row->storage_path
+                       : manifest_name(arena, view, profile, filesystem_path, NULL);
+    return NULL;
 }
 
 /**

@@ -2354,17 +2354,16 @@ typedef struct {
  * child by the view's own word, and the directory is the winner's to enumerate,
  * under the winner's name, from a depth 0 of its own.
  *
- * What the filesystem refuses is said where it happens and the siblings go on,
- * and absence is silent. The lines go to stderr, as the driver's do — core has
- * no output handle.
+ * Cannot fail: what the filesystem refuses is said where it happens and the
+ * siblings go on, and absence is silent. The lines go to stderr, as the driver's
+ * do — core has no output handle.
  *
  * @param scan      What the walk runs under (must not be NULL)
  * @param directory The path this frame enumerates: a key the view holds no blob
  *                  at or over (must not be NULL)
  * @param depth     Frames beneath the tracked directory the driver started at
- * @return Error or NULL on success
  */
-static error_t scan_directory_for_untracked(
+static void scan_directory_for_untracked(
     const scan_t *scan, const char *directory, size_t depth
 ) {
     CHECK_NULL(scan);
@@ -2384,7 +2383,7 @@ static error_t scan_directory_for_untracked(
             "stands in; new files beneath it are not listed\n",
             directory, FS_WALK_MAX_DEPTH
         );
-        return NULL;
+        return;
     }
 
     /* The frame's scratch. The listing comes first, below the entry mark: the
@@ -2411,7 +2410,7 @@ static error_t scan_directory_for_untracked(
         /* The listing's error is dropped, one per directory the walk could not
          * list */
         arena_free(scratch);
-        return NULL;
+        return;
     }
 
     /* Above the listing, the entry's strings — its join, the namer's copy and
@@ -2526,12 +2525,7 @@ static error_t scan_directory_for_untracked(
          * the composition beneath the nearest directory claim above it, else
          * the label of the root it lies under, the word alone where the child
          * is one of this profile's own roots. */
-        const char *name = NULL;
-        err = manifest_name(ws->manifest, scan->profile, child, NULL, scratch, &name);
-        if (err) {
-            err = error_wrap(err, "Failed to name '%s'", child);
-            goto cleanup;
-        }
+        const char *name = manifest_name(scratch, ws->manifest, scan->profile, child, NULL);
 
         /* Check if ignored: the rules on the mount-relative path, which is ""
          * at a root of this profile — no rule reaches an empty subject
@@ -2557,14 +2551,10 @@ static error_t scan_directory_for_untracked(
             workspace_add_untracked(ws, child, name, scan->profile, occupant, &st);
             continue;
         }
-        err = scan_directory_for_untracked(scan, child, depth + 1);
-        if (err) goto cleanup;
+        scan_directory_for_untracked(scan, child, depth + 1);
     }
 
-cleanup:
     arena_free(scratch);
-
-    return err;
 }
 
 /**
@@ -2710,8 +2700,7 @@ static error_t workspace_analyze_untracked(
             .rules         = rules,
             .source_filter = source_filter,
         };
-        err = scan_directory_for_untracked(&scan, root->directory, 0);
-        if (err) goto cleanup;
+        scan_directory_for_untracked(&scan, root->directory, 0);
     }
 
 cleanup:

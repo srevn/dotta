@@ -617,15 +617,9 @@ static error_t add_collect(
          * there, this command's own or the branch's, else the composition beneath
          * the nearest claim above it, else the label of the root it lies under,
          * the word alone where the child is one of this profile's own roots. */
-        const char *child_storage = NULL;
-        err = manifest_name(
-            walk->view, walk->profile, child_fs, walk->listing, arena,
-            &child_storage
+        const char *child_storage = manifest_name(
+            arena, walk->view, walk->profile, child_fs, walk->listing
         );
-        if (err) {
-            err = error_wrap(err, "Failed to name '%s'", child_fs);
-            goto cleanup;
-        }
 
         /* Check exclude patterns */
         gitignore_match_t match;
@@ -734,14 +728,9 @@ static error_t add_refuse_moves(const walk_t *walk) {
         const char *filesystem_path = unkept.entries[i].filesystem_path;
         const char *kept = unkept.entries[i].kept;
 
-        const char *next = NULL;
-        error_t err = manifest_name(
-            walk->view, walk->profile, filesystem_path, walk->listing,
-            walk->ctx->arena, &next
+        const char *next = manifest_name(
+            walk->ctx->arena, walk->view, walk->profile, filesystem_path, walk->listing
         );
-        if (err) {
-            return error_wrap(err, "Failed to name '%s'", filesystem_path);
-        }
         if (strcmp(kept, next) == 0) continue;   /* nothing moved here */
 
         /* The one selection that may move a name: the command captured the path
@@ -1869,17 +1858,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * there, this command's own or the branch's, else the composition beneath
          * the nearest claim above it, else the label of the root it lies under,
          * which at the root itself is the word alone. */
-        const char *storage_path = typed;
-        if (!storage_path) {
-            err = manifest_name(
-                view, opts->profile, filesystem_path, walk.listing, ctx->arena,
-                &storage_path
-            );
-            if (err) {
-                err = error_wrap(err, "Failed to name '%s'", file);
-                goto cleanup;
-            }
-        }
+        const char *storage_path = typed ? typed : manifest_name(
+            ctx->arena, view, opts->profile, filesystem_path, walk.listing
+        );
 
         /* A path named on the command line is subject to the rules like any the
          * walk finds, but a verdict against it is an error, not a silent skip:

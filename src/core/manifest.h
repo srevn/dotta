@@ -982,32 +982,30 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  * — the sentinel encloses them all — so no reader meets an absence and none asks
  * a second authority what one would have meant.
  *
- * Readers: `ignore --test`'s subject, one per asker (cmds/ignore.c); the
- * prospective name a claim search falls through to (core/profiles.c
- * profile_claim_name); the settle of a contribution's collisions (core/manifest.c);
- * the name every capture lands under — add's argument arm, its walk, and the
- * one refusal its completed selection owes, all over the command's own listing
- * (cmds/add.c); and the name the untracked scan offers a new path under, one
- * per entry its guards let through, with no pending layer — the scan admits nothing
- * (core/workspace.c).
+ * Readers: `ignore --test`'s subject, one per asker (cmds/ignore.c
+ * test_path_ignore); the prospective name a claim search falls through to
+ * (core/profiles.c profile_claim_name); the name every capture lands under —
+ * add's argument arm, its walk, and the one refusal its completed selection owes,
+ * all over the command's own listing (cmds/add.c cmd_add, add_collect,
+ * add_refuse_moves); and the name the untracked scan offers a new path under,
+ * one per entry its guards let through, with no pending layer — the scan admits
+ * nothing (core/workspace.c scan_directory_for_untracked). The settle of a
+ * contribution's collisions asks the same rule (core/manifest.c manifest_settle).
  *
+ * @param arena Arena the name lives in (must not be NULL)
  * @param manifest Manifest (must not be NULL)
  * @param profile The asker, or NULL for the shared roots alone
  * @param filesystem_path Where to ask, absolute (must not be NULL)
  * @param pending The asking profile's uncommitted claims, keyed by filesystem
  *                path (manifest_claim_t), or NULL
- * @param arena Arena that owns `*out_storage` (must not be NULL)
- * @param out_storage Arena-backed storage path, never NULL on success (must not
- *                    be NULL; NULL after an error)
- * @return Error or NULL on success
+ * @return The name; never NULL
  */
-error_t manifest_name(
+const char *manifest_name(
+    arena_t *arena,
     const manifest_t *manifest,
     const char *profile,
     const char *filesystem_path,
-    const hashmap_t *pending,
-    arena_t *arena,
-    const char **out_storage
+    const hashmap_t *pending
 );
 
 /**

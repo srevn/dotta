@@ -103,9 +103,9 @@ static error_t read_string(
 }
 
 /* A directory: a string, and not an empty one — leaving the key out is how the
- * default is asked for — read as the kernel will open it, into the arena
- * (sys/filesystem.h fs_make_absolute): every reader of the key, and every child
- * it is handed to, meets the one absolute, folded spelling settled here. */
+ * default is asked for — kept as the file spells it, into the arena. It is read
+ * as a path only once the value that won is known (config_load), so a value the
+ * variable outranks is never read. */
 static error_t read_path(
     toml_datum_t value, const char *section, const char *key, arena_t *arena,
     const char **out
@@ -120,8 +120,8 @@ static error_t read_path(
         );
     }
 
-    error_t err = fs_make_absolute(text, arena, out);
-    return err ? error_wrap(err, "Invalid [%s] %s", section, key) : NULL;
+    *out = arena_strdup(arena, text);
+    return NULL;
 }
 
 /* The three settings of a few words, each read as the value its word names by
@@ -456,8 +456,27 @@ error_t config_load(arena_t *arena, config_t **out) {
     config_t *config = config_create_default(arena);
 
     /* The file over the defaults: each key it names is checked as it is read
-     * (read_key), so nothing is left to check after. */
+     * (read_key), a directory as the spelling it is (read_path). */
     error_t err = read_file(path, config, arena);
+
+    /* The directories, each read once as the kernel will open it (sys/filesystem.h
+     * fs_make_absolute), and only from the value that won: the hooks' is the
+     * file's or the default, and so is the store's unless the variable outranks
+     * both (below). A value that lost is never read, and a default stands absolute
+     * already. */
+    const char *env_dir = config_repo_dir_from_env();
+    if (!err) {
+        err = error_wrap(
+            fs_make_absolute(config->hooks_dir, arena, &config->hooks_dir),
+            "Invalid [hooks] hooks_dir"
+        );
+    }
+    if (!err && !env_dir) {
+        err = error_wrap(
+            fs_make_absolute(config->repo_dir, arena, &config->repo_dir),
+            "Invalid [core] repo_dir"
+        );
+    }
 
     /* Every failure is wrapped once, with the file: the chain beneath it names
      * what in the file, and why. A refused configuration's parts stay in the
@@ -465,8 +484,7 @@ error_t config_load(arena_t *arena, config_t **out) {
     if (err) return error_wrap(err, "Failed to load configuration '%s'", path);
 
     /* The variable outranks the file and the default: the store's directory it
-     * names, settled as the file's is. */
-    const char *env_dir = config_repo_dir_from_env();
+     * names, read as the file's is — and a refusal names the variable. */
     if (env_dir) {
         err = fs_make_absolute(env_dir, arena, &config->repo_dir);
         if (err) return error_wrap(err, "Invalid DOTTA_REPO_DIR");

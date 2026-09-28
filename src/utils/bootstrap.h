@@ -30,9 +30,10 @@
  *                  DOTTA_REPO_DIR for each spawned script. May differ from the
  *                  default repo location — e.g., `dotta clone --path <dir>` honors
  *                  an override that does not match config->repo_dir.
- *   profiles       Profiles to consider, in execution order.
- *                  Profiles without a .bootstrap script are silently skipped
- *                  after a single existence pass.
+ *   profiles       The profiles whose scripts run, in execution order: the
+ *                  caller's listing, every one of which has a .bootstrap script
+ *                  (sys/bootstrap.h bootstrap_exists) — the set the caller showed
+ *                  before asking to run it.
  *   dry_run        True: validate each script's shebang in memory
  *                  and report "would execute". No /tmp write, no process spawn,
  *                  no side effects.
@@ -49,12 +50,9 @@ typedef struct {
 } bootstrap_spec_t;
 
 /**
- * Run .bootstrap scripts for each profile in spec->profiles that has one.
+ * Run the .bootstrap script of each profile in spec->profiles, in order.
  *
  * Behavior:
- *   - Single-pass filter: profiles are checked once for .bootstrap existence;
- *     only those with a script are iterated. N/M progress is computed from the
- *     filtered count.
  *   - Progress: "[N/M] Running profile/.bootstrap..." is emitted via `out` before
  *     each script; "✓ Complete" (or "Would execute" in dry-run) on success; "✗
  *     Failed: <reason>" on error.
@@ -73,8 +71,7 @@ typedef struct {
  *       - Timeout: 600 seconds per script.
  *
  * Returns:
- *   - NULL if no profile had a .bootstrap script OR if every script succeeded
- *     (or validated, for dry-run).
+ *   - NULL if every script succeeded (or validated, for dry-run).
  *   - On spec->stop_on_error=true: the first failure is returned, wrapped with
  *     the failing profile name.
  *   - On spec->stop_on_error=false: after iterating every profile, an ERR_INTERNAL

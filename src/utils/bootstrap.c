@@ -4,7 +4,7 @@
  * See utils/bootstrap.h for the contract. Structured in three bands:
  *   1. Environment construction (DOTTA_* + filtered parent env).
  *   2. Single-profile execution (extract + exec OR in-memory validate).
- *   3. Public orchestrator (filter, iterate, aggregate).
+ *   3. Public orchestrator (iterate, aggregate).
  *
  * This file owns every command-scoped concern of bootstrap: env, timeout, working
  * directory, process-group policy, progress output, and failure aggregation.
@@ -224,39 +224,23 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
      * loudly. */
     CHECK_ARG(out->stream == stdout, "out must route to stdout");
 
-    /* Single-pass filter: keep only profiles that have a script, in order.
-     * STRING_ARRAY_AUTO ensures the list is freed on every exit path. */
-    string_array_t found STRING_ARRAY_AUTO = { 0 };
-    for (size_t i = 0; i < spec->profiles->count; i++) {
-        const char *p = spec->profiles->items[i];
-        if (bootstrap_exists(spec->repo, p)) {
-            string_array_push(&found, p);
-        }
-    }
-
-    if (found.count == 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "No bootstrap scripts found in the given profiles."
-        );
-        return NULL;
-    }
-
-    /* DOTTA_PROFILES exposes the set of scripts being run to each child — not
-     * the set of profiles the user passed in. This matches the "[N/M]" progress
-     * numbering and avoids misleading scripts about peers that aren't
-     * participating. */
-    char *all_profiles = string_array_join(&found, " ");
+    /* The profiles are the caller's listing: every one has a script, which the
+     * caller asked of each (bootstrap_exists) before it showed them and asked
+     * to run them. DOTTA_PROFILES exposes that set to each child — the scripts
+     * being run, not every profile the user named — matching the "[N/M]" progress
+     * numbering, so no script is misled about peers that are not participating. */
+    const string_array_t *profiles = spec->profiles;
+    char *all_profiles = string_array_join(profiles, " ");
 
     /* The failed profiles' names, for the end-of-run summary */
     string_array_t failed STRING_ARRAY_AUTO = { 0 };
 
-    for (size_t i = 0; i < found.count; i++) {
-        const char *profile = found.items[i];
+    for (size_t i = 0; i < profiles->count; i++) {
+        const char *profile = profiles->items[i];
 
         output_print(
             out, OUTPUT_NORMAL, "[%zu/%zu] Running %s/%s...\n",
-            i + 1, found.count, profile, BOOTSTRAP_SCRIPT_NAME
+            i + 1, profiles->count, profile, BOOTSTRAP_SCRIPT_NAME
         );
 
         /* Flush the progress line so it lands on stdout before the child begins
@@ -312,6 +296,6 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
 
     return ERROR(
         ERR_INTERNAL, "%zu of %zu bootstrap script%s failed",
-        failed.count, found.count, failed.count == 1 ? "" : "s"
+        failed.count, profiles->count, failed.count == 1 ? "" : "s"
     );
 }

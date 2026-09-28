@@ -26,7 +26,6 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
-#include "base/heap.h"
 #include "base/string.h"
 #include "core/scope.h"
 #include "core/state.h"
@@ -383,7 +382,7 @@ static bool parent_accepts_removal(const char *path) {
 /**
  * Decide the verdicts
  */
-cleanup_preflight_result_t *cleanup_preflight(
+cleanup_preflight_t *cleanup_preflight(
     arena_t *arena,
     const workspace_t *ws,
     const cleanup_plan_t *plan,
@@ -396,7 +395,7 @@ cleanup_preflight_result_t *cleanup_preflight(
     /* The verdicts and their ten buckets are the arena's, beside the items they
      * borrow: each bucket is made in it, nothing frees them, and an empty bucket
      * needs no guard downstream. */
-    cleanup_preflight_result_t *verdicts = arena_calloc(arena, 1, sizeof(*verdicts));
+    cleanup_preflight_t *verdicts = arena_calloc(arena, 1, sizeof(*verdicts));
     ptr_array_init(&verdicts->prunable_files, arena);
     ptr_array_init(&verdicts->refused_files, arena);
     ptr_array_init(&verdicts->skipped_files, arena);
@@ -574,39 +573,40 @@ cleanup_preflight_result_t *cleanup_preflight(
  * "skipped"). One fs_lstat_occupant each — the workspace's probe, so a path reads
  * the same way at load and at removal.
  */
-cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts) {
+cleanup_receipt_t *cleanup_execute(arena_t *arena, const cleanup_preflight_t *verdicts) {
+    CHECK_NULL(arena);
     CHECK_NULL(verdicts);
 
-    cleanup_result_t *result = heap_calloc(1, sizeof(*result));
+    cleanup_receipt_t *receipt = arena_calloc(arena, 1, sizeof(*receipt));
 
-    /* The receipt is sized to the promise up front — one slot per prunable item,
-     * zeroed, filled in act order as each removal is attempted, the failed bucket
-     * to both kinds together — every promised item could fail. count gates what
-     * a consumer reads, so an untaken slot is invisible and the receipt holds
-     * exactly what happened. */
-    result->pruned_files.entries = heap_calloc(
-        verdicts->prunable_files.count,
-        sizeof(*result->pruned_files.entries)
+    /* The receipt is sized to the promise up front, in the arena the run names
+     * — one slot per prunable item, zeroed, filled in act order as each removal
+     * is attempted, the failed bucket to both kinds together — every promised
+     * item could fail. count gates what a consumer reads, so an untaken slot is
+     * invisible and the receipt holds exactly what happened. */
+    receipt->pruned_files.entries = arena_calloc(
+        arena, verdicts->prunable_files.count,
+        sizeof(*receipt->pruned_files.entries)
     );
-    result->reclaimed_files.entries = heap_calloc(
-        verdicts->prunable_files.count,
-        sizeof(*result->reclaimed_files.entries)
+    receipt->reclaimed_files.entries = arena_calloc(
+        arena, verdicts->prunable_files.count,
+        sizeof(*receipt->reclaimed_files.entries)
     );
-    result->pruned_dirs.entries = heap_calloc(
-        verdicts->prunable_dirs.count,
-        sizeof(*result->pruned_dirs.entries)
+    receipt->pruned_dirs.entries = arena_calloc(
+        arena, verdicts->prunable_dirs.count,
+        sizeof(*receipt->pruned_dirs.entries)
     );
-    result->reclaimed_dirs.entries = heap_calloc(
-        verdicts->prunable_dirs.count,
-        sizeof(*result->reclaimed_dirs.entries)
+    receipt->reclaimed_dirs.entries = arena_calloc(
+        arena, verdicts->prunable_dirs.count,
+        sizeof(*receipt->reclaimed_dirs.entries)
     );
-    result->skipped_dirs.entries = heap_calloc(
-        verdicts->prunable_dirs.count,
-        sizeof(*result->skipped_dirs.entries)
+    receipt->skipped_dirs.entries = arena_calloc(
+        arena, verdicts->prunable_dirs.count,
+        sizeof(*receipt->skipped_dirs.entries)
     );
-    result->failed.entries = heap_calloc(
-        verdicts->prunable_files.count + verdicts->prunable_dirs.count,
-        sizeof(*result->failed.entries)
+    receipt->failed.entries = arena_calloc(
+        arena, verdicts->prunable_files.count + verdicts->prunable_dirs.count,
+        sizeof(*receipt->failed.entries)
     );
 
     /* Step 1: Prune the orphaned files the verdicts cleared */
@@ -627,21 +627,21 @@ cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts) {
          * nothing left that knows about it); a path that cannot be stat'd is
          * not gone either — the unlink is attempted and reports its errno. */
         if (fs_lstat_occupant(path, NULL) == FS_OCCUPANT_NONE) {
-            result->reclaimed_files.entries[result->reclaimed_files.count++].item = item;
+            receipt->reclaimed_files.entries[receipt->reclaimed_files.count++].item = item;
             continue;
         }
 
         error_t remove_err = fs_remove_file(path);
         if (remove_err) {
             /* The item's own outcome; the cause already names its subject */
-            cleanup_outcome_t *o = &result->failed.entries[result->failed.count++];
+            cleanup_outcome_t *o = &receipt->failed.entries[receipt->failed.count++];
 
             o->item = item;
             o->error = remove_err;
             continue;
         }
 
-        result->pruned_files.entries[result->pruned_files.count++].item = item;
+        receipt->pruned_files.entries[receipt->pruned_files.count++].item = item;
     }
 
     /* Step 2: Prune the orphaned directories those files emptied */
@@ -655,7 +655,7 @@ cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts) {
             case FS_OCCUPANT_NONE:
                 /* No filesystem effect happened or was needed — the record retires,
                  * nothing is removed. */
-                result->reclaimed_dirs.entries[result->reclaimed_dirs.count++].item = item;
+                receipt->reclaimed_dirs.entries[receipt->reclaimed_dirs.count++].item = item;
                 continue;
 
             case FS_OCCUPANT_DIRECTORY:
@@ -668,13 +668,13 @@ cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts) {
                 /* Replaced, or made unreachable, while the run waited: not ours
                  * to remove. The next load reads it as released [type], or as
                  * unverified. */
-                result->skipped_dirs.entries[result->skipped_dirs.count++].item = item;
+                receipt->skipped_dirs.entries[receipt->skipped_dirs.count++].item = item;
                 continue;
         }
 
         error_t remove_err = fs_remove_empty_dir(path);
         if (!remove_err) {
-            result->pruned_dirs.entries[result->pruned_dirs.count++].item = item;
+            receipt->pruned_dirs.entries[receipt->pruned_dirs.count++].item = item;
             continue;
         }
 
@@ -684,27 +684,15 @@ cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts) {
          * an entry still holds. Anything else is the item's own failure, kept
          * with its cause as above. */
         if (error_code(remove_err) == ERR_CONFLICT) {
-            result->skipped_dirs.entries[result->skipped_dirs.count++].item = item;
+            receipt->skipped_dirs.entries[receipt->skipped_dirs.count++].item = item;
             continue;
         }
 
-        cleanup_outcome_t *o = &result->failed.entries[result->failed.count++];
+        cleanup_outcome_t *o = &receipt->failed.entries[receipt->failed.count++];
 
         o->item = item;
         o->error = remove_err;
     }
 
-    return result;
-}
-
-void cleanup_result_free(cleanup_result_t *result) {
-    if (!result) return;
-
-    free(result->pruned_files.entries);
-    free(result->reclaimed_files.entries);
-    free(result->pruned_dirs.entries);
-    free(result->reclaimed_dirs.entries);
-    free(result->skipped_dirs.entries);
-    free(result->failed.entries);
-    free(result);
+    return receipt;
 }

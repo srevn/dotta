@@ -40,9 +40,9 @@
  *   directory's remainder permitting
  * - what is left in a directory after this run: fs_directory_emptiness,
  *   vouching for what this run prunes and for what it merely skips (preflight;
- *   cleanup_preflight_result_t has the classes), and fs_remove_empty_dir, which
- *   removes exactly what that walk looks past as gone and refuses anything else
- *   before touching it (execute)
+ *   cleanup_preflight_t has the classes), and fs_remove_empty_dir, which removes
+ *   exactly what that walk looks past as gone and refuses anything else before
+ *   touching it (execute)
  * - whether this run may make a removal the item's facts cleared: write and search
  *   on the parent, fs_eaccess, once per such item (preflight — the refused
  *   buckets). The one fact here that is the run's and not the path's, asked with
@@ -58,8 +58,9 @@
  * The plan's and the verdicts' buckets hold borrowed workspace_item_t pointers
  * (workspace lifetime — the items are arena-allocated, their addresses stable
  * by construction); project them with workspace_items. The receipt's outcomes
- * borrow the same items. Each frees its own buffers and never an item, so the
- * plan, the verdicts, the receipt and the workspace are freed in any order.
+ * borrow the same items. All four are values of the arena they were made in,
+ * and nothing frees one: the items they borrow are the workspace's, so none
+ * outlives the arena the workspace was loaded into.
  *
  * Integration:
  * - workspace.h: orphan detection, the occupant, Git authority, divergence; the
@@ -158,7 +159,7 @@ static inline size_t cleanup_plan_item_count(const cleanup_plan_t *plan) {
  * Pure in the item's divergence bits. Values are listed in precedence order —
  * cleanup_skip_reason answers the first that applies. Files only: a directory's
  * skip is cleanup_verdict's (the workspace could not verify it) or its remainder's
- * (cleanup_preflight_result_t), and needs no table.
+ * (cleanup_preflight_t), and needs no table.
  */
 typedef enum {
     CLEANUP_SKIP_NONE = 0,       /* Not skipped — nothing stands in the way of the prune */
@@ -228,11 +229,11 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
 /**
  * What becomes of a planned orphan, read off the item alone
  *
- * The verdict buckets of cleanup_preflight_result_t, as a value — PRUNABLE split
- * once more there, by the run's reach: one producer, read by the verdict phase
- * to fill them and by status to predict them, so the two cannot route one item
- * two ways. In the order the tests are taken — the occupant, the state, the
- * divergence bits:
+ * The verdict buckets of cleanup_preflight_t, as a value — PRUNABLE split once
+ * more there, by the run's reach: one producer, read by the verdict phase to
+ * fill them and by status to predict them, so the two cannot route one item two
+ * ways. In the order the tests are taken — the occupant, the state, the divergence
+ * bits:
  *
  *   occupant NONE                         ABSENT     record retires, no effect
  *   state RELEASED                        RELEASED   left alone, record retires
@@ -295,7 +296,7 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    while a skipped one is,
  *                                                    released once a permanent
  *                                                    one is (the classes are on
- *                                                    cleanup_preflight_result_t)
+ *                                                    cleanup_preflight_t)
  *
  * PRUNABLE is the one verdict status cannot finish — the remainder and the reach
  * are preflight's, from the disk — and its directory hint says so.
@@ -346,7 +347,7 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  * is deploy's: an item already skipped for a reason is never asked, so a modified
  * orphan under a root-owned parent reads modified unforced and refused under
  * --force, each honest about the one thing in the way. Two under-approximations
- * the removal meets with its cause instead (cleanup_result_t's failed): a sticky
+ * the removal meets with its cause instead (cleanup_receipt_t's failed): a sticky
  * parent's owner rule, and the OS-metadata entries fs_remove_empty_dir clears
  * inside a directory whose own write bit the invoker lacks.
  *
@@ -406,7 +407,7 @@ typedef struct {
     ptr_array_t skipped_dirs;      /* Present; a skipped entry left, could not be verified, or its home moved → left alone, record stays */
     ptr_array_t released_dirs;     /* Released by the workspace, or a permanent entry left → left alone, record retires */
     ptr_array_t absent_dirs;       /* Not there → record retires */
-} cleanup_preflight_result_t;
+} cleanup_preflight_t;
 
 /**
  * Decide the verdicts
@@ -433,7 +434,7 @@ typedef struct {
  *        is not a flag)
  * @return The verdicts
  */
-cleanup_preflight_result_t *cleanup_preflight(
+cleanup_preflight_t *cleanup_preflight(
     arena_t *arena,
     const workspace_t *ws,
     const cleanup_plan_t *plan,
@@ -467,7 +468,7 @@ typedef struct {
 } cleanup_outcomes_t;
 
 /**
- * Cleanup result — the run's receipt: what became of each prunable item
+ * Cleanup receipt — the run's: what became of each prunable item
  *
  * Execute acts on prunable_files and prunable_dirs alone, so the receipt partitions
  * exactly those — the one split execute itself takes, and nothing else:
@@ -482,7 +483,7 @@ typedef struct {
  * verdicts' and are read there: they are decisions, and this object reports
  * effects. The preview says both; the receipt's printer restates the decided
  * ones from the verdicts and reports the run's own from here, in the preview's
- * order (apply's apply_print_cleanup_results reads both objects).
+ * order (apply's apply_print_cleanup_receipt reads both objects).
  *
  * pruned_* guarantee a filesystem removal happened. reclaimed_* were gone by
  * the time the run looked — after the prompt, before the removal — so no removal
@@ -501,7 +502,8 @@ typedef struct {
  * kinds together — every promised item could fail) and fills in act order: files,
  * then the directories in the verdicts' prune order. count gates every read, so
  * an untaken slot is invisible and the receipt holds exactly what happened, by
- * construction. Nothing here can be truncated by the run.
+ * construction. Nothing here can be truncated by the run. A value of the arena
+ * its run names, as its six arrays are: nothing frees one.
  *
  * Records that retire (core/state.h state_retire): pruned_* and reclaimed_* (here),
  * absent_* and released_* (the verdicts). Records that stay: skipped_dirs and
@@ -535,7 +537,7 @@ typedef struct {
     cleanup_outcomes_t reclaimed_dirs;    /* Gone by the time the run looked */
     cleanup_outcomes_t skipped_dirs;      /* Retyped, or gained an entry, while the run waited */
     cleanup_outcomes_t failed;            /* Both kinds, act order, each with its cause */
-} cleanup_result_t;
+} cleanup_receipt_t;
 
 /**
  * Carry the verdicts out
@@ -545,14 +547,11 @@ typedef struct {
  * in the verdicts' prune order. A removal that fails is the item's own outcome:
  * it lands in `failed` with its cause, and the run goes on.
  *
+ * @param arena Arena the receipt and its arrays live in (must not be NULL; the
+ *        verdicts' own, or one they outlive)
  * @param verdicts Verdicts from cleanup_preflight (must not be NULL)
- * @return The receipt (caller frees with cleanup_result_free)
+ * @return The receipt; never NULL
  */
-cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts);
-
-/**
- * Free a result — the arrays; the rows' causes are borrowed. No-op on NULL.
- */
-void cleanup_result_free(cleanup_result_t *result);
+cleanup_receipt_t *cleanup_execute(arena_t *arena, const cleanup_preflight_t *verdicts);
 
 #endif /* DOTTA_CLEANUP_H */

@@ -903,15 +903,15 @@ static void apply_print_deploy_receipt(
 }
 
 /**
- * Print cleanup results
+ * Print cleanup's receipt
  *
  * The run's receipt: per-item sections at verbose, summary counts at normal,
  * the failures at both. Every number is a bucket size, read off two objects because
  * the run's story is held by two: the verdicts hold what cleanup decided and
  * never acted on — released, skipped or refused at preflight, gone at load —
  * and the receipt what execute found and did — pruned, gone by the time it looked,
- * refused, failed (cleanup_result_t). Each read names its source; this adds nothing
- * of its own.
+ * refused, failed (cleanup_receipt_t). Each read names its source; this adds
+ * nothing of its own.
  *
  * A receipt reports effects. That is why this one re-tells a fate deploy's does
  * not: a deploy skip has no effect at all — nothing written, no record moved —
@@ -927,21 +927,21 @@ static void apply_print_deploy_receipt(
  * by the time the run looked) — the verdicts' rows print first, so a run that
  * had both names each once.
  */
-static void apply_print_cleanup_results(
+static void apply_print_cleanup_receipt(
     output_t *out,
-    const cleanup_preflight_result_t *verdicts,
-    const cleanup_result_t *result
+    const cleanup_preflight_t *verdicts,
+    const cleanup_receipt_t *receipt
 ) {
     /* The receipt is a block, the same way deploy's is. */
     output_gap(out, OUTPUT_NORMAL);
 
     /* Verbose mode: show individual items per outcome */
-    if (result->pruned_files.count > 0) {
+    if (receipt->pruned_files.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Pruned orphaned files");
-        for (size_t i = 0; i < result->pruned_files.count; i++) {
+        for (size_t i = 0; i < receipt->pruned_files.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}[pruned]{reset} %s\n",
-                result->pruned_files.entries[i].item->filesystem_path
+                receipt->pruned_files.entries[i].item->filesystem_path
             );
         }
     }
@@ -980,7 +980,7 @@ static void apply_print_cleanup_results(
         }
     }
 
-    if (verdicts->absent_files.count + result->reclaimed_files.count > 0) {
+    if (verdicts->absent_files.count + receipt->reclaimed_files.count > 0) {
         workspace_items_t absent = workspace_items(&verdicts->absent_files);
 
         output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned files");
@@ -990,20 +990,20 @@ static void apply_print_cleanup_results(
                 absent.entries[i]->filesystem_path
             );
         }
-        for (size_t i = 0; i < result->reclaimed_files.count; i++) {
+        for (size_t i = 0; i < receipt->reclaimed_files.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
-                result->reclaimed_files.entries[i].item->filesystem_path
+                receipt->reclaimed_files.entries[i].item->filesystem_path
             );
         }
     }
 
-    if (result->pruned_dirs.count > 0) {
+    if (receipt->pruned_dirs.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Pruned orphaned directories");
-        for (size_t i = 0; i < result->pruned_dirs.count; i++) {
+        for (size_t i = 0; i < receipt->pruned_dirs.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}[pruned]{reset} %s\n",
-                result->pruned_dirs.entries[i].item->filesystem_path
+                receipt->pruned_dirs.entries[i].item->filesystem_path
             );
         }
     }
@@ -1021,7 +1021,7 @@ static void apply_print_cleanup_results(
     }
 
     if (verdicts->skipped_dirs.count + verdicts->refused_dirs.count +
-        result->skipped_dirs.count > 0) {
+        receipt->skipped_dirs.count > 0) {
         workspace_items_t skipped = workspace_items(&verdicts->skipped_dirs);
         workspace_items_t refused = workspace_items(&verdicts->refused_dirs);
 
@@ -1038,15 +1038,15 @@ static void apply_print_cleanup_results(
                 refused.entries[i]->filesystem_path
             );
         }
-        for (size_t i = 0; i < result->skipped_dirs.count; i++) {
+        for (size_t i = 0; i < receipt->skipped_dirs.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
-                result->skipped_dirs.entries[i].item->filesystem_path
+                receipt->skipped_dirs.entries[i].item->filesystem_path
             );
         }
     }
 
-    if (verdicts->absent_dirs.count + result->reclaimed_dirs.count > 0) {
+    if (verdicts->absent_dirs.count + receipt->reclaimed_dirs.count > 0) {
         workspace_items_t absent = workspace_items(&verdicts->absent_dirs);
 
         output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned directories");
@@ -1056,29 +1056,29 @@ static void apply_print_cleanup_results(
                 absent.entries[i]->filesystem_path
             );
         }
-        for (size_t i = 0; i < result->reclaimed_dirs.count; i++) {
+        for (size_t i = 0; i < receipt->reclaimed_dirs.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
-                result->reclaimed_dirs.entries[i].item->filesystem_path
+                receipt->reclaimed_dirs.entries[i].item->filesystem_path
             );
         }
     }
 
     /* Non-verbose: summary counts only. */
     if (!output_is_verbose(out)) {
-        if (result->pruned_files.count > 0) {
+        if (receipt->pruned_files.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned file%s\n",
-                result->pruned_files.count,
-                result->pruned_files.count == 1 ? "" : "s"
+                receipt->pruned_files.count,
+                receipt->pruned_files.count == 1 ? "" : "s"
             );
         }
 
-        if (result->pruned_dirs.count > 0) {
+        if (receipt->pruned_dirs.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned director%s\n",
-                result->pruned_dirs.count,
-                result->pruned_dirs.count == 1 ? "y" : "ies"
+                receipt->pruned_dirs.count,
+                receipt->pruned_dirs.count == 1 ? "y" : "ies"
             );
         }
 
@@ -1116,7 +1116,7 @@ static void apply_print_cleanup_results(
          * parent refuses the run, or because the removal refused — the verbose
          * listing names which. */
         size_t skipped_dirs = verdicts->skipped_dirs.count + verdicts->refused_dirs.count +
-            result->skipped_dirs.count;
+            receipt->skipped_dirs.count;
 
         if (skipped_dirs > 0) {
             output_info(
@@ -1134,7 +1134,7 @@ static void apply_print_cleanup_results(
          * for the record rows that retire behind them: what the user has here
          * is a path that is already gone. */
         size_t reclaimed = verdicts->absent_files.count + verdicts->absent_dirs.count +
-            result->reclaimed_files.count + result->reclaimed_dirs.count;
+            receipt->reclaimed_files.count + receipt->reclaimed_dirs.count;
 
         if (reclaimed > 0) {
             output_styled(
@@ -1150,10 +1150,10 @@ static void apply_print_cleanup_results(
      * rationale); capped the way deploy's failed section is. The cause is the
      * chain's root, where the refusal speaks verbatim — EACCES on the parent,
      * EROFS, EBUSY; the wraps above it restate the path the line already names. */
-    if (result->failed.count > 0) {
+    if (receipt->failed.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Failed prunes");
-        for (size_t i = 0; i < result->failed.count && i < LIST_LIMIT; i++) {
-            const cleanup_outcome_t *o = &result->failed.entries[i];
+        for (size_t i = 0; i < receipt->failed.count && i < LIST_LIMIT; i++) {
+            const cleanup_outcome_t *o = &receipt->failed.entries[i];
 
             output_styled(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s)\n",
@@ -1161,9 +1161,9 @@ static void apply_print_cleanup_results(
                 error_message(error_root(o->error))
             );
         }
-        if (result->failed.count > LIST_LIMIT) {
+        if (receipt->failed.count > LIST_LIMIT) {
             output_print(
-                out, OUTPUT_NORMAL, "  ... and %zu more\n", result->failed.count - LIST_LIMIT
+                out, OUTPUT_NORMAL, "  ... and %zu more\n", receipt->failed.count - LIST_LIMIT
             );
         }
     }
@@ -1208,7 +1208,7 @@ static void apply_print_paths(
  * in tense. Equal counts for a run the world did not move under: a path gone,
  * or a directory refilled, between the prompt and the removal moves one item
  * from the promise here to the receipt's own buckets (reclaimed, skipped), and
- * the receipt says so from its side (apply_print_cleanup_results).
+ * the receipt says so from its side (apply_print_cleanup_receipt).
  *
  * The summaries only count the files the run will not prune; three blocks name
  * them, with different messaging. The released ones close this preview: a release
@@ -1223,7 +1223,7 @@ static void apply_print_paths(
  */
 static void apply_print_cleanup_preview(
     output_t *out,
-    const cleanup_preflight_result_t *verdicts
+    const cleanup_preflight_t *verdicts
 ) {
     workspace_items_t released = workspace_items(&verdicts->released_files);
     size_t skipped_files = verdicts->skipped_files.count + verdicts->refused_files.count;
@@ -1237,8 +1237,8 @@ static void apply_print_cleanup_preview(
 
     /* An empty plan — no orphans in scope, --keep-orphans — has nothing to say,
      * and says nothing. The sum is the plan's size, by the partition above
-     * (cleanup_preflight_result_t's two equations), so only an empty plan returns
-     * here — the closer in cmd_apply counts on it. */
+     * (cleanup_preflight_t's two equations), so only an empty plan returns here
+     * — the closer in cmd_apply counts on it. */
     if (present_files + present_dirs + verdicts->absent_files.count +
         verdicts->absent_dirs.count == 0) {
         return;
@@ -1425,7 +1425,7 @@ static void apply_print_cleanup_preview(
  */
 static void apply_print_cleanup_skips(
     output_t *out,
-    const cleanup_preflight_result_t *verdicts
+    const cleanup_preflight_t *verdicts
 ) {
     workspace_items_t skipped = workspace_items(&verdicts->skipped_files);
 
@@ -1527,12 +1527,12 @@ static void apply_print_cleanup_skips(
  * Last of the previews, after the skips it is the sibling of: a refusal is a
  * skip by fate — the count lines above say "skipped", the record stays, the receipt
  * confirms it under that word — and this block is where its reason lives, the
- * run's rather than the item's (cleanup_preflight_result_t). Empty under a run
- * that holds root, by construction, and prints nothing.
+ * run's rather than the item's (cleanup_preflight_t). Empty under a run that
+ * holds root, by construction, and prints nothing.
  */
 static void apply_print_cleanup_refused(
     output_t *out,
-    const cleanup_preflight_result_t *verdicts
+    const cleanup_preflight_t *verdicts
 ) {
     const workspace_items_t kinds[] = {
         workspace_items(&verdicts->refused_files),
@@ -1601,8 +1601,9 @@ static void apply_print_cleanup_refused(
  *            the run's transaction)
  * @param ws Workspace (must not be NULL): the items every fate carries are its own
  * @param cleanup_verdicts Cleanup's verdicts (must not be NULL)
- * @param cleanup_result Cleanup's receipt (must not be NULL)
- * @param deploy_receipt Deploy's receipt, or NULL where the run deployed nothing
+ * @param cleanup_receipt Cleanup's receipt (must not be NULL)
+ * @param deploy_receipt Deploy's receipt (must not be NULL; the empty receipt
+ *        where the run deployed nothing)
  * @param now Timestamp of the run's ownership events (must be > 0)
  * @param acknowledged The pending reassignments the record acknowledged (must
  *                     not be NULL) — zero where the phase fails, since nothing
@@ -1612,8 +1613,8 @@ static void apply_print_cleanup_refused(
 static error_t apply_write_record(
     const dotta_ctx_t *ctx,
     workspace_t *ws,
-    const cleanup_preflight_result_t *cleanup_verdicts,
-    const cleanup_result_t *cleanup_result,
+    const cleanup_preflight_t *cleanup_verdicts,
+    const cleanup_receipt_t *cleanup_receipt,
     const deploy_receipt_t *deploy_receipt,
     time_t now,
     size_t *acknowledged
@@ -1621,7 +1622,8 @@ static error_t apply_write_record(
     CHECK_NULL(ctx);
     CHECK_NULL(ws);
     CHECK_NULL(cleanup_verdicts);
-    CHECK_NULL(cleanup_result);
+    CHECK_NULL(cleanup_receipt);
+    CHECK_NULL(deploy_receipt);
     CHECK_NULL(acknowledged);
 
     state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE) */
@@ -1642,10 +1644,10 @@ static error_t apply_write_record(
      * What the run found gone: pruned, or gone by the time it looked — the
      * receipt's. */
     const cleanup_outcomes_t *gone[] = {
-        &cleanup_result->pruned_files,
-        &cleanup_result->reclaimed_files,
-        &cleanup_result->pruned_dirs,
-        &cleanup_result->reclaimed_dirs,
+        &cleanup_receipt->pruned_files,
+        &cleanup_receipt->reclaimed_files,
+        &cleanup_receipt->pruned_dirs,
+        &cleanup_receipt->reclaimed_dirs,
     };
     for (size_t b = 0; b < sizeof(gone) / sizeof(gone[0]); b++) {
         for (size_t i = 0; i < gone[b]->count; i++) {
@@ -1723,75 +1725,73 @@ static error_t apply_write_record(
      * were said where they were written. Ancestors' ownership events stay
      * uncounted: they are outside the plan, so no writer named them for the
      * preview, and an acknowledgement that rides one heals the record silently. */
-    if (deploy_receipt) {
-        deploy_outcomes_t deployed = deploy_receipt->deployed;
+    deploy_outcomes_t deployed = deploy_receipt->deployed;
 
-        for (size_t i = 0; i < deployed.count; i++) {
-            const deploy_outcome_t *o = &deployed.entries[i];
-            const workspace_item_t *item = o->verdict->item;
+    for (size_t i = 0; i < deployed.count; i++) {
+        const deploy_outcome_t *o = &deployed.entries[i];
+        const workspace_item_t *item = o->verdict->item;
 
-            /* Counted before the write below replaces the item's record, which
-             * the reassignment is read from; a refusal ends the phase, and the
-             * count with it */
-            if (workspace_reassigned(item->row, item->record, item->occupant)) {
-                (*acknowledged)++;
-            }
-
-            err = workspace_anchor(ws, item, o->stat, now);
-            if (err) goto cleanup;
+        /* Counted before the write below replaces the item's record, which the
+         * reassignment is read from; a refusal ends the phase, and the count
+         * with it */
+        if (workspace_reassigned(item->row, item->record, item->occupant)) {
+            (*acknowledged)++;
         }
 
-        deploy_outcomes_t converged = deploy_receipt->converged;
-        for (size_t i = 0; i < converged.count; i++) {
-            const deploy_verdict_t *v = converged.entries[i].verdict;
-            const workspace_item_t *item = v->item;
+        err = workspace_anchor(ws, item, o->stat, now);
+        if (err) goto cleanup;
+    }
 
-            /* Counted before either write: each replaces the record the
-             * reassignment is read from — an ownership event, and a learning. */
-            if (workspace_reassigned(item->row, item->record, item->occupant)) {
-                (*acknowledged)++;
-            }
+    deploy_outcomes_t converged = deploy_receipt->converged;
+    for (size_t i = 0; i < converged.count; i++) {
+        const deploy_verdict_t *v = converged.entries[i].verdict;
+        const workspace_item_t *item = v->item;
 
-            /* Whether the record follows the row: the acknowledgement loop's
-             * own test, asked of the whole binding — a record dotta owns, bound
-             * to another row, another profile's or another name of this one's.
-             * A fix's record is of the directory's kind, the flush having written
-             * the observation in place of one of another kind. The count above
-             * is the binding's profile half, the one the screens name. */
-            const state_record_t *record = item->record;
-            bool follows = record && record->deployed_at > 0 &&
-                !manifest_is_claim(item->row, record->profile, record->storage_path);
-
-            if (deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX && !follows) {
-                /* A fix: the claims it set, which the record still lacks. It
-                 * sets the mode always, and the ownership only where the verdict
-                 * applies a pair — two -1s leave the owner as the load found
-                 * it, apart from the row's (the flush has learned each axis disk
-                 * already stood on): on a fix, an owner this host cannot resolve,
-                 * which preflight warned of. So the record keeps its own there,
-                 * and the claim stays Git's to bring. */
-                divergence_type_t landed = (v->uid != (uid_t) -1 || v->gid != (gid_t) -1)
-                    ? DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP
-                    : DIVERGENCE_MODE;
-
-                err = workspace_learn(
-                    ws, item, workspace_claims_moved(item->row, record) & landed
-                );
-                if (err) goto cleanup;
-                continue;
-            }
-
-            err = workspace_anchor(ws, item, STATE_STAT_UNSET, now);
-            if (err) goto cleanup;
+        /* Counted before either write: each replaces the record the reassignment
+         * is read from — an ownership event, and a learning. */
+        if (workspace_reassigned(item->row, item->record, item->occupant)) {
+            (*acknowledged)++;
         }
 
-        deploy_outcomes_t ancestors = deploy_receipt->ancestors;
-        for (size_t i = 0; i < ancestors.count; i++) {
-            err = workspace_anchor(
-                ws, ancestors.entries[i].verdict->item, STATE_STAT_UNSET, now
+        /* Whether the record follows the row: the acknowledgement loop's own
+         * test, asked of the whole binding — a record dotta owns, bound to another
+         * row, another profile's or another name of this one's. A fix's record
+         * is of the directory's kind, the flush having written the observation
+         * in place of one of another kind. The count above is the binding's profile
+         * half, the one the screens name. */
+        const state_record_t *record = item->record;
+        bool follows = record && record->deployed_at > 0 &&
+            !manifest_is_claim(item->row, record->profile, record->storage_path);
+
+        if (deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX && !follows) {
+            /* A fix: the claims it set, which the record still lacks. It sets
+             * the mode always, and the ownership only where the verdict applies
+             * a pair — two -1s leave the owner as the load found it, apart from
+             * the row's (the flush has learned each axis disk already stood on):
+             * on a fix, an owner this host cannot resolve, which preflight warned
+             * of. So the record keeps its own there, and the claim stays Git's
+             * to bring. */
+            divergence_type_t landed = (v->uid != (uid_t) -1 || v->gid != (gid_t) -1)
+                ? DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP
+                : DIVERGENCE_MODE;
+
+            err = workspace_learn(
+                ws, item, workspace_claims_moved(item->row, record) & landed
             );
             if (err) goto cleanup;
+            continue;
         }
+
+        err = workspace_anchor(ws, item, STATE_STAT_UNSET, now);
+        if (err) goto cleanup;
+    }
+
+    deploy_outcomes_t ancestors = deploy_receipt->ancestors;
+    for (size_t i = 0; i < ancestors.count; i++) {
+        err = workspace_anchor(
+            ws, ancestors.entries[i].verdict->item, STATE_STAT_UNSET, now
+        );
+        if (err) goto cleanup;
     }
 
     /* The transaction is this phase's to close. The tail is the label's — a refused
@@ -1824,17 +1824,6 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     const manifest_t *manifest = ctx->run.manifest; /* The view at dispatch */
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
-
-    /* Declare all resources at the top, initialized to NULL/zero */
-    error_t err = NULL;
-    scope_t *scope = NULL;
-    workspace_t *ws = NULL;
-    deploy_plan_t *deploy_plan = NULL;                 /* Items borrow from ws */
-    cleanup_plan_t *cleanup_plan = NULL;               /* Items borrow from ws */
-    deploy_preflight_t *deploy_verdicts = NULL; /* Fates borrow items from ws */
-    cleanup_preflight_result_t *cleanup_verdicts = NULL;
-    deploy_receipt_t *deploy_receipt = NULL;   /* Outcomes borrow the fates */
-    cleanup_result_t *cleanup_result = NULL; /* Outcomes borrow the verdicts */
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1869,8 +1858,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .exclude_patterns = opts->exclude_patterns,
         .exclude_count    = opts->exclude_count,
     };
-    err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
-    if (err) goto cleanup;
+    scope_t *scope = NULL;
+    RETURN_IF_ERROR(scope_build(repo, state, &scope_inputs, ctx->arena, &scope));
 
     output_print(
         out, OUTPUT_VERBOSE, "Using %zu profile%s:\n",
@@ -1911,13 +1900,11 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .analyze_orphans   = true,
         .analyze_untracked = false
     };
-    err = workspace_load(
+    workspace_t *ws = NULL;
+    error_t err = workspace_load(
         repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
     );
-    if (err) {
-        err = error_wrap(err, "Failed to load workspace");
-        goto cleanup;
-    }
+    if (err) return error_wrap(err, "Failed to load workspace");
 
     /* What the load owes the record — its observations, a directory's or a file's
      * in the place of a record whose node the look found gone among them, its
@@ -1937,8 +1924,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * do, and ends the run in the flush's own words, which name the write and
      * the path it failed at; a preview's keeps the failure of its own, as status's
      * does. */
-    err = workspace_flush(ws);
-    if (err) goto cleanup;
+    RETURN_IF_ERROR(workspace_flush(ws));
 
     /* Both kinds: a scope of tracked directories alone is a workspace, not an
      * empty one. */
@@ -2038,7 +2024,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Planning deployment...\n");
 
-    deploy_plan = deploy_plan_build(ctx->arena, ws, scope, opts->skip_existing);
+    deploy_plan_t *deploy_plan = deploy_plan_build(ctx->arena, ws, scope, opts->skip_existing);
 
     /* Per-item trace of the work the planner skipped, by reason: -e for both
      * kinds, --skip-existing for files. output_print gates on the verbosity level,
@@ -2124,7 +2110,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Planning cleanup...\n");
 
-    cleanup_plan = cleanup_plan_build(ctx->arena, ws, scope, opts->keep_orphans);
+    cleanup_plan_t *cleanup_plan = cleanup_plan_build(ctx->arena, ws, scope, opts->keep_orphans);
 
     if (opts->keep_orphans) {
         output_print(out, OUTPUT_VERBOSE, "  Orphans kept (--keep-orphans)\n");
@@ -2328,7 +2314,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                  * and a refusal SQLite answers by ending the transaction has
                  * taken the load's writes with it, so a write past it would land
                  * on its own. */
-                goto cleanup;
+                return err;
             }
         }
         if (adopt) adopted_count++;
@@ -2377,7 +2363,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             err = workspace_anchor(ws, item, STATE_STAT_UNSET, now);
             if (err) {
                 /* The file loop's stance: the present lands whole or ends the run */
-                goto cleanup;
+                return err;
             }
         }
     }
@@ -2408,10 +2394,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * taken back past the early exit where the store still stands as this commit
      * leaves it, and ended by the record phase (apply_write_record). */
     err = state_save(state);
-    if (err) {
-        err = error_wrap(err, "Failed to commit state changes");
-        goto cleanup;
-    }
+    if (err) return error_wrap(err, "Failed to commit state changes");
 
     /* What the run's reading of the present has to say, in one block: the rows
      * it claimed, the files Git has moved under it, the work its flags withheld
@@ -2529,8 +2512,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
         }
 
-        err = NULL;
-        goto cleanup;
+        return NULL;
     }
 
     /* The run's transaction: the record of what the two engines do, which the
@@ -2554,10 +2536,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * would roll back unread — while another process's writer waited on it. */
     if (!opts->dry_run) {
         err = state_resume(state);
-        if (err) {
-            err = error_wrap(err, "Nothing was deployed or pruned");
-            goto cleanup;
-        }
+        if (err) return error_wrap(err, "Nothing was deployed or pruned");
     }
 
     /* Decide deploy's verdicts from the plan, and the skips the run reports
@@ -2578,16 +2557,16 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .strict_ownership = config->strict_ownership,
     };
 
+    deploy_preflight_t *deploy_verdicts = NULL;
     err = deploy_preflight(ws, deploy_plan, &deploy_opts, ctx->arena, &deploy_verdicts);
-    if (err) {
-        err = error_wrap(err, "Pre-flight checks failed");
-        goto cleanup;
-    }
+    if (err) return error_wrap(err, "Pre-flight checks failed");
 
     /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
      * no orphans in scope) yields empty verdicts and a silent preview — no gate
      * needed anywhere. */
-    cleanup_verdicts = cleanup_preflight(ctx->arena, ws, cleanup_plan, opts->force);
+    cleanup_preflight_t *cleanup_verdicts = cleanup_preflight(
+        ctx->arena, ws, cleanup_plan, opts->force
+    );
 
     /* What the record phase acknowledges behind the run's own writes, for the
      * tail: each pending reassignment it writes, or none where it failed
@@ -2656,8 +2635,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     };
 
     /* Execute pre-apply hook */
-    err = hook_fire_pre(config, out, &hook_inv);
-    if (err) goto cleanup;
+    RETURN_IF_ERROR(hook_fire_pre(config, out, &hook_inv));
 
     /* Confirm before deployment if configured (unless --force or --dry-run) */
     if (config->confirm_destructive && !opts->force && !opts->dry_run) {
@@ -2726,11 +2704,17 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             if (!output_confirm(out, prompt, false)) {
                 output_gap(out, OUTPUT_NORMAL);
                 output_info(out, OUTPUT_NORMAL, "Cancelled");
-                err = NULL;  /* Not an error - user cancelled */
-                goto cleanup;
+                return NULL;  /* Not an error - user cancelled */
             }
         }
     }
+
+    /* What the run did: nothing, until an engine runs. A dry run, and a run with
+     * no deployment work, read the empty receipt — every count zero, as an empty
+     * bucket of the verdicts reads (core/deploy.h, core/cleanup.h). Nothing frees
+     * a receipt, so the empty one is a value here. */
+    deploy_receipt_t *deploy_receipt = &(deploy_receipt_t){ 0 };
+    cleanup_receipt_t *cleanup_receipt = &(cleanup_receipt_t){ 0 };
 
     /* A dry run ends here. Both previews have printed, and neither engine is
      * called: the verdicts are the run's decisions, and executing would teach a
@@ -2752,12 +2736,12 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
             /* The content cache was populated with decrypted content during
              * workspace divergence analysis; deploy's fetches hit it. */
-            err = deploy_execute(
+            error_t release_err = deploy_execute(
                 repo, ws, deploy_verdicts, content_cache, ctx->arena, &deploy_receipt
             );
 
             apply_print_deploy_receipt(out, deploy_receipt);
-            if (err) {
+            if (release_err) {
                 /* Infrastructure, never a row — a row's own failure is in the
                  * receipt's failed bucket, and the run goes on to record what
                  * landed. Every row ran and only the release of held modes failed:
@@ -2769,9 +2753,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                  * receipts, never errors. */
                 output_warning(
                     out, OUTPUT_NORMAL, "%s; the next apply converges it",
-                    error_message(err)
+                    error_message(release_err)
                 );
-                err = NULL;
             }
         } else if (deploy_verdicts->skipped.count == 0) {
             output_print(out, OUTPUT_VERBOSE, "No deployment work in scope\n");
@@ -2780,15 +2763,15 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         /* Prune the orphans the verdicts cleared. cleanup_execute changes the
          * filesystem only; apply, as the transaction owner, settles the records
          * behind what went and what was let go (apply_write_record, below). */
-        cleanup_result = cleanup_execute(cleanup_verdicts);
-        apply_print_cleanup_results(out, cleanup_verdicts, cleanup_result);
+        cleanup_receipt = cleanup_execute(ctx->arena, cleanup_verdicts);
+        apply_print_cleanup_receipt(out, cleanup_verdicts, cleanup_receipt);
 
         /* The record of what the run did — the orphans it settled, the paths it
          * wrote — whole or not at all (apply_write_record). A record the store
          * refused is said beneath the receipts, with what it left standing; one
          * that landed says only the reassignments it acknowledged, at the tail. */
         error_t record_err = apply_write_record(
-            ctx, ws, cleanup_verdicts, cleanup_result, deploy_receipt, now, &acknowledged_count
+            ctx, ws, cleanup_verdicts, cleanup_receipt, deploy_receipt, now, &acknowledged_count
         );
         if (record_err) {
             output_gap(out, OUTPUT_NORMAL);
@@ -2845,52 +2828,40 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * the receipt does not — that the run did not keep its promise. ERR_FS, not
      * ERR_CONFLICT: the class is filesystem incapacity, and a conflict no longer
      * ends the run. */
-    size_t undelivered = 0;
+    size_t undelivered = deploy_receipt->failed.count;
 
     for (size_t i = 0; i < deploy_verdicts->skipped.count; i++) {
         if (!deploy_skip_needs_force(deploy_verdicts->skipped.entries[i].reason)) {
             undelivered++;
         }
     }
-    if (deploy_receipt) {
-        undelivered += deploy_receipt->failed.count;
-    }
 
     /* Attempted and refused only — the skipped orphans stay out: cleanup's plan
-     * is permission, not obligation (cleanup_result_t's exit contract, the table
+     * is permission, not obligation (cleanup_receipt_t's exit contract, the table
      * both engines draw). */
-    size_t failed_prunes = 0;
-
-    if (cleanup_result) {
-        failed_prunes = cleanup_result->failed.count;
-    }
+    size_t failed_prunes = cleanup_receipt->failed.count;
 
     if (undelivered > 0 && failed_prunes > 0) {
-        err = ERROR(
+        return ERROR(
             ERR_FS, "%zu path%s could not be deployed, %zu orphan%s could not be pruned",
             undelivered, undelivered == 1 ? "" : "s",
             failed_prunes, failed_prunes == 1 ? "" : "s"
         );
-    } else if (undelivered > 0) {
-        err = ERROR(
+    }
+    if (undelivered > 0) {
+        return ERROR(
             ERR_FS, "%zu path%s could not be deployed",
             undelivered, undelivered == 1 ? "" : "s"
         );
-    } else if (failed_prunes > 0) {
-        err = ERROR(
+    }
+    if (failed_prunes > 0) {
+        return ERROR(
             ERR_FS, "%zu orphan%s could not be pruned",
             failed_prunes, failed_prunes == 1 ? "" : "s"
         );
     }
 
-cleanup:
-    /* What the engines hold on the heap: cleanup's receipt, which borrows only
-     * what the arena holds. None frees an item: the workspace, its items, both
-     * plans, both engines' verdicts and deploy's receipt are the arena's
-     * (core/deploy.h, core/cleanup.h). */
-    if (cleanup_result) cleanup_result_free(cleanup_result);
-
-    return err;
+    return NULL;
 }
 
 /* ══════════════════════════════════════════════════════════════════

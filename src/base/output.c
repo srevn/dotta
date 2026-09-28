@@ -23,6 +23,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/error.h"
 #include "base/heap.h"
 
@@ -1002,54 +1003,25 @@ bool output_confirm_destructive(
  * ═══════════════════════════════════════════════════════════════════ */
 
 typedef struct {
-    char **tags;           /* Array of owned tag strings */
+    const char **tags;     /* Tag strings, the list's arena's */
     size_t tag_count;      /* Number of tags */
     output_color_t color;  /* Color for tags */
-    char *content;         /* Owned content string */
-    char *metadata;        /* Owned metadata string (nullable) */
+    const char *content;   /* Content string, the list's arena's */
+    const char *metadata;  /* Metadata string, the list's arena's (nullable) */
 } list_item_t;
 
 struct output_list {
+    arena_t *arena;     /* The list's own: the struct, its strings and its items */
     output_t *ctx;      /* Borrowed reference (caller owns) */
-    char *title;        /* Owned section title */
-    char *hint;         /* Owned hint text (nullable) */
-    list_item_t *items; /* Dynamic array of items */
+    const char *title;  /* Section title */
+    const char *hint;   /* Hint text (nullable) */
+    list_item_t *items; /* The items, grown in the arena */
     size_t count;       /* Current item count */
     size_t capacity;    /* Allocated capacity */
 };
 
-static void free_list_item(list_item_t *item) {
-    if (!item) return;
-
-    if (item->tags) {
-        for (size_t i = 0; i < item->tag_count; i++)
-            free(item->tags[i]);
-        free(item->tags);
-    }
-
-    free(item->content);
-    free(item->metadata);
-}
-
-static void list_ensure_capacity(output_list_t *list) {
-    if (list->count < list->capacity) return;
-
-    /* A capacity whose bytes wrap is one no memory could hold: exhaustion. The
-     * doubling itself cannot wrap first, since the capacity it doubles was
-     * allocated. */
-    size_t new_capacity = list->capacity * 2;
-    if (new_capacity > SIZE_MAX / sizeof(list_item_t)) heap_die(SIZE_MAX);
-
-    list->items = heap_realloc(list->items, new_capacity * sizeof(list_item_t));
-    list->capacity = new_capacity;
-    memset(
-        &list->items[list->count], 0,
-        (new_capacity - list->count) * sizeof(list_item_t)
-    );
-}
-
 static void format_tags_with_brackets(
-    char **tags, size_t tag_count, char *buffer, size_t buffer_size
+    const char *const *tags, size_t tag_count, char *buffer, size_t buffer_size
 ) {
     if (!tags || tag_count == 0 || !buffer || buffer_size == 0) {
         if (buffer && buffer_size > 0) buffer[0] = '\0';
@@ -1073,13 +1045,13 @@ output_list_t *output_list_create(
     CHECK_NULL(ctx);
     CHECK_NULL(title);
 
-    output_list_t *list = heap_calloc(1, sizeof(output_list_t));
+    arena_t *arena = arena_create(0);
+    output_list_t *list = arena_calloc(arena, 1, sizeof(*list));
 
+    list->arena = arena;
     list->ctx = ctx;
-    list->title = heap_strdup(title);
-    list->hint = heap_strdup(hint);
-    list->capacity = 16;
-    list->items = heap_calloc(16, sizeof(list_item_t));
+    list->title = arena_strdup(arena, title);
+    list->hint = arena_strdup(arena, hint);
 
     return list;
 }
@@ -1092,26 +1064,31 @@ void output_list_add(
     CHECK_NULL(list);
     CHECK_ARG(tags != NULL || tag_count == 0, "tags cannot be NULL with a count");
 
-    list_ensure_capacity(list);
+    arena_t *arena = list->arena;
+    list->items = arena_grow(
+        arena, list->items, &list->capacity, list->count + 1, sizeof(*list->items)
+    );
 
     list_item_t *item = &list->items[list->count];
+    *item = (list_item_t){
+        .tag_count = tag_count,
+        .color = color,
+        .content = arena_strdup(arena, content ? content : ""),
+        .metadata = arena_strdup(arena, metadata),
+    };
 
     if (tag_count > 0) {
-        item->tags = heap_calloc(tag_count, sizeof(char *));
+        item->tags = arena_calloc(arena, tag_count, sizeof(*item->tags));
         for (size_t i = 0; i < tag_count; i++)
-            item->tags[i] = heap_strdup(tags[i] ? tags[i] : "");
-        item->tag_count = tag_count;
+            item->tags[i] = arena_strdup(arena, tags[i] ? tags[i] : "");
     }
-
-    item->color = color;
-    item->content = heap_strdup(content ? content : "");
-    item->metadata = heap_strdup(metadata);
 
     list->count++;
 }
 
 void output_list_render(output_list_t *list) {
-    if (!list || list->count == 0) return;
+    CHECK_NULL(list);
+    if (list->count == 0) return;
 
     output_t *ctx = list->ctx;
     if (ctx->verbosity < OUTPUT_NORMAL) return;
@@ -1177,19 +1154,14 @@ void output_list_render(output_list_t *list) {
 }
 
 size_t output_list_count(const output_list_t *list) {
-    return list ? list->count : 0;
+    CHECK_NULL(list);
+
+    return list->count;
 }
 
 void output_list_free(output_list_t *list) {
     if (!list) return;
 
-    if (list->items) {
-        for (size_t i = 0; i < list->count; i++)
-            free_list_item(&list->items[i]);
-        free(list->items);
-    }
-
-    free(list->hint);
-    free(list->title);
-    free(list);
+    /* The list stands in its own arena: read the arena out, then free it whole */
+    arena_free(list->arena);
 }

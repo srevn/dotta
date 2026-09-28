@@ -585,6 +585,13 @@ bool output_confirm_destructive(
  *   1. Create list with title and optional hint
  *   2. Add items with tags, content, and metadata
  *   3. Render (calculates alignment automatically)
+ *   4. Free: the list is an arena of its own, freed whole
+ *
+ * A list's lifetime is its printing's, shorter than the command's: a status over
+ * 70,000 offers builds 8.6 MB of lists, 6.0 MB of them live at once, which the
+ * command's arena would hold to its end (include/runtime.h "Frame-scope"). So a
+ * list owns an arena — the struct, its title and hint, its items and every string
+ * they copy — and output_list_free gives all of it back at once.
  */
 typedef struct output_list output_list_t;
 
@@ -611,7 +618,7 @@ output_list_t *output_list_create(
  * Adds an item with multiple tags (e.g., ["modified", "mode"]). Tags will be
  * formatted as: [modified] [mode]
  *
- * All strings are copied internally - caller retains ownership of inputs.
+ * Every string is copied into the list's arena; the caller keeps its inputs.
  *
  * @param list List builder (must not be NULL)
  * @param tags Array of tag strings (must not be NULL if tag_count > 0)
@@ -662,8 +669,8 @@ size_t output_list_count(const output_list_t *list);
 /**
  * Free list builder and all associated memory
  *
- * Frees the list builder and all internal allocations (tags, content, metadata
- * strings). Safe to call with NULL.
+ * The list's arena, whole: the builder, its strings and its items. Safe to call
+ * with NULL.
  *
  * @param list List builder (NULL-safe)
  */

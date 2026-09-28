@@ -682,10 +682,9 @@ static int epoch_walk_cb(
 
     char key[GIT_OID_SHA1_HEXSIZE + DOTTA_REFNAME_MAX + PATH_MAX + 3];
     (void) snprintf(key, sizeof(key), "%s:%s:%s", oid_hex, walk->branch, path);
-    if (hashmap_has(walk->seen, key)) {
+    if (!hashmap_add(walk->seen, key, NULL)) {
         return (type == GIT_OBJECT_TREE) ? 1 : 0;
     }
-    hashmap_set(walk->seen, key, NULL);
 
     if (type == GIT_OBJECT_TREE) {
         return 0;  /* first visit: descend */
@@ -813,11 +812,10 @@ static error_t walk_ciphertext(
 
             char key[GIT_OID_SHA1_HEXSIZE + DOTTA_REFNAME_MAX + 3];
             (void) snprintf(key, sizeof(key), "%s:%s:", oid_hex, branch);
-            if (hashmap_has(seen, key)) {
+            if (!hashmap_add(seen, key, NULL)) {
                 git_commit_free(commit);
                 continue;
             }
-            hashmap_set(seen, key, NULL);
 
             git_tree *tree = NULL;
             git_err = git_commit_tree(&tree, commit);

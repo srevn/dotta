@@ -161,11 +161,11 @@ static error_t build_items(
      * (core/state.h state_profiles). */
     state_profiles_t enabled_profiles = state_profiles(deploy_state);
 
-    /* Hash map for O(1) lookups, the arena's. Store (i + 1) so index 0 doesn't
-     * collide with the "not found" NULL return. */
+    /* Each name to its index, the arena's: hashmap_find tells index 0 from a
+     * name the map does not hold. */
     hashmap_t *profile_map = hashmap_borrow(arena, all_profiles.count);
     for (size_t i = 0; i < all_profiles.count; i++) {
-        hashmap_set(profile_map, all_profiles.entries[i], (void *) (uintptr_t) (i + 1));
+        hashmap_set(profile_map, all_profiles.entries[i], (void *) (uintptr_t) i);
     }
 
     used = heap_calloc(all_profiles.count, sizeof(bool));
@@ -174,13 +174,12 @@ static error_t build_items(
     /* Pass A: enabled profiles in their saved order. */
     for (size_t i = 0; i < enabled_profiles.count; i++) {
         const char *name = enabled_profiles.entries[i].name;
-        void *idx_ptr = hashmap_get(profile_map, name);
-        if (!idx_ptr) {
+        void *idx = NULL;
+        if (!hashmap_find(profile_map, name, &idx)) {
             /* Persisted name no longer exists locally — drop silently. */
             continue;
         }
-        size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-        used[idx] = true;
+        used[(size_t) (uintptr_t) idx] = true;
         view->items[item_idx].name = heap_strdup(name);
         view->items[item_idx].enabled = true;
         item_idx++;

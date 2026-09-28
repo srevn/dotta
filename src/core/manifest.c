@@ -1156,10 +1156,11 @@ static void manifest_layer(manifest_t *manifest, arena_t *arena) {
 
             /* A derived row only fills an empty path; an explicit one takes
              * whatever stands there. */
-            if (manifest_is_derived(row) &&
-                hashmap_has(manifest->index, row->filesystem_path)) continue;
-
-            hashmap_set(manifest->index, row->filesystem_path, row);
+            if (manifest_is_derived(row)) {
+                hashmap_add(manifest->index, row->filesystem_path, row);
+            } else {
+                hashmap_set(manifest->index, row->filesystem_path, row);
+            }
         }
     }
 

@@ -133,16 +133,59 @@ void hashmap_set(hashmap_t *map, const char *key, void *value);
 void hashmap_put(hashmap_t *map, const char *key, void *value, void **out_prev);
 
 /**
+ * Insert a key that is not there yet
+ *
+ * A seen-set's one probe: the key takes a slot with `value` when the map holds
+ * none for it, and a held key is left as it is. The slot decides, never what it
+ * holds — a key held with a NULL value is held.
+ *
+ * @param map Hash map (must not be NULL)
+ * @param key Key string (copied into the map's arena in owning mode when it takes
+ *            a slot, stored directly in borrowing mode; must not be NULL)
+ * @param value Value a new slot is given
+ * @return true when this call inserted the key, false when it was already there
+ */
+bool hashmap_add(hashmap_t *map, const char *key, void *value);
+
+/**
  * Get value for key
  *
  * Returns NULL both when the key is absent and when its value is NULL. Use
- * hashmap_has() to distinguish the two cases.
+ * hashmap_find() to tell the two apart in one probe.
  *
  * @param map Hash map (NULL returns NULL)
  * @param key Key string (NULL returns NULL)
  * @return Value pointer, or NULL if not found
  */
 void *hashmap_get(const hashmap_t *map, const char *key);
+
+/**
+ * Get value for the key spelled by the first `len` bytes of `key`
+ *
+ * A climb asks each prefix of one string without copying it: `key` need not end
+ * at `len`, and only a key exactly `len` bytes long matches — a span that is a
+ * prefix of a held key finds nothing.
+ *
+ * @param map Hash map (NULL returns NULL)
+ * @param key The span's first byte (NULL returns NULL)
+ * @param len The span's length in bytes, none of them NUL
+ * @return Value pointer, or NULL if not found
+ */
+void *hashmap_get_n(const hashmap_t *map, const char *key, size_t len);
+
+/**
+ * Look up a key, telling absence from a NULL value
+ *
+ * For a map whose values may be NULL — an index 0, a "seen, no value yet" — where
+ * hashmap_get's NULL would mean either.
+ *
+ * @param map Hash map (NULL finds nothing)
+ * @param key Key string (NULL finds nothing)
+ * @param out Receives the value when the key is present; untouched when it is
+ *            absent (must not be NULL)
+ * @return true when the key is present
+ */
+bool hashmap_find(const hashmap_t *map, const char *key, void **out);
 
 /**
  * Check if key exists

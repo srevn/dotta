@@ -285,10 +285,9 @@ static error_t stats_walk(
                 /* Only map files that exist in the current tree. The map is
                  * pre-populated with current-tree paths (NULL values). Skip paths
                  * not in the tree (deleted files, old renames) and paths already
-                 * mapped (non-NULL value). */
-                if (!hashmap_has(walk->map, path) || hashmap_get(walk->map, path)) {
-                    continue;
-                }
+                 * mapped (non-NULL value): one probe tells the two apart. */
+                void *mapped = NULL;
+                if (!hashmap_find(walk->map, path, &mapped) || mapped) continue;
 
                 if (!info) {
                     info = arena_calloc(walk->arena, 1, sizeof(*info));

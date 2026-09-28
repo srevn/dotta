@@ -703,10 +703,8 @@ static error_t profile_enable(
     for (size_t i = 0; i < to_enable.count; i++) {
         const char *profile = to_enable.entries[i];
 
-        /* Silently dedupe duplicate args — we've already decided about this profile
-         * earlier in this pass. */
-        if (hashmap_has(seen_set, profile)) continue;
-        hashmap_set(seen_set, profile, (void *) (uintptr_t) 1);
+        /* Silently dedupe duplicate args — decided about earlier in this pass */
+        if (!hashmap_add(seen_set, profile, NULL)) continue;
 
         if (state_enabled(state, profile)) {
             /* --target on an enabled profile is a retarget: the binding is the
@@ -1051,10 +1049,8 @@ static error_t profile_disable(
         for (size_t i = 0; i < opts->profile_count; i++) {
             const char *profile = opts->profiles[i];
 
-            /* Silently dedupe duplicate args — we've already decided about this
-             * profile earlier in this pass. */
-            if (hashmap_has(seen_set, profile)) continue;
-            hashmap_set(seen_set, profile, (void *) (uintptr_t) 1);
+            /* Silently dedupe duplicate args — decided about earlier in this pass */
+            if (!hashmap_add(seen_set, profile, NULL)) continue;
 
             if (state_enabled(state, profile)) {
                 string_array_push(&to_disable_validated, profile);
@@ -1487,22 +1483,22 @@ static error_t profile_validate(
 
     string_array_t deleted;
     string_array_init(&deleted, ctx->arena);
-    hashmap_t *probed = hashmap_borrow(ctx->arena, 16);   /* profile → (void *) 1 exists, (void *) 2 deleted */
+    hashmap_t *probed = hashmap_borrow(ctx->arena, 16);   /* profile → its branch gone (non-NULL) or not */
 
     for (size_t i = 0; i < record_count; i++) {
         const char *profile = records[i].profile;
 
-        void *known = hashmap_get(probed, profile);
-        if (!known) {
+        void *gone = NULL;
+        if (!hashmap_find(probed, profile, &gone)) {
             bool exists = false;
             err = gitops_branch_exists(repo, profile, &exists);
             if (err) goto cleanup;
-            known = exists ? (void *) 1 : (void *) 2;
-            hashmap_set(probed, profile, known);
-            if (known == (void *) 2) string_array_push(&deleted, profile);
+            gone = (void *) (uintptr_t) !exists;
+            hashmap_set(probed, profile, gone);
+            if (gone) string_array_push(&deleted, profile);
         }
 
-        if (known == (void *) 2) {
+        if (gone) {
             orphaned_files++;
             has_issues = true;
             has_orphaned_files = true;

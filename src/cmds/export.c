@@ -88,7 +88,6 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
-#include "base/heap.h"
 #include "base/output.h"
 #include "base/refspec.h"
 #include "base/string.h"
@@ -920,35 +919,37 @@ static error_t complete_directories(export_entry_list_t *list, arena_t *arena) {
         hashmap_set(standing, list->items[i].rel_path, (void *) (uintptr_t) (i + 1));
     }
 
-    error_t err = NULL;
-
     size_t collected = list->count;
 
-    for (size_t i = 0; i < collected && !err; i++) {
-        /* One copy spells every prefix of this entry in turn. */
-        char *rung = heap_strdup(list->items[i].rel_path);
+    for (size_t i = 0; i < collected; i++) {
+        /* Every prefix of this entry asked of the original string, by its length
+         * (hashmap_get_n): the spine may move as a rung is appended, the string
+         * does not. */
+        const char *rel_path = list->items[i].rel_path;
 
-        for (char *slash = strchr(rung, '/'); slash && !err;
-            slash = strchr(slash + 1, '/')) {
-            *slash = '\0';
+        for (const char *slash = strchr(rel_path, '/'); slash; slash = strchr(slash + 1, '/')) {
+            const size_t len = (size_t) (slash - rel_path);
 
-            size_t held = (size_t) (uintptr_t) hashmap_get(standing, rung);
+            size_t held = (size_t) (uintptr_t) hashmap_get_n(standing, rel_path, len);
             if (held == 0) {
                 export_entry_t e;
                 memset(&e, 0, sizeof(e));
                 e.kind = EXPORT_ENTRY_DIRECTORY;
                 e.mode = DIR_MODE_DEFAULT;
-                e.rel_path = arena_strdup(arena, rung);
+                e.rel_path = arena_strndup(arena, rel_path, len);
                 entry_list_append(list, arena, &e);
                 hashmap_set(standing, e.rel_path, (void *) (uintptr_t) list->count);
-            } else if (list->items[held - 1].kind != EXPORT_ENTRY_DIRECTORY) {
-                /* Both subjects in the branch's own names, because the
-                 * contradiction is the branch's and that is where it gets fixed.
-                 * Every entry that climbs carries one: a leaf comes from a source
-                 * that named it, and the root — the only collected entry without
-                 * a name — holds no slash to climb. */
-                const export_entry_t *blocker = &list->items[held - 1];
-                err = ERROR(
+                continue;
+            }
+
+            /* Both subjects in the branch's own names, because the contradiction
+             * is the branch's and that is where it gets fixed. Every entry that
+             * climbs carries one: a leaf comes from a source that named it, and
+             * the root — the only collected entry without a name — holds no slash
+             * to climb. */
+            const export_entry_t *blocker = &list->items[held - 1];
+            if (blocker->kind != EXPORT_ENTRY_DIRECTORY) {
+                return ERROR(
                     ERR_CONFLICT,
                     "Cannot export '%s': '%s' is a %s in this profile, so "
                     "nothing can stand beneath it",
@@ -956,14 +957,10 @@ static error_t complete_directories(export_entry_list_t *list, arena_t *arena) {
                     blocker->kind == EXPORT_ENTRY_SYMLINK ? "symlink" : "file"
                 );
             }
-
-            *slash = '/';
         }
-
-        free(rung);
     }
 
-    return err;
+    return NULL;
 }
 
 /**

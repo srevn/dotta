@@ -49,11 +49,12 @@ struct hashmap {
     bool borrow_keys;           /* If true: keys stored by reference, not copied */
 };
 
-/* FNV-1a hash function for strings */
-static uint32_t hash_key(const char *key) {
+/* FNV-1a over a key's `len` bytes: a whole key hashes its strlen, a span its own */
+static uint32_t hash_key(const char *key, size_t len) {
     uint64_t hash = FNV_OFFSET;
-    for (const unsigned char *p = (const unsigned char *) key; *p; p++) {
-        hash ^= *p;
+    const unsigned char *bytes = (const unsigned char *) key;
+    for (size_t i = 0; i < len; i++) {
+        hash ^= bytes[i];
         hash *= FNV_PRIME;
     }
     /* XOR-fold: mix upper bits into lower 32 for better distribution */
@@ -145,28 +146,23 @@ static void hashmap_grow(hashmap_t *map) {
 }
 
 /**
- * Shared insert/update implementation.
+ * The slot `key` already holds, or NULL once `key` → `value` took one
  *
- * @param map       Target map
- * @param key       Caller's key (const — copied into the arena if needed)
- * @param value     Value to store
- * @param out_prev  If non-NULL, receives the previous value when updating
- *                  an existing key (set to NULL when inserting a new key).
+ * The one probe every writer makes: set and put replace the value of the slot
+ * it answers, add leaves it — so a key is found or placed in a single walk,
+ * whichever the writer then does with it.
+ *
+ * @param map   Target map
+ * @param key   Caller's key (const — copied into the arena if a slot is taken)
+ * @param value Value a new slot is given; a held slot's is untouched here
  */
-static void hashmap_insert(
-    hashmap_t *map,
-    const char *key,
-    void *value,
-    void **out_prev
-) {
-    if (out_prev) *out_prev = NULL;
-
+static hashmap_slot_t *hashmap_insert(hashmap_t *map, const char *key, void *value) {
     /* Grow before insert so there is always at least one empty slot */
     if (map->count >= map->grow_at) {
         hashmap_grow(map);
     }
 
-    uint32_t h = hash_key(key);
+    uint32_t h = hash_key(key, strlen(key));
     size_t mask = map->capacity - 1;
     size_t pos = ideal_slot(h, mask);
     size_t dist = 0;
@@ -189,15 +185,14 @@ static void hashmap_insert(
             slot->hash = carry_h;
             map->count++;
             map->mod_count++;
-            return;
+            return NULL;
         }
 
-        /* Exact match — update value */
+        /* Exact match — the writer decides the value. Never after a swap: the
+         * Robin Hood order puts a held key before any slot richer than it, so a
+         * walk that has displaced an entry already knows the key is not here. */
         if (slot->hash == h && strcmp(slot->key, key) == 0) {
-            if (out_prev) *out_prev = slot->value;
-            slot->value = value;
-            /* No mod_count bump: value-only update is not structural */
-            return;
+            return slot;
         }
 
         /* Robin Hood: displace richer entries */
@@ -228,16 +223,20 @@ static void hashmap_insert(
 }
 
 /**
- * Find a slot by key.
+ * Find a slot by the key spelled by `key`'s first `len` bytes.
  *
  * Returns pointer to the occupied slot, or NULL if absent. Uses Robin Hood early
  * termination: if our probe distance exceeds the slot's, the key cannot be present.
+ * A slot matches only a key exactly `len` bytes long, so a span that is a prefix
+ * of a held key finds nothing: strncmp stops at the held key's end, and the byte
+ * after the span must be that end.
  */
 static const hashmap_slot_t *hashmap_slot(
     const hashmap_t *map,
     const char *key,
-    uint32_t h
+    size_t len
 ) {
+    const uint32_t h = hash_key(key, len);
     size_t mask = map->capacity - 1;
     size_t pos = ideal_slot(h, mask);
     size_t dist = 0;
@@ -248,7 +247,7 @@ static const hashmap_slot_t *hashmap_slot(
         if (!slot->key)
             return NULL;
 
-        if (slot->hash == h && strcmp(slot->key, key) == 0)
+        if (slot->hash == h && strncmp(slot->key, key, len) == 0 && slot->key[len] == '\0')
             return slot;
 
         if (dist > probe_dist(pos, slot->hash, mask))
@@ -347,7 +346,9 @@ void hashmap_set(hashmap_t *map, const char *key, void *value) {
     CHECK_NULL(map);
     CHECK_NULL(key);
 
-    hashmap_insert(map, key, value, NULL);
+    /* No mod_count bump on an update: a value-only write is not structural */
+    hashmap_slot_t *held = hashmap_insert(map, key, value);
+    if (held) held->value = value;
 }
 
 /* Insert or update, returning the previous value */
@@ -356,29 +357,58 @@ void hashmap_put(hashmap_t *map, const char *key, void *value, void **out_prev) 
     CHECK_NULL(key);
     CHECK_NULL(out_prev);
 
-    hashmap_insert(map, key, value, out_prev);
+    hashmap_slot_t *held = hashmap_insert(map, key, value);
+    *out_prev = held ? held->value : NULL;
+    if (held) held->value = value;
+}
+
+/* Insert a key that is not there yet */
+bool hashmap_add(hashmap_t *map, const char *key, void *value) {
+    CHECK_NULL(map);
+    CHECK_NULL(key);
+
+    return hashmap_insert(map, key, value) == NULL;
 }
 
 /** Get value for key */
 void *hashmap_get(const hashmap_t *map, const char *key) {
+    if (!map || !key) return NULL;
+
+    return hashmap_get_n(map, key, strlen(key));
+}
+
+/* Get value for the key the span spells */
+void *hashmap_get_n(const hashmap_t *map, const char *key, size_t len) {
     if (!map || !key || map->count == 0) return NULL;
-    const hashmap_slot_t *slot = hashmap_slot(map, key, hash_key(key));
+    const hashmap_slot_t *slot = hashmap_slot(map, key, len);
 
     return slot ? slot->value : NULL;
+}
+
+/* Look up a key, telling absence from a NULL value */
+bool hashmap_find(const hashmap_t *map, const char *key, void **out) {
+    CHECK_NULL(out);
+    if (!map || !key || map->count == 0) return false;
+
+    const hashmap_slot_t *slot = hashmap_slot(map, key, strlen(key));
+    if (!slot) return false;
+
+    *out = slot->value;
+    return true;
 }
 
 /* Check if key exists */
 bool hashmap_has(const hashmap_t *map, const char *key) {
     if (!map || !key || map->count == 0) return false;
 
-    return hashmap_slot(map, key, hash_key(key)) != NULL;
+    return hashmap_slot(map, key, strlen(key)) != NULL;
 }
 
 /* Remove key-value pair */
 bool hashmap_remove(hashmap_t *map, const char *key, void **out_old) {
     if (!map || !key || map->count == 0) return false;
 
-    uint32_t h = hash_key(key);
+    uint32_t h = hash_key(key, strlen(key));
     size_t mask = map->capacity - 1;
     size_t pos = ideal_slot(h, mask);
     size_t dist = 0;
@@ -442,7 +472,7 @@ bool hashmap_is_empty(const hashmap_t *map) {
 
 /* Initialize iterator for hashmap */
 void hashmap_iter_init(hashmap_iter_t *iter, const hashmap_t *map) {
-    if (!iter) return;
+    CHECK_NULL(iter);
 
     iter->map = map;
     iter->index = 0;
@@ -455,7 +485,8 @@ bool hashmap_iter_next(
     const char **out_key,
     void **out_value
 ) {
-    if (!iter || !iter->map) return false;
+    CHECK_NULL(iter);
+    if (!iter->map) return false;
 
     const hashmap_t *map = iter->map;
     CHECK_ARG(

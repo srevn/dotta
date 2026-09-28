@@ -289,14 +289,12 @@ static divergence_type_t workspace_compare_ownership(
      * of the user's could make disk stand on, since no uid here is it: Git's to
      * bring, so the route sends it to apply, which warns of the name, and never
      * to update, whose capture of disk would put this host's want of the name
-     * in place of another machine's word. The resolver's sentence is freed unread:
-     * which half failed is the landing's to say (core/deploy.c
-     * resolve_deployment_ownership), never a look's. */
+     * in place of another machine's word. Which half did not resolve is the
+     * landing's to say (core/deploy.c resolve_deployment_ownership), never a
+     * look's. */
     uid_t uid;
     gid_t gid;
-    error_t *err = metadata_ownership(owner, group, &uid, &gid);
-    if (err) {
-        error_free(err);
+    if (metadata_ownership(owner, group, &uid, &gid) != METADATA_OWNERSHIP_RESOLVED) {
         return DIVERGENCE_OWNERSHIP | DIVERGENCE_CLAIM_MOVED;
     }
 

@@ -781,6 +781,19 @@ error_t *metadata_save_to_stage(
 );
 
 /**
+ * Whether a claim's names are this host's (metadata_ownership)
+ *
+ * The half that did not resolve, where one did not — the answer the landing words
+ * and the compare reads as "unresolvable", no sentence minted on the way: the
+ * compare asks it of every row on every load.
+ */
+typedef enum {
+    METADATA_OWNERSHIP_RESOLVED = 0,   /* both halves are this host's ids */
+    METADATA_OWNERSHIP_NO_SUCH_USER,   /* the owner names a user this host cannot resolve */
+    METADATA_OWNERSHIP_NO_SUCH_GROUP   /* the owner resolved; the group names one it cannot */
+} metadata_ownership_t;
+
+/**
  * The sheet's word on a path's ownership, as this host's ids
  *
  * Two names, two absences, one rule each — and no label in either, and no
@@ -793,8 +806,9 @@ error_t *metadata_save_to_stage(
  *     authors a group alone, a named owner brings its group with it, and a group
  *     is as often a directory's inheritance as an intent — what a creation gives,
  *     it keeps
- * A named half is that name on this host, or ERR_NOT_FOUND with the outs untouched:
- * a claim this host cannot spell is never guessed at, and never answered by halves.
+ * A named half is that name on this host, or the half this host cannot resolve
+ * with the outs untouched: a claim this host cannot spell is never guessed at,
+ * and never answered by halves.
  *
  * "Ownership" here is the file's — its uid and gid, the axis status prints as
  * [ownership]. The record's ownership (core/state.h: an ownership event, dotta
@@ -813,12 +827,10 @@ error_t *metadata_save_to_stage(
  * @param group The claimed group, or NULL
  * @param out_uid The owner: the claim's, or the invoker's (must not be NULL)
  * @param out_gid The group: the claim's, or (gid_t) -1 (must not be NULL)
- * @return Error or NULL on success
- *
- * Errors:
- * - ERR_NOT_FOUND: a named user or group this host cannot resolve
+ * @return RESOLVED with both outs written, or the half this host cannot resolve
+ *         — the owner asked first — with neither
  */
-error_t *metadata_ownership(
+metadata_ownership_t metadata_ownership(
     const char *owner,
     const char *group,
     uid_t *out_uid,

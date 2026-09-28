@@ -1349,9 +1349,9 @@ error_t *metadata_save_to_stage(
  * The sheet's word on a path's ownership, as this host's ids
  *
  * Each half by its own rule (metadata.h), written to the outs together, so a
- * half that resolved never survives the other's failure.
+ * half that resolved never survives the other's miss.
  */
-error_t *metadata_ownership(
+metadata_ownership_t metadata_ownership(
     const char *owner,
     const char *group,
     uid_t *out_uid,
@@ -1367,12 +1367,7 @@ error_t *metadata_ownership(
     /* A named owner is its uid on this host, or no answer at all */
     if (owner) {
         struct passwd *pwd = getpwnam(owner);
-        if (!pwd) {
-            return ERROR(
-                ERR_NOT_FOUND, "User '%s' does not exist on this system",
-                owner
-            );
-        }
+        if (!pwd) return METADATA_OWNERSHIP_NO_SUCH_USER;
         uid = pwd->pw_uid;
     }
 
@@ -1380,16 +1375,11 @@ error_t *metadata_ownership(
      * no group constrains none */
     if (group) {
         struct group *grp = getgrnam(group);
-        if (!grp) {
-            return ERROR(
-                ERR_NOT_FOUND, "Group '%s' does not exist on this system",
-                group
-            );
-        }
+        if (!grp) return METADATA_OWNERSHIP_NO_SUCH_GROUP;
         gid = grp->gr_gid;
     }
 
     *out_uid = uid;
     *out_gid = gid;
-    return NULL;
+    return METADATA_OWNERSHIP_RESOLVED;
 }

@@ -742,28 +742,42 @@ static error_t *resolve_deployment_ownership(
     CHECK_NULL(out_gid);
 
     /* The word as this host's ids, the pair the write applies whatever the run
-     * holds */
-    error_t *err = metadata_ownership(row->owner, row->group, out_uid, out_gid);
-    if (!err) return NULL;
+     * holds — or a name this system does not know: which half, by the name the
+     * claim gave it */
+    const char *half = NULL;
+    const char *name = NULL;
+    switch (metadata_ownership(row->owner, row->group, out_uid, out_gid)) {
+        case METADATA_OWNERSHIP_RESOLVED:
+            return NULL;
 
-    /* ERR_NOT_FOUND only: a name this system does not know. Fatal under
-     * strict_ownership, a configuration or environment mismatch the user asked
-     * to be stopped by */
+        case METADATA_OWNERSHIP_NO_SUCH_USER:
+            half = "User";
+            name = row->owner;
+            break;
+
+        case METADATA_OWNERSHIP_NO_SUCH_GROUP:
+            half = "Group";
+            name = row->group;
+            break;
+    }
+
+    /* Fatal under strict_ownership, a configuration or environment mismatch the
+     * user asked to be stopped by */
     if (strict_ownership) {
         return error_wrap(
-            err, "Ownership resolution failed for '%s' "
-            "(strict_ownership enabled)\nHint: Create the user/group "
-            "on this system, or disable strict_ownership", row->storage_path
+            ERROR(ERR_NOT_FOUND, "%s '%s' does not exist on this system", half, name),
+            "Ownership resolution failed for '%s' (strict_ownership enabled)\n"
+            "Hint: Create the user/group on this system, or disable "
+            "strict_ownership", row->storage_path
         );
     }
 
-    /* Otherwise a warning, in the resolver's own words — which name it could
-     * not find — and the deployment continues */
+    /* Otherwise a warning naming the half it could not find, and the deployment
+     * continues */
     string_array_pushf(
-        warnings, "Could not resolve ownership for %s: %s",
-        row->storage_path, error_message(err)
+        warnings, "Could not resolve ownership for %s: %s '%s' does not exist on "
+        "this system", row->storage_path, half, name
     );
-    error_free(err);    /* its message is the warning's now */
 
     /* No change, not a guess: a claim that cannot be honoured is not applied by
      * halves — not the half that resolved, and not the invoker for the half that
@@ -1373,13 +1387,13 @@ static error_t *create_ancestor(deploy_run_t *run, const char *path) {
     }
 
     /* A parent no row claims: the word no claim makes, asked of its one producer
-     * rather than spelled here a second time — two absences are no name to fail
-     * on, and the answer is checked all the same. Left root's, the next climb
-     * through this directory would claim it root's (metadata_capture_ancestors),
-     * and dotta's own artefact would enter the sheet as intent. */
+     * rather than spelled here a second time — two absences name nothing to miss,
+     * so the pair always resolves. Left root's, the next climb through this
+     * directory would claim it root's (metadata_capture_ancestors), and dotta's
+     * own artefact would enter the sheet as intent. */
     uid_t uid;
     gid_t gid;
-    RETURN_IF_ERROR(metadata_ownership(NULL, NULL, &uid, &gid));
+    (void) metadata_ownership(NULL, NULL, &uid, &gid);
 
     return fs_create_dir_exclusive(path, DIR_MODE_DEFAULT, uid, gid);
 }

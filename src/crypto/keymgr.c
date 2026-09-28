@@ -235,12 +235,13 @@ void keymgr_free(keymgr *km) {
  */
 
 /**
- * Does `master` open `witness`? The pair for the witness's profile, one
- * `cipher_decrypt`, the plaintext wiped and freed here: the ladder carries no
- * plaintext, and the decrypt that asked runs its own once the master is kept.
- * ERR_CRYPTO is "no"; any other error is the decrypt's own failure.
+ * Does `master` open `witness`? The pair for the witness's profile, then the
+ * cipher's own question (crypto/cipher.h cipher_opens), which carries no plaintext
+ * out: the ladder holds none, and the decrypt that asked runs its own once the
+ * master is kept. A witness no key could open — truncated, damaged, bound elsewhere
+ * — is a "no" like a wrong master's, never a failure.
  */
-static error_t *open_witness(
+static bool open_witness(
     const uint8_t master[KDF_KEY_SIZE],
     const keymgr_witness_t *witness
 ) {
@@ -248,22 +249,14 @@ static error_t *open_witness(
     uint8_t prf_key[KDF_KEY_SIZE];
     kdf_siv_subkeys(master, witness->profile, mac_key, prf_key);
 
-    buffer_t plaintext = BUFFER_INIT;
-    error_t *err = cipher_decrypt(
-        witness->ciphertext, witness->len,
-        mac_key, prf_key,
-        witness->storage_path,
-        &plaintext
+    const bool opens = cipher_opens(
+        witness->ciphertext, witness->len, mac_key, prf_key, witness->storage_path
     );
 
     crypto_wipe(mac_key, sizeof(mac_key));
     crypto_wipe(prf_key, sizeof(prf_key));
-    if (plaintext.data) {
-        crypto_wipe(plaintext.data, plaintext.size);
-    }
-    buffer_deinit(&plaintext);
 
-    return err;
+    return opens;
 }
 
 /* The same witness: the same bytes under the same binding. One object at two
@@ -290,47 +283,34 @@ typedef struct {
 
 /**
  * keymgr_opens_fn: the trial's answer to a presented witness. One the master
- * opens is accepted with its binding on the proof. The cipher's "no" is that
- * witness's refusal and not the master's, so the walk goes on. A decrypt that
- * failed on its own is neither answer, and its error ends the walk.
+ * opens is accepted with its binding on the proof. One it does not is that
+ * witness's "no" and not the master's, so the walk goes on.
  */
-static error_t *trial_opens(
-    void *self, const keymgr_witness_t *witness, bool *out_accepted
-) {
+static bool trial_opens(void *self, const keymgr_witness_t *witness) {
     keymgr_trial_t *trial = self;
 
-    *out_accepted = false;
     if (trial->in_hand && witness_same(trial->in_hand, witness)) {
-        return NULL;
+        return false;
     }
     trial->tried++;
 
-    error_t *err = open_witness(trial->proof->master, witness);
-    if (!err) {
-        bind_proof(trial->proof, witness);
-        *out_accepted = true;
-        return NULL;
+    if (!open_witness(trial->proof->master, witness)) {
+        return false;
     }
-    if (error_code(err) != ERR_CRYPTO) {
-        return err;
-    }
-    error_free(err);
+    bind_proof(trial->proof, witness);
 
-    return NULL;
+    return true;
 }
 
 /**
  * keymgr_opens_fn: the prompt's question — is there any ciphertext to verify
  * against? — answered by the first witness presented.
  */
-static error_t *witness_exists(
-    void *self, const keymgr_witness_t *witness, bool *out_accepted
-) {
+static bool witness_exists(void *self, const keymgr_witness_t *witness) {
     (void) self;
     (void) witness;
-    *out_accepted = true;
 
-    return NULL;
+    return true;
 }
 
 /**
@@ -362,15 +342,10 @@ static error_t *derive_and_check(
 
     if (in_hand) {
         trial.tried++;
-        err = open_witness(out->master, in_hand);
-        if (!err) {
+        if (open_witness(out->master, in_hand)) {
             bind_proof(out, in_hand);
             return NULL;
         }
-        if (error_code(err) != ERR_CRYPTO) {
-            goto fail;
-        }
-        error_free(err);
     }
 
     if (km->source) {

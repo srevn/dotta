@@ -628,12 +628,8 @@ typedef struct {
     size_t size;                /* its length, the header included */
 } epoch_ciphertext_t;
 
-/* The asker's callback: continue, or stop with its answer in its payload. */
-typedef error_t *(*epoch_ciphertext_fn)(
-    const epoch_ciphertext_t *ct,
-    void *payload,
-    bool *stop
-);
+/* The asker's callback: true stops the walk, the answer in its payload. */
+typedef bool (*epoch_ciphertext_fn)(const epoch_ciphertext_t *ct, void *payload);
 
 /* The walk's own payload, shared across every branch. */
 typedef struct {
@@ -734,13 +730,8 @@ static int epoch_walk_cb(
         .data         = view.data,
         .size         = view.size,
     };
-    bool stop = false;
-    err = walk->fn(&ct, walk->payload, &stop);
+    const bool stop = walk->fn(&ct, walk->payload);
     gitops_blob_view_close(&view);
-    if (err) {
-        walk->error = err;
-        return -1;
-    }
     if (stop) {
         walk->stopped = true;
         return -1;
@@ -891,9 +882,7 @@ typedef struct {
     bool found;                 /* set on the first blob that counts */
 } epoch_census_t;
 
-static error_t *epoch_census_cb(
-    const epoch_ciphertext_t *ct, void *payload, bool *stop
-) {
+static bool epoch_census_cb(const epoch_ciphertext_t *ct, void *payload) {
     epoch_census_t *census = payload;
 
     /* Any ciphertext counts with no fingerprint to attribute to; an unattributable
@@ -903,9 +892,8 @@ static error_t *epoch_census_cb(
         || ct->kind == CONTENT_UNSUPPORTED_VERSION
         || memcmp(ct->epoch_fp, census->local_fp, KDF_EPOCH_FP_SIZE) == 0) {
         census->found = true;
-        *stop = true;
     }
-    return NULL;
+    return census->found;
 }
 
 /*
@@ -943,14 +931,12 @@ typedef struct {
     bool accepted;                  /* set when the predicate accepted one */
 } epoch_find_t;
 
-static error_t *epoch_find_cb(
-    const epoch_ciphertext_t *ct, void *payload, bool *stop
-) {
+static bool epoch_find_cb(const epoch_ciphertext_t *ct, void *payload) {
     epoch_find_t *find = payload;
 
     if (ct->kind != CONTENT_ENCRYPTED
         || memcmp(ct->epoch_fp, find->fp, KDF_EPOCH_FP_SIZE) != 0) {
-        return NULL;
+        return false;
     }
 
     const keymgr_witness_t witness = {
@@ -959,14 +945,8 @@ static error_t *epoch_find_cb(
         .profile      = ct->branch,
         .storage_path = ct->storage_path,
     };
-    bool accepted = false;
-    error_t *err = find->accept(find->self, &witness, &accepted);
-    if (err) return err;
-    if (accepted) {
-        find->accepted = true;
-        *stop = true;
-    }
-    return NULL;
+    find->accepted = find->accept(find->self, &witness);
+    return find->accepted;
 }
 
 error_t *epoch_find_ciphertext(

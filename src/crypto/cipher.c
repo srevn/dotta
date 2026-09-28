@@ -12,10 +12,11 @@
  *      keystream in one pass.
  *
  * Wiping discipline:
- *   - `keystream_seed` and (decrypt) `siv_recomputed` are stack-local and wiped
- *     on every exit path.
+ *   - `keystream_seed` and (the unseal) `siv_recomputed` are stack-local and
+ *     wiped on every exit path.
  *   - The output `buffer_t` is wiped and freed on any error; on success ownership
- *     transfers and the local slot is zeroed.
+ *     transfers and the local slot is zeroed. `cipher_opens` hands no plaintext
+ *     out, so its candidate is wiped and freed on every path.
  *   - Subkeys are caller-owned; never wiped here.
  *
  * Wipe primitive: this layer uses monocypher's `crypto_wipe` directly (already
@@ -279,6 +280,76 @@ cleanup:
     return err;
 }
 
+/**
+ * The seal opened: the candidate plaintext under (mac_key, prf_key), and whether
+ * the stored SIV authenticates it — decrypt's steps 3 and 4, then step 2 again
+ * over what they made.
+ *
+ * The framing is the caller's to have checked: an overhead's worth of bytes at
+ * least, the cap at most, a path within its bound. `candidate` is claimed at
+ * the body's size and every byte of it written; on a mismatch it is would-be
+ * plaintext from an attacker-supplied SIV/ciphertext pair, and the caller wipes
+ * it with whatever else it holds. The seed and the recomputed SIV are wiped here,
+ * on the one way out.
+ */
+static bool unseal(
+    const uint8_t *ciphertext,
+    size_t ciphertext_len,
+    const uint8_t mac_key[KDF_KEY_SIZE],
+    const uint8_t prf_key[KDF_KEY_SIZE],
+    const char *storage_path,
+    size_t path_len,
+    buffer_t *candidate
+) {
+    uint8_t keystream_seed[CIPHER_SIV_SIZE];
+    uint8_t siv_recomputed[CIPHER_SIV_SIZE];
+
+    const uint8_t *header = ciphertext;
+    const uint8_t *siv_received = ciphertext + CIPHER_HEADER_SIZE;
+    const uint8_t *ct_body = ciphertext + CIPHER_OVERHEAD;
+    const size_t plaintext_len = ciphertext_len - CIPHER_OVERHEAD;
+
+    /* Claim the candidate plaintext at its final size; the keystream XOR writes
+     * every byte of it in place, after which we recompute SIV over the
+     * candidate. */
+    buffer_resize(candidate, plaintext_len);
+
+    /* Step 3: keystream seed from received SIV under prf_key. In SIV the IV
+     * authenticates the plaintext — we must decrypt the candidate before we can
+     * verify, then either return or wipe it. */
+    crypto_mac_oneshot(
+        keystream_seed, prf_key, CRYPTO_DOMAIN_CIPHER_KEY,
+        siv_received, CIPHER_SIV_SIZE,
+        NULL, 0
+    );
+
+    /* Step 4: XChaCha20 ciphertext_body → candidate plaintext. Same (seed, nonce,
+     * ctr) as encrypt; XOR is its own inverse. */
+    crypto_chacha20_x(
+        (uint8_t *) candidate->data, ct_body, plaintext_len,
+        keystream_seed, siv_received, /*ctr=*/ 0
+    );
+
+    /* Step 2 (recomputed): SIV over (header, path, candidate). If authentication
+     * holds, candidate == original plaintext, so the recomputed SIV matches the
+     * stored SIV byte-for-byte. */
+    compute_siv(
+        mac_key, header, storage_path, path_len,
+        (const uint8_t *) candidate->data, plaintext_len,
+        siv_recomputed
+    );
+
+    /* Constant-time compare. crypto_verify32 returns 0 iff the two 32-byte buffers
+     * are byte-equal; non-zero indicates ANY difference, with no early-exit timing
+     * leak. */
+    const bool opens = crypto_verify32(siv_recomputed, siv_received) == 0;
+
+    crypto_wipe(keystream_seed, sizeof(keystream_seed));
+    crypto_wipe(siv_recomputed, sizeof(siv_recomputed));
+
+    return opens;
+}
+
 error_t *cipher_decrypt(
     const uint8_t *ciphertext,
     size_t ciphertext_len,
@@ -294,8 +365,6 @@ error_t *cipher_decrypt(
     CHECK_NULL(out_plaintext);
 
     error_t *err = NULL;
-    uint8_t keystream_seed[CIPHER_SIV_SIZE] = { 0 };
-    uint8_t siv_recomputed[CIPHER_SIV_SIZE] = { 0 };
     buffer_t output = BUFFER_INIT;
     size_t path_len = 0;
 
@@ -338,45 +407,10 @@ error_t *cipher_decrypt(
     err = validate_header(ciphertext, ciphertext_len);
     if (err) goto cleanup;
 
-    const uint8_t *header = ciphertext;
-    const uint8_t *siv_received = ciphertext + CIPHER_HEADER_SIZE;
-    const uint8_t *ct_body = ciphertext + CIPHER_OVERHEAD;
-    const size_t plaintext_len = ciphertext_len - CIPHER_OVERHEAD;
-
-    /* Claim the candidate plaintext at its final size; the keystream XOR writes
-     * every byte of it in place, after which we recompute SIV over the
-     * candidate. */
-    buffer_resize(&output, plaintext_len);
-
-    /* Step 3: keystream seed from received SIV under prf_key. In SIV the IV
-     * authenticates the plaintext — we must decrypt the candidate before we can
-     * verify, then either return or wipe it. */
-    crypto_mac_oneshot(
-        keystream_seed, prf_key, CRYPTO_DOMAIN_CIPHER_KEY,
-        siv_received, CIPHER_SIV_SIZE,
-        NULL, 0
-    );
-
-    /* Step 4: XChaCha20 ciphertext_body → candidate plaintext. Same (seed, nonce,
-     * ctr) as encrypt; XOR is its own inverse. */
-    crypto_chacha20_x(
-        (uint8_t *) output.data, ct_body, plaintext_len,
-        keystream_seed, siv_received, /*ctr=*/ 0
-    );
-
-    /* Step 2 (recomputed): SIV over (header, path, candidate). If authentication
-     * holds, candidate == original plaintext, so the recomputed SIV matches the
-     * stored SIV byte-for-byte. */
-    compute_siv(
-        mac_key, header, storage_path, path_len,
-        (const uint8_t *) output.data, plaintext_len,
-        siv_recomputed
-    );
-
-    /* Constant-time compare. crypto_verify32 returns 0 iff the two 32-byte buffers
-     * are byte-equal; non-zero indicates ANY difference, with no early-exit timing
-     * leak. */
-    if (crypto_verify32(siv_recomputed, siv_received) != 0) {
+    if (!unseal(
+        ciphertext, ciphertext_len, mac_key, prf_key, storage_path, path_len,
+        &output
+        )) {
         err = ERROR(
             ERR_CRYPTO,
             "Authentication failed "
@@ -391,8 +425,6 @@ error_t *cipher_decrypt(
     output = (buffer_t){ 0 };
 
 cleanup:
-    crypto_wipe(keystream_seed, sizeof(keystream_seed));
-    crypto_wipe(siv_recomputed, sizeof(siv_recomputed));
     /* On error, wipe before free: after a MAC mismatch the candidate is would-be
      * plaintext from an attacker-supplied SIV/ciphertext pair and must not survive
      * to the caller. */
@@ -402,4 +434,41 @@ cleanup:
     }
 
     return err;
+}
+
+bool cipher_opens(
+    const uint8_t *ciphertext,
+    size_t ciphertext_len,
+    const uint8_t mac_key[KDF_KEY_SIZE],
+    const uint8_t prf_key[KDF_KEY_SIZE],
+    const char *storage_path
+) {
+    CHECK_NULL(ciphertext);
+    CHECK_NULL(mac_key);
+    CHECK_NULL(prf_key);
+    CHECK_NULL(storage_path);
+
+    /* What no encrypt could have sealed opens under no key: bytes with no room
+     * for a seal, bytes past the cap, a path past its bound — measured with
+     * strnlen, as validate_path measures it, so the scan stops at the bound. */
+    const size_t path_len = strnlen(storage_path, CIPHER_STORAGE_PATH_MAX + 1);
+    if (path_len > CIPHER_STORAGE_PATH_MAX || ciphertext_len < CIPHER_OVERHEAD ||
+        ciphertext_len > CIPHER_MAX_CONTENT + (size_t) CIPHER_OVERHEAD) {
+        return false;
+    }
+
+    buffer_t candidate = BUFFER_INIT;
+    const bool opens = unseal(
+        ciphertext, ciphertext_len, mac_key, prf_key, storage_path, path_len,
+        &candidate
+    );
+
+    /* The verdict is all that leaves: the candidate is plaintext, or would-be
+     * plaintext from an attacker-supplied pair, and is wiped either way. */
+    if (candidate.data) {
+        crypto_wipe(candidate.data, candidate.size);
+        buffer_deinit(&candidate);
+    }
+
+    return opens;
 }

@@ -160,22 +160,18 @@ typedef struct keymgr_witness {
 
 /**
  * The keymgr's answer to a witness a source presents: does the master on trial
- * open it? An accepted witness ends the walk. `*out_accepted` is written on every
- * return that has an answer, the refusals included.
+ * open it? True accepts it and ends the walk.
  *
- * A predicate that cannot answer — a decrypt that failed for a reason other than
- * the cipher's "no" — returns its error instead, and that error becomes the walk's:
- * the source stops, reports it, and the attempt is refused with it. A question
- * nobody could answer is never an absence.
+ * A predicate, and total: every witness has an answer, the cipher's
+ * (crypto/cipher.h cipher_opens). One no key could open — truncated, damaged,
+ * bound under another path — is a "no" like a wrong master's, and the walk goes
+ * on to the next, so one bad blob in the history never stands between a right
+ * passphrase and the witness that proves it.
  *
  * `self` is what the keymgr handed the source beside the predicate; the source
  * passes it back untouched and never reads it.
  */
-typedef error_t *(*keymgr_opens_fn)(
-    void *self,
-    const keymgr_witness_t *witness,
-    bool *out_accepted
-);
+typedef bool (*keymgr_opens_fn)(void *self, const keymgr_witness_t *witness);
 
 /**
  * Where the keymgr finds witnesses: whoever holds the repository.
@@ -186,11 +182,10 @@ typedef error_t *(*keymgr_opens_fn)(
  * of them can be the one it was sealed under — to `accept` until one is accepted,
  * and reports whether one was. A ciphertext of another epoch or of a version
  * this build does not read is never presented. The walk's own failure (an object
- * that will not load) is returned, and so is a refusal `accept` itself raises;
- * either stands as that attempt's refusal, and `*out_accepted` is false. The
- * one implementation is `infra/epoch::epoch_find_ciphertext`, over the ciphertext
- * census's walk of every local branch and its history; the unit suites bring
- * their own.
+ * that will not load) is returned and stands as that attempt's refusal, and
+ * `*out_accepted` is false. The one implementation is
+ * `infra/epoch::epoch_find_ciphertext`, over the ciphertext census's walk of
+ * every local branch and its history; the unit suites bring their own.
  *
  * That reach — every local branch, its whole history — is load-bearing, not
  * thorough, and it is what two of this module's promises rest on. It makes one

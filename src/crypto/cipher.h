@@ -55,14 +55,14 @@
  * bump invalidates every blob keyed under the prior version — no migration path
  * (alpha policy in CLAUDE.md).
  *
- * Caller contract: `cipher_encrypt` / `cipher_decrypt` accept a raw `(mac_key,
- * prf_key)` pair so this module stays free of master-key and profile-name
- * knowledge. The canonical caller is `crypto/keymgr`, which derives the pair
- * via `kdf_siv_subkeys` and wipes both buffers after the single per-operation
- * use. Any other production call site needs explicit justification —
- * `kdf_siv_subkeys` is what makes the two subkeys cryptographically independent,
+ * Caller contract: `cipher_encrypt` / `cipher_decrypt` / `cipher_opens` accept
+ * a raw `(mac_key, prf_key)` pair so this module stays free of master-key and
+ * profile-name knowledge. The canonical caller is `crypto/keymgr`, which derives
+ * the pair via `kdf_siv_subkeys` and wipes both buffers after the single
+ * per-operation use. Any other production call site needs explicit justification
+ * — `kdf_siv_subkeys` is what makes the two subkeys cryptographically independent,
  * and per-operation derive + wipe is what bounds subkey lifetime on the stack.
- * tests/test-cipher.c calls both with a fixed pair to pin the format at its own
+ * tests/test-cipher.c calls each with a fixed pair to pin the format at its own
  * boundary.
  */
 
@@ -225,6 +225,41 @@ error_t *cipher_decrypt(
     const uint8_t prf_key[KDF_KEY_SIZE],
     const char *storage_path,
     buffer_t *out_plaintext
+);
+
+/**
+ * Do (mac_key, prf_key) open a ciphertext bound to `storage_path`?
+ *
+ * The seal's own question, asked for its answer alone: the candidate plaintext
+ * is made, authenticated against the stored SIV and wiped here, and nothing leaves
+ * but the verdict. Where `cipher_decrypt` words why bytes will not open, this
+ * says whether they do — the question a trial of many ciphertexts asks, to which
+ * one blob that will not open is a miss and never the trial's end (crypto/keymgr.c
+ * open_witness).
+ *
+ * Total: every input has an answer. Bytes shorter than a seal's framing, longer
+ * than the cap encrypt keeps, or bound to a path longer than any encrypt takes
+ * were sealed under no key, and answer false; the header needs no gate of its
+ * own, being bound into the SIV like the path and the body, so a byte of any of
+ * them differing fails the compare.
+ *
+ * Subkey wiping: `mac_key` / `prf_key` are the caller's, as `cipher_decrypt`'s.
+ *
+ * @param ciphertext     Encrypted input (must not be NULL)
+ * @param ciphertext_len Input length
+ * @param mac_key        SIV MAC subkey (32 bytes)
+ * @param prf_key        SIV PRF subkey (32 bytes)
+ * @param storage_path   Profile-relative path the seal would bind (must not be
+ *                       NULL)
+ * @return true iff the stored SIV authenticates the bytes under these keys and
+ *         this path
+ */
+bool cipher_opens(
+    const uint8_t *ciphertext,
+    size_t ciphertext_len,
+    const uint8_t mac_key[KDF_KEY_SIZE],
+    const uint8_t prf_key[KDF_KEY_SIZE],
+    const char *storage_path
 );
 
 #endif /* DOTTA_CRYPTO_CIPHER_H */

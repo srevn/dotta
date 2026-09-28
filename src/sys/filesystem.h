@@ -700,13 +700,23 @@ error_t fs_normalize_path(const char *path, char **out);
 bool fs_is_folded(const char *path);
 
 /**
- * Get parent directory path
+ * The directory a path stands in
  *
- * @param path Path (must not be NULL)
- * @param out Parent directory (must not be NULL, caller must free)
- * @return Error or NULL on success
+ * `mkdir -p`'s parent, and dirname(3)'s rule: the last component goes with the
+ * separators on either side of it, so a trailing separator — the same path spelled
+ * as a directory — names the same parent (`a/b/` is in `a`). A path with no
+ * separator stands in ".", and one directly beneath the root in "/". Pure in
+ * the string; whether the parent is there is the caller's question. "." and "/"
+ * are their own parents, and both always stand — which is what ends every recursion
+ * that climbs through this one.
+ *
+ * The heap's: the mkdir -p recursions' transient, freed before each returns —
+ * no arena is in reach there.
+ *
+ * @param path Path (must not be NULL or empty)
+ * @return The parent (caller frees); never NULL
  */
-error_t fs_get_parent_dir(const char *path, char **out);
+char *fs_parent_dir(const char *path);
 
 /**
  * Join path components

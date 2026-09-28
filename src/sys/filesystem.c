@@ -9,7 +9,6 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <libgen.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -473,28 +472,19 @@ error_t fs_write_file_raw(
     CHECK_ARG(data != NULL || size == 0, "data cannot be NULL with a size");
 
     /* Ensure parent directory exists */
-    char *parent = NULL;
-    error_t err = fs_get_parent_dir(path, &parent);
-    if (err) return err;
-
-    if (parent && !fs_exists(parent)) {
-        err = fs_create_dir(parent, true);
-        if (err) {
-            free(parent);
-            return error_wrap(
-                err, "Failed to create parent directory for '%s'",
-                path
-            );
-        }
+    char *parent = fs_parent_dir(path);
+    error_t err = fs_exists(parent) ? NULL : fs_create_dir(parent, true);
+    if (err) {
+        free(parent);
+        return error_wrap(err, "Failed to create parent directory for '%s'", path);
     }
 
     /* Build temp file path in the target's own directory. Two names in one
      * directory are necessarily on one filesystem, so the rename below can never
      * fail with EXDEV — there is no cross-device case to fall back from, and no
      * second write strategy at all. */
-    const char *dir = parent ? parent : ".";
     char tmp_path[PATH_MAX];
-    int n = snprintf(tmp_path, sizeof(tmp_path), "%s/.dotta-tmp-XXXXXX", dir);
+    int n = snprintf(tmp_path, sizeof(tmp_path), "%s/.dotta-tmp-XXXXXX", parent);
 
     /* Create temp file with restrictive 0600 mode (mkstemp guarantee).
      *
@@ -511,11 +501,11 @@ error_t fs_write_file_raw(
     } else if ((fd = fs_mkstemp(tmp_path)) < 0) {
         tmp_err = error_from_errno(
             errno, "Failed to create a temporary file in '%s' for '%s'",
-            dir, path
+            parent, path
         );
     }
 
-    free(parent);  /* `dir` borrowed it; nothing below reads either */
+    free(parent);  /* nothing below reads it */
     if (tmp_err) return tmp_err;
 
     /* Write data to temp file with correct ownership and permissions.
@@ -630,17 +620,10 @@ error_t fs_create_dir(const char *path, bool parents) {
 
     if (parents) {
         /* Create parent first */
-        char *parent = NULL;
-        error_t err = fs_get_parent_dir(path, &parent);
+        char *parent = fs_parent_dir(path);
+        error_t err = fs_is_directory(parent) ? NULL : fs_create_dir(parent, true);
+        free(parent);
         if (err) return err;
-
-        if (parent && !fs_is_directory(parent)) {
-            err = fs_create_dir(parent, true);
-            free(parent);
-            if (err) return err;
-        } else {
-            free(parent);
-        }
     }
 
     /* Create directory */
@@ -667,20 +650,12 @@ error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
     bool existed = fs_is_directory(path);
 
     if (!existed) {
-        /* Create parent directories if requested */
+        /* Create parent directories if requested, at the default 0755 */
         if (parents) {
-            char *parent = NULL;
-            error_t err = fs_get_parent_dir(path, &parent);
+            char *parent = fs_parent_dir(path);
+            error_t err = fs_is_directory(parent) ? NULL : fs_create_dir(parent, true);
+            free(parent);
             if (err) return err;
-
-            if (parent && !fs_is_directory(parent)) {
-                /* Use default 0755 for parent directories */
-                err = fs_create_dir(parent, true);
-                free(parent);
-                if (err) return err;
-            } else {
-                free(parent);
-            }
         }
 
         /* Try to create directory with specified mode */
@@ -1365,42 +1340,19 @@ bool fs_is_folded(const char *path) {
     return true;
 }
 
-error_t fs_get_parent_dir(const char *path, char **out) {
-    RETURN_IF_ERROR(validate_path(path));
-    CHECK_NULL(out);
+char *fs_parent_dir(const char *path) {
+    CHECK_NULL(path);
+    CHECK_ARG(path[0] != '\0', "the parent of an empty path");
 
-    /* Strip trailing slashes (except for root "/") */
-    size_t path_len = strlen(path);
-    while (path_len > 1 && path[path_len - 1] == '/') {
-        path_len--;
-    }
+    /* Three runs from the end: the trailing separators, the last component, the
+     * separators before it. None reaches past the first byte, so the root keeps
+     * its one separator and a relative component leaves nothing: "." */
+    size_t len = strlen(path);
+    while (len > 1 && path[len - 1] == '/') len--;
+    while (len > 0 && path[len - 1] != '/') len--;
+    while (len > 1 && path[len - 1] == '/') len--;
 
-    /* Make a copy without trailing slashes for processing */
-    char *clean_path = heap_strndup(path, path_len);
-
-    /* Find last slash in cleaned path */
-    const char *last_slash = strrchr(clean_path, '/');
-
-    if (!last_slash) {
-        /* No slash - current directory */
-        free(clean_path);
-        *out = heap_strdup(".");
-        return NULL;
-    }
-
-    if (last_slash == clean_path) {
-        /* Root directory */
-        free(clean_path);
-        *out = heap_strdup("/");
-        return NULL;
-    }
-
-    /* Extract parent */
-    size_t len = last_slash - clean_path;
-    *out = heap_strndup(clean_path, len);
-    free(clean_path);
-
-    return NULL;
+    return len == 0 ? heap_strdup(".") : heap_strndup(path, len);
 }
 
 error_t fs_path_join(const char *base, const char *component, char **out) {
@@ -1617,32 +1569,11 @@ const char *fs_stat_noun(const struct stat *st) {
 error_t fs_ensure_parent_dirs(const char *path) {
     RETURN_IF_ERROR(validate_path(path));
 
-    /* Get parent directory */
-    char *path_copy = heap_strdup(path);
+    /* The directory the path stands in, made with its own parents where it is
+     * missing; "." and "/" always stand. */
+    char *parent = fs_parent_dir(path);
+    error_t err = fs_is_directory(parent) ? NULL : fs_create_dir(parent, true);
+    free(parent);
 
-    char *parent = dirname(path_copy);
-    if (!parent || strcmp(parent, ".") == 0 || strcmp(parent, "/") == 0) {
-        /* No parent to create, or parent is root */
-        free(path_copy);
-        return NULL;
-    }
-
-    /* Check if parent exists */
-    if (fs_is_directory(parent)) {
-        free(path_copy);
-        return NULL;
-    }
-
-    /* Create parent directories recursively */
-    error_t err = fs_create_dir(parent, true);  /* true = recursive */
-    free(path_copy);
-
-    if (err) {
-        return error_wrap(
-            err, "Failed to create parent directories for: %s",
-            path
-        );
-    }
-
-    return NULL;
+    return err ? error_wrap(err, "Failed to create parent directories for: %s", path) : NULL;
 }

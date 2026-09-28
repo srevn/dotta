@@ -132,6 +132,10 @@ _Static_assert(
     CIPHER_OVERHEAD == CIPHER_HEADER_SIZE + CIPHER_SIV_SIZE,
     "OVERHEAD must equal HEADER + SIV"
 );
+_Static_assert(
+    CIPHER_MAX_CONTENT <= SIZE_MAX - CIPHER_OVERHEAD,
+    "a capped plaintext and its overhead must fit a size_t"
+);
 
 /**
  * Read a cipher-blob header without touching the SIV or attempting decryption.

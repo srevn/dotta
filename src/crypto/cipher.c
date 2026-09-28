@@ -209,16 +209,7 @@ error_t cipher_encrypt(
         goto cleanup;
     }
 
-    /* Belt-and-braces overflow guard; unreachable today (CIPHER_MAX_CONTENT ≪
-     * SIZE_MAX on 64-bit hosts), survives future bumps to the content cap. */
-    if (plaintext_len > SIZE_MAX - CIPHER_OVERHEAD) {
-        err = ERROR(
-            ERR_INVALID_ARG,
-            "Plaintext too large (size_t overflow): %zu bytes",
-            plaintext_len
-        );
-        goto cleanup;
-    }
+    /* Within the cap, the sum cannot wrap (asserted beside the cap, cipher.h) */
     const size_t total_len = CIPHER_OVERHEAD + plaintext_len;
 
     /* Build the header on the stack so its type stays strictly `uint8_t[14]`

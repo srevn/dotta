@@ -24,7 +24,7 @@ typedef struct {
  * Executes git commands directly on the dotta repository. Pure passthrough - no
  * interception or modification.
  *
- * @param repo_path Repository path (must not be NULL)
+ * @param repo_path The store's directory (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Exit code from git (0 = success, non-zero = error)
  */
@@ -33,10 +33,17 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts);
 /**
  * Spec-engine command specification for `dotta git`.
  *
- * Passthrough, and `.repo` declared: the engine skips argv parsing entirely;
- * the dispatcher opens the dotta repo, and cmd_git forks the child over its
- * path. The handle is held while the child runs — libgit2 takes no lock on
- * open, and nothing the child writes is read back afterwards.
+ * Passthrough, and nothing declared: the engine skips argv parsing entirely and
+ * the dispatcher opens nothing; cmd_git forks git over the store's directory
+ * the configuration settled (`config->repo_dir`). Never opened here, because an
+ * open is dotta asserting its own model of the repository — libgit2's open, which
+ * reads files of the user's that dotta itself commonly deploys (~/.gitconfig)
+ * and can refuse over one of them, and then the store's own declaration
+ * (utils/repo.h). The pass-through is what a user reaches for when that model
+ * does not hold — `dotta git show global:home/.gitconfig` is the way back to
+ * the committed copy of the file that broke the open — so it cannot be gated on
+ * the model holding: an opening pass-through would answer that remedy with the
+ * very error the remedy is for.
  *
  * Registered in cmds/registry.c; defined in git.c beside the dispatch wrapper.
  */

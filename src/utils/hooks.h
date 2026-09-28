@@ -74,15 +74,12 @@ typedef struct {
  * is a refusal an identity met (base/error.h), and the commands that fire this
  * close an escaping one with the sudo line.
  *
- * `repo_dir` is exported to the hook as DOTTA_REPO_DIR. Expected to come from
- * ctx->run.repo_path — the dispatcher already resolved it when opening the repo,
- * so callers borrow the string rather than re-resolving. NULL suppresses the
- * DOTTA_REPO_DIR export.
+ * The hook's DOTTA_REPO_DIR is the store's directory the configuration settled
+ * (`config->repo_dir`), and its path the configured hooks directory's.
  */
 error_t hook_fire_pre(
     const config_t *config,
     output_t *out,
-    const char *repo_dir,
     const hook_invocation_t *inv
 );
 
@@ -92,14 +89,11 @@ error_t hook_fire_pre(
  * No-op if inv->dry_run is true. Otherwise builds a hook environment from inv
  * and runs the post_<cmd> hook script (if configured and present). Failures never
  * propagate: on error, prints a warning and any captured hook output, then swallows
- * the error.
- *
- * `repo_dir` is exported as DOTTA_REPO_DIR (see hook_fire_pre).
+ * the error. Its environment is hook_fire_pre's.
  */
 void hook_fire_post(
     const config_t *config,
     output_t *out,
-    const char *repo_dir,
     const hook_invocation_t *inv
 );
 

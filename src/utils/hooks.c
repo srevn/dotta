@@ -32,9 +32,9 @@ typedef enum {
     HOOK_POST_SYNC,
 } hook_type_t;
 
-/* Hook environment. Pointers are borrowed from the invocation and its backing
- * strings; this struct is stack-allocated in hook_fire and lives only for the
- * duration of one hook_execute call. */
+/* Hook environment. Pointers are borrowed from the configuration, the invocation
+ * and its backing strings; this struct is stack-allocated in hook_fire and lives
+ * only for the duration of one hook_execute call. */
 typedef struct {
     const char *repo_dir;
     const char *command;
@@ -99,8 +99,9 @@ static void hook_env(const hook_context_t *context, arena_t *arena, string_array
 
     string_array_init(env, arena);
 
-    /* DOTTA_* surface — three optional, two always-on, then per-file. */
-    if (context->repo_dir) string_array_pushf(env, "DOTTA_REPO_DIR=%s", context->repo_dir);
+    /* DOTTA_* surface — the store's directory, two optional, two always-on, then
+     * per-file. */
+    string_array_pushf(env, "DOTTA_REPO_DIR=%s", context->repo_dir);
     if (context->command) string_array_pushf(env, "DOTTA_COMMAND=%s", context->command);
     if (context->profile) string_array_pushf(env, "DOTTA_PROFILE=%s", context->profile);
 
@@ -313,20 +314,18 @@ static void print_hook_output(
 }
 
 /**
- * Stack-build a context from the invocation and execute the hook. `repo_dir` is
- * borrowed from the caller (ctx->run.repo_path in normal flow). The caller
- * stack-allocates `out_result` and is responsible for calling
+ * Stack-build a context from the configuration and the invocation and execute
+ * the hook. The caller stack-allocates `out_result` and is responsible for calling
  * process_result_deinit() on every path.
  */
 static error_t hook_fire(
     const config_t *config,
-    const char *repo_dir,
     const hook_invocation_t *inv,
     hook_type_t type,
     process_result_t *out_result
 ) {
     const hook_context_t ctx = {
-        .repo_dir   = repo_dir,
+        .repo_dir   = config->repo_dir,
         .command    = cmd_name(inv->cmd),
         .profile    = inv->profile,
         .files      = inv->files,
@@ -341,16 +340,13 @@ static error_t hook_fire(
 error_t hook_fire_pre(
     const config_t *config,
     output_t *out,
-    const char *repo_dir,
     const hook_invocation_t *inv
 ) {
     CHECK_NULL(config);
     CHECK_NULL(inv);
 
     process_result_t result = { 0 };
-    error_t err = hook_fire(
-        config, repo_dir, inv, pre_type_for(inv->cmd), &result
-    );
+    error_t err = hook_fire(config, inv, pre_type_for(inv->cmd), &result);
 
     if (err) {
         print_hook_output(out, &result);
@@ -364,7 +360,6 @@ error_t hook_fire_pre(
 void hook_fire_post(
     const config_t *config,
     output_t *out,
-    const char *repo_dir,
     const hook_invocation_t *inv
 ) {
     CHECK_NULL(config);
@@ -373,9 +368,7 @@ void hook_fire_post(
     if (inv->dry_run) return;
 
     process_result_t result = { 0 };
-    error_t err = hook_fire(
-        config, repo_dir, inv, post_type_for(inv->cmd), &result
-    );
+    error_t err = hook_fire(config, inv, post_type_for(inv->cmd), &result);
 
     if (err) {
         output_warning(

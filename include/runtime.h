@@ -82,29 +82,18 @@ typedef struct manifest manifest_t;
 typedef struct args_command args_command_t;
 
 /**
- * The shape a command opens the repository in
+ * Whether a command opens the repository
  *
  * OPEN is `repo_open`: the libgit2 handle over the store's directory the
- * configuration settled (`config->repo_dir`). PATH is that directory alone, with
- * no open at all — for a command that never touches the handle because it forks
- * the real git over the directory (git).
- *
- * The split is not a saved open. Everything `repo_open` does is dotta asserting
- * its own model of the repository: libgit2's open, which reads files of the user's
- * that dotta itself commonly deploys (~/.gitconfig) and can refuse over one of
- * them, and then the store's own declaration (utils/repo.h). The pass-through
- * is what a user reaches for when that model does not hold — `dotta git show
- * global:home/.gitconfig` is the way back to the committed copy of the file that
- * broke the open — so it cannot be gated on the model holding: an opening
- * pass-through would answer that remedy with the very error the remedy is for.
- *
- * CREATE-style commands (init, clone) declare NONE and open the repository
- * themselves, because it does not exist before dispatch runs.
+ * configuration settled (`config->repo_dir`, which every command reads there
+ * whether it opens or not). CREATE-style commands (init, clone) declare NONE
+ * and open the repository themselves, because it does not exist before dispatch
+ * runs; the pass-through (git) declares NONE and opens nothing, because it forks
+ * the real git over the directory (cmds/git.h says why it must not open).
  */
 typedef enum dotta_repo_mode {
     DOTTA_REPO_NONE,   /* No repository member */
-    DOTTA_REPO_PATH,   /* The store's directory, and no open */
-    DOTTA_REPO_OPEN    /* repo_open: the handle, and the directory it opened */
+    DOTTA_REPO_OPEN    /* repo_open: the handle over the settled directory */
 } dotta_repo_mode_t;
 
 /**
@@ -323,7 +312,7 @@ typedef enum dotta_crypto_mode {
  * `state` (a database that will not load) and returns on the first NULL it reads.
  */
 typedef struct dotta_needs {
-    dotta_repo_mode_t repo;     /* NONE, PATH or OPEN */
+    dotta_repo_mode_t repo;     /* NONE or OPEN */
     dotta_state_mode_t state;   /* NONE, READ or WRITE. Requires repo OPEN */
     bool mounts;                /* This machine's topology over the enabled set. Requires state */
     dotta_crypto_mode_t crypto; /* NONE, CACHED or OBTAIN: the content cache */
@@ -341,12 +330,6 @@ typedef struct dotta_needs {
  * Handlers read them as `ctx->run.x` and name them, one by one, at every call
  * into core; commands never free a member.
  *
- *   - `repo_path` is non-NULL iff `repo` was declared at all, and `repo` itself
- *     only at OPEN: the store's directory the configuration settled
- *     (`config->repo_dir`), borrowed from the process arena. A command that needs
- *     only the path (git) declares PATH and the run never opens. The run holds
- *     only borrowed or arena-owned strings, and `close_run` frees no `const char
- *     *`.
  *   - `state` is the handle in the declared shape; dispatch closes it on return
  *     (`state_free` rolls back any uncommitted transaction).
  *   - `mounts` is a value: built into the command arena from the state's rows
@@ -366,10 +349,10 @@ typedef struct dotta_needs {
  *     (`manifest_diff(ctx->run.manifest, after, …)`).
  *
  * Owning-typed pointers where `close_run` frees (`content_cache_t *`, `keymgr
- * *`, `state_t *`, `git_repository *`); `const` where nothing does (`mounts`,
- * `manifest` and `repo_path` are the arena's). Below the dispatcher the contract
- * is `const dotta_ctx_t *`: the pointers are `T *const`, the pointees live —
- * state takes transactions, the cache fills.
+ * *`, `state_t *`, `git_repository *`); `const` where nothing does (`mounts`
+ * and `manifest` are the arena's). Below the dispatcher the contract is `const
+ * dotta_ctx_t *`: the pointers are `T *const`, the pointees live — state takes
+ * transactions, the cache fills.
  *
  * Members not welcome on this struct
  * ----------------------------------
@@ -393,10 +376,13 @@ typedef struct dotta_needs {
  *      product at open — `mounts` from `manifest_mounts` — is the run's own shape,
  *      not this pattern: the table is the view's product, and handlers read the
  *      member, never the accessor.
+ *   4. No copy of the configuration. What the load settled is read where it lives
+ *      (`ctx->config->repo_dir`, the store's directory); a member holding it
+ *      would be a second source for one fact, and a gate — "non-NULL iff declared"
+ *      — on a value no open produces.
  */
 typedef struct dotta_run {
     struct git_repository *repo;        /* needs->repo == OPEN */
-    const char *repo_path;              /* needs->repo != NONE; the configuration's repo_dir, borrowed */
     state_t *state;                     /* needs->state != NONE; the READ or WRITE shape */
     const mount_table_t *mounts;        /* needs->mounts; this machine's topology at dispatch */
     keymgr *keymgr;                     /* needs->crypto != NONE, and only if encryption is on */

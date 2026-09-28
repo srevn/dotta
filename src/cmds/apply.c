@@ -1819,7 +1819,6 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
-    const char *repo_path = ctx->run.repo_path;
     state_t *state = ctx->run.state;                /* Borrowed from dispatcher (WRITE) */
     content_cache_t *content_cache = ctx->run.content_cache;
     const manifest_t *manifest = ctx->run.manifest; /* The view at dispatch */
@@ -2657,7 +2656,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     };
 
     /* Execute pre-apply hook */
-    err = hook_fire_pre(config, out, repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
     /* Confirm before deployment if configured (unless --force or --dry-run) */
@@ -2831,7 +2830,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Execute post-apply hook. The record phase settled the run's transaction
      * before this — committed or rolled back — and a preview began none, so the
      * hook meets the database this run leaves. */
-    hook_fire_post(config, out, repo_path, &hook_inv);
+    hook_fire_post(config, out, &hook_inv);
 
     /* The receipt is printed; what remains is the return value. The plan is the
      * run's promise: a row the user's own flags withheld (-e, --skip-existing)

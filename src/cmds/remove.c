@@ -815,7 +815,6 @@ static error_t remove_paths(
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
-    const char *repo_path = ctx->run.repo_path;
     state_t *state = ctx->run.state;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
@@ -964,7 +963,7 @@ static error_t remove_paths(
     };
 
     /* Execute pre-remove hook */
-    err = hook_fire_pre(config, out, repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
     /* The plan, on the stage: which tree entries leave, and the metadata edit
@@ -1159,7 +1158,7 @@ static error_t remove_paths(
     }
 
     /* Execute post-remove hook */
-    hook_fire_post(config, out, repo_path, &hook_inv);
+    hook_fire_post(config, out, &hook_inv);
 
     /* Success */
     if (!opts->quiet) {
@@ -1211,7 +1210,6 @@ static error_t remove_profile(
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
-    const char *repo_path = ctx->run.repo_path;
     state_t *state = ctx->run.state;
     const mount_table_t *mounts = ctx->run.mounts;
     const config_t *config = ctx->config;
@@ -1492,7 +1490,7 @@ static error_t remove_profile(
     };
 
     /* Execute pre-remove hook */
-    err = hook_fire_pre(config, out, repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
     /* No filesystem deletion here either — see the Architectural note in
@@ -1630,7 +1628,7 @@ static error_t remove_profile(
      * remove_paths. */
 
     /* Execute post-remove hook */
-    hook_fire_post(config, out, repo_path, &hook_inv);
+    hook_fire_post(config, out, &hook_inv);
 
     /* Success message (only on actual deletion, not dry-run/cancel/error) */
     if (performed && !opts->quiet) {

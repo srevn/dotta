@@ -123,7 +123,7 @@ static error_t open_run(
     const config_t *config,
     arena_t *arena
 ) {
-    /* A spec without a payload opens nothing (init, clone, completion). */
+    /* A spec without a payload opens nothing (init, clone, completion, git). */
     const dotta_needs_t *needs = spec->payload;
     if (needs == NULL) return NULL;
 
@@ -151,15 +151,11 @@ static error_t open_run(
 
     error_t err = NULL;
 
-    /* The repository, in the declared shape: the store's directory the
-     * configuration settled, which OPEN opens and PATH does not — what lets the
-     * pass-through run over a repository dotta cannot open. */
-    if (needs->repo != DOTTA_REPO_NONE) {
-        run->repo_path = config->repo_dir;
-        if (needs->repo == DOTTA_REPO_OPEN) {
-            err = repo_open(config, &run->repo);
-            if (err) goto done;
-        }
+    /* The repository, where the spec declares it: the store's directory the
+     * configuration settled, opened. */
+    if (needs->repo == DOTTA_REPO_OPEN) {
+        err = repo_open(config, &run->repo);
+        if (err) goto done;
     }
 
     /* State, in the shape the spec declares — narrowed where this invocation is

@@ -4,6 +4,7 @@
 
 #include "cmds/bootstrap.h"
 
+#include <config.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -337,7 +338,6 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
-    const char *repo_path = ctx->run.repo_path;
     state_t *state = ctx->run.state;
     output_t *out = ctx->out;
 
@@ -471,7 +471,7 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
 
     bootstrap_spec_t spec = {
         .repo          = repo,
-        .repo_dir      = repo_path,
+        .repo_dir      = ctx->config->repo_dir,
         .profiles      = &found,
         .dry_run       = opts->dry_run,
         .stop_on_error = !opts->continue_on_error,

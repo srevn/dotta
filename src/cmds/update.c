@@ -1438,7 +1438,6 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
-    const char *repo_path = ctx->run.repo_path;
     state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
     content_cache_t *content_cache = ctx->run.content_cache;
     const manifest_t *manifest = ctx->run.manifest;
@@ -1754,7 +1753,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .dry_run    = opts->dry_run,
     };
 
-    err = hook_fire_pre(config, out, repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
     /* The prompts — none bind a dry run: it executes nothing, so there is nothing
@@ -1866,7 +1865,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
     /* Execute post-update hook (the hooks layer suppresses it on a dry run) */
-    hook_fire_post(config, out, repo_path, &hook_inv);
+    hook_fire_post(config, out, &hook_inv);
 
     /* Summary — one truthful line */
     output_gap(out, OUTPUT_NORMAL);

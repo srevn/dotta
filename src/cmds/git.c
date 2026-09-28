@@ -4,6 +4,7 @@
 
 #include "cmds/git.h"
 
+#include <config.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
@@ -112,7 +113,7 @@ static error_t git_dispatch(const void *ctx_v, void *opts_v) {
         .args      = &ctx->argv[2],
         .arg_count = ctx->argc - 2,
     };
-    *ctx->exit_code = cmd_git(ctx->run.repo_path, &opts);
+    *ctx->exit_code = cmd_git(ctx->config->repo_dir, &opts);
     return NULL;
 }
 
@@ -135,7 +136,6 @@ const args_command_t spec_git = {
         "  %s git show global:home/.bashrc\n"
         "  %s git reflog global\n"
         "  %s git remote -v\n",
-    .payload     = &(const dotta_needs_t){ .repo = DOTTA_REPO_PATH },
     .dispatch    = git_dispatch,
     .passthrough = true,
 };

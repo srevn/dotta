@@ -1503,7 +1503,6 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
-    const char *repo_path = ctx->run.repo_path;
     state_t *state = ctx->run.state;
     content_cache_t *content_cache = ctx->run.content_cache;
     const manifest_t *before = ctx->run.manifest;  /* The view ahead of the Git phase: the dispatcher's */
@@ -1921,7 +1920,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         .dry_run    = opts->dry_run,
     };
 
-    err = hook_fire_pre(config, out, repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
     /* Create transfer context for progress reporting. URL was resolved alongside
@@ -2206,7 +2205,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * build was warned above and is not a reason to skip it. Nor is a profile
      * that failed: the pushes and pulls that did land are real, and the hook's
      * subject is the world sync leaves behind, not what sync returns. */
-    hook_fire_post(config, out, repo_path, &hook_inv);
+    hook_fire_post(config, out, &hook_inv);
 
     /* Final summary */
     sync_render_summary(results, xfer, manifest_changed, apply_pending, out);

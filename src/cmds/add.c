@@ -1438,7 +1438,6 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
-    const char *repo_path = ctx->run.repo_path;
     state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE; READ under -n) */
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
@@ -1617,7 +1616,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     };
 
     /* Execute pre-add hook */
-    err = hook_fire_pre(config, out, repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
     /* The profile's stage, as the pre-flight above resolved it: the branch's
@@ -2461,7 +2460,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* Execute post-add hook. The record phase settled its own transaction before
      * returning, so the hook meets the database this run leaves — committed or
      * rolled back — and not a lock nothing will use again. */
-    hook_fire_post(config, out, repo_path, &hook_inv);
+    hook_fire_post(config, out, &hook_inv);
 
     /* Show summary on success. Every argument lists itself or ends the command,
      * and both capture loops are total over their lists, so there is always

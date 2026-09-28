@@ -15,7 +15,6 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
-#include "base/heap.h"
 #include "base/output.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
@@ -49,45 +48,22 @@ typedef enum {
  * Per-profile sync result
  */
 typedef struct {
-    char *profile;
+    const char *profile;           /* The scope's own name, borrowed */
     upstream_state_t state;
     size_t ahead;
     size_t behind;
     sync_outcome_t outcome;
-    error_t error;                 /* Borrowed; set by mark_result_failed */
+    error_t error;                 /* The failed outcome's cause, whichever phase met it; NULL elsewhere */
 } profile_sync_result_t;
 
 /**
- * Overall sync results
+ * The results: one row per profile in the sync scope, in its order — a value of
+ * the command arena, as its rows are
  */
 typedef struct {
     profile_sync_result_t *profiles;
     size_t profile_count;
 } sync_results_t;
-
-/**
- * Create sync results
- */
-static sync_results_t *sync_results_create(size_t profile_count) {
-    sync_results_t *results = heap_calloc(1, sizeof(sync_results_t));
-    results->profiles = heap_calloc(profile_count, sizeof(profile_sync_result_t));
-    results->profile_count = profile_count;
-    return results;
-}
-
-/**
- * Free sync results
- */
-static void sync_results_free(sync_results_t *results) {
-    if (!results) return;
-
-    for (size_t i = 0; i < results->profile_count; i++) {
-        free(results->profiles[i].profile);
-    }
-
-    free(results->profiles);
-    free(results);
-}
 
 /**
  * Single funnel for SYNC_OUTCOME_FAILED. Keeps err, borrowed as every error is
@@ -329,32 +305,37 @@ static error_t sync_fetch_phase(
 }
 
 /**
- * Phase 2: Analyze branch states for profiles in sync scope
+ * Phase 2: the results — one row per profile in the sync scope, in its order,
+ * each seeded with its branch's state against the remote
  *
- * Operates on the scope's profiles (scope_profiles), matching sync_fetch_phase:
- * analyze only what the user asked for. results is sized from
- * scope_profiles(scope)->count by the caller; the two counts agree. A profile
- * it cannot analyze fails in its own row (mark_result_failed).
+ * The table is made here, in `arena`, as scope_profiles(scope) orders it — the
+ * profiles sync_fetch_phase fetched: analyze only what the user asked for. A
+ * row names its profile by the scope's own string. A profile it cannot analyze
+ * fails in its own row (mark_result_failed), and the push phase's skip line and
+ * the dry run read that cause back; a later phase says its own failure where it
+ * happens.
  */
-static void sync_analyze_phase(
+static sync_results_t sync_analyze_phase(
+    arena_t *arena,
     git_repository *repo,
     const char *remote_name,
-    const scope_t *scope,
-    sync_results_t *results,
-    output_t *out
+    const scope_t *scope
 ) {
+    CHECK_NULL(arena);
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(scope);
-    CHECK_NULL(results);
-    CHECK_NULL(out);
 
     const string_array_t *profiles = scope_profiles(scope);
+    sync_results_t results = {
+        .profiles      = arena_calloc(arena, profiles->count, sizeof(profile_sync_result_t)),
+        .profile_count = profiles->count,
+    };
 
     for (size_t i = 0; i < profiles->count; i++) {
-        profile_sync_result_t *result = &results->profiles[i];
+        profile_sync_result_t *result = &results.profiles[i];
 
-        result->profile = heap_strdup(profiles->entries[i]);
+        result->profile = profiles->entries[i];
 
         /* Analyze state */
         upstream_info_t info;
@@ -371,6 +352,8 @@ static void sync_analyze_phase(
         result->ahead = info.ahead;
         result->behind = info.behind;
     }
+
+    return results;
 }
 
 /**
@@ -1514,7 +1497,6 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     workspace_t *ws = NULL;
     manifest_t *after = NULL;                  /* The view after the Git phase */
     scope_t *scope = NULL;
-    sync_results_t *results = NULL;
     const char *remote_name = NULL;
     const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
@@ -1557,9 +1539,6 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         );
         goto cleanup;
     }
-
-    /* Create results tracker */
-    results = sync_results_create(scope_profiles(scope)->count);
 
     /* Auto-detect remote early — fail fast before expensive workspace load. URL
      * is resolved alongside the name; the credential helper consumes it when
@@ -1944,14 +1923,14 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     if (err) goto cleanup;
 
     /* Phase 2: Analyze branch states */
-    sync_analyze_phase(repo, remote_name, scope, results, out);
+    sync_results_t results = sync_analyze_phase(ctx->arena, repo, remote_name, scope);
 
     /* Dry run: display analysis and exit without executing push/pull. The answer
      * still stands — a profile the analysis could not read is a question the
      * dry run failed to answer, not a profile it found no work for. */
     if (opts->dry_run) {
-        sync_render_dry_run(results, out);
-        err = sync_failure(results);
+        sync_render_dry_run(&results, out);
+        err = sync_failure(&results);
         goto cleanup;
     }
 
@@ -1966,8 +1945,8 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * avoids noise when there's nothing actionable to report. */
     bool no_push = opts->no_push;
     bool all_quiet = true;
-    for (size_t i = 0; i < results->profile_count; i++) {
-        const profile_sync_result_t *r = &results->profiles[i];
+    for (size_t i = 0; i < results.profile_count; i++) {
+        const profile_sync_result_t *r = &results.profiles[i];
         if (r->outcome != SYNC_OUTCOME_UP_TO_DATE ||
             r->state != UPSTREAM_UP_TO_DATE) {
             all_quiet = false;
@@ -1982,7 +1961,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     }
 
     err = sync_push_phase(
-        repo, remote_name, results, out, sync_ephemeral, auto_pull, opts->no_pull,
+        repo, remote_name, &results, out, sync_ephemeral, auto_pull, opts->no_pull,
         no_push, diverged_strategy, xfer, config->confirm_destructive
     );
 
@@ -2208,17 +2187,17 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     hook_fire_post(config, out, &hook_inv);
 
     /* Final summary */
-    sync_render_summary(results, xfer, manifest_changed, apply_pending, out);
+    sync_render_summary(&results, xfer, manifest_changed, apply_pending, out);
 
     /* The receipt is printed; the return value is what the caller reads. */
-    err = sync_failure(results);
+    err = sync_failure(&results);
 
 cleanup:
-    /* Free resources in reverse order of allocation. state is borrowed from the
-     * dispatcher and sync opens no transaction of its own (the flush scopes its
-     * own; nothing else writes). */
-    if (xfer) transfer_context_free(xfer);
-    if (results) sync_results_free(results);
+    /* The one handle the run holds: the transfer, whose close commits the
+     * credential decision (sys/transfer.h). state is borrowed from the dispatcher
+     * and sync opens no transaction of its own (the flush scopes its own; nothing
+     * else writes), and the results are the command arena's. */
+    transfer_context_free(xfer);
 
     return err;
 }

@@ -60,7 +60,8 @@ void completion_profiles(
         return;
     }
 
-    /* A listing that failed offers no local name, and the remote's may still */
+    /* A listing that failed offers no local name, and the remote's may still; a
+     * state the tolerant open could not load marks none of them enabled */
     string_array_t branches;
     error_t err = gitops_list_branches(repo, ctx->arena, &branches);
     if (!err) {
@@ -68,8 +69,8 @@ void completion_profiles(
             const char *branch = branches.entries[i];
             fprintf(
                 out, "%s\t%s\n", branch,
-                state_enabled(state, branch) ? "Enabled profile"
-                                             : "Available profile"
+                state && state_enabled(state, branch) ? "Enabled profile"
+                                                      : "Available profile"
             );
         }
     }

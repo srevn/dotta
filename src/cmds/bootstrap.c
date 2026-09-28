@@ -170,10 +170,7 @@ static error_t bootstrap_edit(
 
     /* The user's editor: DOTTA_EDITOR, VISUAL, EDITOR, then vi (sys/editor.h) */
     err = editor_launch_with_env(temp_path);
-    if (err) {
-        err = error_wrap(err, "Failed to edit bootstrap script");
-        goto cleanup;
-    }
+    if (err) goto cleanup;   /* the editor's refusal names itself; the caller frames it */
 
     /* Read edited content back from temp file */
     err = fs_read_file(temp_path, &content_buf);

@@ -46,9 +46,8 @@ typedef struct {
  * before it is asked: a dry run and a real run reach the same verdict on the
  * same argument — the same admission, semantic and structural, the stage's own
  * refusals included — and the prompt is the only gate between the preview and
- * the commit. What no preview can foresee is what is left: memory, a ref another
- * writer moved between the preview and the commit, a repository that will not
- * write.
+ * the commit. What no preview can foresee is what is left: a ref another writer
+ * moved between the preview and the commit, a repository that will not write.
  *
  * The two names. A revert restores what the commit held into the name the branch
  * tip holds, and the key the user named is the key both trees are asked in. A

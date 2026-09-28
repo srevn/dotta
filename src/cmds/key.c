@@ -6,7 +6,6 @@
 
 #include <config.h>
 #include <git2.h>
-#include <stdio.h>
 
 #include "base/args.h"
 #include "base/error.h"
@@ -26,7 +25,7 @@
  * holds passphrase bytes: what to verify against, how many times to ask, and
  * what stands after a refusal are the keymgr's decisions.
  */
-static error_t cmd_key_set(const dotta_ctx_t *ctx) {
+static error_t key_set(const dotta_ctx_t *ctx) {
     keymgr *keymgr = ctx->run.keymgr;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
@@ -107,7 +106,7 @@ static error_t cmd_key_set(const dotta_ctx_t *ctx) {
  * Clears the cached passphrase from the dispatcher-owned keymgr and its on-disk
  * session cache.
  */
-static error_t cmd_key_clear(const dotta_ctx_t *ctx) {
+static error_t key_clear(const dotta_ctx_t *ctx) {
     keymgr *keymgr = ctx->run.keymgr;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
@@ -147,9 +146,10 @@ static error_t cmd_key_clear(const dotta_ctx_t *ctx) {
 /**
  * Execute key status action
  *
- * Displays encryption configuration and key cache status.
+ * Displays encryption configuration and key cache status. Cannot fail: a view
+ * that will not build is said, and the rest is shown without its count.
  */
-static error_t cmd_key_status(const dotta_ctx_t *ctx) {
+static void key_status(const dotta_ctx_t *ctx) {
     git_repository *repo = ctx->run.repo;
     const state_t *state = ctx->run.state;
     keymgr *keymgr = ctx->run.keymgr;
@@ -242,7 +242,7 @@ static error_t cmd_key_status(const dotta_ctx_t *ctx) {
         output_hintline(out, OUTPUT_NORMAL, "  [encryption]");
         output_hintline(out, OUTPUT_NORMAL, "  enabled = true");
 
-        return NULL;
+        return;
     }
 
     /* Display key cache status */
@@ -326,8 +326,6 @@ static error_t cmd_key_status(const dotta_ctx_t *ctx) {
             output_hintline(out, OUTPUT_NORMAL, "  dotta add --encrypt -p <profile> <file>");
         }
     }
-
-    return NULL;
 }
 
 /**
@@ -346,9 +344,9 @@ error_t cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
      * ctx->run.keymgr (NULL when encryption is disabled — each handler
      * short-circuits on that via its own config->encryption_enabled check). */
     switch (opts->action) {
-        case KEY_ACTION_SET:    return cmd_key_set(ctx);
-        case KEY_ACTION_CLEAR:  return cmd_key_clear(ctx);
-        case KEY_ACTION_STATUS: return cmd_key_status(ctx);
+        case KEY_ACTION_SET:    return key_set(ctx);
+        case KEY_ACTION_CLEAR:  return key_clear(ctx);
+        case KEY_ACTION_STATUS: key_status(ctx); return NULL;
     }
 
     CHECK_ARG(false, "a key action no enumerator names");

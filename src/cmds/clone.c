@@ -92,8 +92,9 @@ static void land_profiles(
  * @param repo Repository
  * @param remote_name Remote name
  * @param out Output context
- * @param arena Arena the answer and the listing it is read from live in
- * @param landed Output: the profile names made local (left as it was on a failure)
+ * @param arena Arena the listing the names are read from lives in
+ * @param landed The caller's array the profile names made local are pushed onto
+ *        (left as it was on a failure)
  * @return Error or NULL on success
  */
 static error_t land_all_profiles(
@@ -121,21 +122,15 @@ static error_t land_all_profiles(
         );
     }
 
-    /* Create array for the profiles made local */
-    string_array_t successful;
-    string_array_init(&successful, arena);
-
     /* Create local branches */
     land_profiles(
-        repo, remote_name, all_branches.entries, all_branches.count, out, &successful
+        repo, remote_name, all_branches.entries, all_branches.count, out, landed
     );
 
     output_success(
         out, OUTPUT_NORMAL, "Fetched %zu profile%s",
-        successful.count, successful.count == 1 ? "" : "s"
+        landed->count, landed->count == 1 ? "" : "s"
     );
-
-    *landed = successful;
 
     return NULL;
 }

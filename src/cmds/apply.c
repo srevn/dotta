@@ -9,8 +9,6 @@
 #include <git2.h>
 #include <pwd.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #include "base/arena.h"
 #include "base/args.h"
@@ -78,12 +76,12 @@
  * directions and names its cost the way cleanup's does: --force keeps Git's and
  * discards what stands there, and a CONTENT skip adds the disk-wins verb, 'dotta
  * update' — gated on CONTENT and not on the class, because update refuses a retyped
- * row (update.c's retyped_skipped). It stops there: the 'dotta add --force' a
- * Git-moved row needs is what update's own refusal says at the moment the user
- * meets it, and '-e' is how to ignore a skip, not how to remedy one. The block
- * sits between the deploy preview and cleanup's, so each engine tells its story
- * the same way — what it will do, then what it will not and why. No total-count
- * line: the exit error's message is the count's one home.
+ * row (cmds/update.c update_partition's kind refusal). It stops there: the 'dotta
+ * add --force' a Git-moved row needs is what update's own refusal says at the
+ * moment the user meets it, and '-e' is how to ignore a skip, not how to remedy
+ * one. The block sits between the deploy preview and cleanup's, so each engine
+ * tells its story the same way — what it will do, then what it will not and why.
+ * No total-count line: the exit error's message is the count's one home.
  */
 static void apply_print_deploy_skips(
     output_t *out, const deploy_preflight_t *verdicts
@@ -233,15 +231,15 @@ static void apply_print_deploy_skips(
      * when any skip is --force's to lift (the class the exit contract reads,
      * deploy_skip_needs_force), naming its cost; the disk-wins direction only
      * when a CONTENT skip is present — 'dotta update' refuses a retyped row
-     * (update.c's retyped_skipped), so a TYPE-only block must not be told to
-     * use it; the incapacities a hand can fix split by the claim the skip carries
-     * (ancestor_class) — widening the scope plans a tracked ancestor, and
-     * PERMISSION, OCCUPIED and a squatter nothing claims read the same line; a
-     * derived claim is never planned, so its second way out is the named
-     * re-derivation, whose own preview names what the re-capture would commit.
-     * Last, UNREADABLE's closing — an unreadable path is not "in the way", and
-     * a fix-or-widen instruction would misname a refusal to judge what could
-     * not be seen. */
+     * (cmds/update.c update_partition's kind refusal), so a TYPE-only block must
+     * not be told to use it; the incapacities a hand can fix split by the claim
+     * the skip carries (ancestor_class) — widening the scope plans a tracked
+     * ancestor, and PERMISSION, OCCUPIED and a squatter nothing claims read the
+     * same line; a derived claim is never planned, so its second way out is the
+     * named re-derivation, whose own preview names what the re-capture would
+     * commit. Last, UNREADABLE's closing — an unreadable path is not "in the
+     * way", and a fix-or-widen instruction would misname a refusal to judge what
+     * could not be seen. */
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         if (deploy_skip_needs_force(verdicts->skipped.entries[i].reason)) {
             output_info(

@@ -237,7 +237,7 @@ typedef struct {
  * @param scope Operation scope (must not be NULL)
  * @param config Configuration (must not be NULL; auto_detect_new_files admits
  *               new files for the consent prompt)
- * @param out Output context (for the verbose "Excluded" log, can be NULL)
+ * @param out Output context, for the verbose "Excluded" log (must not be NULL)
  * @param arena Arena the accepted items' spine lives in (must not be NULL)
  * @param partition Output, zeroed then filled (must not be NULL)
  */

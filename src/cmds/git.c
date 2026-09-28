@@ -104,7 +104,8 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
  * That status IS the user-visible contract — `git diff --exit-code`, merge-base
  * probes, CI scripts all branch on it. We can't funnel it through `error_t` (which
  * collapses to 0 or 1), so we write through `*ctx->exit_code`; `run_spec` honors
- * that when dispatch returns NULL. See `struct args_ctx` docs for the channel.
+ * that when dispatch returns NULL — the channel include/runtime.h "Exit-code
+ * override" states.
  */
 static error_t git_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;

@@ -8,7 +8,6 @@
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 
 #include "base/arena.h"
@@ -78,7 +77,8 @@ static void mark_result_failed(
 }
 
 /**
- * Pull branch with fast-forward only Returns true if branch was updated
+ * Fast-forward a branch to its remote-tracking ref, and nothing else; *updated
+ * says whether it moved
  */
 static error_t pull_branch_ff(
     git_repository *repo,

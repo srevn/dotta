@@ -7,7 +7,6 @@
 #include <config.h>
 #include <git2.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -228,7 +227,7 @@ static const char *get_status_message_from_item(
     }
 
     /* Profile reassignment with no content/metadata divergence. Only reachable
-     * via UPSTREAM (DOWNSTREAM filtered by should_show_item). */
+     * via UPSTREAM (DOWNSTREAM filtered by should_show_item_for_direction). */
     if (workspace_reassigned(item->row, item->record, item->occupant)) {
         return "profile reassigned (acknowledged by apply)";
     }

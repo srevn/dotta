@@ -1215,7 +1215,6 @@ static error_t remove_profile(
     error_t err = NULL;
     const char *remote_name = NULL;
     const char *remote_url = NULL;
-    bool performed = false;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1348,14 +1347,14 @@ static error_t remove_profile(
     /* The candidates as the record stands before the prompt, on the borrowed
      * state: the preview's, and whether there is anything to settle once the
      * branch is gone. Under spec-driven READ the handle is always non-NULL here
-     * (CHECK_NULL at entry), and state_load for a missing DB still returns a
-     * usable handle (DB-less, reads degrade to empty) — no defensive fallback
-     * needed. The settle reads them again under its lock: the prompt and the
-     * pre-remove hook stand between the two, and another process can write the
-     * record there — an apply that adopts or deploys this profile's files, from
-     * another terminal or from the hook. Failure is non-fatal — warn and decide
-     * over what was read; what this run cannot settle, the next apply reads as
-     * orphans and releases. */
+     * (the dispatcher's), and state_load for a missing DB still returns a usable
+     * handle (DB-less, reads degrade to empty) — no defensive fallback needed.
+     * The settle reads them again under its lock: the prompt and the pre-remove
+     * hook stand between the two, and another process can write the record there
+     * — an apply that adopts or deploys this profile's files, from another terminal
+     * or from the hook. Failure is non-fatal — warn and decide over what was
+     * read; what this run cannot settle, the next apply reads as orphans and
+     * releases. */
     candidate_t *candidates = NULL;
     size_t candidate_count = 0;
     size_t deployed_count = 0;
@@ -1499,8 +1498,6 @@ static error_t remove_profile(
         goto cleanup;
     }
 
-    performed = true;
-
     /* Post-deletion: the enabled set and the record, in one transaction — opened
      * only where there is, or can come to be, something to write: a record naming
      * the profile (the candidates read before the prompt), or the profile enabled
@@ -1626,8 +1623,9 @@ static error_t remove_profile(
     /* Execute post-remove hook */
     hook_fire_post(config, out, &hook_inv);
 
-    /* Success message (only on actual deletion, not dry-run/cancel/error) */
-    if (performed && !opts->quiet) {
+    /* Success message: every exit before the deletion is behind us (dry run,
+     * cancel, error) */
+    if (!opts->quiet) {
         output_success(out, OUTPUT_NORMAL, "Profile '%s' deleted", opts->profile);
 
         /* The hint speaks only for records actually settled, and for the fate

@@ -824,25 +824,22 @@ error_t metadata_capture_ancestors(
     /* Every rung is a prefix of the leaf's own name, so one copy spells them
      * all: each separator truncates it in place and is restored before the next
      * one extends past it. The scan reads the caller's string, which is never
-     * written, so the cut is an offset into it. */
-    char *rung = heap_strdup(storage_path);
+     * written, so the cut is an offset into it. The copy is the arena's the rungs'
+     * paths are spelled into; what keeps a rung — the sheet's item, the retired
+     * array — copies it. */
+    char *rung = arena_strdup(arena, storage_path);
 
-    error_t err = NULL;
     for (const char *sep = first; sep; sep = strchr(sep + 1, '/')) {
         size_t cut = (size_t) (sep - storage_path);
 
         rung[cut] = '\0';
-        err = capture_ancestor(
-            metadata, mounts, profile, rung, arena, captured, retired
+        RETURN_IF_ERROR(
+            capture_ancestor(metadata, mounts, profile, rung, arena, captured, retired)
         );
         rung[cut] = '/';
-
-        if (err) break;
     }
 
-    free(rung);
-
-    return err;
+    return NULL;
 }
 
 /**

@@ -443,7 +443,7 @@ void output_print_diff(
 /**
  * Format file size in human-readable form
  *
- * Formats byte sizes into human-readable strings (B, KB, MB, GB). The buffer
+ * Formats byte sizes into human-readable strings (B, KiB, MiB, GiB). The buffer
  * must be at least 32 bytes to accommodate all formats.
  *
  * @param bytes Size in bytes

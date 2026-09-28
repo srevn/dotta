@@ -4,8 +4,8 @@
  * Handles profile detection, name resolution, and branch-level queries. The
  * questions asked of one branch, or of every branch, answered from Git and this
  * machine's topology; the searches by path build one branch's view to ask it
- * (core/manifest.h) and free it before they answer, so no manifest type crosses
- * this surface.
+ * (core/manifest.h), in the caller's arena, and answer from it, so no manifest
+ * type crosses this surface.
  *
  * The layering convention, least specific first:
  * 1. global

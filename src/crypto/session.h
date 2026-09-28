@@ -71,8 +71,8 @@
  * @param epoch      The epoch the master derives under: names the file and keys
  *                   the obfuscation (non-NULL)
  * @param expires_at Unix seconds after which the file refuses to load; 0 = never
- * @return NULL on success; ERR_FS on I/O failure; ERR_CRYPTO if the nonce cannot
- *         be drawn
+ * @return NULL on success; an I/O failure's errno code (base/error.h
+ *         error_code_from_errno); ERR_CRYPTO if the nonce cannot be drawn
  */
 error_t session_save(
     const uint8_t master_key[KDF_KEY_SIZE],
@@ -101,7 +101,7 @@ error_t session_save(
  * @param out_expires_at The file's expiry, 0 = never (non-NULL; set on success)
  * @return NULL on success; ERR_NOT_FOUND if there is no file or it has expired;
  *         ERR_CRYPTO for corruption, wrong mode or owner, version mismatch or
- *         MAC failure; ERR_FS for an unexpected I/O error
+ *         MAC failure; an unexpected I/O error's errno code
  */
 error_t session_load(
     uint8_t out_master_key[KDF_KEY_SIZE],

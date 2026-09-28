@@ -566,9 +566,9 @@ const mount_table_t *manifest_mounts(const manifest_t *manifest);
  * enabled_profiles mutation follows.
  *
  * A state with no database has no rows and yields the bare table (HOME and the
- * root sentinel). A row read that fails on an opened database is an error and
- * propagates: a bare table in its place would classify every input as home/ or
- * root/ and resolve no custom/ path, silently.
+ * root sentinel). The rows are the handle's, read when it was loaded (core/state.h
+ * state_profiles); what can refuse here is a target's spelling (infra/mount.h
+ * mount_table_build).
  *
  * @param state State handle (must not be NULL; borrowed, not freed)
  * @param binding The run's own binding, standing for its profile's row, or NULL

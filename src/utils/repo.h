@@ -70,10 +70,12 @@
  * about the repository just created.
  *
  * @param config        Loaded configuration (must not be NULL)
- * @param arena         Arena both answers live in (must not be NULL)
+ * @param arena         Arena a positional's settled spelling lives in (must not
+ *                      be NULL); the configured location is the configuration's,
+ *                      the process's, so either answer outlives the command
  * @param explicit_path The command's positional, or NULL for the configured
  *                      location
- * @param out_path      Resolved absolute path, the arena's (must not be NULL)
+ * @param out_path      Resolved absolute path (must not be NULL)
  * @param out_elsewhere Optional: the configured location when out_path is not
  *                      it, NULL otherwise (can be NULL)
  * @return Error or NULL on success
@@ -131,7 +133,7 @@ error_t repo_is_store(git_repository *repo, bool *out);
  * store an older dotta kept — and refused with ERR_NOT_FOUND naming the path,
  * `dotta init` and DOTTA_REPO_DIR. This is the standard way to open the store
  * for dotta commands — the pass-through (`dotta git`) is the one that deliberately
- * does not, taking only the path (`dotta_repo_mode_t` in include/runtime.h).
+ * does not, forking git over the settled directory itself (cmds/git.h).
  *
  * THE OPEN IS THE PRESENCE TEST: there is no separate "is a repository here"
  * question — asking it means opening, and a predicate that opens and throws the

@@ -26,7 +26,7 @@
  *   - `Platform: <os>/<arch>`         (skipped if either is unknown)
  *   - `Build: <type> - <date> <time>` (sanitizer tag for debug builds)
  *   - `Compiler: <cc>`                (skipped if unknown)
- *   - `libgit2: <major>.<minor>.<rev>`
+ *   - `Libraries: libgit2 <major>.<minor>.<rev>, sqlite <version>`
  *
  * No allocations, no error paths — every input is a compile-time constant or a
  * libgit2 call that cannot fail.

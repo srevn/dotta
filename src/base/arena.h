@@ -93,7 +93,8 @@ __attribute__((format(printf, 2, 3)));
  * arena_str_format over a va_list, for a formatter of its own
  *
  * The format is dotta's own, so one that cannot be formatted is its writer's
- * bug. Readers: base/array.c string_array_pushf.
+ * bug. Readers: base/arena.c arena_str_format, base/array.c string_array_pushf,
+ * and base/error.c error_create and error_wrap.
  *
  * @param fmt  Format string (must not be NULL)
  * @param args The arguments, as a variadic caller received them

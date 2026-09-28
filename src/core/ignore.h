@@ -158,8 +158,8 @@ error_t ignore_excludes_compile(
  *     lives until the arena is freed. In practice the arena is command-scoped
  *     (`ctx->arena`).
  *   - `config->ignore_ruleset` is borrowed, and so are the strings its rules
- *     hold: config_load compiled the layer into the config's arena, which lives
- *     for the process and so outlives every ruleset the builder returns.
+ *     hold: config_load compiled the layer into the process's arena, which outlives
+ *     every ruleset the builder returns.
  *   - `cli_rules` is borrowed, and so are the strings its rules hold: every
  *     per-profile ruleset copies those rules, so the arena they were compiled
  *     into must outlive every ruleset the builder returns. In practice both are

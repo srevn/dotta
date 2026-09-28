@@ -103,7 +103,7 @@ typedef struct {
  * where it names no group — on every run; (uid_t) -1 is no change, and an owner
  * is left unchanged only where the claim named one this host cannot resolve).
  * The mode the write applies is the row's, read there — total for every kind
- * that carries one (resolve_metadata carries the rationale).
+ * that carries one (check_ownership carries the rationale).
  */
 typedef struct {
     const workspace_item_t *item;    /* Borrowed (workspace lifetime), never NULL; the row is item->row */

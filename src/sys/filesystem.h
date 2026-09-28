@@ -309,8 +309,8 @@ error_t fs_create_dir(const char *path, bool parents);
  * @return Error or NULL on success
  *
  * Errors:
- * - ERR_FS: Failed to create directory (permission denied, etc.)
- * - ERR_FS: Failed to set permissions (not owner, etc.)
+ * - A creation or a chmod the kernel refused: its errno's code (the header's
+ *   "The word" — ERR_PERMISSION for a refusal, ERR_FS for the rest)
  * - ERR_INVALID_ARG: Invalid mode (> 0777)
  */
 error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
@@ -349,9 +349,8 @@ error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
  *
  * Errors:
  * - ERR_INVALID_ARG: Invalid mode (> 0777)
- * - ERR_FS: Failed to create directory
- * - ERR_FS: Failed to set ownership (not running as root)
- * - ERR_FS: Failed to set permissions
+ * - A creation, a chown or a chmod the kernel refused: its errno's code (the
+ *   header's "The word" — ERR_PERMISSION for a refusal, ERR_FS for the rest)
  */
 error_t fs_create_dir_with_ownership(
     const char *path,

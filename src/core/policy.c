@@ -241,6 +241,6 @@ bool encryption_policy_violation(
         return false;
     }
 
-    /* matches_auto_patterns is NULL-safe and pure. */
+    /* encryption_policy_matches_auto_patterns is NULL-safe and pure. */
     return encryption_policy_matches_auto_patterns(config, storage_path);
 }

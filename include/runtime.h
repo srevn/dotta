@@ -189,18 +189,18 @@ typedef enum dotta_crypto_mode {
  *
  * repo
  * ----
- * The repository in the declared shape (`dotta_repo_mode_t`): the handle and
- * the path opening it resolved, the path alone, or neither. Three strengths of
- * one need, in one member — the two the dispatcher can supply are ordered, so
- * there is no combination to reconcile and no way to ask for the path twice.
+ * The repository in the declared shape (`dotta_repo_mode_t`): the handle repo_open
+ * made over the store's directory the configuration settled, or none. A command
+ * that wants the directory and not the handle reads the configuration
+ * (`config->repo_dir`), as the pass-through does (cmds/git.h).
  *
  * state
  * -----
  * The handle in the declared shape (`dotta_state_mode_t`). Requires `repo` at
- * OPEN — state lives in the repository dotta opened, not beside its path. A WRITE
- * spec whose `--dry-run` flag this invocation set opens READ instead. The closure
- * above is tested against what the spec declares: narrowing yields READ and never
- * NONE, so nothing it checks can come out differently for a preview.
+ * OPEN — state lives in the repository dotta opened. A WRITE spec whose `--dry-run`
+ * flag this invocation set opens READ instead. The closure above is tested against
+ * what the spec declares: narrowing yields READ and never NONE, so nothing it
+ * checks can come out differently for a preview.
  *
  * mounts
  * ------
@@ -271,7 +271,8 @@ typedef enum dotta_crypto_mode {
  * --------
  * The view — every enabled profile at HEAD, precedence resolved, one row per
  * active path (`core/manifest.h`) — `manifest_build` over the state's enabled
- * set. Requires `state`. Borrowed by the handler, released by the dispatcher.
+ * set. Requires `state`. Borrowed by the handler, and a value of the command
+ * arena, which nothing frees (the run, below).
  *
  * Who declares it: the commands whose subject is the view — the workspace commands
  * (status, diff, apply, sync, update — `workspace_load` borrows the view rather

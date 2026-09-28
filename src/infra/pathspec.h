@@ -128,9 +128,7 @@ error_t pathspec_create(
  * `kind` is the manifest's kind of the path (a tracked directory squatted by a
  * file is still a directory): gitignore's directory-only rules (`dir/`) match a
  * directory itself only when the caller says it is one; files beneath it match
- * at the rung above regardless. Never fails: a copy of a subject that cannot be
- * made ends the ascent for both — no vocabulary is read a rung further than the
- * other — and the answer is the leaf's.
+ * at the rung above regardless. Never fails.
  *
  * @param spec         Pathspec (NULL = match all)
  * @param filesystem_path Where the path stands (NULL: no filesystem entry reads it)

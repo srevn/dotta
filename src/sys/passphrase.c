@@ -179,7 +179,8 @@ error_t passphrase_prompt(
  * The underlying "env-var passphrases are visible to ps(1)" trade-off is the
  * user's choice to accept.
  *
- * @param out_passphrase Passphrase (caller must free and zero)
+ * @param out_passphrase Passphrase, a secure mapping (secure_free, the header's
+ *        cleanup contract)
  * @param out_len Passphrase length
  */
 error_t passphrase_from_env(

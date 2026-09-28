@@ -111,8 +111,8 @@ struct manifest {
 
     /* The two health slices: claims the build could not place (no target binding)
      * and names a profile did not keep (it names the path otherwise), both grouped
-     * by profile in build order. Flat arena arrays, abandon-and-realloc growth;
-     * empty on the common build (no allocation until the first note). */
+     * by profile in build order. Flat arena arrays, grown by arena_grow; empty
+     * on the common build (no allocation until the first note). */
     manifest_unbound_claim_t *unbound;
     size_t unbound_count;
     size_t unbound_capacity;
@@ -877,11 +877,10 @@ static int manifest_claim_blob(
  * very tree being read, so no caller of a builder chooses a policy for a fact
  * this step is the authority on.
  *
- * Memory: every allocation the view keeps lands in `arena`; the sheet is this
- * call's and is released at its tail (no row borrows it — each takes an arena
- * copy), and so are the step's three lists, whose lifetime is this call and not
- * the view's. On error, rows already placed are left as they are — the build
- * fails whole and the caller releases the indexes.
+ * Memory: every allocation lands in `arena`, the step's three lists included,
+ * which stay there past the call; the sheet alone is this call's, released at
+ * its tail (no row borrows it — each takes an arena copy). On error, rows already
+ * placed are left as they are — the build fails whole, and nothing frees a view.
  *
  * @param manifest Target view (must not be NULL; its mount table is what places
  *                 rows)

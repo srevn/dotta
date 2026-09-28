@@ -273,10 +273,10 @@ done:
  *
  * The content cache first (holds a borrowed keymgr pointer but does not dereference
  * it at teardown), then the keymgr, then state (state_free auto-rolls-back any
- * uncommitted transaction per state.h's contract), then the repository. The view,
- * the mount table and the repository path are the arena's. Every dotta primitive
- * is NULL-safe, so a run that opened partway — an acquisition error, or a tolerant
- * open that stopped early — closes the same way as a whole one.
+ * uncommitted transaction per state.h's contract), then the repository. The view
+ * and the mount table are the arena's. Every dotta primitive is NULL-safe, so a
+ * run that opened partway — an acquisition error, or a tolerant open that stopped
+ * early — closes the same way as a whole one.
  */
 static void close_run(dotta_run_t *run) {
     content_cache_free(run->content_cache);

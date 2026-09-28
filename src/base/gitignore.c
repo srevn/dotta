@@ -85,7 +85,7 @@
 #include "base/heap.h"
 #include "base/wildmatch.h"
 
-/* Size limits — match the existing core/ignore.c conventions. */
+/* Size limits: a pattern's length and a ruleset's count, refused past either. */
 #define MAX_PATTERN_LENGTH 4096
 #define MAX_RULES          10000
 #define PATH_STACK_BUFFER  4096

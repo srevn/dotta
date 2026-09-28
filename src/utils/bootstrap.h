@@ -27,9 +27,9 @@
  * Fields:
  *   repo           Open Git repository.
  *   repo_dir       Absolute path to the repository. Becomes
- *                  DOTTA_REPO_DIR for each spawned script. May differ from the
- *                  default repo location — e.g., `dotta clone --path <dir>` honors
- *                  an override that does not match config->repo_dir.
+ *                  DOTTA_REPO_DIR for each spawned script. May differ from
+ *                  config->repo_dir — `dotta clone <url> <path>` bootstraps the
+ *                  store it made at <path>, wherever the configuration looks.
  *   profiles       The profiles whose scripts run, in execution order: the
  *                  caller's listing, every one of which has a .bootstrap script
  *                  (sys/bootstrap.h bootstrap_exists) — the set the caller showed

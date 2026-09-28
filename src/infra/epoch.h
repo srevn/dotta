@@ -330,8 +330,8 @@ typedef enum {
  * / ls) still folds to EPOCH_RECONCILE_UNREACHABLE so the caller can skip epoch
  * reconciliation best-effort — the authoritative "remote unreachable" diagnostic
  * comes from the subsequent fetch phase — but a census failure has no second
- * reporter anywhere in sync, so its cause is returned rather than freed. It is
- * returned bare: this boundary knows the mechanism, and the caller that renders
+ * reporter anywhere in sync, so its cause is returned rather than dropped. It
+ * is returned bare: this boundary knows the mechanism, and the caller that renders
  * it is the one that can name the subject.
  *
  * This module owns only the *mechanism* of looking and classifying; the acts,

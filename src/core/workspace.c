@@ -78,11 +78,11 @@ struct workspace {
     arena_t *arena;                              /* Borrowed; backs every workspace-lifetime string */
 
     /* The view: every enabled profile at HEAD, built by the dispatcher at the
-     * start of the command and borrowed here (ctx->run.manifest — its rows are
-     * the command arena's, its index the dispatcher's to release). Rows are
-     * read-only for the whole run — the record a writer patches is the one its
-     * item holds (workspace_item_t), never a row. The view's own index answers
-     * the scan, at each child it lists and each rung above a root
+     * start of the command and borrowed here (ctx->run.manifest — rows and index
+     * alike are the command arena's, and nothing frees a view). Rows are read-only
+     * for the whole run — the record a writer patches is the one its item holds
+     * (workspace_item_t), never a row. The view's own index answers the scan,
+     * at each child it lists and each rung above a root
      * (scan_directory_for_untracked, blob_over): a path is one row, and each
      * asks row->type for the kind it wants. A reader outside the module asks
      * for the path's item instead, which carries its row (workspace_find). */
@@ -2881,8 +2881,7 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
  * too. None is read at count zero.
  *
  * Lifetime: every pointer (the items, their arrays, the record, the squatted
- * list) lives in ws->arena, beside the view's rows; the view's index is the
- * dispatcher's.
+ * list) lives in ws->arena, beside the view's rows and index.
  *
  * Performance: O(M log M + A log M) — one sort, and a search per record; no Git,
  * no probes.

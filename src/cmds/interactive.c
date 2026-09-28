@@ -54,7 +54,7 @@
 typedef struct {
     const char *name;      /* Profile name, the listing's */
     const char *target;    /* Deployment target — the row's, or this session's; NULL when unset */
-    bool enabled;          /* Selected for save; toggled by space, persisted by save_order */
+    bool enabled;          /* Selected for save; toggled by space, persisted by view_save */
     bool needs_target;     /* A claim of the branch needs a binding (core/profiles.h) */
     bool unreadable;       /* The branch would not read: the seed absorbed it, the row says so */
 } item_t;
@@ -71,7 +71,7 @@ typedef struct {
     item_t *items;         /* Profile rows */
     size_t item_count;     /* Number of valid entries in items */
     size_t cursor;         /* Selected row (0..item_count-1; valid iff item_count > 0) */
-    bool modified;         /* Unsaved edits pending; cleared by a successful save_order */
+    bool modified;         /* Unsaved edits pending; cleared by a successful view_save */
     prompt_t prompt;       /* Inline target-capture overlay state */
 } view_t;
 
@@ -81,8 +81,10 @@ typedef enum {
     INTERACTIVE_EXIT_ERROR    /* Quit on error; out_err carries the cause */
 } interactive_result_t;
 
-/* Save-time diff plan. Pointer arrays live in the caller's arena, and so does
- * new_order, each name in it a copy made there. */
+/* Save-time diff plan: made in the view's arena at each save, new_order's names
+ * copies made there, and abandoned there once the save ends — O(profiles) bytes
+ * per save, and a save is human-paced, the reason a replaced target is abandoned
+ * too. */
 typedef struct {
     string_array_t new_order;  /* Ordered enabled names, in display order */
     item_t **new_order_items;  /* Parallel pointers into view->items (same indexing as new_order) */
@@ -258,12 +260,12 @@ static void move_down(view_t *view) {
 
 /* Phase: collect enabled rows in display order. Pure view sweep; no state
  * interaction. */
-static void plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
-    string_array_init(&plan->new_order, arena);
+static void plan_collect(view_t *view, plan_t *plan) {
+    string_array_init(&plan->new_order, view->arena);
 
     if (view->item_count > 0) {
         plan->new_order_items = arena_calloc(
-            arena, view->item_count, sizeof(*plan->new_order_items)
+            view->arena, view->item_count, sizeof(*plan->new_order_items)
         );
     }
 
@@ -282,21 +284,19 @@ static void plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
  * the borrows are live: needs_enable (additions, plus retained rows whose target
  * names another directory), removal_names (arena-strdup'd so they outlive the
  * slice), and the spelling a retained binding keeps, copied onto the item that
- * offered another for it — into the view's arena, where the item lives, and not
- * the plan's. */
-static void plan_classify(
-    arena_t *arena, state_t *deploy_state, view_t *view, plan_t *plan
-) {
+ * offered another for it. All of it into the view's arena: the plan's, and the
+ * item's, which lives there. */
+static void plan_classify(state_t *deploy_state, view_t *view, plan_t *plan) {
     state_profiles_t persisted = state_profiles(deploy_state);
 
     if (plan->new_order.count > 0) {
         plan->needs_enable = arena_calloc(
-            arena, plan->new_order.count, sizeof(*plan->needs_enable)
+            view->arena, plan->new_order.count, sizeof(*plan->needs_enable)
         );
     }
     if (persisted.count > 0) {
         plan->removal_names = arena_calloc(
-            arena, persisted.count, sizeof(*plan->removal_names)
+            view->arena, persisted.count, sizeof(*plan->removal_names)
         );
     }
 
@@ -306,7 +306,7 @@ static void plan_classify(
         const char *p_name = persisted.entries[i].name;
         if (string_array_contains(&plan->new_order, p_name)) continue;
 
-        plan->removal_names[plan->removal_count++] = arena_strdup(arena, p_name);
+        plan->removal_names[plan->removal_count++] = arena_strdup(view->arena, p_name);
     }
 
     /* Walk new_order; flag rows that must be re-written via
@@ -417,27 +417,30 @@ static error_t plan_apply(state_t *deploy_state, const plan_t *plan) {
  * load cannot build: a branch that exists but will not load. Not a target gate
  * — the build is total over a custom/ claim whose profile has no binding, which
  * contributes no row and is recorded for the health channel to say (core/manifest.h
- * manifest_unbound) — so an unbound row saves here as a clone's and a sync's do. */
-static error_t plan_check(
-    git_repository *repo, state_t *deploy_state, arena_t *arena
-) {
+ * manifest_unbound) — so an unbound row saves here as a clone's and a sync's do.
+ *
+ * Built only to learn that it can be, in a frame of the check's own, freed before
+ * the answer: a session of N saves holds no view, where the view's arena would
+ * hold one per save — profile_needs_target's shape (core/profiles.c). The error
+ * outlives the frame: it lives in the errors' own arena (base/error.h
+ * "Lifetime"). */
+static error_t plan_check(git_repository *repo, state_t *deploy_state) {
+    arena_t *frame = arena_create(0);
     manifest_t *view = NULL;
-    error_t err = manifest_build(repo, deploy_state, arena, &view);
-    if (err) {
-        return error_wrap(err, "Failed to build manifest with new scope");
-    }
+    error_t err = manifest_build(repo, deploy_state, frame, &view);
+    arena_free(frame);
+
+    if (err) return error_wrap(err, "Failed to build manifest with new scope");
     return NULL;
 }
 
 /* Save orchestrator. Holds a scoped write transaction for the diff window only;
  * declaring WRITE at the spec level would hold BEGIN IMMEDIATE for the whole
- * session, blocking other dotta processes. The plan and the view it checks are
- * built in the view's arena. */
-static error_t save_order(git_repository *repo, state_t *deploy_state, view_t *view) {
-    arena_t *arena = view->arena;
-
+ * session, blocking other dotta processes. The plan is built in the view's arena
+ * (plan_t), the view it checks in a frame of the check's own (plan_check). */
+static error_t view_save(git_repository *repo, state_t *deploy_state, view_t *view) {
     plan_t plan = { 0 };
-    plan_collect(arena, view, &plan);
+    plan_collect(view, &plan);
 
     /* Refuse a save that would empty enabled_profiles. Checked here — after collect
      * — instead of via a cached counter on view: the items array is the single
@@ -450,7 +453,7 @@ static error_t save_order(git_repository *repo, state_t *deploy_state, view_t *v
     error_t err = state_begin(deploy_state);
     if (err) return err;
 
-    plan_classify(arena, deploy_state, view, &plan);
+    plan_classify(deploy_state, view, &plan);
 
     err = plan_validate(&plan);
     if (err) goto rollback;
@@ -458,7 +461,7 @@ static error_t save_order(git_repository *repo, state_t *deploy_state, view_t *v
     err = plan_apply(deploy_state, &plan);
     if (err) goto rollback;
 
-    err = plan_check(repo, deploy_state, arena);
+    err = plan_check(repo, deploy_state);
     if (err) goto rollback;
 
     err = state_commit(deploy_state);
@@ -529,7 +532,7 @@ static void row_render(const view_t *view, size_t i) {
     /* Three questions, in order. Does the row hold a binding — the store's, or
      * this session's? Shown wherever one is held: on a home-only row bound on
      * purpose, as profile list and status show it; and on a disabled row, where
-     * it is what the next toggle-on writes (save_order releases it if no save
+     * it is what the next toggle-on writes (view_save releases it if no save
      * takes it). Could the seed not say? Does the branch need a binding it has
      * not got — the same answer status prints for an enabled row, and here `t`
      * is the remedy. */
@@ -722,7 +725,7 @@ static interactive_result_t handle_key_normal(
              * (2) toggle is OFF→ON, (3) no target captured or seeded yet. The
              * captured target survives transient toggle-off / toggle-on cycles
              * within a session, so a re-enable skips the prompt naturally via
-             * gate 3 (until a save releases it: save_order). A row the seed could
+             * gate 3 (until a save releases it: view_save). A row the seed could
              * not read needs nothing it can say, so it toggles without a prompt
              * and plan_check refuses the save that would enable it. */
             if (toggling_on && it->needs_target && it->target == NULL) {
@@ -766,7 +769,7 @@ static interactive_result_t handle_key_normal(
             if (!view->modified) {
                 return INTERACTIVE_CONTINUE;
             }
-            error_t err = save_order(repo, deploy_state, view);
+            error_t err = view_save(repo, deploy_state, view);
             if (err) {
                 *out_err = err;
                 return INTERACTIVE_EXIT_ERROR;

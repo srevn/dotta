@@ -451,7 +451,11 @@ typedef struct dotta_run {
  *     profile_needs_target builds one branch's view to read one bool off it:
  *     against `ctx->arena` the editor would keep a view per local branch for
  *     the length of its session and the listing one per available row — 1.8 MB
- *     of heap at six branches of 1,000 paths, for six bools.
+ *     of heap at six branches of 1,000 paths, for six bools. `cmds/interactive.c`'s
+ *     plan_check builds the saved set's view only to learn that it builds: against
+ *     the command arena a session kept one per save — 50 saves over a 5,000-file
+ *     profile measured 120.7 MB of peak RSS, and 46.2 MB with the check's own,
+ *     the same 391 KB live at the end of 2 saves or 50.
  *
  *     Or no arena in reach: a function whose answer is not memory keeps what it
  *     builds and drops within the call in a frame of its own — a spawn's

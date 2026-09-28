@@ -740,7 +740,7 @@ static inline divergence_type_t workspace_claims_moved(
  * life; the workspace's own — the active items, both kinds or one
  * (workspace_active, workspace_directories, workspace_files), and the diverged
  * items (workspace_diverged) — borrow for the workspace's life; update's filters
- * hand over heap buffers the caller frees.
+ * lend a spine in the arena the caller named. Nothing frees a slice.
  */
 typedef struct {
     const workspace_item_t *const *entries;
@@ -759,7 +759,7 @@ typedef struct {
  */
 static inline workspace_items_t workspace_items(const ptr_array_t *bucket) {
     return (workspace_items_t){
-        .entries = (const workspace_item_t *const *) bucket->items,
+        .entries = (const workspace_item_t *const *) bucket->entries,
         .count = bucket->count,
     };
 }
@@ -1000,23 +1000,23 @@ typedef struct {
  * keep alive beside it.
  *
  * @param repo Git repository (must not be NULL)
- * @param state State handle (must not be NULL, borrowed from caller;
- *              caller retains ownership and must free it after workspace_free)
+ * @param state State handle (must not be NULL, borrowed from caller, who keeps
+ *              it open for as long as it reads the workspace)
  * @param config Configuration (for ignore patterns, can be NULL)
  * @param content_cache Shared blob-content cache (must not be NULL;
- *              borrowed — lifetime must extend past workspace_free. Obtain from
+ *              borrowed — it must outlive the workspace. Obtain from
  *              `ctx->run.content_cache` under a spec that declares crypto)
  * @param manifest The view over the enabled set (must not be NULL; borrowed —
- *                 lifetime must extend past workspace_free. `ctx->run.manifest`,
- *                 which the command's spec declares with `.manifest`; no command
- *                 mutates Git or the enabled set between dispatch and
- *                 workspace_load, so it is current)
+ *                 it must outlive the workspace. `ctx->run.manifest`, which the
+ *                 command's spec declares with `.manifest`; no command mutates
+ *                 Git or the enabled set between dispatch and workspace_load,
+ *                 so it is current)
  * @param opts The two analyses this load may decline (must not be NULL)
- * @param arena Borrowed allocator backing every workspace-lifetime string (the
- *              view's rows, the record, diverged items, partition pointer arrays).
- *              Must outlive workspace_free; in practice `ctx->arena` (must not
- *              be NULL).
- * @param out Workspace (must not be NULL, caller must free with workspace_free)
+ * @param arena The arena the workspace lives in, and everything it holds (the
+ *              items, the record, the diverged items, the partition's arrays),
+ *              beside the view's rows: nothing frees a workspace, which goes
+ *              with it. In practice `ctx->arena` (must not be NULL).
+ * @param out Workspace (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *workspace_load(
@@ -1528,14 +1528,5 @@ error_t *workspace_learn(
  *         end; NULL otherwise, a flush that writes for itself keeping its own
  */
 error_t *workspace_flush(workspace_t *ws);
-
-/**
- * Free workspace
- *
- * Frees all internal state and divergence analysis results.
- *
- * @param ws Workspace to free (can be NULL)
- */
-void workspace_free(workspace_t *ws);
 
 #endif /* DOTTA_WORKSPACE_H */

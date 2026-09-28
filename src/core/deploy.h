@@ -429,8 +429,8 @@ typedef struct {
  * intent).
  *
  * Buckets hold borrowed item pointers (workspace lifetime — the items are
- * arena-allocated, their addresses stable by construction); the plan owns only
- * the bucket buffers. Project a bucket with workspace_items: its one writer,
+ * arena-allocated, their addresses stable by construction), and the buckets live
+ * in the plan's arena. Project a bucket with workspace_items: its one writer,
  * deploy.c deploy_classify, keeps the element type the projection reads.
  */
 typedef struct {
@@ -449,7 +449,7 @@ typedef struct {
 
 /**
  * Deployment plan — deploy's classification of the active items in scope, one
- * partition per kind. Free with deploy_plan_free.
+ * partition per kind. A value of the arena it was built in: nothing frees one.
  *
  * Both kinds' items arrive ordered by filesystem_path (workspace_directories,
  * workspace_files), so a tracked parent precedes its tracked children within
@@ -593,20 +593,17 @@ typedef struct {
  *        all see one answer. Not overridden by --force: --force also overrides
  *        cleanup's skip reasons and the confirmation prompt, so the combination
  *        is meaningful and the narrower flag keeps its promise.
- * @param out Plan (must not be NULL; caller frees with deploy_plan_free)
+ * @param arena Arena the plan and its buckets live in (must not be NULL)
+ * @param out Plan (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *deploy_plan_build(
     const workspace_t *ws,
     const scope_t *scope,
     bool skip_existing,
+    arena_t *arena,
     deploy_plan_t **out
 );
-
-/**
- * Free a plan. No-op on NULL.
- */
-void deploy_plan_free(deploy_plan_t *plan);
 
 /**
  * True when the plan carries no work of either kind.
@@ -829,6 +826,7 @@ error_t *deploy_preflight(
  * @param verdicts The verdicts to carry out — deployable rows only, by
  *        construction: the skips never enter these arrays (must not be NULL)
  * @param cache Content cache for batch operations (must not be NULL)
+ * @param arena Arena the run's held directories live in (must not be NULL)
  * @param out Deployment results (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
@@ -837,6 +835,7 @@ error_t *deploy_execute(
     const workspace_t *ws,
     const deploy_preflight_result_t *verdicts,
     content_cache_t *cache,
+    arena_t *arena,
     deploy_result_t **out
 );
 

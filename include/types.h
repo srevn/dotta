@@ -72,12 +72,13 @@ typedef struct {
 } string_array_t;
 
 /**
- * Pointer array - dynamic array of borrowed pointers
+ * Pointer array - borrowed pointers, the spine in the arena it was made in
  */
 typedef struct {
-    void **items;
+    void **entries;
     size_t count;
     size_t capacity;
+    arena_t *arena;       /* where the spine grows; NULL until ptr_array_init */
 } ptr_array_t;
 
 /**

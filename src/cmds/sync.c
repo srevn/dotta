@@ -2243,7 +2243,6 @@ cleanup:
      * own; nothing else writes). `before` is the dispatcher's view — not freed
      * here. */
     manifest_free(after);
-    if (ws) workspace_free(ws);
     if (xfer) transfer_context_free(xfer);
     if (results) sync_results_free(results);
     if (scope) scope_free(scope);

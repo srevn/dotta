@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/heap.h"
@@ -197,15 +198,24 @@ static error_t *deploy_classify(
  */
 error_t *deploy_plan_build(
     const workspace_t *ws, const scope_t *scope, bool skip_existing,
-    deploy_plan_t **out
+    arena_t *arena, deploy_plan_t **out
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(scope);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    /* calloc zeroes the eight ptr_array_t buckets — that IS their empty state */
-    deploy_plan_t *plan = heap_calloc(1, sizeof(*plan));
-    error_t *err = NULL;
+    /* The plan and its eight buckets are the arena's, beside the items they borrow:
+     * each bucket is made in it, and nothing frees a plan. */
+    deploy_plan_t *plan = arena_calloc(arena, 1, sizeof(*plan));
+    ptr_array_init(&plan->directories.pending, arena);
+    ptr_array_init(&plan->directories.clean, arena);
+    ptr_array_init(&plan->directories.excluded, arena);
+    ptr_array_init(&plan->directories.skipped_existing, arena);
+    ptr_array_init(&plan->files.pending, arena);
+    ptr_array_init(&plan->files.clean, arena);
+    ptr_array_init(&plan->files.excluded, arena);
+    ptr_array_init(&plan->files.skipped_existing, arena);
 
     /* Directories then files — the order preflight decides and the run acts in.
      * Convention alone: each row's classification reads the workspace and the
@@ -235,12 +245,12 @@ error_t *deploy_plan_build(
 
         /* No SKIP_EXISTING arm: --skip-existing does not reach tracked directories
          * (see deploy_partition_t). */
-        err = deploy_classify(
+        error_t *err = deploy_classify(
             &plan->directories, item,
             scope_is_excluded(scope, item->storage_path, PATH_KIND_DIRECTORY)
                 ? SKIP_EXCLUDED : SKIP_NONE
         );
-        if (err) goto cleanup;
+        if (err) return error_wrap(err, "Failed to build deploy plan");
     }
 
     workspace_items_t files = workspace_files(ws);
@@ -272,34 +282,12 @@ error_t *deploy_plan_build(
             skip = SKIP_EXISTING;
         }
 
-        err = deploy_classify(&plan->files, item, skip);
-        if (err) goto cleanup;
+        error_t *err = deploy_classify(&plan->files, item, skip);
+        if (err) return error_wrap(err, "Failed to build deploy plan");
     }
 
     *out = plan;
     return NULL;
-
-cleanup:
-    deploy_plan_free(plan);
-    return error_wrap(err, "Failed to build deploy plan");
-}
-
-/**
- * Free a plan — bucket buffers only; the items belong to the workspace
- */
-void deploy_plan_free(deploy_plan_t *plan) {
-    if (!plan) return;
-
-    ptr_array_deinit(&plan->files.pending);
-    ptr_array_deinit(&plan->files.clean);
-    ptr_array_deinit(&plan->files.excluded);
-    ptr_array_deinit(&plan->files.skipped_existing);
-    ptr_array_deinit(&plan->directories.pending);
-    ptr_array_deinit(&plan->directories.clean);
-    ptr_array_deinit(&plan->directories.excluded);
-    ptr_array_deinit(&plan->directories.skipped_existing);
-
-    free(plan);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1231,7 +1219,8 @@ typedef struct {
     const workspace_t *ws;                     /* a landing directory's row (holdable_directory) */
     const deploy_preflight_result_t *verdicts; /* the ancestors' metadata (create_ancestor) */
     deploy_result_t *result;                   /* the receipt so far (the ancestors bucket) */
-    ptr_array_t held;                          /* held_directory_t * (owned), in the order taken */
+    arena_t *arena;                            /* the held directories live here */
+    ptr_array_t held;                          /* held_directory_t *, in the order taken */
 } deploy_run_t;
 
 /**
@@ -1264,7 +1253,7 @@ static mode_t working_mode(mode_t mode) {
 static void hold_directory(deploy_run_t *run, const char *path, mode_t mode) {
     if (working_mode(mode) == mode) return;
 
-    held_directory_t *held = heap_alloc(sizeof(*held));
+    held_directory_t *held = arena_alloc(run->arena, sizeof(*held));
     held->path = path;
     held->mode = mode;
 
@@ -1284,13 +1273,12 @@ static void hold_directory(deploy_run_t *run, const char *path, mode_t mode) {
  * afresh. Applied through fs_create_dir_with_ownership — the same fd-based fchmod
  * the converge arm uses, never a chmod(2) on a path that may have become a symlink
  * meanwhile. Every entry is attempted; the first failure is the one reported.
- * Frees the holds either way.
  */
 static error_t *release_directories(deploy_run_t *run) {
     error_t *err = NULL;
 
     for (size_t i = run->held.count; i-- > 0;) {
-        held_directory_t *held = run->held.items[i];
+        const held_directory_t *held = run->held.entries[i];
         error_t *release_err = fs_create_dir_with_ownership(
             held->path, held->mode, (uid_t) -1, (gid_t) -1
         );
@@ -1305,10 +1293,8 @@ static error_t *release_directories(deploy_run_t *run) {
                 );
             }
         }
-        free(held);
     }
 
-    ptr_array_deinit(&run->held);
     return err;
 }
 
@@ -1774,12 +1760,14 @@ error_t *deploy_execute(
     const workspace_t *ws,
     const deploy_preflight_result_t *verdicts,
     content_cache_t *cache,
+    arena_t *arena,
     deploy_result_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(ws);
     CHECK_NULL(verdicts);
     CHECK_NULL(cache);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     error_t *err = NULL;
@@ -1812,8 +1800,9 @@ error_t *deploy_execute(
         .ws       = ws,
         .verdicts = verdicts,
         .result   = result,
-        .held     = { 0 },
+        .arena    = arena,
     };
+    ptr_array_init(&run.held, arena);
 
     /* Directories first: parents before the files beneath them, and under --force
      * a squatting symlink is gone before anything is written through it. Verdict

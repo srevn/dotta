@@ -694,7 +694,7 @@ static error_t *manifest_settle(
 
     /* The contest, typed once: a ptr_array holds void *, and every read below
      * is a row's path or its name. */
-    manifest_row_t **rows = (manifest_row_t **) contenders->items;
+    manifest_row_t **rows = (manifest_row_t **) contenders->entries;
 
     qsort(rows, contenders->count, sizeof(*rows), filesystem_order);
 
@@ -982,17 +982,19 @@ static error_t *manifest_contribute(
         );
     }
 
-    /* The step's three lists, spent when it returns (Rule 1 — they are valid
-     * across one build, and the contribution is valid across the view's life):
-     * every row this profile placed, in claim order; the rows that met a path
-     * it had already named; and the sheet's names the tree contradicted. The
-     * second is empty on every profile that names each of its paths once, the
-     * third on every branch whose sheet its own tree agrees with.
+    /* The step's three lists, read only while it runs: every row this profile
+     * placed, in claim order; the rows that met a path it had already named;
+     * and the sheet's names the tree contradicted. The second is empty on every
+     * profile that names each of its paths once, the third on every branch whose
+     * sheet its own tree agrees with. The two arrays are the build's arena's,
+     * left there when the step returns: a pointer per row placed.
      *
      * The third borrows its keys: each is the arena name the walk joined, which
      * outlives the map by the whole view. */
-    ptr_array_t placed PTR_ARRAY_AUTO = { 0 };
-    ptr_array_t contenders PTR_ARRAY_AUTO = { 0 };
+    ptr_array_t placed;
+    ptr_array_t contenders;
+    ptr_array_init(&placed, arena);
+    ptr_array_init(&contenders, arena);
 
     hashmap_t *contradicted = hashmap_borrow(8);
 
@@ -1131,7 +1133,7 @@ static error_t *manifest_contribute(
     if (standing > 0) {
         c->rows = arena_calloc(arena, standing, sizeof(*c->rows));
         for (size_t j = 0; j < placed.count; j++) {
-            manifest_row_t *row = placed.items[j];
+            manifest_row_t *row = placed.entries[j];
             if (hashmap_get(c->index, row->filesystem_path) == row) {
                 c->rows[c->count++] = row;
             }

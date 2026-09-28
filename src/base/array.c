@@ -1,9 +1,11 @@
 /**
- * array.c - Dynamic string array implementation
+ * array.c - Dynamic arrays
  *
- * Every spine and every copied string is the heap's, which dies rather than answer
- * NULL (base/heap.h). A count whose bytes no memory could hold is exhaustion,
- * said before the heap is asked.
+ * A string array's spine and every copied string are the heap's, which dies rather
+ * than answer NULL (base/heap.h); a pointer array's spine is in the arena it
+ * remembers, grown by the one growth an arena has (base/arena.h arena_grow).
+ * Either way a count whose bytes no memory could hold is exhaustion, said before
+ * any memory is asked.
  */
 
 #include "base/array.h"
@@ -12,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/arena.h"
 #include "base/error.h"
 #include "base/heap.h"
 
@@ -254,121 +257,44 @@ char *string_array_join(const string_array_t *arr, const char *delimiter) {
     return result;
 }
 
-/* === ptr_array_t — borrowed-pointer dynamic array === */
+/* === ptr_array_t — borrowed pointers, in the arena it was made in === */
 
-/* --- Lifecycle (stack / embedded) --- */
-
-void ptr_array_init(ptr_array_t *arr) {
-    *arr = (ptr_array_t){ 0 };
-}
-
-void ptr_array_init_cap(ptr_array_t *arr, size_t cap) {
+void ptr_array_init(ptr_array_t *arr, arena_t *arena) {
     CHECK_NULL(arr);
+    CHECK_NULL(arena);
 
-    *arr = (ptr_array_t){ 0 };
-
-    if (cap == 0) return;
-
-    arr->items = heap_calloc(cap, sizeof(void *));
-    arr->capacity = cap;
+    *arr = (ptr_array_t){ .arena = arena };
 }
 
-void ptr_array_deinit(ptr_array_t *arr) {
-    if (!arr) return;
-
-    free(arr->items);
-    *arr = (ptr_array_t){ 0 };
+void ptr_array_init_cap(ptr_array_t *arr, arena_t *arena, size_t cap) {
+    ptr_array_init(arr, arena);
+    ptr_array_reserve(arr, cap);
 }
-
-/* --- Lifecycle (heap) --- */
-
-ptr_array_t *ptr_array_new(size_t cap) {
-    ptr_array_t *arr = heap_calloc(1, sizeof(*arr));
-    ptr_array_init_cap(arr, cap);
-
-    return arr;
-}
-
-void ptr_array_free(ptr_array_t *arr) {
-    if (!arr) return;
-    ptr_array_deinit(arr);
-    free(arr);
-}
-
-void ptr_array_free_cb(void *ptr) {
-    ptr_array_free(ptr);
-}
-
-/* --- Internal --- */
-
-static void ptr_array_ensure_capacity(ptr_array_t *arr) {
-    if (arr->count < arr->capacity) return;
-
-    /* The capacity's bytes stand in memory, so its double cannot wrap; the double's
-     * bytes can, and that is exhaustion. */
-    size_t new_cap = arr->capacity ? arr->capacity * 2 : DEFAULT_CAP;
-    if (new_cap > SIZE_MAX / sizeof(void *)) {
-        heap_die(SIZE_MAX);
-    }
-
-    arr->items = heap_realloc(arr->items, new_cap * sizeof(void *));
-    arr->capacity = new_cap;
-}
-
-/* --- Mutation --- */
 
 void ptr_array_push(ptr_array_t *arr, const void *p) {
     CHECK_NULL(arr);
+    CHECK_ARG(arr->arena != NULL, "a pointer array was pushed before it was given an arena");
 
-    ptr_array_ensure_capacity(arr);
+    /* Room for one more, in the arena the array remembers */
+    arr->entries = arena_grow(
+        arr->arena, arr->entries, &arr->capacity, arr->count + 1, sizeof(*arr->entries)
+    );
+
     /* Storage is type-erased void *; the caller's const intent (if any) is
      * re-applied at retrieval through their cast back to T ** / const T **. */
-    arr->items[arr->count++] = (void *) p;
+    arr->entries[arr->count++] = (void *) p;
 }
 
 void ptr_array_reserve(ptr_array_t *arr, size_t cap) {
     CHECK_NULL(arr);
+    CHECK_ARG(arr->arena != NULL, "a pointer array was reserved before it was given an arena");
 
-    if (cap <= arr->capacity) return;
-
-    if (cap > SIZE_MAX / sizeof(void *)) {
-        heap_die(SIZE_MAX);
-    }
-
-    arr->items = heap_realloc(arr->items, cap * sizeof(void *));
-    arr->capacity = cap;
+    arr->entries = arena_grow(
+        arr->arena, arr->entries, &arr->capacity, cap, sizeof(*arr->entries)
+    );
 }
 
 void ptr_array_clear(ptr_array_t *arr) {
     if (!arr) return;
     arr->count = 0;
-}
-
-/* --- Transfer --- */
-
-const void **ptr_array_steal(ptr_array_t *arr, size_t *out_count) {
-    if (!arr || !out_count) {
-        if (out_count) {
-            *out_count = 0;
-        }
-        return NULL;
-    }
-
-    if (arr->count == 0) {
-        /* Collapse empty-but-reserved state to the NULL/0 contract. Callers passing
-         * the result through output parameters rely on "NULL means no results"
-         * — a zero-length non-NULL buffer would complicate that. */
-        free(arr->items);
-        *arr = (ptr_array_t){ 0 };
-        *out_count = 0;
-        return NULL;
-    }
-
-    /* Centralized cast: storage is type-erased void ** to remain universal across
-     * const and mutable callers; the return type advertises that callers should
-     * treat the stolen buffer as read-only references. */
-    const void **buf = (const void **) arr->items;
-    *out_count = arr->count;
-    *arr = (ptr_array_t){ 0 };
-    return buf;
 }

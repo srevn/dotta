@@ -1486,7 +1486,6 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     }
 
 cleanup:
-    if (ws) workspace_free(ws);
     if (scope) scope_free(scope);
 
     return err;

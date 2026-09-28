@@ -817,7 +817,8 @@ static error_t *collect_filesystem(
     list->basename = path_basename(filesystem_path);
 
     const manifest_row_t *at = NULL;
-    ptr_array_t beneath PTR_ARRAY_AUTO = { 0 };
+    ptr_array_t beneath;
+    ptr_array_init(&beneath, arena);
     manifest_rows_t rows = manifest_rows(view);
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];
@@ -847,9 +848,9 @@ static error_t *collect_filesystem(
         if (beneath.count > 0) {
             /* The least path, so the refusal names one thing and names the same
              * one every run: row order is the view's own business. */
-            const manifest_row_t *first = beneath.items[0];
+            const manifest_row_t *first = beneath.entries[0];
             for (size_t i = 1; i < beneath.count; i++) {
-                const manifest_row_t *row = beneath.items[i];
+                const manifest_row_t *row = beneath.entries[i];
                 if (strcmp(row->filesystem_path, first->filesystem_path) < 0) {
                     first = row;
                 }
@@ -877,7 +878,7 @@ static error_t *collect_filesystem(
     );
 
     for (size_t i = 0; i < beneath.count; i++) {
-        const manifest_row_t *row = beneath.items[i];
+        const manifest_row_t *row = beneath.entries[i];
         export_entry_t e = entry_from_row(row);
         /* Past the base and its separator — borrowed from the row, whose string
          * is the arena's and outlives the view. For the filesystem root the base

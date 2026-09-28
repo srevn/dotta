@@ -2044,7 +2044,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Planning deployment...\n");
 
-    err = deploy_plan_build(ws, scope, opts->skip_existing, &deploy_plan);
+    err = deploy_plan_build(ws, scope, opts->skip_existing, ctx->arena, &deploy_plan);
     if (err) {
         err = error_wrap(err, "Failed to plan deployment");
         goto cleanup;
@@ -2134,7 +2134,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Planning cleanup...\n");
 
-    cleanup_plan = cleanup_plan_build(ws, scope, opts->keep_orphans);
+    cleanup_plan = cleanup_plan_build(ctx->arena, ws, scope, opts->keep_orphans);
 
     if (opts->keep_orphans) {
         output_print(out, OUTPUT_VERBOSE, "  Orphans kept (--keep-orphans)\n");
@@ -2597,7 +2597,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
      * no orphans in scope) yields empty verdicts and a silent preview — no gate
      * needed anywhere. */
-    cleanup_verdicts = cleanup_preflight(ws, cleanup_plan, opts->force);
+    cleanup_verdicts = cleanup_preflight(ctx->arena, ws, cleanup_plan, opts->force);
 
     /* What the record phase acknowledges behind the run's own writes, for the
      * tail: each pending reassignment it writes, or none where it failed
@@ -2762,7 +2762,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
             /* The content cache was populated with decrypted content during
              * workspace divergence analysis; deploy's fetches hit it. */
-            err = deploy_execute(repo, ws, deploy_verdicts, content_cache, &deploy_result);
+            err = deploy_execute(
+                repo, ws, deploy_verdicts, content_cache, ctx->arena, &deploy_result
+            );
 
             apply_print_deploy_results(out, deploy_result);
             if (err) {
@@ -2894,17 +2896,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
 cleanup:
-    /* Each engine's objects in reverse construction order, deploy's receipt before
-     * the fates it borrows. None frees an item, so the workspace is freed in
-     * any order against them (core/deploy.h, core/cleanup.h). */
+    /* What the engines hold on the heap, in reverse construction order, deploy's
+     * receipt before the fates it borrows. None frees an item: the workspace,
+     * its items and both plans are the arena's (core/deploy.h, core/cleanup.h). */
     if (deploy_result) deploy_result_free(deploy_result);
     if (deploy_verdicts) deploy_preflight_result_free(deploy_verdicts);
-    if (deploy_plan) deploy_plan_free(deploy_plan);
     if (cleanup_result) cleanup_result_free(cleanup_result);
-    if (cleanup_verdicts) cleanup_preflight_result_free(cleanup_verdicts);
-    if (cleanup_plan) cleanup_plan_free(cleanup_plan);
     if (profiles_str) free(profiles_str);
-    if (ws) workspace_free(ws);
     if (scope) scope_free(scope);
 
     return err;

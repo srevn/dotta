@@ -86,7 +86,7 @@ struct workspace {
      * (scan_directory_for_untracked, blob_over): a path is one row, and each
      * asks row->type for the kind it wants. A reader outside the module asks
      * for the path's item instead, which carries its row (workspace_find). */
-    const manifest_t *manifest;                  /* Borrowed — NOT freed in workspace_free */
+    const manifest_t *manifest;                  /* Borrowed */
 
     /* The active items: one per row of the view, the directories and then the
      * files, each in strcmp order (workspace_kind_order) — the order they are
@@ -121,11 +121,11 @@ struct workspace {
     state_t *state;                              /* The record's handle (borrowed from caller) */
 
     /* Content cache for encrypted blob reads during divergence analysis */
-    content_cache_t *content_cache;              /* Borrowed — NOT freed in workspace_free */
+    content_cache_t *content_cache;              /* Borrowed */
 
     /* The diverged items: every item the analyses left with something to say,
      * derived once every verdict is in (workspace_list), then the scan's
-     * discoveries. The array owns only the pointer buffer. */
+     * discoveries. The spine is the arena's, beside the items it lists. */
     ptr_array_t diverged;                        /* workspace_item_t *: active, analyzed orphans, discoveries */
 
     /* The squatted directories: every path a claim names as a directory that
@@ -170,9 +170,7 @@ static int workspace_kind_order(const void *a, const void *b) {
     const workspace_item_t *ia = *(const workspace_item_t *const *) a;
     const workspace_item_t *ib = *(const workspace_item_t *const *) b;
 
-    if (ia->item_kind != ib->item_kind) {
-        return ia->item_kind == PATH_KIND_DIRECTORY ? -1 : 1;
-    }
+    if (ia->item_kind != ib->item_kind) return ia->item_kind == PATH_KIND_DIRECTORY ? -1 : 1;
 
     return strcmp(ia->filesystem_path, ib->filesystem_path);
 }
@@ -344,9 +342,7 @@ static workspace_fault_t workspace_code_fault(error_code_t code) {
  * workspace_measure at its own and at a directory's access check.
  */
 static workspace_fault_t workspace_error_fault(error_t *err) {
-    if (!err) {
-        return WORKSPACE_FAULT_NONE;
-    }
+    if (!err) return WORKSPACE_FAULT_NONE;
 
     workspace_fault_t fault = workspace_code_fault(error_code(error_root(err)));
     error_free(err);
@@ -807,9 +803,7 @@ static void workspace_analyze_file(
      * and the filesystem is not a party to it — and the record pairs as on every
      * item, so a pending reassignment still shows. Nothing is owed the record:
      * a record is what dotta saw, and dotta saw nothing here. */
-    if (item->displaced != WORKSPACE_DISPLACED_NONE) {
-        return;
-    }
+    if (item->displaced != WORKSPACE_DISPLACED_NONE) return;
 
     if (item->occupant == FS_OCCUPANT_NONE) {
         /* Absent: classify_absent decides (its claim gate is inert here — a file
@@ -1423,9 +1417,7 @@ static orphan_authority_t compute_orphan_authority(
      * that will not load on the way is a failure to look, never an absence. */
     git_tree_entry *entry = NULL;
     int rc = git_tree_entry_bypath(&entry, cached->tree, storage_path);
-    if (rc != 0 && rc != GIT_ENOTFOUND) {
-        return ORPHAN_AUTHORITY_UNVERIFIED;
-    }
+    if (rc != 0 && rc != GIT_ENOTFOUND) return ORPHAN_AUTHORITY_UNVERIFIED;
 
     /* A blob at the name and only there: one above it reads GIT_ENOTFOUND and
      * contradicts nothing, as in the view, whose contradiction index is keyed
@@ -1679,9 +1671,7 @@ static const workspace_item_t *standing_item(
     const workspace_item_t *const *entries = find_entries(ws, st, &count);
 
     for (size_t i = 0; i < count; i++) {
-        if (same_entry(path, entries[i]->filesystem_path, st)) {
-            return entries[i];
-        }
+        if (same_entry(path, entries[i]->filesystem_path, st)) return entries[i];
     }
 
     return NULL;
@@ -1724,9 +1714,7 @@ static const workspace_item_t *standing_item(
  * @param kind The kind the claim names — the item's own, a row's or a record's
  */
 static bool claim_stands(fs_occupant_t occupant, path_kind_t kind) {
-    if (occupant == FS_OCCUPANT_NONE || occupant == FS_OCCUPANT_UNKNOWN) {
-        return false;
-    }
+    if (occupant == FS_OCCUPANT_NONE || occupant == FS_OCCUPANT_UNKNOWN) return false;
 
     return (occupant == FS_OCCUPANT_DIRECTORY) == (kind == PATH_KIND_DIRECTORY);
 }
@@ -2507,9 +2495,7 @@ static error_t *scan_directory_for_untracked(
              * of them. Asked before the name and before any rule: an owner's
              * exclusion is the owner's, and a walk from outside inherits none
              * of it. */
-            if (find_scan_root(scan->roots, scan->root_count, st.st_dev, st.st_ino)) {
-                continue;
-            }
+            if (find_scan_root(scan->roots, scan->root_count, st.st_dev, st.st_ino)) continue;
         } else if (claim || workspace_find_item(ws->orphans, ws->orphan_count, child) ||
             standing_item(ws, child, &st)) {
             /* Whether anything already speaks for the leaf — by its spelling
@@ -2798,9 +2784,7 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
      * - DIRECTORY: Actual directory, check metadata */
     workspace_look(ws, item);
 
-    if (item->displaced != WORKSPACE_DISPLACED_NONE) {
-        return;
-    }
+    if (item->displaced != WORKSPACE_DISPLACED_NONE) return;
 
     if (item->occupant == FS_OCCUPANT_NONE) {
         /* Absent path: classify_absent decides, and this is where its claim gate
@@ -2900,8 +2884,7 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
  * The partition is the single source of truth for "is this row in scope?": a
  * path is active iff the view has a row for it, and a record is an orphan iff
  * no active item stands at its path — one search, asked once per record, decides
- * both. No defensive cleanup on error: workspace_free is the single cleanup
- * authority.
+ * both. Nothing to clean up on error: every array it makes is the arena's.
  *
  * Every array is allocated whatever its count: the arena answers a zero-byte
  * request with a place of its own (base/arena.h), so no array is ever NULL —
@@ -3070,16 +3053,16 @@ error_t *workspace_load(
     CHECK_NULL(out);
 
     /* Zeroed: every count starts at none — analyzed_count stays so on a load
-     * that declines the orphan analysis — and a zeroed ptr_array_t is the diverged
-     * items' empty state */
-    workspace_t *ws = heap_calloc(1, sizeof(*ws));
+     * that declines the orphan analysis. The workspace is the arena's, as
+     * everything it holds is, so nothing frees one. */
+    workspace_t *ws = arena_calloc(arena, 1, sizeof(*ws));
 
     /* Borrow caller-owned resources. Lifetime guarantees: repo is ctx->run.repo
      * (command-scoped); state comes from ctx->run.state (command-scoped);
      * content_cache comes from ctx->run.content_cache (command-scoped, wraps
      * ctx->run.keymgr); manifest is ctx->run.manifest (the view the dispatcher
      * built over the enabled set, command-scoped); arena is ctx->arena
-     * (command-scoped). All five must outlive workspace_free. The view is the
+     * (command-scoped). All five must outlive the workspace. The view is the
      * persistent enabled set's, never a CLI filter's: `dotta status -p global`
      * loads the whole workspace and filters at display time. */
     ws->repo = repo;
@@ -3087,6 +3070,7 @@ error_t *workspace_load(
     ws->content_cache = content_cache;
     ws->manifest = manifest;
     ws->arena = arena;
+    ptr_array_init(&ws->diverged, arena);
 
     /* An item per active path and per orphan record, each record paired onto
      * its item. Consumers read the active items, whole or by kind, every one
@@ -3095,10 +3079,7 @@ error_t *workspace_load(
      * computed from Git at dispatch, so it is current by construction — nothing
      * upstream repairs anything. */
     error_t *err = workspace_partition(ws);
-    if (err) {
-        workspace_free(ws);
-        return error_wrap(err, "Failed to partition workspace");
-    }
+    if (err) return error_wrap(err, "Failed to partition workspace");
 
     /* The join, one walk over the active items in their order
      * (workspace_kind_order): every directory before any file, each analyzed as
@@ -3155,10 +3136,7 @@ error_t *workspace_load(
     /* Optional: new files beneath the tracked directories */
     if (opts->analyze_untracked) {
         err = workspace_analyze_untracked(ws, config);
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to analyze untracked files");
-        }
+        if (err) return error_wrap(err, "Failed to analyze untracked files");
     }
 
     *out = ws;
@@ -3169,9 +3147,7 @@ error_t *workspace_load(
  * The diverged items
  */
 workspace_items_t workspace_diverged(const workspace_t *ws) {
-    if (!ws) {
-        return (workspace_items_t) { 0 };
-    }
+    if (!ws) return (workspace_items_t) { 0 };
 
     return workspace_items(&ws->diverged);
 }
@@ -3263,17 +3239,11 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
      * never stands on a deployed item (the reach rule), so the two view classes
      * are the whole test and falling through is what a record's memory says of
      * a view row. */
-    if (item->displaced == WORKSPACE_DISPLACED_TRACKED) {
-        return WORKSPACE_ROUTE_DISPLACED_TRACKED;
-    }
-    if (item->displaced == WORKSPACE_DISPLACED_DERIVED) {
-        return WORKSPACE_ROUTE_DISPLACED_DERIVED;
-    }
+    if (item->displaced == WORKSPACE_DISPLACED_TRACKED) return WORKSPACE_ROUTE_DISPLACED_TRACKED;
+    if (item->displaced == WORKSPACE_DISPLACED_DERIVED) return WORKSPACE_ROUTE_DISPLACED_DERIVED;
 
     /* A bit the analysis could not settle outranks the ones it could */
-    if (divergence & DIVERGENCE_UNVERIFIED) {
-        return WORKSPACE_ROUTE_UNVERIFIABLE;
-    }
+    if (divergence & DIVERGENCE_UNVERIFIED) return WORKSPACE_ROUTE_UNVERIFIABLE;
 
     /* Git's side that disk did not follow — the bytes Git moved past what dotta
      * last reconciled (STALE), a claim it moved past the record's or one this
@@ -3300,9 +3270,7 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
                                               : WORKSPACE_ROUTE_KIND;
     }
 
-    if (divergence != DIVERGENCE_NONE) {
-        return WORKSPACE_ROUTE_CAPTURE;
-    }
+    if (divergence != DIVERGENCE_NONE) return WORKSPACE_ROUTE_CAPTURE;
 
     return workspace_reassigned(item->row, item->record, item->occupant)
            ? WORKSPACE_ROUTE_REASSIGNED
@@ -3969,28 +3937,8 @@ rollback:
      * it open, so the next scoped writer does not inherit it; nothing, where it
      * failed before the lock — and its failure is the flush's to keep: what the
      * load owed, the next load owes again. */
-    if (!scoped) {
-        return err;
-    }
+    if (!scoped) return err;
     state_rollback(ws->state);
     error_free(err);
     return NULL;
-}
-
-/**
- * Free workspace
- */
-void workspace_free(workspace_t *ws) {
-    if (!ws) {
-        return;
-    }
-
-    /* Free the diverged items' array (the items and their strings are arena-backed) */
-    ptr_array_deinit(&ws->diverged);
-
-    /* The view is borrowed (the dispatcher's); the items, their arrays, the record
-     * and the squatted list are arena-allocated and the caller's arena releases
-     * them when freed. ws->arena is borrowed — never freed here. */
-
-    free(ws);
 }

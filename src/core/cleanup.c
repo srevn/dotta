@@ -22,6 +22,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -41,7 +42,7 @@
  * Descending path length, then ascending path so the order is total and the reports
  * are reproducible.
  */
-static int compare_deepest_first(const void *a, const void *b) {
+static int cleanup_depth_order(const void *a, const void *b) {
     const char *pa = (*(const workspace_item_t *const *) a)->filesystem_path;
     const char *pb = (*(const workspace_item_t *const *) b)->filesystem_path;
 
@@ -59,15 +60,21 @@ static int compare_deepest_first(const void *a, const void *b) {
  * Build the cleanup plan
  */
 cleanup_plan_t *cleanup_plan_build(
+    arena_t *arena,
     const workspace_t *ws,
     const scope_t *scope,
     bool keep_orphans
 ) {
+    CHECK_NULL(arena);
     CHECK_NULL(ws);
     CHECK_NULL(scope);
 
-    /* calloc zeroes the three ptr_array_t buckets — that IS their empty state */
-    cleanup_plan_t *plan = heap_calloc(1, sizeof(*plan));
+    /* The plan and its three buckets are the arena's, beside the items they borrow:
+     * each bucket is made in it, and nothing frees a plan. */
+    cleanup_plan_t *plan = arena_calloc(arena, 1, sizeof(*plan));
+    ptr_array_init(&plan->files, arena);
+    ptr_array_init(&plan->directories, arena);
+    ptr_array_init(&plan->excluded, arena);
 
     /* --keep-orphans: nothing is planned, by request. The empty plan is what
      * every later stage reads, so no stage re-encodes the flag. */
@@ -119,22 +126,12 @@ cleanup_plan_t *cleanup_plan_build(
      * producer two layers away is free to change its sort. */
     if (plan->directories.count > 1) {
         qsort(
-            plan->directories.items, plan->directories.count,
-            sizeof(*plan->directories.items), compare_deepest_first
+            plan->directories.entries, plan->directories.count,
+            sizeof(*plan->directories.entries), cleanup_depth_order
         );
     }
 
     return plan;
-}
-
-void cleanup_plan_free(cleanup_plan_t *plan) {
-    if (!plan) return;
-
-    ptr_array_deinit(&plan->files);
-    ptr_array_deinit(&plan->directories);
-    ptr_array_deinit(&plan->excluded);
-
-    free(plan);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -387,16 +384,29 @@ static bool parent_accepts_removal(const char *path) {
  * Decide the verdicts
  */
 cleanup_preflight_result_t *cleanup_preflight(
+    arena_t *arena,
     const workspace_t *ws,
     const cleanup_plan_t *plan,
     bool force
 ) {
+    CHECK_NULL(arena);
     CHECK_NULL(ws);
     CHECK_NULL(plan);
 
-    /* calloc zeroes the ten buckets — an empty answer needs no NULL guard
-     * downstream */
-    cleanup_preflight_result_t *verdicts = heap_calloc(1, sizeof(*verdicts));
+    /* The verdicts and their ten buckets are the arena's, beside the items they
+     * borrow: each bucket is made in it, nothing frees them, and an empty bucket
+     * needs no guard downstream. */
+    cleanup_preflight_result_t *verdicts = arena_calloc(arena, 1, sizeof(*verdicts));
+    ptr_array_init(&verdicts->prunable_files, arena);
+    ptr_array_init(&verdicts->refused_files, arena);
+    ptr_array_init(&verdicts->skipped_files, arena);
+    ptr_array_init(&verdicts->released_files, arena);
+    ptr_array_init(&verdicts->absent_files, arena);
+    ptr_array_init(&verdicts->prunable_dirs, arena);
+    ptr_array_init(&verdicts->refused_dirs, arena);
+    ptr_array_init(&verdicts->skipped_dirs, arena);
+    ptr_array_init(&verdicts->released_dirs, arena);
+    ptr_array_init(&verdicts->absent_dirs, arena);
 
     /* The fate of every present planned item, in one set: the directory pass
      * asks it about every entry it meets. Borrowed keys, all workspace-owned;
@@ -531,23 +541,6 @@ cleanup_preflight_result_t *cleanup_preflight(
     hashmap_free(fates, NULL);
 
     return verdicts;
-}
-
-void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts) {
-    if (!verdicts) return;
-
-    ptr_array_deinit(&verdicts->prunable_files);
-    ptr_array_deinit(&verdicts->refused_files);
-    ptr_array_deinit(&verdicts->skipped_files);
-    ptr_array_deinit(&verdicts->released_files);
-    ptr_array_deinit(&verdicts->absent_files);
-    ptr_array_deinit(&verdicts->prunable_dirs);
-    ptr_array_deinit(&verdicts->refused_dirs);
-    ptr_array_deinit(&verdicts->skipped_dirs);
-    ptr_array_deinit(&verdicts->released_dirs);
-    ptr_array_deinit(&verdicts->absent_dirs);
-
-    free(verdicts);
 }
 
 /* ══════════════════════════════════════════════════════════════════

@@ -185,7 +185,8 @@ typedef struct {
  * only its key can settle the record it strands.
  *
  * Memory: the caller zero-fills the struct; update_profile allocates `captured`
- * (sized to its item count, an upper bound); release with update_commits_free.
+ * (sized to its item count, an upper bound) and makes `deleted` in the command
+ * arena; release with update_commits_free.
  */
 typedef struct {
     const char *profile;      /* Borrowed from the item group */
@@ -204,7 +205,6 @@ static void update_commits_free(commit_t *commits, size_t count) {
     if (!commits) return;
     for (size_t i = 0; i < count; i++) {
         free(commits[i].captured);
-        ptr_array_deinit(&commits[i].deleted);
         string_array_deinit(&commits[i].pruned);
         string_array_deinit(&commits[i].retired);
     }
@@ -235,7 +235,7 @@ static void update_commits_free(commit_t *commits, size_t count) {
  * acknowledges it, the filter only declines it.
  */
 typedef struct {
-    workspace_items_t accepted;              /* The run's work; entries heap-owned, the caller frees */
+    workspace_items_t accepted;              /* The run's work; the spine is the arena's */
     size_t refused[WORKSPACE_ROUTE_COUNT];   /* In scope, deployed, refused — by the route that refused it */
     size_t faults[WORKSPACE_FAULT_COUNT];    /* The UNVERIFIABLE arm again — by whose remedy the look is */
 } partition_t;
@@ -255,9 +255,8 @@ typedef struct {
  * @param config Configuration (must not be NULL; auto_detect_new_files admits
  *               new files for the consent prompt)
  * @param out Output context (for the verbose "Excluded" log, can be NULL)
- * @param partition Output, zeroed then filled; accepted.entries is heap-allocated
- *                  and the caller frees it with free((void *) entries) (must
- *                  not be NULL)
+ * @param arena Arena the accepted items' spine lives in (must not be NULL)
+ * @param partition Output, zeroed then filled (must not be NULL)
  */
 static void update_partition(
     const workspace_t *ws,
@@ -265,18 +264,21 @@ static void update_partition(
     const scope_t *scope,
     const config_t *config,
     output_t *out,
+    arena_t *arena,
     partition_t *partition
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(opts);
     CHECK_NULL(scope);
     CHECK_NULL(config);
+    CHECK_NULL(arena);
     CHECK_NULL(partition);
 
     *partition = (partition_t){ 0 };
 
     workspace_items_t all = workspace_diverged(ws);
-    ptr_array_t accepted PTR_ARRAY_AUTO = { 0 };
+    ptr_array_t accepted;
+    ptr_array_init(&accepted, arena);
 
     for (size_t i = 0; i < all.count; i++) {
         const workspace_item_t *item = all.entries[i];
@@ -345,8 +347,10 @@ static void update_partition(
         ptr_array_push(&accepted, item);
     }
 
-    partition->accepted.entries = (const workspace_item_t *const *)
-        ptr_array_steal(&accepted, &partition->accepted.count);
+    partition->accepted = (workspace_items_t){
+        .entries = (const workspace_item_t *const *) accepted.entries,
+        .count = accepted.count,
+    };
 }
 
 /**
@@ -411,6 +415,7 @@ static error_t *update_profile(
 
     *out_processed = 0;
     commit->profile = profile;
+    ptr_array_init(&commit->deleted, ctx->arena);
 
     if (item_count == 0 && row_count == 0) return NULL;
 
@@ -787,7 +792,7 @@ static error_t *update_profile(
             storage_paths[named++] = commit->captured[i].storage_path;
         }
         for (size_t i = 0; i < commit->deleted.count; i++) {
-            const workspace_item_t *item = commit->deleted.items[i];
+            const workspace_item_t *item = commit->deleted.entries[i];
             storage_paths[named++] = item->storage_path;
         }
         for (size_t i = 0; i < commit->retired.count; i++) {
@@ -942,7 +947,7 @@ static error_t *update_write_record(
          * this profile deploys them at (UNBOUND names nothing on this machine:
          * nothing to release). */
         for (size_t i = 0; i < commit->deleted.count; i++) {
-            const workspace_item_t *item = commit->deleted.items[i];
+            const workspace_item_t *item = commit->deleted.entries[i];
             const manifest_row_t *row = manifest_lookup(manifest, item->filesystem_path);
 
             if (!row) {
@@ -1088,7 +1093,8 @@ static error_t *update_execute(
         const char *profile = enabled->items[p];
 
         /* This profile's items, in filter order */
-        ptr_array_t group PTR_ARRAY_AUTO = { 0 };
+        ptr_array_t group;
+        ptr_array_init(&group, ctx->arena);
         for (size_t i = 0; i < update_count; i++) {
             if (strcmp(update_items[i]->profile, profile) == 0) {
                 ptr_array_push(&group, update_items[i]);
@@ -1096,7 +1102,8 @@ static error_t *update_execute(
         }
 
         /* This profile's chains to re-derive, when the run named paths */
-        ptr_array_t rows PTR_ARRAY_AUTO = { 0 };
+        ptr_array_t rows;
+        ptr_array_init(&rows, ctx->arena);
         for (size_t i = 0; i < derive_count; i++) {
             if (strcmp(derive_rows[i]->profile, profile) == 0) {
                 ptr_array_push(&rows, derive_rows[i]);
@@ -1130,8 +1137,8 @@ static error_t *update_execute(
         commit_t bookkeeping = { 0 };
         size_t processed = 0;
         err = update_profile(
-            ctx, stage, profile, (const workspace_item_t **) group.items,
-            group.count, (const manifest_row_t **) rows.items, rows.count,
+            ctx, stage, profile, (const workspace_item_t **) group.entries,
+            group.count, (const manifest_row_t **) rows.entries, rows.count,
             opts, &bookkeeping, &processed
         );
         stage_free(stage);
@@ -1169,7 +1176,6 @@ static error_t *update_execute(
             /* No commit landed — a walk that touched nothing, or a failure before
              * the commit: the bookkeeping describes nothing */
             free(bookkeeping.captured);
-            ptr_array_deinit(&bookkeeping.deleted);
             string_array_deinit(&bookkeeping.pruned);
             string_array_deinit(&bookkeeping.retired);
         }
@@ -1467,7 +1473,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     scope_t *scope = NULL;
     char *profiles_str = NULL;
     partition_t partition = { 0 };
-    ptr_array_t derive_rows = { 0 };
     size_t total_updated = 0;
     error_t *record_err = NULL;   /* The record phase's fate: non-fatal, read by the stop and the summary */
 
@@ -1573,7 +1578,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Partition the diverged items: the scope, the flags, and for a deployed
      * item the route table. */
-    update_partition(ws, opts, scope, config, out, &partition);
+    update_partition(ws, opts, scope, config, out, ctx->arena, &partition);
 
     /* What the filter refused, said once — above the exit below, so a workspace
      * whose only divergence is stale explains itself, and above the prompt. One
@@ -1693,6 +1698,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * from this operation), where the chain riding a captured leaf stays
      * scope-blind like add's — an exclusion names a path, never the way to it.
      * A bare run names nothing and derives nothing. */
+    ptr_array_t derive_rows;
+    ptr_array_init(&derive_rows, ctx->arena);
     if (opts->file_count > 0) {
         manifest_rows_t all_rows = manifest_rows(manifest);
         for (size_t i = 0; i < all_rows.count; i++) {
@@ -1830,7 +1837,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             ctx, scope_enabled(scope),
             (const workspace_item_t **) partition.accepted.entries,
             partition.accepted.count,
-            (const manifest_row_t **) derive_rows.items, derive_rows.count,
+            (const manifest_row_t **) derive_rows.entries, derive_rows.count,
             opts, &total_updated, &commits, &commit_count
         );
 
@@ -1925,9 +1932,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
 cleanup:
     error_free(record_err);
-    free((void *) partition.accepted.entries); /* The array; the items are the workspace's */
-    ptr_array_deinit(&derive_rows);            /* Rows are the view's */
-    if (ws) workspace_free(ws);
     if (profiles_str) free(profiles_str);
     if (scope) scope_free(scope);
 

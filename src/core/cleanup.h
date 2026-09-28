@@ -96,7 +96,8 @@
  * prunes it.
  *
  * `directories` is sorted deepest-first here, once, so preflight predicts and
- * execute prunes in the same order. Free with cleanup_plan_free.
+ * execute prunes in the same order. A value of the arena it was built in: nothing
+ * frees one.
  */
 typedef struct {
     ptr_array_t files;         /* ORPHANED / RELEASED file items in scope */
@@ -111,23 +112,19 @@ typedef struct {
  * gating each on scope_accepts_profile ∧ scope_accepts_path(kind), then routing
  * by scope_is_excluded(kind) and item_kind.
  *
+ * @param arena Arena the plan and its buckets live in (must not be NULL)
  * @param ws Workspace loaded with orphan analysis (must not be NULL)
  * @param scope Operation scope (must not be NULL)
  * @param keep_orphans --keep-orphans: plan nothing. An empty plan is the answer
  *        every later stage reads — no stage re-encodes the flag.
- * @return The plan (caller frees with cleanup_plan_free)
+ * @return The plan
  */
 cleanup_plan_t *cleanup_plan_build(
+    arena_t *arena,
     const workspace_t *ws,
     const scope_t *scope,
     bool keep_orphans
 );
-
-/**
- * Free a plan — bucket buffers only; the items belong to the workspace. No-op
- * on NULL.
- */
-void cleanup_plan_free(cleanup_plan_t *plan);
 
 /**
  * True when the plan carries nothing this run may act on
@@ -426,6 +423,7 @@ typedef struct {
  *
  * READ-ONLY: modifies neither the filesystem, the state database nor Git.
  *
+ * @param arena Arena the verdicts and their buckets live in (must not be NULL)
  * @param ws Workspace the plan was built from (must not be NULL; the view answers
  *        for the active paths beneath a directory, the items for the entries
  *        outside the plan)
@@ -433,16 +431,14 @@ typedef struct {
  * @param force --force: prune what would be skipped too; never a released file,
  *        never a directory's UNVERIFIED (cleanup_verdict), never a refusal (root
  *        is not a flag)
- * @return The verdicts (caller frees with cleanup_preflight_result_free)
+ * @return The verdicts
  */
 cleanup_preflight_result_t *cleanup_preflight(
+    arena_t *arena,
     const workspace_t *ws,
     const cleanup_plan_t *plan,
     bool force
 );
-
-/** Free verdicts. No-op on NULL. */
-void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts);
 
 /* ── Outcomes ─────────────────────────────────────────────────────── */
 

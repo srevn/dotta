@@ -71,9 +71,7 @@ static bool should_show_item_for_direction(
             item->state == WORKSPACE_STATE_DELETED) {
             return true;
         }
-        if (item->state != WORKSPACE_STATE_DEPLOYED) {
-            return false;
-        }
+        if (item->state != WORKSPACE_STATE_DEPLOYED) return false;
         return item->displaced != WORKSPACE_DISPLACED_NONE ||
                (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE |
                DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_TYPE |
@@ -89,12 +87,8 @@ static bool should_show_item_for_direction(
          * UNVERIFIABLE is the one refusal shown: the row's status says update
          * skips it, where a listing that left it out would say "no local changes"
          * over a file nobody could read. */
-        if (item->state == WORKSPACE_STATE_DELETED) {
-            return true;
-        }
-        if (item->state != WORKSPACE_STATE_DEPLOYED) {
-            return false;
-        }
+        if (item->state == WORKSPACE_STATE_DELETED) return true;
+        if (item->state != WORKSPACE_STATE_DEPLOYED) return false;
         workspace_route_t route = workspace_item_route(item);
         return route == WORKSPACE_ROUTE_CAPTURE ||
                route == WORKSPACE_ROUTE_UNVERIFIABLE;
@@ -192,9 +186,7 @@ static const char *get_status_message_from_item(
     /* Git moved past the bytes dotta last confirmed, and disk did not follow. A
      * claim Git moved alone keeps its axis sentence below: upstream, that sentence
      * is what apply does, and there are no bytes to name. */
-    if (item->divergence & DIVERGENCE_STALE) {
-        return "changed in Git (would be deployed by apply)";
-    }
+    if (item->divergence & DIVERGENCE_STALE) return "changed in Git (would be deployed by apply)";
 
     if (item->divergence & DIVERGENCE_CONTENT) {
         return direction == DIFF_UPSTREAM
@@ -326,18 +318,14 @@ static error_t *show_file_diff_from_workspace(
      * blob against the squatter's target's file would be a diff of two unrelated
      * things, and nothing here is overwritten (apply --force replaces the squatter
      * and writes the row fresh). */
-    if (item->displaced != WORKSPACE_DISPLACED_NONE) {
-        return NULL;
-    }
+    if (item->displaced != WORKSPACE_DISPLACED_NONE) return NULL;
 
     /* Only a content difference has bytes to render: the copy's own edit, or
      * the blob Git moved past, which disk still holds. A claim, whoever moved
      * it (CLAIM_MOVED is no byte), a reassignment and how Git stores the blob
      * differ in nothing a hunk could show, and a sealed blob is opened for none
      * of them. */
-    if (!(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE))) {
-        return NULL;
-    }
+    if (!(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE))) return NULL;
 
     /* Get content from cache via the row's blob_oid (borrowed reference - don't
      * free), read as the entry the row's type says it is */
@@ -422,17 +410,13 @@ static error_t *present_diffs_for_direction(
     error_t *err = NULL;
 
     /* Early return if no diverged items */
-    if (diverged.count == 0) {
-        return NULL;
-    }
+    if (diverged.count == 0) return NULL;
 
     for (size_t i = 0; i < diverged.count; i++) {
         const workspace_item_t *item = diverged.entries[i];
 
         /* Filter 1: Only process FILES (skip directories) */
-        if (item->item_kind != PATH_KIND_FILE) {
-            continue;
-        }
+        if (item->item_kind != PATH_KIND_FILE) continue;
 
         /* Filter 2: Check file filter (user-specified files) */
         if (!scope_accepts_path(
@@ -442,14 +426,10 @@ static error_t *present_diffs_for_direction(
         }
 
         /* Filter 3: Direction-based filtering */
-        if (!should_show_item_for_direction(item, direction)) {
-            continue;
-        }
+        if (!should_show_item_for_direction(item, direction)) continue;
 
         /* Filter 4: Profile filter (CLI filtering) */
-        if (!scope_accepts_profile(scope, item->profile)) {
-            continue;
-        }
+        if (!scope_accepts_profile(scope, item->profile)) continue;
 
         /* Each entry is a block; a name-only listing has none */
         if (!opts->name_only) {
@@ -671,14 +651,10 @@ static error_t *compare_tree_files_to_filesystem(
         const char *profile = entry->profile;
 
         /* A directory row: no content to diff */
-        if (entry->type == PATH_TYPE_DIRECTORY) {
-            continue;
-        }
+        if (entry->type == PATH_TYPE_DIRECTORY) continue;
 
         /* Check file filter */
-        if (!pathspec_matches(file_filter, filesystem_path, storage_path, PATH_KIND_FILE)) {
-            continue;
-        }
+        if (!pathspec_matches(file_filter, filesystem_path, storage_path, PATH_KIND_FILE)) continue;
 
         git_filemode_t mode = path_type_to_git_filemode(entry->type);
 
@@ -715,9 +691,7 @@ static error_t *compare_tree_files_to_filesystem(
             err = compare_buffer_to_disk(
                 hist_content, filesystem_path, mode, &st, &result
             );
-            if (err) {
-                return error_wrap(err, "Failed to compare '%s'", filesystem_path);
-            }
+            if (err) return error_wrap(err, "Failed to compare '%s'", filesystem_path);
 
             if (result != CMP_EQUAL) {
                 output_print(out, OUTPUT_NORMAL, "%s\n", filesystem_path);
@@ -745,9 +719,7 @@ static error_t *compare_tree_files_to_filesystem(
         err = compare_generate_diff(
             hist_content, filesystem_path, storage_path, mode, CMP_DIR_DOWNSTREAM, &diff
         );
-        if (err) {
-            return error_wrap(err, "Failed to generate diff for '%s'", filesystem_path);
-        }
+        if (err) return error_wrap(err, "Failed to generate diff for '%s'", filesystem_path);
 
         /* The status message, in the commit's words rather than the renderer's
          * — and the verdict this form has no line for is a copy that is the
@@ -1018,9 +990,7 @@ static error_t *diff_commit_to_workspace(
      * anything is compared, as the workspace arm answers it over its own. Where
      * no entry reaches content, nothing can diff, and the answers are the whole
      * report. */
-    if (!validate_filter_paths(file_filter, historical, "path of the commit", out)) {
-        goto cleanup;
-    }
+    if (!validate_filter_paths(file_filter, historical, "path of the commit", out)) goto cleanup;
 
     /* Step 6: Compare the commit's view against the current filesystem */
     size_t diff_count = 0;
@@ -1320,15 +1290,10 @@ static error_t *diff_workspace(
     arena_t *arena = ctx->arena;
     output_t *out = ctx->out;
 
-    error_t *err = NULL;
-    workspace_t *ws = NULL;
-
     /* Step 1: The filter's coverage over the view — the one the workspace joins,
      * and all the question needs. Where no entry reaches content, nothing can
      * diff, the answers are the whole report, and no workspace is loaded. */
-    if (!validate_filter_paths(scope_paths(scope), manifest, "active path", out)) {
-        return NULL;
-    }
+    if (!validate_filter_paths(scope_paths(scope), manifest, "active path", out)) return NULL;
 
     /* Step 2: Load the workspace. Orphans have no reader here, and the untracked
      * scan is update's. */
@@ -1337,18 +1302,16 @@ static error_t *diff_workspace(
         .analyze_untracked = false
     };
 
-    err = workspace_load(repo, state, config, cache, manifest, &ws_opts, arena, &ws);
-    if (err) {
-        return error_wrap(err, "Failed to load workspace");
-    }
+    workspace_t *ws = NULL;
+    error_t *err = workspace_load(repo, state, config, cache, manifest, &ws_opts, arena, &ws);
+    if (err) return error_wrap(err, "Failed to load workspace");
 
     /* What the load owes the record — its observations, its confirmations, the
      * voids of orders the view took back (core/workspace.h workspace_flush) —
      * the confirmations seeding the fast path for subsequent status/apply calls.
      * The flush keeps the failure of the transaction it takes, so diff renders
      * what the load read whatever the flush met. */
-    err = workspace_flush(ws);
-    if (err) goto cleanup;
+    RETURN_IF_ERROR(workspace_flush(ws));
 
     /* Step 3: Get pre-analyzed divergence from workspace */
     workspace_items_t diverged = workspace_diverged(ws);
@@ -1372,7 +1335,7 @@ static error_t *diff_workspace(
             diverged, cache, DIFF_UPSTREAM, scope, opts, out,
             &upstream_count, &unverified
         );
-        if (err) goto cleanup;
+        if (err) return err;
 
         if (upstream_count == 0 && !opts->name_only) {
             output_info(out, OUTPUT_NORMAL, "No upstream differences");
@@ -1393,7 +1356,7 @@ static error_t *diff_workspace(
             diverged, cache, DIFF_DOWNSTREAM, scope, opts, out,
             &downstream_count, &unverified
         );
-        if (err) goto cleanup;
+        if (err) return err;
 
         if (downstream_count == 0 && !opts->name_only) {
             output_info(out, OUTPUT_NORMAL, "No downstream differences");
@@ -1412,7 +1375,7 @@ static error_t *diff_workspace(
             diverged, cache, opts->direction, scope, opts, out,
             &total_diff_count, &unverified
         );
-        if (err) goto cleanup;
+        if (err) return err;
 
         /* An empty screen says what the verb it previews says of its own empty
          * run. Upstream, apply's: under a filter the scope the screen showed
@@ -1441,9 +1404,7 @@ static error_t *diff_workspace(
         }
     }
 
-cleanup:
-    workspace_free(ws);
-    return err;
+    return NULL;
 }
 
 /**

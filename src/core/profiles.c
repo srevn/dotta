@@ -830,8 +830,10 @@ error_t *profile_build_filesystem_index(
     if (err) return err;
 
     /* Every placed row of every branch, gathered before any of it is keyed: the
-     * rows are the arena's and outlive the views they came from. */
-    ptr_array_t rows PTR_ARRAY_AUTO = { 0 };
+     * rows are the arena's and outlive the views they came from, and so is the
+     * list of them. */
+    ptr_array_t rows;
+    ptr_array_init(&rows, arena);
     for (size_t i = 0; i < branches->count && !err; i++) {
         if (exclude && strcmp(branches->items[i], exclude) == 0) continue;
 
@@ -852,7 +854,7 @@ error_t *profile_build_filesystem_index(
 
     /* The runs, typed once: a ptr_array holds void *, and every read below is a
      * row's path, its profile or its name. */
-    const manifest_row_t **sorted = (const manifest_row_t **) rows.items;
+    const manifest_row_t **sorted = (const manifest_row_t **) rows.entries;
     qsort(sorted, rows.count, sizeof(*sorted), index_order);
 
     hashmap_t *index = hashmap_borrow(rows.count);

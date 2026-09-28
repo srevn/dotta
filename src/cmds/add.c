@@ -897,7 +897,7 @@ static void add_print_labels(const walk_t *walk) {
     size_t count[LABEL_COUNT] = { 0 };
     for (size_t b = 0; b < sizeof(listed) / sizeof(listed[0]); b++) {
         for (size_t i = 0; i < listed[b]->count; i++) {
-            const path_t *path = listed[b]->items[i];
+            const path_t *path = listed[b]->entries[i];
             count[label_of(path->claim.storage_path)]++;
         }
     }
@@ -1090,7 +1090,7 @@ static error_t *add_commit(
     size_t named = 0;
     for (size_t b = 0; b < sizeof(listed) / sizeof(listed[0]); b++) {
         for (size_t i = 0; i < listed[b]->count; i++) {
-            const path_t *path = listed[b]->items[i];
+            const path_t *path = listed[b]->entries[i];
             paths[named++] = path->claim.storage_path;
         }
     }
@@ -1352,7 +1352,7 @@ static error_t *add_write_record(
         const ptr_array_t *captured[] = { added_files, added_dirs };
         for (size_t b = 0; b < sizeof(captured) / sizeof(captured[0]); b++) {
             for (size_t i = 0; i < captured[b]->count; i++) {
-                const path_t *path = captured[b]->items[i];
+                const path_t *path = captured[b]->entries[i];
 
                 const manifest_row_t *row = manifest_lookup(manifest, path->filesystem_path);
                 if (!manifest_is_claim(row, profile, path->claim.storage_path)) {
@@ -1702,6 +1702,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     walk.admission = admission;
     walk.sheet = metadata;
     walk.listing = hashmap_borrow(0);
+    ptr_array_init(&walk.files, ctx->arena);
+    ptr_array_init(&walk.directories, ctx->arena);
 
     /* Process each input path. Two parsing heads — a storage shape and a filesystem
      * shape — and one ladder beneath them: what stands at the path, this command's
@@ -2022,7 +2024,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * Given up here, with the selection complete, so that the sheet the sweep
      * below reads is the one the commit will carry. */
     for (size_t i = 0; i < walk.files.count; i++) {
-        const path_t *path = walk.files.items[i];
+        const path_t *path = walk.files.entries[i];
         const metadata_item_t *standing = metadata_lookup(
             metadata, path->claim.storage_path
         );
@@ -2081,7 +2083,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
     for (size_t i = 0; i < walk.directories.count; i++) {
-        const path_t *path = walk.directories.items[i];
+        const path_t *path = walk.directories.entries[i];
 
         err = stage_admit_subtree(admission, path->claim.storage_path);
         if (err) {
@@ -2112,7 +2114,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * questions, one lookup each. */
     if (!opts->force) {
         for (size_t i = 0; i < walk.files.count; i++) {
-            const path_t *path = walk.files.items[i];
+            const path_t *path = walk.files.entries[i];
             if (!git_index_get_bypath(
                 stage_index(stage), path->claim.storage_path, 0
                 )) {
@@ -2147,7 +2149,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * when this run can never seal — encryption turned off — rather than at a
      * capture the others would already have preceded into the object database. */
     for (size_t i = 0; i < walk.files.count; i++) {
-        path_t *path = walk.files.items[i];
+        path_t *path = walk.files.entries[i];
         if (path->occupant == FS_OCCUPANT_SYMLINK) continue;
 
         const char *storage_path = path->claim.storage_path;
@@ -2210,14 +2212,14 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * and sealed as the decision pass said. What a capture reads off its
          * source — the mode and the owner a claim takes — is the capture's. */
         for (size_t i = 0; i < walk.directories.count; i++) {
-            const path_t *path = walk.directories.items[i];
+            const path_t *path = walk.directories.entries[i];
             output_info(
                 out, OUTPUT_VERBOSE, "Would track directory: %s -> %s",
                 path->filesystem_path, path->claim.storage_path
             );
         }
         for (size_t i = 0; i < walk.files.count; i++) {
-            const path_t *path = walk.files.items[i];
+            const path_t *path = walk.files.entries[i];
             if (path->should_encrypt) {
                 output_info(
                     out, OUTPUT_VERBOSE, "Would encrypt: %s -> %s",
@@ -2297,7 +2299,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * is found before any source blob reaches the object database.
      */
     for (size_t i = 0; i < walk.directories.count; i++) {
-        path_t *path = walk.directories.items[i];
+        path_t *path = walk.directories.entries[i];
         const char *storage_path = path->claim.storage_path;
 
         /* Stat directory to capture mode (and ownership if root/custom). lstat
@@ -2358,7 +2360,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * put wrote and the stat of the bytes committed, which a later lstat could
      * not promise. */
     for (size_t i = 0; i < walk.files.count; i++) {
-        path_t *path = walk.files.items[i];
+        path_t *path = walk.files.entries[i];
 
         err = add_capture(ctx, stage, opts->profile, path, metadata);
         if (err) {
@@ -2380,7 +2382,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const ptr_array_t *chains[] = { &walk.files, &walk.directories };
     for (size_t b = 0; b < sizeof(chains) / sizeof(chains[0]); b++) {
         for (size_t i = 0; i < chains[b]->count; i++) {
-            const path_t *path = chains[b]->items[i];
+            const path_t *path = chains[b]->entries[i];
 
             err = metadata_capture_ancestors(
                 metadata, mounts, opts->profile, path->claim.storage_path, ctx->arena,
@@ -2663,8 +2665,6 @@ cleanup:
      * are the arena's, and so is every row the view points at: only the heap
      * indexes are freed here. */
     if (metadata) metadata_free(metadata);
-    ptr_array_deinit(&walk.directories);
-    ptr_array_deinit(&walk.files);
     hashmap_free(walk.listing, NULL);
     manifest_free(view);
     stage_admission_free(admission);

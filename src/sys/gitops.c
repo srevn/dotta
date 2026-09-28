@@ -696,37 +696,37 @@ error_t gitops_fetch_branches(
 
     /* Look up remote once */
     git_remote *remote = NULL;
-    int err = git_remote_lookup(&remote, repo, remote_name);
-    if (err < 0) return error_from_git(err);
+    int rc = git_remote_lookup(&remote, repo, remote_name);
+    if (rc < 0) return error_from_git(rc);
 
-    /* Build array of refspecs for all branches */
-    char **refspecs = heap_calloc(branches->count, sizeof(char *));
+    /* The refspecs, one per branch, in a frame of this call's own — its answer
+     * is no memory — and in the one shape git_strarray reads: a string array's
+     * entries are an argv as they stand. */
+    arena_t *frame = arena_create(0);
+    string_array_t refspecs;
+    string_array_init_cap(&refspecs, frame, branches->count);
 
-    /* Construct refspecs for each branch */
-    error_t err_result = NULL;
+    error_t err = NULL;
     for (size_t i = 0; i < branches->count; i++) {
         /* Each refspec's source is its branch's ref, spelled where every one is. */
         char refname[DOTTA_REFNAME_MAX];
-        err_result = gitops_branch_refname(
-            refname, sizeof(refname), branches->entries[i]
-        );
-        if (err_result) goto cleanup;
-
-        /* Allocate buffer for this refspec */
-        refspecs[i] = heap_alloc(DOTTA_REFSPEC_MAX);
+        err = gitops_branch_refname(refname, sizeof(refname), branches->entries[i]);
+        if (err) goto cleanup;
 
         /* Build refspec: refs/heads/branch:refs/remotes/origin/branch */
-        error_t err_build = gitops_build_refname(
-            refspecs[i], DOTTA_REFSPEC_MAX, "%s:refs/remotes/%s/%s",
+        char refspec[DOTTA_REFSPEC_MAX];
+        err = gitops_build_refname(
+            refspec, sizeof(refspec), "%s:refs/remotes/%s/%s",
             refname, remote_name, branches->entries[i]
         );
-        if (err_build) {
-            err_result = error_wrap(
-                err_build, "Invalid branch/remote name '%s/%s'",
+        if (err) {
+            err = error_wrap(
+                err, "Invalid branch/remote name '%s/%s'",
                 remote_name, branches->entries[i]
             );
             goto cleanup;
         }
+        string_array_push(&refspecs, refspec);
     }
 
     git_fetch_options fetch_opts;
@@ -735,27 +735,18 @@ error_t gitops_fetch_branches(
         &fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
     );
 
-    /* Build git_strarray from our refspecs */
-    git_strarray refs = { refspecs, branches->count };
+    git_strarray refs = { refspecs.entries, refspecs.count };
 
     transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
-    err = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
-    transfer_op_end(xfer, err);
+    rc = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
+    transfer_op_end(xfer, rc);
 
-    if (err < 0) {
-        err_result = error_from_git(err);
-        goto cleanup;
-    }
+    if (rc < 0) err = error_from_git(rc);
 
 cleanup:
-    /* Free refspecs array */
-    for (size_t i = 0; i < branches->count; i++) {
-        free(refspecs[i]);
-    }
-    free(refspecs);
-
+    arena_free(frame);
     git_remote_free(remote);
-    return err_result;
+    return err;
 }
 
 error_t gitops_push_branch(

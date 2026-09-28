@@ -30,8 +30,10 @@ error_t repo_create_target(
     /* Where this machine's repository lives, and where the positional puts one,
      * in the one shape the comparison at the end can trust: both are read by
      * fs_make_absolute — the configured one at load, the positional here — so
-     * the two spellings of one directory are one string. No positional: the
-     * configured location is the answer. */
+     * the two spellings of one directory are one string, all but one through a
+     * link beside its target's, whose `..` only the kernel folds: that pair reads
+     * as elsewhere, a note and never a second store. No positional: the configured
+     * location is the answer. */
     const char *configured = config->repo_dir;
     const char *path = configured;
     if (explicit_path != NULL) {

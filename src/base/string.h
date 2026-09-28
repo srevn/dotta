@@ -89,7 +89,7 @@ size_t str_path_parent_len(const char *path);
  * as every directory does ("/" and "x" is "/x"), and a name spelled from the
  * root joins as a relative one does ("/t" and "/etc/x" is "/t/etc/x" — the
  * re-rooting under add's --target reads it so). Nothing else is folded: a `.`,
- * a `..` or a doubled separator inside either side stands, for str_path_normalize.
+ * a `..` or a doubled separator inside either side stands, for str_path_fold.
  *
  * @param arena Arena the joined path lives in (must not be NULL)
  * @param dir Directory (must not be NULL or empty)
@@ -99,37 +99,51 @@ size_t str_path_parent_len(const char *path);
 char *str_path_join(arena_t *arena, const char *dir, const char *name);
 
 /**
- * Fold a path lexically, into an arena
+ * Fold a path, into an arena
  *
  * `.` components and empty ones (a doubled or a trailing separator) go, and a
- * `..` takes the component before it — by the string alone, never by asking the
- * filesystem, so a `..` after a symlink takes the link's name rather than stepping
- * out of what it reaches. An absolute path keeps its root, where a `..` has nothing
+ * `..` takes the component before it. With `folds` NULL that is the string's
+ * reading alone, never the filesystem's, so a `..` after a symlink takes the
+ * link's name rather than stepping out of what it reaches — the fold of a key.
+ * Where `folds` is given it is asked before each such take, of the fold so far
+ * through the component the `..` would take, and a `..` it refuses stays: in
+ * place, and a floor no later `..` reaches below — the fold of a path the kernel
+ * will open, whose `..` only the kernel can read after a link (sys/filesystem.h
+ * fs_make_absolute). An absolute path keeps its root, where a `..` has nothing
  * to take; a relative one keeps the leading `..`s nothing before them takes,
  * and folds to "." when nothing is left. The answer is never longer than the
- * path, and for an absolute one it is the fold's own spelling (str_path_folded).
+ * path, and for an absolute one folded whole it is the fold's own spelling
+ * (str_path_folded).
  *
- * Examples:
+ * Examples, `folds` NULL:
  *   /home/user/project/../file   -> /home/user/file
  *   /home/user/./config/         -> /home/user/config
  *   /home/user/../../../etc      -> /etc
  *   ./foo/../bar                 -> bar
  *   ../a/../../b                 -> ../../b
  *   a/..                         -> .
+ * and where `folds` refuses "/w/link":
+ *   /w/link/../s                 -> /w/link/../s
+ *   /w/link/../b/../s            -> /w/link/../s
+ *   /w/link/../../s              -> /w/link/../../s
  *
  * @param arena Arena the folded path lives in (must not be NULL)
  * @param path Path (must not be NULL or empty)
+ * @param folds Whether a `..` may take the last component of `through`, the fold
+ *              so far; NULL, every one may
  * @return The folded path; never NULL
  */
-char *str_path_normalize(arena_t *arena, const char *path);
+char *str_path_fold(
+    arena_t *arena, const char *path, bool (*folds)(const char *through)
+);
 
 /**
  * Is this path the fold's own spelling?
  *
  * Absolute, with no empty, `.` or `..` component — "/" or "/a/b": what
- * str_path_normalize returns for an absolute input, and returns unchanged for
- * one of these. The shape every key has (infra/mount.h): a root's spelling is
- * one, and so is a root's spelling joined with a tail. A relative path answers
+ * str_path_fold returns for an absolute input it folds whole, and returns unchanged
+ * for one of these. The shape every key has (infra/mount.h): a root's spelling
+ * is one, and so is a root's spelling joined with a tail. A relative path answers
  * no whatever it spells — the fold keeps a leading `..` on one, and every reader
  * here asks of an absolute path, which the fold joins a relative one onto first
  * (sys/filesystem.h fs_make_absolute, infra/path.h path_input_filesystem_path).

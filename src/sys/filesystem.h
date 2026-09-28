@@ -599,26 +599,32 @@ error_t fs_ensure_parent_dirs(const char *path);
 error_t fs_working_directory(arena_t *arena, const char **out);
 
 /**
- * A path as the shell reads it: absolute and folded, no link resolved
+ * A path as the kernel will open it: absolute, folded wherever the kernel reads
+ * the fold the same, no link resolved
  *
  * A leading tilde expands under HOME (fs_expand_tilde, whose `~user` refusal is
  * this function's one), a relative path joins the working directory as the shell
- * spells it (fs_working_directory), and the whole folds lexically (base/string.h
- * str_path_normalize). Unlike fs_canonicalize_path, which resolves every link
- * through realpath(3), a link stays the entry it is reached through, and the
- * path need not exist: past the one look at the working directory, a string's
- * operation.
+ * spells it (fs_working_directory), and the whole folds (base/string.h
+ * str_path_fold): `.` and empty components always, and a `..` where the component
+ * it takes is a directory — the directory holding it, whatever stands above —
+ * or is a file or nothing at all, which the kernel has no reading of. After a
+ * link the `..` stays, and so does one whose look is refused: the kernel steps
+ * out of what a link reaches, and a fold by the string would name another
+ * directory. Unlike fs_canonicalize_path, which resolves every link through
+ * realpath(3), a link stays the entry it is reached through, and the path need
+ * not exist; the filesystem is asked only at a `..`, and of the working directory.
  *
  * Readers: the store's directory, the one reading its two sources share so that
  * the two can be compared — the configured one, settled at load (utils/config.c),
  * and a create-style command's positional (utils/repo.c repo_create_target);
  * and the hooks' directory beside it. A CLI argument that names a key is the
  * argument's door's instead (infra/path.h), which spells the working directory
- * for a key before it joins.
+ * for a key before it joins and folds by the string alone.
  *
  * Examples:
  *   /home/user/mylink -> /home/user/mylink (even if mylink is a symlink)
- *   ~/x/../y          -> /home/user/y
+ *   ~/x/../y          -> /home/user/y       (x a directory, a file or nothing)
+ *   ~/link/../y       -> /home/user/link/../y (link a symlink)
  *   mylink            -> /current/dir/mylink
  *   ./x, ., ../y      -> /current/dir/x, /current/dir, /current/y
  *

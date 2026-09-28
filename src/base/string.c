@@ -67,15 +67,18 @@ char *str_path_join(arena_t *arena, const char *dir, const char *name) {
     return joined;
 }
 
-char *str_path_normalize(arena_t *arena, const char *path) {
+char *str_path_fold(
+    arena_t *arena, const char *path, bool (*folds)(const char *through)
+) {
     CHECK_NULL(arena);
     CHECK_NULL(path);
     CHECK_ARG(path[0] != '\0', "the fold of an empty path");
 
     /* Written in place, never longer than the path: a component is kept as it
      * is met, and a `..` takes back the last one kept. The floor is what no `..`
-     * reaches below — an absolute path's root, and a relative path's leading
-     * `..`s, which rise with it as each is kept. */
+     * reaches below — an absolute path's root, and every `..` kept, which raises
+     * it: a relative path's leading ones, and one `folds` would not let take
+     * the component before it. */
     bool absolute = path[0] == '/';
     char *folded = arena_alloc(arena, strlen(path) + 1);
     char *w = folded;
@@ -92,16 +95,26 @@ char *str_path_normalize(arena_t *arena, const char *path) {
 
         if (n == 1 && seg[0] == '.') continue;
         if (n == 2 && seg[0] == '.' && seg[1] == '.') {
+            /* The last component kept goes, and the separator before it — asked
+             * of `folds` first, over the fold so far through that component,
+             * which the terminator makes a path of its own until the next byte
+             * is written over it. */
             if (w > floor) {
-                /* The last component kept goes, and the separator before it */
-                while (w > floor && w[-1] != '/') w--;
-                if (w > floor) w--;
-            } else if (!absolute) {
-                if (w > folded) *w++ = '/';
-                *w++ = '.';
-                *w++ = '.';
-                floor = w;
+                *w = '\0';
+                if (!folds || folds(folded)) {
+                    while (w > floor && w[-1] != '/') w--;
+                    if (w > floor) w--;
+                    continue;
+                }
+            } else if (absolute && w == folded + 1) {
+                continue;   /* the root's `..` is the root */
             }
+
+            /* Kept, and the floor rises past it */
+            if (w > folded && w[-1] != '/') *w++ = '/';
+            *w++ = '.';
+            *w++ = '.';
+            floor = w;
             continue;
         }
 

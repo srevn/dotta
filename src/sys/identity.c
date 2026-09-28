@@ -213,9 +213,9 @@ error_t identity_init(arena_t *arena) {
         );
     }
 
-    /* The normalised spelling, folded into the arena (base/string.h
-     * str_path_normalize). */
-    self.home = str_path_normalize(arena, home);
+    /* The folded spelling, into the arena: by the string alone, as every key
+     * beneath HOME is folded (base/string.h str_path_fold). */
+    self.home = str_path_fold(arena, home, NULL);
 
     /* The drop, where root was obtained for a user, and before the groups are
      * read: the list below is what the kernel checks the invoker's chown against,

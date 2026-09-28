@@ -53,11 +53,11 @@
  * <url> [path]`); NULL means "wherever this machine's repository lives", which
  * is `config->repo_dir` and nothing else. Both are read by one function
  * (sys/filesystem.h fs_make_absolute: `~` expanded, a relative path settled against
- * the current directory, the whole folded), and both get their parent directories
- * — an explicit path is not a lesser path, and each of the two commands used to
- * drop a different step: a quoted `dotta init "~/dotfiles"` created a literal
- * `./~/dotfiles`, and `dotta clone` re-derived the implicit branch without
- * $DOTTA_REPO_DIR in it.
+ * the current directory, the whole folded where the kernel reads the fold the
+ * same), and both get their parent directories — an explicit path is not a lesser
+ * path, and each of the two commands used to drop a different step: a quoted
+ * `dotta init "~/dotfiles"` created a literal `./~/dotfiles`, and `dotta clone`
+ * re-derived the implicit branch without $DOTTA_REPO_DIR in it.
  *
  * `*out_elsewhere` is where later commands will look, set only when that is not
  * `*out_path` — NULL when the two are the same place, so a non-NULL answer is

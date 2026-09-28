@@ -1219,13 +1219,36 @@ error_t fs_working_directory(arena_t *arena, const char **out) {
     return NULL;
 }
 
+/**
+ * Does the kernel read a `..` after `through` as the string does — as the directory
+ * holding its last component?
+ *
+ * Where that component is a directory, yes, whatever links stand above it: `c/..`
+ * names the directory `c` stands in. Where it is a file or nothing at all (ENOENT,
+ * or ENOTDIR above it), the kernel has no reading of the `..` to disagree with,
+ * and the string's stands. Where it is a link, no: the kernel steps out of what
+ * the link reaches. And where the look is refused, nobody here knows, so the
+ * `..` is left for the open, which meets that refusal with its own errno. Asked
+ * as the invoker, with the raw call: what this reads is dotta's own directory,
+ * which libgit2 and a hook open as the invoker and never with the reach (the
+ * header).
+ */
+static bool fs_folds(const char *through) {
+    struct stat st;
+
+    return lstat(through, &st) == 0
+        ? !S_ISLNK(st.st_mode)
+        : errno == ENOENT || errno == ENOTDIR;
+}
+
 error_t fs_make_absolute(const char *path, arena_t *arena, const char **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
     /* The shell's order: the tilde, then the working directory beneath a path
-     * still relative, then the fold over the whole. */
+     * still relative, then the fold over the whole — the kernel's, which keeps
+     * a `..` only it can read. */
     const char *expanded = NULL;
     RETURN_IF_ERROR(fs_expand_tilde(path, arena, &expanded));
 
@@ -1235,7 +1258,7 @@ error_t fs_make_absolute(const char *path, arena_t *arena, const char **out) {
         expanded = str_path_join(arena, cwd, expanded);
     }
 
-    *out = str_path_normalize(arena, expanded);
+    *out = str_path_fold(arena, expanded, fs_folds);
     return NULL;
 }
 

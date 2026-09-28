@@ -26,9 +26,9 @@
  * answer is the key. The grammar of a name (infra/label.h: label_prefixes,
  * label_validate_storage), the filesystem's two readings (fs_expand_tilde,
  * fs_working_directory), the path's algebra (base/string.h: str_path_join,
- * str_path_normalize) and HOME's two spellings (sys/identity) are delegated to
- * the layers below. The table of roots is not among them: no root's spelling is
- * read here and no root's noun, so this file names no place (infra/path.h).
+ * str_path_fold) and HOME's two spellings (sys/identity) are delegated to the
+ * layers below. The table of roots is not among them: no root's spelling is read
+ * here and no root's noun, so this file names no place (infra/path.h).
  */
 
 #include "infra/path.h"
@@ -194,7 +194,7 @@ error_t path_input_filesystem_path(const char *input, arena_t *arena, const char
         path = str_path_join(arena, cwd, path);
     }
 
-    *out = str_path_normalize(arena, path);
+    *out = str_path_fold(arena, path, NULL);
 
     return NULL;
 }

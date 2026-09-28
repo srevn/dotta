@@ -103,7 +103,7 @@ static error_t read_string(
 }
 
 /* A directory: a string, and not an empty one — leaving the key out is how the
- * default is asked for — read as the shell reads a path, into the arena
+ * default is asked for — read as the kernel will open it, into the arena
  * (sys/filesystem.h fs_make_absolute): every reader of the key, and every child
  * it is handed to, meets the one absolute, folded spelling settled here. */
 static error_t read_path(

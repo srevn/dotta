@@ -213,10 +213,10 @@ typedef struct {
  */
 static bool add_inside(const char *input, const char *target, arena_t *arena) {
     /* The folded prefix, grown one component at a time, with "." dropped and
-     * ".." popping — the fold str_path_normalize performs over a whole argument,
-     * applied per prefix so the prefixes exist to be asked about. Folding never
-     * grows a path, so the argument's own length plus a leading slash and a
-     * terminator bounds it, absolute or not. */
+     * ".." popping — the fold str_path_fold performs over a whole argument, applied
+     * per prefix so the prefixes exist to be asked about. Folding never grows a
+     * path, so the argument's own length plus a leading slash and a terminator
+     * bounds it, absolute or not. */
     char *folded = arena_alloc(arena, strlen(input) + 2);
     folded[0] = '/';
     folded[1] = '\0';

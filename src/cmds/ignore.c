@@ -829,10 +829,10 @@ static error_t test_path_ignore(
 
     /* The directory hint is read from the argument as typed, and it is the only
      * thing read from it: both readings below shed a trailing slash of their
-     * own — the resolver's storage arm sheds it, and str_path_normalize folds
-     * it away — so nothing here has to hand them a shortened copy. Shortening
-     * it *before* the dispatch is what used to read `home/` as the working
-     * directory's `home`. */
+     * own — the resolver's storage arm sheds it, and str_path_fold folds it away
+     * — so nothing here has to hand them a shortened copy. Shortening it *before*
+     * the dispatch is what used to read `home/` as the working directory's
+     * `home`. */
     size_t len = strlen(test_path);
     bool trailing_slash = len > 1 && test_path[len - 1] == '/';
 

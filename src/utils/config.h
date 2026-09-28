@@ -37,13 +37,13 @@
  * is no array, and an entry that is no string, holds a NUL or makes no rule
  * (base/gitignore.h), refuse the load, the entry named by its line and column.
  *
- * The two directories are settled here too, each read as the shell reads a path
- * (sys/filesystem.h fs_make_absolute: the tilde expanded, a relative one joined
- * onto the working directory, the whole folded), so every reader meets one
- * spelling: [hooks] hooks_dir, and the store's — DOTTA_REPO_DIR where it is set,
- * else [core] repo_dir, else the default beneath HOME. A `~user` spelling is
- * refused here, named by its key or by the variable, whether or not the command
- * would have read it.
+ * The two directories are settled here too, each read as the kernel will open
+ * it (sys/filesystem.h fs_make_absolute: the tilde expanded, a relative one joined
+ * onto the working directory, the whole folded where the kernel reads the fold
+ * the same), so every reader meets one spelling: [hooks] hooks_dir, and the store's
+ * — DOTTA_REPO_DIR where it is set, else [core] repo_dir, else the default beneath
+ * HOME. A `~user` spelling is refused here, named by its key or by the variable,
+ * whether or not the command would have read it.
  *
  * @param arena The arena the configuration lives in — the process's, main's
  *              (include/runtime.h); a refused load leaves its parts there (must

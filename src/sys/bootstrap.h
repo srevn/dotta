@@ -71,10 +71,12 @@ error_t bootstrap_read(
  * Script content is validated via bootstrap_validate() before being written to
  * disk, so a bad shebang never produces a stale temp file.
  *
- * Used by the edit workflow: an external editor operates on the extracted file,
- * and the edited content is read back for commit. The orchestrator in
- * utils/bootstrap.c does NOT use this — it manages its own temp file lifecycle
- * so the exec-then-unlink window is tight around the actual subprocess call.
+ * Two readers, each unlinking and dropping the path within one call: the edit
+ * workflow (cmds/bootstrap.c bootstrap_edit), where an external editor operates
+ * on the extracted file and the edited content is read back for commit; and the
+ * orchestrator (utils/bootstrap.c run_live), which execs it and unlinks it at
+ * once, so the file stands only for the length of the script's run. The path is
+ * the heap's: a transient of both, and the edit holds no arena.
  *
  * @param repo          Open Git repository (must not be NULL)
  * @param profile       Profile branch name (must not be NULL)

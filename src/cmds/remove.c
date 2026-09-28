@@ -8,7 +8,6 @@
 #include <git2.h>
 #include <limits.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -826,7 +825,6 @@ static error_t remove_paths(
     size_t claim_count = 0;
     metadata_t *metadata = NULL;        /* the branch's, from the resolver (owned) */
     overlaps_t overlaps = { 0 };        /* arena — the analysis's */
-    char *message = NULL;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1044,8 +1042,7 @@ static error_t remove_paths(
         .custom_msg    = opts->message,
         .target_commit = NULL
     };
-    message = commit_message(config, &msg_ctx);
-    err = stage_commit(stage, message, NULL);
+    err = stage_commit(stage, commit_message(ctx->arena, config, &msg_ctx), NULL);
     if (err) {
         err = error_wrap(err, "Failed to create commit");
         goto cleanup;
@@ -1192,7 +1189,6 @@ cleanup:
      * is active, so it safely closes any partially-begun record-update transaction
      * on error paths. */
     state_rollback(state);
-    free(message);
     if (metadata) metadata_free(metadata);
     stage_free(stage);
 

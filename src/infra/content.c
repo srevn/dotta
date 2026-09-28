@@ -685,26 +685,22 @@ error_t content_capture_link(const char *filesystem_path, content_capture_t *out
         );
     }
 
-    /* The read, after the look */
-    char *target = NULL;
-    RETURN_IF_ERROR(fs_read_symlink(filesystem_path, &target));
+    /* The read, after the look: the entry's bytes are the target, as read — never
+     * judged, never sealed. */
+    buffer_t bytes = BUFFER_INIT;
+    RETURN_IF_ERROR(fs_read_symlink(filesystem_path, &bytes));
 
     /* The same link, looked at again: another renamed over it is another inode,
      * and a new one at a freed inode carries a ctime of its own (the header). */
     struct stat again;
     if (fs_lstat(filesystem_path, &again) != 0 || again.st_dev != st.st_dev ||
         again.st_ino != st.st_ino || again.st_ctime != st.st_ctime) {
-        free(target);
+        buffer_deinit(&bytes);
         return ERROR(
             ERR_CONFLICT, "Cannot capture '%s': it changed while it was read",
             filesystem_path
         );
     }
-
-    /* The entry's bytes are the target, as read: never judged, never sealed. */
-    buffer_t bytes = BUFFER_INIT;
-    buffer_append_string(&bytes, target);
-    free(target);
 
     *out = (content_capture_t){
         .bytes = bytes, .mode = GIT_FILEMODE_LINK, .encrypted = false, .st = st

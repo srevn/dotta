@@ -11,14 +11,13 @@
 
 #include <git2.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
-#include "base/heap.h"
 #include "base/output.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
@@ -177,7 +176,7 @@ static error_t list_profiles(
     size_t max_counts_len = 0;
     size_t max_size_len = 0;
     if (verbose) {
-        lines = heap_calloc(branches.count, sizeof(*lines));
+        lines = arena_calloc(ctx->arena, branches.count, sizeof(*lines));
 
         for (size_t i = 0; i < branches.count; i++) {
             const char *bname = branches.entries[i];
@@ -318,8 +317,6 @@ static error_t list_profiles(
             " {cyan}[•]{reset}  no remote\n"
         );
     }
-
-    free(lines);
 
     return NULL;
 }

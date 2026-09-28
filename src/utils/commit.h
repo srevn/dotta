@@ -69,11 +69,14 @@ typedef struct {
  * A variable the table has no row for is left as the template spelled it, braces
  * and all, so a template is never silently emptied by a typo.
  *
+ * @param arena Arena the message lives in (must not be NULL)
  * @param config Configuration holding the two templates (must not be NULL)
  * @param ctx Context with action, profile, paths (must not be NULL)
- * @return Allocated commit message string (caller must free)
+ * @return The message, the arena's; never NULL
  */
-char *commit_message(const config_t *config, const commit_message_context_t *ctx);
+const char *commit_message(
+    arena_t *arena, const config_t *config, const commit_message_context_t *ctx
+);
 
 /**
  * Get action name in present tense

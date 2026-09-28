@@ -8,14 +8,13 @@
 #include <git2.h>
 #include <limits.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/buffer.h"
 #include "base/error.h"
-#include "base/heap.h"
 #include "base/output.h"
 #include "base/refspec.h"
 #include "cmds/completion.h"
@@ -557,14 +556,16 @@ static error_t show_diff_preview(
  * Uses custom message if provided, otherwise generates from template system.
  * This centralizes message generation logic for reuse across revert operations.
  *
+ * @param arena Arena the message lives in (must not be NULL)
  * @param config Configuration (must not be NULL)
  * @param profile Profile name (must not be NULL)
  * @param file_path File path (must not be NULL)
  * @param target_commit_oid Target commit OID (must not be NULL)
  * @param custom_message Custom message (can be NULL for template generation)
- * @return Allocated message string (caller must free)
+ * @return The message, the arena's
  */
-static char *build_revert_commit_message(
+static const char *build_revert_commit_message(
+    arena_t *arena,
     const config_t *config,
     const char *profile,
     const char *file_path,
@@ -572,7 +573,7 @@ static char *build_revert_commit_message(
     const char *custom_message
 ) {
     if (custom_message && custom_message[0]) {
-        return heap_strdup(custom_message);
+        return arena_strdup(arena, custom_message);
     }
 
     /* Generate message using template system */
@@ -591,7 +592,7 @@ static char *build_revert_commit_message(
         .target_commit = oid_str
     };
 
-    return commit_message(config, &msg_ctx);
+    return commit_message(arena, config, &msg_ctx);
 }
 
 /**
@@ -753,7 +754,6 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     metadata_t *target_sheet = NULL;
     metadata_item_t *restored_claim = NULL;
     buffer_t rebound = BUFFER_INIT;
-    char *msg = NULL;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1219,8 +1219,9 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
-    msg = build_revert_commit_message(
-        config, profile, restored_name, git_commit_id(target_commit), opts->message
+    const char *msg = build_revert_commit_message(
+        ctx->arena, config, profile, restored_name, git_commit_id(target_commit),
+        opts->message
     );
 
     err = stage_commit(stage, msg, NULL);
@@ -1251,7 +1252,6 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     );
 
 cleanup:
-    if (msg) free(msg);
     buffer_deinit(&rebound);
     if (restored_claim) metadata_item_free(restored_claim);
     if (standing_sheet) metadata_free(standing_sheet);

@@ -10,7 +10,6 @@
 #include <git2.h>
 #include <limits.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -19,7 +18,6 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
-#include "base/heap.h"
 #include "base/output.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
@@ -406,8 +404,6 @@ static error_t update_profile(
 
     /* Initialize all resources to NULL for goto cleanup */
     metadata_t *metadata = NULL;
-    const char **storage_paths = NULL;
-    char *message = NULL;
     error_t err = NULL;
 
     /* The one metadata load: the sheet in the tree the stage opened at — the
@@ -772,8 +768,9 @@ static error_t update_profile(
      * and the message's path list says so. */
     size_t named_count = commit->captured_count + commit->deleted.count +
         commit->retired.count;
+    const char **storage_paths = NULL;
     if (named_count > 0) {
-        storage_paths = heap_calloc(named_count, sizeof(*storage_paths));
+        storage_paths = arena_calloc(ctx->arena, named_count, sizeof(*storage_paths));
 
         size_t named = 0;
         for (size_t i = 0; i < commit->captured_count; i++) {
@@ -798,10 +795,8 @@ static error_t update_profile(
         .target_commit = NULL
     };
 
-    message = commit_message(ctx->config, &msg_ctx);
-
     /* Create commit */
-    err = stage_commit(stage, message, NULL);
+    err = stage_commit(stage, commit_message(ctx->arena, ctx->config, &msg_ctx), NULL);
     if (err) {
         err = error_wrap(err, "Failed to create commit");
         goto cleanup;
@@ -811,8 +806,6 @@ static error_t update_profile(
 
 cleanup:
     /* Free resources in reverse order */
-    if (message) free(message);
-    if (storage_paths) free(storage_paths);
     if (metadata) metadata_free(metadata);
 
     return err;

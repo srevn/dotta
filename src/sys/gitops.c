@@ -970,26 +970,21 @@ error_t gitops_list_remote_branches(
 }
 
 error_t gitops_get_remote_url(
-    git_repository *repo, const char *remote_name, char **out_url
+    git_repository *repo, const char *remote_name, arena_t *arena,
+    const char **out_url
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
+    CHECK_NULL(arena);
     CHECK_NULL(out_url);
 
     git_remote *remote = NULL;
-    int err = git_remote_lookup(&remote, repo, remote_name);
-    if (err < 0) return error_from_git(err);
+    int rc = git_remote_lookup(&remote, repo, remote_name);
+    if (rc < 0) return error_from_git(rc);
 
-    const char *url = git_remote_url(remote);
-    if (!url) {
-        git_remote_free(remote);
-        return ERROR(
-            ERR_NOT_FOUND, "Remote '%s' has no URL configured",
-            remote_name
-        );
-    }
-
-    *out_url = heap_strdup(url);
+    /* Copied before the remote goes: the URL is the remote's, and NULL where it
+     * has none. */
+    *out_url = arena_strdup(arena, git_remote_url(remote));
     git_remote_free(remote);
 
     return NULL;
@@ -1041,19 +1036,8 @@ error_t gitops_resolve_default_remote(
     const char *name = arena_strdup(arena, selected);
     git_strarray_dispose(&remotes);
 
-    /* URL is optional. A remote without URL is legal — credentialed transfer
-     * tolerates a NULL URL — so leave *out_url = NULL on that branch instead of
-     * erroring. */
-    if (out_url) {
-        git_remote *remote = NULL;
-        int lookup_err = git_remote_lookup(&remote, repo, name);
-        if (lookup_err < 0) return error_from_git(lookup_err);
-
-        /* Copied before the remote goes: the URL is the remote's, and NULL where
-         * it has none. */
-        *out_url = arena_strdup(arena, git_remote_url(remote));
-        git_remote_free(remote);
-    }
+    /* URL is optional, and so is a remote's: one without a URL answers NULL. */
+    if (out_url) RETURN_IF_ERROR(gitops_get_remote_url(repo, name, arena, out_url));
 
     *out_name = name;
 

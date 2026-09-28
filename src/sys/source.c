@@ -43,7 +43,9 @@
 
 #include "sys/source.h"
 
+#include <errno.h>
 #include <git2.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -143,8 +145,12 @@ static error_t place(git_repository *repo, const char *directory, char **out) {
     const char *workdir = git_repository_workdir(repo);
     if (!workdir) return NULL;
 
-    char *canonical = NULL;
-    RETURN_IF_ERROR(fs_canonicalize_path(directory, &canonical));
+    /* The directory as the kernel spells it, through the funnel's reach: a
+     * transient of this call, with no arena in reach. */
+    char canonical[PATH_MAX];
+    if (fs_realpath(directory, canonical) == NULL) {
+        return error_from_errno(errno, "Failed to resolve path '%s'", directory);
+    }
 
     /* The workdir without the separator libgit2 ends it with: at that offset a
      * path beneath the workdir holds the separator, and the workdir's own spelling
@@ -164,7 +170,6 @@ static error_t place(git_repository *repo, const char *directory, char **out) {
         *out = heap_str_format("%s%s", tail, *tail ? "/" : "");
     }
 
-    free(canonical);
     return NULL;
 }
 

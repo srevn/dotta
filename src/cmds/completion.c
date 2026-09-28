@@ -18,7 +18,6 @@
 #include "cmds/completion.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "base/arena.h"
@@ -101,12 +100,11 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out) {
     for (size_t i = 0; i < remotes.count; i++) {
         const char *name = remotes.strings[i];
 
-        /* A remote with no URL is described by its kind: the lookup's error is
-         * dropped, one per such remote */
-        char *url = NULL;
-        (void) gitops_get_remote_url(repo, name, &url);
+        /* A remote with no URL is described by its kind, and so is one whose
+         * lookup fails: that error is dropped, one per such remote */
+        const char *url = NULL;
+        (void) gitops_get_remote_url(repo, name, ctx->arena, &url);
         fprintf(out, "%s\t%s\n", name, url ? url : "Remote");
-        free(url);
     }
 
     git_strarray_dispose(&remotes);

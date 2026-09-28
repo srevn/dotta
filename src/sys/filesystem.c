@@ -1239,8 +1239,9 @@ error_t fs_make_absolute(const char *path, arena_t *arena, const char **out) {
     return NULL;
 }
 
-error_t fs_canonicalize_path(const char *path, char **out) {
+error_t fs_canonicalize_path(const char *path, arena_t *arena, const char **out) {
     RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     char resolved[PATH_MAX];
@@ -1248,7 +1249,7 @@ error_t fs_canonicalize_path(const char *path, char **out) {
         return error_from_errno(errno, "Failed to resolve path '%s'", path);
     }
 
-    *out = heap_strdup(resolved);
+    *out = arena_strdup(arena, resolved);
 
     return NULL;
 }
@@ -1323,9 +1324,11 @@ error_t fs_create_symlink(
     return NULL;
 }
 
-error_t fs_read_symlink(const char *linkpath, char **out) {
+error_t fs_read_symlink(const char *linkpath, buffer_t *out) {
     RETURN_IF_ERROR(validate_path(linkpath));
     CHECK_NULL(out);
+
+    *out = (buffer_t){ 0 };
 
     /* The whole buffer is offered, and a read that fills it is refused: readlink
      * cuts a longer target short without a word, so a full buffer cannot tell a
@@ -1342,8 +1345,7 @@ error_t fs_read_symlink(const char *linkpath, char **out) {
         );
     }
 
-    buf[len] = '\0';
-    *out = heap_strdup(buf);
+    buffer_append(out, buf, (size_t) len);
 
     return NULL;
 }

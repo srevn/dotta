@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/buffer.h"
 #include "base/error.h"
@@ -387,7 +388,7 @@ static error_t edit_content_via_editor(
  *
  * Captures everything that differs between the two so edit_dottaignore and
  * modify_dottaignore stay ref-agnostic. Constructed on the stack in cmd_ignore;
- * the profile's refname and label live in that frame too.
+ * the profile's refname lives in that frame too, its label in the command arena.
  */
 typedef struct {
     const char *refname;        /* BASELINE_REF or the profile's branch ref */
@@ -1115,34 +1116,22 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
      * what an editor opens on when the file is not there yet. Each arm establishes
      * its home before naming it — the profile named must be here, the baseline's
      * ref must stand — so edit and modify start on a ref that exists. The profile's
-     * refname and label live in this frame. */
+     * refname lives in this frame, its label in the command arena. */
     char refname[DOTTA_REFNAME_MAX];
-    char *profile_label = NULL;
     dottaignore_scope_t scope;
-    error_t err = NULL;
     if (opts->profile) {
-        err = profile_require(repo, opts->profile);
-        if (err) {
-            return err;
-        }
-        err = gitops_branch_refname(refname, sizeof(refname), opts->profile);
-        if (err) {
-            return err;
-        }
-        profile_label = heap_str_format("profile '%s'", opts->profile);
+        RETURN_IF_ERROR(profile_require(repo, opts->profile));
+        RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), opts->profile));
         scope = (dottaignore_scope_t){
             .refname = refname,
-            .display_label = profile_label,
+            .display_label = arena_str_format(ctx->arena, "profile '%s'", opts->profile),
             .default_seed = ignore_profile_template(),
         };
     } else {
         /* Seeded by `dotta init` and `dotta clone`; absent only by hand, and
          * init is what puts it back. */
         bool seeded = false;
-        err = gitops_reference_exists(repo, BASELINE_REF, &seeded);
-        if (err) {
-            return err;
-        }
+        RETURN_IF_ERROR(gitops_reference_exists(repo, BASELINE_REF, &seeded));
         if (!seeded) {
             return ERROR(
                 ERR_NOT_FOUND,
@@ -1159,16 +1148,12 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     }
 
     if (has_modify) {
-        err = modify_dottaignore(
+        return modify_dottaignore(
             repo, &scope, opts->add_patterns, opts->add_count,
             opts->remove_patterns, opts->remove_count, out
         );
-    } else {
-        err = edit_dottaignore(repo, &scope, out);
     }
-
-    free(profile_label);
-    return err;
+    return edit_dottaignore(repo, &scope, out);
 }
 
 /* ══════════════════════════════════════════════════════════════════

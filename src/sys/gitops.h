@@ -607,17 +607,26 @@ error_t gitops_list_remote_branches(
 /**
  * Get URL for a remote
  *
- * Looks up a remote by name and returns a copy of its URL.
+ * The remote's URL, copied into the arena, or NULL where it has none: a remote
+ * configured without a URL is legal — credentialed transfers tolerate one
+ * (gitops_resolve_default_remote) — so its absence is an answer, never an error.
+ * A lookup that fails — no such remote, a name Git refuses — is the error, in
+ * Git's words, and leaves `*out_url` as it was.
+ *
+ * Readers: gitops_resolve_default_remote's URL, and the completion's description
+ * of each configured remote (cmds/completion.c completion_remotes).
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL)
- * @param out_url URL string (must not be NULL, caller must free)
+ * @param arena Arena the URL lives in (must not be NULL)
+ * @param out_url The URL, the arena's, or NULL (must not be NULL)
  * @return Error or NULL on success
  */
 error_t gitops_get_remote_url(
     git_repository *repo,
     const char *remote_name,
-    char **out_url
+    arena_t *arena,
+    const char **out_url
 );
 
 /**
@@ -629,11 +638,11 @@ error_t gitops_get_remote_url(
  *   3. Multiple remotes without "origin" → error (require explicit choice).
  *   4. No remotes → error with a hint to add one.
  *
- * When `out_url` is non-NULL, also looks up the remote's URL. A remote configured
- * without a URL yields `*out_url = NULL` and a successful return — credentialed
- * transfers tolerate a NULL URL (helper approve / reject become no-ops,
- * SSH/anonymous still works), so this stays a happy-path outcome rather than an
- * error.
+ * When `out_url` is non-NULL, also looks up the remote's URL
+ * (gitops_get_remote_url). A remote configured without a URL yields `*out_url =
+ * NULL` and a successful return — credentialed transfers tolerate a NULL URL
+ * (helper approve / reject become no-ops, SSH/anonymous still works), so this
+ * stays a happy-path outcome rather than an error.
  *
  * The name is the configuration's, as git lists it, and nothing here judges it:
  * a name Git refuses — a hand-written `[remote ""]` among them — is refused by

@@ -8,7 +8,6 @@
 #include <errno.h>
 #include <git2.h>
 #include <limits.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -1102,11 +1101,11 @@ static error_t add_commit(
         .target_commit = NULL
     };
 
-    char *message = commit_message(walk->ctx->config, &msg_ctx);
-
     /* Create commit */
-    error_t err = stage_commit(stage, message, out_committed);
-    free(message);
+    error_t err = stage_commit(
+        stage, commit_message(walk->ctx->arena, walk->ctx->config, &msg_ctx),
+        out_committed
+    );
 
     if (err) {
         return error_wrap(err, "Failed to create commit");

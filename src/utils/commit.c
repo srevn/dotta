@@ -6,14 +6,13 @@
 
 #include <config.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/buffer.h"
 #include "base/error.h"
-#include "base/heap.h"
 #include "sys/identity.h"
 
 /* Maximum length for hostname */
@@ -43,67 +42,28 @@ typedef struct {
 } template_t;
 
 /**
- * Get current hostname as an allocated string
+ * The host's name, written into `buf` — "unknown" where the kernel will not say
  */
-static char *get_hostname(void) {
-    char hostname[MAX_HOSTNAME];
-
-    if (gethostname(hostname, sizeof(hostname)) != 0) {
-        /* Fallback to "unknown" if gethostname fails */
-        return heap_strdup("unknown");
+static void commit_hostname(char *buf, size_t size) {
+    if (gethostname(buf, size) != 0) {
+        snprintf(buf, size, "unknown");
+        return;
     }
 
-    /* Ensure null termination */
-    hostname[MAX_HOSTNAME - 1] = '\0';
-
-    return heap_strdup(hostname);
+    /* gethostname need not terminate a name it truncated */
+    buf[size - 1] = '\0';
 }
 
 /**
- * Get current username as an allocated string
+ * The local time `now` in strftime's `format`, written into `buf` — "unknown"
+ * where the clock cannot be read as local time
  *
- * The invoker's (sys/identity): under sudo the user who typed the command, not
- * the root that $USER names there. "unknown" for a uid with no passwd entry.
+ * Every time a message renders is this one instant's (commit_message reads the
+ * clock once), so a `{date}` and a `{datetime}` cannot name two days.
  */
-static char *get_username(void) {
-    const char *name = identity()->name;
-    return heap_strdup(name ? name : "unknown");
-}
-
-/**
- * Get current datetime in local timezone as an allocated ISO 8601 string
- */
-static char *get_datetime_local(void) {
-    time_t now = time(NULL);
-    struct tm *tm_info = localtime(&now);
-
-    if (!tm_info) {
-        /* Fallback if localtime fails */
-        return heap_strdup("unknown");
-    }
-
-    /* Format: 2025-01-09 14:23:45 +0300 (uses %z for timezone offset) */
-    char buffer[64];
-    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S %z", tm_info);
-
-    return heap_strdup(buffer);
-}
-
-/**
- * Get current date as an allocated ISO 8601 string (YYYY-MM-DD)
- */
-static char *get_date_local(void) {
-    time_t now = time(NULL);
-    struct tm *tm_info = localtime(&now);
-
-    if (!tm_info) {
-        return heap_strdup("unknown");
-    }
-
-    char buffer[16];
-    strftime(buffer, sizeof(buffer), "%Y-%m-%d", tm_info);
-
-    return heap_strdup(buffer);
+static void commit_time(time_t now, const char *format, char *buf, size_t size) {
+    const struct tm *local = localtime(&now);
+    if (!local || strftime(buf, size, format, local) == 0) snprintf(buf, size, "unknown");
 }
 
 /**
@@ -141,60 +101,54 @@ const char *commit_action_name_past(commit_action_t action) {
 }
 
 /**
- * Format path list as bullet points with truncation, in an allocated string
+ * The path list as bullet points with truncation, appended to `text`
  *
  * Both kinds, as the caller handed them over (utils/commit.h): the list says
  * "paths" of what it truncates and of what it has none of, because a commit that
  * claimed a directory and no file has a path to name and no file.
  */
-static char *format_path_list(const char *const *paths, size_t count) {
+static void commit_paths(buffer_t *text, const char *const *paths, size_t count) {
     if (count == 0 || !paths) {
-        return heap_strdup("  (no paths)");
+        buffer_append_string(text, "  (no paths)");
+        return;
     }
-
-    buffer_t buf = BUFFER_INIT;
 
     /* Show up to MAX_PATHS_DETAIL paths */
     size_t show_count = count < MAX_PATHS_DETAIL ? count : MAX_PATHS_DETAIL;
 
     for (size_t i = 0; i < show_count; i++) {
-        buffer_append_string(&buf, "  - ");
-        buffer_append_string(&buf, paths[i]);
+        buffer_append_string(text, "  - ");
+        buffer_append_string(text, paths[i]);
         if (i < show_count - 1 || count > MAX_PATHS_DETAIL) {
-            buffer_append_string(&buf, "\n");
+            buffer_append_string(text, "\n");
         }
     }
 
     /* Add truncation notice if needed */
     if (count > MAX_PATHS_DETAIL) {
         buffer_appendf(
-            &buf, "  ... and %zu more path%s",
+            text, "  ... and %zu more path%s",
             count - MAX_PATHS_DETAIL, (count - MAX_PATHS_DETAIL) == 1 ? "" : "s"
         );
     }
-
-    /* Transfer ownership from buffer to avoid copy */
-    return buffer_detach(&buf);
 }
 
 /**
- * Substitute template variables in a string
+ * A template with its variables substituted, appended to `text`
  *
  * Replaces {variable} placeholders with the table's values. A name the table
  * has no row for is left as the template spelled it, braces and all, so a typo
  * empties no line and prose survives a stray brace.
  *
+ * @param text Where the substitution is appended (must not be NULL)
  * @param template Template string with {variable} placeholders (must not be NULL)
  * @param vars The variables and their values, resolved once by the caller
  * @param var_count How many
- * @return Allocated string with substitutions
  */
-static char *substitute_template(
-    const char *template, const template_t *vars, size_t var_count
+static void commit_substitute(
+    buffer_t *text, const char *template, const template_t *vars, size_t var_count
 ) {
     CHECK_NULL(template);
-
-    buffer_t buf = BUFFER_INIT;
 
     /* Process template character by character. Three cases, each leaving the
      * loop at its own line: what is not a variable, what is shaped like one and
@@ -206,7 +160,7 @@ static char *substitute_template(
          * that is not a brace at all. */
         const char *end = *p == '{' ? strchr(p, '}') : NULL;
         if (!end) {
-            buffer_append(&buf, p, 1);
+            buffer_append(text, p, 1);
             p++;
             continue;
         }
@@ -217,7 +171,7 @@ static char *substitute_template(
         char var_name[64];
 
         if (var_len >= sizeof(var_name)) {
-            buffer_append(&buf, p, (size_t) (end - p) + 1);
+            buffer_append(text, p, (size_t) (end - p) + 1);
             p = end + 1;
             continue;
         }
@@ -235,90 +189,77 @@ static char *substitute_template(
         }
 
         if (value) {
-            buffer_append_string(&buf, value);
+            buffer_append_string(text, value);
         } else {
             /* Unknown variable - keep as-is */
-            buffer_appendf(&buf, "{%s}", var_name);
+            buffer_appendf(text, "{%s}", var_name);
         }
 
         p = end + 1;
     }
-
-    /* Transfer ownership from buffer to avoid copy */
-    return buffer_detach(&buf);
-}
-
-/**
- * Build full commit message (title + body)
- */
-static char *build_full_message(const char *title, const char *body) {
-    /* Skip body if empty */
-    if (body[0] == '\0') {
-        return heap_strdup(title);
-    }
-
-    /* Calculate size: title + "\n\n" + body + "\0" */
-    size_t size = strlen(title) + 2 + strlen(body) + 1;
-    char *message = heap_alloc(size);
-    snprintf(message, size, "%s\n\n%s", title, body);
-
-    return message;
 }
 
 /**
  * Build commit message from context
  */
-char *commit_message(const config_t *config, const commit_message_context_t *ctx) {
+const char *commit_message(
+    arena_t *arena, const config_t *config, const commit_message_context_t *ctx
+) {
+    CHECK_NULL(arena);
     CHECK_NULL(config);
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->profile);
 
     /* If custom message provided, use it directly */
-    if (ctx->custom_msg) {
-        return heap_strdup(ctx->custom_msg);
-    }
+    if (ctx->custom_msg) return arena_strdup(arena, ctx->custom_msg);
 
-    /* Get components, each freed once the message is built */
-    char *hostname = get_hostname();
-    char *username = get_username();
-    char *date = get_date_local();
-    char *datetime = get_datetime_local();
-    char *path_list = format_path_list(ctx->paths, ctx->path_count);
-
-    /* The values this message is made of, resolved once for both templates. The
+    /* The values this message is made of, resolved once for both templates: the
+     * clock read once, so every time the message names is one instant's. The
      * count is rendered here and not in the reader, which is what keeps it the
      * length of the list beside it under any template that names either. */
-    char count[32];
+    const time_t now = time(NULL);
+    char hostname[MAX_HOSTNAME], date[16], datetime[64], count[32];
+    commit_hostname(hostname, sizeof(hostname));
+    commit_time(now, "%Y-%m-%d", date, sizeof(date));
+    commit_time(now, "%Y-%m-%d %H:%M:%S %z", datetime, sizeof(datetime));
     snprintf(count, sizeof(count), "%zu", ctx->path_count);
+
+    buffer_t paths = BUFFER_INIT;
+    commit_paths(&paths, ctx->paths, ctx->path_count);
+
+    /* {user} is the invoker's (sys/identity): under sudo the user who typed the
+     * command, not the root that $USER names there — "unknown" for a uid with
+     * no passwd entry */
+    const char *user = identity()->name;
 
     const template_t vars[] = {
         { "host",          hostname                                     },
-        { "user",          username                                     },
+        { "user",          user ? user : "unknown"                      },
         { "profile",       ctx->profile                                 },
         { "action",        commit_action_name(ctx->action)              },
         { "action_past",   commit_action_name_past(ctx->action)         },
         { "count",         count                                        },
         { "date",          date                                         },
         { "datetime",      datetime                                     },
-        { "paths",         path_list                                    },
+        { "paths",         paths.data                                   },
         { "target_commit", ctx->target_commit ? ctx->target_commit : "" },
     };
     const size_t var_count = sizeof(vars) / sizeof(vars[0]);
 
-    /* Build title and body from their templates */
-    char *title = substitute_template(config->commit_title, vars, var_count);
-    char *body = substitute_template(config->commit_body, vars, var_count);
+    /* The title, and the body beneath a blank line — which stands only above a
+     * body its template did not substitute to nothing. */
+    buffer_t text = BUFFER_INIT;
+    commit_substitute(&text, config->commit_title, vars, var_count);
+    size_t title_end = text.size;
+    buffer_append_string(&text, "\n\n");
+    size_t body_at = text.size;
+    commit_substitute(&text, config->commit_body, vars, var_count);
 
-    /* Build full message */
-    char *message = build_full_message(title, body);
+    const char *message = arena_strndup(
+        arena, text.data, text.size == body_at ? title_end : text.size
+    );
 
-    free(hostname);
-    free(username);
-    free(date);
-    free(datetime);
-    free(path_list);
-    free(title);
-    free(body);
-
+    buffer_deinit(&text);
+    buffer_deinit(&paths);
     return message;
 }

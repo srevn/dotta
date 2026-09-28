@@ -143,19 +143,11 @@ static bool mode_stands(const struct stat *st, git_filemode_t expected_mode) {
 static error_t read_copy(
     const char *disk_path, git_filemode_t expected_mode, buffer_t *out
 ) {
-    /* fs_read_fd clears this too, but a link's read and a failed open never reach
-     * it. */
+    /* A link's target is its bytes, read into the buffer as a file's are */
+    if (expected_mode == GIT_FILEMODE_LINK) return fs_read_symlink(disk_path, out);
+
+    /* fs_read_fd clears this too, but a failed open never reaches it. */
     *out = (buffer_t){ 0 };
-
-    if (expected_mode == GIT_FILEMODE_LINK) {
-        char *target = NULL;
-        RETURN_IF_ERROR(fs_read_symlink(disk_path, &target));
-
-        buffer_append_string(out, target);
-        free(target);
-
-        return NULL;
-    }
 
     int fd = fs_open(disk_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0);
     if (fd < 0) {

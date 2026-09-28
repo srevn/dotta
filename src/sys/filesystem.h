@@ -637,10 +637,11 @@ error_t fs_make_absolute(const char *path, arena_t *arena, const char **out);
  * code (error_code_from_errno).
  *
  * @param path Path to resolve (must not be NULL)
- * @param out Canonical path (must not be NULL, caller must free)
+ * @param arena Arena the canonical path lives in (must not be NULL)
+ * @param out Canonical path, the arena's (must not be NULL)
  * @return Error or NULL on success
  */
-error_t fs_canonicalize_path(const char *path, char **out);
+error_t fs_canonicalize_path(const char *path, arena_t *arena, const char **out);
 
 /**
  * The directory a path stands in
@@ -708,18 +709,20 @@ error_t fs_create_symlink(
 );
 
 /**
- * Read symbolic link target
+ * Read symbolic link target into buffer
  *
- * The target whole, or a refusal: readlink(2) cuts a target longer than its buffer
- * short without a word, so a read that fills the PATH_MAX bytes offered is refused
- * as the name too long it is (ENAMETOOLONG, ERR_FS) rather than taken for a shorter
- * target.
+ * A link's target is its content — the bytes a blob of mode 120000 holds — so
+ * it fills a buffer as fs_read_file does: `*out` is emptied first, and holds
+ * the target on success and nothing after an error. The target whole, or a refusal:
+ * readlink(2) cuts a target longer than its buffer short without a word, so a
+ * read that fills the PATH_MAX bytes offered is refused as the name too long it
+ * is (ENAMETOOLONG, ERR_FS) rather than taken for a shorter target.
  *
  * @param linkpath Link path (must not be NULL, must be a symlink)
- * @param out Target path (must not be NULL, caller must free)
+ * @param out Output buffer (must not be NULL)
  * @return Error or NULL on success
  */
-error_t fs_read_symlink(const char *linkpath, char **out);
+error_t fs_read_symlink(const char *linkpath, buffer_t *out);
 
 /**
  * Permission operations

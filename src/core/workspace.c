@@ -2541,14 +2541,14 @@ static error_t scan_directory_for_untracked(
          * That one reads the place and not the subject, so a root standing inside
          * a repository whose rules name it is not entered, which is the answer
          * the directory would get under any other name. The layer's own failure
-         * leaves no verdict, as today, and its error is dropped — one per entry
-         * no layer decided, only while the source repository will not read
+         * leaves no verdict, and its error is dropped — the one its source
+         * repository or directory gave, answered again for every entry beneath
          * (sys/source.h). */
         gitignore_match_t match;
         gitignore_eval(scan->rules, label_tail(name), is_dir, &match);
         bool ignored = match.decided && match.ignored;
         if (!match.decided && scan->source_filter) {
-            (void) source_filter_is_excluded(scan->source_filter, child, is_dir, &ignored);
+            (void) source_filter_excludes(scan->source_filter, child, is_dir, &ignored);
         }
         if (ignored) continue;
 

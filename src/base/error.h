@@ -19,12 +19,16 @@
  * by accident does not compile.
  *
  * What that costs is the pressure the shape is for: an error is minted on a failure
- * path only. One made per row on a path that continues is an answer spelled as
- * an error, and every one of them stays for the run — so an answer
- * is data (a key opens a ciphertext or it does not, crypto/cipher.h cipher_opens;
- * a claim's names resolve or say which did not, core/metadata.h
- * metadata_ownership), and a loop that still reads one says its bound where it
- * reads it.
+ * path only, and a loop that goes on is where the cost shows, since every error
+ * it makes stays for the run. Two kinds meet such a loop. An answer spelled as
+ * an error is data instead (a key opens a ciphertext or it does not,
+ * crypto/cipher.h cipher_opens; a claim's names resolve or say which did not,
+ * core/metadata.h metadata_ownership). A genuine failure the loop goes on past
+ * is minted once per cause and answered again — an immutable error is safe to
+ * hand every reader — so what the run keeps is counted by the causes, never by
+ * the loop (sys/source.h: a repository that will not open is one error for every
+ * entry beneath it; the keymgr's standing refusal, one for every row after it).
+ * A loop that still mints per row says its bound where it does.
  *
  * ERR_PERMISSION
  * --------------

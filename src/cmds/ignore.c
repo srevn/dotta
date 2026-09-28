@@ -665,11 +665,11 @@ static bool source_gitignore_matches(
     if (!filter || !abs_path || abs_path[0] != '/') return false;
 
     bool excluded = false;
-    error_t err = source_filter_is_excluded(filter, abs_path, is_directory, &excluded);
+    error_t err = source_filter_excludes(filter, abs_path, is_directory, &excluded);
     if (err) {
-        /* Surfaced (above): its error is dropped once warned — one per asker no
-         * layer decided, only while the source repository will not read
-         * (sys/source.h). */
+        /* Surfaced (above): warned for every asker no layer decided, and dropped
+         * — the one error the source repository or directory gave, answered again
+         * for each (sys/source.h). */
         output_warning(
             out, OUTPUT_NORMAL,
             "Source .gitignore check failed: %s", error_message(err)

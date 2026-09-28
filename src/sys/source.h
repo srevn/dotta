@@ -26,7 +26,8 @@
  * answer — the repository that governs it, and where it stands inside — and asks
  * again at every directory it is given, because a repository is a boundary and
  * not a subtree: a nested repository's `.git/info/exclude` is visible through
- * no handle but its own.
+ * no handle but its own. A failure is an answer it remembers too, and the handle
+ * is its retry boundary: a fresh handle asks again.
  *
  * Threading: not thread-safe — mirrors libgit2's per-handle model. A handle must
  * not be used concurrently from multiple threads.
@@ -79,6 +80,13 @@ void source_filter_free(source_filter_t *f);
  *   - Uses `git_repository_discover` with `across_fs = 0`, so a source repo on
  *     a different filesystem than the directory is treated as "not in a repo" —
  *     matches git's own behaviour.
+ *   - Returns an error where the rules cannot be read — a repository that will
+ *     not open, a directory discovery or `realpath` cannot answer for, a query
+ *     libgit2 cannot complete — and that failure is answered again, the one error,
+ *     for every entry it stands for: a repository's while discovery keeps answering
+ *     that repository, a directory's while the entries asked about are its own.
+ *     Each is minted once per cause (base/error.h "Lifetime"), so a caller that
+ *     goes on past it keeps one error however many entries it asks about.
  *
  * Policy: this function answers the mechanical question "is this path ignored
  * by its source repo?". The policy "do we consult that answer at all?" belongs
@@ -99,7 +107,7 @@ void source_filter_free(source_filter_t *f);
  * @param out      Output boolean (must not be NULL)
  * @return Error or NULL on success
  */
-error_t source_filter_is_excluded(
+error_t source_filter_excludes(
     source_filter_t *f,
     const char *abs_path,
     bool is_dir,

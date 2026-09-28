@@ -398,13 +398,13 @@ static bool add_excluded(
 
     if (walk->source_filter) {
         bool excluded = false;
-        error_t err = source_filter_is_excluded(
+        error_t err = source_filter_excludes(
             walk->source_filter, filesystem_path, is_directory, &excluded
         );
         if (err) {
-            /* Degraded (above): its error is dropped once warned — one per entry
-             * no layer decided, only while its source repository will not read
-             * (sys/source.h). */
+            /* Degraded (above): warned for every entry no layer decided, and
+             * dropped — the one error its source repository or directory gave,
+             * answered again for each (sys/source.h). */
             output_warning(
                 walk->ctx->out, OUTPUT_VERBOSE,
                 "Source .gitignore check failed for %s: %s", filesystem_path,

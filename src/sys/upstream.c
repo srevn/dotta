@@ -139,9 +139,9 @@ output_color_t upstream_state_color(upstream_state_t state) {
         case UPSTREAM_REMOTE_AHEAD: return OUTPUT_COLOR_YELLOW;
         case UPSTREAM_DIVERGED:     return OUTPUT_COLOR_RED;
         case UPSTREAM_NO_REMOTE:    return OUTPUT_COLOR_CYAN;
-        case UPSTREAM_UNKNOWN:
-        default:                    return OUTPUT_COLOR_DIM;
+        case UPSTREAM_UNKNOWN:      return OUTPUT_COLOR_DIM;
     }
+    CHECK_ARG(false, "an upstream state no enumerator names");
 }
 
 /**

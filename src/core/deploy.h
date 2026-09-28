@@ -51,6 +51,7 @@
 #include <git2.h>
 #include <types.h>
 
+#include "base/error.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -168,8 +169,7 @@ static inline deploy_convergence_t deploy_convergence(fs_occupant_t occ) {
         case FS_OCCUPANT_UNKNOWN:   return DEPLOY_CONVERGE_REPLACE;
     }
 
-    /* Unreachable once every enum value is handled */
-    return DEPLOY_CONVERGE_REPLACE;
+    CHECK_ARG(false, "an occupant no enumerator names");
 }
 
 /**

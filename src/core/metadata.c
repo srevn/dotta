@@ -330,10 +330,6 @@ bool metadata_same_claim(const metadata_item_t *a, const metadata_item_t *b) {
 /**
  * Remove metadata item
  *
- * Unified removal function that replaces:
- * - metadata_remove_entry() (files)
- * - metadata_remove_tracked_directory() (directories)
- *
  * Works for every kind. A key the collection does not hold changes nothing.
  */
 bool metadata_remove_item(
@@ -375,10 +371,9 @@ bool metadata_remove_item(
         return true;
     }
 
-    /* Unreachable while the spine and the index agree. Reached, it would mean
-     * the index named an item no slot holds — nothing above changed anything,
-     * so the honest answer is that nothing was removed. */
-    return false;
+    /* Reached only if the index named an item no slot holds: the two agree by
+     * construction (above), so this is the sheet's own bug. */
+    CHECK_ARG(false, "the index names an item no slot of the spine holds");
 }
 
 /**

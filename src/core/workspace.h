@@ -75,6 +75,7 @@
 #include <string.h>
 #include <types.h>
 
+#include "base/error.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "core/manifest.h"
@@ -531,8 +532,7 @@ static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
         case PATH_TYPE_DIRECTORY:  return FS_OCCUPANT_DIRECTORY;
     }
 
-    /* Unreachable once every enum value is handled */
-    return FS_OCCUPANT_OTHER;
+    CHECK_ARG(false, "a path type no enumerator names");
 }
 
 /**

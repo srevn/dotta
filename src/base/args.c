@@ -423,13 +423,16 @@ static void apply_value_opt(
             break;
         }
 
-        default:
-            /* Caller should route FLAG/FLAG_SET directly; this path is a bug. */
-            record_error(
-                errors, arena, tok_idx, opt,
-                "internal: option kind %d is not value-taking", (int) opt->kind
-            );
-            break;
+        case ARGS_KIND_END:
+        case ARGS_KIND_GROUP:
+        case ARGS_KIND_FLAG:
+        case ARGS_KIND_FLAG_SET:
+        case ARGS_KIND_POSITIONAL:
+        case ARGS_KIND_POSITIONAL_ARG:
+        case ARGS_KIND_POSITIONAL_RAW:
+            /* The callers route the value-taking kinds alone (apply_long_opt,
+             * apply_short_opt) */
+            CHECK_ARG(false, "a kind that takes no value was handed one");
     }
 }
 
@@ -520,12 +523,13 @@ static void apply_long_opt(
             apply_value_opt(opt, inline_val, cur, opts, arena, errors, tok_idx);
             break;
 
-        default:
-            record_error(
-                errors, arena, tok_idx, opt,
-                "internal: option kind %d", (int) opt->kind
-            );
-            break;
+        case ARGS_KIND_END:
+        case ARGS_KIND_GROUP:
+        case ARGS_KIND_POSITIONAL:
+        case ARGS_KIND_POSITIONAL_ARG:
+        case ARGS_KIND_POSITIONAL_RAW:
+            /* find_long answers a row a flag names, and these rows name none */
+            CHECK_ARG(false, "a row no flag names was found by a flag");
     }
 }
 
@@ -565,12 +569,13 @@ static void apply_short_opt(
         case ARGS_KIND_INT:
             apply_value_opt(opt, NULL, cur, opts, arena, errors, tok_idx);
             break;
-        default:
-            record_error(
-                errors, arena, tok_idx, opt,
-                "internal: option kind %d", (int) opt->kind
-            );
-            break;
+        case ARGS_KIND_END:
+        case ARGS_KIND_GROUP:
+        case ARGS_KIND_POSITIONAL:
+        case ARGS_KIND_POSITIONAL_ARG:
+        case ARGS_KIND_POSITIONAL_RAW:
+            /* find_short answers a row a flag names, and these rows name none */
+            CHECK_ARG(false, "a row no flag names was found by a flag");
     }
 }
 
@@ -802,22 +807,14 @@ static args_outcome_t consume_tokens(
      * `default_subcommand` when set, matching how `git fetch --all` implies `git
      * fetch`. */
     if (command->subcommands != NULL) {
-        /* Spec-author guard: the subcommand path never parses the parent's opts
-         * — flags fall through to the default sub. Catching a stray
-         * ARGS_FLAG/STRING/etc. on a tree parent here turns a silent-no-op bug
-         * into a visible parse error. */
-        if (command->opts != NULL) {
-            for (const args_opt_t *o = command->opts;
-                o->kind != ARGS_KIND_END; o++) {
-                if (o->kind == ARGS_KIND_GROUP) continue;
-                record_error(
-                    errors, arena, -1, o,
-                    "internal: command '%s' has subcommands; "
-                    "opts[] must be empty (move flags to each subcommand)",
-                    command->name ? command->name : "?"
-                );
-                return ARGS_FAILED;
-            }
+        /* The spec author's contract: the subcommand path never parses the parent's
+         * opts — flags fall through to the default sub — so a tree parent carries
+         * none, and a stray one would be a silent no-op. */
+        for (const args_opt_t *o = command->opts; o && o->kind != ARGS_KIND_END; o++) {
+            CHECK_ARG(
+                o->kind == ARGS_KIND_GROUP,
+                "a command with subcommands carries no options of its own"
+            );
         }
 
         if (!cur_more(cur)) {

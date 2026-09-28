@@ -712,6 +712,8 @@ static error_t collect_storage(
             goto cleanup;
     }
 
+    CHECK_ARG(false, "a held kind no enumerator names");
+
 cleanup:
     if (subtree) git_tree_free(subtree);
     metadata_free(metadata);

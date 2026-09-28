@@ -105,6 +105,7 @@
 #include <sys/stat.h>
 #include <types.h>
 
+#include "base/error.h"
 #include "base/hashmap.h"
 #include "infra/mount.h"
 
@@ -280,15 +281,17 @@ typedef struct {
  */
 static inline git_filemode_t path_type_to_git_filemode(path_type_t type) {
     switch (type) {
+        case PATH_TYPE_FILE:
+            return GIT_FILEMODE_BLOB;
         case PATH_TYPE_SYMLINK:
             return GIT_FILEMODE_LINK;
         case PATH_TYPE_EXECUTABLE:
             return GIT_FILEMODE_BLOB_EXECUTABLE;
         case PATH_TYPE_DIRECTORY:
             return GIT_FILEMODE_TREE;
-        default:
-            return GIT_FILEMODE_BLOB;
     }
+
+    CHECK_ARG(false, "a path type no enumerator names");
 }
 
 /**

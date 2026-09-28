@@ -217,10 +217,9 @@ static void apply_print_deploy_skips(
                 break;
             }
 
-            case DEPLOY_SKIP_NONE: {
-                /* Unreachable: a row is in skipped because a reason names it */
-                break;
-            }
+            case DEPLOY_SKIP_NONE:
+                /* A row is in skipped because a reason names it */
+                CHECK_ARG(false, "a skipped row has its reason");
         }
     }
 
@@ -1493,8 +1492,8 @@ static void apply_print_cleanup_skips(
                 }
                 break;
             case CLEANUP_SKIP_NONE:
-                /* Unreachable: a file is in skipped_files because a reason names it */
-                break;
+                /* A file is in skipped_files because a reason names it */
+                CHECK_ARG(false, "a skipped file has its reason");
         }
 
         output_colored(out, OUTPUT_NORMAL, color, "  %s", glyph);

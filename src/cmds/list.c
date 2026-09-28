@@ -50,8 +50,6 @@ static void print_upstream_state(
     output_t *out,
     const upstream_info_t *info
 ) {
-    if (!info) return;
-
     const char *symbol = upstream_state_symbol(info->state);
     output_color_t color = upstream_state_color(info->state);
     char label[32];
@@ -78,7 +76,6 @@ static void print_upstream_state(
         case UPSTREAM_UP_TO_DATE:
         case UPSTREAM_NO_REMOTE:
         case UPSTREAM_UNKNOWN:
-        default:
             snprintf(
                 label, sizeof(label), "[%s]",
                 symbol

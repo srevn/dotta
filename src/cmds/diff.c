@@ -233,7 +233,9 @@ static const char *get_status_message_from_item(
         return "profile reassigned (acknowledged by apply)";
     }
 
-    return "unknown";
+    /* Every item the direction filter admits has a sentence above
+     * (should_show_item_for_direction) */
+    CHECK_ARG(false, "an admitted item has a status message");
 }
 
 /**

@@ -61,10 +61,11 @@ static const char *const HOOK_NAMES[] = {
 };
 
 static const char *hook_type_name(hook_type_t type) {
-    if (type >= 0 && type < (sizeof(HOOK_NAMES) / sizeof(HOOK_NAMES[0]))) {
-        return HOOK_NAMES[type];
-    }
-    return "unknown";
+    CHECK_ARG(
+        (size_t) type < sizeof(HOOK_NAMES) / sizeof(HOOK_NAMES[0]),
+        "a hook type no name is kept for"
+    );
+    return HOOK_NAMES[type];
 }
 
 /**
@@ -97,9 +98,6 @@ static error_t hook_get_path(
     CHECK_NULL(out);
 
     const char *hook_name = hook_type_name(type);
-    if (strcmp(hook_name, "unknown") == 0) {
-        return ERROR(ERR_INVALID_ARG, "Invalid hook type: %d", type);
-    }
 
     /* Get hooks directory */
     char *hooks_dir = NULL;

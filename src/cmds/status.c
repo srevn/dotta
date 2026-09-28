@@ -1264,7 +1264,6 @@ static error_t status_print_remote(
                 no_remote++;
                 break;
             case UPSTREAM_UNKNOWN:
-            default:
                 snprintf(
                     status_str, sizeof(status_str), "%s unknown",
                     symbol

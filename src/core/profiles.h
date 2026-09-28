@@ -509,10 +509,10 @@ error_t profile_list_files(
  * add_print_enable).
  *
  * Cost: one tree walk and one sheet load, in an arena of the call's own — the
- * product is a bool and nothing outlives the call (include/runtime.h, the
- * frame-scope lifetime). Measured at 0.144.2 on a 1,000-path branch: 2.5 ms,
- * against 31 ms for the statistics beside it, whose object-header read per blob
- * is the larger half.
+ * product is a bool and nothing outlives the call (include/runtime.h "Memory",
+ * a frame's). Measured at 0.144.2 on a 1,000-path branch: 2.5 ms, against 31 ms
+ * for the statistics beside it, whose object-header read per blob is the larger
+ * half.
  *
  * @param repo Repository (must not be NULL)
  * @param profile Profile name (must not be NULL)

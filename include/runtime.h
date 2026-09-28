@@ -409,75 +409,93 @@ typedef struct dotta_run {
  * is unpacked. A future resource lands here as a member and a need, not as
  * signature churn across every command.
  *
- * Arena lifetimes
- * ---------------
- * The codebase has exactly three arena lifetimes, two of which are threaded through
- * the layers as a parameter and one of which never leaves the function that made
- * it:
+ * Memory
+ * ------
+ * One question places every allocation: what must this outlive, and what must
+ * it not?
  *
- *   - Process-scope. `main`'s arena, made before identity_init and freed after
- *     everything, on every exit: the identity of the run (sys/identity.h) and
- *     the configuration — the struct, every value read into it and its two compiled
- *     pattern rulesets, read-only once config_load returns. Lives the whole
- *     process; outlives every dispatch, and is the command arena's parent as
- *     main is run_spec's. The errors are a second instance of it, not a fourth
- *     lifetime: `base/error.c`'s own arena, made at the first error and never
- *     freed, because an error is made before the command's arena exists and
- *     rendered after it is gone (base/error.h "Lifetime"), and base sees no
- *     composition root to be handed main's.
+ *   - An arena, for what lives until a scope ends. Nothing in one is freed alone,
+ *     and a container lives in the arena it was made in (base/array.h,
+ *     base/hashmap.h). A function whose answer is memory takes the arena its
+ *     answer lives in, first; a callee that fills a caller's container takes none.
  *
- *   - Command-scope. `ctx->arena` is the dispatch-wide bump allocator, created
- *     and freed by `run_spec`. Handlers allocate into it directly or thread it
- *     as an `arena_t *` parameter; the parser uses the same arena since its outputs
- *     are read by the handler, and every derived member of the run (the mount
- *     table, the view's rows) lives in it. Handlers and every layer beneath borrow
- *     the pointer — never call `arena_free(ctx->arena)`.
+ *       - The process's. `main`'s, made before identity_init and freed after
+ *         everything, on every exit: the identity of the run (sys/identity.h)
+ *         and the configuration — the struct, every value read into it and its
+ *         two compiled pattern rulesets, read-only once config_load returns.
+ *         The errors are a second instance of it, not another lifetime:
+ *         `base/error.c`'s own arena, made at the first error and never freed,
+ *         because an error is made before the command's arena exists and rendered
+ *         after it is gone, and base sees no composition root to be handed main's.
+ *         A loop that goes on past a failure mints it once per cause and answers
+ *         it again, so what the errors keep is counted by their causes
+ *         (base/error.h "Lifetime").
  *
- *   - Frame-scope. An arena a function makes and frees itself, whose pointer
- *     never leaves the call that made it, for one of two reasons.
+ *       - The command's. `ctx->arena`, made and freed by `run_spec`: every value
+ *         a command builds — names, rows, items, records, plans, verdicts,
+ *         receipts, messages — and every container that holds them, the parser's
+ *         outputs, and the run's derived members (the mount table, the view's
+ *         rows). Borrowed by every layer beneath and freed by none, and never
+ *         marked: its containers remember it, and a return to a mark would drop
+ *         what they grew.
  *
- *     A lifetime shorter than the command's, earned by a number.
- *     `core/workspace.c`'s untracked walk makes one per scan root and
- *     `cmds/add.c`'s one per directory argument, every frame listing into it
- *     and every entry rewinding it (sys/filesystem.h fs_listing_t), because an
- *     entry that is named and then excluded is kept by nothing, and its joined
- *     path and the namer's two strings all outlive the decision that discarded
- *     it: 20,000 ignored files beneath one tracked directory measured 4.1 MB of
- *     peak RSS at the shape that composed names by hand, 20.3 MB against
- *     `ctx->arena`, and 4.1 MB with a scratch of the walk's own, and `add -e`
- *     over 51,000 excluded entries 13.2 MB against `ctx->arena` and 7.3 MB with
- *     one; every string that outlives an entry is copied at the one door it leaves
- *     through (workspace_add_untracked, add_list). `core/profiles.c`'s
- *     profile_needs_target builds one branch's view to read one bool off it:
- *     against `ctx->arena` the editor would keep a view per local branch for
- *     the length of its session and the listing one per available row — 1.8 MB
- *     of heap at six branches of 1,000 paths, for six bools. `cmds/interactive.c`'s
- *     plan_check builds the saved set's view only to learn that it builds: against
- *     the command arena a session kept one per save — 50 saves over a 5,000-file
- *     profile measured 120.7 MB of peak RSS, and 46.2 MB with the check's own,
- *     the same 391 KB live at the end of 2 saves or 50.
+ *       - A frame's. An arena a function makes and frees itself, for one of two
+ *         reasons.
  *
- *     Or no arena in reach: a function whose answer is not memory keeps what it
- *     builds and drops within the call in a frame of its own — a spawn's
- *     environment (`utils/hooks.c` hook_execute, `utils/bootstrap.c` run_live),
- *     a run's own lists (`utils/bootstrap.c` bootstrap_fire), a listing read to
- *     decide (`sys/filesystem.c` fs_remove_empty_dir, `sys/gitops.c`
- *     gitops_branch_blocker, `infra/epoch.c` walk_ciphertext), a walk's listings
- *     (`sys/filesystem.c` fs_remove_dir, one scratch its frames' listings rewind).
- *     A function whose answer is memory takes the arena its answer lives in
- *     instead, and a callee that fills a caller's container takes none: the
- *     container remembers its arena (base/array.h).
+ *         A lifetime shorter than the command's, earned by a number. A walk keeps
+ *         one scratch, made by its driver — `core/workspace.c`'s untracked walk
+ *         one per scan root, `cmds/add.c`'s one per directory argument — every
+ *         frame listing into it and every entry rewinding it (sys/filesystem.h
+ *         fs_listing_t), because an entry that is named and then excluded is
+ *         kept by nothing: 20,000 ignored files beneath one tracked directory
+ *         measured 4.1 MB of peak RSS at the shape that composed names by hand,
+ *         20.3 MB against `ctx->arena`, and 4.1 MB with a scratch of the walk's
+ *         own, and `add -e` over 51,000 excluded entries 13.2 MB against
+ *         `ctx->arena` and 7.3 MB with one; what outlives an entry is copied at
+ *         the one door it leaves through (workspace_add_untracked, add_list). A
+ *         view built to read one answer off it is built in one too:
+ *         `core/profiles.c`'s profile_needs_target reads one bool off a branch's
+ *         view, where the editor would keep a view per local branch for its session
+ *         — 1.8 MB of heap at six branches of 1,000 paths, for six bools — and
+ *         `cmds/interactive.c`'s plan_check learns only that the saved set's
+ *         view builds, where a session kept one per save — 50 saves over a
+ *         5,000-file profile measured 120.7 MB of peak RSS against the command
+ *         arena, and 46.2 MB with the check's own, 391 KB live at the end of 2
+ *         saves or 50.
  *
- * Adding a fourth requires the evidence that one has: a genuinely sub-command
- * lifetime in code, and a number. Hypothesised need is not enough; a primitive
- * exists when a real consumer exists. Single-threaded by design (no pthread, no
- * async I/O loop), so concurrent allocation is not a concern.
+ *         No arena in reach: a function whose answer is not memory keeps what
+ *         it builds and drops within the call in a frame of its own — a spawn's
+ *         environment (`utils/hooks.c` hook_execute, `utils/bootstrap.c` run_live),
+ *         a run's own lists (`utils/bootstrap.c` bootstrap_fire), a fetch's
+ *         refspecs (`sys/gitops.c` gitops_fetch_branches), a diff's attribution
+ *         index (`core/manifest.c` manifest_diff), a listing read to decide
+ *         (`sys/filesystem.c` fs_remove_empty_dir, `sys/gitops.c`
+ *         gitops_branch_blocker, `infra/epoch.c` walk_ciphertext), and a walk
+ *         whose answer is an error (`sys/filesystem.c` fs_remove_dir).
+ *
+ *       - A handle's own. Made by its opener and freed by its closer: the sheet
+ *         (core/metadata.h), a printer's list (base/output.h output_list_t).
+ *
+ *   - The heap, for what dies before any scope does: a payload sized by its data
+ *     (base/buffer.h — a file's bytes, a blob's, a diff's text), freed with the
+ *     item that holds it; a handle's own struct, released by its closer; a
+ *     transient built and freed within one call (heap_str_format, deploy's per-row
+ *     path scratch).
+ *
+ *   - The library, for what a library allocates: libgit2's objects and SQLite's
+ *     statements, released by the library's own verb on every path.
+ *
+ *   - A secure mapping, for a secret that outlives a call (base/secure.h
+ *     secure_alloc); a wipe for one that does not (secure_wipe).
  *
  * Every allocation dotta makes — its own code, and cJSON's and tomlc17's through
  * the hooks main installs — succeeds or the process dies (`base/heap.h`,
  * `base/arena.h`). A mapping sized by someone else's claim (`base/secure.h`), a
  * linked library's exhaustion and a bound the design chose (`sys/filesystem.c
- * FS_MAX_READ_SIZE`, `sys/process.h PROCESS_CAPTURE_MAX`) are refusals.
+ * FS_MAX_READ_SIZE`, `sys/process.h PROCESS_CAPTURE_MAX`) are refusals. A new
+ * scope needs the evidence one has: a genuinely shorter lifetime in code, and a
+ * number — a hypothesised need is not enough. Single-threaded by design (no
+ * pthread, no async I/O loop), so concurrent allocation is not a concern.
  *
  * Exit-code override
  * ------------------

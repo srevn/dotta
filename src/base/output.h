@@ -589,8 +589,8 @@ bool output_confirm_destructive(
  *
  * A list's lifetime is its printing's, shorter than the command's: a status over
  * 70,000 offers builds 8.6 MB of lists, 6.0 MB of them live at once, which the
- * command's arena would hold to its end (include/runtime.h "Frame-scope"). So a
- * list owns an arena — the struct, its title and hint, its items and every string
+ * command's arena would hold to its end (include/runtime.h "Memory"). So a list
+ * owns an arena — the struct, its title and hint, its items and every string
  * they copy — and output_list_free gives all of it back at once.
  */
 typedef struct output_list output_list_t;

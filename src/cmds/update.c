@@ -1005,10 +1005,10 @@ cleanup:
  * bare run hands no rows and visits exactly the profiles it always did.
  *
  * The commits that landed cross the error boundary: out_commits receives one
- * bookkeeping entry per landed commit, handed to the caller even when a later
- * profile fails, so the record write follows what Git shows. A profile that
- * committed nothing — a walk that touched nothing, or a failure before its commit
- * — contributes no entry.
+ * bookkeeping entry per landed commit, written as the commit lands, so the caller
+ * holds it even when a later profile fails and the record write follows what
+ * Git shows. A profile that committed nothing — a walk that touched nothing, or
+ * a failure before its commit — contributes no entry.
  *
  * @param ctx Dispatch context (must not be NULL; the stages are opened on the
  *            run's repository, the capture reads the key and the encryption policy)
@@ -1023,7 +1023,7 @@ cleanup:
  * @param total_updated Output: total items committed across all profiles (must
  *                      not be NULL)
  * @param out_commits Output: one commit's bookkeeping per landed commit, in the
- *                    command arena; set even on error (must not be NULL)
+ *                    command arena; set on every return (must not be NULL)
  * @param out_commit_count Output: number of entries in out_commits (must not be
  *                         NULL)
  * @return Error or NULL on success
@@ -1051,20 +1051,13 @@ static error_t update_execute(
     output_t *out = ctx->out;
 
     *total_updated = 0;
-    *out_commits = NULL;
     *out_commit_count = 0;
 
-    if (update_count == 0 && derive_count == 0) {
-        return NULL;
-    }
-
-    commit_t *commits = NULL;
-    size_t commit_count = 0;
-    error_t err = NULL;
-
     /* One bookkeeping slot per enabled profile — an upper bound; only landed
-     * commits fill one. */
-    commits = arena_calloc(ctx->arena, enabled->count, sizeof(commit_t));
+     * commits fill one, each as it lands, so the caller holds every commit that
+     * landed whichever profile stops the run. */
+    commit_t *commits = arena_calloc(ctx->arena, enabled->count, sizeof(*commits));
+    *out_commits = commits;
 
     for (size_t p = 0; p < enabled->count; p++) {
         const char *profile = enabled->entries[p];
@@ -1100,15 +1093,11 @@ static error_t update_execute(
         /* The profile's stage: the branch as it stands now, the parent of the
          * commit the walk makes. Its life is this iteration's. */
         char refname[DOTTA_REFNAME_MAX];
-        err = gitops_branch_refname(refname, sizeof(refname), profile);
-        if (err) goto cleanup;
+        RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), profile));
 
         stage_t *stage = NULL;
-        err = stage_open(repo, refname, &stage);
-        if (err) {
-            err = error_wrap(err, "Failed to open profile '%s'", profile);
-            goto cleanup;
-        }
+        error_t err = stage_open(repo, refname, &stage);
+        if (err) return error_wrap(err, "Failed to open profile '%s'", profile);
 
         /* Update this profile on its stage */
         commit_t bookkeeping = { 0 };
@@ -1122,10 +1111,7 @@ static error_t update_execute(
 
         /* Any error is a failure before the commit: no commit landed, whatever
          * the bookkeeping holds */
-        if (err) {
-            err = error_wrap(err, "Failed to update profile '%s'", profile);
-            goto cleanup;
-        }
+        if (err) return error_wrap(err, "Failed to update profile '%s'", profile);
 
         /* The commit gate's own sum, read back off the bookkeeping the walk filled:
          * on a clean return, zero means the gate closed without a commit and
@@ -1138,8 +1124,9 @@ static error_t update_execute(
             bookkeeping.claimed + bookkeeping.retired.count;
         if (landed == 0) continue;
 
-        /* The commit landed: its bookkeeping is the record write's now */
-        commits[commit_count++] = bookkeeping;
+        /* The commit landed: its bookkeeping is the record write's now, the
+         * caller's whatever a later profile meets */
+        commits[(*out_commit_count)++] = bookkeeping;
         *total_updated += processed;
 
         if (!output_is_verbose(out)) {
@@ -1157,13 +1144,7 @@ static error_t update_execute(
         }
     }
 
-cleanup:
-    /* The commits that landed cross the error boundary: the caller writes the
-     * record for them either way */
-    *out_commits = commits;
-    *out_commit_count = commit_count;
-
-    return err;
+    return NULL;
 }
 
 /**
@@ -1437,14 +1418,6 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    /* Declare all resources at top, initialized to NULL */
-    error_t err = NULL;
-    workspace_t *ws = NULL;
-    scope_t *scope = NULL;
-    partition_t partition = { 0 };
-    size_t total_updated = 0;
-    error_t record_err = NULL;   /* The record phase's fate: non-fatal, read by the stop and the summary */
-
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
@@ -1465,15 +1438,14 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .exclude_patterns = opts->exclude_patterns,
         .exclude_count    = opts->exclude_count,
     };
-    err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
-    if (err) goto cleanup;
+    scope_t *scope = NULL;
+    RETURN_IF_ERROR(scope_build(repo, state, &scope_inputs, ctx->arena, &scope));
 
     if (scope_enabled(scope)->count == 0) {
-        err = ERROR(
+        return ERROR(
             ERR_NOT_FOUND, "No enabled profiles found\n"
             "Hint: Run 'dotta profile enable <name>' to enable profiles"
         );
-        goto cleanup;
     }
 
     /* Load workspace for update analysis
@@ -1497,13 +1469,11 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .analyze_untracked = (opts->include_new || opts->only_new ||
             config->auto_detect_new_files) /* Explicit flags or config auto-detect */
     };
-    err = workspace_load(
+    workspace_t *ws = NULL;
+    error_t err = workspace_load(
         repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
     );
-    if (err) {
-        err = error_wrap(err, "Failed to analyze workspace");
-        goto cleanup;
-    }
+    if (err) return error_wrap(err, "Failed to analyze workspace");
 
     /* What the load owes the record — its observations, its confirmations, the
      * voids of orders the view took back (core/workspace.h workspace_flush) —
@@ -1514,8 +1484,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * Files actually updated by this command get their record written separately
      * inside update_write_record(); this flush covers the clean files the analysis
      * verified but didn't modify. */
-    err = workspace_flush(ws);
-    if (err) goto cleanup;
+    RETURN_IF_ERROR(workspace_flush(ws));
 
     /* The run's filter context, ahead of everything the filter says against it:
      * the verbose "Excluded" log, the census, the nothing-exit and the preview */
@@ -1547,6 +1516,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Partition the diverged items: the scope, the flags, and for a deployed
      * item the route table. */
+    partition_t partition;
     update_partition(ws, opts, scope, config, out, ctx->arena, &partition);
 
     /* What the filter refused, said once — above the exit below, so a workspace
@@ -1698,8 +1668,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         } else {
             output_info(out, OUTPUT_NORMAL, "No modified files or directories to update");
         }
-        err = NULL;  /* Not an error */
-        goto cleanup;
+        return NULL;
     }
 
     /* The plan's shape, counted once: the preview gates its sections on these
@@ -1746,8 +1715,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .dry_run    = opts->dry_run,
     };
 
-    err = hook_fire_pre(config, out, &hook_inv);
-    if (err) goto cleanup;
+    RETURN_IF_ERROR(hook_fire_pre(config, out, &hook_inv));
 
     /* The prompts — none bind a dry run: it executes nothing, so there is nothing
      * to consent to */
@@ -1755,7 +1723,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         if (opts->interactive) {
             if (!output_confirm(out, "Update these items?", false)) {
                 output_info(out, OUTPUT_NORMAL, "Cancelled");
-                goto cleanup;
+                return NULL;
             }
         }
 
@@ -1790,7 +1758,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                         out, OUTPUT_NORMAL,
                         "No modified files remaining after skipping new files"
                     );
-                    goto cleanup;
+                    return NULL;
                 }
             }
         }
@@ -1802,6 +1770,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * summary below is its one sentence. */
     commit_t *commits = NULL;
     size_t commit_count = 0;
+    size_t total_updated = 0;
+    error_t record_err = NULL;   /* The record phase's fate: non-fatal, read by the stop and the summary */
     if (!opts->dry_run) {
         err = update_execute(
             ctx, scope_enabled(scope),
@@ -1856,7 +1826,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             output_info(out, OUTPUT_NORMAL, "Record updated");
         }
 
-        if (err) goto cleanup;
+        if (err) return err;
     }
 
     /* Execute post-update hook (the hooks layer suppresses it on a dry run) */
@@ -1896,8 +1866,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
     }
 
-cleanup:
-    return err;
+    return NULL;
 }
 
 /* ══════════════════════════════════════════════════════════════════

@@ -37,17 +37,6 @@
 #include <types.h>
 
 /**
- * Error structure (opaque)
- *
- * Contains error code, message, and optional cause.
- */
-struct error {
-    error_code_t code;
-    char *message;
-    error_t *cause;  /* Wrapped error (can be NULL) */
-};
-
-/**
  * Create a new error with formatted message
  *
  * An error is the heap's, so it is made or the run dies of exhaustion
@@ -140,6 +129,18 @@ const char *error_message(const error_t *err);
  * @return Error code
  */
 error_code_t error_code(const error_t *err);
+
+/**
+ * Get the cause — the error this one wraps
+ *
+ * One link down the chain, for a reader that walks it: error_root is the walk
+ * taken to its end, error_print the walk rendered.
+ *
+ * @param err Error
+ * @return The wrapped error, or NULL at the root and for NULL (valid until the
+ *         error is freed)
+ */
+const error_t *error_cause(const error_t *err);
 
 /**
  * Get the root cause — the deepest error in the chain

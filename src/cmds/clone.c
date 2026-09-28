@@ -372,7 +372,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * repository's epoch; without it, every encrypted blob is undecryptable. */
     err = epoch_fetch(repo, "origin", xfer, NULL);
     if (err) {
-        if (err->code == ERR_NOT_FOUND) {
+        if (error_code(err) == ERR_NOT_FOUND) {
             /* Split the diagnostic: an empty remote is a publish-first problem,
              * a ref-bearing one is simply not dotta's. On a listing failure fall
              * through to the foreign diagnostic. */
@@ -409,7 +409,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 );
             }
             goto cleanup;
-        } else if (err->code == ERR_CRYPTO) {
+        } else if (error_code(err) == ERR_CRYPTO) {
             /* Malformed remote epoch — epoch_fetch installs only what it proved,
              * so no garbage ref persists. The advertised ref establishes identity
              * (the gate above), but its payload is a crypto concern:

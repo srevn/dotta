@@ -217,7 +217,7 @@ static error_t *open_run(
                     "  - Or set encryption.enabled = false to work without "
                     "encryption for now",
                     EPOCH_REF,
-                    err->code == ERR_NOT_FOUND ? "is missing" : "cannot be read"
+                    error_code(err) == ERR_NOT_FOUND ? "is missing" : "cannot be read"
                 );
                 goto done;
             }

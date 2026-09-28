@@ -1474,7 +1474,7 @@ static void epoch_reconcile(
                  * it. Anything else is the fetch's own failure under one line
                  * of context. */
                 output_warning(
-                    out, OUTPUT_NORMAL, err->code == ERR_CRYPTO ? "%s"
+                    out, OUTPUT_NORMAL, error_code(err) == ERR_CRYPTO ? "%s"
                     : "Failed to adopt repository epoch from remote: %s",
                     error_message(err)
                 );

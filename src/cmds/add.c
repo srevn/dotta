@@ -2760,7 +2760,7 @@ static error_t *add_dispatch(const void *ctx_v, void *opts_v) {
      * (sys/filesystem's second try) — EROFS and an immutable flag refuse writes,
      * never reads, and code ERR_FS besides. So the one thing left to say is
      * sudo. */
-    if (err && err->code == ERR_PERMISSION && !identity()->privileged) {
+    if (error_code(err) == ERR_PERMISSION && !identity()->privileged) {
         err = error_wrap(err, "Only root can read it; re-run under sudo");
     }
 

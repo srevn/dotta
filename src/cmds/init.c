@@ -167,7 +167,7 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
      * reads as an absence and is made whole by the init, refs and all
      * (gitops_init_repository). */
     err = gitops_open_repository(&repo, path);
-    if (err && error_code(err) == ERR_NOT_FOUND) {
+    if (error_code(err) == ERR_NOT_FOUND) {
         error_free(err);
         err = gitops_init_repository(&repo, path);
     }
@@ -211,7 +211,7 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
         /* ERR_CRYPTO is the refusal to mint over reachable ciphertext. It already
          * names the state of the ref and the restore that repairs it, so a wrap
          * would only push both under a line that says less. */
-        if (err->code != ERR_CRYPTO) {
+        if (error_code(err) != ERR_CRYPTO) {
             err = error_wrap(err, "Failed to initialize repository epoch");
         }
         goto cleanup;

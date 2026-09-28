@@ -2011,7 +2011,7 @@ static error_t *update_dispatch(const void *ctx_v, void *opts_v) {
     /* A refusal the invoker met reading a source (add_dispatch has the list and
      * the argument) ends the update before its commit; a run that holds root
      * reads through it, so the one thing left to say is sudo. */
-    if (err && err->code == ERR_PERMISSION && !identity()->privileged) {
+    if (error_code(err) == ERR_PERMISSION && !identity()->privileged) {
         err = error_wrap(err, "Only root can read it; re-run under sudo");
     }
 

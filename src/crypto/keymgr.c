@@ -186,7 +186,7 @@ static void bind_epoch(keymgr *km, const kdf_epoch_t *epoch) {
 static error_t *refuse(keymgr *km, error_t *err) {
     free(km->refusal.line);
     km->refusal.line = heap_strdup(error_message(err));
-    km->refusal.code = err->code;
+    km->refusal.code = error_code(err);
 
     return err;
 }
@@ -311,7 +311,7 @@ static error_t *trial_opens(
         *out_accepted = true;
         return NULL;
     }
-    if (err->code != ERR_CRYPTO) {
+    if (error_code(err) != ERR_CRYPTO) {
         return err;
     }
     error_free(err);
@@ -367,7 +367,7 @@ static error_t *derive_and_check(
             bind_proof(out, in_hand);
             return NULL;
         }
-        if (err->code != ERR_CRYPTO) {
+        if (error_code(err) != ERR_CRYPTO) {
             goto fail;
         }
         error_free(err);
@@ -429,7 +429,7 @@ fail:
  * base/secure.h) passes through as itself. Takes ownership of `read_err`.
  */
 static error_t *nothing_read(error_t *read_err) {
-    if (read_err->code == ERR_MEMORY) {
+    if (error_code(read_err) == ERR_MEMORY) {
         return read_err;
     }
     error_t *locked = ERROR(
@@ -459,7 +459,7 @@ static error_t *prompt_and_verify(
         size_t passphrase_len = 0;
         error_t *err = passphrase_prompt(prompt, &passphrase, &passphrase_len);
         if (err) {
-            if (tty && err->code == ERR_INVALID_ARG
+            if (tty && error_code(err) == ERR_INVALID_ARG
                 && attempt < KEYMGR_ATTEMPTS) {
                 error_free(err);
                 continue;
@@ -475,7 +475,7 @@ static error_t *prompt_and_verify(
         /* A wrong passphrase — derive_and_check's ERR_LOCKED — is re-asked at a
          * terminal; a derivation or a walk that failed on its own is refused at
          * once. */
-        if (!tty || err->code != ERR_LOCKED || attempt == KEYMGR_ATTEMPTS) {
+        if (!tty || error_code(err) != ERR_LOCKED || attempt == KEYMGR_ATTEMPTS) {
             return refuse(km, err);
         }
         error_free(err);
@@ -499,7 +499,7 @@ static error_t *prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
         size_t passphrase_len = 0;
         error_t *err = passphrase_prompt(prompt, &passphrase, &passphrase_len);
         if (err) {
-            if (tty && err->code == ERR_INVALID_ARG
+            if (tty && error_code(err) == ERR_INVALID_ARG
                 && attempt < KEYMGR_ATTEMPTS) {
                 error_free(err);
                 continue;
@@ -514,7 +514,7 @@ static error_t *prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
         );
         /* Nothing readable at all ends the ladder; a line the primitive refuses
          * is a mismatch, and falls through to be one. */
-        if (err && err->code != ERR_INVALID_ARG) {
+        if (err && error_code(err) != ERR_INVALID_ARG) {
             secure_free(passphrase, passphrase_len + 1);
             return refuse(km, nothing_read(err));
         }
@@ -578,7 +578,7 @@ static error_t *obtain(
         secure_free(passphrase, passphrase_len + 1);
         return err ? refuse(km, err) : NULL;
     }
-    if (err->code != ERR_NOT_FOUND) {
+    if (error_code(err) != ERR_NOT_FOUND) {
         return refuse(km, err);
     }
     error_free(err);

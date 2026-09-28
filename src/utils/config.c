@@ -436,7 +436,7 @@ static error_t *read_sections(toml_datum_t top, config_t *config) {
 static error_t *read_file(const char *path, config_t *config) {
     buffer_t text = BUFFER_INIT;
     error_t *err = fs_read_file(path, &text);
-    if (err && err->code == ERR_NOT_FOUND) {
+    if (error_code(err) == ERR_NOT_FOUND) {
         /* No config file - every key keeps its default */
         error_free(err);
         return NULL;

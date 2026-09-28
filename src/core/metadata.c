@@ -779,7 +779,7 @@ static error_t *capture_ancestor(
          * see: a directory capture that fails loses a claim and nothing else,
          * so the rung keeps what it had and dotta creates it as it would have
          * before. */
-        if (err->code != ERR_NOT_FOUND) {
+        if (error_code(err) != ERR_NOT_FOUND) {
             return err;
         }
         error_free(err);

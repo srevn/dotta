@@ -284,7 +284,7 @@ error_t *epoch_init(
         );
     }
 
-    if (probe_err->code != ERR_NOT_FOUND) {
+    if (error_code(probe_err) != ERR_NOT_FOUND) {
         /* The ref is there and yields no epoch. Over reachable ciphertext it
          * may be the unreadable form of the epoch that keys it, so the refusal
          * keeps the probe as its cause — epoch_load names what is wrong with
@@ -1019,7 +1019,7 @@ static error_t *decide_divergence(
     error_t *lerr = epoch_load(repo, &local);
     /* The epoch is public — no wipe. */
 
-    if (lerr && lerr->code == ERR_NOT_FOUND) {
+    if (error_code(lerr) == ERR_NOT_FOUND) {
         /* No bytes at the ref: nothing to make unreachable, and whatever this
          * repository holds was orphaned by whatever removed them. A census here
          * would attribute against a value that does not exist. */

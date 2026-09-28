@@ -13,6 +13,14 @@
 #include "base/heap.h"
 #include "base/terminal.h"
 
+/* The node, this file's alone: a reader asks for its code, its message, its cause
+ * or its root, and never reads a field. */
+struct error {
+    error_code_t code;
+    char *message;
+    error_t *cause;  /* Wrapped error (can be NULL) */
+};
+
 /**
  * Create error with variable arguments (internal helper)
  */
@@ -114,6 +122,11 @@ const char *error_message(const error_t *err) {
 error_code_t error_code(const error_t *err) {
     if (!err) return OK;
     return err->code;
+}
+
+const error_t *error_cause(const error_t *err) {
+    if (!err) return NULL;
+    return err->cause;
 }
 
 const error_t *error_root(const error_t *err) {

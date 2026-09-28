@@ -73,10 +73,7 @@ static inline size_t probe_dist(size_t slot, uint32_t hash, size_t mask) {
 
 /* Resize-only insert (no key dup, no update check) */
 static void insert_for_resize(
-    hashmap_t *map,
-    char *key,
-    void *value,
-    uint32_t hash
+    hashmap_t *map, char *key, void *value, uint32_t hash
 ) {
     size_t mask = map->capacity - 1;
     size_t pos = ideal_slot(hash, mask);
@@ -178,7 +175,8 @@ static hashmap_slot_t *hashmap_insert(hashmap_t *map, const char *key, void *val
         /* Empty slot — insert */
         if (!slot->key) {
             if (!carry_key) {
-                carry_key = map->borrow_keys ? (char *) key : arena_strdup(map->arena, key);
+                carry_key = map->borrow_keys
+                    ? (char *) key : arena_strdup(map->arena, key);
             }
             slot->key = carry_key;
             slot->value = carry_val;
@@ -199,7 +197,8 @@ static hashmap_slot_t *hashmap_insert(hashmap_t *map, const char *key, void *val
         size_t existing = probe_dist(pos, slot->hash, mask);
         if (dist > existing) {
             if (!carry_key) {
-                carry_key = map->borrow_keys ? (char *) key : arena_strdup(map->arena, key);
+                carry_key = map->borrow_keys
+                    ? (char *) key : arena_strdup(map->arena, key);
             }
 
             /* Swap our entry into this slot, carry the displaced one */
@@ -232,9 +231,7 @@ static hashmap_slot_t *hashmap_insert(hashmap_t *map, const char *key, void *val
  * after the span must be that end.
  */
 static const hashmap_slot_t *hashmap_slot(
-    const hashmap_t *map,
-    const char *key,
-    size_t len
+    const hashmap_t *map, const char *key, size_t len
 ) {
     const uint32_t h = hash_key(key, len);
     size_t mask = map->capacity - 1;
@@ -331,8 +328,7 @@ void hashmap_clear(hashmap_t *map, hashmap_free_fn free_fn) {
     for (size_t i = 0; i < map->capacity; i++) {
         hashmap_slot_t *slot = &map->slots[i];
         if (slot->key) {
-            if (free_fn && slot->value)
-                free_fn(slot->value);
+            if (free_fn && slot->value) free_fn(slot->value);
             *slot = (hashmap_slot_t){ 0 };
         }
     }
@@ -490,7 +486,8 @@ bool hashmap_iter_next(
 
     const hashmap_t *map = iter->map;
     CHECK_ARG(
-        map->mod_count == iter->snapshot_mod_count, "a map was modified while it was iterated"
+        map->mod_count == iter->snapshot_mod_count,
+        "a map was modified while it was iterated"
     );
 
     while (iter->index < map->capacity) {

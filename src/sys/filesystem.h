@@ -562,7 +562,8 @@ error_t fs_list_dir(const char *path, arena_t *arena, string_array_t *out);
  * the scratch as it stands, for the walk's driver, which made it, to free whole.
  *
  * A value its frame holds, and nothing frees one. Readers: sys/filesystem.c
- * fs_remove_subtree.
+ * fs_remove_subtree; core/workspace.c workspace_scan, whose entries leave the
+ * scratch through workspace_add_untracked.
  */
 typedef struct {
     arena_t *scratch;       /* The walk's: every listing, path and string it makes */
@@ -611,8 +612,8 @@ const char *fs_listing_next(fs_listing_t *listing);
  * status can reach. It bounds recursion and the per-frame resources a walk holds
  * while it enumerates; it is not a path-length limit and not a total memory bound.
  *
- * Read by cmds/add's add_collect and by core/workspace's untracked scan, which
- * is where the arithmetic comes from. */
+ * Read by cmds/add.c add_collect and core/workspace.c workspace_scan, which is
+ * where the arithmetic comes from. */
 #define FS_WALK_MAX_DEPTH 128
 
 /**

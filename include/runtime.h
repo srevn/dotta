@@ -437,18 +437,19 @@ typedef struct dotta_run {
  *     never leaves the call that made it, for one of two reasons.
  *
  *     A lifetime shorter than the command's, earned by a number.
- *     `core/workspace.c`'s untracked walk creates one per directory frame and
- *     resets it before each entry, because an entry that is named and then excluded
- *     is neither an offer nor a row, and its joined path and the namer's two
- *     strings all outlive the decision that discarded it: 20,000 ignored files
- *     beneath one tracked directory measured 4.1 MB of peak RSS at the shape
- *     that composed names by hand, 20.3 MB against `ctx->arena`, and 4.1 MB with
- *     the frame's own; every string that outlives a frame is copied at the one
- *     door it leaves through (workspace_add_untracked). `core/profiles.c`'s
- *     profile_needs_target builds one branch's view to read one bool off it:
- *     against `ctx->arena` the editor would keep a view per local branch for
- *     the length of its session and the listing one per available row — 1.8 MB
- *     of heap at six branches of 1,000 paths, for six bools.
+ *     `core/workspace.c`'s untracked walk makes one per scan root, every frame
+ *     listing into it and every entry rewinding it (sys/filesystem.h fs_listing_t),
+ *     because an entry that is named and then excluded is neither an offer nor
+ *     a row, and its joined path and the namer's two strings all outlive the
+ *     decision that discarded it: 20,000 ignored files beneath one tracked
+ *     directory measured 4.1 MB of peak RSS at the shape that composed names by
+ *     hand, 20.3 MB against `ctx->arena`, and 4.1 MB with a scratch of the walk's
+ *     own; every string that outlives an entry is copied at the one door it leaves
+ *     through (workspace_add_untracked). `core/profiles.c`'s profile_needs_target
+ *     builds one branch's view to read one bool off it: against `ctx->arena`
+ *     the editor would keep a view per local branch for the length of its session
+ *     and the listing one per available row — 1.8 MB of heap at six branches of
+ *     1,000 paths, for six bools.
  *
  *     Or no arena in reach: a function whose answer is not memory keeps what it
  *     builds and drops within the call in a frame of its own — a spawn's

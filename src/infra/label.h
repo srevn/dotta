@@ -219,14 +219,13 @@ label_t label_of(const char *storage_path);
  *
  * Readers: every surface a pattern is evaluated on — the enumeration
  * core/ignore.h's "The subject" describes without naming. The two walks ask of
- * what they found (cmds/add.c add_excluded, core/workspace.c
- * scan_directory_for_untracked), the scope of a name for --exclude, a row's or
- * an orphan's (core/scope.c scope_is_excluded), the policy of a name for
- * auto_encrypt (core/policy.c encryption_policy_matches_auto_patterns), and `ignore
- * --test` twice, of its argument and of the name the view gave it (cmds/ignore.c
- * test_path_ignore). One reader counts rather than matches: the climb, whose
- * rungs are the separators in the tail (core/metadata.c
- * metadata_capture_ancestors).
+ * what they found (cmds/add.c add_excluded, core/workspace.c workspace_scan),
+ * the scope of a name for --exclude, a row's or an orphan's (core/scope.c
+ * scope_is_excluded), the policy of a name for auto_encrypt (core/policy.c
+ * encryption_policy_matches_auto_patterns), and `ignore --test` twice, of its
+ * argument and of the name the view gave it (cmds/ignore.c test_path_ignore).
+ * One reader counts rather than matches: the climb, whose rungs are the separators
+ * in the tail (core/metadata.c metadata_capture_ancestors).
  *
  * @param storage_path Storage path, under a label
  * @return Pointer past the label; "" for the word alone, and for a label spelled

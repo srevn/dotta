@@ -692,10 +692,9 @@ static bool source_gitignore_matches(
  *
  * One lstat, the link itself and never its target — add's walk and the untracked
  * scan both classify this way and offer a symlink whole (cmds/add.c add_collect,
- * core/workspace.c scan_directory_for_untracked), so a `pointer/` rule that does
- * not decide there must not decide here. A stat would follow the link, and a
- * broken one would read as absent; both are answers about something other than
- * the path.
+ * core/workspace.c workspace_scan), so a `pointer/` rule that does not decide
+ * there must not decide here. A stat would follow the link, and a broken one
+ * would read as absent; both are answers about something other than the path.
  *
  * `filesystem_path` is NULL for a custom/ name this asker binds no target for:
  * the name stands nowhere, so nothing can be looked at and the source tree has

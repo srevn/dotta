@@ -239,7 +239,7 @@ static inline bool manifest_is_claim(
  * arm (core/workspace.h workspace_reassigned, core/workspace.c classify_absent,
  * workspace_item_route); the untracked scan's word at a child, a rung being the
  * one claim that settles nothing about the path it stands at (core/workspace.c
- * scan_directory_for_untracked); the tags' clean arm, where a rung nothing diverged
+ * workspace_scan); the tags' clean arm, where a rung nothing diverged
  * on reads [ancestor] (core/workspace.c workspace_item_tags);
  * update's derive-scope slice (cmds/update.c cmd_update); and the two refusals
  * of a second name for one path, where a derived claim names nothing and so blocks
@@ -989,8 +989,8 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  * all over the command's own listing (cmds/add.c cmd_add, add_collect,
  * add_refuse_moves); and the name the untracked scan offers a new path under,
  * one per entry its guards let through, with no pending layer — the scan admits
- * nothing (core/workspace.c scan_directory_for_untracked). The settle of a
- * contribution's collisions asks the same rule (core/manifest.c manifest_settle).
+ * nothing (core/workspace.c workspace_scan). The settle of a contribution's
+ * collisions asks the same rule (core/manifest.c manifest_settle).
  *
  * @param arena Arena the name lives in (must not be NULL)
  * @param manifest Manifest (must not be NULL)

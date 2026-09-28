@@ -1762,7 +1762,9 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         /* New files the scan found (not asked for by flag) are added only with
          * consent. Declining keeps the rest of the run: the re-filter compacts
          * the accepted array in place — the preview named the new files separately,
-         * and the receipt reports what actually happens. */
+         * and the receipt reports what actually happens. What is left is asked
+         * the nothing-exit's own question, so a named run whose only accepted
+         * items were new files still re-derives the chains it named. */
         if (counts.new_files > 0 && config->confirm_new_files &&
             !opts->include_new && !opts->only_new && config->auto_detect_new_files) {
 
@@ -1783,7 +1785,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 }
                 partition.accepted.count = kept;
 
-                if (partition.accepted.count == 0) {
+                if (partition.accepted.count == 0 && derive_rows.count == 0) {
                     output_info(
                         out, OUTPUT_NORMAL,
                         "No modified files remaining after skipping new files"

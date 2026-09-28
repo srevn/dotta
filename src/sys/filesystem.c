@@ -641,12 +641,9 @@ error_t fs_create_dir(const char *path, bool parents) {
 error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
     RETURN_IF_ERROR(validate_path(path));
 
-    /* Validate mode */
-    if (mode > 0777) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", mode
-        );
-    }
+    /* A mode is at most 0777 by every producer's rule (the sheet's parse, the
+     * factories, a stat's permission bits): a caller that hands more is broken. */
+    CHECK_ARG(mode <= 0777, "a mode past 0777");
 
     bool existed = fs_is_directory(path);
 
@@ -705,13 +702,9 @@ error_t fs_create_dir_with_ownership(
 ) {
     RETURN_IF_ERROR(validate_path(path));
 
-    /* Validate mode */
-    if (mode > 0777) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
-            mode
-        );
-    }
+    /* A mode is at most 0777 by every producer's rule (the sheet's parse, the
+     * factories, a stat's permission bits): a caller that hands more is broken. */
+    CHECK_ARG(mode <= 0777, "a mode past 0777");
 
     /* Whether the directory below is this call's own making: one it made and
      * cannot attribute is unmade, one it opened stands as found. */
@@ -812,13 +805,9 @@ error_t fs_create_dir_exclusive(
 ) {
     RETURN_IF_ERROR(validate_path(path));
 
-    /* Validate mode */
-    if (mode > 0777) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
-            mode
-        );
-    }
+    /* A mode is at most 0777 by every producer's rule (the sheet's parse, the
+     * factories, a stat's permission bits): a caller that hands more is broken. */
+    CHECK_ARG(mode <= 0777, "a mode past 0777");
 
     /* mkdir(2) is the exclusivity: it creates or it refuses, atomically — there
      * is no open-existing arm, which is the whole difference from

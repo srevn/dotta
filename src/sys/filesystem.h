@@ -304,14 +304,13 @@ error_t fs_create_dir(const char *path, bool parents);
  * permissions regardless of whether file exists.
  *
  * @param path Directory path (must not be NULL)
- * @param mode Permission mode for the target directory (e.g., 0700, 0755)
+ * @param mode Permission mode for the target directory, at most 0777 (e.g., 0700,
+ *        0755)
  * @param parents Create parent directories if true
  * @return Error or NULL on success
  *
- * Errors:
- * - A creation or a chmod the kernel refused: its errno's code (the header's
- *   "The word" — ERR_PERMISSION for a refusal, ERR_FS for the rest)
- * - ERR_INVALID_ARG: Invalid mode (> 0777)
+ * Errors: a creation or a chmod the kernel refused, by its errno's code (the
+ * header's "The word" — ERR_PERMISSION for a refusal, ERR_FS for the rest).
  */
 error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
 
@@ -342,15 +341,13 @@ error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
  *   claims, and invents nothing for the rest)
  *
  * @param path Directory path (must not be NULL)
- * @param mode Permission mode for target directory (e.g., 0700, 0755)
+ * @param mode Permission mode for target directory, at most 0777 (e.g., 0700, 0755)
  * @param uid Target UID for directory ownership (use -1 to preserve)
  * @param gid Target GID for directory ownership (use -1 to preserve)
  * @return Error or NULL on success
  *
- * Errors:
- * - ERR_INVALID_ARG: Invalid mode (> 0777)
- * - A creation, a chown or a chmod the kernel refused: its errno's code (the
- *   header's "The word" — ERR_PERMISSION for a refusal, ERR_FS for the rest)
+ * Errors: a creation, a chown or a chmod the kernel refused, by its errno's code
+ * (the header's "The word" — ERR_PERMISSION for a refusal, ERR_FS for the rest).
  */
 error_t fs_create_dir_with_ownership(
     const char *path,
@@ -387,13 +384,12 @@ error_t fs_create_dir_with_ownership(
  * no later run converges. The parent must exist, as for the sibling.
  *
  * @param path Directory path (must not be NULL)
- * @param mode Permission mode for the directory (e.g., 0700, 0755)
+ * @param mode Permission mode for the directory, at most 0777 (e.g., 0700, 0755)
  * @param uid Target UID for directory ownership (use -1 to leave as created)
  * @param gid Target GID for directory ownership (use -1 to leave as created)
  * @return Error or NULL on success
  *
  * Errors:
- * - ERR_INVALID_ARG: Invalid mode (> 0777)
  * - ERR_EXISTS: Something already stands at the path
  * - ERR_FS: Failed to create, open or attribute the directory
  */

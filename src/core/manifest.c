@@ -69,7 +69,7 @@ typedef struct {
     const char *profile;           /* Arena-backed; the same pointer every row of it carries */
     manifest_row_t **rows;         /* The rows standing, in claim order (arena, exact) */
     size_t count;                  /* Rows standing */
-    hashmap_t *index;              /* path → the row standing there, heap-allocated */
+    hashmap_t *index;              /* path → the row standing there (arena) */
 
     /* Every name the profile holds at a path it names more than once: the settle's
      * own group, NULL-terminated, in name order. NULL until a settle happens —
@@ -82,7 +82,7 @@ typedef struct {
      * Every member is an explicit row. A contender is pushed only against a held
      * explicit claim — the blob pass and the directory pass state that placement
      * rule in the same line — so no reader of a group filters derived. */
-    hashmap_t *contested;          /* path → manifest_row_t **, heap-allocated */
+    hashmap_t *contested;          /* path → manifest_row_t ** (arena) */
 } contribution_t;
 
 /**
@@ -105,7 +105,7 @@ struct manifest {
 
     manifest_row_t **rows;         /* The winners, cut once at layering (arena, exact) */
     size_t count;                  /* Rows in the spine */
-    hashmap_t *index;              /* path → the winning row, heap-allocated */
+    hashmap_t *index;              /* path → the winning row (arena) */
 
     const mount_table_t *mounts;   /* The table the rows were placed by: the build's own, or a tree view's caller's */
 
@@ -1183,11 +1183,11 @@ static void manifest_layer(manifest_t *manifest, arena_t *arena) {
  * Allocate a fresh manifest_t, ready for the per-profile step.
  *
  * The view struct, the contributions array and the profile list beside it (both
- * sized for the profiles the build will walk at most) are arena-allocated; each
- * contribution fills its own slot as it is registered (manifest_contribute).
- * The index hashmap is heap-allocated (borrowed-key mode — keys live in the
- * caller's arena and survive the hashmap's lifetime). No spine is allocated here:
- * each is cut once, exactly, from the index that decides it.
+ * sized for the profiles the build will walk at most) are arena-allocated, and
+ * so is the index, which borrows its keys from the rows it points at
+ * (hashmap_borrow); each contribution fills its own slot as it is registered
+ * (manifest_contribute). No spine is allocated here: each is cut once, exactly,
+ * from the index that decides it.
  */
 static manifest_t *manifest_allocate(
     arena_t *arena,

@@ -429,15 +429,16 @@ typedef struct {
  * even when --skip-existing would also skip it (a named path is the more explicit
  * intent).
  *
- * Buckets hold borrowed item pointers (workspace lifetime — the items are
- * arena-allocated, their addresses stable by construction), and the buckets live
- * in the plan's arena. Project a bucket with workspace_items: its one writer,
- * deploy.c deploy_classify, keeps the element type the projection reads.
+ * Each bucket is a slice of the items it holds, filled once the plan has decided
+ * every item (core/workspace.h workspace_buckets_t): deploy.c deploy_classify
+ * names the bucket for each, and nothing else adds to one. The items are borrowed
+ * (workspace lifetime — arena-allocated, their addresses stable by construction),
+ * each bucket's array the plan's arena's.
  */
 typedef struct {
-    ptr_array_t pending;    /* Need work — deploy_preflight decides how, deploy_execute acts */
-    ptr_array_t clean;      /* In scope, no work — apply's to adopt or acknowledge */
-    ptr_array_t excluded;   /* Need work, skipped by -e — reported, never touched */
+    workspace_items_t pending;    /* Need work — deploy_preflight decides how, deploy_execute acts */
+    workspace_items_t clean;      /* In scope, no work — apply's to adopt or acknowledge */
+    workspace_items_t excluded;   /* Need work, skipped by -e — reported, never touched */
 
     /* Need work, skipped by --skip-existing: something already occupies the path.
      * Files only. A tracked directory row writes no data — it creates a container
@@ -445,7 +446,7 @@ typedef struct {
      * and would instead strand the tracked children the flag exists to deploy.
      * Its one destructive act, replacing a squatter, is force-gated at preflight
      * already. */
-    ptr_array_t skipped_existing;
+    workspace_items_t skipped_existing;
 } deploy_partition_t;
 
 /**
@@ -461,8 +462,8 @@ typedef struct {
  * deploy_preflight, deploy_execute).
  */
 typedef struct {
-    deploy_partition_t files;         /* workspace_item_t *: the file items */
-    deploy_partition_t directories;   /* workspace_item_t *: the tracked directory items */
+    deploy_partition_t files;         /* The file items */
+    deploy_partition_t directories;   /* The tracked directory items */
 } deploy_plan_t;
 
 /**

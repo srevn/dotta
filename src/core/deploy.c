@@ -140,7 +140,7 @@ typedef enum {
 } skip_reason_t;
 
 /**
- * Route one active item in scope into its partition bucket, or drop it
+ * Add one active item in scope to its partition's bucket, or to none
  *
  * Three inputs, three owners: whether there is work is the item's to say
  * (deploy_needs_work), why its work is skipped the plan's (-e, --skip-existing),
@@ -151,29 +151,35 @@ typedef enum {
  * item — every clean one with something standing, under --skip-existing — is
  * not a skip at all.
  *
- * The plan's one writer, and so the one place its buckets' element type is kept:
- * a ptr_array_t says nothing of what it holds, and every reader projects it as
- * items (core/workspace.h workspace_items).
+ * The plan's one writer: the bucket an item goes to is named here and nowhere
+ * else, and the plan's buckets are filled once the walk is done
+ * (deploy_plan_build).
  *
+ * @param buckets The plan's buckets (must not be NULL)
  * @param part Partition for the item's kind (must not be NULL)
  * @param item An active item in scope, borrowed (must not be NULL)
  * @param skip Why the item's work is skipped, if it is
  */
 static void deploy_classify(
-    deploy_partition_t *part,
-    const workspace_item_t *item,
+    workspace_buckets_t *buckets, deploy_partition_t *part, const workspace_item_t *item,
     skip_reason_t skip
 ) {
     if (!deploy_needs_work(item)) {
         /* Excluded: neither work nor apply's to own */
-        if (skip != SKIP_EXCLUDED) ptr_array_push(&part->clean, item);
+        if (skip != SKIP_EXCLUDED) workspace_buckets_add(buckets, item, &part->clean);
         return;
     }
 
     switch (skip) {
-        case SKIP_NONE:     ptr_array_push(&part->pending, item); return;
-        case SKIP_EXCLUDED: ptr_array_push(&part->excluded, item); return;
-        case SKIP_EXISTING: ptr_array_push(&part->skipped_existing, item); return;
+        case SKIP_NONE:
+            workspace_buckets_add(buckets, item, &part->pending);
+            return;
+        case SKIP_EXCLUDED:
+            workspace_buckets_add(buckets, item, &part->excluded);
+            return;
+        case SKIP_EXISTING:
+            workspace_buckets_add(buckets, item, &part->skipped_existing);
+            return;
     }
 
     CHECK_ARG(false, "a skip reason no enumerator names");
@@ -189,17 +195,11 @@ deploy_plan_t *deploy_plan_build(
     CHECK_NULL(ws);
     CHECK_NULL(scope);
 
-    /* The plan and its eight buckets are the arena's, beside the items they borrow:
-     * each bucket is made in it, and nothing frees a plan. */
+    /* The plan and its eight buckets are the arena's, beside the items they borrow,
+     * and nothing frees a plan. Each item is added to its bucket as the walk
+     * decides it, and the eight are filled once the walk is done. */
     deploy_plan_t *plan = arena_calloc(arena, 1, sizeof(*plan));
-    ptr_array_init(&plan->directories.pending, arena);
-    ptr_array_init(&plan->directories.clean, arena);
-    ptr_array_init(&plan->directories.excluded, arena);
-    ptr_array_init(&plan->directories.skipped_existing, arena);
-    ptr_array_init(&plan->files.pending, arena);
-    ptr_array_init(&plan->files.clean, arena);
-    ptr_array_init(&plan->files.excluded, arena);
-    ptr_array_init(&plan->files.skipped_existing, arena);
+    workspace_buckets_t *buckets = workspace_buckets_create(arena);
 
     /* Directories then files — the order preflight decides and the run acts in.
      * Convention alone: each row's classification reads the workspace and the
@@ -230,7 +230,7 @@ deploy_plan_t *deploy_plan_build(
         /* No SKIP_EXISTING arm: --skip-existing does not reach tracked directories
          * (see deploy_partition_t). */
         deploy_classify(
-            &plan->directories, item,
+            buckets, &plan->directories, item,
             scope_is_excluded(scope, item->storage_path, PATH_KIND_DIRECTORY)
                 ? SKIP_EXCLUDED : SKIP_NONE
         );
@@ -265,9 +265,10 @@ deploy_plan_t *deploy_plan_build(
             skip = SKIP_EXISTING;
         }
 
-        deploy_classify(&plan->files, item, skip);
+        deploy_classify(buckets, &plan->files, item, skip);
     }
 
+    workspace_buckets_fill(buckets);
     return plan;
 }
 
@@ -661,8 +662,8 @@ static void check_ancestry(
  *        named), and UNCLAIMED on the ANCESTOR refusal alone
  */
 static void check_landing(
-    const workspace_t *ws, const deploy_preflight_t *verdicts,
-    const char *path, deploy_skip_t *skip
+    const workspace_t *ws, const deploy_preflight_t *verdicts, const char *path,
+    deploy_skip_t *skip
 ) {
     char *scratch = heap_strdup(path);
 
@@ -887,11 +888,8 @@ static bool above_deployable_row(
  * row's own.
  */
 error_t deploy_preflight(
-    const workspace_t *ws,
-    const deploy_plan_t *plan,
-    const deploy_options_t *opts,
-    arena_t *arena,
-    deploy_preflight_t **out
+    const workspace_t *ws, const deploy_plan_t *plan, const deploy_options_t *opts,
+    arena_t *arena, deploy_preflight_t **out
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(plan);
@@ -908,13 +906,19 @@ error_t deploy_preflight(
     /* One slot per pending item — verdict or skip, so the skip array's bound is
      * both kinds together — and one per directory item for the ancestors (an
      * upper bound; the count says how many were decided). */
-    workspace_items_t files = workspace_items(&plan->files.pending);
-    workspace_items_t dirs = workspace_items(&plan->directories.pending);
+    workspace_items_t files = plan->files.pending;
+    workspace_items_t dirs = plan->directories.pending;
     workspace_items_t all_dirs = workspace_directories(ws);
 
-    verdicts->directories.entries = arena_calloc(arena, dirs.count, sizeof(deploy_verdict_t));
-    verdicts->files.entries = arena_calloc(arena, files.count, sizeof(deploy_verdict_t));
-    verdicts->ancestors.entries = arena_calloc(arena, all_dirs.count, sizeof(deploy_verdict_t));
+    verdicts->directories.entries = arena_calloc(
+        arena, dirs.count, sizeof(deploy_verdict_t)
+    );
+    verdicts->files.entries = arena_calloc(
+        arena, files.count, sizeof(deploy_verdict_t)
+    );
+    verdicts->ancestors.entries = arena_calloc(
+        arena, all_dirs.count, sizeof(deploy_verdict_t)
+    );
     verdicts->skipped.entries = arena_calloc(
         arena, files.count + dirs.count, sizeof(deploy_skip_t)
     );
@@ -979,7 +983,8 @@ error_t deploy_preflight(
              * is the row converging in place — so path_clearance cannot refuse
              * here, TYPE is the only reachable arm, and "use --force" is always
              * the true remedy. */
-            if (skip.reason == DEPLOY_SKIP_NONE && occupant_conflicts(occupant, item->row->type) &&
+            if (skip.reason == DEPLOY_SKIP_NONE &&
+                occupant_conflicts(occupant, item->row->type) &&
                 path_clearance(path, occupant, opts->force) != CLEARANCE_OK) {
                 skip.reason = DEPLOY_SKIP_TYPE;
             }
@@ -1001,9 +1006,7 @@ error_t deploy_preflight(
 
         if (skip.reason == DEPLOY_SKIP_NONE) {
             RETURN_IF_ERROR(
-                check_ownership(
-                opts, &verdicts->warnings, item->row, &uid, &gid, &skip.reason
-                )
+                check_ownership(opts, &verdicts->warnings, item->row, &uid, &gid, &skip.reason)
             );
         }
 
@@ -1441,8 +1444,7 @@ static error_t open_landing_directory(
     );
     if (err) {
         return error_wrap(
-            err, "Failed to open directory '%s' for the run",
-            ancestor
+            err, "Failed to open directory '%s' for the run", ancestor
         );
     }
     hold_directory(run, dir->filesystem_path, current);
@@ -1500,8 +1502,7 @@ static error_t ensure_parents(deploy_run_t *run, const char *path) {
         *slash = '/';
         if (err) {
             err = error_wrap(
-                err, "Failed to create parent directory for '%s'",
-                path
+                err, "Failed to create parent directory for '%s'", path
             );
             goto cleanup;
         }
@@ -1584,8 +1585,7 @@ static error_t deploy_file(
         );
         if (err) {
             err = error_wrap(
-                err, "Failed to deploy symlink '%s'",
-                file->filesystem_path
+                err, "Failed to deploy symlink '%s'", file->filesystem_path
             );
             goto cleanup;
         }
@@ -1605,8 +1605,7 @@ static error_t deploy_file(
 
     if (err) {
         err = error_wrap(
-            err, "Failed to get content for '%s'",
-            file->storage_path
+            err, "Failed to get content for '%s'", file->storage_path
         );
         goto cleanup;
     }

@@ -2006,26 +2006,22 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Per-item trace of the work the planner skipped, by reason: -e for both
      * kinds, --skip-existing for files. output_print gates on the verbosity level,
      * so normal runs pay only the loop cost. */
-    workspace_items_t excluded_files = workspace_items(&deploy_plan->files.excluded);
-    workspace_items_t excluded_dirs = workspace_items(&deploy_plan->directories.excluded);
-    workspace_items_t existing_files = workspace_items(&deploy_plan->files.skipped_existing);
-
-    for (size_t i = 0; i < excluded_files.count; i++) {
+    for (size_t i = 0; i < deploy_plan->files.excluded.count; i++) {
         output_print(
             out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
-            excluded_files.entries[i]->filesystem_path
+            deploy_plan->files.excluded.entries[i]->filesystem_path
         );
     }
-    for (size_t i = 0; i < excluded_dirs.count; i++) {
+    for (size_t i = 0; i < deploy_plan->directories.excluded.count; i++) {
         output_print(
             out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
-            excluded_dirs.entries[i]->filesystem_path
+            deploy_plan->directories.excluded.entries[i]->filesystem_path
         );
     }
-    for (size_t i = 0; i < existing_files.count; i++) {
+    for (size_t i = 0; i < deploy_plan->files.skipped_existing.count; i++) {
         output_print(
             out, OUTPUT_VERBOSE, "  Skipping (exists): %s\n",
-            existing_files.entries[i]->filesystem_path
+            deploy_plan->files.skipped_existing.entries[i]->filesystem_path
         );
     }
 
@@ -2237,10 +2233,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * nobody looked at would set deployed_at on a stranger's file, and
      * acknowledging one would re-stamp an owned record with a stat no look gave. */
     size_t adopted_count = 0;
-    workspace_items_t clean_files = workspace_items(&deploy_plan->files.clean);
 
-    for (size_t i = 0; i < clean_files.count; i++) {
-        const workspace_item_t *item = clean_files.entries[i];
+    for (size_t i = 0; i < deploy_plan->files.clean.count; i++) {
+        const workspace_item_t *item = deploy_plan->files.clean.entries[i];
         const manifest_row_t *file = item->row;
         const state_record_t *record = item->record;
 
@@ -2307,10 +2302,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * another kind of node reaches this loop in no run: the flush has written
      * the directory's observation in its place (core/workspace.h workspace_flush),
      * so an owned file record never re-stamps a directory the user made. */
-    workspace_items_t clean_dirs = workspace_items(&deploy_plan->directories.clean);
-
-    for (size_t i = 0; i < clean_dirs.count; i++) {
-        const workspace_item_t *item = clean_dirs.entries[i];
+    for (size_t i = 0; i < deploy_plan->directories.clean.count; i++) {
+        const workspace_item_t *item = deploy_plan->directories.clean.entries[i];
         const manifest_row_t *dir = item->row;
         const state_record_t *record = item->record;
 
@@ -2409,8 +2402,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * bucket. */
     size_t stale_files = 0;
     size_t stale_dirs = 0;
-    workspace_items_t pending_files = workspace_items(&deploy_plan->files.pending);
-    workspace_items_t pending_dirs = workspace_items(&deploy_plan->directories.pending);
+    workspace_items_t pending_files = deploy_plan->files.pending;
+    workspace_items_t pending_dirs = deploy_plan->directories.pending;
 
     for (size_t i = 0; i < pending_files.count; i++) {
         if (pending_files.entries[i]->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {

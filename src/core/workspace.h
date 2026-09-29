@@ -738,10 +738,9 @@ static inline divergence_type_t workspace_claims_moved(
  * - the workspace's own — the active items, both kinds or one (workspace_active,
  *   workspace_directories, workspace_files), and the diverged items
  *   (workspace_diverged) — borrow for the workspace's life;
- * - a classification's buckets (workspace_buckets_t: cleanup's plan and verdicts,
- *   core/cleanup.h) point into arrays in the arena its buckets were made in;
- * - deploy's plan (core/deploy.h deploy_partition_t) projects its buckets through
- *   workspace_items, each slice borrowing for its bucket's life;
+ * - a classification's buckets (workspace_buckets_t: deploy's plan, core/deploy.h
+ *   deploy_partition_t; cleanup's plan and verdicts, core/cleanup.h) point into
+ *   arrays in the arena its buckets were made in;
  * - update's filters lend a spine in the arena the caller named.
  * The items are the workspace's however long a slice lives. Nothing frees a slice.
  */
@@ -754,10 +753,10 @@ typedef struct {
  * The items a ptr_array_t bucket holds, as a typed slice
  *
  * A bucket says nothing of its element, so the cast is only as sound as its
- * writers: every bucket that projects through here holds items alone — deploy's
- * plan by its one writer (core/deploy.c deploy_classify), the diverged items
- * where they are listed. The cast layers const onto both pointer levels. The
- * slice aliases the bucket's storage and is valid for the bucket's lifetime.
+ * writers: the one bucket that projects through here, the diverged items, holds
+ * items alone where they are listed. The cast layers const onto both pointer
+ * levels. The slice aliases the bucket's storage and is valid for the bucket's
+ * lifetime.
  */
 static inline workspace_items_t workspace_items(const ptr_array_t *bucket) {
     return (workspace_items_t){
@@ -1146,8 +1145,9 @@ workspace_items_t workspace_directories(const workspace_t *ws);
  * that builds a new element per decision keeps typed arrays of it instead
  * (core/deploy.h deploy_preflight_t, the receipts).
  *
- * Readers: core/cleanup.c cleanup_plan_build and cleanup_preflight. A reader
- * not on this list is a bug.
+ * Readers: core/deploy.c deploy_plan_build (through deploy_classify),
+ * core/cleanup.c cleanup_plan_build and cleanup_preflight. A reader not on this
+ * list is a bug.
  */
 typedef struct workspace_buckets workspace_buckets_t;
 

@@ -184,12 +184,15 @@ static const char *source_resolve(source_filter_t *f, const char *path) {
  * git directory
  *
  * libgit2's is_valid_repository_path: a HEAD file, and objects/ and refs/
- * directories in the common dir — the one a `commondir` file names, a linked
- * worktree's, else the gitdir itself: `gitdir`, the very pointer, so a caller
- * tells a gitdir with a common dir of its own by the file (git's has_common),
- * whatever the file names. A reftable or sha256 repository keeps all three, which
- * is what lets the rules be read where libgit2 cannot open one. A `commondir`
- * naming nothing names no git directory.
+ * directories in the common dir. git reads HEAD's content besides (setup.c
+ * validate_headref) and takes a HEAD that is a link into refs/, so a directory
+ * holding a HEAD git cannot read as a ref is one git walks past and this reads.
+ * The common dir is the one a `commondir` file names, a linked worktree's, else
+ * the gitdir itself: `gitdir`, the very pointer, so a caller tells a gitdir with
+ * a common dir of its own by the file (git's has_common), whatever the file names.
+ * A reftable or sha256 repository keeps all three, which is what lets the rules
+ * be read where libgit2 cannot open one. A `commondir` that names nothing is a
+ * failure, as git dies resolving one (setup.c get_common_dir_noenv).
  */
 static error_t source_commondir(source_filter_t *f, const char *gitdir, const char **out) {
     *out = NULL;
@@ -205,7 +208,11 @@ static error_t source_commondir(source_filter_t *f, const char *gitdir, const ch
         commondir = source_resolve(
             f, named[0] == '/' ? named : arena_str_format(f->arena, "%s%s", gitdir, named)
         );
-        if (!commondir) return NULL;
+        if (!commondir) {
+            return error_from_errno(
+                errno, "Failed to resolve commondir '%s' of '%s'", named, gitdir
+            );
+        }
     }
 
     if (source_stat(commondir, "objects", &st) != 0 || !S_ISDIR(st.st_mode)) return NULL;
@@ -523,7 +530,8 @@ static const repository_t *source_repository(
  * An invalid `.git` directory is walked past, as git walks past one. A `.git`
  * file is not: one that is no gitfile, or names no git directory, is this
  * directory's failure — git refuses to work beneath it (setup.c
- * read_gitfile_gently).
+ * read_gitfile_gently) — and so is a `.git` that is neither a file nor a directory,
+ * and a git directory whose commondir names nothing.
  */
 static error_t source_discover(
     source_filter_t *f, const char *directory, const repository_t **out
@@ -564,6 +572,10 @@ static error_t source_discover(
 
             *out = source_repository(f, directory, gitdir, commondir);
             return NULL;
+        } else {
+            /* Neither: git reads a `.git` it can stat as a directory or a file,
+             * and refuses anything else ("not a regular file"). */
+            return ERROR(ERR_VALIDATION, "'%s.git' is not a regular file", directory);
         }
     }
 
@@ -581,9 +593,10 @@ static error_t source_discover(
  * repository at it, else its parent's answer, unless its parent stands on another
  * filesystem, where the walk up stops (libgit2's across_fs 0, git's default)
  *
- * A directory the invoker cannot look at is one discovery cannot examine: it
- * reads as its parent reads (libgit2 walks past a level it cannot stat). Memoised
- * in the one map every spelling shares; the prefix points into the key.
+ * A directory the invoker cannot look into is one discovery cannot examine: it
+ * reads as its parent reads, as libgit2 walks past a level it cannot stat — git
+ * itself cannot work there as the invoker at all (sys/source.h). Memoised in
+ * the one map every spelling shares; the prefix points into the key.
  */
 static directory_t *source_place(source_filter_t *f, const char *physical, size_t len) {
     directory_t *d = hashmap_get_n(f->directories, physical, len);

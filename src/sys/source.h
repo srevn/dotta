@@ -22,8 +22,13 @@
  * a format, and a linked worktree's own config.worktree where the format reads
  * one (else neither, for a linked worktree). A directory that is not there reads
  * as it will once it is — git's rules are the path's, and `ignore --test` asks
- * about a path before it is made — and so does one the invoker cannot look at,
- * which discovery walks past as git does.
+ * about a path before it is made. So does one the invoker cannot look into:
+ * discovery walks past it, as libgit2 does, where git itself cannot work there
+ * as the invoker at all. Under sudo that is a hybrid on purpose — the walk enters
+ * such a directory with root's reach and reads its rules so, while discovery
+ * sees what the invoker sees — and its residue is stated: a repository nested
+ * inside one, which only root can see, is read by the lists of the repository
+ * around it.
  *
  * It is intentionally orthogonal to `core/ignore`, which compiles the user's
  * own `.dottaignore` + config + CLI layers inside the dotta repo. A consumer
@@ -56,12 +61,14 @@
  * else is a failure of the layer — a rule file that cannot be opened or read,
  * is not a regular file, holds a NUL or does not compile; a configuration that
  * does not parse, or a file of the repository's own configuration that the invoker
- * cannot read; a `.git` file that names no repository; a `core.worktree` that
- * names nothing, or stands beside `core.bare` — each minted once per cause and
- * answered again for every entry that reaches it: a directory's, a repository's,
- * a file's. One of the machine's configuration files that the invoker cannot
- * read is absent, as git skips a global or XDG file; the system file libgit2
- * finds is its own, which need not be git's, and is read as the machine's.
+ * cannot read; a `.git` file that names no repository, a `.git` that is neither
+ * a file nor a directory, a git directory whose commondir names nothing; a
+ * `core.worktree` that names nothing, or stands beside `core.bare` — each minted
+ * once per cause and answered again for every entry that reaches it: a directory's,
+ * a repository's, a file's. One of the machine's configuration files that the
+ * invoker cannot read is absent, as git skips a global or XDG file; the system
+ * file libgit2 finds is its own, which need not be git's, and is read as the
+ * machine's.
  *
  * Lifetime: the arena's. A filter lives in the arena it was made in, every answer
  * it keeps with it, and nothing frees it; no libgit2 handle outlives a call. It

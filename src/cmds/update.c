@@ -225,11 +225,10 @@ typedef struct {
 /**
  * Partition the workspace's diverged items for update
  *
- * The scope triplet first — the user's paths, minus the patterns they excluded,
- * from the profiles they named — as three calls so the exclude arm keeps its
- * verbose log; the log is the pattern's, and fires for every in-scope item the
- * pattern hits whatever the state rule then says of it. Then the state rule under
- * the flags, and for a deployed item the route: the partition (partition_t).
+ * The scope first: the profiles and paths the user named, then the patterns they
+ * excluded — the order every scope reader asks in (core/scope.h
+ * scope_accepts_entry) — each item a pattern spares logged. Then the state rule
+ * under the flags, and for a deployed item the route: the partition (partition_t).
  *
  * @param ws Workspace (must not be NULL)
  * @param opts Update options (must not be NULL)
@@ -265,18 +264,21 @@ static void update_partition(
     for (size_t i = 0; i < diverged.count; i++) {
         const workspace_item_t *item = diverged.entries[i];
 
-        /* The scope triplet: the path filter reads both names, the exclude the
-         * mount-relative one. */
-        if (!scope_accepts_path(
+        /* Outside the profiles and the paths the user named: invisible, as to
+         * every scope reader — the path filter reads both names */
+        if (!scope_accepts_profile(scope, item->profile) ||
+            !scope_accepts_path(
             scope, item->filesystem_path, item->storage_path, item->item_kind
             )) {
             continue;
         }
+
+        /* A pattern's, by the mount-relative name: asked apart from the two above
+         * so the arm keeps its verbose log, which is the pattern's — it fires
+         * for every item in scope the pattern hits, whatever the state rule would
+         * then say of it */
         if (scope_is_excluded(scope, item->storage_path, item->item_kind)) {
             output_info(out, OUTPUT_VERBOSE, "Excluded: %s", item->filesystem_path);
-            continue;
-        }
-        if (!scope_accepts_profile(scope, item->profile)) {
             continue;
         }
 
@@ -1427,7 +1429,9 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      *   scope_enabled  — the persistent enabled set, the CLI filter's bound.
      *   scope_profiles — update operation face (hook context string).
      *
-     *   scope_paths / scope_is_excluded — per-item gates in update_partition
+     *   scope_accepts_profile / scope_accepts_path, then scope_is_excluded —
+     *   the per-item gates: update_partition's, and the named run's rows'
+     *   (scope_accepts_entry)
      */
     scope_inputs_t scope_inputs = {
         .profiles         = opts->profiles,

@@ -51,8 +51,9 @@
  * files: git hands a command-line entry to its list unread (`ls-files -x '#foo'`
  * matches a file named `#foo`, `-x 'foo '` keeps the space, `-x ''` is taken
  * and matches nothing), where a pattern here is read as the line it would be in
- * a file, and refused where that line makes no rule (validate_pattern; gitignore.h
- * says why).
+ * a file, and refused where that line makes no rule, or opens with `~/`, which
+ * git reads as a directory named `~` and its writer as home (validate_pattern;
+ * gitignore.h says why).
  *
  * What git has and this file must not take, for want of a subject: per-pattern
  * base/baselen (git reads a .gitignore per directory; dotta stores one at each
@@ -334,7 +335,16 @@ static void parse_line(
  * the pattern's noun. One about what the pattern says quotes it — the checks
  * before it bound the quote to one line of at most 4096 bytes — and one about
  * its shape does not. `#` is tested beside rule_span's own test of it: one module,
- * one definition of a comment. */
+ * one definition of a comment.
+ *
+ * A rule is refused too where its writer cannot have meant it: a `~/` opening
+ * the pattern, past a `!`. A shell reads that as home and the grammar as a
+ * directory named `~`, so a pattern spelled from home — quoted to keep its glob
+ * from the shell, or written in a file no shell reads — matches nothing its writer
+ * named. The refusal spells both readings: the anchor, which starts the pattern
+ * at the top of the rules' own directory — `/` alone being no pattern, nothing
+ * is offered for `~/` alone — and the escape. A lone `~` is a name like any
+ * other. */
 static error_t validate_pattern(const char *pattern, size_t len) {
     if (memchr(pattern, '\n', len))
         return ERROR(ERR_VALIDATION, "gitignore: a pattern is one line");
@@ -343,14 +353,30 @@ static error_t validate_pattern(const char *pattern, size_t len) {
             ERR_VALIDATION, "gitignore: a pattern exceeds %d bytes",
             MAX_PATTERN_LENGTH
         );
-    if (rule_span(pattern, len) > 0)
+    if (rule_span(pattern, len) == 0) {
+        if (*pattern == '#')
+            return ERROR(
+                ERR_VALIDATION, "gitignore: '%s' is a comment, not a pattern\n"
+                "Hint: Escape the '#' to match it: '\\%s'", pattern, pattern
+            );
+        return ERROR(ERR_VALIDATION, "gitignore: '%s' names no pattern", pattern);
+    }
+
+    int bang = *pattern == '!';
+    if (pattern[bang] != '~' || pattern[bang + 1] != '/')
         return NULL;
-    if (*pattern == '#')
+    if (pattern[bang + 2] == '\0')
         return ERROR(
-            ERR_VALIDATION, "gitignore: '%s' is a comment, not a pattern\n"
-            "Hint: Escape the '#' to match it: '\\%s'", pattern, pattern
+            ERR_VALIDATION, "gitignore: '%s' names a directory called '~', not "
+            "home\nHint: Escape the '~' to match that directory: '%.*s\\%s'",
+            pattern, bang, pattern, pattern + bang
         );
-    return ERROR(ERR_VALIDATION, "gitignore: '%s' names no pattern", pattern);
+    return ERROR(
+        ERR_VALIDATION, "gitignore: '%s' names a directory called '~', not home\n"
+        "Hint: Anchor it at the top instead: '%.*s%s' — or escape the '~' to "
+        "match that directory: '%.*s\\%s'",
+        pattern, bang, pattern, pattern + bang + 1, bang, pattern, pattern + bang
+    );
 }
 
 /* One pattern into one rule: refused as validate_pattern refuses, and a rule

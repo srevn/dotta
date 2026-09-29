@@ -34,8 +34,9 @@
  *
  * The two pattern lists, [ignore] patterns and [encryption] auto_encrypt, are
  * compiled here, auto_encrypt whether or not encryption is enabled: a list that
- * is no array, and an entry that is no string, holds a NUL or makes no rule
- * (base/gitignore.h), refuse the load, the entry named by its line and column.
+ * is no array, and an entry that is no string, holds a NUL, makes no rule or is
+ * spelled from home (base/gitignore.h), refuse the load, the entry named by its
+ * line and column.
  *
  * The two directories are settled here too, each read as the kernel will open
  * it (sys/filesystem.h fs_make_absolute: the tilde expanded, a relative one joined

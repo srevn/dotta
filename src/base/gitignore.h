@@ -45,9 +45,14 @@
  * read as nothing. git reads a command-line entry unread (`ls-files -x '#foo'`
  * matches a file named `#foo`); a pattern here cannot be, because `ignore --add`
  * writes it into a file as a line and `--exclude` is promised the file's meaning.
- * So `foo ` means `foo`, and a name that begins with `#` is matched by `\#`. A
- * list of patterns is its caller's to walk, each entry one pattern — never the
- * lines of a file: no mark is shed from an entry and no newline splits one.
+ * So `foo ` means `foo`, and a name that begins with `#` is matched by `\#`.
+ * One line that does make a rule is refused as well: a pattern opening with `~/`,
+ * past a `!`, which a shell reads as home and the grammar as a directory named
+ * `~` — typed quoted to keep a glob from the shell, or written in a file no shell
+ * reads, it matches nothing its writer named. `/` anchors the pattern at the
+ * top of the rules' directory, and `\~/` names the directory called `~`. A list
+ * of patterns is its caller's to walk, each entry one pattern — never the lines
+ * of a file: no mark is shed from an entry and no newline splits one.
  *
  * And a ruleset takes a third input, which the grammar never reads again: the
  * rules another ruleset compiled (gitignore_ruleset_append_rules), copied in
@@ -311,12 +316,14 @@ typedef struct gitignore_rule gitignore_rule_t;
  *
  * gitignore_rule_parse's refusals with nothing kept, for a caller that writes
  * the pattern itself and asks the grammar first (cmds/ignore's --add and --remove).
- * In order: a newline (a pattern is one line), a length past 4096 bytes, and a
- * line that would make no rule — a comment, in its own words and with the escape
- * that makes it a pattern; anything else as naming nothing. A refusal about what
- * the pattern says quotes it, bounded by that order to one line of at most 4096
- * bytes; one about its shape quotes nothing. The caller names its source around
- * the refusal and repeats none of it.
+ * In order: a newline (a pattern is one line), a length past 4096 bytes, a line
+ * that would make no rule — a comment, in its own words and with the escape that
+ * makes it a pattern; anything else as naming nothing — and a rule spelled from
+ * home, a `~/` opening it past a `!`, with its anchored spelling and the escape
+ * that names a directory called `~`. A refusal about what the pattern says quotes
+ * it, bounded by that order to one line of at most 4096 bytes; one about its
+ * shape quotes nothing. The caller names its source around the refusal and repeats
+ * none of it.
  *
  * @param pattern One pattern (must not be NULL)
  * @return Error (ERR_VALIDATION), or NULL when the pattern is one rule

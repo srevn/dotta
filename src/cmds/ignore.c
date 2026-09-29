@@ -63,10 +63,11 @@ static bool pattern_exists(const char *content, const char *pattern, size_t span
  * Refuse an argument that is not one pattern, before anything is read or written.
  *
  * The grammar's refusing verb reads each as the line it would be in the file: a
- * newline (two lines would land as two rules), an over-long line, and a line
- * that makes no rule — which would land as a comment or as nothing, reported as
- * "no changes" — are refused in its words, which quote the argument where its
- * words are the reason. The flag is named here.
+ * newline (two lines would land as two rules), an over-long line, a line that
+ * makes no rule — which would land as a comment or as nothing, reported as "no
+ * changes" — and a rule spelled from home (`~/`), which would land as a directory
+ * named `~`, are refused in its words, which quote the argument where its words
+ * are the reason. The flag is named here.
  */
 static error_t require_patterns(const char *flag, char **patterns, size_t count) {
     for (size_t i = 0; i < count; i++) {
@@ -1251,7 +1252,7 @@ const args_command_t spec_ignore = {
         "  A pattern is matched against the path as seen from the directory\n"
         "  it deploys under, as a .gitignore at ~, at / or at the deployment\n"
         "  target would match it: write .config/Code/Cache/ for\n"
-        "  ~/.config/Code/Cache, never home/.\n"
+        "  ~/.config/Code/Cache, never ~/ or home/.\n"
         "  Run 'dotta ignore -v --test <path>' to see the exact subject.\n"
         "\n"
         "Pattern Syntax:\n"

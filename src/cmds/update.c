@@ -5,7 +5,6 @@
 #include "cmds/update.h"
 
 #include <config.h>
-#include <dirent.h>
 #include <errno.h>
 #include <git2.h>
 #include <limits.h>

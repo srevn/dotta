@@ -27,6 +27,13 @@
  *     final link for an in-tree `.gitignore` (git's open_nofollow), O_NONBLOCK
  *     so a FIFO in one's place cannot wedge the open (git's own open would).
  *
+ *   - A repository's lists are one chain, in the order git reads them: each
+ *     `.gitignore` from a directory up to the workdir, then info/exclude, then
+ *     the excludes file. It is git's exclude stack (dir.c prep_exclude), kept
+ *     per directory rather than per traversal — what a memo of point queries
+ *     can keep — so a rung is asked of its directory's list and every list after
+ *     it, and nothing is looked up twice.
+ *
  *   - Nothing is freed one by one: the answers, the rules and the errors live
  *     for the arena, and the one scratch — the rung asked — grows in it to the
  *     longest and is taken back by the next query. A failure is an answer like
@@ -54,23 +61,30 @@
 #include "sys/filesystem.h"
 #include "sys/identity.h"
 
-/* One file of a repository's stack, read once: its rules, or why they could not
- * be read. A file that is not there has no rules and no failure. */
-typedef struct {
+/* One list of a repository's stack, read once: a file's rules, or why they could
+ * not be read, and the list git reads after it where these are silent. A file
+ * that is not there has no rules and no failure. A `.gitignore` is a list of
+ * the repository that reads it, not of the directory it stands in: a core.worktree
+ * above its `.git` makes directories another repository governs this one's too,
+ * and each repository compiles the file with its own core.ignoreCase. */
+typedef struct file file_t;
+struct file {
     const gitignore_ruleset_t *rules;  /* NULL: absent, as git reads it */
     const char *path;                  /* Where it is read from, absolute; NULL: no file */
     error_t failure;                   /* Why it could not be read; NULL when it was */
-} file_t;
+    size_t root;                       /* Its directory beneath the workdir, through its '/': a rung's bytes it reads past */
+    const file_t *next;                /* The list git reads after it; NULL: the last */
+};
 
 /* One repository, read once where discovery found it: where its rules are relative
- * to, how they compare, and its files. */
+ * to, how they compare, and its lists. */
 typedef struct {
     const char *workdir;               /* The kernel's spelling, through its '/'; NULL: none */
     gitignore_case_t casing;           /* core.ignoreCase */
-    file_t exclude;                    /* $GIT_COMMON_DIR/info/exclude */
-    file_t excludes;                   /* core.excludesFile, else git's default */
-    hashmap_t *gitignores;             /* A directory beneath the workdir, through its '/' → file_t */
-    error_t refusal;                   /* Why its configuration or layout could not be read */
+    hashmap_t *gitignores;             /* A directory beneath the workdir, through its '/' → its .gitignore */
+    file_t info_exclude;               /* $GIT_COMMON_DIR/info/exclude, after every .gitignore */
+    file_t excludes_file;              /* core.excludesFile, else git's default: the last list */
+    error_t failure;                   /* Why its configuration or layout could not be read */
 } repository_t;
 
 /* One directory's answer: the repository that governs it and where it stands
@@ -89,6 +103,18 @@ struct source_filter {
     char *rung;                        /* Scratch: the rung asked, taken back by the next query */
     size_t rung_capacity;
 };
+
+/**
+ * How much of `spelling` names the directory above the one its first `len` bytes
+ * name, through its '/' — a directory's parent, or a rung's next `.gitignore`
+ * up; 0 where none is above a relative one
+ */
+static size_t source_parent(const char *spelling, size_t len) {
+    size_t at = len - 1;                /* the '/' that ends the directory */
+    while (at > 0 && spelling[at - 1] != '/') at--;
+
+    return at;
+}
 
 /* ══════════════════════════════════════════════════════════════════
  * The layout, as the invoker
@@ -199,7 +225,8 @@ static error_t source_commondir(source_filter_t *f, const char *gitdir, const ch
  * `nofollow` is O_NOFOLLOW for an in-tree `.gitignore`, which git opens without
  * following a final link, and 0 for the two files git follows. What git reads
  * as absent by rule is absent here: a file that is not there, and a link where
- * none is followed. Anything else is the file's failure (sys/source.h).
+ * none is followed. Anything else is the file's failure (sys/source.h). `out`
+ * is made whole, its place in the chain left to the caller.
  */
 static void source_read(
     source_filter_t *f, const char *path, int nofollow, gitignore_case_t casing,
@@ -253,23 +280,28 @@ static void source_read(
 }
 
 /**
- * The `.gitignore` of one directory beneath the workdir — the first `level` bytes
+ * The `.gitignore` of one directory beneath the workdir — the first `root` bytes
  * of `rung`, through its '/', "" at the workdir — read once, never through a
- * final link (git's open_nofollow).
+ * final link (git's open_nofollow), and chained to the list git reads after it:
+ * the directory above's, or at the workdir, info/exclude.
  */
 static const file_t *source_gitignore(
-    source_filter_t *f, const repository_t *repository, const char *rung, size_t level
+    source_filter_t *f, const repository_t *repository, const char *rung, size_t root
 ) {
-    file_t *file = hashmap_get_n(repository->gitignores, rung, level);
+    file_t *file = hashmap_get_n(repository->gitignores, rung, root);
     if (file) return file;
 
     file = arena_alloc(f->arena, sizeof(*file));
     source_read(
-        f, arena_str_format(f->arena, "%s%.*s.gitignore", repository->workdir, (int) level, rung),
+        f, arena_str_format(f->arena, "%s%.*s.gitignore", repository->workdir, (int) root, rung),
         O_NOFOLLOW, repository->casing, file
     );
+    file->root = root;
+    file->next = root
+        ? source_gitignore(f, repository, rung, source_parent(rung, root))
+        : &repository->info_exclude;
 
-    hashmap_set(repository->gitignores, arena_strndup(f->arena, rung, level), file);
+    hashmap_set(repository->gitignores, arena_strndup(f->arena, rung, root), file);
     return file;
 }
 
@@ -335,7 +367,7 @@ static int source_string(
  * to the gitdir, or where the `.git` was found unless core.bare, or none. A
  * repository with no workdir answers for nothing, and reads no file.
  *
- * Never NULL: what could not be read is the repository's refusal, answered for
+ * Never NULL: what could not be read is the repository's failure, answered for
  * every directory it governs.
  */
 static const repository_t *source_repository(
@@ -388,7 +420,7 @@ static const repository_t *source_repository(
     git_config_free(config);
 
     if (rc < 0) {
-        r->refusal = error_from_git(rc);
+        r->failure = error_from_git(rc);
         return r;
     }
 
@@ -401,7 +433,7 @@ static const repository_t *source_repository(
             f, worktree[0] == '/' ? worktree : arena_str_format(f->arena, "%s%s", gitdir, worktree)
         );
         if (!r->workdir) {
-            r->refusal = error_from_errno(
+            r->failure = error_from_errno(
                 errno, "Failed to resolve core.worktree '%s' of '%s'", worktree, gitdir
             );
             return r;
@@ -413,31 +445,33 @@ static const repository_t *source_repository(
 
     r->casing = ignorecase ? GITIGNORE_CASE_INSENSITIVE : GITIGNORE_CASE_SENSITIVE;
 
-    /* The two files every rung falls back to, read now: info/exclude in the common
+    /* The two lists after every .gitignore, read now: info/exclude in the common
      * dir, which a linked worktree shares; and core.excludesFile — relative to
      * the workdir, where git reads it from; none where it is set empty — or,
-     * unset, git's default (dir.c xdg_config_home). */
+     * unset, git's default (environment.c repo_excludes_file, path.c
+     * xdg_config_home). The excludes file is the last. */
     source_read(
         f, arena_str_format(f->arena, "%sinfo/exclude", commondir), 0, r->casing,
-        &r->exclude
+        &r->info_exclude
     );
+    r->info_exclude.next = &r->excludes_file;
 
     if (!excludesfile) {
         const char *xdg = getenv("XDG_CONFIG_HOME");
         source_read(
             f, xdg && *xdg ? str_path_join(f->arena, xdg, "git/ignore")
                            : str_path_join(f->arena, identity()->home, ".config/git/ignore"),
-            0, r->casing, &r->excludes
+            0, r->casing, &r->excludes_file
         );
     } else if (*excludesfile) {
         const char *path = NULL;
         error_t err = fs_expand_tilde(excludesfile, f->arena, &path);
         if (err) {
-            r->excludes.failure = error_wrap(err, "Failed to read core.excludesFile");
+            r->excludes_file.failure = error_wrap(err, "Failed to read core.excludesFile");
         } else {
             source_read(
                 f, path[0] == '/' ? path : str_path_join(f->arena, r->workdir, path), 0,
-                r->casing, &r->excludes
+                r->casing, &r->excludes_file
             );
         }
     }
@@ -450,18 +484,6 @@ static const repository_t *source_repository(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * How much of `spelling` names the directory above the one its first `len` bytes
- * name, through its '/' — a directory's parent, or a rung's next `.gitignore`
- * up; 0 where none is above a relative one
- */
-static size_t source_parent(const char *spelling, size_t len) {
-    size_t at = len - 1;                /* the '/' that ends the directory */
-    while (at > 0 && spelling[at - 1] != '/') at--;
-
-    return at;
-}
-
-/**
  * The repository found at `directory` (the kernel's spelling, through its '/')
  * — one level of git's walk up: the `.git` it holds, a directory or a file naming
  * one; failing that, the directory itself as a git directory. NULL where neither
@@ -472,7 +494,9 @@ static size_t source_parent(const char *spelling, size_t len) {
  * directory's failure — git refuses to work beneath it (setup.c
  * read_gitfile_gently).
  */
-static error_t source_found(source_filter_t *f, const char *directory, const repository_t **out) {
+static error_t source_discover(
+    source_filter_t *f, const char *directory, const repository_t **out
+) {
     *out = NULL;
 
     struct stat st;
@@ -544,7 +568,7 @@ static const directory_t *source_place(source_filter_t *f, const char *physical,
     int rc = stat(key, &st);
     if (rc == 0) {
         d->dev = st.st_dev;
-        d->failure = source_found(f, key, &repository);
+        d->failure = source_discover(f, key, &repository);
     }
 
     /* None at this level: the parent's answer, where the walk up may reach it. */
@@ -561,7 +585,7 @@ static const directory_t *source_place(source_filter_t *f, const char *physical,
      * the key, "" at the workdir, nowhere outside it or where there is none. */
     if (repository && !d->failure) {
         d->repository = repository;
-        d->failure = repository->refusal;
+        d->failure = repository->failure;
 
         size_t root = repository->workdir ? strlen(repository->workdir) : 0;
         if (!d->failure && root && strncmp(key, repository->workdir, root) == 0) {
@@ -647,34 +671,24 @@ static error_t source_decide(
 ) {
     *out = (source_rule_t){ 0 };
 
-    /* Each .gitignore from the rung's own directory up to the workdir, deepest
-     * first, reading the rung from its own directory: a suffix of it. A list
-     * that decides here is never read past, so no file above it can fail the
-     * rung. */
+    /* The chain from the rung's own directory: each .gitignore up to the workdir,
+     * deepest first, then info/exclude and the excludes file — git pushes those
+     * two the other way round and reads its lists last first (dir.c
+     * setup_standard_excludes). Each list reads the rung from its own root, a
+     * suffix of it, and one that decides is never read past, so no file after
+     * it can fail the rung. */
     const char *slash = strrchr(rung, '/');
-    for (size_t level = slash ? (size_t) (slash - rung) + 1 : 0;;) {
-        const file_t *file = source_gitignore(f, repository, rung, level);
+    size_t root = slash ? (size_t) (slash - rung) + 1 : 0;
+
+    for (const file_t *file = source_gitignore(f, repository, rung, root); file;
+        file = file->next) {
         if (file->failure) return file->failure;
 
-        const gitignore_rule_t *rule = gitignore_ruleset_find(file->rules, rung + level, is_dir);
+        const gitignore_rule_t *rule = gitignore_ruleset_find(
+            file->rules, rung + file->root, is_dir
+        );
         if (rule) {
             *out = (source_rule_t){ rule, file->path };
-            return NULL;
-        }
-        if (level == 0) break;
-        level = source_parent(rung, level);
-    }
-
-    /* Then info/exclude and the excludes file, reading the whole rung: git pushes
-     * the two the other way round and reads its lists last first (dir.c
-     * setup_standard_excludes). */
-    const file_t *files[] = { &repository->exclude, &repository->excludes };
-    for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
-        if (files[i]->failure) return files[i]->failure;
-
-        const gitignore_rule_t *rule = gitignore_ruleset_find(files[i]->rules, rung, is_dir);
-        if (rule) {
-            *out = (source_rule_t){ rule, files[i]->path };
             return NULL;
         }
     }
@@ -734,19 +748,19 @@ error_t source_filter_find(
 }
 
 error_t source_filter_excludes(
-    source_filter_t *f, const char *abs_path, bool is_dir, bool *out
+    source_filter_t *f, const char *path, bool is_dir, bool *out
 ) {
     CHECK_NULL(f);
-    CHECK_NULL(abs_path);
+    CHECK_NULL(path);
     CHECK_NULL(out);
-    CHECK_ARG(abs_path[0] == '/', "source_filter requires absolute paths");
+    CHECK_ARG(path[0] == '/', "source_filter requires absolute paths");
 
     *out = false;
 
-    const char *name = strrchr(abs_path, '/') + 1;
+    const char *name = strrchr(path, '/') + 1;
     if (!*name) return NULL;
 
-    const directory_t *d = source_directory(f, abs_path, (size_t) (name - abs_path));
+    const directory_t *d = source_directory(f, path, (size_t) (name - path));
     if (d->failure) return d->failure;
     if (!d->prefix) return NULL;
 

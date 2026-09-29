@@ -110,7 +110,7 @@ source_filter_t *source_filter_create(arena_t *arena);
  * rule (`node_modules/`) needs.
  *
  * Readers: source_filter_excludes (below), until core/ignore's climb asks the
- * rungs itself; tests/test-source-parity.c, which climbs over it as git does.
+ * rungs itself; tests/test-source-parity.c climb, which climbs over it as git does.
  *
  * @param f      Filter (must not be NULL)
  * @param path   Absolute path (must start with `/`)
@@ -126,7 +126,7 @@ error_t source_filter_find(
 );
 
 /**
- * Test whether `abs_path` is excluded by the ignore rules of its directory's
+ * Test whether `path` is excluded by the ignore rules of its directory's
  * repository.
  *
  * git's climb over the rungs of the path beneath that repository's workdir: every
@@ -149,19 +149,19 @@ error_t source_filter_find(
  * cmds/ignore.c source_gitignore_matches; built by cmds/add.c cmd_add,
  * core/workspace.c workspace_analyze_untracked and cmds/ignore.c test_path_ignore.
  *
- * Preconditions: `abs_path` must start with `/`. Callers with possibly-relative
- * input resolve it first (path_input_filesystem_path, path_input_resolve, realpath,
+ * Preconditions: `path` must start with `/`. Callers with possibly-relative input
+ * resolve it first (path_input_filesystem_path, path_input_resolve, realpath,
  * or a state filesystem path), and every one of those sheds a trailing `/`.
  *
- * @param f        Filter (must not be NULL)
- * @param abs_path Absolute path (must start with `/`)
- * @param is_dir   True if the path refers to a directory
- * @param out      Output boolean (must not be NULL)
+ * @param f      Filter (must not be NULL)
+ * @param path   Absolute path (must start with `/`)
+ * @param is_dir True if the path refers to a directory
+ * @param out    Output boolean (must not be NULL)
  * @return Error (the failure the verdict could not be read past) or NULL on success
  */
 error_t source_filter_excludes(
     source_filter_t *f,
-    const char *abs_path,
+    const char *path,
     bool is_dir,
     bool *out
 );

@@ -49,7 +49,6 @@
 #include <time.h>
 
 #include "base/arena.h"
-#include "base/array.h"
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "base/hashmap.h"
@@ -125,8 +124,11 @@ struct workspace {
 
     /* The diverged items: every item the analyses left with something to say,
      * derived once every verdict is in (workspace_list), then the scan's
-     * discoveries. The spine is the arena's, beside the items it lists. */
-    ptr_array_t diverged;                        /* workspace_item_t *: active, analyzed orphans, discoveries */
+     * discoveries — the arena's, beside the items it lists, grown where each is
+     * noted (workspace_note_diverged). */
+    const workspace_item_t **diverged;           /* Arena; active, analyzed orphans, discoveries */
+    size_t diverged_count;
+    size_t diverged_capacity;
 
     /* The squatted directories: every path a claim names as a directory that
      * the load's look found occupied by anything else, and every path it looked
@@ -399,6 +401,25 @@ static const workspace_squatted_t *workspace_squatter_above(
 }
 
 /**
+ * Note an item among the diverged items, after every one noted before it
+ *
+ * The list grows in the workspace's arena, beside the items it lists: derived
+ * once every verdict is in (workspace_list), then extended by the scan's
+ * discoveries (workspace_add_untracked). No reader is lent it before the load
+ * returns, so none holds an array a later note outgrows (workspace_diverged).
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param item The item, the workspace's own (must not be NULL)
+ */
+static void workspace_note_diverged(workspace_t *ws, const workspace_item_t *item) {
+    ws->diverged = arena_grow(
+        ws->arena, ws->diverged, &ws->diverged_capacity, ws->diverged_count + 1,
+        sizeof(*ws->diverged)
+    );
+    ws->diverged[ws->diverged_count++] = item;
+}
+
+/**
  * Add an untracked item — the one producer with neither source
  *
  * The untracked scan found a new file inside a tracked directory: no row (the
@@ -454,7 +475,7 @@ static void workspace_add_untracked(
         .state = WORKSPACE_STATE_UNTRACKED,
     };
 
-    ptr_array_push(&ws->diverged, item);
+    workspace_note_diverged(ws, item);
 }
 
 /**
@@ -2993,13 +3014,13 @@ static void workspace_list(workspace_t *ws) {
             continue;
         }
 
-        ptr_array_push(&ws->diverged, item);
+        workspace_note_diverged(ws, item);
     }
 
     /* The analyzed prefix, which is every orphan or none: a load that declined
      * the orphan analysis lists none, whatever it looked at (analyzed_count) */
     for (size_t i = 0; i < ws->analyzed_count; i++) {
-        ptr_array_push(&ws->diverged, ws->orphans[i]);
+        workspace_note_diverged(ws, ws->orphans[i]);
     }
 }
 
@@ -3042,7 +3063,6 @@ error_t workspace_load(
     ws->content_cache = content_cache;
     ws->manifest = manifest;
     ws->arena = arena;
-    ptr_array_init(&ws->diverged, arena);
 
     /* An item per active path and per orphan record, each record paired onto
      * its item. Consumers read the active items, whole or by kind, every one
@@ -3121,7 +3141,7 @@ error_t workspace_load(
 workspace_items_t workspace_diverged(const workspace_t *ws) {
     if (!ws) return (workspace_items_t) { 0 };
 
-    return workspace_items(&ws->diverged);
+    return (workspace_items_t){ .entries = ws->diverged, .count = ws->diverged_count };
 }
 
 /**
@@ -3298,8 +3318,10 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
      * never stands on a deployed item (the reach rule), so the two view classes
      * are the whole test and falling through is what a record's memory says of
      * a view row. */
-    if (item->displaced == WORKSPACE_DISPLACED_TRACKED) return WORKSPACE_ROUTE_DISPLACED_TRACKED;
-    if (item->displaced == WORKSPACE_DISPLACED_DERIVED) return WORKSPACE_ROUTE_DISPLACED_DERIVED;
+    if (item->displaced == WORKSPACE_DISPLACED_TRACKED)
+        return WORKSPACE_ROUTE_DISPLACED_TRACKED;
+    if (item->displaced == WORKSPACE_DISPLACED_DERIVED)
+        return WORKSPACE_ROUTE_DISPLACED_DERIVED;
 
     /* A bit the analysis could not settle outranks the ones it could */
     if (divergence & DIVERGENCE_UNVERIFIED) return WORKSPACE_ROUTE_UNVERIFIABLE;

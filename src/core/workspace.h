@@ -750,22 +750,6 @@ typedef struct {
 } workspace_items_t;
 
 /**
- * The items a ptr_array_t bucket holds, as a typed slice
- *
- * A bucket says nothing of its element, so the cast is only as sound as its
- * writers: the one bucket that projects through here, the diverged items, holds
- * items alone where they are listed. The cast layers const onto both pointer
- * levels. The slice aliases the bucket's storage and is valid for the bucket's
- * lifetime.
- */
-static inline workspace_items_t workspace_items(const ptr_array_t *bucket) {
-    return (workspace_items_t){
-        .entries = (const workspace_item_t *const *) bucket->entries,
-        .count = bucket->count,
-    };
-}
-
-/**
  * Which verb resolves a deployed item — the one route table
  *
  * The partition of WORKSPACE_STATE_DEPLOYED items that every surface routing a

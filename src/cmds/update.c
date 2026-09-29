@@ -163,13 +163,14 @@ static error_t update_capture(
  * Memory: every member is the command arena's, and nothing frees a commit.
  */
 typedef struct {
-    const char *profile;      /* Borrowed from the item group */
-    state_record_t *captured; /* What each capture committed, as the record keeps it */
+    const char *profile;               /* Borrowed from the enabled set */
+    state_record_t *captured;          /* What each capture committed, as the record keeps it */
     size_t captured_count;
-    ptr_array_t deleted;      /* Items whose deletion the commit recorded (const workspace_item_t *) */
-    string_array_t pruned;    /* Directory entries dropped as redundant (storage paths) */
-    size_t claimed;           /* Ancestor claims the derivation authored or refreshed */
-    string_array_t retired;   /* Ancestor claims the derivation dropped (storage paths) */
+    const workspace_item_t **deleted;  /* Items whose deletion the commit recorded */
+    size_t deleted_count;
+    string_array_t pruned;             /* Directory entries dropped as redundant (storage paths) */
+    size_t claimed;                    /* Ancestor claims the derivation authored or refreshed */
+    string_array_t retired;            /* Ancestor claims the derivation dropped (storage paths) */
 } commit_t;
 
 /**
@@ -415,7 +416,6 @@ static error_t update_profile(
 
     *out_processed = 0;
     commit->profile = profile;
-    ptr_array_init(&commit->deleted, ctx->arena);
     string_array_init(&commit->pruned, ctx->arena);
     string_array_init(&commit->retired, ctx->arena);
 
@@ -430,11 +430,15 @@ static error_t update_profile(
         return error_wrap(err, "Failed to load existing metadata");
     }
 
-    /* The capture list can hold every item; the walk fills it with the ones that
-     * landed. A rows-only call has nothing to capture and no list to size. */
+    /* The capture and deletion lists can each hold every item; the walk fills
+     * them with the ones that landed. A rows-only call has nothing to capture
+     * or delete, and no list to size. */
     if (item_count > 0) {
         commit->captured = arena_calloc(
             ctx->arena, item_count, sizeof(*commit->captured)
+        );
+        commit->deleted = arena_calloc(
+            ctx->arena, item_count, sizeof(*commit->deleted)
         );
     }
 
@@ -461,7 +465,7 @@ static error_t update_profile(
                     if (err) goto cleanup;
                     /* Remove metadata entry if it exists */
                     metadata_remove_item(metadata, item->storage_path);
-                    ptr_array_push(&commit->deleted, item);
+                    commit->deleted[commit->deleted_count++] = item;
                     continue;
                 }
 
@@ -582,7 +586,7 @@ static error_t update_profile(
                             out, OUTPUT_VERBOSE, "  Removed directory metadata: %s",
                             item->filesystem_path
                         );
-                        ptr_array_push(&commit->deleted, item);
+                        commit->deleted[commit->deleted_count++] = item;
                     }
                     continue;
                 }
@@ -733,7 +737,7 @@ static error_t update_profile(
      * redundancy: a chain re-derived under a captured leaf or a named path is
      * the user's own word about the disk, and it drives the commit it needs —
      * which is how the remedy for a rung the world moved under works at all. */
-    size_t path_count = commit->captured_count + commit->deleted.count +
+    size_t path_count = commit->captured_count + commit->deleted_count +
         commit->claimed + commit->retired.count;
     if (path_count == 0) goto cleanup;
 
@@ -783,7 +787,7 @@ static error_t update_profile(
      * them (it leaves the view by this commit); an authored one only rides, the
      * pruned-keys precedent, so a derivation that only refreshed names nothing
      * and the message's path list says so. */
-    size_t named_count = commit->captured_count + commit->deleted.count +
+    size_t named_count = commit->captured_count + commit->deleted_count +
         commit->retired.count;
     const char **storage_paths = NULL;
     if (named_count > 0) {
@@ -793,9 +797,8 @@ static error_t update_profile(
         for (size_t i = 0; i < commit->captured_count; i++) {
             storage_paths[named++] = commit->captured[i].storage_path;
         }
-        for (size_t i = 0; i < commit->deleted.count; i++) {
-            const workspace_item_t *item = commit->deleted.entries[i];
-            storage_paths[named++] = item->storage_path;
+        for (size_t i = 0; i < commit->deleted_count; i++) {
+            storage_paths[named++] = commit->deleted[i]->storage_path;
         }
         for (size_t i = 0; i < commit->retired.count; i++) {
             storage_paths[named++] = commit->retired.entries[i];
@@ -819,7 +822,7 @@ static error_t update_profile(
         goto cleanup;
     }
 
-    *out_processed = commit->captured_count + commit->deleted.count;
+    *out_processed = commit->captured_count + commit->deleted_count;
 
 cleanup:
     /* Free resources in reverse order */
@@ -944,8 +947,8 @@ static error_t update_write_record(
          * — the pruned entries and the dropped ancestor claims — by the path
          * this profile deploys them at (UNBOUND names nothing on this machine:
          * nothing to release). */
-        for (size_t i = 0; i < commit->deleted.count; i++) {
-            const workspace_item_t *item = commit->deleted.entries[i];
+        for (size_t i = 0; i < commit->deleted_count; i++) {
+            const workspace_item_t *item = commit->deleted[i];
             const manifest_row_t *row = manifest_lookup(manifest, item->filesystem_path);
 
             if (!row) {
@@ -1137,7 +1140,7 @@ static error_t update_execute(
          * say. (A stage whose tree equals the one it opened commits nothing;
          * only a capture re-read identical inside the load-to-open window makes
          * one, and the record write is right for it either way.) */
-        size_t landed = bookkeeping.captured_count + bookkeeping.deleted.count +
+        size_t landed = bookkeeping.captured_count + bookkeeping.deleted_count +
             bookkeeping.claimed + bookkeeping.retired.count;
         if (landed == 0) continue;
 

@@ -214,3 +214,54 @@ char *str_join(
 
     return joined;
 }
+
+/* The bytes every shell reads as themselves, wherever they stand in a word */
+#define SHELL_PLAIN \
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./,:@+-"
+
+const char *str_shell_quote(arena_t *arena, const char *word) {
+    CHECK_NULL(arena);
+    CHECK_NULL(word);
+
+    /* The shell's own expansion first: a `~` standing as the first component is
+     * HOME's, and stays outside the quotes with the `/` behind it. */
+    size_t home = 0;
+    if (word[0] == '~' && (word[1] == '\0' || word[1] == '/')) home = word[1] ? 2 : 1;
+    const char *rest = word + home;
+
+    /* A word the shell reads as itself stands as it is, the tilde form's bare
+     * `~` and `~/` among them; only the empty word needs quotes to be one. */
+    if (rest[strspn(rest, SHELL_PLAIN)] == '\0') {
+        return *word ? word : "''";
+    }
+
+    /* Sized for the worst: a byte costs at most three — the quotes of a run of
+     * one around it — and a quote or a backslash two. A count no memory could
+     * hold is exhaustion. */
+    size_t len = strlen(rest);
+    if (len > (SIZE_MAX - home - 1) / 3) heap_die(SIZE_MAX);
+
+    char *quoted = arena_alloc(arena, home + 3 * len + 1);
+    char *at = quoted;
+    memcpy(at, word, home);
+    at += home;
+
+    /* A run of ordinary bytes stands inside one pair of quotes, and a quote or
+     * a backslash stands outside every pair, escaped, where each shell reads
+     * `\'` and `\\` alike: a quote is written wherever an ordinary byte opens a
+     * run or an escaped one closes it. */
+    bool quoting = false;
+    for (const char *p = rest; *p; p++) {
+        bool escaped = *p == '\'' || *p == '\\';
+        if (escaped == quoting) {
+            *at++ = '\'';
+            quoting = !quoting;
+        }
+        if (escaped) *at++ = '\\';
+        *at++ = *p;
+    }
+    if (quoting) *at++ = '\'';
+    *at = '\0';
+
+    return quoted;
+}

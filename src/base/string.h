@@ -191,6 +191,28 @@ char *str_join(
 );
 
 /**
+ * A word as a shell reads it back, into an arena
+ *
+ * For a line the user runs: the word itself where each of its bytes is one every
+ * shell reads as itself — a letter, a digit, or one of `_ . / , : @ + -` — and
+ * otherwise single-quoted, with each `'` and `\` spelled between the quoted runs
+ * as `\'` and `\\`. That is the one spelling sh, bash, zsh and fish all read
+ * back byte for byte: fish reads `\'` and `\\` as escapes inside single quotes
+ * too, so neither is ever left there. A word with nothing in it is `''`.
+ *
+ * One expansion is the shell's and stays outside the quotes: a `~` that is the
+ * word's first component, alone or before a `/`, which is how output_format_path
+ * spells a path beneath HOME — `~/Library/Application Support` reads back as
+ * the path it names, `~/'Library/Application Support'`. Any other `~` is quoted.
+ *
+ * @param arena Arena a quoted word lives in (must not be NULL)
+ * @param word  The word (must not be NULL)
+ * @return `word` itself where it needs no quotes, else its quoted spelling in
+ *         the arena; never NULL
+ */
+const char *str_shell_quote(arena_t *arena, const char *word);
+
+/**
  * RAII cleanup for strings
  */
 static inline void cleanup_string(char **str) {

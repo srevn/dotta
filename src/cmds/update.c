@@ -233,8 +233,6 @@ typedef struct {
  * @param ws Workspace (must not be NULL)
  * @param opts Update options (must not be NULL)
  * @param scope Operation scope (must not be NULL)
- * @param config Configuration (must not be NULL; auto_detect_new_files admits
- *               new files for the consent prompt)
  * @param out Output context, for the verbose "Excluded" log (must not be NULL)
  * @param arena Arena the accepted items' spine lives in (must not be NULL)
  * @param partition Output, zeroed then filled (must not be NULL)
@@ -243,7 +241,6 @@ static void update_partition(
     const workspace_t *ws,
     const cmd_update_options_t *opts,
     const scope_t *scope,
-    const config_t *config,
     output_t *out,
     arena_t *arena,
     partition_t *partition
@@ -251,7 +248,6 @@ static void update_partition(
     CHECK_NULL(ws);
     CHECK_NULL(opts);
     CHECK_NULL(scope);
-    CHECK_NULL(config);
     CHECK_NULL(arena);
     CHECK_NULL(partition);
 
@@ -311,12 +307,10 @@ static void update_partition(
                 break;
 
             case WORKSPACE_STATE_UNTRACKED:
-                /* A new file under a tracked directory: by flag (--include-new,
-                 * --only-new), or by config, for the consent prompt */
-                if (!opts->include_new && !opts->only_new &&
-                    !config->auto_detect_new_files) {
-                    continue;
-                }
+                /* A new file under a tracked directory, the run's whenever the
+                 * load found one: it scans only where the run asked for new files
+                 * — by flag (--include-new, --only-new), or by config, for the
+                 * consent prompt (cmd_update's analyze_untracked) */
                 break;
 
             case WORKSPACE_STATE_UNDEPLOYED:
@@ -1464,6 +1458,10 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * (core/workspace.h workspace_load). Running that analysis here would not
      * change one item.
      *
+     * The scan is the run's one answer to whether new files are in scope at all:
+     * a flag asks for them, or the config does, for the consent prompt — and
+     * every discovery it makes is the run's (update_partition).
+     *
      * State is borrowed from the dispatcher (ctx->run.state). Read-only analysis.
      * The transaction for the record write opens later in update_write_record().
      */
@@ -1520,7 +1518,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     /* Partition the diverged items: the scope, the flags, and for a deployed
      * item the route table. */
     partition_t partition;
-    update_partition(ws, opts, scope, config, out, ctx->arena, &partition);
+    update_partition(ws, opts, scope, out, ctx->arena, &partition);
 
     /* What the filter refused, said once — above the exit below, so a workspace
      * whose only divergence is stale explains itself, and above the prompt. One
@@ -1730,14 +1728,15 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             }
         }
 
-        /* New files the scan found (not asked for by flag) are added only with
-         * consent. Declining keeps the rest of the run: the re-filter compacts
-         * the accepted array in place — the preview named the new files separately,
-         * and the receipt reports what actually happens. What is left is asked
-         * the nothing-exit's own question, so a named run whose only accepted
-         * items were new files still re-derives the chains it named. */
+        /* New files no flag asked for — the config's scan found them — are added
+         * only with consent. Declining keeps the rest of the run: the re-filter
+         * compacts the accepted array in place — the preview named the new files
+         * separately, and the receipt reports what actually happens. What is
+         * left is asked the nothing-exit's own question, so a named run whose
+         * only accepted items were new files still re-derives the chains it
+         * named. */
         if (counts.new_files > 0 && config->confirm_new_files &&
-            !opts->include_new && !opts->only_new && config->auto_detect_new_files) {
+            !opts->include_new && !opts->only_new) {
 
             char confirm_msg[128];
             snprintf(

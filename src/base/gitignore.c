@@ -63,10 +63,11 @@
  * tree that travels between machines rather than a name on this filesystem.
  *
  * What is this file's own, which git has no need for: the per-rule origin tag,
- * the rule as written kept for the verdict's report, arena lifetime and the
- * composition it allows (a ruleset's compiled rules copied into another, their
- * strings shared), `decided`, the rule parsed and asked alone that infra/pathspec
- * reads, and the selection program beside the exclusion one (gitignore.h has both).
+ * the rule as written and its line kept for the verdict's report, arena lifetime
+ * and the composition it allows (a ruleset's compiled rules copied into another,
+ * their strings shared), `decided`, the rule parsed and asked alone that
+ * infra/pathspec reads, and the selection program beside the exclusion one
+ * (gitignore.h has both).
  *
  * Adaptations of shape only: drops macros, attributes and assignments
  * (gitignore-only, no gitattributes), drops the file-source abstraction — rules
@@ -101,13 +102,15 @@
  * through it gitignore_ruleset_append_rules — and its two strings are not: they
  * stay in the arena the parse put them in, shared by every copy. */
 struct gitignore_rule {
-    const char *pattern;              /* NUL-terminated */
-    size_t len;                       /* strlen(pattern), after the escapes */
+    const char *body;                 /* what the matcher reads: the head and the
+                                       * marker off, the escapes resolved */
+    size_t len;                       /* strlen(body) */
     size_t prefix;                    /* its literal head (git's nowildcardlen);
                                        * == len when nothing in it can glob */
     unsigned int flags;               /* GITIGNORE_FLAG_* bitmask */
     gitignore_origin_t origin;        /* the holding ruleset's tag; 0 for a rule alone */
-    const char *source;               /* the rule as written, its line's span */
+    const char *pattern;              /* the rule as written, its line's span */
+    size_t line;                      /* its line in the file it was read from; 0: none */
 };
 
 struct gitignore_ruleset {
@@ -257,8 +260,9 @@ static size_t rule_span(const char *line, size_t len) {
 
 /* One line into the rule it makes. A line that makes no rule — rule_span's zero,
  * and nothing else — leaves out_rule->pattern NULL: a file skips it, and a pattern
- * never arrives as one (validate_pattern refused it). The origin is not the line's:
- * the ruleset tags the rule after the parse, and a rule alone carries none. */
+ * never arrives as one (validate_pattern refused it). The origin and the line
+ * are not the parse's: the ruleset tags the rule after it, and the file door
+ * numbers it, so a rule alone carries neither. */
 static void parse_line(
     arena_t *arena, const char *line, size_t line_len, gitignore_rule_t *out_rule
 ) {
@@ -269,12 +273,12 @@ static void parse_line(
         return;
 
     unsigned int flags = 0;
-    const char *pattern = line;
+    const char *body = line;
     size_t length = span;
 
-    if (*pattern == '!') {
+    if (*body == '!') {
         flags |= GITIGNORE_FLAG_NEGATIVE;
-        pattern++;
+        body++;
         length--;
     }
 
@@ -283,21 +287,21 @@ static void parse_line(
      * escape protects is the wildmatch later. Whitespace is pattern content and
      * breaks nothing; what trails it is already outside the span. */
     int slash_count = 0;
-    const char *end = pattern + length;
+    const char *end = body + length;
 
-    for (const char *scan = pattern; scan < end; scan++) {
+    for (const char *scan = body; scan < end; scan++) {
         if (*scan != '/')
             continue;
 
         flags |= GITIGNORE_FLAG_FULLPATH;
         slash_count++;
-        if (slash_count == 1 && pattern == scan)
-            pattern++;                   /* consume leading anchor slash */
+        if (slash_count == 1 && body == scan)
+            body++;                      /* consume leading anchor slash */
     }
 
-    length = (size_t) (end - pattern);
+    length = (size_t) (end - body);
 
-    if (pattern[length - 1] == '/') {
+    if (body[length - 1] == '/') {
         length--;
         flags |= GITIGNORE_FLAG_DIRECTORY;
         if (--slash_count <= 0)
@@ -306,8 +310,8 @@ static void parse_line(
 
     /* The rule as written — the `!` and the anchor slash included, what the span
      * left off the back excluded — kept for the verdict's report. */
-    char *source = arena_strndup(arena, line, span);
-    char *copy = arena_strndup(arena, pattern, length);
+    char *pattern = arena_strndup(arena, line, span);
+    char *copy = arena_strndup(arena, body, length);
 
     length = unescape_spaces(copy);
 
@@ -319,12 +323,13 @@ static void parse_line(
     if (copy[0] == '*' && copy[1 + wildmatch_literal_length(copy + 1)] == '\0')
         flags |= GITIGNORE_FLAG_ENDSWITH;
 
-    out_rule->pattern = copy;
+    out_rule->body = copy;
     out_rule->len = length;
     out_rule->prefix = wildmatch_literal_length(copy);
     out_rule->flags = flags;
     out_rule->origin = 0;
-    out_rule->source = source;
+    out_rule->pattern = pattern;
+    out_rule->line = 0;
 }
 
 /* --- One pattern ---------------------------------------------------- */
@@ -401,15 +406,15 @@ static bool match_basename(
 ) {
     if (r->prefix == r->len)
         return basename_len == r->len
-               && memcmp(r->pattern, basename, basename_len) == 0;
+               && memcmp(r->body, basename, basename_len) == 0;
 
     if (r->flags & GITIGNORE_FLAG_ENDSWITH) {
         size_t tail = r->len - 1;      /* the literal behind the leading `*` */
         return tail <= basename_len
-               && memcmp(r->pattern + 1, basename + basename_len - tail, tail) == 0;
+               && memcmp(r->body + 1, basename + basename_len - tail, tail) == 0;
     }
 
-    return wildmatch(r->pattern, basename, 0) == WM_MATCH;
+    return wildmatch(r->body, basename, 0) == WM_MATCH;
 }
 
 /* An anchored rule against a whole rung — git's match_pathname (dir.c:1352),
@@ -424,16 +429,16 @@ static bool match_fullpath(
     const gitignore_rule_t *r, const char *rung, size_t rung_len
 ) {
     if (r->prefix == 0)
-        return wildmatch(r->pattern, rung, WM_PATHNAME) == WM_MATCH;
+        return wildmatch(r->body, rung, WM_PATHNAME) == WM_MATCH;
 
-    if (r->prefix > rung_len || memcmp(r->pattern, rung, r->prefix) != 0)
+    if (r->prefix > rung_len || memcmp(r->body, rung, r->prefix) != 0)
         return false;
     if (r->prefix == r->len)           /* nothing behind the head to match */
         return rung_len == r->len;
 
     size_t keep = r->prefix - 1;
 
-    return wildmatch(r->pattern + keep, rung + keep, WM_PATHNAME) == WM_MATCH;
+    return wildmatch(r->body + keep, rung + keep, WM_PATHNAME) == WM_MATCH;
 }
 
 /* One rule against one rung: the directory marker against is_dir, then the pattern
@@ -500,6 +505,21 @@ static bool rule_reaches(
 
 /* --- The subject ----------------------------------------------------- */
 
+/* One rung as a single question takes it — gitignore_rule_matches' and
+ * gitignore_ruleset_find's: a leading slash is the subject's, never an anchor,
+ * and is shed; a trailing one is not read, the caller saying it with is_dir.
+ * Answers the rung's length, 0 for one with nothing in it, which no rule matches,
+ * and where its last component begins. */
+static size_t rung_subject(const char **rung, const char **basename) {
+    while (**rung == '/')
+        (*rung)++;
+
+    const char *slash = strrchr(*rung, '/');
+    *basename = slash ? slash + 1 : *rung;
+
+    return strlen(*rung);
+}
+
 /* The subject a walk cuts, copied into `dst` (room for strlen(path) + 1): the
  * leading slashes are the caller's spelling and are dropped, and a trailing one
  * is read as the directory hint it is — `*is_dir` is set by one, never cleared.
@@ -540,20 +560,25 @@ error_t gitignore_ruleset_append_file(
 
     const char *line = gitignore_file_lines(content);
 
-    /* A line and its newline are one step; the last line needs no newline. */
-    while (*line) {
+    /* A line and its newline are one step; the last line needs no newline. The
+     * lines are numbered as git numbers them, from 1 and every one — a comment
+     * and a blank line among them — so a rule names its line in the file, and
+     * so does the refusal of one. */
+    for (size_t number = 1; *line; number++) {
         size_t len = strcspn(line, "\n");
 
         if (len > MAX_PATTERN_LENGTH)
             return ERROR(
-                ERR_VALIDATION,
-                "gitignore: line exceeds %d bytes", MAX_PATTERN_LENGTH
+                ERR_VALIDATION, "gitignore: line %zu exceeds %d bytes", number,
+                MAX_PATTERN_LENGTH
             );
 
         gitignore_rule_t rule = { 0 };
         parse_line(set->arena, line, len, &rule);
-        if (rule.pattern)
+        if (rule.pattern) {
+            rule.line = number;
             RETURN_IF_ERROR(push_rule(set, rule, origin));
+        }
 
         line += len + (line[len] == '\n');
     }
@@ -608,7 +633,7 @@ void gitignore_eval(
     out->decided = false;
     out->ignored = false;
     out->origin = 0;
-    out->source = NULL;
+    out->pattern = NULL;
 
     if (!set || !path)
         return;
@@ -675,7 +700,7 @@ cleanup:
         out->decided = true;
         out->ignored = !(match->flags & GITIGNORE_FLAG_NEGATIVE);
         out->origin = match->origin;
-        out->source = match->source;
+        out->pattern = match->pattern;
     }
 }
 
@@ -734,13 +759,25 @@ size_t gitignore_ruleset_size(const gitignore_ruleset_t *set) {
     return set ? set->count : 0;
 }
 
-const char *gitignore_ruleset_source(
+const gitignore_rule_t *gitignore_ruleset_find(
+    const gitignore_ruleset_t *set, const char *rung, bool is_dir
+) {
+    if (!set || !rung)
+        return NULL;
+
+    const char *basename;
+    size_t len = rung_subject(&rung, &basename);
+
+    return len > 0 ? match_rung(set, rung, len, basename, is_dir) : NULL;
+}
+
+const gitignore_rule_t *gitignore_ruleset_rule(
     const gitignore_ruleset_t *set, size_t index
 ) {
     CHECK_NULL(set);
     CHECK_ARG(index < set->count, "index is past the ruleset's rules");
 
-    return set->rules[index].source;
+    return &set->rules[index];
 }
 
 /* --- The rule alone -------------------------------------------------- */
@@ -776,19 +813,26 @@ bool gitignore_rule_matches(
     if (!rule || !rung)
         return false;
 
-    while (*rung == '/')    /* the subject's leading slash, never an anchor */
-        rung++;
-    if (*rung == '\0')
-        return false;
+    const char *basename;
+    size_t len = rung_subject(&rung, &basename);
 
-    size_t len = strlen(rung);
-    const char *slash = strrchr(rung, '/');
-
-    return rule_matches(rule, rung, len, slash ? slash + 1 : rung, is_dir);
+    return len > 0 && rule_matches(rule, rung, len, basename, is_dir);
 }
 
 bool gitignore_rule_negated(const gitignore_rule_t *rule) {
     return rule && (rule->flags & GITIGNORE_FLAG_NEGATIVE);
+}
+
+const char *gitignore_rule_pattern(const gitignore_rule_t *rule) {
+    return rule ? rule->pattern : NULL;
+}
+
+size_t gitignore_rule_line(const gitignore_rule_t *rule) {
+    return rule ? rule->line : 0;
+}
+
+gitignore_origin_t gitignore_rule_origin(const gitignore_rule_t *rule) {
+    return rule ? rule->origin : 0;
 }
 
 size_t gitignore_rule_span(const char *line, size_t len) {

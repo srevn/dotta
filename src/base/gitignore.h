@@ -29,10 +29,12 @@
  * matched". A `!` beneath a rule that matched an ancestor is the whole of what
  * separates them.
  *
- * A rule is one line of the grammar, parsed and asked alone (`gitignore_rule_t`,
- * at the end of this header), for a caller whose program is neither —
- * infra/pathspec, which reads its rules in its own order and walks the rungs
- * itself.
+ * A rule is one line of the grammar (`gitignore_rule_t`): what a ruleset holds
+ * and answers with — the rule deciding one rung, and each rule in order — and
+ * what a caller whose program is neither parses and asks alone (infra/pathspec,
+ * which reads its rules in its own order and walks the rungs itself). A rule
+ * knows the pattern it was written as, the line of the file it was read from,
+ * and the origin its set gave it.
  *
  * Two kinds of input reach the grammar. A *file* is lines
  * (gitignore_ruleset_append_file): a byte-order mark at its head is the file's,
@@ -76,19 +78,29 @@
 
 /*
  * Origin tag - an opaque identifier assigned by the caller when appending rules,
- * returned verbatim by gitignore_eval to identify which source decided the match.
- * Its values are the caller's (core/ignore's ignore_origin_t); a rule parsed
- * alone carries 0.
+ * returned verbatim by gitignore_eval and gitignore_rule_origin to say which of
+ * the caller's inputs a rule came from. Its values are the caller's (core/ignore's
+ * ignore_origin_t); a rule parsed alone carries 0.
  */
 typedef uint8_t gitignore_origin_t;
 
 typedef struct gitignore_ruleset gitignore_ruleset_t;
 
+/*
+ * One line of the grammar, parsed: what a ruleset holds and answers with — its
+ * own record, which the set's next append may move — or a rule of its own, parsed
+ * and asked alone (gitignore_rule_parse, at the end of this header) — no ruleset
+ * around it, and so neither of the ruleset's programs: no ancestors, no order,
+ * nothing final — for a caller whose program is its own and reads each rule itself
+ * (infra/pathspec: its rules in its own order, over rungs of its own walk).
+ */
+typedef struct gitignore_rule gitignore_rule_t;
+
 typedef struct {
     bool decided;                  /* true if any rule matched */
     bool ignored;                  /* winning rule's effect (negation-aware) */
     gitignore_origin_t origin;     /* origin of winning rule */
-    const char *source;            /* winning rule as written, borrowed; NULL when undecided */
+    const char *pattern;           /* winning rule as written, borrowed; NULL when undecided */
 } gitignore_match_t;
 
 /**
@@ -101,7 +113,7 @@ gitignore_ruleset_t *gitignore_ruleset_create(arena_t *arena);
 
 /**
  * Parse `content` as a gitignore file and append the resulting rules, each tagged
- * with `origin`. Safe to call repeatedly to layer sources (e.g. baseline then
+ * with `origin`. Safe to call repeatedly to compose layers (e.g. baseline then
  * profile). A file, not a pattern: one string meant as one rule goes through
  * gitignore_ruleset_append_pattern, which refuses what this door would split on
  * a newline or skip as a comment.
@@ -109,12 +121,14 @@ gitignore_ruleset_t *gitignore_ruleset_create(arena_t *arena);
  * Blank and comment lines are skipped. A UTF-8 byte-order mark at the head of
  * `content` is shed before the first line (gitignore_file_lines) — it is the
  * file's, not its first rule's; one anywhere else is pattern content. A final
- * line needs no terminator. Empty content is accepted (no rules appended). Returns
- * ERR_VALIDATION if any line exceeds 4096 bytes or the cumulative rule count
- * exceeds 10000.
+ * line needs no terminator. Empty content is accepted (no rules appended). Each
+ * rule keeps the line it was read from (gitignore_rule_line), counted as git
+ * counts one: from 1, every line counted, comments and blanks among them. Returns
+ * ERR_VALIDATION if any line exceeds 4096 bytes, naming it, or the cumulative
+ * rule count exceeds 10000.
  *
  * @param ruleset Ruleset to append into (must not be NULL)
- * @param content Gitignore source text (must not be NULL; may be empty)
+ * @param content A gitignore file's text (must not be NULL; may be empty)
  * @param origin  Caller-chosen origin tag
  * @return Error or NULL on success
  */
@@ -211,13 +225,13 @@ error_t gitignore_ruleset_append_rules(
  * Never fails. Always populates every field of *out; decided=false means no rule
  * matched any rung — the ruleset was silent, which is what core/ignore's readers
  * turn their source-tree ladder on, and it is a fact about the rungs rather than
- * about the walk: any order over them answers it the same. `source` and `origin`
+ * about the walk: any order over them answers it the same. `pattern` and `origin`
  * name the excluding rule when `ignored`; when `decided && !ignored` they name
  * the deepest rule that matched and excluded nothing (git reports no pattern at
- * all for that path), and no caller reads them there. `source` is the rule as
- * written — the bytes gitignore_rule_span answers for its line (`!build/`,
- * `/.cache/`); it borrows the arena the rule was parsed into — for a rule composed
- * in from another ruleset (gitignore_ruleset_append_rules), not this one's.
+ * all for that path), and no caller reads them there. `pattern` is the rule as
+ * written (gitignore_rule_pattern), borrowed from the arena the rule was parsed
+ * into — for a rule composed in from another ruleset
+ * (gitignore_ruleset_append_rules), not this one's.
  *
  * @param ruleset Ruleset (must not be NULL)
  * @param path    Relative path (must not be NULL)
@@ -279,6 +293,31 @@ bool gitignore_is_selected(
 );
 
 /**
+ * The rule that decides one rung, or NULL where the set says nothing of it.
+ *
+ * git's last_matching_pattern_from_list: the set's rules in reverse insertion
+ * order, each read as gitignore_rule_matches reads one, and the first that matches
+ * — a negation as readily as any, for the caller to read (gitignore_rule_negated).
+ * No ancestor is asked: the climb over a path's rungs is the caller's, for a
+ * program that is more than one ruleset. gitignore_eval is this asked of every
+ * rung of one path, an excluded ancestor final. `rung` and `is_dir` as for
+ * gitignore_rule_matches.
+ *
+ * The rule is the set's own record, valid until the next append to the set, which
+ * may move every record (base/arena.h arena_grow). Never fails, allocates nothing.
+ *
+ * @param ruleset Ruleset (can be NULL: NULL)
+ * @param rung    One rung, relative to the ruleset's root (can be NULL: NULL)
+ * @param is_dir  True if the rung refers to a directory
+ * @return The deciding rule, borrowed from the set; NULL when no rule matches
+ */
+const gitignore_rule_t *gitignore_ruleset_find(
+    const gitignore_ruleset_t *ruleset,
+    const char *rung,
+    bool is_dir
+);
+
+/**
  * Number of rules in the set (diagnostic).
  *
  * @param ruleset Ruleset (can be NULL)
@@ -287,29 +326,22 @@ bool gitignore_is_selected(
 size_t gitignore_ruleset_size(const gitignore_ruleset_t *ruleset);
 
 /**
- * The index-th rule as written, in the order appended — the bytes
- * gitignore_rule_span answers for its line — for a listing of the rules a set
- * holds (`dotta key status -v`). A span, not a line: a trailing space the grammar
- * trimmed is not in it, and written back alone it may name another rule. Borrowed
- * from the arena the rule was parsed into.
+ * The index-th rule, in the order appended — for a listing of the rules a set
+ * holds (`dotta key status -v`, each as written: gitignore_rule_pattern). The
+ * set's own record, valid until the next append to the set.
  *
  * @param ruleset Ruleset (must not be NULL)
  * @param index   Below gitignore_ruleset_size(ruleset)
- * @return The rule's source (never NULL)
+ * @return The rule (never NULL)
  */
-const char *gitignore_ruleset_source(const gitignore_ruleset_t *ruleset, size_t index);
+const gitignore_rule_t *gitignore_ruleset_rule(
+    const gitignore_ruleset_t *ruleset,
+    size_t index
+);
 
 /* -------------------------------------------------------------------- */
-/* The rule alone                                                       */
+/* The rule                                                             */
 /* -------------------------------------------------------------------- */
-
-/*
- * One line of the grammar as a rule of its own — no ruleset around it, and so
- * neither of the ruleset's programs: no ancestors, no order, nothing final. For
- * a caller whose program is its own and reads each rule itself (infra/pathspec:
- * its rules in its own order, over rungs of its own walk).
- */
-typedef struct gitignore_rule gitignore_rule_t;
 
 /**
  * Refuse a pattern that is not one rule.
@@ -322,7 +354,7 @@ typedef struct gitignore_rule gitignore_rule_t;
  * home, a `~/` opening it past a `!`, with its anchored spelling and the escape
  * that names a directory called `~`. A refusal about what the pattern says quotes
  * it, bounded by that order to one line of at most 4096 bytes; one about its
- * shape quotes nothing. The caller names its source around the refusal and repeats
+ * shape quotes nothing. The caller names its door around the refusal and repeats
  * none of it.
  *
  * @param pattern One pattern (must not be NULL)
@@ -382,6 +414,39 @@ bool gitignore_rule_matches(
 bool gitignore_rule_negated(const gitignore_rule_t *rule);
 
 /**
+ * The rule as written: the bytes gitignore_rule_span answers for its line, the
+ * `!` and the anchor slash kept (`!build/`, `/.cache/`). A span, not a line: a
+ * trailing space the grammar trimmed is not in it, and written back alone it
+ * may name another rule. Borrowed from the arena the rule was parsed into,
+ * whichever set holds the record now.
+ *
+ * @param rule The rule (can be NULL: NULL)
+ * @return The pattern; NULL for no rule
+ */
+const char *gitignore_rule_pattern(const gitignore_rule_t *rule);
+
+/**
+ * The line of the file the rule was read from, 1-based as git counts it
+ * (gitignore_ruleset_append_file), kept wherever the record is copied — so a
+ * composed set's rule still names its line in its own file. 0 for a rule no file
+ * gave: a pattern, appended or parsed alone.
+ *
+ * @param rule The rule (can be NULL: 0)
+ * @return The line, or 0
+ */
+size_t gitignore_rule_line(const gitignore_rule_t *rule);
+
+/**
+ * The origin the set holding the rule tagged it with — the last set it was appended
+ * to, since a copy is re-tagged (gitignore_ruleset_append_rules); 0 for a rule
+ * parsed alone.
+ *
+ * @param rule The rule (can be NULL: 0)
+ * @return The origin tag
+ */
+gitignore_origin_t gitignore_rule_origin(const gitignore_rule_t *rule);
+
+/**
  * How many leading bytes of `line` are the rule it makes, as written.
  *
  * The grammar takes nothing off the front of a line — the `!` and the anchor
@@ -390,7 +455,7 @@ bool gitignore_rule_negated(const gitignore_rule_t *rule);
  * the line's last byte — a CRLF terminator; one with spaces behind it is inside
  * the rule, as it is to git — and then a run of trailing spaces (an escaped one,
  * `foo\ `, is kept; a tab is not a space and is kept). What is left is the rule
- * as written — the same bytes `gitignore_match_t.source` reports for it.
+ * as written — the same bytes gitignore_rule_pattern answers for the rule it makes.
  *
  * So the span is the *identity* of a rule for anyone editing the file it lives
  * in: two lines name the same rule iff their spans are equal byte for byte,

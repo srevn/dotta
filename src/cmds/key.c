@@ -228,7 +228,9 @@ static void key_status(const dotta_ctx_t *ctx) {
             for (size_t i = 0; i < count; i++) {
                 output_print(
                     out, OUTPUT_VERBOSE, "    - %s\n",
-                    gitignore_ruleset_source(config->auto_encrypt_ruleset, i)
+                    gitignore_rule_pattern(
+                    gitignore_ruleset_rule(config->auto_encrypt_ruleset, i)
+                    )
                 );
             }
         }

@@ -1029,7 +1029,7 @@ static error_t test_path_ignore(
                 output_info(
                     out, OUTPUT_NORMAL, "  Reason: %s: '%s'",
                     ignore_origin_describe((ignore_origin_t) match.origin),
-                    match.source
+                    match.pattern
                 );
             } else {
                 output_info(out, OUTPUT_NORMAL, "  Reason: source .gitignore");

@@ -657,7 +657,7 @@ static error_t add_collect(
                 output_info(
                     out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')", child_fs,
                     ignore_origin_describe((ignore_origin_t) match.origin),
-                    match.source
+                    match.pattern
                 );
             } else {
                 output_info(
@@ -1905,7 +1905,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                     "Add it anyway with -e '!%s' — one -e per rule that "
                     "excludes it — or edit the rule with 'dotta ignore'",
                     file, ignore_origin_describe((ignore_origin_t) match.origin),
-                    match.source, match.source
+                    match.pattern, match.pattern
                 );
             } else {
                 err = ERROR(

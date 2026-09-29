@@ -17,8 +17,10 @@
  * parent's — stopping where the walk up would cross into another filesystem. A
  * nested repository answers for its own contents, and a repository's own root
  * is an entry of whatever contains its parent. Its workdir is where the `.git`
- * was found, unless its configuration says otherwise (`core.worktree`, `core.bare`,
- * neither of which a linked worktree reads). A directory that is not there reads
+ * was found, unless its format says otherwise: `core.worktree` or `core.bare`,
+ * which git reads from the repository's own files alone — a config that declares
+ * a format, and a linked worktree's own config.worktree where the format reads
+ * one (else neither, for a linked worktree). A directory that is not there reads
  * as it will once it is — git's rules are the path's, and `ignore --test` asks
  * about a path before it is made — and so does one the invoker cannot look at,
  * which discovery walks past as git does.
@@ -39,7 +41,12 @@
  * module opens none, since git's newer formats (reftable, sha256) keep libgit2
  * from opening one at all. Nor is git's environment configuration
  * (`GIT_CONFIG_GLOBAL` and the rest), which libgit2 reads none of, nor a
- * repository's owner (`safe.directory`): its rules can only exclude more.
+ * repository's owner (`safe.directory`), which guards what a repository could
+ * make git run — hooks, a filter, a pager — where a rule file runs nothing. Nor
+ * is a repository's format verified — its version and extensions — since the
+ * rules are plain files whatever the format, and reading them where libgit2 cannot
+ * open the repository is what this module is for; and its layout keys are read
+ * with the includes libgit2 follows, where git's format pass reads the file alone.
  * `core.excludesFile` spelled from another user's home (`~user/`) is refused,
  * as every tilde dotta reads is (sys/filesystem.h fs_expand_tilde).
  *
@@ -50,11 +57,11 @@
  * is not a regular file, holds a NUL or does not compile; a configuration that
  * does not parse, or a file of the repository's own configuration that the invoker
  * cannot read; a `.git` file that names no repository; a `core.worktree` that
- * names nothing — each minted once per cause and answered again for every entry
- * that reaches it: a directory's, a repository's, a file's. One of the machine's
- * configuration files that the invoker cannot read is absent, as git skips a
- * global or XDG file; the system file libgit2 finds is its own, which need not
- * be git's, and is read as the machine's.
+ * names nothing, or stands beside `core.bare` — each minted once per cause and
+ * answered again for every entry that reaches it: a directory's, a repository's,
+ * a file's. One of the machine's configuration files that the invoker cannot
+ * read is absent, as git skips a global or XDG file; the system file libgit2
+ * finds is its own, which need not be git's, and is read as the machine's.
  *
  * Lifetime: the arena's. A filter lives in the arena it was made in, every answer
  * it keeps with it, and nothing frees it; no libgit2 handle outlives a call. It

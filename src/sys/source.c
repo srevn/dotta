@@ -4,15 +4,15 @@
  *
  * Implementation notes:
  *
- *   - Discovery is git's (setup.c setup_git_directory_gently_1), in libgit2's
- *     C: repository.c find_repo_traverse, is_valid_repository_path and
- *     read_gitfile. It is ported rather than asked of git_repository_discover
- *     for the one fact that call drops: the directory the `.git` was found in,
- *     which is the workdir unless the configuration says otherwise. A gitfile —
- *     a linked worktree's, a submodule's, a separate git dir's — names a gitdir
- *     that says nothing of where it was named from. Ported, the walk up is also
- *     one question per directory, memoised: a directory's answer is its own
- *     `.git`'s, or its parent's.
+ *   - Discovery is git's (setup.c repo_discovery_find_dir), in libgit2's C:
+ *     repository.c find_repo_traverse, is_valid_repository_path and read_gitfile.
+ *     It is ported rather than asked of git_repository_discover for the one fact
+ *     that call drops: the directory the `.git` was found in, which is the workdir
+ *     unless the format says otherwise. A gitfile — a linked worktree's, a
+ *     submodule's, a separate git dir's — names a gitdir that says nothing of
+ *     where it was named from. Ported, the walk up is also one question per
+ *     directory, memoised: a directory's answer is its own `.git`'s, or its
+ *     parent's.
  *
  *   - One map holds every directory's answer under every spelling it was asked
  *     by. A spelling is resolved once (realpath, through the funnel), and the
@@ -185,9 +185,11 @@ static const char *source_resolve(source_filter_t *f, const char *path) {
  *
  * libgit2's is_valid_repository_path: a HEAD file, and objects/ and refs/
  * directories in the common dir — the one a `commondir` file names, a linked
- * worktree's, else the gitdir itself. A reftable or sha256 repository keeps all
- * three, which is what lets the rules be read where libgit2 cannot open one. A
- * `commondir` naming nothing names no git directory.
+ * worktree's, else the gitdir itself: `gitdir`, the very pointer, so a caller
+ * tells a gitdir with a common dir of its own by the file (git's has_common),
+ * whatever the file names. A reftable or sha256 repository keeps all three, which
+ * is what lets the rules be read where libgit2 cannot open one. A `commondir`
+ * naming nothing names no git directory.
  */
 static error_t source_commondir(source_filter_t *f, const char *gitdir, const char **out) {
     *out = NULL;
@@ -362,16 +364,17 @@ static error_t source_string(
  * reached through the `.git` of `found`, or at `gitdir` itself where `found` is
  * NULL (a bare repository, or a walk begun inside a gitdir)
  *
- * Its configuration is composed as libgit2's repository open composes one
- * (repository.c load_config), less the repository a conditional include needs:
- * the repository's own file, its worktree's where that file sets
- * extensions.worktreeConfig, then the global, XDG, system and programdata files
- * libgit2 finds — read and let go. Its workdir is git's (setup.c
- * setup_discovered_git_dir): a linked worktree's is where its `.git` was found
- * — it reads neither key below from the common config
- * (check_repository_format_gently) — and any other's is core.worktree, relative
- * to the gitdir, or where the `.git` was found unless core.bare, or none. A
- * repository with no workdir answers for nothing, and reads no file.
+ * git reads a repository twice, and so does this. Its format first, from its
+ * own files alone (setup.c read_and_verify_repository_format): the config, which
+ * declares a format (core.repositoryformatversion) or has none, and the worktree's
+ * own config.worktree where the format extends to it (extensions.worktreeConfig)
+ * — core.bare and core.worktree are read there and nowhere else. Then its
+ * configuration, composed as libgit2's repository open composes one (repository.c
+ * load_config), less the repository a conditional include needs: the global,
+ * XDG, system and programdata files libgit2 finds, below the repository's own.
+ * Its workdir is git's (setup.c repo_discover_implicit_gitdir): core.worktree,
+ * relative to the gitdir, else where the `.git` was found unless core.bare, else
+ * none. A repository with no workdir answers for nothing, and reads no file.
  *
  * Never NULL: what could not be read is the repository's failure, answered for
  * every directory it governs.
@@ -382,16 +385,9 @@ static const repository_t *source_repository(
     repository_t *r = arena_calloc(f->arena, 1, sizeof(*r));
     r->gitignores = hashmap_borrow(f->arena, 0);
 
-    bool linked = strcmp(commondir, gitdir) != 0;
+    const char *version = NULL, *worktree = NULL, *excludesfile = NULL;
     bool worktree_config = false, bare = false, ignorecase = false;
-    const char *worktree = NULL, *excludesfile = NULL;
 
-    /* One configuration, read whole and let go before anything is answered. An
-     * extension is the repository's own, so its file is asked alone whether a
-     * worktree's is read (git's check_repository_format reads nothing else); a
-     * file that does not parse is libgit2's error, naming the file, and one of
-     * the repository's own that the invoker cannot read is its failure
-     * (source_config). */
     static const struct {
         int (*find)(git_buf *path);
         git_config_level_t level;
@@ -402,6 +398,10 @@ static const repository_t *source_repository(
         { git_config_find_programdata, GIT_CONFIG_LEVEL_PROGRAMDATA },
     };
 
+    /* One composition serves both readings, read and let go before anything is
+     * answered: a file that does not parse is libgit2's error, naming the file,
+     * and one of the repository's own that the invoker cannot read is its failure
+     * (source_config). */
     git_config *config = NULL;
     int rc = git_config_new(&config);
     if (rc < 0) {
@@ -409,24 +409,32 @@ static const repository_t *source_repository(
         return r;
     }
 
+    /* The format, from the repository's own files before anything joins them:
+     * the config alone says whether the worktree's is read. Every key is read
+     * whether it counts or not, as git parses the file whole (setup.c
+     * check_repo_format): a value that does not parse is its refusal either way. */
     error_t err = source_config(
         config, arena_str_format(f->arena, "%sconfig", commondir), GIT_CONFIG_LEVEL_LOCAL
     );
+    if (!err) err = source_string(f, config, "core.repositoryformatversion", &version);
     if (!err) err = source_bool(config, "extensions.worktreeconfig", &worktree_config);
-    if (!err && worktree_config) {
+    if (!err && version && worktree_config) {
         err = source_config(
             config, arena_str_format(f->arena, "%sconfig.worktree", gitdir),
             GIT_CONFIG_LEVEL_WORKTREE
         );
     }
+    if (!err) err = source_bool(config, "core.bare", &bare);
+    if (!err) err = source_string(f, config, "core.worktree", &worktree);
+
+    /* Then the configuration: every level, the machine's files below the
+     * repository's own. */
     for (size_t i = 0; !err && i < sizeof(levels) / sizeof(levels[0]); i++) {
         git_buf path = GIT_BUF_INIT;
         if (levels[i].find(&path) == 0) err = source_config(config, path.ptr, levels[i].level);
         git_buf_dispose(&path);
     }
-    if (!err) err = source_bool(config, "core.bare", &bare);
     if (!err) err = source_bool(config, "core.ignorecase", &ignorecase);
-    if (!err) err = source_string(f, config, "core.worktree", &worktree);
     if (!err) err = source_string(f, config, "core.excludesfile", &excludesfile);
     git_config_free(config);
 
@@ -435,13 +443,25 @@ static const repository_t *source_repository(
         return r;
     }
 
-    /* The workdir, in git's order. A core.worktree that names nothing is git's
-     * refusal too ("Invalid path"). */
-    if (found && linked) {
+    /* The workdir, in git's order. The two keys are the format's: a config that
+     * declares none names no layout (setup.c read_repository_format keeps nothing
+     * it read), and a gitdir with a common dir of its own — a linked worktree —
+     * takes none from the common config unless the worktree's own is read. Both
+     * at once is git's refusal (setup.c apply_repository_format: "core.bare and
+     * core.worktree do not make sense"), and so is a core.worktree that names
+     * nothing — empty, it names nothing as git's chdir("") does. */
+    if (!version || (commondir != gitdir && !worktree_config)) {
         r->workdir = found;
-    } else if (!linked && worktree) {
+    } else if (worktree && bare) {
+        r->failure = ERROR(
+            ERR_VALIDATION, "'%s' sets both core.bare and core.worktree, which do not make sense",
+            gitdir
+        );
+        return r;
+    } else if (worktree) {
         r->workdir = source_resolve(
-            f, worktree[0] == '/' ? worktree : arena_str_format(f->arena, "%s%s", gitdir, worktree)
+            f, *worktree && *worktree != '/'
+                ? arena_str_format(f->arena, "%s%s", gitdir, worktree) : worktree
         );
         if (!r->workdir) {
             r->failure = error_from_errno(
@@ -449,7 +469,7 @@ static const repository_t *source_repository(
             );
             return r;
         }
-    } else if (found && !bare) {
+    } else if (!bare) {
         r->workdir = found;
     }
     if (!r->workdir) return r;

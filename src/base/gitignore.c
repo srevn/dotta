@@ -58,9 +58,14 @@
  * What git has and this file must not take, for want of a subject: per-pattern
  * base/baselen (git reads a .gitignore per directory; dotta stores one at each
  * root), the exclude_list_group / exclude_stack / untracked cache, resolve_dtype
- * (the caller says which kind a path is), the cone-mode hashmaps, and icase — a
- * rule is read byte for byte here, because its subject is a storage path in a
- * tree that travels between machines rather than a name on this filesystem.
+ * (the caller says which kind a path is), and the cone-mode hashmaps.
+ *
+ * icase is taken, per ruleset where git has it per run (core.ignoreCase): a set's
+ * creator says how it compares letters, and every rule it holds is read so —
+ * its literal shortcuts as fspathncmp reads them, and wildmatch under WM_CASEFOLD.
+ * A storage path is a key in a tree that travels between machines, read byte
+ * for byte; a name on a filesystem that folds case is read with ASCII's letters
+ * folded, as git reads one. ASCII's alone, which is all wildmatch folds.
  *
  * What is this file's own, which git has no need for: the per-rule origin tag,
  * the rule as written and its line kept for the verdict's report, arena lifetime
@@ -92,11 +97,13 @@
 #define MAX_RULES          10000
 #define PATH_STACK_BUFFER  4096
 
-/* Rule flags — module-private. */
+/* Rule flags — module-private. ICASE is the holding set's, stamped on the rule
+ * as it enters (push_rule), and never the parse's. */
 #define GITIGNORE_FLAG_NEGATIVE  (1U << 0)
 #define GITIGNORE_FLAG_DIRECTORY (1U << 1)
 #define GITIGNORE_FLAG_FULLPATH  (1U << 2)
 #define GITIGNORE_FLAG_ENDSWITH  (1U << 3)
+#define GITIGNORE_FLAG_ICASE     (1U << 4)
 
 /* One rule. The record is copied wherever a ruleset takes it — push_rule, and
  * through it gitignore_ruleset_append_rules — and its two strings are not: they
@@ -115,6 +122,7 @@ struct gitignore_rule {
 
 struct gitignore_ruleset {
     arena_t *arena;                   /* borrowed */
+    gitignore_case_t casing;          /* how every rule it holds compares letters */
     gitignore_rule_t *rules;          /* arena-allocated; grown by arena_grow */
     size_t count;
     size_t capacity;
@@ -195,7 +203,9 @@ static size_t unescape_spaces(char *str) {
  * cap counts rules stored, never lines read — a blank or comment line at index
  * 10 000 must not falsely trip the limit. The rule comes by value: the caller's
  * copy, taken before any growth runs, so the array it was read from — this set's
- * own, when a set appends itself — need not outlive the push. */
+ * own, when a set appends itself — need not outlive the push. The tag is the
+ * set's origin and the set's casing both: a copy from another set is read as
+ * this one reads its rules, whatever the set it came from folded. */
 static error_t push_rule(
     gitignore_ruleset_t *set, gitignore_rule_t rule, gitignore_origin_t origin
 ) {
@@ -207,6 +217,9 @@ static error_t push_rule(
     );
 
     rule.origin = origin;
+    rule.flags &= ~GITIGNORE_FLAG_ICASE;
+    if (set->casing == GITIGNORE_CASE_INSENSITIVE)
+        rule.flags |= GITIGNORE_FLAG_ICASE;
     set->rules[set->count++] = rule;
 
     return NULL;
@@ -398,23 +411,46 @@ static error_t parse_rule(
 
 /* --- The match at one rung ------------------------------------------ */
 
+/* The literal compare the matcher's shortcuts make, under wildmatch's own flags:
+ * byte for byte, or where WM_CASEFOLD says so with ASCII's letters folded — git's
+ * fspathncmp. ASCII's alone, as wildmatch folds them, so a byte past 0x7F is
+ * compared as it is. */
+static bool literal_equal(const char *a, const char *b, size_t n, unsigned int wm) {
+    if (!(wm & WM_CASEFOLD))
+        return memcmp(a, b, n) == 0;
+
+    for (size_t i = 0; i < n; i++) {
+        unsigned char x = (unsigned char) a[i];
+        unsigned char y = (unsigned char) b[i];
+        if (x >= 'A' && x <= 'Z') x += 'a' - 'A';
+        if (y >= 'A' && y <= 'Z') y += 'a' - 'A';
+        if (x != y)
+            return false;
+    }
+
+    return true;
+}
+
 /* A bare rule against one basename — git's match_basename (dir.c:1328). A rule
- * that cannot glob is a length and a memcmp, `*literal` is a memcmp of the tail,
- * and only what neither answers reaches wildmatch. */
+ * that cannot glob is a length and a literal compare, `*literal` a compare of
+ * the tail, and only what neither answers reaches wildmatch. */
 static bool match_basename(
     const gitignore_rule_t *r, const char *basename, size_t basename_len
 ) {
+    /* The set's casing, stamped on the rule: one word for both compares. */
+    unsigned int wm = (r->flags & GITIGNORE_FLAG_ICASE) ? WM_CASEFOLD : 0;
+
     if (r->prefix == r->len)
         return basename_len == r->len
-               && memcmp(r->body, basename, basename_len) == 0;
+               && literal_equal(r->body, basename, basename_len, wm);
 
     if (r->flags & GITIGNORE_FLAG_ENDSWITH) {
         size_t tail = r->len - 1;      /* the literal behind the leading `*` */
         return tail <= basename_len
-               && memcmp(r->body + 1, basename + basename_len - tail, tail) == 0;
+               && literal_equal(r->body + 1, basename + basename_len - tail, tail, wm);
     }
 
-    return wildmatch(r->body, basename, 0) == WM_MATCH;
+    return wildmatch(r->body, basename, wm) == WM_MATCH;
 }
 
 /* An anchored rule against a whole rung — git's match_pathname (dir.c:1352),
@@ -428,17 +464,19 @@ static bool match_basename(
 static bool match_fullpath(
     const gitignore_rule_t *r, const char *rung, size_t rung_len
 ) {
-    if (r->prefix == 0)
-        return wildmatch(r->body, rung, WM_PATHNAME) == WM_MATCH;
+    unsigned int wm = WM_PATHNAME | ((r->flags & GITIGNORE_FLAG_ICASE) ? WM_CASEFOLD : 0);
 
-    if (r->prefix > rung_len || memcmp(r->body, rung, r->prefix) != 0)
+    if (r->prefix == 0)
+        return wildmatch(r->body, rung, wm) == WM_MATCH;
+
+    if (r->prefix > rung_len || !literal_equal(r->body, rung, r->prefix, wm))
         return false;
     if (r->prefix == r->len)           /* nothing behind the head to match */
         return rung_len == r->len;
 
     size_t keep = r->prefix - 1;
 
-    return wildmatch(r->body + keep, rung + keep, WM_PATHNAME) == WM_MATCH;
+    return wildmatch(r->body + keep, rung + keep, wm) == WM_MATCH;
 }
 
 /* One rule against one rung: the directory marker against is_dir, then the pattern
@@ -543,11 +581,12 @@ static size_t copy_subject(char *dst, const char *path, bool *is_dir) {
 
 /* --- Public API ------------------------------------------------------ */
 
-gitignore_ruleset_t *gitignore_ruleset_create(arena_t *arena) {
+gitignore_ruleset_t *gitignore_ruleset_create(arena_t *arena, gitignore_case_t casing) {
     CHECK_NULL(arena);
 
     gitignore_ruleset_t *set = arena_calloc(arena, 1, sizeof(*set));
     set->arena = arena;
+    set->casing = casing;
 
     return set;
 }

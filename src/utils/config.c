@@ -180,7 +180,7 @@ static error_t read_patterns(
         );
     }
 
-    gitignore_ruleset_t *rules = gitignore_ruleset_create(arena);
+    gitignore_ruleset_t *rules = gitignore_ruleset_create(arena, GITIGNORE_CASE_SENSITIVE);
 
     for (int32_t i = 0; i < value.u.arr.size; i++) {
         toml_datum_t entry = value.u.arr.elem[i];

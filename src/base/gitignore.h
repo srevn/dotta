@@ -87,6 +87,18 @@ typedef uint8_t gitignore_origin_t;
 typedef struct gitignore_ruleset gitignore_ruleset_t;
 
 /*
+ * How a ruleset compares a rule's letters with a subject's — git's core.ignoreCase,
+ * held per set where git holds it per run. A storage path is a key in a tree
+ * that travels between machines, and is compared byte for byte; a name on a
+ * filesystem that folds case is compared with ASCII's letters folded, as git
+ * compares one.
+ */
+typedef enum {
+    GITIGNORE_CASE_SENSITIVE,      /* Byte for byte */
+    GITIGNORE_CASE_INSENSITIVE     /* ASCII's letters folded, in literals and globs alike */
+} gitignore_case_t;
+
+/*
  * One line of the grammar, parsed: what a ruleset holds and answers with — its
  * own record, which the set's next append may move — or a rule of its own, parsed
  * and asked alone (gitignore_rule_parse, at the end of this header) — no ruleset
@@ -104,12 +116,19 @@ typedef struct {
 } gitignore_match_t;
 
 /**
- * Create an empty ruleset backed by the given arena.
+ * Create an empty ruleset backed by the given arena, comparing letters as `casing`
+ * says. Every rule the set holds is matched so, whichever set it was parsed into:
+ * a copy (gitignore_ruleset_append_rules) is read as its new set reads its own,
+ * as it is tagged with its new set's origin.
  *
- * @param arena Arena providing storage (borrowed; must outlive ruleset)
+ * @param arena  Arena providing storage (borrowed; must outlive ruleset)
+ * @param casing How the set's rules compare letters with a subject's
  * @return The ruleset, the arena's; never NULL
  */
-gitignore_ruleset_t *gitignore_ruleset_create(arena_t *arena);
+gitignore_ruleset_t *gitignore_ruleset_create(
+    arena_t *arena,
+    gitignore_case_t casing
+);
 
 /**
  * Parse `content` as a gitignore file and append the resulting rules, each tagged
@@ -388,8 +407,10 @@ error_t gitignore_rule_parse(
  * shed (the subject's, never an anchor), a trailing slash is not read — say so
  * with `is_dir` — and a rung that is empty or nothing but slashes matches nothing.
  * A directory-only rule matches only when `is_dir`; an anchored rule reads the
- * whole rung, a bare one its basename. No ancestor is consulted: the walk is
- * the caller's. Never fails, allocates nothing.
+ * whole rung, a bare one its basename. Its letters are compared as the set that
+ * holds it compares them (gitignore_case_t); a rule parsed alone, byte for byte.
+ * No ancestor is consulted: the walk is the caller's. Never fails, allocates
+ * nothing.
  *
  * @param rule   The rule (can be NULL: false)
  * @param rung   One rung, relative to the rule's root (can be NULL: false)

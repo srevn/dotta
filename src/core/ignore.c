@@ -193,7 +193,7 @@ struct ignore_rules {
 static error_t build_profile_ruleset(
     ignore_rules_t *r, const char *profile, gitignore_ruleset_t **out
 ) {
-    gitignore_ruleset_t *rs = gitignore_ruleset_create(r->arena);
+    gitignore_ruleset_t *rs = gitignore_ruleset_create(r->arena, GITIGNORE_CASE_SENSITIVE);
 
     /* 1. Baseline / builtin fallback (lowest precedence). */
     RETURN_IF_ERROR(
@@ -374,7 +374,7 @@ error_t ignore_excludes_compile(
     *out = NULL;
     if (count == 0) return NULL;
 
-    gitignore_ruleset_t *rules = gitignore_ruleset_create(arena);
+    gitignore_ruleset_t *rules = gitignore_ruleset_create(arena, GITIGNORE_CASE_SENSITIVE);
 
     for (size_t i = 0; i < count; i++) {
         error_t err = gitignore_ruleset_append_pattern(
@@ -407,7 +407,7 @@ error_t ignore_rules_create(
      * not text, must surface, not silently drop safety defaults. The rules hold
      * their own copies of every string, so the Git buffer is freed as soon as
      * they are made. */
-    gitignore_ruleset_t *baseline = gitignore_ruleset_create(arena);
+    gitignore_ruleset_t *baseline = gitignore_ruleset_create(arena, GITIGNORE_CASE_SENSITIVE);
 
     char *blob = NULL;
     error_t err = ignore_blob_text(repo, BASELINE_REF, &blob);

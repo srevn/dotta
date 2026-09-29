@@ -369,12 +369,13 @@ static error_t add_spell(
  *
  * The verdict names the layer and the rule as written, so a caller can say who
  * excluded the path. The rule it names is the outermost that excludes the path:
- * an excluded directory is final, so the climb ends at the first ancestor a rule
- * excludes and never reaches the rules below it (base/gitignore.h). Clearing
- * that one can uncover the next, which is why the refusal offers one `-e` per
- * rule rather than one flag and a promise. A source layer that cannot answer
- * degrades to a verbose warning and no exclusion, so an odd source repository
- * never blocks the user from adding a file they explicitly named.
+ * an excluded directory is final, so the climb ends at the first rung a rule
+ * excludes and never reaches the rules below it (core/ignore.h ignore_verdict).
+ * Clearing that one can uncover the next, which is why the refusal offers one
+ * `-e` per rule rather than one flag and a promise. A source layer that cannot
+ * answer, where no rung is excluded, degrades to a verbose warning and no
+ * exclusion, so an odd source repository never blocks the user from adding a
+ * file they explicitly named.
  */
 static ignore_verdict_t add_excluded(
     const walk_t *walk, const manifest_row_t *held, const char *filesystem_path,
@@ -393,7 +394,7 @@ static ignore_verdict_t add_excluded(
     }
 
     /* Anything else meets every layer. Degraded (above): a source layer that
-     * cannot answer is warned for every entry no layer decided, and dropped —
+     * cannot answer is warned for every entry no rule excludes, and dropped —
      * the one error its source repository, directory or rule file gave, answered
      * again for each (sys/source.h) — leaving the verdict no exclusion. */
     error_t err = ignore_verdict(
@@ -622,22 +623,15 @@ static error_t add_collect(
         );
 
         /* Left out by a rule, the subtree with it: said at VERBOSE, under the
-         * layer that decided, and the rule where the verdict names one. */
+         * layer and the rule that excluded it. */
         const ignore_verdict_t verdict = add_excluded(
             walk, held, child_fs, child_storage, kind
         );
         if (verdict.origin != IGNORE_ORIGIN_NONE) {
-            if (verdict.pattern) {
-                output_info(
-                    out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')", child_fs,
-                    ignore_origin_describe(verdict.origin), verdict.pattern
-                );
-            } else {
-                output_info(
-                    out, OUTPUT_VERBOSE, "Excluded: %s (%s)", child_fs,
-                    ignore_origin_describe(verdict.origin)
-                );
-            }
+            output_info(
+                out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')", child_fs,
+                ignore_origin_describe(verdict.origin), verdict.pattern
+            );
             continue;
         }
 
@@ -1846,11 +1840,12 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * of it, but a verdict against it is an error, not a silent skip: the
          * user asked for it by name, and the answer says which rule stands in
          * the way and how to get past it. A re-capture of a claim meets -e alone,
-         * so no rule of discovery refuses it. The source tree's .gitignore reads
-         * the path and not the name, so a root standing inside a repository whose
-         * rules name it is refused here as any ignored directory is, unless the
-         * profile already tracks it; at "/" the filter names no entry and asks
-         * nothing (sys/source.h). */
+         * so no rule of discovery refuses it. The source tree's rules read where
+         * the path physically stands and not the name, over every rung of it,
+         * so a root standing inside a repository whose rules name it, or name a
+         * directory above it, is refused here as any ignored directory is, unless
+         * the profile already tracks it; at "/" the path names no entry and asks
+         * nothing. */
         const ignore_verdict_t verdict = add_excluded(
             &walk, held, filesystem_path, storage_path, kind
         );

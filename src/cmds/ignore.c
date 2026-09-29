@@ -759,7 +759,7 @@ static bool stands_as_directory(
  * hint, so directory-only patterns (`cache/`) can be tested. The path meets the
  * ladder's one question, as the walk asks it (core/ignore.h ignore_verdict):
  * the rules on the asker's name for it, and the source tree's on the path, when
- * the asker places it, where no `.dottaignore` layer decided.
+ * the asker places it, rung by rung where no `.dottaignore` layer decides.
  *
  * The view is the named profile's branch at HEAD — which need not be enabled,
  * and answers when some *other* enabled profile's branch will not build — or
@@ -957,12 +957,13 @@ static error_t test_path_ignore(
         const gitignore_ruleset_t *rules = NULL;
         RETURN_IF_ERROR(ignore_ruleset(ignore_rules, asker, &rules));
 
-        /* The ladder's one question: the rules on the name, and where no layer
-         * decided, the source tree's on the path — the lowest layer, so a `!`
-         * above it wins. A source layer that cannot answer is said at NORMAL,
-         * for every asker it fails, and read as no exclusion so the rest of the
-         * output stays coherent — the one error its source repository, directory
-         * or rule file gave, answered again for each (sys/source.h). */
+        /* The ladder's one question: the rules on the name, and the source tree's
+         * on the path, rung by rung where no layer decides — the lowest layer,
+         * so a `!` above it wins at its rung. A source layer that cannot answer,
+         * where no rung is excluded, is said at NORMAL, for every asker it fails,
+         * and read as no exclusion so the rest of the output stays coherent —
+         * the one error its source repository, directory or rule file gave,
+         * answered again for each (sys/source.h). */
         ignore_verdict_t verdict;
         error_t failure = ignore_verdict(
             rules, ignore_source(ignore_rules), name, filesystem_path,
@@ -977,16 +978,10 @@ static error_t test_path_ignore(
 
         if (verdict.origin != IGNORE_ORIGIN_NONE) {
             output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} %sIGNORED\n", who);
-            if (verdict.pattern) {
-                output_info(
-                    out, OUTPUT_NORMAL, "  Reason: %s: '%s'",
-                    ignore_origin_describe(verdict.origin), verdict.pattern
-                );
-            } else {
-                output_info(
-                    out, OUTPUT_NORMAL, "  Reason: %s", ignore_origin_describe(verdict.origin)
-                );
-            }
+            output_info(
+                out, OUTPUT_NORMAL, "  Reason: %s: '%s'",
+                ignore_origin_describe(verdict.origin), verdict.pattern
+            );
             any_ignored = true;
         } else {
             output_success(out, OUTPUT_NORMAL, "%sNOT IGNORED", who);

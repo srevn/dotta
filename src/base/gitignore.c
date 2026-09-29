@@ -44,8 +44,9 @@
  *
  * One deliberate difference from git, and it is this module's own: where a negated
  * ancestor ends git's report with no pattern at all, the rule is kept here as
- * `decided && !ignored`, which is what core/ignore's ladder turns its source
- * layer on. The parity suite compares patterns only where both answers ignore.
+ * `decided && !ignored`, which no reader turns on any longer — core/ignore's
+ * ladder asks a rung at a time. The parity suite compares patterns only where
+ * both answers ignore.
  *
  * And one at the door, which the parity suite cannot see, for it asks only about
  * files: git hands a command-line entry to its list unread (`ls-files -x '#foo'`
@@ -700,8 +701,7 @@ void gitignore_eval(
      * ancestor a rule excludes ends the walk and is the rule the verdict is
      * reported under. An ancestor a rule *un*-excludes settles nothing about
      * what lies beneath it; it is kept only so a caller can tell "our rules spoke"
-     * from "our rules were silent" (`decided`), which is what core/ignore's ladder
-     * turns its source layer on (ignore_verdict). */
+     * from "our rules were silent" (`decided`). */
     const gitignore_rule_t *match = NULL;
 
     size_t len = copy_subject(p, path, &is_dir);

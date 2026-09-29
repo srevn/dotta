@@ -2537,14 +2537,15 @@ static void workspace_scan(
          * ignore_verdict): the rules on the mount-relative name, which is "" at
          * a root of this profile — no rule reaches an empty subject
          * (base/gitignore.c), so a root's entries are matched and a root is not
-         * — and where no layer decided, the source tree's rules on the path,
-         * the lowest layer, so a `!` rule above it wins. That one reads the place
-         * and not the name, so a root standing inside a repository whose rules
-         * name it is not entered, which is the answer the directory would get
-         * under any other name. The layer's own failure leaves no verdict, and
-         * its error is dropped — the one its source repository, directory or
-         * rule file gave, answered again for every entry that reaches it
-         * (sys/source.h). */
+         * — and the source tree's rules on the path, rung by rung where no layer
+         * decides, the lowest layer, so a `!` rule above it wins at its rung.
+         * That one reads where the path physically stands and not the name, so
+         * a root standing inside a repository whose rules name it is not entered,
+         * which is the answer the directory would get under any other name. The
+         * layer's failure, the answer only where no rung is excluded, leaves no
+         * verdict, and its error is dropped — the one its source repository,
+         * directory or rule file gave, answered again for every entry that reaches
+         * it (sys/source.h). */
         ignore_verdict_t verdict;
         (void) ignore_verdict(
             scan->rules, scan->source, name, child,

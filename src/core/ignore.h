@@ -20,12 +20,14 @@
  * not re-opened by a profile's `!.cache/keep`; `!.cache/` re-opens it, and then
  * the rules beneath have their say.
  *
- * The source tree's own rules — what git excludes where a path stands, when the
- * user runs `dotta add` against files that live inside a git repository — are
- * the fifth layer and the lowest (sys/source.h). The builder opens it where the
- * configuration respects it (ignore_source), and the ladder's one question asks
- * it where no layer above decided, so a `!` rule in any of the four overrides
- * it (ignore_verdict).
+ * The source tree's own rules — what git excludes where a path physically stands,
+ * when the user runs `dotta add` against files that live inside a git repository
+ * — are the fifth layer and the lowest (sys/source.h). The builder opens it where
+ * the configuration respects it (ignore_source), and the ladder's one question
+ * asks it rung by rung, wherever the four are silent (ignore_verdict): a directory
+ * it excludes is final like any other, and a `!` in any of the four re-opens
+ * the rung it names against the source's rules too — that rung and not what lies
+ * beneath it, where the source's finer rules still speak.
  *
  * What the rules reach
  * --------------------
@@ -137,16 +139,21 @@ typedef enum {
 } ignore_origin_t;
 
 /**
- * The ladder's answer for one path: whether a rule leaves it out, and which
+ * The ladder's answer for one path: whether a rule leaves it out, which, and where
  *
  * The origin is the answer — IGNORE_ORIGIN_NONE where no rule excludes the path,
  * else the layer whose rule does — so nothing beside it restates the verdict.
- * The pattern is borrowed from the arena its rule was parsed into, which outlives
- * the command (ignore_rules_create).
+ * The rung is where on the path the rule excluded it, counted up from the path
+ * itself: 0 where the rule names the path, 1 where it names the directory the
+ * path stands in, and so on — the name's rung at that height where one of the
+ * four decided, the place's where the source layer did (ignore_verdict). The
+ * pattern is borrowed from the arena its rule was parsed into, the command's or
+ * longer.
  */
 typedef struct {
     ignore_origin_t origin;   /* The layer whose rule excludes the path; NONE: none does */
-    const char *pattern;      /* That rule as written; NULL with NONE, and with SOURCE: source_filter_excludes names none */
+    const char *pattern;      /* That rule as written; NULL with NONE */
+    size_t rung;              /* How far above the path it excluded: 0 the path itself */
 } ignore_verdict_t;
 
 /**
@@ -268,20 +275,36 @@ error_t ignore_ruleset(
 source_filter_t *ignore_source(ignore_rules_t *rules);
 
 /**
- * The ladder's verdict on one path: the four layers on its name, and where they
- * are silent, the source layer on its place.
+ * The ladder's verdict on one path: the four layers on its name and the source
+ * layer on where it physically stands, asked rung by rung from the top, as git
+ * asks its lists (dir.c prep_exclude, last_matching_pattern_from_lists) with
+ * the four the higher. At each rung the four decide where a rule of theirs matches
+ * — a `!` as surely as any — and the source layer where they are silent, the
+ * rung asked of its own directory's repository. The first rung a rule excludes
+ * is the verdict, final across both: nothing beneath it is asked. A `!` re-opens
+ * the rung it names and no other, so the source's rules beneath it still speak.
  *
- * The four layers are one program over the name's tail (base/gitignore.h
- * gitignore_eval). Where any of their rules matched, at any rung, the source
- * layer is not asked: it is the lowest layer, so a `!` in any of the four overrides
- * it. Where they were silent, the source layer's verdict on the place stands
- * (sys/source.h source_filter_excludes). The name and the place are one path —
- * `filesystem_path` is where `storage_path` stands (cmds/add.h, THE KEY INVARIANT)
- * — and each program reads the spelling its rules are written for.
+ * One path, two subjects, their rungs counted up from the path itself. The name's
+ * tail ends `filesystem_path`, component for component (cmds/add.h, THE KEY
+ * INVARIANT) — a contract, checked. The source layer reads the place in the
+ * kernel's spelling (sys/source.h source_filter_physical), so a place spelled
+ * through a link is read where the link leads. The two rungs at one height are
+ * one directory at the path and at its directory, and above them wherever no
+ * link the spelled place passes through leads elsewhere: a `!` of the four re-opens
+ * the source's rung only where they are. A rung of the place no rung of the name
+ * is — above the name's top, the root it lies under and what contains it, or
+ * above such a link — is the source layer's alone.
  *
  * `source` NULL — the configuration turned the layer off, or the reader asks a
  * layer alone, add's -e of a claim — or `filesystem_path` NULL — a name no binding
- * places on this machine — asks the four alone, and cannot fail.
+ * places on this machine — asks the four alone, over the name's rungs, and cannot
+ * fail.
+ *
+ * A rung the source layer cannot read is no verdict: a rung beneath it that a
+ * rule excludes excludes the path whatever the unread one says. Its failure is
+ * the answer only where no rung is excluded — the first such failure, and `*out`
+ * no exclusion — for the reader to choose its fate; so is the failure of a place
+ * whose directory resolves to nothing, which leaves the layer no rung to ask.
  *
  * Readers: cmds/add.c add_excluded (a claim with the -e layer alone, anything
  * else with every layer), core/workspace.c workspace_scan, cmds/ignore.c
@@ -294,9 +317,8 @@ source_filter_t *ignore_source(ignore_rules_t *rules);
  * @param filesystem_path Where it stands, absolute (can be NULL: the layers alone)
  * @param kind            What stands there — a directory-only rule matches a
  *                        directory alone
- * @param out             The verdict (must not be NULL): no exclusion on error
- * @return The source layer's failure, for the reader to choose its fate; NULL
- *         on success
+ * @param out             The verdict (must not be NULL)
+ * @return The source layer's failure, where no rung is excluded; NULL otherwise
  */
 error_t ignore_verdict(
     const gitignore_ruleset_t *rules,
@@ -308,10 +330,8 @@ error_t ignore_verdict(
 );
 
 /**
- * Describe an origin tag for diagnostic display.
- *
- * Accepts the origin returned by `gitignore_eval` (as stored in the match result)
- * after the caller's cast to `ignore_origin_t`.
+ * Describe an origin tag for diagnostic display: the layer a verdict names
+ * (ignore_verdict_t), in the words its readers print.
  *
  * @param origin Origin tag
  * @return Human-readable static string (never NULL, never to be freed)

@@ -19,7 +19,8 @@
  *     kernel's spelling is answered by the walk up — every prefix of a resolved
  *     path is resolved too, so the walk never resolves again, and a spelling
  *     with no link in it is its own kernel's spelling and one key. A spelled
- *     directory's entry is its kernel spelling's, shared.
+ *     directory's entry is its kernel spelling's, shared, and keeps that spelling:
+ *     what a climb over a place climbs (source_filter_physical).
  *
  *   - The repository is read as the invoker: raw stat, open and realpath for
  *     its layout, and libgit2 for its configuration (sys/source.h). The rule
@@ -87,11 +88,12 @@ typedef struct {
     error_t failure;                   /* Why its configuration or layout could not be read */
 } repository_t;
 
-/* One directory's answer: the repository that governs it and where it stands
- * inside, or the failure that left it none. */
+/* One directory's answer: its kernel spelling, the repository that governs it
+ * and where it stands inside, or the failure that left it none. */
 typedef struct {
+    const char *physical;              /* The kernel's spelling, through its '/': its key; NULL: it resolves to nothing */
     const repository_t *repository;    /* NULL: none governs it */
-    const char *prefix;                /* Where it stands in the workdir, a suffix of its key; NULL: nowhere */
+    const char *prefix;                /* Where it stands in the workdir, a suffix of `physical`; NULL: nowhere */
     dev_t dev;                         /* Its filesystem, where the walk up stops */
     error_t failure;                   /* Why it has no answer; NULL when it has one */
 } directory_t;
@@ -643,7 +645,8 @@ static error_t source_discover(
  * A directory the invoker cannot look into is one discovery cannot examine: it
  * reads as its parent reads, as libgit2 walks past a level it cannot stat — git
  * itself cannot work there as the invoker at all (sys/source.h). Memoised in
- * the one map every spelling shares; the prefix points into the key.
+ * the one map every spelling shares, under the kernel's spelling, which the answer
+ * keeps: the prefix points into it.
  */
 static directory_t *source_place(source_filter_t *f, const char *physical, size_t len) {
     directory_t *d = hashmap_get_n(f->directories, physical, len);
@@ -651,6 +654,7 @@ static directory_t *source_place(source_filter_t *f, const char *physical, size_
 
     char *key = arena_strndup(f->arena, physical, len);
     d = arena_calloc(f->arena, 1, sizeof(*d));
+    d->physical = key;
 
     struct stat st;
     const repository_t *repository = NULL;
@@ -846,6 +850,28 @@ source_filter_t *source_filter_create(arena_t *arena) {
     return f;
 }
 
+error_t source_filter_physical(
+    source_filter_t *f, const char *path, size_t len, const char **out
+) {
+    CHECK_NULL(f);
+    CHECK_NULL(path);
+    CHECK_NULL(out);
+    CHECK_ARG(
+        len > 0 && path[0] == '/' && path[len - 1] == '/',
+        "source_filter_physical requires a directory spelled absolute, through its '/'"
+    );
+
+    /* The directory's answer under this spelling — the same entry every spelling
+     * of it shares — and the spelling it was stored under. One that resolves to
+     * nothing keeps no spelling, and its failure says why; a failure of discovery
+     * leaves the spelling standing, since the directory is where it is either
+     * way. */
+    const directory_t *d = source_directory(f, path, len);
+    *out = d->physical;
+
+    return d->physical ? NULL : d->failure;
+}
+
 error_t source_filter_find(
     source_filter_t *f, const char *path, bool is_dir, source_rule_t *out
 ) {
@@ -868,45 +894,4 @@ error_t source_filter_find(
     if (!d->prefix) return NULL;
 
     return source_decide(f, d->repository, source_rung(f, d->prefix, name), is_dir, out);
-}
-
-error_t source_filter_excludes(
-    source_filter_t *f, const char *path, bool is_dir, bool *out
-) {
-    CHECK_NULL(f);
-    CHECK_NULL(path);
-    CHECK_NULL(out);
-    CHECK_ARG(path[0] == '/', "source_filter requires absolute paths");
-
-    *out = false;
-
-    const char *name = strrchr(path, '/') + 1;
-    if (!*name) return NULL;
-    if (f->failure) return f->failure;
-
-    const directory_t *d = source_directory(f, path, (size_t) (name - path));
-    if (d->failure) return d->failure;
-    if (!d->prefix) return NULL;
-
-    /* git's climb (dir.c prep_exclude), over the rungs the kernel spells: every
-     * directory from the workdir down, shallowest first and each as a directory,
-     * then the entry. Each rung is cut in the scratch in place, and the scratch
-     * is the query's, so nothing is put back on the way out. */
-    char *rung = source_rung(f, d->prefix, name);
-    source_rule_t decided;
-
-    for (char *slash = strchr(rung, '/'); slash; slash = strchr(slash + 1, '/')) {
-        *slash = '\0';
-        RETURN_IF_ERROR(source_decide(f, d->repository, rung, true, &decided));
-        if (decided.rule && !gitignore_rule_negated(decided.rule)) {
-            *out = true;
-            return NULL;
-        }
-        *slash = '/';
-    }
-
-    RETURN_IF_ERROR(source_decide(f, d->repository, rung, is_dir, &decided));
-    *out = decided.rule && !gitignore_rule_negated(decided.rule);
-
-    return NULL;
 }

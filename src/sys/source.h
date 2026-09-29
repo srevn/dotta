@@ -121,6 +121,39 @@ typedef struct {
 source_filter_t *source_filter_create(arena_t *arena);
 
 /**
+ * The directory `path`'s first `len` bytes spell, through its '/', as the kernel
+ * spells it: where a path in that directory physically stands, and so where
+ * source_filter_find reads one from.
+ *
+ * A place's kernel spelling is its directory's, answered here, and its own name
+ * as spelled — git follows no link, and reads one it meets at the end as an entry.
+ * A climb over a place's rungs climbs that spelling: a link the place is spelled
+ * through leads to a directory whose own ancestors are the rungs git reads, and
+ * the directories the spelling passed through on the way to it are not among
+ * them. A directory not made yet is spelled as it will be once it is, beneath
+ * the kernel's spelling of the nearest one that stands.
+ *
+ * Every spelling of one directory answers the same string, the filter's for its
+ * arena's life: resolved once per spelling, as the rung query resolves one. What
+ * the discovery environment refuses is discovery's failure, never this answer's.
+ *
+ * Readers: core/ignore.c ignore_verdict — the place it climbs, and whether a
+ * rung of a name is the place's own; tests/test-source-parity.c compare.
+ *
+ * @param f    Filter (must not be NULL)
+ * @param path A directory, spelled absolute (must not be NULL)
+ * @param len  Bytes of `path` that spell it, through its '/'
+ * @param out  The kernel's spelling, through its '/'; NULL on error (must not be NULL)
+ * @return Error (why the spelling resolves to nothing) or NULL on success
+ */
+error_t source_filter_physical(
+    source_filter_t *f,
+    const char *path,
+    size_t len,
+    const char **out
+);
+
+/**
  * The rule of the source repository's stack that decides `path` itself.
  *
  * git's last_matching_pattern_from_lists, asked of the repository that governs
@@ -128,8 +161,14 @@ source_filter_t *source_filter_create(arena_t *arena);
  * the deepest first, each reading the path from its own directory; then
  * `info/exclude`, then the excludes file, reading it from the workdir. The first
  * list with a rule that matches decides, and within a list the last such rule
- * does — a negation as readily as any, for the caller to read. No ancestor of
- * `path` is asked: the climb over its rungs is the caller's.
+ * does — a negation as readily as any, for the caller to read. The directory is
+ * read where it physically stands (source_filter_physical), so every spelling
+ * of a path in it is asked one question.
+ *
+ * No ancestor of `path` is asked. The climb is the caller's, over the path's
+ * kernel spelling from the top, each rung asked of its own directory's repository
+ * — git's traversal, where a directory is an entry of the repository it stands
+ * in, and a nested repository's root an entry of the one around it.
  *
  * `out->rule` is NULL where no rule decides the rung, where no repository governs
  * the directory or its workdir does not contain it (a bare repository, a
@@ -137,8 +176,16 @@ source_filter_t *source_filter_create(arena_t *arena);
  * its last `/` ("/"). A directory is asked with `is_dir`, which a directory-only
  * rule (`node_modules/`) needs.
  *
- * Readers: source_filter_excludes (below), until core/ignore's climb asks the
- * rungs itself; tests/test-source-parity.c climb, which climbs over it as git does.
+ * Policy: whether to consult the answer at all belongs with the caller — the
+ * builder of the ladder's layers reads `config.respect_gitignore`, and a caller
+ * that wants the layer off does not build a filter. Readers: core/ignore.c
+ * ignore_verdict, the ladder's one question, whose climb asks every rung of the
+ * place; tests/test-source-parity.c climb, which climbs over it as git does from
+ * the path's own directory. Built by core/ignore.c ignore_rules_create.
+ *
+ * Preconditions: `path` must start with `/`. Callers with possibly-relative input
+ * resolve it first (path_input_filesystem_path, path_input_resolve, realpath,
+ * or a state filesystem path), and every one of those sheds a trailing `/`.
  *
  * @param f      Filter (must not be NULL)
  * @param path   Absolute path (must start with `/`)
@@ -151,47 +198,6 @@ error_t source_filter_find(
     const char *path,
     bool is_dir,
     source_rule_t *out
-);
-
-/**
- * Test whether `path` is excluded by the ignore rules of its directory's
- * repository.
- *
- * git's climb over the rungs of the path beneath that repository's workdir: every
- * directory on the way down, shallowest first, each asked as source_filter_find
- * asks one; then the path itself. The first rung a rule excludes is the verdict
- * — an excluded directory is final, and a rule beneath it cannot re-include
- * anything — and a rung a negation decides settles nothing beneath it. That is
- * `git check-ignore` from the repository, the tree's own rules at every rung
- * and no other repository's: a nested repository's root, which its parent's
- * repository judges, is not asked of it here.
- *
- * `*out` is false for "not excluded" and for "no verdict" alike — no repository
- * governs the directory, or its workdir does not contain it — and the two are
- * deliberately one answer to a caller that layers this beneath its own. A path
- * that names no entry answers false.
- *
- * Policy: whether to consult the answer at all belongs with the caller — the
- * builder of the ladder's layers reads `config.respect_gitignore`, and a caller
- * that wants the layer off does not build a filter. Reader: core/ignore.c
- * ignore_verdict, the ladder's one question; built by core/ignore.c
- * ignore_rules_create.
- *
- * Preconditions: `path` must start with `/`. Callers with possibly-relative input
- * resolve it first (path_input_filesystem_path, path_input_resolve, realpath,
- * or a state filesystem path), and every one of those sheds a trailing `/`.
- *
- * @param f      Filter (must not be NULL)
- * @param path   Absolute path (must start with `/`)
- * @param is_dir True if the path refers to a directory
- * @param out    Output boolean (must not be NULL)
- * @return Error (the failure the verdict could not be read past) or NULL on success
- */
-error_t source_filter_excludes(
-    source_filter_t *f,
-    const char *path,
-    bool is_dir,
-    bool *out
 );
 
 #endif /* DOTTA_SYS_SOURCE_H */

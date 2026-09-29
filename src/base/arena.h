@@ -6,8 +6,9 @@
  * in a single arena_free() call, and everything after a mark by arena_reset().
  *
  * An allocation cannot fail: it succeeds, or the run dies of exhaustion
- * (base/heap.h heap_die), so no answer here is NULL but the copy of a NULL string.
- * All allocations are 8-byte aligned.
+ * (base/heap.h heap_die), so no answer here is NULL but the copy of a NULL string
+ * and an empty array a growth hands back as it was (arena_grow). All allocations
+ * are 8-byte aligned.
  *
  * Under AddressSanitizer an arena is as visible as the heap: an allocation's
  * own bytes alone are addressable, a redzone follows each, and what a growth
@@ -121,7 +122,8 @@ __attribute__((format(printf, 2, 0)));
  * @param capacity The array's capacity in entries, updated (must not be NULL)
  * @param want     The entries the array must hold
  * @param size     One entry's size in bytes
- * @return The array: `entries` itself where nothing grew; never NULL
+ * @return The array: `entries` itself where nothing grew — NULL still, for an
+ *         empty array asked for none — else a new one, never NULL
  */
 void *arena_grow(
     arena_t *arena, void *entries, size_t *capacity, size_t want, size_t size

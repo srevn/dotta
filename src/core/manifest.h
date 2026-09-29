@@ -256,8 +256,11 @@ static inline bool manifest_is_derived(const manifest_row_t *row) {
  *
  * Structural type — parallels libgit2's git_strarray and base/array's
  * string_array_t. The producer's signature dictates lifetime via the arena (or
- * other allocator) that backs the rows: manifest_rows(view), the one producer,
- * lends the view's, backed by the view's arena (the command's).
+ * other allocator) that backs the rows: manifest_rows(view) lends the view's,
+ * backed by the view's arena (the command's); cmds/update.c lends two of its
+ * own — cmd_update's named-run leaves, in the command's arena, and update_execute's
+ * per-profile share of them, in an array the next profile refills (valid for
+ * one update_profile call). The rows are the view's however long a slice lives.
  */
 typedef struct {
     const manifest_row_t *const *entries;

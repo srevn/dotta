@@ -200,7 +200,9 @@ typedef struct {
  *
  * The lists are slices one classification fills (core/workspace.h
  * workspace_buckets_t), each in the diverged items' order, in the arena the
- * partition was made in — the items borrowed, the workspace's.
+ * partition was made in — the items borrowed, the workspace's. The discoveries
+ * follow every other diverged item (workspace_diverged), so the new files are
+ * accepted's suffix: what cmd_update's decline drops.
  *
  * The equation: in-scope deployed items no pattern spared = accepted deployed ∪
  * Σ refused[arm], by one switch that routes each item once — nothing is counted
@@ -377,13 +379,10 @@ static void update_partition(
  *            the encryption policy off it)
  * @param stage The profile's stage, opened by the caller (must not be NULL)
  * @param profile Profile to update (must not be NULL)
- * @param items Array of workspace items to update (may be NULL when item_count
- *              is 0)
- * @param item_count Number of items
+ * @param items The profile's share of the run's work, in filter order (empty
+ *              where the profile has only chains to re-derive)
  * @param rows The named run's in-scope view rows for this profile, each the leaf
- *             of a chain to re-derive (may be NULL when row_count is 0; a bare
- *             run names no paths and hands none)
- * @param row_count Number of rows
+ *             of a chain to re-derive (empty on a bare run, which names no paths)
  * @param opts Update options (must not be NULL)
  * @param commit The commit's bookkeeping, zero-filled by the caller; the walk
  *               fills it (must not be NULL)
@@ -396,10 +395,8 @@ static error_t update_profile(
     const dotta_ctx_t *ctx,
     stage_t *stage,
     const char *profile,
-    const workspace_item_t **items,
-    size_t item_count,
-    const manifest_row_t **rows,
-    size_t row_count,
+    workspace_items_t items,
+    manifest_rows_t rows,
     const cmd_update_options_t *opts,
     commit_t *commit,
     size_t *out_processed
@@ -433,12 +430,12 @@ static error_t update_profile(
     /* The capture and deletion lists can each hold every item; the walk fills
      * them with the ones that landed. A rows-only call has nothing to capture
      * or delete, and no list to size. */
-    if (item_count > 0) {
+    if (items.count > 0) {
         commit->captured = arena_calloc(
-            ctx->arena, item_count, sizeof(*commit->captured)
+            ctx->arena, items.count, sizeof(*commit->captured)
         );
         commit->deleted = arena_calloc(
-            ctx->arena, item_count, sizeof(*commit->deleted)
+            ctx->arena, items.count, sizeof(*commit->deleted)
         );
     }
 
@@ -447,8 +444,8 @@ static error_t update_profile(
 
     /* One walk, one writer per item: each arm does its item's work and fills
      * the commit's bookkeeping beside it. */
-    for (size_t i = 0; i < item_count; i++) {
-        const workspace_item_t *item = items[i];
+    for (size_t i = 0; i < items.count; i++) {
+        const workspace_item_t *item = items.entries[i];
 
         switch (item->item_kind) {
             case PATH_KIND_FILE: {
@@ -708,9 +705,9 @@ static error_t update_profile(
      * route to a retire (a captured leaf's chain cannot hold a squatted rung; a
      * named one can, and naming it is the remedy). A row the walk also captured
      * climbs twice for free: the derivation counts only differences. */
-    for (size_t i = 0; i < row_count; i++) {
+    for (size_t i = 0; i < rows.count; i++) {
         err = metadata_capture_ancestors(
-            metadata, ctx->run.mounts, profile, rows[i]->storage_path, ctx->arena,
+            metadata, ctx->run.mounts, profile, rows.entries[i]->storage_path, ctx->arena,
             &commit->claimed, &commit->retired
         );
         if (err) goto cleanup;
@@ -1033,12 +1030,11 @@ cleanup:
  * @param ctx Dispatch context (must not be NULL; the stages are opened on the
  *            run's repository, the capture reads the key and the encryption policy)
  * @param enabled The enabled set, in order (must not be NULL)
- * @param update_items Pre-filtered items to update (may be NULL when update_count
- *                     is 0)
- * @param update_count Number of items
+ * @param work The run's work: the accepted items, less the new files where the
+ *             user declined them (empty where a named run has only chains to
+ *             re-derive)
  * @param derive_rows The named run's in-scope view rows, the chains to re-derive
- *                    (may be NULL when derive_count is 0)
- * @param derive_count Number of rows
+ *                    (empty on a bare run)
  * @param opts Update options (must not be NULL)
  * @param total_updated Output: total items committed across all profiles (must
  *                      not be NULL)
@@ -1051,10 +1047,8 @@ cleanup:
 static error_t update_execute(
     const dotta_ctx_t *ctx,
     const string_array_t *enabled,
-    const workspace_item_t **update_items,
-    size_t update_count,
-    const manifest_row_t **derive_rows,
-    size_t derive_count,
+    workspace_items_t work,
+    manifest_rows_t derive_rows,
     const cmd_update_options_t *opts,
     size_t *total_updated,
     commit_t **out_commits,
@@ -1079,28 +1073,34 @@ static error_t update_execute(
     commit_t *commits = arena_calloc(ctx->arena, enabled->count, sizeof(*commits));
     *out_commits = commits;
 
+    /* One profile's items and chains, gathered afresh for each profile into two
+     * arrays sized once to the whole run's: update_profile keeps no pointer into
+     * either — the bookkeeping holds each item it deleted, and each capture its
+     * record — so a landed commit keeps its own when the next profile refills
+     * them */
+    const workspace_item_t **items = arena_calloc(ctx->arena, work.count, sizeof(*items));
+    const manifest_row_t **rows = arena_calloc(ctx->arena, derive_rows.count, sizeof(*rows));
+
     for (size_t p = 0; p < enabled->count; p++) {
         const char *profile = enabled->entries[p];
 
         /* This profile's items, in filter order */
-        ptr_array_t group;
-        ptr_array_init(&group, ctx->arena);
-        for (size_t i = 0; i < update_count; i++) {
-            if (strcmp(update_items[i]->profile, profile) == 0) {
-                ptr_array_push(&group, update_items[i]);
+        size_t item_count = 0;
+        for (size_t i = 0; i < work.count; i++) {
+            if (strcmp(work.entries[i]->profile, profile) == 0) {
+                items[item_count++] = work.entries[i];
             }
         }
 
         /* This profile's chains to re-derive, when the run named paths */
-        ptr_array_t rows;
-        ptr_array_init(&rows, ctx->arena);
-        for (size_t i = 0; i < derive_count; i++) {
-            if (strcmp(derive_rows[i]->profile, profile) == 0) {
-                ptr_array_push(&rows, derive_rows[i]);
+        size_t row_count = 0;
+        for (size_t i = 0; i < derive_rows.count; i++) {
+            if (strcmp(derive_rows.entries[i]->profile, profile) == 0) {
+                rows[row_count++] = derive_rows.entries[i];
             }
         }
 
-        if (group.count == 0 && rows.count == 0) {
+        if (item_count == 0 && row_count == 0) {
             continue;
         }
 
@@ -1123,8 +1123,9 @@ static error_t update_execute(
         commit_t bookkeeping = { 0 };
         size_t processed = 0;
         err = update_profile(
-            ctx, stage, profile, (const workspace_item_t **) group.entries,
-            group.count, (const manifest_row_t **) rows.entries, rows.count,
+            ctx, stage, profile,
+            (workspace_items_t){ .entries = items, .count = item_count },
+            (manifest_rows_t){ .entries = rows, .count = row_count },
             opts, &bookkeeping, &processed
         );
         stage_free(stage);
@@ -1635,13 +1636,18 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * guarantees exist. The exclude gate binds here (the user excluded the path
      * from this operation), where the chain riding a captured leaf stays
      * scope-blind like add's — an exclusion names a path, never the way to it.
-     * A bare run names nothing and derives nothing. */
-    ptr_array_t derive_rows;
-    ptr_array_init(&derive_rows, ctx->arena);
+     * A bare run names nothing and derives nothing. The leaves grow as the walk
+     * finds them rather than into room for the whole view: a named path picks a
+     * few rows out of all of them. */
+    manifest_rows_t derive_rows = { 0 };
     if (opts->file_count > 0) {
-        manifest_rows_t all_rows = manifest_rows(manifest);
-        for (size_t i = 0; i < all_rows.count; i++) {
-            const manifest_row_t *row = all_rows.entries[i];
+        manifest_rows_t rows = manifest_rows(manifest);
+        const manifest_row_t **leaves = NULL;
+        size_t leaf_count = 0;
+        size_t leaf_capacity = 0;
+
+        for (size_t i = 0; i < rows.count; i++) {
+            const manifest_row_t *row = rows.entries[i];
 
             if (manifest_is_derived(row)) {
                 continue;
@@ -1652,8 +1658,13 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 )) {
                 continue;
             }
-            ptr_array_push(&derive_rows, row);
+            leaves = arena_grow(
+                ctx->arena, leaves, &leaf_capacity, leaf_count + 1, sizeof(*leaves)
+            );
+            leaves[leaf_count++] = row;
         }
+
+        derive_rows = (manifest_rows_t){ .entries = leaves, .count = leaf_count };
     }
 
     /* Check if we have anything to update — or, on a named run, any chains to
@@ -1688,6 +1699,11 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     RETURN_IF_ERROR(hook_fire_pre(config, out, &hook_inv));
 
+    /* The run's work: the accepted items — less the new files, where the user
+     * declines them below. A value the command holds; the partition's list is
+     * never edited. */
+    workspace_items_t work = partition.accepted;
+
     /* The prompts — none bind a dry run: it executes nothing, so there is nothing
      * to consent to */
     if (!opts->dry_run) {
@@ -1699,12 +1715,11 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
 
         /* New files no flag asked for — the config's scan found them — are added
-         * only with consent. Declining keeps the rest of the run: the re-filter
-         * compacts the accepted array in place — the preview named the new files
-         * separately, and the receipt reports what actually happens. What is
-         * left is asked the nothing-exit's own question, so a named run whose
-         * only accepted items were new files still re-derives the chains it
-         * named. */
+         * only with consent. Declining keeps the rest of the run — the preview
+         * named the new files separately, and the receipt reports what actually
+         * happens. What is left is asked the nothing-exit's own question, so a
+         * named run whose only accepted items were new files still re-derives
+         * the chains it named. */
         if (partition.new_files.count > 0 && config->confirm_new_files &&
             !opts->include_new && !opts->only_new) {
 
@@ -1715,17 +1730,13 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 partition.new_files.count == 1 ? "it" : "them"
             );
             if (!output_confirm(out, confirm_msg, false)) {
-                const workspace_item_t **writable =
-                    (const workspace_item_t **) partition.accepted.entries;
-                size_t kept = 0;
-                for (size_t i = 0; i < partition.accepted.count; i++) {
-                    if (writable[i]->state != WORKSPACE_STATE_UNTRACKED) {
-                        writable[kept++] = writable[i];
-                    }
-                }
-                partition.accepted.count = kept;
+                /* The new files are the accepted items' suffix: the discoveries
+                 * follow every other diverged item (core/workspace.h
+                 * workspace_diverged), and the partition keeps the order it walks
+                 * in — so the rest of the run is the prefix before them */
+                work.count -= partition.new_files.count;
 
-                if (partition.accepted.count == 0 && derive_rows.count == 0) {
+                if (work.count == 0 && derive_rows.count == 0) {
                     output_info(
                         out, OUTPUT_NORMAL,
                         "No modified files remaining after skipping new files"
@@ -1746,11 +1757,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     error_t record_err = NULL;   /* The record phase's fate: non-fatal, read by the stop and the summary */
     if (!opts->dry_run) {
         err = update_execute(
-            ctx, scope_enabled(scope),
-            (const workspace_item_t **) partition.accepted.entries,
-            partition.accepted.count,
-            (const manifest_row_t **) derive_rows.entries, derive_rows.count,
-            opts, &total_updated, &commits, &commit_count
+            ctx, scope_enabled(scope), work, derive_rows, opts, &total_updated,
+            &commits, &commit_count
         );
 
         /* Write the record — for the commits that landed, error or no

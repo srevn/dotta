@@ -742,7 +742,9 @@ static inline divergence_type_t workspace_claims_moved(
  *   deploy_partition_t; cleanup's plan and verdicts, core/cleanup.h; status's
  *   sections, cmds/status.c status_print_workspace; update's partition,
  *   cmds/update.c update_partition) point into arrays in the arena its buckets
- *   were made in.
+ *   were made in;
+ * - update's per-profile share of its work (cmds/update.c update_execute) points
+ *   into an array the next profile refills: valid for one update_profile call.
  * The items are the workspace's however long a slice lives. Nothing frees a slice.
  */
 typedef struct {
@@ -1024,6 +1026,9 @@ error_t workspace_load(
  * a borrowed slice. Pure value return — no allocation, no error path. Items are
  * arena-allocated, so the slice and the item addresses it carries are valid for
  * the workspace's lifetime.
+ *
+ * The discoveries follow every other item, an order a reader may keep:
+ * cmds/update.c cmd_update declines the new files as its accepted items' suffix.
  *
  * Every item it holds has something to say: a state but DEPLOYED, or a DEPLOYED
  * item the route does not call clean (workspace_item_route) — a squatter above

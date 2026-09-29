@@ -734,13 +734,16 @@ static inline divergence_type_t workspace_claims_moved(
  * Structural type — parallels manifest_rows_t. Callers receive a typed handle
  * instead of triple-star out-params.
  *
- * Pass by value. Lifetime is the producer's: the engines' buckets — deploy's
- * plan (core/deploy.h deploy_partition_t), cleanup's plan and verdicts
- * (core/cleanup.h) — project through workspace_items and borrow for the bucket's
- * life; the workspace's own — the active items, both kinds or one
- * (workspace_active, workspace_directories, workspace_files), and the diverged
- * items (workspace_diverged) — borrow for the workspace's life; update's filters
- * lend a spine in the arena the caller named. Nothing frees a slice.
+ * Pass by value. Lifetime is the producer's:
+ * - the workspace's own — the active items, both kinds or one (workspace_active,
+ *   workspace_directories, workspace_files), and the diverged items
+ *   (workspace_diverged) — borrow for the workspace's life;
+ * - a classification's buckets (workspace_buckets_t: cleanup's plan and verdicts,
+ *   core/cleanup.h) point into arrays in the arena its buckets were made in;
+ * - deploy's plan (core/deploy.h deploy_partition_t) projects its buckets through
+ *   workspace_items, each slice borrowing for its bucket's life;
+ * - update's filters lend a spine in the arena the caller named.
+ * The items are the workspace's however long a slice lives. Nothing frees a slice.
  */
 typedef struct {
     const workspace_item_t *const *entries;
@@ -752,10 +755,9 @@ typedef struct {
  *
  * A bucket says nothing of its element, so the cast is only as sound as its
  * writers: every bucket that projects through here holds items alone — deploy's
- * plan by its one writer (core/deploy.c deploy_classify), cleanup's where each
- * item is routed, the diverged items where they are listed. The cast layers const
- * onto both pointer levels. The slice aliases the bucket's storage and is valid
- * for the bucket's lifetime.
+ * plan by its one writer (core/deploy.c deploy_classify), the diverged items
+ * where they are listed. The cast layers const onto both pointer levels. The
+ * slice aliases the bucket's storage and is valid for the bucket's lifetime.
  */
 static inline workspace_items_t workspace_items(const ptr_array_t *bucket) {
     return (workspace_items_t){
@@ -1109,6 +1111,80 @@ workspace_items_t workspace_files(const workspace_t *ws);
  * @return Borrowed slice over the directory items
  */
 workspace_items_t workspace_directories(const workspace_t *ws);
+
+/**
+ * The buckets a classification of the workspace's items fills
+ *
+ * A producer that classifies items — each into one bucket of its answer, or into
+ * none — adds each item to its bucket as it decides it, the bucket named by the
+ * slice it will be: a field of the result the producer returns, or a local. Once
+ * the last is added, the fill sets every bucket's slice over its items, in the
+ * order they were added — a stable grouping, with no comparator and no path order.
+ * So a classification spells its buckets once, as its answer's own slices: no
+ * container per bucket, no cast, and the slice every reader holds
+ * (workspace_items_t).
+ *
+ * What the producer owes the construction:
+ *   - a slice is empty ({ 0 }) when first added to, and belongs to these buckets
+ *     alone until the fill: no two share one
+ *   - it stays at one address, and is neither changed nor read as an answer until
+ *     the fill — a copy of the struct holding it, taken before, is not the one
+ *     the fill writes
+ *   - the fill comes once, after the last addition, and ends the construction
+ *   - totality and uniqueness are the producer's: every addition is kept, and
+ *     nothing checks that each item was classified, or classified once
+ * The one misuse the buckets can see dies at a slice's first addition: a slice
+ * that already holds items, which the fill would overwrite.
+ *
+ * Three lifetimes meet here: the slice, a value wherever its holder keeps it;
+ * each bucket's array, the arena's the buckets were made in, grown as items are
+ * added and never moved once filled; and the items, the workspace's — an arena
+ * that outlives the workspace does not extend them.
+ *
+ * A pass that must read what it decided while it decides keeps an index of its
+ * own beside the buckets (core/cleanup.c cleanup_preflight's fate set); a producer
+ * that builds a new element per decision keeps typed arrays of it instead
+ * (core/deploy.h deploy_preflight_t, the receipts).
+ *
+ * Readers: core/cleanup.c cleanup_plan_build and cleanup_preflight. A reader
+ * not on this list is a bug.
+ */
+typedef struct workspace_buckets workspace_buckets_t;
+
+/**
+ * Make the buckets of one classification
+ *
+ * Nothing is reserved: a bucket's array is made at its first addition and grows
+ * as every array in an arena grows (base/arena.h arena_grow), each outgrown array
+ * left to the arena.
+ *
+ * @param arena Arena the buckets and every bucket's array live in: the answer's
+ *              own (must not be NULL)
+ * @return The buckets; never NULL
+ */
+workspace_buckets_t *workspace_buckets_create(arena_t *arena);
+
+/**
+ * Add an item to a bucket, after every item added to it before
+ *
+ * @param buckets The classification's buckets (must not be NULL)
+ * @param item    The item, borrowed (must not be NULL)
+ * @param slice   The bucket, as the slice the fill sets (must not be NULL; empty
+ *                the first time it is added to)
+ */
+void workspace_buckets_add(
+    workspace_buckets_t *buckets, const workspace_item_t *item, workspace_items_t *slice
+);
+
+/**
+ * Fill every bucket added to: its slice, over its items in the order added
+ *
+ * Once, after the last addition. A slice nothing was added to is none of the
+ * buckets', and keeps its { 0 }: the empty slice.
+ *
+ * @param buckets The classification's buckets (must not be NULL)
+ */
+void workspace_buckets_fill(workspace_buckets_t *buckets);
 
 /**
  * The managed item at a path, or NULL

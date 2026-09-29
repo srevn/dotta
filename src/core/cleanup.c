@@ -23,7 +23,6 @@
 #include <unistd.h>
 
 #include "base/arena.h"
-#include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
@@ -48,20 +47,21 @@ cleanup_plan_t *cleanup_plan_build(
     CHECK_NULL(ws);
     CHECK_NULL(scope);
 
-    /* The plan and its three buckets are the arena's, beside the items they borrow:
-     * each bucket is made in it, and nothing frees a plan. */
+    /* The plan and its three buckets are the arena's, beside the items they borrow,
+     * and nothing frees a plan. */
     cleanup_plan_t *plan = arena_calloc(arena, 1, sizeof(*plan));
-    ptr_array_init(&plan->files, arena);
-    ptr_array_init(&plan->directories, arena);
-    ptr_array_init(&plan->excluded, arena);
 
-    /* --keep-orphans: nothing is planned, by request. The empty plan is what
-     * every later stage reads, so no stage re-encodes the flag. */
+    /* --keep-orphans: nothing is planned, by request. The empty plan — three
+     * empty buckets — is what every later stage reads, so no stage re-encodes
+     * the flag. */
     if (keep_orphans) {
         return plan;
     }
 
+    /* Each orphan in scope is added to its bucket as the walk decides it, and
+     * the three are filled once the walk is done. */
     workspace_items_t items = workspace_diverged(ws);
+    workspace_buckets_t *buckets = workspace_buckets_create(arena);
 
     for (size_t i = 0; i < items.count; i++) {
         const workspace_item_t *item = items.entries[i];
@@ -85,14 +85,15 @@ cleanup_plan_t *cleanup_plan_build(
 
         /* Exclude dimension: spared, reported by the caller, never touched. */
         if (scope_is_excluded(scope, item->storage_path, item->item_kind)) {
-            ptr_array_push(&plan->excluded, item);
+            workspace_buckets_add(buckets, item, &plan->excluded);
         } else if (item->item_kind == PATH_KIND_DIRECTORY) {
-            ptr_array_push(&plan->directories, item);
+            workspace_buckets_add(buckets, item, &plan->directories);
         } else {
-            ptr_array_push(&plan->files, item);
+            workspace_buckets_add(buckets, item, &plan->files);
         }
     }
 
+    workspace_buckets_fill(buckets);
     return plan;
 }
 
@@ -376,19 +377,12 @@ cleanup_preflight_t *cleanup_preflight(
     CHECK_NULL(plan);
 
     /* The verdicts and their ten buckets are the arena's, beside the items they
-     * borrow: each bucket is made in it, nothing frees them, and an empty bucket
-     * needs no guard downstream. */
+     * borrow, and nothing frees them. Neither pass reads a bucket — the directory
+     * pass asks the fate set below — so each item is added to its bucket as its
+     * verdict is taken, and the ten are filled once both passes are done: a bucket
+     * nothing was added to is the empty slice, and needs no guard downstream. */
     cleanup_preflight_t *verdicts = arena_calloc(arena, 1, sizeof(*verdicts));
-    ptr_array_init(&verdicts->prunable_files, arena);
-    ptr_array_init(&verdicts->refused_files, arena);
-    ptr_array_init(&verdicts->skipped_files, arena);
-    ptr_array_init(&verdicts->released_files, arena);
-    ptr_array_init(&verdicts->absent_files, arena);
-    ptr_array_init(&verdicts->prunable_dirs, arena);
-    ptr_array_init(&verdicts->refused_dirs, arena);
-    ptr_array_init(&verdicts->skipped_dirs, arena);
-    ptr_array_init(&verdicts->released_dirs, arena);
-    ptr_array_init(&verdicts->absent_dirs, arena);
+    workspace_buckets_t *buckets = workspace_buckets_create(arena);
 
     /* The fate of every present planned item, in one set: the directory pass
      * asks it about every entry it meets. Borrowed keys, all workspace-owned;
@@ -401,24 +395,22 @@ cleanup_preflight_t *cleanup_preflight(
     /* One verdict per file, read off the item, then one probe for the ones it
      * cleared. An absent file joins neither the prune count nor the fate set:
      * no filesystem effect to preview, and no walk meets it. */
-    workspace_items_t files = workspace_items(&plan->files);
-
-    for (size_t i = 0; i < files.count; i++) {
-        const workspace_item_t *item = files.entries[i];
+    for (size_t i = 0; i < plan->files.count; i++) {
+        const workspace_item_t *item = plan->files.entries[i];
         fate_t fate = FATE_UNPLANNED;
 
         switch (cleanup_verdict(item, force)) {
             case CLEANUP_ABSENT:
-                ptr_array_push(&verdicts->absent_files, item);
+                workspace_buckets_add(buckets, item, &verdicts->absent_files);
                 break;
 
             case CLEANUP_RELEASED:
-                ptr_array_push(&verdicts->released_files, item);
+                workspace_buckets_add(buckets, item, &verdicts->released_files);
                 fate = FATE_PERMANENT;
                 break;
 
             case CLEANUP_SKIPPED:
-                ptr_array_push(&verdicts->skipped_files, item);
+                workspace_buckets_add(buckets, item, &verdicts->skipped_files);
                 fate = FATE_SKIPPED;
                 break;
 
@@ -426,10 +418,10 @@ cleanup_preflight_t *cleanup_preflight(
                 /* Nothing of its own in the way; the run's reach is the last
                  * rung, and a refusal leaves the file exactly as a skip does. */
                 if (parent_accepts_removal(item->filesystem_path)) {
-                    ptr_array_push(&verdicts->prunable_files, item);
+                    workspace_buckets_add(buckets, item, &verdicts->prunable_files);
                     fate = FATE_GONE;
                 } else {
-                    ptr_array_push(&verdicts->refused_files, item);
+                    workspace_buckets_add(buckets, item, &verdicts->refused_files);
                     fate = FATE_SKIPPED;
                 }
                 break;
@@ -463,7 +455,8 @@ cleanup_preflight_t *cleanup_preflight(
      * class off the set — its pruned children gone, its skipped ones skipped,
      * its released ones permanent.
      *
-     * The buckets fill in walk order: deepest first. */
+     * Each is added to its bucket in walk order, so every directory bucket holds
+     * its items deepest first. */
     for (size_t i = 0; i < dir_count; i++) {
         const workspace_item_t *item = dirs[i];
         const char *path = item->filesystem_path;
@@ -473,20 +466,20 @@ cleanup_preflight_t *cleanup_preflight(
             case CLEANUP_ABSENT:
                 /* A pure state reclaim: no filesystem effect to preview, and no
                  * walk meets it. */
-                ptr_array_push(&verdicts->absent_dirs, item);
+                workspace_buckets_add(buckets, item, &verdicts->absent_dirs);
                 break;
 
             case CLEANUP_RELEASED:
                 /* Left alone — unprobed, because nothing about its contents changes
                  * the answer — and the record retires. */
-                ptr_array_push(&verdicts->released_dirs, item);
+                workspace_buckets_add(buckets, item, &verdicts->released_dirs);
                 fate = FATE_PERMANENT;
                 break;
 
             case CLEANUP_SKIPPED:
                 /* The workspace could not verify it; the directory above it waits
                  * with it. */
-                ptr_array_push(&verdicts->skipped_dirs, item);
+                workspace_buckets_add(buckets, item, &verdicts->skipped_dirs);
                 fate = FATE_SKIPPED;
                 break;
 
@@ -521,13 +514,13 @@ cleanup_preflight_t *cleanup_preflight(
                      * Asked last, of what the run would otherwise remove, so a
                      * directory a permanent entry keeps is released whoever owns
                      * its parent. */
-                    ptr_array_push(&verdicts->refused_dirs, item);
+                    workspace_buckets_add(buckets, item, &verdicts->refused_dirs);
                     fate = FATE_SKIPPED;
                 } else {
-                    ptr_array_t *bucket = (fate == FATE_GONE) ? &verdicts->prunable_dirs
-                                        : (fate == FATE_SKIPPED) ? &verdicts->skipped_dirs
-                                                                 : &verdicts->released_dirs;
-                    ptr_array_push(bucket, item);
+                    workspace_items_t *slice = (fate == FATE_GONE) ? &verdicts->prunable_dirs
+                                             : (fate == FATE_SKIPPED) ? &verdicts->skipped_dirs
+                                                                      : &verdicts->released_dirs;
+                    workspace_buckets_add(buckets, item, slice);
                 }
                 break;
         }
@@ -537,6 +530,7 @@ cleanup_preflight_t *cleanup_preflight(
         }
     }
 
+    workspace_buckets_fill(buckets);
     return verdicts;
 }
 
@@ -608,10 +602,8 @@ cleanup_receipt_t *cleanup_execute(arena_t *arena, const cleanup_preflight_t *ve
     );
 
     /* Step 1: Prune the orphaned files the verdicts cleared */
-    workspace_items_t files = workspace_items(&verdicts->prunable_files);
-
-    for (size_t i = 0; i < files.count; i++) {
-        const workspace_item_t *item = files.entries[i];
+    for (size_t i = 0; i < verdicts->prunable_files.count; i++) {
+        const workspace_item_t *item = verdicts->prunable_files.entries[i];
         const char *path = item->filesystem_path;
 
         /* Gone before we got here: no filesystem effect happened or was needed
@@ -643,10 +635,8 @@ cleanup_receipt_t *cleanup_execute(arena_t *arena, const cleanup_preflight_t *ve
     }
 
     /* Step 2: Prune the orphaned directories those files emptied */
-    workspace_items_t dirs = workspace_items(&verdicts->prunable_dirs);
-
-    for (size_t i = 0; i < dirs.count; i++) {
-        const workspace_item_t *item = dirs.entries[i];
+    for (size_t i = 0; i < verdicts->prunable_dirs.count; i++) {
+        const workspace_item_t *item = verdicts->prunable_dirs.entries[i];
         const char *path = item->filesystem_path;
 
         switch (fs_lstat_occupant(path, NULL)) {

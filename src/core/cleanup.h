@@ -55,12 +55,13 @@
  * are decided before parents, so a parent emptied by its children needs no second
  * look and the preview predicts the outcome the prune arrives at.
  *
- * The plan's and the verdicts' buckets hold borrowed workspace_item_t pointers
- * (workspace lifetime — the items are arena-allocated, their addresses stable
- * by construction); project them with workspace_items. The receipt's outcomes
- * borrow the same items. All four are values of the arena they were made in,
- * and nothing frees one: the items they borrow are the workspace's, so none
- * outlives the arena the workspace was loaded into.
+ * The plan's and the verdicts' buckets are slices of the workspace's items, each
+ * filled once its phase has decided them all (core/workspace.h workspace_buckets_t)
+ * — the items borrowed (workspace lifetime — arena-allocated, their addresses
+ * stable by construction), each bucket's array the arena's the plan or the verdicts
+ * were made in. The receipt's outcomes borrow the same items. All four are values
+ * of the arena they were made in, and nothing frees one: the items they borrow
+ * are the workspace's, so none outlives the arena the workspace was loaded into.
  *
  * Integration:
  * - workspace.h: orphan detection, the occupant, Git authority, divergence; the
@@ -101,9 +102,9 @@
  * arena it was built in: nothing frees one.
  */
 typedef struct {
-    ptr_array_t files;         /* ORPHANED / RELEASED file items in scope */
-    ptr_array_t directories;   /* ORPHANED / RELEASED directory items in scope */
-    ptr_array_t excluded;      /* Both kinds, spared by -e — reported, never touched */
+    workspace_items_t files;         /* ORPHANED / RELEASED file items in scope */
+    workspace_items_t directories;   /* ORPHANED / RELEASED directory items in scope */
+    workspace_items_t excluded;      /* Both kinds, spared by -e — reported, never touched */
 } cleanup_plan_t;
 
 /**
@@ -333,8 +334,8 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  * to is what the run does. A vanished or refused item is reported by execute as
  * what it found, never re-decided.
  *
- * Every bucket is always initialized — an empty answer is a valid answer, and
- * no consumer needs a NULL guard.
+ * A bucket nothing was added to is the empty slice — an empty answer is a valid
+ * answer, and no consumer needs a guard.
  *
  * refused_* hold what every fact of its own cleared and the run cannot remove:
  * unlink and rmdir ask nothing of the path, only write and search on its parent,
@@ -395,18 +396,18 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  */
 typedef struct {
     /* Files */
-    ptr_array_t prunable_files;    /* Present, no reason to skip it → unlinked */
-    ptr_array_t refused_files;     /* Present, nothing of its own in the way, the parent refuses this run → left alone, record stays */
-    ptr_array_t skipped_files;     /* Present, a skip reason stands → left alone (unless --force) */
-    ptr_array_t released_files;    /* Present, Git no longer backs it → left on disk, record retires */
-    ptr_array_t absent_files;      /* Not on disk at load → record retires, no filesystem effect */
+    workspace_items_t prunable_files;    /* Present, no reason to skip it → unlinked */
+    workspace_items_t refused_files;     /* Present, nothing of its own in the way, the parent refuses this run → left alone, record stays */
+    workspace_items_t skipped_files;     /* Present, a skip reason stands → left alone (unless --force) */
+    workspace_items_t released_files;    /* Present, Git no longer backs it → left on disk, record retires */
+    workspace_items_t absent_files;      /* Not on disk at load → record retires, no filesystem effect */
 
     /* Directories */
-    ptr_array_t prunable_dirs;     /* Present; nothing but gone entries left → removed */
-    ptr_array_t refused_dirs;      /* Present; nothing but gone entries left, the parent refuses this run → left alone, record stays */
-    ptr_array_t skipped_dirs;      /* Present; a skipped entry left, could not be verified, or its home moved → left alone, record stays */
-    ptr_array_t released_dirs;     /* Released by the workspace, or a permanent entry left → left alone, record retires */
-    ptr_array_t absent_dirs;       /* Not there → record retires */
+    workspace_items_t prunable_dirs;     /* Present; nothing but gone entries left → removed */
+    workspace_items_t refused_dirs;      /* Present; nothing but gone entries left, the parent refuses this run → left alone, record stays */
+    workspace_items_t skipped_dirs;      /* Present; a skipped entry left, could not be verified, or its home moved → left alone, record stays */
+    workspace_items_t released_dirs;     /* Released by the workspace, or a permanent entry left → left alone, record retires */
+    workspace_items_t absent_dirs;       /* Not there → record retires */
 } cleanup_preflight_t;
 
 /**

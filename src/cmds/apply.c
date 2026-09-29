@@ -563,11 +563,10 @@ static void apply_print_withheld(
 ) {
     /* -e reaches all three kinds, so its summary counts "paths"; the verbose
      * breakdown names each kind and what it was spared. */
-    workspace_items_t excluded_orphans = workspace_items(&cleanup_plan->excluded);
     size_t excluded_orphan_files = 0; size_t excluded_orphan_dirs = 0;
 
-    for (size_t i = 0; i < excluded_orphans.count; i++) {
-        if (excluded_orphans.entries[i]->item_kind == PATH_KIND_DIRECTORY) {
+    for (size_t i = 0; i < cleanup_plan->excluded.count; i++) {
+        if (cleanup_plan->excluded.entries[i]->item_kind == PATH_KIND_DIRECTORY) {
             excluded_orphan_dirs++;
         } else {
             excluded_orphan_files++;
@@ -575,7 +574,7 @@ static void apply_print_withheld(
     }
 
     size_t excluded = deploy_plan->files.excluded.count +
-        deploy_plan->directories.excluded.count + excluded_orphans.count;
+        deploy_plan->directories.excluded.count + cleanup_plan->excluded.count;
 
     if (excluded > 0) {
         if (output_is_verbose(out)) {
@@ -945,13 +944,11 @@ static void apply_print_cleanup_receipt(
     }
 
     if (verdicts->released_files.count > 0) {
-        workspace_items_t items = workspace_items(&verdicts->released_files);
-
         output_section(out, OUTPUT_VERBOSE, "Released files");
-        for (size_t i = 0; i < items.count; i++) {
+        for (size_t i = 0; i < verdicts->released_files.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
-                items.entries[i]->filesystem_path
+                verdicts->released_files.entries[i]->filesystem_path
             );
         }
     }
@@ -960,32 +957,27 @@ static void apply_print_cleanup_receipt(
      * block for the item's own, the needing-root block for the run's — and both
      * always print; the receipt only confirms the skip. */
     if (verdicts->skipped_files.count + verdicts->refused_files.count > 0) {
-        workspace_items_t skipped = workspace_items(&verdicts->skipped_files);
-        workspace_items_t refused = workspace_items(&verdicts->refused_files);
-
         output_section(out, OUTPUT_VERBOSE, "Skipped orphaned files");
-        for (size_t i = 0; i < skipped.count; i++) {
+        for (size_t i = 0; i < verdicts->skipped_files.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
-                skipped.entries[i]->filesystem_path
+                verdicts->skipped_files.entries[i]->filesystem_path
             );
         }
-        for (size_t i = 0; i < refused.count; i++) {
+        for (size_t i = 0; i < verdicts->refused_files.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
-                refused.entries[i]->filesystem_path
+                verdicts->refused_files.entries[i]->filesystem_path
             );
         }
     }
 
     if (verdicts->absent_files.count + receipt->reclaimed_files.count > 0) {
-        workspace_items_t absent = workspace_items(&verdicts->absent_files);
-
         output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned files");
-        for (size_t i = 0; i < absent.count; i++) {
+        for (size_t i = 0; i < verdicts->absent_files.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
-                absent.entries[i]->filesystem_path
+                verdicts->absent_files.entries[i]->filesystem_path
             );
         }
         for (size_t i = 0; i < receipt->reclaimed_files.count; i++) {
@@ -1007,33 +999,28 @@ static void apply_print_cleanup_receipt(
     }
 
     if (verdicts->released_dirs.count > 0) {
-        workspace_items_t items = workspace_items(&verdicts->released_dirs);
-
         output_section(out, OUTPUT_VERBOSE, "Released directories");
-        for (size_t i = 0; i < items.count; i++) {
+        for (size_t i = 0; i < verdicts->released_dirs.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
-                items.entries[i]->filesystem_path
+                verdicts->released_dirs.entries[i]->filesystem_path
             );
         }
     }
 
     if (verdicts->skipped_dirs.count + verdicts->refused_dirs.count +
         receipt->skipped_dirs.count > 0) {
-        workspace_items_t skipped = workspace_items(&verdicts->skipped_dirs);
-        workspace_items_t refused = workspace_items(&verdicts->refused_dirs);
-
         output_section(out, OUTPUT_VERBOSE, "Skipped orphaned directories");
-        for (size_t i = 0; i < skipped.count; i++) {
+        for (size_t i = 0; i < verdicts->skipped_dirs.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
-                skipped.entries[i]->filesystem_path
+                verdicts->skipped_dirs.entries[i]->filesystem_path
             );
         }
-        for (size_t i = 0; i < refused.count; i++) {
+        for (size_t i = 0; i < verdicts->refused_dirs.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
-                refused.entries[i]->filesystem_path
+                verdicts->refused_dirs.entries[i]->filesystem_path
             );
         }
         for (size_t i = 0; i < receipt->skipped_dirs.count; i++) {
@@ -1045,13 +1032,11 @@ static void apply_print_cleanup_receipt(
     }
 
     if (verdicts->absent_dirs.count + receipt->reclaimed_dirs.count > 0) {
-        workspace_items_t absent = workspace_items(&verdicts->absent_dirs);
-
         output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned directories");
-        for (size_t i = 0; i < absent.count; i++) {
+        for (size_t i = 0; i < verdicts->absent_dirs.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
-                absent.entries[i]->filesystem_path
+                verdicts->absent_dirs.entries[i]->filesystem_path
             );
         }
         for (size_t i = 0; i < receipt->reclaimed_dirs.count; i++) {
@@ -1177,12 +1162,10 @@ static void apply_print_cleanup_receipt(
  */
 static void apply_print_paths(
     output_t *out,
-    const ptr_array_t *bucket,
+    workspace_items_t items,
     output_color_t color,
     const char *glyph
 ) {
-    workspace_items_t items = workspace_items(bucket);
-
     for (size_t i = 0; i < items.count && i < LIST_LIMIT; i++) {
         output_colored(out, OUTPUT_VERBOSE, color, "    %s", glyph);
         output_print(out, OUTPUT_VERBOSE, " %s\n", items.entries[i]->filesystem_path);
@@ -1223,13 +1206,13 @@ static void apply_print_cleanup_preview(
     output_t *out,
     const cleanup_preflight_t *verdicts
 ) {
-    workspace_items_t released = workspace_items(&verdicts->released_files);
     size_t skipped_files = verdicts->skipped_files.count + verdicts->refused_files.count;
     size_t skipped_dirs = verdicts->skipped_dirs.count + verdicts->refused_dirs.count;
 
     /* Every planned item lands in exactly one bucket, so these are the
      * present-orphan counts and the state-only count. */
-    size_t present_files = verdicts->prunable_files.count + skipped_files + released.count;
+    size_t present_files = verdicts->prunable_files.count + skipped_files +
+        verdicts->released_files.count;
     size_t present_dirs = verdicts->prunable_dirs.count + skipped_dirs +
         verdicts->released_dirs.count;
 
@@ -1253,18 +1236,19 @@ static void apply_print_cleanup_preview(
          * prunable copy is not inactive — its claim deploys at a new filesystem
          * path — so "(no longer active)" would lie about it. Both classes reach
          * here: a BOUND one by its own verdict, a SHARED one under --force. */
-        workspace_items_t prunable = workspace_items(&verdicts->prunable_files);
         size_t moved = 0;
-        for (size_t i = 0; i < prunable.count; i++) {
-            if (prunable.entries[i]->relocation != WORKSPACE_RELOCATION_NONE) moved++;
+        for (size_t i = 0; i < verdicts->prunable_files.count; i++) {
+            if (verdicts->prunable_files.entries[i]->relocation != WORKSPACE_RELOCATION_NONE) {
+                moved++;
+            }
         }
 
-        if (prunable.count - moved > 0) {
+        if (verdicts->prunable_files.count - moved > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
                 "  {yellow}%zu{reset} file%s will be pruned (no longer active)\n",
-                prunable.count - moved,
-                prunable.count - moved == 1 ? "" : "s"
+                verdicts->prunable_files.count - moved,
+                verdicts->prunable_files.count - moved == 1 ? "" : "s"
             );
         }
 
@@ -1283,14 +1267,14 @@ static void apply_print_cleanup_preview(
          * own below — the released ones closing this preview, the skipped ones
          * with their reasons in the block after it — so their counts stand
          * alone. */
-        apply_print_paths(out, &verdicts->prunable_files, OUTPUT_COLOR_CYAN, "•");
+        apply_print_paths(out, verdicts->prunable_files, OUTPUT_COLOR_CYAN, "•");
 
-        if (released.count > 0) {
+        if (verdicts->released_files.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
                 "  {cyan}%zu{reset} file%s will be released from management\n",
-                released.count,
-                released.count == 1 ? "" : "s"
+                verdicts->released_files.count,
+                verdicts->released_files.count == 1 ? "" : "s"
             );
         }
 
@@ -1329,7 +1313,7 @@ static void apply_print_cleanup_preview(
             );
         }
 
-        apply_print_paths(out, &verdicts->prunable_dirs, OUTPUT_COLOR_CYAN, "•");
+        apply_print_paths(out, verdicts->prunable_dirs, OUTPUT_COLOR_CYAN, "•");
 
         /* All three fates are named here, each list under its own count, because
          * a directory gets no block of its own: nothing is asked of the user
@@ -1350,7 +1334,7 @@ static void apply_print_cleanup_preview(
             );
         }
 
-        apply_print_paths(out, &verdicts->released_dirs, OUTPUT_COLOR_CYAN, "→");
+        apply_print_paths(out, verdicts->released_dirs, OUTPUT_COLOR_CYAN, "→");
 
         if (skipped_dirs > 0) {
             output_styled(
@@ -1359,8 +1343,8 @@ static void apply_print_cleanup_preview(
             );
         }
 
-        apply_print_paths(out, &verdicts->skipped_dirs, OUTPUT_COLOR_YELLOW, "⊘");
-        apply_print_paths(out, &verdicts->refused_dirs, OUTPUT_COLOR_YELLOW, "⊘");
+        apply_print_paths(out, verdicts->skipped_dirs, OUTPUT_COLOR_YELLOW, "⊘");
+        apply_print_paths(out, verdicts->refused_dirs, OUTPUT_COLOR_YELLOW, "⊘");
 
         if (verdicts->absent_dirs.count > 0) {
             output_styled(
@@ -1386,11 +1370,11 @@ static void apply_print_cleanup_preview(
      * Hence the one thing true of all four: nothing on disk was touched. The
      * old second half ("no longer managed by dotta") was false of the fourth,
      * which is about a file this same run may adopt eleven lines above. */
-    if (released.count > 0) {
+    if (verdicts->released_files.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Released files");
 
-        for (size_t i = 0; i < released.count; i++) {
-            const workspace_item_t *item = released.entries[i];
+        for (size_t i = 0; i < verdicts->released_files.count; i++) {
+            const workspace_item_t *item = verdicts->released_files.entries[i];
 
             output_styled(out, OUTPUT_NORMAL, "  {cyan}→{reset} %s", item->filesystem_path);
             output_styled(out, OUTPUT_NORMAL, " {dim}(from %s){reset}\n", item->profile);
@@ -1425,14 +1409,12 @@ static void apply_print_cleanup_skips(
     output_t *out,
     const cleanup_preflight_t *verdicts
 ) {
-    workspace_items_t skipped = workspace_items(&verdicts->skipped_files);
-
-    if (skipped.count == 0) return;
+    if (verdicts->skipped_files.count == 0) return;
 
     output_section(out, OUTPUT_NORMAL, "Skipped orphaned files");
 
-    for (size_t i = 0; i < skipped.count; i++) {
-        const workspace_item_t *item = skipped.entries[i];
+    for (size_t i = 0; i < verdicts->skipped_files.count; i++) {
+        const workspace_item_t *item = verdicts->skipped_files.entries[i];
 
         /* How the reason reads on screen. The reason itself is cleanup's
          * (cleanup_skip_reason); this only names it — red where the file's own
@@ -1532,10 +1514,7 @@ static void apply_print_cleanup_refused(
     output_t *out,
     const cleanup_preflight_t *verdicts
 ) {
-    const workspace_items_t kinds[] = {
-        workspace_items(&verdicts->refused_files),
-        workspace_items(&verdicts->refused_dirs),
-    };
+    const workspace_items_t kinds[] = { verdicts->refused_files, verdicts->refused_dirs };
     size_t total = kinds[0].count + kinds[1].count;
 
     if (total == 0) return;
@@ -1656,15 +1635,15 @@ static error_t apply_write_record(
 
     /* The verdicts' own: neither needed an effect — what was gone before the
      * run began, and what the run let go. The receipt's printer told them. */
-    const workspace_items_t decided[] = {
-        workspace_items(&cleanup_verdicts->absent_files),
-        workspace_items(&cleanup_verdicts->absent_dirs),
-        workspace_items(&cleanup_verdicts->released_files),
-        workspace_items(&cleanup_verdicts->released_dirs),
+    const workspace_items_t *decided[] = {
+        &cleanup_verdicts->absent_files,
+        &cleanup_verdicts->absent_dirs,
+        &cleanup_verdicts->released_files,
+        &cleanup_verdicts->released_dirs,
     };
     for (size_t b = 0; b < sizeof(decided) / sizeof(decided[0]); b++) {
-        for (size_t i = 0; i < decided[b].count; i++) {
-            err = state_retire(state, decided[b].entries[i]->filesystem_path);
+        for (size_t i = 0; i < decided[b]->count; i++) {
+            err = state_retire(state, decided[b]->entries[i]->filesystem_path);
             if (err) goto cleanup;
         }
     }
@@ -2117,15 +2096,11 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Mirror the deployment-loop trace: for each orphan skipped by --exclude,
      * emit a per-file line. output_print gates on the verbosity level, so
      * non-verbose runs pay only the loop cost. */
-    {
-        workspace_items_t excluded_orphans = workspace_items(&cleanup_plan->excluded);
-
-        for (size_t i = 0; i < excluded_orphans.count; i++) {
-            output_print(
-                out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
-                excluded_orphans.entries[i]->filesystem_path
-            );
-        }
+    for (size_t i = 0; i < cleanup_plan->excluded.count; i++) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
+            cleanup_plan->excluded.entries[i]->filesystem_path
+        );
     }
 
     if (cleanup_plan->files.count > 0) {

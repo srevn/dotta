@@ -3163,6 +3163,93 @@ workspace_items_t workspace_directories(const workspace_t *ws) {
 }
 
 /**
+ * One bucket: the slice the fill sets, and the items added to it so far
+ */
+typedef struct {
+    workspace_items_t *slice;          /* The producer's; written once, by the fill */
+    const workspace_item_t **items;    /* Arena; in the order added */
+    size_t count;
+    size_t capacity;
+} bucket_t;
+
+/**
+ * The buckets of one classification
+ */
+struct workspace_buckets {
+    arena_t *arena;       /* The answer's: the table and every bucket's items */
+    bucket_t *entries;    /* One per slice added to, in the order first added to */
+    size_t count;
+    size_t capacity;
+};
+
+/**
+ * Make the buckets of one classification
+ */
+workspace_buckets_t *workspace_buckets_create(arena_t *arena) {
+    CHECK_NULL(arena);
+
+    workspace_buckets_t *buckets = arena_calloc(arena, 1, sizeof(*buckets));
+    buckets->arena = arena;
+
+    return buckets;
+}
+
+/**
+ * Add an item to a bucket
+ */
+void workspace_buckets_add(
+    workspace_buckets_t *buckets, const workspace_item_t *item, workspace_items_t *slice
+) {
+    CHECK_NULL(buckets);
+    CHECK_NULL(item);
+    CHECK_NULL(slice);
+
+    /* The slice's bucket, by a linear search of those added to — ten at most,
+     * the cleanup verdicts' — else a new one. A slice is added to empty: the
+     * fill is what gives it items, and would overwrite any it held. */
+    size_t b = 0;
+    while (b < buckets->count && buckets->entries[b].slice != slice) b++;
+
+    if (b == buckets->count) {
+        CHECK_ARG(slice->count == 0, "an item was added to a slice that holds items");
+
+        buckets->entries = arena_grow(
+            buckets->arena, buckets->entries, &buckets->capacity, b + 1,
+            sizeof(*buckets->entries)
+        );
+        buckets->entries[buckets->count++] = (bucket_t){ .slice = slice };
+    }
+
+    /* The item, after every one added to its bucket before: the bucket's own
+     * array grows, and no slice points into it until the fill */
+    bucket_t *bucket = &buckets->entries[b];
+
+    bucket->items = arena_grow(
+        buckets->arena, bucket->items, &bucket->capacity, bucket->count + 1,
+        sizeof(*bucket->items)
+    );
+    bucket->items[bucket->count++] = item;
+}
+
+/**
+ * Fill every bucket added to
+ */
+void workspace_buckets_fill(workspace_buckets_t *buckets) {
+    CHECK_NULL(buckets);
+
+    /* Each slice over its bucket's array as the last addition left it: no addition
+     * comes after the fill, so the array a slice points into never moves */
+    for (size_t b = 0; b < buckets->count; b++) {
+        const bucket_t *bucket = &buckets->entries[b];
+
+        *bucket->slice = (workspace_items_t){
+            .entries = bucket->items,
+            .count = bucket->count,
+        };
+    }
+}
+
+/**
  * The managed item at a path, or NULL
  */
 const workspace_item_t *workspace_find(

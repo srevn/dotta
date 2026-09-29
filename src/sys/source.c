@@ -486,25 +486,23 @@ static const repository_t *source_repository(
 
     r->casing = ignorecase ? GITIGNORE_CASE_INSENSITIVE : GITIGNORE_CASE_SENSITIVE;
 
-    /* The two lists after every .gitignore, read now: info/exclude in the common
-     * dir, which a linked worktree shares; and core.excludesFile — relative to
-     * the workdir, where git reads it from; none where it is set empty — or,
-     * unset, git's default (environment.c repo_excludes_file, path.c
-     * xdg_config_home). The excludes file is the last. */
+    /* The two lists after every .gitignore, read now. info/exclude, in the common
+     * dir, which a linked worktree shares; and the excludes file, the last. */
     source_read(
         f, arena_str_format(f->arena, "%sinfo/exclude", commondir), 0, r->casing,
         &r->info_exclude
     );
     r->info_exclude.next = &r->excludes_file;
 
-    if (!excludesfile) {
-        const char *xdg = getenv("XDG_CONFIG_HOME");
-        source_read(
-            f, xdg && *xdg ? str_path_join(f->arena, xdg, "git/ignore")
-                           : str_path_join(f->arena, identity()->home, ".config/git/ignore"),
-            0, r->casing, &r->excludes_file
-        );
-    } else if (*excludesfile) {
+    /* core.excludesFile as git reads a path (config.c git_config_pathname): `~`
+     * expanded, relative to the workdir, where git reads it from, and set empty,
+     * naming no file. `:(optional)` before it makes a file that is not there
+     * the key unset — read as it is where nothing sets it: git's default
+     * (environment.c repo_excludes_file, path.c xdg_config_home). */
+    bool optional = excludesfile && strncmp(excludesfile, ":(optional)", 11) == 0;
+    if (optional) excludesfile += 11;
+
+    if (excludesfile && *excludesfile) {
         const char *path = NULL;
         err = fs_expand_tilde(excludesfile, f->arena, &path);
         if (err) {
@@ -515,6 +513,14 @@ static const repository_t *source_repository(
                 r->casing, &r->excludes_file
             );
         }
+    }
+    if (!excludesfile || (optional && !r->excludes_file.rules && !r->excludes_file.failure)) {
+        const char *xdg = getenv("XDG_CONFIG_HOME");
+        source_read(
+            f, xdg && *xdg ? str_path_join(f->arena, xdg, "git/ignore")
+                           : str_path_join(f->arena, identity()->home, ".config/git/ignore"),
+            0, r->casing, &r->excludes_file
+        );
     }
 
     return r;

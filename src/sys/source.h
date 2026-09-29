@@ -8,9 +8,10 @@
  * it as git(1) does: it finds the repository, reads its stack — each `.gitignore`
  * from the workdir down, `$GIT_COMMON_DIR/info/exclude`, and `core.excludesFile`
  * (git's default `$XDG_CONFIG_HOME/git/ignore`, else `~/.config/git/ignore`,
- * where none is set) — and matches it with base/gitignore in git's order. The
- * specification is git itself: tests/test-source-parity.c asks `git check-ignore`
- * the same questions, layout by layout.
+ * where none is set, or an optional one — `:(optional)` — names no file that is
+ * there) — and matches it with base/gitignore in git's order. The specification
+ * is git itself: tests/test-source-parity.c asks `git check-ignore` the same
+ * questions, layout by layout.
  *
  * Which repository answers is git's discovery: the one whose `.git` a directory
  * holds, else the directory itself where it is a git directory (bare), else its
@@ -57,7 +58,9 @@
  * open the repository is what this module is for; and its layout keys are read
  * with the includes libgit2 follows, where git's format pass reads the file alone.
  * `core.excludesFile` spelled from another user's home (`~user/`) is refused,
- * as every tilde dotta reads is (sys/filesystem.h fs_expand_tilde).
+ * as every tilde dotta reads is (sys/filesystem.h fs_expand_tilde), and one spelled
+ * from git's own install (`%(prefix)/`) names a place dotta cannot know: it is
+ * read from the workdir, and is not there.
  *
  * What cannot be read is a failure, never an answer. What git reads as absent
  * by rule reads absent here: a rule file that is not there, and an in-tree

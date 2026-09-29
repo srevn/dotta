@@ -60,11 +60,11 @@ cleanup_plan_t *cleanup_plan_build(
 
     /* Each orphan in scope is added to its bucket as the walk decides it, and
      * the three are filled once the walk is done. */
-    workspace_items_t items = workspace_diverged(ws);
+    workspace_items_t diverged = workspace_diverged(ws);
     workspace_buckets_t *buckets = workspace_buckets_create(arena);
 
-    for (size_t i = 0; i < items.count; i++) {
-        const workspace_item_t *item = items.entries[i];
+    for (size_t i = 0; i < diverged.count; i++) {
+        const workspace_item_t *item = diverged.entries[i];
 
         /* Both kinds reach both states: the kind decides the bucket, the state
          * is a verdict's input. */

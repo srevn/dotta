@@ -1590,7 +1590,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * — the same table status's sections and update's filter read, so sync
          * cannot route an item a third way), the other states by the state switch
          * beside it. One item, one count. */
-        workspace_items_t all_diverged = workspace_diverged(ws);
+        workspace_items_t diverged = workspace_diverged(ws);
 
         /* The rule the arms below follow: sync blocks on update's work and on
          * the conflicts update refuses and the user must decide; it reports,
@@ -1608,8 +1608,8 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         size_t squatted_count = 0;    /* KIND_DERIVED — a rung dotta only passes through; blocks nothing */
         size_t displaced_count = 0;   /* DISPLACED_* — dotta did not look; blocks nothing */
 
-        for (size_t i = 0; i < all_diverged.count; i++) {
-            const workspace_item_t *item = all_diverged.entries[i];
+        for (size_t i = 0; i < diverged.count; i++) {
+            const workspace_item_t *item = diverged.entries[i];
 
             if (!scope_accepts_profile(scope, item->profile)) {
                 continue;

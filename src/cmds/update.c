@@ -259,12 +259,12 @@ static void update_partition(
 
     *partition = (partition_t){ 0 };
 
-    workspace_items_t all = workspace_diverged(ws);
+    workspace_items_t diverged = workspace_diverged(ws);
     ptr_array_t accepted;
     ptr_array_init(&accepted, arena);
 
-    for (size_t i = 0; i < all.count; i++) {
-        const workspace_item_t *item = all.entries[i];
+    for (size_t i = 0; i < diverged.count; i++) {
+        const workspace_item_t *item = diverged.entries[i];
 
         /* The scope triplet: the path filter reads both names, the exclude the
          * mount-relative one. */

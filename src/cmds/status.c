@@ -329,12 +329,12 @@ static void status_print_workspace(
     if (!ws || !out) return;
 
     /* The diverged items, read by the status line's fold and by the sections */
-    workspace_items_t all_items = workspace_diverged(ws);
+    workspace_items_t diverged = workspace_diverged(ws);
 
     /* A load holding none is clean (workspace_diverged), and says so only when
      * asked. One holding any opens the section whatever the filter reaches: a
      * filtered profile that reads Clean still counts the divergence it hides. */
-    if (all_items.count == 0 && !output_is_verbose(out)) return;
+    if (diverged.count == 0 && !output_is_verbose(out)) return;
 
     /* The status line, one fold whatever the filter: the diverged items the filter
      * reaches, those of them dotta could not verify, and those it hides. A scope
@@ -349,8 +349,8 @@ static void status_print_workspace(
     size_t scoped_unverified = 0;
     size_t hidden_count = 0;
 
-    for (size_t i = 0; i < all_items.count; i++) {
-        const workspace_item_t *item = all_items.entries[i];
+    for (size_t i = 0; i < diverged.count; i++) {
+        const workspace_item_t *item = diverged.entries[i];
 
         if (!scope_accepts_profile(scope, item->profile)) {
             hidden_count++;
@@ -442,8 +442,8 @@ static void status_print_workspace(
         size_t reassigned_count = 0;
         size_t squatted_count = 0;
         size_t displaced_count = 0;
-        for (size_t i = 0; i < all_items.count; i++) {
-            const workspace_item_t *item = all_items.entries[i];
+        for (size_t i = 0; i < diverged.count; i++) {
+            const workspace_item_t *item = diverged.entries[i];
 
             /* Apply profile filter if specified (Coherent Scope)
              *

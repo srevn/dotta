@@ -1510,7 +1510,7 @@ static void apply_print_cleanup_skips(
 /**
  * Print the cleanup refusals: what the run cannot prune, and what could
  *
- * Both kinds in one section — files, then the directories in prune order — each
+ * Both kinds in one section — files, then the directories deepest first — each
  * row naming the parent that refuses, verbatim, in the words deploy's PERMISSION
  * row uses for the same fact ("… is not writable"; "ancestry cannot be reached"
  * where the workspace's own lstat was refused on the way — the occupant says

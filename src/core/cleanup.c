@@ -113,8 +113,8 @@ cleanup_plan_t *cleanup_plan_build(
         }
     }
 
-    /* Prune order, established once. A child's path is its parent's path plus a
-     * separator and a name, so it is strictly longer; descending length therefore
+    /* Deepest first, established once. A child's path is its parent's path plus
+     * a separator and a name, so it is strictly longer; descending length therefore
      * places every directory after its own descendants, and two paths of equal
      * length can never be parent and child. That order is what lets a single
      * pass decide a directory whose emptiness depends on its children — no second
@@ -465,7 +465,7 @@ cleanup_preflight_t *cleanup_preflight(
      * a parent read each child's class off the set: its pruned children gone,
      * its skipped ones skipped, its released ones permanent.
      *
-     * The buckets fill in walk order, which is prune order: deepest first. */
+     * The buckets fill in walk order: deepest first. */
     workspace_items_t dirs = workspace_items(&plan->directories);
 
     for (size_t i = 0; i < dirs.count; i++) {
@@ -510,8 +510,10 @@ cleanup_preflight_t *cleanup_preflight(
                     walk_t walk = { .fates = fates, .ws = ws, .skipped = false };
 
                     switch (fs_directory_emptiness(path, vouch_entry, &walk)) {
-                        case FS_DIR_OCCUPIED:   fate = FATE_PERMANENT; break;
-                        case FS_DIR_UNREADABLE: fate = FATE_SKIPPED; break;
+                        case FS_DIR_OCCUPIED:   fate = FATE_PERMANENT;
+                            break;
+                        case FS_DIR_UNREADABLE: fate = FATE_SKIPPED;
+                            break;
                         case FS_DIR_EMPTY:      fate = walk.skipped ? FATE_SKIPPED : FATE_GONE;
                             break;
                     }
@@ -528,7 +530,7 @@ cleanup_preflight_t *cleanup_preflight(
                 } else {
                     ptr_array_t *bucket = (fate == FATE_GONE) ? &verdicts->prunable_dirs
                                         : (fate == FATE_SKIPPED) ? &verdicts->skipped_dirs
-                                                              : &verdicts->released_dirs;
+                                                                 : &verdicts->released_dirs;
                     ptr_array_push(bucket, item);
                 }
                 break;
@@ -554,10 +556,10 @@ cleanup_preflight_t *cleanup_preflight(
  * happened at preflight, in cleanup_skip_reason and the released test; nothing
  * is re-checked here and nothing pretends to be.
  *
- * Files first, then the directories those files emptied, in the verdicts' prune
- * order (deepest first, the plan's order): every child is decided before its
- * parent, so a parent this run empties is seen empty when its turn comes — the
- * whole reason the old iterate-until-stable loop existed.
+ * Files first, then the directories those files emptied, deepest first, in the
+ * verdicts' order (the plan's): every child's turn comes before its parent's,
+ * so a parent this run empties is seen empty when its own comes — the whole reason
+ * the old iterate-until-stable loop existed.
  *
  * fs_remove_empty_dir is the mechanism and also the guard: it clears the OS
  * metadata the prediction looked past and nothing else, and it refuses — before

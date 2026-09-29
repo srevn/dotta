@@ -102,7 +102,7 @@
  */
 typedef struct {
     ptr_array_t files;         /* ORPHANED / RELEASED file items in scope */
-    ptr_array_t directories;   /* ORPHANED / RELEASED directory items in scope, deepest first (prune order) */
+    ptr_array_t directories;   /* ORPHANED / RELEASED directory items in scope, deepest first */
     ptr_array_t excluded;      /* Both kinds, spared by -e — reported, never touched */
 } cleanup_plan_t;
 
@@ -391,7 +391,7 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  *
  * Exact except where the world moves underneath it — a change made while the
  * confirmation prompt waits, an I/O failure — and the run reports whatever it
- * could not do. prunable_dirs is in prune order, deepest first.
+ * could not do. prunable_dirs is deepest first.
  */
 typedef struct {
     /* Files */
@@ -500,10 +500,10 @@ typedef struct {
  *
  * Each array is sized to its promise at entry (calloc; the failed bucket to both
  * kinds together — every promised item could fail) and fills in act order: files,
- * then the directories in the verdicts' prune order. count gates every read, so
- * an untaken slot is invisible and the receipt holds exactly what happened, by
- * construction. Nothing here can be truncated by the run. A value of the arena
- * its run names, as its six arrays are: nothing frees one.
+ * then the directories deepest first, in the verdicts' order. count gates every
+ * read, so an untaken slot is invisible and the receipt holds exactly what
+ * happened, by construction. Nothing here can be truncated by the run. A value
+ * of the arena its run names, as its six arrays are: nothing frees one.
  *
  * Records that retire (core/state.h state_retire): pruned_* and reclaimed_* (here),
  * absent_* and released_* (the verdicts). Records that stay: skipped_dirs and
@@ -544,8 +544,8 @@ typedef struct {
  *
  * Pure filesystem: no repo, no state — the caller settles the records from the
  * receipt and the verdicts. Files first (every prunable file), then directories
- * in the verdicts' prune order. A removal that fails is the item's own outcome:
- * it lands in `failed` with its cause, and the run goes on.
+ * deepest first, in the verdicts' order. A removal that fails is the item's own
+ * outcome: it lands in `failed` with its cause, and the run goes on.
  *
  * @param arena Arena the receipt and its arrays live in (must not be NULL; the
  *        verdicts' own, or one they outlive)

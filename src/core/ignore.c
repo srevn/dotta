@@ -492,55 +492,68 @@ source_filter_t *ignore_source(ignore_rules_t *r) {
 }
 
 /**
- * How many rungs a subject has: its components, a place's leading '/' being none
- * — a name's tail, or a place, never "/" — and "" none at all
+ * How many rungs a place has: its components, its leading '/' being none — a
+ * place always names an entry, so it is never "/"
  */
-static size_t ignore_rungs(const char *subject) {
-    if (!*subject) return 0;
-
+static size_t ignore_rungs(const char *place) {
     size_t rungs = 1;
-    for (const char *c = subject + 1; *c; c++) rungs += *c == '/';
+    for (const char *c = place + 1; *c; c++) rungs += *c == '/';
 
     return rungs;
 }
 
 /**
- * One rung deeper into a subject cut in place: the separator cut last put back,
- * and the next one cut — none past the last, where the whole subject is the rung
- * — so the subject reads as the rung asked. A first rung is never empty, so the
- * search starts a byte in: past a place's leading '/', or into a name's first
- * component.
+ * One rung deeper into a place cut in place: the separator cut last put back,
+ * and the next one cut — none past the last, where the whole place is the rung
+ * — so the place reads as the rung asked. A first rung is never empty, so the
+ * search starts past the place's leading '/'.
  */
-static char *ignore_descend(char *subject, char *cut) {
+static char *ignore_descend(char *place, char *cut) {
     if (cut) *cut = '/';
-    cut = strchr(cut ? cut + 1 : subject + 1, '/');
+    cut = strchr(cut ? cut + 1 : place + 1, '/');
     if (cut) *cut = '\0';
 
     return cut;
 }
 
 /**
- * Is the name's rung the place's own directory at the same height — one directory,
- * however each is spelled?
+ * Does a `!` of the four re-open this directory of the place — decide a rung of
+ * the name that is the same directory, at whatever height each stands?
  *
- * At the path and at its directory always: the place is its directory's kernel
- * spelling and its own name. Above them, wherever no link the spelled place passes
- * through leads elsewhere: the directory the spelled rung is — the first `len`
- * bytes of `spelled` — as the kernel spells it, against the place's rung. A
- * spelling the filter cannot resolve is no directory it can call the place's.
+ * Each rung of the name above the path is spelled where the path is — the name's
+ * tail ends `spelled`, `head` bytes in — through its '/', and resolved as the
+ * kernel spells it (sys/source.h source_filter_physical), since the place is
+ * read where it physically stands: a link the spelled place passes through can
+ * set a directory the name reaches at one height at another height of the place,
+ * and a directory no rung of the name reaches — above its top, or behind such a
+ * link — is the source layer's alone. A spelling the filter cannot resolve names
+ * no directory. Asked where the source excludes the directory or cannot read
+ * it, the four having excluded nothing: a rule of theirs at a rung is a `!` or
+ * none.
+ *
+ * `name` is the tail, cut here and put back; `directory` is the place cut at
+ * its rung.
  */
-static bool ignore_shared(
-    source_filter_t *source, const char *spelled, size_t len, const char *place, size_t rung
+static bool ignore_reopened(
+    const gitignore_ruleset_t *rules, source_filter_t *source, const char *spelled,
+    size_t head, char *name, const char *directory
 ) {
-    if (rung < 2) return true;
+    size_t n = strlen(directory);
 
-    /* The spelled rung through its '/', which stands behind it: a rung above
-     * the path's directory is a directory the spelling goes on through. */
-    const char *physical = NULL;
-    if (source_filter_physical(source, spelled, len + 1, &physical)) return false;
+    for (char *cut = strchr(name, '/'); cut; cut = strchr(cut + 1, '/')) {
+        const char *physical = NULL;
+        if (source_filter_physical(source, spelled, head + (size_t) (cut - name) + 1, &physical) ||
+            strncmp(physical, directory, n) != 0 || physical[n] != '/' || physical[n + 1] != '\0') {
+            continue;
+        }
 
-    size_t n = strlen(place);
-    return strncmp(physical, place, n) == 0 && physical[n] == '/' && physical[n + 1] == '\0';
+        *cut = '\0';
+        const gitignore_rule_t *rule = gitignore_ruleset_find(rules, name, true);
+        *cut = '/';
+        if (rule) return true;
+    }
+
+    return false;
 }
 
 error_t ignore_verdict(
@@ -596,26 +609,23 @@ error_t ignore_verdict(
     );
     if (failure) return failure;
 
-    /* The two subjects in one transient, the heap's, each cut in place at the
-     * rung asked: the name's tail, and the place in the kernel's spelling. */
+    /* The two subjects in one transient, the heap's, each cut in place: the place
+     * in the kernel's spelling, at the rung asked, and the name's tail, where a
+     * `!` of the four is looked for. */
     size_t directory_len = strlen(directory), entry_len = strlen(entry);
-    char *name = heap_alloc(tail_len + 1 + directory_len + entry_len + 1);
-    memcpy(name, tail, tail_len + 1);
-
-    char *place = name + tail_len + 1;
+    char *place = heap_alloc(directory_len + entry_len + 1 + tail_len + 1);
     memcpy(place, directory, directory_len);
     memcpy(place + directory_len, entry, entry_len + 1);
 
-    /* Top down, git's order, each rung counted up from the path itself — 0 the
-     * path, 1 its directory — in both subjects at once, as infra/pathspec counts
-     * its two: the name runs out at its root, and the place climbs on to "/". */
-    size_t name_rungs = ignore_rungs(name), place_rungs = ignore_rungs(place);
-    char *name_cut = NULL, *place_cut = NULL;
+    char *name = place + directory_len + entry_len + 1;
+    memcpy(name, tail, tail_len + 1);
 
-    for (size_t rung = name_rungs > place_rungs ? name_rungs : place_rungs; rung-- > 0;) {
+    /* Top down, git's order, each rung counted up from the path itself — 0 the
+     * path, 1 its directory — and on to "/", above the name's top. */
+    char *place_cut = NULL;
+
+    for (size_t rung = ignore_rungs(place); rung-- > 0;) {
         bool is_dir = rung > 0 || kind == PATH_KIND_DIRECTORY;
-        if (rung < name_rungs) name_cut = ignore_descend(name, name_cut);
-        if (rung >= place_rungs) continue;
         place_cut = ignore_descend(place, place_cut);
 
         /* The place's rung, asked of its own directory's repository — a nested
@@ -625,15 +635,12 @@ error_t ignore_verdict(
         error_t err = source_filter_find(source, place, is_dir, &found);
         if (!err && (!found.rule || gitignore_rule_negated(found.rule))) continue;
 
-        /* A `!` of the four re-opens its rung against the source's rules too,
-         * where the name's rung is the place's own directory — asked where the
-         * source excludes the rung or cannot read it, the four having excluded
-         * nothing, so a rule of theirs at a rung is a `!` or none. A rung of
-         * the place no rung of the name is — above the name's top, or above a
-         * link the spelled place passes through — is the source layer's alone. */
-        if (rung < name_rungs &&
-            gitignore_rule_negated(gitignore_ruleset_find(rules, name, is_dir)) &&
-            ignore_shared(source, spelled, head + strlen(name), place, rung)) {
+        /* A `!` of the four re-opens the rung it names against the source's rules
+         * too, asked where the source excludes the rung or cannot read it: at
+         * the path, a `!` of theirs at the path; above it, one at a rung of the
+         * name that is this directory, wherever the place stands beneath it. */
+        if (rung == 0 ? gitignore_rule_negated(gitignore_ruleset_find(rules, tail, is_dir))
+                      : ignore_reopened(rules, source, spelled, head, name, place)) {
             continue;
         }
 
@@ -649,7 +656,7 @@ error_t ignore_verdict(
         };
         break;
     }
-    free(name);
+    free(place);
 
     /* A failure is the answer only where nothing excluded the path. */
     return out->origin == IGNORE_ORIGIN_NONE ? failure : NULL;

@@ -292,12 +292,13 @@ source_filter_t *ignore_source(ignore_rules_t *rules);
  * tail ends `filesystem_path`, component for component (cmds/add.h, THE KEY
  * INVARIANT) — a contract, checked where the place is read. The source layer
  * reads the place in the kernel's spelling (sys/source.h source_filter_physical),
- * so a place spelled through a link is read where the link leads. The two rungs
- * at one height are one directory at the path and at its directory, and above
- * them wherever no link the spelled place passes through leads elsewhere: a `!`
- * of the four re-opens the source's rung only where they are. A rung of the place
- * no rung of the name is — above the name's top, the root it lies under and what
- * contains it, or above such a link — is the source layer's alone.
+ * so a place spelled through a link is read where the link leads — and a `!` of
+ * the four re-opens the directory its rung names as the kernel spells it, wherever
+ * the place stands beneath it: at the height its rung has in the name or at
+ * another, since a link the spelled place passes through can set one directory
+ * at two. At the path it re-opens the path itself. A rung of the place no rung
+ * of the name is — above the name's top, the root it lies under and what contains
+ * it, or behind a link the name passes through — is the source layer's alone.
  *
  * `source` NULL — the configuration turned the layer off, or the reader asks a
  * layer alone, add's -e of a claim — or `filesystem_path` NULL — a name no binding

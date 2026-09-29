@@ -65,11 +65,11 @@
  * The syscalls the funnel is made of — one wrapper per kind, syscall-shaped on
  * purpose: the return and errno are the kernel's, untouched — the second try's,
  * where the reach ran — so a caller's classification of a failure (ENOENT read
- * as absence, EACCES as a refusal) stays its own. The primitives below are built
- * on these and never on the raw call, so a reader that wants an error_t and a
- * reader that wants the errno make the same call at the same site. The six here
- * have outside readers; the write kinds (mkdir, unlink, rename, …) are the
- * primitives' own and stay inside the module.
+ * as absence, fs_lstat_occupant; EACCES as a denial, fs_denied) stays its own.
+ * The primitives below are built on these and never on the raw call, so a reader
+ * that wants an error_t and a reader that wants the errno make the same call at
+ * the same site. The six here have outside readers; the write kinds (mkdir, unlink,
+ * rename, …) are the primitives' own and stay inside the module.
  */
 
 /**
@@ -109,23 +109,19 @@ int fs_open(const char *path, int flags, mode_t mode);
 DIR *fs_opendir(const char *path);
 
 /**
- * May the effective user do `amode` at the path?
+ * faccessat(2) with AT_EACCESS — may the effective user do `amode` at the path?
  *
- * faccessat(2) with AT_EACCESS, with the reach: a run that holds root answers
- * as root would (a read-only filesystem or an immutable flag still refuses).
- * access(2) answers for the real user, which is the wrong one the moment the
- * two differ, and only the effective one lands a write. Knows what a mode test
- * does not: ownership, groups, ACLs, root. A directory's W_OK | X_OK is "may a
- * new entry be made in it" — the question every write beneath a path asks of
- * its nearest present ancestor (core/deploy).
+ * With the reach: a run that holds root answers as root would, and a read-only
+ * filesystem or an immutable flag refuses root too. access(2) answers for the
+ * real user, which is the wrong one the moment the two differ, and only the
+ * effective one lands a write. Knows what a mode test does not: ownership, groups,
+ * ACLs, root.
  *
  * @param path Path (must not be NULL)
  * @param amode R_OK, W_OK, X_OK, or'd
- * @return true iff permitted; on false errno is faccessat's — the reach's second
- *         call's where root was tried — so a caller can tell a refusal from a
- *         path that went away
+ * @return 0, or -1 with errno — the reach's second call's where root was tried
  */
-bool fs_eaccess(const char *path, int amode);
+int fs_eaccess(const char *path, int amode);
 
 /**
  * realpath(3) — the path as the kernel spells it, every link resolved
@@ -850,6 +846,31 @@ bool fs_lexists(const char *path);
  * @return What stands at the path
  */
 fs_occupant_t fs_lstat_occupant(const char *path, struct stat *st);
+
+/**
+ * Do the permission bits deny the effective user `amode` at the path?
+ *
+ * fs_eaccess, read for the one refusal that is the run's own: EACCES — the bits,
+ * an ACL among them, refusing this identity where another passes, as root does.
+ * A run that holds root has asked as root already, so a denial left to it is
+ * one root met too (a MAC policy, an NFS export that squashes root). Every other
+ * answer is no denial: the path admits the run; or it refuses every identity —
+ * a read-only filesystem (EROFS), an immutable flag (EPERM: faccessat asks no
+ * owner rule, so its EPERM is a flag's, never one root lifts); or it says nothing
+ * of identity — the path gone, a loop, a name too long. The call the question
+ * predicts meets each of those itself, and reports its cause.
+ *
+ * A directory's W_OK | X_OK is "may an entry be made in it, or removed from it"
+ * — asked of the directory a write lands in, or a removal is made from.
+ *
+ * Readers: core/deploy.c check_landing and open_landing_directory (the landing),
+ * core/cleanup.c cleanup_refused (the parent).
+ *
+ * @param path Path (must not be NULL)
+ * @param amode R_OK, W_OK, X_OK, or'd
+ * @return true iff the bits deny this identity (EACCES)
+ */
+bool fs_denied(const char *path, int amode);
 
 /**
  * The noun for what a look found

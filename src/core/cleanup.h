@@ -43,13 +43,15 @@
  *   cleanup_preflight_t has the classes), and fs_remove_empty_dir, which removes
  *   exactly what that walk looks past as gone and refuses anything else before
  *   touching it (execute)
- * - whether this run may make a removal the item's facts cleared: write and search
- *   on the parent, fs_eaccess, once per such item (preflight — the refused
- *   buckets). The one fact here that is the run's and not the path's, asked with
- *   the reach counted in: a run that holds root is never refused, so the buckets
- *   are empty under sudo by construction, and without it the refusal is a skip
- *   that names the parent and closes with the sudo line — the shape deploy's
- *   PERMISSION skip has on the other engine
+ * - whether this run is denied a removal the item's facts cleared: the parent's
+ *   bits, asked for write and search (fs_denied), once per such item (preflight
+ *   — the refused buckets). The one fact here that is the run's and not the path's,
+ *   asked with the reach counted in: a run that holds root has asked as root,
+ *   and is denied only where root is too (a MAC policy, an NFS export that squashes
+ *   root); without it the denial is a skip that names the parent and closes with
+ *   the sudo line — the shape deploy's PERMISSION skip has on the other engine.
+ *   What refuses every identity — a read-only filesystem, an immutable flag —
+ *   is the path's, and the removal meets it (cleanup_receipt_t's failed)
  *
  * Directory pruning is one deepest-first pass, ordered by the preflight. Children
  * are decided before parents, so a parent emptied by its children needs no second
@@ -337,20 +339,28 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  * A bucket nothing was added to is the empty slice — an empty answer is a valid
  * answer, and no consumer needs a guard.
  *
- * refused_* hold what every fact of its own cleared and the run cannot remove:
- * unlink and rmdir ask nothing of the path, only write and search on its parent,
- * and the parent refuses this run (fs_eaccess, with the reach — a run that holds
- * root fills neither bucket, and the sudo'd re-run the preview names meets no
- * refusal). Treated exactly as a skip is — left alone, record stays, the directory
- * above waits with it, the screen counts it as skipped — and kept apart from
- * one because the reason is the run's, not the item's: --force lifts a skip reason
- * and never this, and the remedy is root, not consent. The last rung, as OWNERSHIP
- * is deploy's: an item already skipped for a reason is never asked, so a modified
- * orphan under a root-owned parent reads modified unforced and refused under
- * --force, each honest about the one thing in the way. Two under-approximations
- * the removal meets with its cause instead (cleanup_receipt_t's failed): a sticky
- * parent's owner rule, and the OS-metadata entries fs_remove_empty_dir clears
- * inside a directory whose own write bit the invoker lacks.
+ * refused_* hold what every fact of its own cleared — or --force lifted — and
+ * the run is denied: unlink and rmdir ask nothing of the path, only write and
+ * search on its parent, and the parent's bits deny this run (fs_denied, with
+ * the reach — a run that holds root is denied only where root is too, so the
+ * sudo'd re-run the preview names meets no denial). Treated exactly as a skip
+ * is — left alone, record stays, the directory above waits with it, the screen
+ * counts it as skipped — and kept apart from one because the reason is the run's,
+ * not the item's: --force lifts a skip reason and never this, and the remedy is
+ * root, not consent. The last rung, as OWNERSHIP is deploy's: an item already
+ * skipped for a reason is never asked, so a modified orphan under a root-owned
+ * parent reads modified unforced and refused under --force, each honest about
+ * the one thing in the way.
+ *
+ * Present is not absent at load, and a file --force planned past a look that
+ * failed is no more than that: something may stand there. Its parent is asked
+ * all the same, and answers for the way to it — a denial on the way is refused
+ * (ancestry that cannot be reached), a loop or a name too long no identity's.
+ * What the bits do not decide the removal meets with its cause (cleanup_receipt_t's
+ * failed): what refuses every identity — a read-only filesystem, an immutable
+ * flag — and two under-approximations, a sticky parent's owner rule and the
+ * OS-metadata entries fs_remove_empty_dir clears inside a directory whose own
+ * write bit the invoker lacks.
  *
  * A directory is predicted against this same run's own effects — what is left
  * in it once the run has acted. What the readdir meets falls into three classes,
@@ -396,15 +406,15 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  */
 typedef struct {
     /* Files */
-    workspace_items_t prunable_files;    /* Present, no reason to skip it → unlinked */
-    workspace_items_t refused_files;     /* Present, nothing of its own in the way, the parent refuses this run → left alone, record stays */
+    workspace_items_t prunable_files;    /* Present, no skip reason left standing (--force lifts them all) → unlinked */
+    workspace_items_t refused_files;     /* As prunable, and the parent denies this run → left alone, record stays */
     workspace_items_t skipped_files;     /* Present, a skip reason stands → left alone (unless --force) */
     workspace_items_t released_files;    /* Present, Git no longer backs it → left on disk, record retires */
     workspace_items_t absent_files;      /* Not on disk at load → record retires, no filesystem effect */
 
     /* Directories */
     workspace_items_t prunable_dirs;     /* Present; nothing but gone entries left → removed */
-    workspace_items_t refused_dirs;      /* Present; nothing but gone entries left, the parent refuses this run → left alone, record stays */
+    workspace_items_t refused_dirs;      /* Present; nothing but gone entries left, the parent denies this run → left alone, record stays */
     workspace_items_t skipped_dirs;      /* Present; a skipped entry left, could not be verified, or its home moved → left alone, record stays */
     workspace_items_t released_dirs;     /* Released by the workspace, or a permanent entry left → left alone, record retires */
     workspace_items_t absent_dirs;       /* Not there → record retires */
@@ -414,7 +424,7 @@ typedef struct {
  * Decide the verdicts
  *
  * Files: cleanup_verdict from the item — every field it reads was written at
- * workspace load — then, for a prunable one, the parent's reach (one fs_eaccess).
+ * workspace load — then, for a prunable one, the parent's reach (one fs_denied).
  * Directories, deepest first — an order this pass establishes (cleanup.c
  * cleanup_depth_order): cleanup_verdict from the item likewise (a released or
  * unverified directory is left alone, unprobed), then for each candidate the
@@ -450,10 +460,10 @@ cleanup_preflight_t *cleanup_preflight(
  *
  * The item is borrowed from the verdicts' prunable buckets (workspace lifetime
  * — arena addresses, stable by construction). The error is the failed bucket's
- * tail: the mechanism's own refusal, verbatim (EACCES on the parent, EROFS, EBUSY,
- * an EIO the unlink met) — a prune's cause names its remedy the way a deploy's
- * does, and the remedies differ, so the receipt keeps it for the caller to render.
- * NULL in every other bucket: the bucket is the tag, as UNSET is for
+ * tail: the mechanism's own refusal, verbatim (EROFS, an immutable flag's EPERM,
+ * EBUSY, an EIO the unlink met) — a prune's cause names its remedy the way a
+ * deploy's does, and the remedies differ, so the receipt keeps it for the caller
+ * to render. NULL in every other bucket: the bucket is the tag, as UNSET is for
  * deploy_outcome_t's stat. Borrowed, as every error is (base/error.h).
  */
 typedef struct {
@@ -518,7 +528,7 @@ typedef struct {
  *   never attempted: dotta could not     deploy   exit ≠ 0  the incapacity skips
  *                                        cleanup  exit 0    a directory's UNVERIFIED
  *                                                           (cleanup_verdict);
- *                                                           a parent that refuses
+ *                                                           a parent that denies
  *                                                           the run (refused_*)
  *   attempted: the world moved           deploy   exit ≠ 0  failed — EEXIST, EISDIR,
  *                                                           ENOTEMPTY are the

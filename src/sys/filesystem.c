@@ -87,13 +87,13 @@ DIR *fs_opendir(const char *path) {
     return dir;
 }
 
-bool fs_eaccess(const char *path, int amode) {
+int fs_eaccess(const char *path, int amode) {
     int rc = faccessat(AT_FDCWD, path, amode, AT_EACCESS);
     if (rc < 0 && identity_raise_on_refusal(errno)) {
         rc = faccessat(AT_FDCWD, path, amode, AT_EACCESS);
         identity_lower();
     }
-    return rc == 0;
+    return rc;
 }
 
 static int fs_mkdir(const char *path, mode_t mode) {
@@ -1462,6 +1462,13 @@ fs_occupant_t fs_lstat_occupant(const char *path, struct stat *st) {
     if (S_ISDIR(st->st_mode)) return FS_OCCUPANT_DIRECTORY;
 
     return FS_OCCUPANT_OTHER;
+}
+
+bool fs_denied(const char *path, int amode) {
+    /* EACCES alone: the bits refuse this identity. A flag's EPERM and a read-only
+     * mount's EROFS refuse root as well, and a loop or a path gone answers nothing
+     * of identity — the call this predicts meets each of them. */
+    return fs_eaccess(path, amode) < 0 && errno == EACCES;
 }
 
 const char *fs_stat_noun(const struct stat *st) {

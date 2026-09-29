@@ -335,32 +335,39 @@ static bool cleanup_active_beneath(const workspace_t *ws, const char *dir) {
 }
 
 /**
- * May this run make the removal?
+ * Is this run denied the removal?
  *
  * unlink(2) and rmdir(2) ask nothing of the path itself: the entry is the parent's,
- * and write and search on the parent is the whole of the question (fs_eaccess,
- * with the reach — a run that holds root is never refused here). The parent is
- * the path's own, not the nearest present one deploy climbs to: a planned orphan
- * is present, so its parent is. Not asked, and met by the removal with its cause
- * instead: a sticky parent's owner rule, an immutable flag, a read-only mount,
- * and the OS-metadata entries fs_remove_empty_dir clears inside a directory whose
+ * and whether the parent's bits deny this run write and search is the whole of
+ * the question (fs_denied, with the reach — a run that holds root is denied only
+ * where root is too). The parent is the path's own, not the nearest present one
+ * deploy climbs to: an orphan the verdict planned stood at the load's look, and
+ * so did its parent — save a file --force planned past a look that failed, whose
+ * parent is asked all the same and answers for the way there: a denial on the
+ * way is the run's (ancestry that cannot be reached, root's to lift), a loop or
+ * a name too long no identity's.
+ *
+ * What the bits do not decide is no denial, and the removal meets it with its
+ * cause: what refuses every identity — a read-only filesystem, an immutable flag
+ * — and what the question does not model — a sticky parent's owner rule, and
+ * the OS-metadata entries fs_remove_empty_dir clears inside a directory whose
  * own write bit the invoker lacks. The one bound is the buffer's, and no boundary
  * makes it idle — the store refuses a key's shape, never its length — so a parent
- * that would not fit in PATH_MAX, the kernel's own bound on a path, reads as
- * admitted: the removal reports it.
+ * that would not fit in PATH_MAX, the kernel's own bound on a path, is no denial:
+ * the removal reports it.
  */
-static bool parent_accepts_removal(const char *path) {
+static bool cleanup_refused(const char *path) {
     size_t len = str_path_parent_len(path);
     char parent[PATH_MAX];
 
     if (len >= sizeof(parent)) {
-        return true;
+        return false;
     }
 
     memcpy(parent, path, len);
     parent[len] = '\0';
 
-    return fs_eaccess(parent, W_OK | X_OK);
+    return fs_denied(parent, W_OK | X_OK);
 }
 
 /**
@@ -415,14 +422,15 @@ cleanup_preflight_t *cleanup_preflight(
                 break;
 
             case CLEANUP_PRUNABLE:
-                /* Nothing of its own in the way; the run's reach is the last
-                 * rung, and a refusal leaves the file exactly as a skip does. */
-                if (parent_accepts_removal(item->filesystem_path)) {
-                    workspace_buckets_add(buckets, item, &verdicts->prunable_files);
-                    fate = FATE_GONE;
-                } else {
+                /* No skip reason left standing (--force lifts them all); the
+                 * run's reach is the last rung, and a refusal leaves the file
+                 * exactly as a skip does. */
+                if (cleanup_refused(item->filesystem_path)) {
                     workspace_buckets_add(buckets, item, &verdicts->refused_files);
                     fate = FATE_SKIPPED;
+                } else {
+                    workspace_buckets_add(buckets, item, &verdicts->prunable_files);
+                    fate = FATE_GONE;
                 }
                 break;
         }
@@ -508,7 +516,7 @@ cleanup_preflight_t *cleanup_preflight(
                     }
                 }
 
-                if (fate == FATE_GONE && !parent_accepts_removal(path)) {
+                if (fate == FATE_GONE && cleanup_refused(path)) {
                     /* Nothing but gone entries left, and not this run's to remove:
                      * skipped, as a refused file is, for the run that holds root.
                      * Asked last, of what the run would otherwise remove, so a

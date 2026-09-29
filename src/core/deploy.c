@@ -462,9 +462,9 @@ static bool nearest_ancestor(
  * would refuse, and that argument is the ancestor claim's as much as the tracked
  * one's — the alternative would make the reach depend on whether the user typed
  * the directory or a file inside it. Nothing else is ours to touch: a directory
- * no row names and that refuses is a permission error, and a claimed one we do
- * not own cannot be fchmod'd at all (identity_may_chmod: the node's owner, or a
- * run that holds root).
+ * no row names whose bits deny the run is a permission error, and a claimed one
+ * we do not own cannot be fchmod'd at all (identity_may_chmod: the node's owner,
+ * or a run that holds root).
  *
  * @param st lstat of the directory (must not be NULL)
  */
@@ -625,21 +625,24 @@ static void check_ancestry(
  *                             directory row converges nothing and vouches for
  *                             nothing — it answers below like any stranger's path
  *   a directory the view      ours to hold (holdable_directory), either class:
- *   names                     if it refuses, ensure_parents opens it for the run
- *                             and releases it afterwards; fine
- *   any other directory       must accept a new entry now — fs_eaccess,
- *                             which unlike a mode test knows about ownership,
- *                             groups, ACLs and root, and asks for the user the
- *                             write will be made as — or the row is skipped
- *                             (PERMISSION); a symlink to a directory is asked
- *                             through the link
+ *   names                     if its bits deny the run, ensure_parents opens it
+ *                             for the run and releases it afterwards; fine
+ *   any other directory       its bits must not deny the run a new entry —
+ *                             fs_denied, which unlike a mode test knows about
+ *                             ownership, groups, ACLs and root, and asks for
+ *                             the user the write will be made as — or the row
+ *                             is skipped (PERMISSION); a symlink to a directory
+ *                             is asked through the link. What refuses every
+ *                             identity there — a read-only filesystem, an immutable
+ *                             flag — denies the run nothing, and is the write's
+ *                             to meet and report
  *   anything else             a non-directory no row names squats the
  *                             ancestry, and this run will not replace it (Coherent
  *                             Scope) — skipped (ANCESTOR), by hand. The rung
  *                             ran first, so nothing the load saw claims the
  *                             squatter: the skip's class is UNCLAIMED, the one
  *                             class this producer can find
- *   unreachable               EACCES is a refusal too (PERMISSION, with no
+ *   unreachable               EACCES is a denial too (PERMISSION, with no
  *                             ancestor to name); any other errno is left for
  *                             the write to report
  *
@@ -684,7 +687,7 @@ static void check_landing(
     if (directory_is_deployable(verdicts, scratch)) {
         goto cleanup;
     }
-    if (is_dir && fs_eaccess(scratch, W_OK | X_OK)) {
+    if (is_dir && !fs_denied(scratch, W_OK | X_OK)) {
         goto cleanup;
     }
     if (occ == FS_OCCUPANT_DIRECTORY && holdable_directory(ws, scratch, &st)) {
@@ -1403,19 +1406,22 @@ static error_t create_ancestor(deploy_run_t *run, const char *path) {
 /**
  * Open a planned path's landing directory for the run
  *
- * The nearest present ancestor is where the write lands, and it must accept a
- * new entry. An absent chain below it is created at working modes and cannot
- * refuse; the ancestor itself can — a claimed 0555 directory that is already
- * exactly as recorded refuses the very child it was captured with. When it is
+ * The nearest present ancestor is where the write lands, and its bits must not
+ * deny a new entry. An absent chain below it is created at working modes and
+ * cannot refuse; the ancestor itself can — a claimed 0555 directory that is already
+ * exactly as recorded denies the very child it was captured with. When it is
  * ours (holdable_directory) the run holds it at a working mode, built from its
  * current mode so that the release restores exactly what was there, recorded or
  * not (an excluded or out-of-scope row is not the plan's to converge). Anything
- * else is left alone and the write reports the refusal.
+ * else is left alone and the write reports the refusal — so is what refuses every
+ * identity (a read-only filesystem, an immutable flag), which denies the run
+ * nothing: the hold's chmod lifts the bits and no more, and would meet the refusal
+ * as flatly as the write.
  *
  * The questions check_landing asked of the same ancestor, less the one time has
  * answered: a pending row has been converged by the directory pass before any
- * file lands, so it stands here as a directory at its working mode and fs_eaccess
- * simply passes. Prediction and mechanism, one rule.
+ * file lands, so it stands here as a directory at its working mode and is denied
+ * nothing. Prediction and mechanism, one rule.
  *
  * @param run Run context (must not be NULL)
  * @param ancestor Nearest present ancestor, NUL-terminated (must not be NULL)
@@ -1429,7 +1435,7 @@ static error_t open_landing_directory(
     fs_occupant_t occ,
     const struct stat *st
 ) {
-    if (occ != FS_OCCUPANT_DIRECTORY || fs_eaccess(ancestor, W_OK | X_OK)) {
+    if (occ != FS_OCCUPANT_DIRECTORY || !fs_denied(ancestor, W_OK | X_OK)) {
         return NULL;
     }
 

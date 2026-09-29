@@ -220,8 +220,10 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  *                so the exit code says so. Three of them are the invoker's refusals
  *                and root's to lift — PERMISSION, FOREIGN, OWNERSHIP — and a run
  *                that holds none closes its skips by naming it (apply's sudo line);
- *                one that holds root meets neither, save where root itself is
- *                refused (a read-only filesystem, an immutable flag).
+ *                one that holds root meets none of them, save a PERMISSION where
+ *                the bits deny root as well (a MAC policy, an NFS export that
+ *                squashes root). What refuses every identity — a read-only
+ *                filesystem, an immutable flag — is no skip: the write meets it.
  *
  * The split is deploy's exit contract, and workspace_item_route's UNVERIFIABLE
  * arm (workspace.h) restates its incapacity half from the route side — a change
@@ -273,7 +275,7 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
 typedef enum {
     DEPLOY_SKIP_NONE = 0,     /* Not skipped — the row has a verdict */
     DEPLOY_SKIP_ANCESTOR,     /* A non-directory squats an ancestor this run does not converge */
-    DEPLOY_SKIP_PERMISSION,   /* The landing refuses: an ancestor not ours, or none reachable */
+    DEPLOY_SKIP_PERMISSION,   /* The landing's bits deny the run: an ancestor not ours, or none reachable */
     DEPLOY_SKIP_FOREIGN,      /* A directory another owns stands at the path: only its owner converges it */
     DEPLOY_SKIP_OCCUPIED,     /* A directory holding untracked paths stands at the path */
     DEPLOY_SKIP_TYPE,         /* A different kind of path stands where the row lands (--force) */
@@ -669,12 +671,13 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  *   goes to the nearest present ancestor alone: everything absent beneath it is
  *   created by this run at a working mode and cannot refuse. A deployable or
  *   holdable claimed directory there is dotta's and never refuses; any other
- *   directory must accept a new entry now (access(2)) or the row is skipped
- *   (PERMISSION); a non-directory squatter at a path no row claims skips it too
- *   (ANCESTOR — the claimed ones were the ancestry rung's). Ancestors are not
- *   items, so this is the one fresh probe preflight takes; the mechanism
- *   (ensure_parents) asks the same questions of the same ancestor, so this predicts
- *   the run rather than modelling it.
+ *   directory's bits must not deny the run a new entry (fs_denied) or the row
+ *   is skipped (PERMISSION) — what refuses every identity there denies the run
+ *   nothing, and is the write's to meet; a non-directory squatter at a path no
+ *   row claims skips it too (ANCESTOR — the claimed ones were the ancestry rung's).
+ *   Ancestors are not items, so this is the one fresh probe preflight takes;
+ *   the mechanism (ensure_parents) asks the same questions of the same ancestor,
+ *   so this predicts the run rather than modelling it.
  * - Type — the occupant the workspace's look found at the planned path, both
  *   kinds (workspace_item_t.occupant; a row planned beneath a squatter this run
  *   replaces is absent, and asked nothing). A different kind at the path — a
@@ -737,12 +740,13 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * average).
  *
  * Runs as the invoker, the identity every write is made as (sys/identity), and
- * asks for no other: a landing the invoker cannot write is PERMISSION, a pair
+ * asks for no other: a landing whose bits deny the invoker is PERMISSION, a pair
  * it cannot set is OWNERSHIP — a row is OWNERSHIP-skipped iff its resolved pair
  * is not the invoker's to set and the run holds no root — and a run that holds
  * root meets neither refusal, since the executors land the row through the
- * syscall's second try (sys/filesystem) and root sets any pair. The ancestors
- * are not asked the ownership rung (a foreign-owned derived claim above a landing
+ * syscall's second try (sys/filesystem) and root sets any pair, save where the
+ * bits deny root as well (fs_denied asks as root already). The ancestors are
+ * not asked the ownership rung (a foreign-owned derived claim above a landing
  * the invoker can write meets the refusal at the create, and the row beneath
  * carries it as its outcome).
  *

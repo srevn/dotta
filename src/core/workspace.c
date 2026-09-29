@@ -1559,8 +1559,8 @@ static const workspace_item_t *const *find_entries(
  * The directory a path is an entry of, by identity
  *
  * stat(2) of the parent, through a link standing at any rung — the chain two
- * spellings of one entry differ in (cleanup's parent_accepts_removal takes the
- * parent the same way). The one bound is the buffer's: a key that was just lstat'ed
+ * spellings of one entry differ in (cleanup's cleanup_refused takes the parent
+ * the same way). The one bound is the buffer's: a key that was just lstat'ed
  * fits in PATH_MAX, the kernel's own bound on a path, and so does its parent —
  * one that would not answers as a look that did not happen, which is its one
  * caller's rule for it.
@@ -1877,10 +1877,10 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
         item->fault = workspace_code_fault(error_code_from_errno(item->lstat_errno));
     } else if (item->item_kind == PATH_KIND_FILE) {
         item->fault = workspace_error_fault(workspace_compare_orphan(ws, item));
-    } else if (!fs_eaccess(item->filesystem_path, R_OK | X_OK)) {
+    } else if (fs_eaccess(item->filesystem_path, R_OK | X_OK) < 0) {
         /* A directory: read for the readdir, search for the walk's look at an
-         * entry named like OS metadata (fs_directory_emptiness). fs_eaccess leaves
-         * faccessat's errno on false. */
+         * entry named like OS metadata (fs_directory_emptiness). Any failure
+         * leaves it unmeasured, and the errno, faccessat's, says whose. */
         item->fault = workspace_code_fault(error_code_from_errno(errno));
     }
 

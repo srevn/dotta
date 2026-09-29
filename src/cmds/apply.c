@@ -65,8 +65,8 @@
  * hold it, and an unreadable-only run is offered neither a flag that will not
  * lift it nor a by-hand fix for a path dotta could not even read: it closes with
  * its own line, because dotta never writes on a guess. The refusals root lifts
- * — a landing the invoker cannot write, a directory it does not own, a pair it
- * cannot set, and a look that met EACCES on the path itself — close by naming
+ * — a landing whose bits deny the invoker, a directory it does not own, a pair
+ * it cannot set, and a look that met EACCES on the path itself — close by naming
  * sudo, and only for a run that holds none: identity()->privileged, the one process
  * fact this block asks. The key's refusal closes the same way, naming the verb
  * that lifts it; the two are told apart by the field the label above reads. Neither
@@ -1131,8 +1131,8 @@ static void apply_print_cleanup_receipt(
     /* The items the run could not remove — both kinds, act order, each with its
      * cause. At every verbosity, and after what went (the header carries the
      * rationale); capped the way deploy's failed section is. The cause is the
-     * chain's root, where the refusal speaks verbatim — EACCES on the parent,
-     * EROFS, EBUSY; the wraps above it restate the path the line already names. */
+     * chain's root, where the refusal speaks verbatim — EROFS, an immutable flag's
+     * EPERM, EBUSY; the wraps above it restate the path the line already names. */
     if (receipt->failed.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Failed prunes");
         for (size_t i = 0; i < receipt->failed.count && i < LIST_LIMIT; i++) {
@@ -1493,11 +1493,11 @@ static void apply_print_cleanup_skips(
  * Print the cleanup refusals: what the run cannot prune, and what could
  *
  * Both kinds in one section — files, then the directories deepest first — each
- * row naming the parent that refuses, verbatim, in the words deploy's PERMISSION
- * row uses for the same fact ("… is not writable"; "ancestry cannot be reached"
- * where the workspace's own lstat was refused on the way — the occupant says
- * so, and the parent the probe asked is then not the rung that refused), and
- * the one closer: sudo, named for a run that holds none the way
+ * row naming the parent whose bits deny the run, verbatim, in the words deploy's
+ * PERMISSION row uses for the same fact ("… is not writable"; "ancestry cannot
+ * be reached" where the workspace's own lstat was denied on the way — the occupant
+ * says so, and the parent the probe asked is then not the rung that refused),
+ * and the one closer: sudo, named for a run that holds none the way
  * apply_print_deploy_skips names it — asked of the identity, never handed in.
  * Capped like deploy's block — one root-owned parent can refuse a whole subtree
  * — where cleanup's skipped-files block is not (every row there carries a reason
@@ -1507,8 +1507,9 @@ static void apply_print_cleanup_skips(
  * Last of the previews, after the skips it is the sibling of: a refusal is a
  * skip by fate — the count lines above say "skipped", the record stays, the receipt
  * confirms it under that word — and this block is where its reason lives, the
- * run's rather than the item's (cleanup_preflight_t). Empty under a run that
- * holds root, by construction, and prints nothing.
+ * run's rather than the item's (cleanup_preflight_t). Under a run that holds
+ * root it holds only what the bits deny root as well (a MAC policy, an NFS export
+ * that squashes root), and the closer, which names root, is withheld from it.
  */
 static void apply_print_cleanup_refused(
     output_t *out,

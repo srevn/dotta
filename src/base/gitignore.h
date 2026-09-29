@@ -249,7 +249,8 @@ error_t gitignore_ruleset_append_rules(
  * the answer. The rule is the set's own record, valid until the next append
  * (gitignore_ruleset_find), and says the rest through its accessors: its pattern
  * as written, its origin, its line. Readers: gitignore_is_ignored, for core/scope.c
- * scope_is_excluded.
+ * scope_is_excluded; core/ignore.c ignore_verdict, the ladder's four layers,
+ * which the source layer is asked beneath only where they exclude nothing.
  *
  * @param ruleset Ruleset (can be NULL: no rule)
  * @param path    Relative path (can be NULL: no rule)

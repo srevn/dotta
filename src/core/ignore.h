@@ -24,10 +24,10 @@
  * when the user runs `dotta add` against files that live inside a git repository
  * — are the fifth layer and the lowest (sys/source.h). The builder opens it where
  * the configuration respects it (ignore_source), and the ladder's one question
- * asks it rung by rung, wherever the four are silent (ignore_verdict): a directory
- * it excludes is final like any other, and a `!` in any of the four re-opens
- * the rung it names against the source's rules too — that rung and not what lies
- * beneath it, where the source's finer rules still speak.
+ * asks it where the four exclude nothing (ignore_verdict): a directory it excludes
+ * is final like any other, and a `!` in any of the four re-opens the rung it
+ * names against the source's rules too — that rung and not what lies beneath
+ * it, where the source's finer rules still speak.
  *
  * What the rules reach
  * --------------------
@@ -276,36 +276,40 @@ error_t ignore_ruleset(
 source_filter_t *ignore_source(ignore_rules_t *rules);
 
 /**
- * The ladder's verdict on one path: the four layers on its name and the source
- * layer on where it physically stands, asked rung by rung from the top, as git
- * asks its lists (dir.c prep_exclude, last_matching_pattern_from_lists) with
- * the four the higher. At each rung the four decide where a rule of theirs matches
- * — a `!` as surely as any — and the source layer where they are silent, the
- * rung asked of its own directory's repository. The first rung a rule excludes
- * is the verdict, final across both: nothing beneath it is asked. A `!` re-opens
- * the rung it names and no other, so the source's rules beneath it still speak.
+ * The ladder's verdict on one path: the four layers on its name, and where they
+ * exclude nothing, the source layer on where it physically stands. Each climbs
+ * its subject's rungs from the top, as git asks its lists (dir.c prep_exclude,
+ * last_matching_pattern_from_lists): the first rung a rule excludes is the verdict,
+ * final, and a `!` settles its own rung and nothing beneath it. The four are
+ * the higher layers — one program, the last rule to match winning across them
+ * (base/gitignore.h gitignore_eval) — so an exclusion of theirs is the answer,
+ * and the source layer is not asked. A `!` of theirs re-opens the rung it names
+ * against the source's rules too, that rung and no other, so the source's rules
+ * beneath it still speak. The source layer asks each rung of its own directory's
+ * repository.
  *
  * One path, two subjects, their rungs counted up from the path itself. The name's
  * tail ends `filesystem_path`, component for component (cmds/add.h, THE KEY
- * INVARIANT) — a contract, checked. The source layer reads the place in the
- * kernel's spelling (sys/source.h source_filter_physical), so a place spelled
- * through a link is read where the link leads. The two rungs at one height are
- * one directory at the path and at its directory, and above them wherever no
- * link the spelled place passes through leads elsewhere: a `!` of the four re-opens
- * the source's rung only where they are. A rung of the place no rung of the name
- * is — above the name's top, the root it lies under and what contains it, or
- * above such a link — is the source layer's alone.
+ * INVARIANT) — a contract, checked where the place is read. The source layer
+ * reads the place in the kernel's spelling (sys/source.h source_filter_physical),
+ * so a place spelled through a link is read where the link leads. The two rungs
+ * at one height are one directory at the path and at its directory, and above
+ * them wherever no link the spelled place passes through leads elsewhere: a `!`
+ * of the four re-opens the source's rung only where they are. A rung of the place
+ * no rung of the name is — above the name's top, the root it lies under and what
+ * contains it, or above such a link — is the source layer's alone.
  *
  * `source` NULL — the configuration turned the layer off, or the reader asks a
  * layer alone, add's -e of a claim — or `filesystem_path` NULL — a name no binding
- * places on this machine — asks the four alone, over the name's rungs, and cannot
- * fail.
+ * places on this machine — asks the four alone, and cannot fail.
  *
  * A rung the source layer cannot read is no verdict: a rung beneath it that a
  * rule excludes excludes the path whatever the unread one says. Its failure is
  * the answer only where no rung is excluded — the first such failure, and `*out`
  * no exclusion — for the reader to choose its fate; so is the failure of a place
- * whose directory resolves to nothing, which leaves the layer no rung to ask.
+ * whose directory resolves to nothing, which leaves the layer no rung to ask. A
+ * path the four exclude asks the source layer nothing, so no failure of its reaches
+ * it.
  *
  * Readers: cmds/add.c add_excluded (a claim with the -e layer alone, anything
  * else with every layer), core/workspace.c workspace_scan, cmds/ignore.c

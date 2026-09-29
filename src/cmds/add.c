@@ -368,14 +368,15 @@ static error_t add_spell(
  * decision moves.
  *
  * The verdict names the layer and the rule as written, so a caller can say who
- * excluded the path. The rule it names is the outermost that excludes the path:
- * an excluded directory is final, so the climb ends at the first rung a rule
- * excludes and never reaches the rules below it (core/ignore.h ignore_verdict).
- * Clearing that one can uncover the next, which is why the refusal offers one
- * `-e` per rule rather than one flag and a promise. A source layer that cannot
- * answer, where no rung is excluded, degrades to a verbose warning and no
- * exclusion, so an odd source repository never blocks the user from adding a
- * file they explicitly named.
+ * excluded the path. The rule it names is the outermost of the four's that excludes
+ * the path, where one of theirs does, else the source tree's: within each an
+ * excluded directory is final, so the climb ends at the first rung a rule excludes
+ * and never reaches the rules below it (core/ignore.h ignore_verdict). Clearing
+ * that one can uncover the next, beneath it or in the layer below, which is why
+ * the refusal offers one `-e` per rule rather than one flag and a promise. A
+ * source layer that cannot answer, where no rung is excluded, degrades to a verbose
+ * warning and no exclusion, so an odd source repository never blocks the user
+ * from adding a file they explicitly named.
  */
 static ignore_verdict_t add_excluded(
     const walk_t *walk, const manifest_row_t *held, const char *filesystem_path,

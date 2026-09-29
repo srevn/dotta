@@ -18,7 +18,8 @@
  * The source layer (sys/source.h) is not compiled with them: it reads the rules
  * of the repositories a path physically stands in, each rung of its own, so it
  * answers for the place, where the four answer for the name. The builder opens
- * it, and ignore_verdict climbs both — the one place the ladder is spelled.
+ * it, and ignore_verdict asks both, the four first — the one place the ladder
+ * is spelled.
  */
 
 #include "core/ignore.h"
@@ -551,101 +552,102 @@ error_t ignore_verdict(
 
     *out = (ignore_verdict_t){ .origin = IGNORE_ORIGIN_NONE };
 
-    /* The four read the name's tail, which ends the spelled place component for
-     * component (cmds/add.h, THE KEY INVARIANT): a contract, checked where the
-     * place is read, since that is how a rung of the name is found in the place.
-     * Without the source layer the place is not read at all. */
+    /* The four, over the name's tail: one program, git's (base/gitignore.h
+     * gitignore_eval) — the ancestors first, and the first rung a rule of theirs
+     * excludes the verdict. They are the higher layers, so an exclusion of theirs
+     * is final across the ladder too: the source layer is not asked. */
     const char *tail = label_tail(storage_path);
-    const char *spelled = source ? filesystem_path : NULL;
-    size_t tail_len = strlen(tail), head = 0;
-    if (spelled) {
-        size_t len = strlen(spelled);
-        CHECK_ARG(
-            tail_len == 0 || (tail_len < len && spelled[len - tail_len - 1] == '/' &&
-            memcmp(spelled + len - tail_len, tail, tail_len) == 0),
-            "a name's tail ends the path it names"
-        );
-        head = len - tail_len;
+    const gitignore_match_t match = gitignore_eval(
+        rules, tail, kind == PATH_KIND_DIRECTORY
+    );
+    if (match.rule) {
+        *out = (ignore_verdict_t){
+            (ignore_origin_t) gitignore_rule_origin(match.rule),
+            gitignore_rule_pattern(match.rule), match.rung
+        };
+        return NULL;
     }
 
-    /* The source layer reads where the place physically stands: its directory
-     * as the kernel spells it, and its own name as spelled — git follows no link,
-     * and reads one it meets at the end as an entry. A place that names no entry
-     * ("/") asks nothing; one whose directory resolves to nothing leaves the
-     * layer no rung, and its failure is the answer wherever the four exclude
-     * nothing. */
+    /* Where they exclude nothing, the source layer, which reads where the place
+     * physically stands: its directory as the kernel spells it, and its own name
+     * as spelled — git follows no link, and reads one it meets at the end as an
+     * entry. Without the layer, or a place, the four's answer stands, and a place
+     * that names no entry ("/") asks nothing. */
+    const char *spelled = source ? filesystem_path : NULL;
     const char *entry = spelled ? strrchr(spelled, '/') + 1 : NULL;
+    if (!entry || !*entry) return NULL;
+
+    /* The name's tail ends the spelled place component for component (cmds/add.h,
+     * THE KEY INVARIANT): a contract, checked where the place is read, since
+     * that is how a rung of the name is found in the place. */
+    size_t tail_len = strlen(tail), len = strlen(spelled);
+    CHECK_ARG(
+        tail_len == 0 || (tail_len < len && spelled[len - tail_len - 1] == '/' &&
+        memcmp(spelled + len - tail_len, tail, tail_len) == 0),
+        "a name's tail ends the path it names"
+    );
+    size_t head = len - tail_len;
+
+    /* A place whose directory resolves to nothing leaves the layer no rung, and
+     * its failure is the answer, the four having excluded nothing. */
     const char *directory = NULL;
-    error_t failure = NULL;
-    if (entry && *entry) {
-        failure = source_filter_physical(
-            source, spelled, (size_t) (entry - spelled), &directory
-        );
-    }
+    error_t failure = source_filter_physical(
+        source, spelled, (size_t) (entry - spelled), &directory
+    );
+    if (failure) return failure;
 
     /* The two subjects in one transient, the heap's, each cut in place at the
      * rung asked: the name's tail, and the place in the kernel's spelling. */
-    size_t directory_len = directory ? strlen(directory) : 0;
-    size_t entry_len = directory ? strlen(entry) : 0;
+    size_t directory_len = strlen(directory), entry_len = strlen(entry);
     char *name = heap_alloc(tail_len + 1 + directory_len + entry_len + 1);
     memcpy(name, tail, tail_len + 1);
 
-    char *place = NULL;
-    if (directory) {
-        place = name + tail_len + 1;
-        memcpy(place, directory, directory_len);
-        memcpy(place + directory_len, entry, entry_len + 1);
-    }
+    char *place = name + tail_len + 1;
+    memcpy(place, directory, directory_len);
+    memcpy(place + directory_len, entry, entry_len + 1);
 
     /* Top down, git's order, each rung counted up from the path itself — 0 the
      * path, 1 its directory — in both subjects at once, as infra/pathspec counts
      * its two: the name runs out at its root, and the place climbs on to "/". */
-    size_t name_rungs = ignore_rungs(name);
-    size_t place_rungs = place ? ignore_rungs(place) : 0;
+    size_t name_rungs = ignore_rungs(name), place_rungs = ignore_rungs(place);
     char *name_cut = NULL, *place_cut = NULL;
 
     for (size_t rung = name_rungs > place_rungs ? name_rungs : place_rungs; rung-- > 0;) {
         bool is_dir = rung > 0 || kind == PATH_KIND_DIRECTORY;
-
-        /* The four, where the name reaches the rung: one program, the last rule
-         * to match wins across them, and one that excludes is the verdict — an
-         * excluded rung is final, and nothing beneath it is asked. */
-        const gitignore_rule_t *rule = NULL;
-        if (rung < name_rungs) {
-            name_cut = ignore_descend(name, name_cut);
-            rule = gitignore_ruleset_find(rules, name, is_dir);
-            if (rule && !gitignore_rule_negated(rule)) {
-                *out = (ignore_verdict_t){
-                    (ignore_origin_t) gitignore_rule_origin(rule), gitignore_rule_pattern(rule),
-                    rung
-                };
-                break;
-            }
-        }
-
-        /* A `!` of theirs re-opens its rung against the source's rules too, where
-         * the name's rung is the place's own directory; a rung of the place no
-         * rung of the name is — above the name's top, or above a link the spelled
-         * place passes through — is the source layer's alone. */
+        if (rung < name_rungs) name_cut = ignore_descend(name, name_cut);
         if (rung >= place_rungs) continue;
         place_cut = ignore_descend(place, place_cut);
-        if (rule && ignore_shared(source, spelled, head + strlen(name), place, rung)) continue;
 
-        /* The source layer: the place's rung, asked of its own directory's
-         * repository — a nested repository's root of the one around it, as a
-         * walk meets it, and home's own entries of home, as git asked from there
-         * judges them. A rung it cannot read is no verdict, since a rung beneath
-         * it that a rule excludes excludes the path whatever this one says: the
-         * first failure is kept, and the climb goes on. */
+        /* The place's rung, asked of its own directory's repository — a nested
+         * repository's root of the one around it, as a walk meets it, and home's
+         * own entries of home, as git asked from there judges them. */
         source_rule_t found;
         error_t err = source_filter_find(source, place, is_dir, &found);
-        if (err && !failure) failure = err;
-        if (found.rule && !gitignore_rule_negated(found.rule)) {
-            *out = (ignore_verdict_t){
-                IGNORE_ORIGIN_SOURCE, gitignore_rule_pattern(found.rule), rung
-            };
-            break;
+        if (!err && (!found.rule || gitignore_rule_negated(found.rule))) continue;
+
+        /* A `!` of the four re-opens its rung against the source's rules too,
+         * where the name's rung is the place's own directory — asked where the
+         * source excludes the rung or cannot read it, the four having excluded
+         * nothing, so a rule of theirs at a rung is a `!` or none. A rung of
+         * the place no rung of the name is — above the name's top, or above a
+         * link the spelled place passes through — is the source layer's alone. */
+        if (rung < name_rungs &&
+            gitignore_rule_negated(gitignore_ruleset_find(rules, name, is_dir)) &&
+            ignore_shared(source, spelled, head + strlen(name), place, rung)) {
+            continue;
         }
+
+        /* A rung it cannot read is no verdict, since a rung beneath it that a
+         * rule excludes excludes the path whatever this one says: the first failure
+         * is kept, and the climb goes on. */
+        if (err) {
+            if (!failure) failure = err;
+            continue;
+        }
+        *out = (ignore_verdict_t){
+            IGNORE_ORIGIN_SOURCE, gitignore_rule_pattern(found.rule), rung
+        };
+        break;
     }
     free(name);
 

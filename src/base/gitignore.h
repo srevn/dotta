@@ -242,14 +242,14 @@ error_t gitignore_ruleset_append_rules(
  * settles nothing about what lies beneath it and the walk continues.
  *
  * Never fails. Always populates every field of *out; decided=false means no rule
- * matched any rung — the ruleset was silent, which is what core/ignore's readers
- * turn their source-tree ladder on, and it is a fact about the rungs rather than
- * about the walk: any order over them answers it the same. `pattern` and `origin`
- * name the excluding rule when `ignored`; when `decided && !ignored` they name
- * the deepest rule that matched and excluded nothing (git reports no pattern at
- * all for that path), and no caller reads them there. `pattern` is the rule as
- * written (gitignore_rule_pattern), borrowed from the arena the rule was parsed
- * into — for a rule composed in from another ruleset
+ * matched any rung — the ruleset was silent, which is what core/ignore's ladder
+ * turns its source layer on (ignore_verdict), and it is a fact about the rungs
+ * rather than about the walk: any order over them answers it the same. `pattern`
+ * and `origin` name the excluding rule when `ignored`; when `decided && !ignored`
+ * they name the deepest rule that matched and excluded nothing (git reports no
+ * pattern at all for that path), and no caller reads them there. `pattern` is
+ * the rule as written (gitignore_rule_pattern), borrowed from the arena the rule
+ * was parsed into — for a rule composed in from another ruleset
  * (gitignore_ruleset_append_rules), not this one's.
  *
  * @param ruleset Ruleset (must not be NULL)

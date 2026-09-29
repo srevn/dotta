@@ -16,7 +16,6 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
-#include "base/gitignore.h"
 #include "base/hashmap.h"
 #include "base/output.h"
 #include "base/string.h"
@@ -34,7 +33,6 @@
 #include "sys/gitops.h"
 #include "sys/stage.h"
 #include "sys/identity.h"
-#include "sys/source.h"
 #include "utils/commit.h"
 #include "utils/hooks.h"
 
@@ -115,7 +113,7 @@ typedef struct {
     const manifest_t *view;              /* The branch as this command opened it */
     const gitignore_ruleset_t *rules;    /* The profile's .dottaignore layers */
     const gitignore_ruleset_t *excludes; /* The -e layer alone, what a claim meets; NULL: none */
-    source_filter_t *source_filter;      /* The source tree's .gitignore, when consulted */
+    source_filter_t *source;             /* The source layer, the builder's; NULL: turned off */
     stage_admission_t *admission;        /* The branch's tree, and every blob listed since */
     const metadata_t *sheet;             /* The branch's claims, asked with it */
     hashmap_t *listing;                  /* filesystem path -> &item->claim (borrowed both) */
@@ -358,83 +356,57 @@ static error_t add_spell(
  * none (core/manifest.h manifest_lookup_claim). A path the profile claims — a
  * file, or a directory it tracks — is no discovery, and meets the operation's
  * own -e alone. Anything else is discovered, a directory the profile only passes
- * through included, since naming it makes a new claim; it meets every rule, in
- * two mechanisms, each on the name it is written against:
- *   1. The `.dottaignore` layers (baseline, profile, config, CLI) compiled into
- *      a single gitignore ruleset, evaluated on the mount-relative path (label_tail
- *      of `storage_path`): what a `.gitignore` at the mount root would see.
- *   2. The source tree's own `.gitignore`, if the command built a filter (gated
- *      on `config.respect_gitignore`), evaluated on `filesystem_path`: that
- *      repository's root is the root its rules are relative to. The lowest layer:
- *      asked only when no `.dottaignore` layer decided, so a `!` rule in any of
- *      them overrides it.
+ * through included, since naming it makes a new claim; it meets every layer,
+ * through the ladder's one question (core/ignore.h ignore_verdict): the
+ * `.dottaignore` layers on the name, and the source tree's rules, where the builder
+ * opened them, on the place.
  *
- * The subject of the first is the name this command chose, whatever produced it
- * — a claim the profile already held, a composition beneath a tracked directory,
- * a typed argument — so a path beneath a tracked `home/jail/etc` is matched as
- * `jail/etc/x` and not as `etc/x` (cmds/add.h). The subject of the second is
- * where the path stands, which no naming decision moves.
+ * The name is the one this command chose, whatever produced it — a claim the
+ * profile already held, a composition beneath a tracked directory, a typed argument
+ * — so a path beneath a tracked `home/jail/etc` is matched as `jail/etc/x` and
+ * not as `etc/x` (cmds/add.h). The place is where the path stands, which no naming
+ * decision moves.
  *
- * Either mechanism may be absent. `*out_match` is the rules' verdict — the layer
- * and the rule as written when they decided, undecided when the source tree's
- * .gitignore gave the verdict — so a caller can say who excluded the path. The
- * rule it names is the outermost that excludes the path: an excluded directory
- * is final, so the walk ends at the first ancestor a rule excludes and never
- * reaches the rules below it (base/gitignore.h). Clearing that one can uncover
- * the next, which is why the refusal offers one `-e` per rule rather than one
- * flag and a promise. Source-filter errors degrade to a verbose warning and a
- * "not excluded" verdict so an odd source repo never blocks the user from adding
- * a file they explicitly named. The gitignore evaluator never fails — its verdict
- * is applied directly.
+ * The verdict names the layer and the rule as written, so a caller can say who
+ * excluded the path. The rule it names is the outermost that excludes the path:
+ * an excluded directory is final, so the climb ends at the first ancestor a rule
+ * excludes and never reaches the rules below it (base/gitignore.h). Clearing
+ * that one can uncover the next, which is why the refusal offers one `-e` per
+ * rule rather than one flag and a promise. A source layer that cannot answer
+ * degrades to a verbose warning and no exclusion, so an odd source repository
+ * never blocks the user from adding a file they explicitly named.
  */
-static bool add_excluded(
+static ignore_verdict_t add_excluded(
     const walk_t *walk, const manifest_row_t *held, const char *filesystem_path,
-    const char *storage_path, path_kind_t kind, gitignore_match_t *out_match
+    const char *storage_path, path_kind_t kind
 ) {
-    /* Both layers ask for the directory bit, which is the kind read as the two
-     * APIs want it: a gitignore rule with a trailing slash matches a directory
-     * alone, and the source filter's rules need the same distinction. */
-    bool is_directory = kind == PATH_KIND_DIRECTORY;
+    ignore_verdict_t verdict;
 
     /* A claim meets the operation's own filter and no rule of discovery: the -e
      * layer alone, as apply and update ask it of what they hold (core/scope.h
      * scope_is_excluded). So a claim a rule names is re-captured, as update
      * re-captures it and as git stages a tracked file its rules ignore, and a
-     * `-e` still leaves it out. */
+     * `-e` still leaves it out. No source layer is asked, so nothing can fail. */
     if (held && !manifest_is_derived(held)) {
-        gitignore_eval(
-            walk->excludes, label_tail(storage_path), is_directory, out_match
-        );
-        return out_match->ignored;
+        (void) ignore_verdict(walk->excludes, NULL, storage_path, NULL, kind, &verdict);
+        return verdict;
     }
 
-    gitignore_eval(
-        walk->rules, label_tail(storage_path), is_directory, out_match
+    /* Anything else meets every layer. Degraded (above): a source layer that
+     * cannot answer is warned for every entry no layer decided, and dropped —
+     * the one error its source repository, directory or rule file gave, answered
+     * again for each (sys/source.h) — leaving the verdict no exclusion. */
+    error_t err = ignore_verdict(
+        walk->rules, walk->source, storage_path, filesystem_path, kind, &verdict
     );
-    if (out_match->decided) {
-        return out_match->ignored;
-    }
-
-    if (walk->source_filter) {
-        bool excluded = false;
-        error_t err = source_filter_excludes(
-            walk->source_filter, filesystem_path, is_directory, &excluded
+    if (err) {
+        output_warning(
+            walk->ctx->out, OUTPUT_VERBOSE, "Source .gitignore check failed for %s: %s",
+            filesystem_path, error_message(err)
         );
-        if (err) {
-            /* Degraded (above): warned for every entry no layer decided, and
-             * dropped — the one error its source repository, directory or rule
-             * file gave, answered again for each (sys/source.h). */
-            output_warning(
-                walk->ctx->out, OUTPUT_VERBOSE,
-                "Source .gitignore check failed for %s: %s", filesystem_path,
-                error_message(err)
-            );
-            return false;
-        }
-        return excluded;
     }
 
-    return false;
+    return verdict;
 }
 
 /**
@@ -650,19 +622,20 @@ static error_t add_collect(
         );
 
         /* Left out by a rule, the subtree with it: said at VERBOSE, under the
-         * rule that decided. */
-        gitignore_match_t match;
-        if (add_excluded(walk, held, child_fs, child_storage, kind, &match)) {
-            if (match.decided) {
+         * layer that decided, and the rule where the verdict names one. */
+        const ignore_verdict_t verdict = add_excluded(
+            walk, held, child_fs, child_storage, kind
+        );
+        if (verdict.origin != IGNORE_ORIGIN_NONE) {
+            if (verdict.pattern) {
                 output_info(
                     out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')", child_fs,
-                    ignore_origin_describe((ignore_origin_t) match.origin),
-                    match.pattern
+                    ignore_origin_describe(verdict.origin), verdict.pattern
                 );
             } else {
                 output_info(
-                    out, OUTPUT_VERBOSE, "Excluded: %s (source .gitignore)",
-                    child_fs
+                    out, OUTPUT_VERBOSE, "Excluded: %s (%s)", child_fs,
+                    ignore_origin_describe(verdict.origin)
                 );
             }
             continue;
@@ -1451,7 +1424,6 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     error_t err = NULL;
     ignore_rules_t *ignore_rules = NULL;
     const gitignore_ruleset_t *profile_rules = NULL;
-    source_filter_t *source_filter = NULL;
     stage_t *stage = NULL;
     stage_admission_t *admission = NULL; /* The tree as its names are chosen: see below */
     manifest_t *view = NULL;         /* The branch as the stage opened it: see below */
@@ -1599,17 +1571,6 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     err = ignore_rules_create(repo, config, excludes, ctx->arena, &ignore_rules);
     if (err) goto cleanup;
 
-    /* Source-tree .gitignore filter (opt-in via config).
-     *
-     * Built once per command, in its arena, and shared across the whole collection
-     * walk, so every directory and every rule file it reads is read once for
-     * every file beneath it. What degrades is a query — add_excluded reads one
-     * that fails as "not excluded", so an odd source repository never blocks a
-     * path the user named. */
-    if (config && config->respect_gitignore) {
-        source_filter = source_filter_create(ctx->arena);
-    }
-
     /* Build hook invocation */
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_ADD,
@@ -1690,7 +1651,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     walk.view = view;
     walk.rules = profile_rules;
     walk.excludes = excludes;
-    walk.source_filter = source_filter;
+    walk.source = ignore_source(ignore_rules);
     walk.admission = admission;
     walk.sheet = metadata;
     walk.listing = hashmap_borrow(ctx->arena, 0);
@@ -1890,24 +1851,26 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * rules name it is refused here as any ignored directory is, unless the
          * profile already tracks it; at "/" the filter names no entry and asks
          * nothing (sys/source.h). */
-        gitignore_match_t match;
-        if (add_excluded(&walk, held, filesystem_path, storage_path, kind, &match)) {
-            if (match.decided) {
-                err = ERROR(
-                    ERR_INVALID_ARG, "'%s' is ignored by %s: '%s'\n"
-                    "Add it anyway with -e '!%s' — one -e per rule that "
-                    "excludes it — or edit the rule with 'dotta ignore'",
-                    file, ignore_origin_describe((ignore_origin_t) match.origin),
-                    match.pattern, match.pattern
-                );
-            } else {
-                err = ERROR(
-                    ERR_INVALID_ARG,
-                    "'%s' is ignored by its source tree's .gitignore\n"
-                    "Set respect_gitignore = false in the config to add it",
-                    file
-                );
-            }
+        const ignore_verdict_t verdict = add_excluded(
+            &walk, held, filesystem_path, storage_path, kind
+        );
+        if (verdict.origin == IGNORE_ORIGIN_SOURCE) {
+            err = ERROR(
+                ERR_INVALID_ARG,
+                "'%s' is ignored by its source tree's .gitignore\n"
+                "Set respect_gitignore = false in the config to add it",
+                file
+            );
+            goto cleanup;
+        }
+        if (verdict.origin != IGNORE_ORIGIN_NONE) {
+            err = ERROR(
+                ERR_INVALID_ARG, "'%s' is ignored by %s: '%s'\n"
+                "Add it anyway with -e '!%s' — one -e per rule that "
+                "excludes it — or edit the rule with 'dotta ignore'",
+                file, ignore_origin_describe(verdict.origin), verdict.pattern,
+                verdict.pattern
+            );
             goto cleanup;
         }
 

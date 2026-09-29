@@ -28,7 +28,6 @@
 #include "sys/editor.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
-#include "sys/source.h"
 
 /**
  * Does any line of content name the same rule as pattern? (zero-allocation)
@@ -648,38 +647,6 @@ static error_t modify_dottaignore(
     return NULL;
 }
 
-/**
- * Probe the source-tree .gitignore where no .dottaignore layer decided — the
- * lowest layer. Requires an absolute path; a NULL one (a custom/ storage path
- * with no target bound here) silently short-circuits to "no source verdict".
- *
- * Errors from the underlying libgit2 query are surfaced at NORMAL verbosity so
- * a --test invocation that can't probe layer 5 makes the limitation visible,
- * then return a "not excluded" verdict so the rest of the output remains coherent.
- */
-static bool source_gitignore_matches(
-    source_filter_t *filter,
-    const char *abs_path,
-    bool is_directory,
-    output_t *out
-) {
-    if (!filter || !abs_path || abs_path[0] != '/') return false;
-
-    bool excluded = false;
-    error_t err = source_filter_excludes(filter, abs_path, is_directory, &excluded);
-    if (err) {
-        /* Surfaced (above): warned for every asker no layer decided, and dropped
-         * — the one error the source repository, directory or rule file gave,
-         * answered again for each (sys/source.h). */
-        output_warning(
-            out, OUTPUT_NORMAL,
-            "Source .gitignore check failed: %s", error_message(err)
-        );
-        return false;
-    }
-    return excluded;
-}
-
 /* The longest `who` an asker's line carries: "Profile '" (9), a profile name,
  * "': " (3) and the terminator, rounded. The name is bounded by the ref it becomes,
  * not by git's 255 — that one is per component and a profile name has several:
@@ -789,10 +756,10 @@ static bool stands_as_directory(
  * Both are read before the view is built, so a refusal is a plain return.
  *
  * The path need not exist: a trailing slash on one that does not is the directory
- * hint, so directory-only patterns (`cache/`) can be tested. The rules are
- * evaluated on the mount-relative subject, exactly as the walk evaluates them
- * (cmds/add.c add_excluded); the source tree's `.gitignore` is asked on the path,
- * when the asker has one, and only where no `.dottaignore` layer decided.
+ * hint, so directory-only patterns (`cache/`) can be tested. The path meets the
+ * ladder's one question, as the walk asks it (core/ignore.h ignore_verdict):
+ * the rules on the asker's name for it, and the source tree's on the path, when
+ * the asker places it, where no `.dottaignore` layer decided.
  *
  * The view is the named profile's branch at HEAD — which need not be enabled,
  * and answers when some *other* enabled profile's branch will not build — or
@@ -846,14 +813,12 @@ static error_t test_path_ignore(
 
     /* The key the user named, fixed for every asker: the resolver's sum, its
      * tag the whole condition the loop's arms read and its member the argument's
-     * own reading. A second reading stands beside it, one per key — a name's
-     * tail, what the rules see; a path's kind, observed there once — so the loop
-     * reads what the argument gave and asks nothing of it again. The table is
-     * the run's until a view is built, and then the view's own — the one its
+     * own reading. A path's kind stands beside it, observed there once, so the
+     * loop reads what the argument gave and asks nothing of it again. The table
+     * is the run's until a view is built, and then the view's own — the one its
      * rows were placed by. */
     const mount_table_t *mounts = ctx->run.mounts;
     path_input_t arg;                         /* the key: a name or a path */
-    const char *argument_subject = NULL;      /* a name's tail, what the rules see */
     bool argument_is_directory = false;       /* a path's kind, observed there once */
     manifest_t *view = NULL;                  /* a path's: where each asker names it */
 
@@ -881,8 +846,7 @@ static error_t test_path_ignore(
      * two keys this command answers (infra/path.h). */
     switch (arg.key) {
         case PATH_KEY_STORAGE:
-            /* The name's own tail is the subject, for every asker alike. */
-            argument_subject = label_tail(arg.storage_path);
+            /* The name is the one the rules read, for every asker alike. */
             break;
 
         case PATH_KEY_FILESYSTEM:
@@ -903,17 +867,10 @@ static error_t test_path_ignore(
             break;
     }
 
-    /* Source .gitignore filter (opt-in via config). Built once for the whole
-     * invocation, in its arena, so every directory and rule file it reads is
-     * read once across the loop. */
-    source_filter_t *source_filter = NULL;
-    if (config && config->respect_gitignore) {
-        source_filter = source_filter_create(ctx->arena);
-    }
-
     /* Layered-rules builder — the baseline compiled once, each profile's ruleset
      * composed on first request; no CLI layer, for --test takes no -e. The arena's,
-     * as the filter is. */
+     * and so is its source layer, so every directory and rule file it reads is
+     * read once across the loop. */
     ignore_rules_t *ignore_rules = NULL;
     RETURN_IF_ERROR(ignore_rules_create(repo, config, NULL, ctx->arena, &ignore_rules));
 
@@ -971,17 +928,17 @@ static error_t test_path_ignore(
         }
 
         /* The asker's reading, seeded with the key the user named: a storage
-         * name is one subject for every asker alike, a path is the machine's
-         * one reading and the kind observed there once. The arm fills the half
-         * the argument did not name. */
-        const char *subject = argument_subject;
+         * name is one name for every asker alike, a path is the machine's one
+         * reading and the kind observed there once. The arm fills the half the
+         * argument did not name. */
+        const char *name = arg.key == PATH_KEY_STORAGE ? arg.storage_path : NULL;
         const char *filesystem_path = arg.key == PATH_KEY_FILESYSTEM ? arg.filesystem_path : NULL;
         bool is_directory = argument_is_directory;
 
         if (arg.key == PATH_KEY_STORAGE) {
             /* Where this asker's target puts the name, and what stands there: a
              * custom/ name places only under a profile with a target. */
-            filesystem_path = mount_resolve(ctx->arena, mounts, asker, arg.storage_path);
+            filesystem_path = mount_resolve(ctx->arena, mounts, asker, name);
             is_directory = stands_as_directory(
                 who, test_path, filesystem_path, trailing_slash, out
             );
@@ -989,37 +946,46 @@ static error_t test_path_ignore(
             /* What this asker calls the path: the claims it holds above it, else
              * its own roots — the word alone at one of them, whose tail is ""
              * and which no rule reaches. */
-            subject = label_tail(
-                manifest_name(ctx->arena, view, asker, filesystem_path, NULL)
-            );
+            name = manifest_name(ctx->arena, view, asker, filesystem_path, NULL);
         }
 
         output_info(
             out, OUTPUT_VERBOSE, "%sMatching '%s' as '%s'%s", who, test_path,
-            subject, is_directory ? " (a directory)" : ""
+            label_tail(name), is_directory ? " (a directory)" : ""
         );
 
         const gitignore_ruleset_t *rules = NULL;
         RETURN_IF_ERROR(ignore_ruleset(ignore_rules, asker, &rules));
 
-        /* The rules on the subject; where no layer decided, the source tree's
-         * .gitignore on the path — the lowest layer, so a `!` above it wins. */
-        gitignore_match_t match;
-        gitignore_eval(rules, subject, is_directory, &match);
-        bool ignored = match.decided
-            ? match.ignored
-            : source_gitignore_matches(source_filter, filesystem_path, is_directory, out);
+        /* The ladder's one question: the rules on the name, and where no layer
+         * decided, the source tree's on the path — the lowest layer, so a `!`
+         * above it wins. A source layer that cannot answer is said at NORMAL,
+         * for every asker it fails, and read as no exclusion so the rest of the
+         * output stays coherent — the one error its source repository, directory
+         * or rule file gave, answered again for each (sys/source.h). */
+        ignore_verdict_t verdict;
+        error_t failure = ignore_verdict(
+            rules, ignore_source(ignore_rules), name, filesystem_path,
+            is_directory ? PATH_KIND_DIRECTORY : PATH_KIND_FILE, &verdict
+        );
+        if (failure) {
+            output_warning(
+                out, OUTPUT_NORMAL, "Source .gitignore check failed: %s",
+                error_message(failure)
+            );
+        }
 
-        if (ignored) {
+        if (verdict.origin != IGNORE_ORIGIN_NONE) {
             output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} %sIGNORED\n", who);
-            if (match.decided) {
+            if (verdict.pattern) {
                 output_info(
                     out, OUTPUT_NORMAL, "  Reason: %s: '%s'",
-                    ignore_origin_describe((ignore_origin_t) match.origin),
-                    match.pattern
+                    ignore_origin_describe(verdict.origin), verdict.pattern
                 );
             } else {
-                output_info(out, OUTPUT_NORMAL, "  Reason: source .gitignore");
+                output_info(
+                    out, OUTPUT_NORMAL, "  Reason: %s", ignore_origin_describe(verdict.origin)
+                );
             }
             any_ignored = true;
         } else {

@@ -20,11 +20,12 @@
  * not re-opened by a profile's `!.cache/keep`; `!.cache/` re-opens it, and then
  * the rules beneath have their say.
  *
- * The source tree's own `.gitignore` (when the user runs `dotta add` against
- * files that live inside a different git repository) is a separate mechanism in
- * `sys/source.h`. Callers that want that behaviour build a `source_filter_t`
- * alongside and consult it explicitly — where no layer above decided, so it is
- * the lowest layer and a `!` rule in any of the four overrides it.
+ * The source tree's own rules — what git excludes where a path stands, when the
+ * user runs `dotta add` against files that live inside a git repository — are
+ * the fifth layer and the lowest (sys/source.h). The builder opens it where the
+ * configuration respects it (ignore_source), and the ladder's one question asks
+ * it where no layer above decided, so a `!` rule in any of the four overrides
+ * it (ignore_verdict).
  *
  * What the rules reach
  * --------------------
@@ -43,16 +44,18 @@
  * -------------
  * A consumer builds one `ignore_rules_t` per command via `ignore_rules_create`.
  * Profile-specific rulesets are produced on demand by `ignore_ruleset`, which
- * returns a borrowed `const gitignore_ruleset_t *` the caller passes directly
- * to `gitignore_is_ignored()` or `gitignore_eval()`. Per-profile rulesets are
- * memoised for the builder's lifetime.
+ * returns a borrowed `const gitignore_ruleset_t *`, and memoised for the builder's
+ * lifetime. A reader asks one question of a path, through `ignore_verdict`: the
+ * ruleset on its name and the builder's source layer on its place, one answer
+ * saying which layer's rule excludes it.
  *
  * The subject
  * -----------
  * A ruleset is evaluated against the mount-relative path — `label_tail` of the
  * storage path (infra/label.h), what a `.gitignore` at `~`, at `/` or at the
  * deployment target would see. Every consumer classifies what it found before
- * it asks, and asks with the tail: `.cache/` means `~/.cache` for a `home/` path
+ * it asks, and the tail is what is asked — the ladder is handed the name and
+ * cuts it itself (ignore_verdict): `.cache/` means `~/.cache` for a `home/` path
  * and `/.cache` for a `root/` one, and nothing above the mount root takes part.
  *
  * Full .gitignore grammar is supported:
@@ -75,10 +78,11 @@
 #include <stdbool.h>
 #include <types.h>
 
-/* Forward declaration — the full header pulls in plenty of machinery we do not
- * want every consumer of core/ignore.h to transitively include. The type already
- * typedefs identically there */
+/* Forward declarations — the full headers pull in plenty of machinery we do not
+ * want every consumer of core/ignore.h to transitively include. The types already
+ * typedef identically there */
 typedef struct gitignore_ruleset gitignore_ruleset_t;
+typedef struct source_filter source_filter_t;
 
 /**
  * The baseline's home: a ref of this machine's own.
@@ -119,16 +123,31 @@ typedef struct ignore_rules ignore_rules_t;
  * Declared in ascending precedence so a larger numeric value means "this layer
  * overrides lower ones." Values round-trip through gitignore_origin_t (8-bit):
  * a layer's rules are tagged at its compile, and again where the builder composes
- * it.
+ * it. The source layer's are not: sys/source reads its own rules, and the verdict
+ * names their layer (ignore_verdict).
  */
 typedef enum {
     IGNORE_ORIGIN_NONE = 0,   /* No rule matched */
+    IGNORE_ORIGIN_SOURCE,     /* The source repository's rules (lowest priority) */
     IGNORE_ORIGIN_BUILTIN,    /* Compiled defaults (fallback when baseline absent) */
     IGNORE_ORIGIN_BASELINE,   /* Baseline .dottaignore at BASELINE_REF */
     IGNORE_ORIGIN_PROFILE,    /* Profile .dottaignore on its branch */
     IGNORE_ORIGIN_CONFIG,     /* Config file patterns */
     IGNORE_ORIGIN_CLI         /* --exclude flags (highest priority) */
 } ignore_origin_t;
+
+/**
+ * The ladder's answer for one path: whether a rule leaves it out, and which
+ *
+ * The origin is the answer — IGNORE_ORIGIN_NONE where no rule excludes the path,
+ * else the layer whose rule does — so nothing beside it restates the verdict.
+ * The pattern is borrowed from the arena its rule was parsed into, which outlives
+ * the command (ignore_rules_create).
+ */
+typedef struct {
+    ignore_origin_t origin;   /* The layer whose rule excludes the path; NONE: none does */
+    const char *pattern;      /* That rule as written; NULL with NONE, and with SOURCE: source_filter_excludes names none */
+} ignore_verdict_t;
 
 /**
  * Compile the `--exclude` patterns into the CLI layer: once per command, so every
@@ -161,7 +180,9 @@ error_t ignore_excludes_compile(
  * Reads and compiles the baseline `.dottaignore` at BASELINE_REF — the compiled
  * defaults when it is absent — once, for every profile the builder composes,
  * and borrows the config's layer and the CLI's. Does not touch the profile branch
- * until `ignore_ruleset` is called.
+ * until `ignore_ruleset` is called. Opens the source layer where the configuration
+ * respects it (`respect_gitignore`) — the one reader of that key — and lends it
+ * through `ignore_source`.
  *
  * Lifetime / ownership:
  *   - `repo` is borrowed; the builder must not outlive the repo handle.
@@ -232,6 +253,58 @@ error_t ignore_ruleset(
     ignore_rules_t *rules,
     const char *profile,
     const gitignore_ruleset_t **out
+);
+
+/**
+ * The source layer, as the builder opened it: a filter over the rules of the
+ * repositories the paths stand in (sys/source.h), or NULL where the configuration
+ * turns the layer off. The builder's, for its arena's life, and shared by every
+ * question the command asks, so every directory and rule file it reads is read
+ * once.
+ *
+ * @param rules Builder (must not be NULL)
+ * @return The filter, or NULL
+ */
+source_filter_t *ignore_source(ignore_rules_t *rules);
+
+/**
+ * The ladder's verdict on one path: the four layers on its name, and where they
+ * are silent, the source layer on its place.
+ *
+ * The four layers are one program over the name's tail (base/gitignore.h
+ * gitignore_eval). Where any of their rules matched, at any rung, the source
+ * layer is not asked: it is the lowest layer, so a `!` in any of the four overrides
+ * it. Where they were silent, the source layer's verdict on the place stands
+ * (sys/source.h source_filter_excludes). The name and the place are one path —
+ * `filesystem_path` is where `storage_path` stands (cmds/add.h, THE KEY INVARIANT)
+ * — and each program reads the spelling its rules are written for.
+ *
+ * `source` NULL — the configuration turned the layer off, or the reader asks a
+ * layer alone, add's -e of a claim — or `filesystem_path` NULL — a name no binding
+ * places on this machine — asks the four alone, and cannot fail.
+ *
+ * Readers: cmds/add.c add_excluded (a claim with the -e layer alone, anything
+ * else with every layer), core/workspace.c workspace_scan, cmds/ignore.c
+ * test_path_ignore.
+ *
+ * @param rules           The layers the path meets, composed (ignore_ruleset), or
+ *                        the -e layer alone (can be NULL: no rules)
+ * @param source          The source layer (ignore_source; can be NULL: not asked)
+ * @param storage_path    The path's name (must not be NULL)
+ * @param filesystem_path Where it stands, absolute (can be NULL: the layers alone)
+ * @param kind            What stands there — a directory-only rule matches a
+ *                        directory alone
+ * @param out             The verdict (must not be NULL): no exclusion on error
+ * @return The source layer's failure, for the reader to choose its fate; NULL
+ *         on success
+ */
+error_t ignore_verdict(
+    const gitignore_ruleset_t *rules,
+    source_filter_t *source,
+    const char *storage_path,
+    const char *filesystem_path,
+    path_kind_t kind,
+    ignore_verdict_t *out
 );
 
 /**

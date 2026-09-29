@@ -50,7 +50,6 @@
 
 #include "base/arena.h"
 #include "base/error.h"
-#include "base/gitignore.h"
 #include "base/hashmap.h"
 #include "base/heap.h"
 #include "base/string.h"
@@ -63,7 +62,6 @@
 #include "infra/label.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
-#include "sys/source.h"
 
 /**
  * Workspace structure
@@ -2309,7 +2307,7 @@ typedef struct {
     size_t root_count;
     const char *profile;               /* The owner of the root this walk began at */
     const gitignore_ruleset_t *rules;  /* That profile's layered ruleset */
-    source_filter_t *source_filter;    /* The source tree's .gitignore, or NULL */
+    source_filter_t *source;           /* The source layer, the builder's; NULL: turned off */
 } scan_t;
 
 /**
@@ -2535,24 +2533,24 @@ static void workspace_scan(
          * is one of this profile's own roots. */
         const char *name = manifest_name(scratch, ws->manifest, scan->profile, child, NULL);
 
-        /* Check if ignored: the rules on the mount-relative path, which is ""
-         * at a root of this profile — no rule reaches an empty subject
-         * (base/gitignore.c), so a root's entries are matched and a root is not.
-         * Where no layer decided, the source tree's .gitignore on the path (its
-         * root is that repo's) — the lowest layer, so a `!` rule above it wins.
-         * That one reads the place and not the subject, so a root standing inside
-         * a repository whose rules name it is not entered, which is the answer
-         * the directory would get under any other name. The layer's own failure
-         * leaves no verdict, and its error is dropped — the one its source
-         * repository, directory or rule file gave, answered again for every entry
-         * that reaches it (sys/source.h). */
-        gitignore_match_t match;
-        gitignore_eval(scan->rules, label_tail(name), is_dir, &match);
-        bool ignored = match.decided && match.ignored;
-        if (!match.decided && scan->source_filter) {
-            (void) source_filter_excludes(scan->source_filter, child, is_dir, &ignored);
-        }
-        if (ignored) continue;
+        /* Check if ignored — the ladder's one question (core/ignore.h
+         * ignore_verdict): the rules on the mount-relative name, which is "" at
+         * a root of this profile — no rule reaches an empty subject
+         * (base/gitignore.c), so a root's entries are matched and a root is not
+         * — and where no layer decided, the source tree's rules on the path,
+         * the lowest layer, so a `!` rule above it wins. That one reads the place
+         * and not the name, so a root standing inside a repository whose rules
+         * name it is not entered, which is the answer the directory would get
+         * under any other name. The layer's own failure leaves no verdict, and
+         * its error is dropped — the one its source repository, directory or
+         * rule file gave, answered again for every entry that reaches it
+         * (sys/source.h). */
+        ignore_verdict_t verdict;
+        (void) ignore_verdict(
+            scan->rules, scan->source, name, child,
+            is_dir ? PATH_KIND_DIRECTORY : PATH_KIND_FILE, &verdict
+        );
+        if (verdict.origin != IGNORE_ORIGIN_NONE) continue;
 
         /* Settled: a directory is descended, and anything else offered. */
         if (!is_dir) {
@@ -2643,19 +2641,12 @@ static error_t workspace_analyze_untracked(
      * here, once; each profile's ruleset is composed on first use and cached,
      * so the roots below amortise the cost across the whole status (the previous
      * shape rebuilt an entire context per profile, re-loading the baseline each
-     * time). No CLI layer: the scan reads no -e, and update's excludes filter
-     * the items it nominates, afterwards (scope_is_excluded). */
+     * time). Its source layer is one filter for every root, so every directory
+     * and every rule file it reads is read once across them all. No CLI layer:
+     * the scan reads no -e, and update's excludes filter the items it nominates,
+     * afterwards (scope_is_excluded). */
     ignore_rules_t *ignore_rules = NULL;
     RETURN_IF_ERROR(ignore_rules_create(ws->repo, config, NULL, ws->arena, &ignore_rules));
-
-    /* Source-tree .gitignore filter — built once for the whole scan, in the
-     * workspace's arena, so every directory and every rule file it reads is read
-     * once across every root. Driven by config; policy decision lives here, not
-     * in the ignore module. */
-    source_filter_t *source_filter = NULL;
-    if (config && config->respect_gitignore) {
-        source_filter = source_filter_create(ws->arena);
-    }
 
     for (size_t r = 0; r < root_count; r++) {
         const scan_root_t *root = &roots[r];
@@ -2688,12 +2679,12 @@ static error_t workspace_analyze_untracked(
          * owner's contribution and excluded by its layers, and the roots are
          * where it stops. */
         const scan_t scan = {
-            .ws            = ws,
-            .roots         = roots,
-            .root_count    = root_count,
-            .profile       = root->profile,
-            .rules         = rules,
-            .source_filter = source_filter,
+            .ws         = ws,
+            .roots      = roots,
+            .root_count = root_count,
+            .profile    = root->profile,
+            .rules      = rules,
+            .source     = ignore_source(ignore_rules),
         };
 
         /* The walk's one scratch, freed whatever the walk met: every frame's

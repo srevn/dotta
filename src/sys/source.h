@@ -35,9 +35,9 @@
  * is stated: a repository nested inside one, which only root can see, is read
  * by the lists of the repository around it.
  *
- * It is intentionally orthogonal to `core/ignore`, which compiles the user's
- * own `.dottaignore` + config + CLI layers inside the dotta repo. A consumer
- * that wants both behaviours calls both modules — no hidden cross-wiring.
+ * It knows nothing of `core/ignore`, which compiles the user's own `.dottaignore`,
+ * config and CLI layers inside the dotta repo: core/ignore asks this module as
+ * the lowest of its layers (ignore_verdict), and no other module asks it.
  *
  * What it reads, and as whom. The repository — its discovery and its configuration
  * — is read as the invoker: libgit2 reads the configuration by path, as the
@@ -171,11 +171,11 @@ error_t source_filter_find(
  * deliberately one answer to a caller that layers this beneath its own. A path
  * that names no entry answers false.
  *
- * Policy: whether to consult the answer at all belongs with the caller (typically
- * `config.respect_gitignore`); a caller that wants the layer off does not build
- * a filter. Readers: cmds/add.c add_excluded, core/workspace.c workspace_scan,
- * cmds/ignore.c source_gitignore_matches; built by cmds/add.c cmd_add,
- * core/workspace.c workspace_analyze_untracked and cmds/ignore.c test_path_ignore.
+ * Policy: whether to consult the answer at all belongs with the caller — the
+ * builder of the ladder's layers reads `config.respect_gitignore`, and a caller
+ * that wants the layer off does not build a filter. Reader: core/ignore.c
+ * ignore_verdict, the ladder's one question; built by core/ignore.c
+ * ignore_rules_create.
  *
  * Preconditions: `path` must start with `/`. Callers with possibly-relative input
  * resolve it first (path_input_filesystem_path, path_input_resolve, realpath,

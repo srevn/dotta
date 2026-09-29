@@ -15,8 +15,10 @@
  * a later layer's `!` has to be asked at the same rung as the earlier layer's
  * directory it re-opens (ignore.h).
  *
- * Source-tree `.gitignore` (a foreign repo the user is adding files from) is a
- * separate mechanism — see `sys/source.h`. Consumers compose the two explicitly.
+ * The source layer (sys/source.h) is not compiled with them: it reads the rules
+ * of the repository a path stands in, so it answers for the place, where the
+ * four answer for the name. The builder opens it, and ignore_verdict asks both
+ * — the one place the ladder is spelled.
  */
 
 #include "core/ignore.h"
@@ -29,7 +31,9 @@
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/gitignore.h"
+#include "infra/label.h"
 #include "sys/gitops.h"
+#include "sys/source.h"
 #include "sys/stage.h"
 
 /* Size cap on `.dottaignore` blobs — an ignore-specific policy guarding against
@@ -171,6 +175,7 @@ struct ignore_rules {
     ignore_origin_t baseline_origin;           /* BASELINE, or BUILTIN */
     const gitignore_ruleset_t *config_rules;   /* borrowed; compiled at load */
     const gitignore_ruleset_t *cli_rules;      /* borrowed; NULL when no -e */
+    source_filter_t *source;                   /* the source layer; NULL: turned off */
 
     /* Memoised per-profile rulesets: a linear scan, as profiles are few */
     entry_t *profiles;
@@ -433,6 +438,11 @@ error_t ignore_rules_create(
     r->config_rules = config ? config->ignore_ruleset : NULL;
     r->cli_rules = cli_rules;
 
+    /* The source layer where the configuration respects it, in the builder's
+     * arena: one filter for every question the command asks, so every directory
+     * and rule file it reads is read once. */
+    r->source = config && config->respect_gitignore ? source_filter_create(arena) : NULL;
+
     *out = r;
     return NULL;
 }
@@ -473,9 +483,49 @@ error_t ignore_ruleset(
     return NULL;
 }
 
+source_filter_t *ignore_source(ignore_rules_t *r) {
+    CHECK_NULL(r);
+
+    return r->source;
+}
+
+error_t ignore_verdict(
+    const gitignore_ruleset_t *rules, source_filter_t *source, const char *storage_path,
+    const char *filesystem_path, path_kind_t kind, ignore_verdict_t *out
+) {
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out);
+
+    *out = (ignore_verdict_t){ .origin = IGNORE_ORIGIN_NONE };
+    bool is_dir = kind == PATH_KIND_DIRECTORY;
+
+    /* The four layers, one program on the name's tail: a rule of theirs that
+     * matched any rung decides, a `!` as surely as any, and the source layer is
+     * not asked. */
+    gitignore_match_t match;
+    gitignore_eval(rules, label_tail(storage_path), is_dir, &match);
+    if (match.decided) {
+        if (match.ignored) {
+            *out = (ignore_verdict_t){ (ignore_origin_t) match.origin, match.pattern };
+        }
+        return NULL;
+    }
+
+    /* Where they were silent, the source layer's verdict on the place, where a
+     * reader asks it and the name stands somewhere. */
+    if (!source || !filesystem_path) return NULL;
+
+    bool excluded = false;
+    RETURN_IF_ERROR(source_filter_excludes(source, filesystem_path, is_dir, &excluded));
+    if (excluded) out->origin = IGNORE_ORIGIN_SOURCE;
+
+    return NULL;
+}
+
 const char *ignore_origin_describe(ignore_origin_t origin) {
     switch (origin) {
         case IGNORE_ORIGIN_NONE:     return "not ignored";
+        case IGNORE_ORIGIN_SOURCE:   return "source .gitignore";
         case IGNORE_ORIGIN_BUILTIN:  return "built-in defaults";
         case IGNORE_ORIGIN_BASELINE: return "baseline .dottaignore";
         case IGNORE_ORIGIN_PROFILE:  return "profile .dottaignore";

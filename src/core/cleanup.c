@@ -28,7 +28,7 @@
 #include "base/hashmap.h"
 #include "base/string.h"
 #include "core/scope.h"
-#include "core/state.h"
+#include "core/workspace.h"
 #include "sys/filesystem.h"
 
 /* ══════════════════════════════════════════════════════════════════

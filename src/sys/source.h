@@ -14,21 +14,25 @@
  *
  * Which repository answers is git's discovery: the one whose `.git` a directory
  * holds, else the directory itself where it is a git directory (bare), else its
- * parent's — stopping where the walk up would cross into another filesystem. A
- * nested repository answers for its own contents, and a repository's own root
- * is an entry of whatever contains its parent. Its workdir is where the `.git`
- * was found, unless its format says otherwise: `core.worktree` or `core.bare`,
- * which git reads from the repository's own files alone — a config that declares
- * a format, and a linked worktree's own config.worktree where the format reads
- * one (else neither, for a linked worktree). A directory that is not there reads
- * as it will once it is — git's rules are the path's, and `ignore --test` asks
- * about a path before it is made. So does one the invoker cannot look into:
- * discovery walks past it, as libgit2 does, where git itself cannot work there
- * as the invoker at all. Under sudo that is a hybrid on purpose — the walk enters
- * such a directory with root's reach and reads its rules so, while discovery
- * sees what the invoker sees — and its residue is stated: a repository nested
- * inside one, which only root can see, is read by the lists of the repository
- * around it.
+ * parent's — stopping where git's walk up stops, below a ceiling
+ * (GIT_CEILING_DIRECTORIES: a directory that is one still asks its own `.git`)
+ * and where it would cross into another filesystem (unless
+ * GIT_DISCOVERY_ACROSS_FILESYSTEM). The environment that names one repository
+ * for every path (GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR) is not read: every
+ * path here is asked of its own. A nested repository answers for its own contents,
+ * and a repository's own root is an entry of whatever contains its parent. Its
+ * workdir is where the `.git` was found, unless its format says otherwise:
+ * `core.worktree` or `core.bare`, which git reads from the repository's own files
+ * alone — a config that declares a format, and a linked worktree's own
+ * config.worktree where the format reads one (else neither, for a linked worktree).
+ * A directory that is not there reads as it will once it is — git's rules are
+ * the path's, and `ignore --test` asks about a path before it is made. So does
+ * one the invoker cannot look into: discovery walks past it, as libgit2 does,
+ * where git itself cannot work there as the invoker at all. Under sudo that is
+ * a hybrid on purpose — the walk enters such a directory with root's reach and
+ * reads its rules so, while discovery sees what the invoker sees — and its residue
+ * is stated: a repository nested inside one, which only root can see, is read
+ * by the lists of the repository around it.
  *
  * It is intentionally orthogonal to `core/ignore`, which compiles the user's
  * own `.dottaignore` + config + CLI layers inside the dotta repo. A consumer
@@ -103,6 +107,10 @@ typedef struct {
 
 /**
  * Create a source filter.
+ *
+ * git's discovery environment is read here, once — GIT_CEILING_DIRECTORIES and
+ * GIT_DISCOVERY_ACROSS_FILESYSTEM — so a filter asks under the environment it
+ * was made in, and a value git refuses is the failure of every query it answers.
  *
  * @param arena Arena the filter and everything it reads live in (must not be NULL)
  * @return The filter, the arena's; never NULL

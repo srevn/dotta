@@ -99,6 +99,9 @@ typedef struct {
 struct source_filter {
     arena_t *arena;                    /* Borrowed; backs all of it */
     hashmap_t *directories;            /* A directory through its '/', any spelling → directory_t */
+    hashmap_t *ceilings;               /* GIT_CEILING_DIRECTORIES, each through its '/'; NULL: none */
+    bool across;                       /* GIT_DISCOVERY_ACROSS_FILESYSTEM: the walk up crosses them */
+    error_t failure;                   /* Why the environment gives discovery no reading */
     char *rung;                        /* Scratch: the rung asked, taken back by the next query */
     size_t rung_capacity;
 };
@@ -522,6 +525,43 @@ static const repository_t *source_repository(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
+ * GIT_CEILING_DIRECTORIES, as git reads it (setup.c canonicalize_ceiling_entry):
+ * each absolute entry through its '/', resolved — or kept as spelled once an
+ * empty entry has turned resolving off — and a relative one, or one that resolves
+ * to nothing, dropped. NULL where none is left.
+ */
+static hashmap_t *source_ceilings(arena_t *arena) {
+    hashmap_t *ceilings = NULL;
+    bool verbatim = false;
+
+    const char *entry = getenv("GIT_CEILING_DIRECTORIES");
+    while (entry && *entry) {
+        size_t n = strcspn(entry, ":");
+        const char *spelled = arena_strndup(arena, entry, n);
+        entry += n + (entry[n] == ':');
+
+        /* An empty entry keeps every later one as spelled; a relative one, or
+         * one that resolves to nothing, is dropped. */
+        if (n == 0) {
+            verbatim = true;
+            continue;
+        }
+        if (*spelled != '/') continue;
+
+        char resolved[PATH_MAX];
+        const char *ceiling = verbatim ? spelled : realpath(spelled, resolved);
+        if (!ceiling) continue;
+
+        size_t len = strlen(ceiling);
+        char *key = arena_str_format(arena, "%s%s", ceiling, ceiling[len - 1] == '/' ? "" : "/");
+        if (!ceilings) ceilings = hashmap_borrow(arena, 0);
+        hashmap_set(ceilings, key, key);
+    }
+
+    return ceilings;
+}
+
+/**
  * The repository found at `directory` (the kernel's spelling, through its '/')
  * — one level of git's walk up: the `.git` it holds, a directory or a file naming
  * one; failing that, the directory itself as a git directory. NULL where neither
@@ -590,8 +630,9 @@ static error_t source_discover(
 
 /**
  * The answer for a directory in the kernel's spelling, through its '/' — the
- * repository at it, else its parent's answer, unless its parent stands on another
- * filesystem, where the walk up stops (libgit2's across_fs 0, git's default)
+ * repository at it, else its parent's answer, unless its parent is a ceiling or
+ * stands on another filesystem, where git's walk up stops (setup.c
+ * repo_discovery_find_dir)
  *
  * A directory the invoker cannot look into is one discovery cannot examine: it
  * reads as its parent reads, as libgit2 walks past a level it cannot stat — git
@@ -614,11 +655,16 @@ static directory_t *source_place(source_filter_t *f, const char *physical, size_
         d->failure = source_discover(f, key, &repository);
     }
 
-    /* None at this level: the parent's answer, where the walk up may reach it. */
-    if (!d->failure && !repository && len > 1) {
-        const directory_t *parent = source_place(f, key, source_parent(key, len));
+    /* None at this level: the parent's answer, where the walk up may reach it —
+     * never into a ceiling, which git never enters from below (a directory that
+     * is one still asks its own `.git`), and never across a filesystem unless
+     * the environment says so. git compares each level with where its walk began;
+     * one level with the next meets the first change as surely. */
+    size_t above = source_parent(key, len);
+    if (!d->failure && !repository && above && !hashmap_get_n(f->ceilings, key, above)) {
+        const directory_t *parent = source_place(f, key, above);
         if (rc != 0) d->dev = parent->dev;
-        if (d->dev == parent->dev) {
+        if (f->across || d->dev == parent->dev) {
             repository = parent->repository;
             d->failure = parent->failure;
         }
@@ -778,6 +824,19 @@ source_filter_t *source_filter_create(arena_t *arena) {
     f->arena = arena;
     f->directories = hashmap_borrow(arena, 0);
 
+    /* git's discovery environment, read once: where the walk up stops, and whether
+     * a filesystem boundary is one. A value git refuses to read is every query's
+     * failure, as it is every command's to git (git_env_bool). */
+    f->ceilings = source_ceilings(arena);
+    const char *across = getenv("GIT_DISCOVERY_ACROSS_FILESYSTEM");
+    int value = 0;
+    if (across && git_config_parse_bool(&value, across) < 0) {
+        f->failure = ERROR(
+            ERR_VALIDATION, "GIT_DISCOVERY_ACROSS_FILESYSTEM is not a boolean: '%s'", across
+        );
+    }
+    f->across = value != 0;
+
     return f;
 }
 
@@ -796,6 +855,7 @@ error_t source_filter_find(
      * and never holds one. A path that names no entry asks nothing. */
     const char *name = strrchr(path, '/') + 1;
     if (!*name) return NULL;
+    if (f->failure) return f->failure;
 
     const directory_t *d = source_directory(f, path, (size_t) (name - path));
     if (d->failure) return d->failure;
@@ -816,6 +876,7 @@ error_t source_filter_excludes(
 
     const char *name = strrchr(path, '/') + 1;
     if (!*name) return NULL;
+    if (f->failure) return f->failure;
 
     const directory_t *d = source_directory(f, path, (size_t) (name - path));
     if (d->failure) return d->failure;

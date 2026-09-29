@@ -915,8 +915,7 @@ static error_t test_path_ignore(
      * composed on first request; no CLI layer, for --test takes no -e. The arena's,
      * as the filter is. */
     ignore_rules_t *ignore_rules = NULL;
-    err = ignore_rules_create(repo, config, NULL, ctx->arena, &ignore_rules);
-    if (err) return error_wrap(err, "Failed to build ignore rules");
+    RETURN_IF_ERROR(ignore_rules_create(repo, config, NULL, ctx->arena, &ignore_rules));
 
     /* The askers: the profile named, the enabled set, or the one asker that is
      * no profile — which names through the shared roots and meets the baseline
@@ -1001,8 +1000,7 @@ static error_t test_path_ignore(
         );
 
         const gitignore_ruleset_t *rules = NULL;
-        err = ignore_rules_for_profile(ignore_rules, asker, &rules);
-        if (err) return error_wrap(err, "Failed to build ignore rules");
+        RETURN_IF_ERROR(ignore_ruleset(ignore_rules, asker, &rules));
 
         /* The rules on the subject; where no layer decided, the source tree's
          * .gitignore on the path — the lowest layer, so a `!` above it wins. */

@@ -1597,10 +1597,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * for a brand-new profile the builder would otherwise try to load a
      * non-existent branch (a non-error, but no point walking that code path). */
     err = ignore_rules_create(repo, config, excludes, ctx->arena, &ignore_rules);
-    if (err) {
-        err = error_wrap(err, "Failed to build ignore rules");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Source-tree .gitignore filter (opt-in via config).
      *
@@ -1650,13 +1647,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * → loads the profile's `.dottaignore`; new profile → branch doesn't exist
      * yet, builder treats that as "no profile layer" and the common layers still
      * apply. */
-    err = ignore_rules_for_profile(ignore_rules, opts->profile, &profile_rules);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to load ignore rules for profile '%s'", opts->profile
-        );
-        goto cleanup;
-    }
+    err = ignore_ruleset(ignore_rules, opts->profile, &profile_rules);
+    if (err) goto cleanup;
 
     /* The profile's sheet, from the tree the stage opened at: the branch's own
      * bytes, an empty sheet for a new profile (the loader's contract). Read before

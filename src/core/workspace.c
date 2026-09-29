@@ -2646,8 +2646,7 @@ static error_t workspace_analyze_untracked(
      * time). No CLI layer: the scan reads no -e, and update's excludes filter
      * the items it nominates, afterwards (scope_is_excluded). */
     ignore_rules_t *ignore_rules = NULL;
-    error_t err = ignore_rules_create(ws->repo, config, NULL, ws->arena, &ignore_rules);
-    if (err) return error_wrap(err, "Failed to build ignore rules");
+    RETURN_IF_ERROR(ignore_rules_create(ws->repo, config, NULL, ws->arena, &ignore_rules));
 
     /* Source-tree .gitignore filter — built once for the whole scan, in the
      * workspace's arena, so every directory and every rule file it reads is read
@@ -2683,12 +2682,7 @@ static error_t workspace_analyze_untracked(
          * files as untracked, which the user could then `dotta add` by accident.
          * A corrupt .dottaignore must surface so the user can fix it. */
         const gitignore_ruleset_t *rules = NULL;
-        err = ignore_rules_for_profile(ignore_rules, root->profile, &rules);
-        if (err) {
-            return error_wrap(
-                err, "Failed to load ignore patterns for profile '%s'", root->profile
-            );
-        }
+        RETURN_IF_ERROR(ignore_ruleset(ignore_rules, root->profile, &rules));
 
         /* What this root's walk runs under: the rows it meets are named by the
          * owner's contribution and excluded by its layers, and the roots are

@@ -42,8 +42,8 @@
  * Runtime shape
  * -------------
  * A consumer builds one `ignore_rules_t` per command via `ignore_rules_create`.
- * Profile-specific rulesets are produced on demand by `ignore_rules_for_profile`,
- * which returns a borrowed `const gitignore_ruleset_t *` the caller passes directly
+ * Profile-specific rulesets are produced on demand by `ignore_ruleset`, which
+ * returns a borrowed `const gitignore_ruleset_t *` the caller passes directly
  * to `gitignore_is_ignored()` or `gitignore_eval()`. Per-profile rulesets are
  * memoised for the builder's lifetime.
  *
@@ -101,14 +101,13 @@ typedef struct gitignore_ruleset gitignore_ruleset_t;
  *
  * Compiles the baseline once on construction, borrows the config's layer and
  * the CLI's, and builds per-profile rulesets lazily. Each ruleset returned by
- * `ignore_rules_for_profile` is a self-contained evaluator usable with any
- * `base/gitignore` primitive.
+ * `ignore_ruleset` is a self-contained evaluator usable with any `base/gitignore`
+ * primitive.
  *
  * Lifetime: the arena's. The builder, its profile cache and every ruleset
- * `ignore_rules_for_profile` returns are allocated in the arena
- * `ignore_rules_create` borrows, and live until that arena is freed — nothing
- * frees them one by one. Per-profile rulesets are memoised for the life of the
- * builder.
+ * `ignore_ruleset` returns are allocated in the arena `ignore_rules_create`
+ * borrows, and live until that arena is freed — nothing frees them one by one.
+ * Per-profile rulesets are memoised for the life of the builder.
  *
  * Thread safety: not thread-safe.
  */
@@ -162,7 +161,7 @@ error_t ignore_excludes_compile(
  * Reads and compiles the baseline `.dottaignore` at BASELINE_REF — the compiled
  * defaults when it is absent — once, for every profile the builder composes,
  * and borrows the config's layer and the CLI's. Does not touch the profile branch
- * until `ignore_rules_for_profile` is called.
+ * until `ignore_ruleset` is called.
  *
  * Lifetime / ownership:
  *   - `repo` is borrowed; the builder must not outlive the repo handle.
@@ -183,7 +182,7 @@ error_t ignore_excludes_compile(
  * .dottaignore"). Refused at the first profile query: a profile's .dottaignore
  * that does not load, is not text or does not compile, and a composed ruleset
  * past the cap. The config's layer was refused, if at all, where the file was
- * loaded.
+ * loaded. Each refusal names its layer, so a caller returns it as it stands.
  *
  * Input validation:
  *   - Per-pattern length: 4096 bytes (the gitignore engine).
@@ -206,7 +205,7 @@ error_t ignore_rules_create(
 );
 
 /**
- * Resolve the ruleset to use for `profile`.
+ * The ruleset for `profile`: the four layers, composed.
  *
  * The returned pointer is borrowed from the builder's arena and stays valid for
  * the arena's life. Repeated calls with the same profile name return the same
@@ -219,12 +218,17 @@ error_t ignore_rules_create(
  * contributes no rules. Callers that need "profile exists" semantics ask
  * `profile_require` first.
  *
+ * The profile's .dottaignore is the one layer read here, and its refusal names
+ * the profile ("Failed to load .dottaignore for profile '<name>'", "Failed to
+ * parse …"); a composed ruleset past the cap is the engine's own refusal. A caller
+ * returns either as it stands, and adds nothing to it.
+ *
  * @param rules   Builder (must not be NULL)
  * @param profile Profile name (may be NULL or "")
  * @param out     Output ruleset pointer (must not be NULL)
  * @return Error or NULL on success
  */
-error_t ignore_rules_for_profile(
+error_t ignore_ruleset(
     ignore_rules_t *rules,
     const char *profile,
     const gitignore_ruleset_t **out
@@ -283,7 +287,7 @@ error_t ignore_blob_read(
  * A NUL would end every string reading of the file — the rules the builder
  * compiles, the lines `dotta ignore --add` and `--remove` rewrite — and whatever
  * stood behind it would be lost without a word. Its readers: ignore_rules_create
- * (the baseline), the per-profile build behind ignore_rules_for_profile, and
+ * (the baseline), the per-profile composition behind ignore_ruleset, and
  * cmds/ignore's --add / --remove. The editor reads the bytes, so a file refused
  * here is mended by `dotta ignore`.
  *

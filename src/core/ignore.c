@@ -4,10 +4,9 @@
  * The builder holds the layers every profile shares — the baseline, compiled at
  * creation; the config's, compiled at load (utils/config) and borrowed; the CLI
  * layer, compiled once by ignore_excludes_compile and handed in — and lazily
- * assembles a fresh per-profile ruleset on first call to
- * `ignore_rules_for_profile`. Subsequent calls with the same profile name return
- * the cached pointer — memoisation lives in the builder, not in any caller
- * bookkeeping.
+ * composes a fresh per-profile ruleset on first call to `ignore_ruleset`.
+ * Subsequent calls with the same profile name return the cached pointer —
+ * memoisation lives in the builder, not in any caller bookkeeping.
  *
  * A compiled layer is composed by copying (gitignore_ruleset_append_rules): each
  * per-profile ruleset copies the baseline's, the config's and the CLI's rules
@@ -157,11 +156,11 @@ static const char *const PROFILE_DOTTAIGNORE =
     "\n"
     "# Add your profile-specific patterns below:\n";
 
-/* One entry in the per-profile memo (ignore_rules_for_profile) */
+/* One entry in the per-profile memo (ignore_ruleset) */
 typedef struct {
     const char *name;             /* the key; "" for baseline-only */
     gitignore_ruleset_t *ruleset;
-} profile_entry_t;
+} entry_t;
 
 struct ignore_rules {
     arena_t *arena;                            /* borrowed; backs all of it */
@@ -174,13 +173,13 @@ struct ignore_rules {
     const gitignore_ruleset_t *cli_rules;      /* borrowed; NULL when no -e */
 
     /* Memoised per-profile rulesets: a linear scan, as profiles are few */
-    profile_entry_t *profiles;
+    entry_t *profiles;
     size_t profile_count;
     size_t profile_capacity;
 };
 
 /**
- * Build a fresh ruleset for `profile` in the builder's arena.
+ * Compose a fresh ruleset for `profile` in the builder's arena.
  *
  * Appends the four layers in precedence order (baseline/builtin, profile, config,
  * CLI) — the baseline's, the config's and the CLI's compiled rules copied, the
@@ -190,7 +189,7 @@ struct ignore_rules {
  *
  * `profile` is the canonicalised key ("" means baseline-only).
  */
-static error_t build_profile_ruleset(
+static error_t ignore_compose(
     ignore_rules_t *r, const char *profile, gitignore_ruleset_t **out
 ) {
     gitignore_ruleset_t *rs = gitignore_ruleset_create(r->arena, GITIGNORE_CASE_SENSITIVE);
@@ -438,7 +437,7 @@ error_t ignore_rules_create(
     return NULL;
 }
 
-error_t ignore_rules_for_profile(
+error_t ignore_ruleset(
     ignore_rules_t *r, const char *profile, const gitignore_ruleset_t **out
 ) {
     CHECK_NULL(r);
@@ -457,9 +456,9 @@ error_t ignore_rules_for_profile(
         }
     }
 
-    /* Build fresh and cache. */
+    /* Compose fresh and cache. */
     gitignore_ruleset_t *rs = NULL;
-    RETURN_IF_ERROR(build_profile_ruleset(r, key, &rs));
+    RETURN_IF_ERROR(ignore_compose(r, key, &rs));
 
     r->profiles = arena_grow(
         r->arena, r->profiles, &r->profile_capacity, r->profile_count + 1,

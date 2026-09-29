@@ -65,6 +65,14 @@ typedef struct {
  * label: which label a name keeps is the profile's history, and no argument says
  * it.
  *
+ * **What the ignore rules reach** is what this add discovers: a path the profile
+ * does not claim. A claim — a file the profile holds, a directory it tracks —
+ * meets the command's own `-e` alone, the filter apply and update ask of what
+ * they hold, so no rule of discovery refuses its re-capture or skips it in a
+ * walk (core/ignore.h). What a walk finds beneath a tracked directory that the
+ * profile does not claim is discovered like any other path, and a directory the
+ * profile only passes through claims nothing: naming one makes a new claim.
+ *
  * **The chosen name is the subject of two matchers**, its label stripped: the
  * `.dottaignore` layers and the auto-encryption patterns (core/ignore,
  * core/policy). A path beneath a tracked `home/jail/etc` is matched as `jail/etc/x`

@@ -26,6 +26,19 @@
  * alongside and consult it explicitly — where no layer above decided, so it is
  * the lowest layer and a `!` rule in any of the four overrides it.
  *
+ * What the rules reach
+ * --------------------
+ * The layers decide discovery — what add's walk may pick up and what the untracked
+ * scan may offer — and the subject of discovery is a path its asker does not
+ * claim: the profile being added to, for add; any enabled profile, for the scan.
+ * A claim is no discovery, and only the operation's own -e reaches it: the filter
+ * apply and update ask of what they hold (core/scope.h scope_is_excluded), and
+ * add of what its profile holds (cmds/add.c add_excluded). A directory a profile
+ * only passes through claims nothing, so naming one is a discovery. Readers of
+ * the rule: cmds/add.c cmd_add and add_collect, which look up the profile's claim
+ * before any rule is asked; core/workspace.c workspace_scan, which asks the view
+ * before any rule.
+ *
  * Runtime shape
  * -------------
  * A consumer builds one `ignore_rules_t` per command via `ignore_rules_create`.

@@ -241,11 +241,13 @@ static inline bool manifest_is_claim(
  * one claim that settles nothing about the path it stands at (core/workspace.c
  * workspace_scan); the tags' clean arm, where a rung nothing diverged
  * on reads [ancestor] (core/workspace.c workspace_item_tags);
- * update's derive-scope slice (cmds/update.c cmd_update); and the two refusals
- * of a second name for one path, where a derived claim names nothing and so blocks
- * nothing (cmds/add.c cmd_add, cmds/revert.c refuse_second_name). Every other
- * `tracked` read in the tree stands where the kind is already settled and asks
- * the field's own meaning, not this predicate.
+ * update's derive-scope slice (cmds/update.c cmd_update); the two refusals of a
+ * second name for one path, where a derived claim names nothing and so blocks
+ * nothing (cmds/add.c cmd_add, cmds/revert.c refuse_second_name); and add's rule
+ * question, where it claims nothing either and so is a discovery, meeting every
+ * rule (cmds/add.c add_excluded). Every other `tracked` read in the tree stands
+ * where the kind is already settled and asks the field's own meaning, not this
+ * predicate.
  */
 static inline bool manifest_is_derived(const manifest_row_t *row) {
     return row && row->type == PATH_TYPE_DIRECTORY && !row->tracked;
@@ -803,11 +805,13 @@ size_t manifest_holders(
  * profile_claim_name, and the per-branch arm of profile_discover_claims), which
  * asks this before the namer — a derived claim is something the profile holds
  * and nothing it names, so the namer alone would climb past it and answer a name
- * the branch never held; and add's kind question, which asks whether the profile's
- * own claim at a path agrees with what stands there now (cmds/add.c) — the one
- * reading that sees an explicit claim with nothing beneath it for either of the
- * branch's documents to find, and a derived row included, since a profile holding
- * a subtree beneath a path is a statement a path that became a file contradicts.
+ * the branch never held; and add's two questions of a path it names or walks
+ * (cmds/add.c cmd_add and add_collect): which rules reach it — a claim meets
+ * the -e layer alone, no rule of discovery (add_excluded) — and whether the
+ * profile's own claim agrees with what stands there now — the one reading that
+ * sees an explicit claim with nothing beneath it for either of the branch's
+ * documents to find, and a derived row included, since a profile holding a subtree
+ * beneath a path is a statement a path that became a file contradicts.
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,

@@ -94,9 +94,10 @@ typedef struct {
  *
  * `view` is the branch as this command opened it: this profile's contribution
  * alone, from the tree the stage opened at, under this command's table. Every
- * name comes from it (core/manifest.h manifest_name, over `listing`), the kind
- * question reads it (manifest_lookup_claim), and so does the one refusal the
- * completed selection owes (add_refuse_moves).
+ * name comes from it (core/manifest.h manifest_name, over `listing`), so does
+ * the claim standing at a path (manifest_lookup_claim) — which rules reach the
+ * path (add_excluded) and what kind it must be — and so does the one refusal
+ * the completed selection owes (add_refuse_moves).
  *
  * `admission` and `sheet` are the two documents one commit carries, and the walk
  * asks both whether the commit has room for a name before a byte is read. The
@@ -113,6 +114,7 @@ typedef struct {
     const char *profile;                 /* The asker: whose claims name what is found */
     const manifest_t *view;              /* The branch as this command opened it */
     const gitignore_ruleset_t *rules;    /* The profile's .dottaignore layers */
+    const gitignore_ruleset_t *excludes; /* The -e layer alone, what a claim meets; NULL: none */
     source_filter_t *source_filter;      /* The source tree's .gitignore, when consulted */
     stage_admission_t *admission;        /* The branch's tree, and every blob listed since */
     const metadata_t *sheet;             /* The branch's claims, asked with it */
@@ -349,10 +351,15 @@ static error_t add_spell(
 }
 
 /**
- * Check if path should be ignored.
+ * Does a rule leave this path out of the add?
  *
- * Consults two independent mechanisms in order, each on the name it is written
- * against:
+ * Which rules are asked turns on whose the path is (core/ignore.h, what the rules
+ * reach). `held` is the row the profile holds at the path, NULL where it holds
+ * none (core/manifest.h manifest_lookup_claim). A path the profile claims — a
+ * file, or a directory it tracks — is no discovery, and meets the operation's
+ * own -e alone. Anything else is discovered, a directory the profile only passes
+ * through included, since naming it makes a new claim; it meets every rule, in
+ * two mechanisms, each on the name it is written against:
  *   1. The `.dottaignore` layers (baseline, profile, config, CLI) compiled into
  *      a single gitignore ruleset, evaluated on the mount-relative path (label_tail
  *      of `storage_path`): what a `.gitignore` at the mount root would see.
@@ -381,13 +388,25 @@ static error_t add_spell(
  * is applied directly.
  */
 static bool add_excluded(
-    const walk_t *walk, const char *filesystem_path, const char *storage_path,
-    path_kind_t kind, gitignore_match_t *out_match
+    const walk_t *walk, const manifest_row_t *held, const char *filesystem_path,
+    const char *storage_path, path_kind_t kind, gitignore_match_t *out_match
 ) {
     /* Both layers ask for the directory bit, which is the kind read as the two
      * APIs want it: a gitignore rule with a trailing slash matches a directory
      * alone, and the source filter's attr stack needs the same distinction. */
     bool is_directory = kind == PATH_KIND_DIRECTORY;
+
+    /* A claim meets the operation's own filter and no rule of discovery: the -e
+     * layer alone, as apply and update ask it of what they hold (core/scope.h
+     * scope_is_excluded). So a claim a rule names is re-captured, as update
+     * re-captures it and as git stages a tracked file its rules ignore, and a
+     * `-e` still leaves it out. */
+    if (held && !manifest_is_derived(held)) {
+        gitignore_eval(
+            walk->excludes, label_tail(storage_path), is_directory, out_match
+        );
+        return out_match->ignored;
+    }
 
     gitignore_eval(
         walk->rules, label_tail(storage_path), is_directory, out_match
@@ -619,9 +638,21 @@ static error_t add_collect(
             scratch, walk->view, walk->profile, child_fs, walk->listing
         );
 
-        /* Check exclude patterns */
+        /* What the profile already claims at the path, asked before any rule: a
+         * claim is no discovery, and meets the -e layer alone (add_excluded).
+         * The row is the path's own authority on kind too, a derived one included
+         * — it says the profile holds a subtree beneath the path, which a path
+         * that became a file cannot carry — and it is the one reading that sees
+         * a claim with nothing beneath it for either of the branch's documents
+         * to find, where add_admit below covers the rest, by the name. */
+        const manifest_row_t *held = manifest_lookup_claim(
+            walk->view, walk->profile, child_fs
+        );
+
+        /* Left out by a rule, the subtree with it: said at VERBOSE, under the
+         * rule that decided. */
         gitignore_match_t match;
-        if (add_excluded(walk, child_fs, child_storage, kind, &match)) {
+        if (add_excluded(walk, held, child_fs, child_storage, kind, &match)) {
             if (match.decided) {
                 output_info(
                     out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')", child_fs,
@@ -637,15 +668,8 @@ static error_t add_collect(
             continue;
         }
 
-        /* What the profile already claims at the path, against what stands there
-         * now. The row is the path's own authority on kind, a derived one included
-         * — it says the profile holds a subtree beneath the path, which a path
-         * that became a file cannot carry — and it is the one reading that sees
-         * a claim with nothing beneath it for either of the branch's documents
-         * to find, where add_admit below covers the rest, by the name. */
-        const manifest_row_t *held = manifest_lookup_claim(
-            walk->view, walk->profile, child_fs
-        );
+        /* A kind the claim contradicts: what stands there now is not what the
+         * profile holds there. */
         if (held && path_type_kind(held->type) != kind) {
             output_warning(
                 out, OUTPUT_NORMAL,
@@ -1554,7 +1578,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* The -e layer, compiled once: a pattern the grammar refuses is refused here,
      * under the flag's name and before the pre-add hook runs. The same rules
-     * are the builder's top layer. */
+     * are the builder's top layer, and the whole of what a claim meets
+     * (add_excluded). */
     const gitignore_ruleset_t *excludes = NULL;
     err = ignore_excludes_compile(
         opts->exclude_patterns, opts->exclude_count, ctx->arena, &excludes
@@ -1671,6 +1696,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     walk.profile = opts->profile;
     walk.view = view;
     walk.rules = profile_rules;
+    walk.excludes = excludes;
     walk.source_filter = source_filter;
     walk.admission = admission;
     walk.sheet = metadata;
@@ -1851,15 +1877,28 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             ctx->arena, view, opts->profile, filesystem_path, walk.listing
         );
 
-        /* A path named on the command line is subject to the rules like any the
-         * walk finds, but a verdict against it is an error, not a silent skip:
-         * the user asked for it by name, and the answer says which rule stands
-         * in the way and how to get past it. The source tree's .gitignore reads
+        /* What the profile already claims at the path, asked before any rule: a
+         * claim is no discovery, and meets the -e layer alone (add_excluded).
+         * The row is the path's own authority on kind too, a derived one included
+         * — it says the profile holds a subtree beneath the path, which a path
+         * that became a file cannot carry — and it is the one reading that sees
+         * a claim with nothing beneath it for either document to find, where
+         * the name's own admission below covers the rest. */
+        const manifest_row_t *held = manifest_lookup_claim(
+            view, opts->profile, filesystem_path
+        );
+
+        /* A path named on the command line meets the rules the walk would ask
+         * of it, but a verdict against it is an error, not a silent skip: the
+         * user asked for it by name, and the answer says which rule stands in
+         * the way and how to get past it. A re-capture of a claim meets -e alone,
+         * so no rule of discovery refuses it. The source tree's .gitignore reads
          * the path and not the name, so a root standing inside a repository whose
-         * rules name it is refused here as any ignored directory is; at "/" the
-         * filter names no entry and asks nothing (sys/source.h). */
+         * rules name it is refused here as any ignored directory is, unless the
+         * profile already tracks it; at "/" the filter names no entry and asks
+         * nothing (sys/source.h). */
         gitignore_match_t match;
-        if (add_excluded(&walk, filesystem_path, storage_path, kind, &match)) {
+        if (add_excluded(&walk, held, filesystem_path, storage_path, kind, &match)) {
             if (match.decided) {
                 err = ERROR(
                     ERR_INVALID_ARG, "'%s' is ignored by %s: '%s'\n"
@@ -1879,18 +1918,11 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        /* What the profile already claims at the path, against what stands there
-         * now. The row is the path's own authority on kind, a derived one included
-         * — it says the profile holds a subtree beneath the path, which a path
-         * that became a file cannot carry — and it is the one reading that sees
-         * a claim with nothing beneath it for either document to find, where
-         * the name's own admission below covers the rest. The removal is
-         * name-shaped: it takes that claim and everything beneath it, under every
-         * topology, where a filesystem-shaped one addresses another key at a
-         * binder's own spelling. */
-        const manifest_row_t *held = manifest_lookup_claim(
-            view, opts->profile, filesystem_path
-        );
+        /* A kind the claim contradicts: what stands there now is not what the
+         * profile holds there. The removal is name-shaped: it takes that claim
+         * and everything beneath it, under every topology, where a
+         * filesystem-shaped one addresses another key at a binder's own
+         * spelling. */
         if (held && path_type_kind(held->type) != kind) {
             char shown[PATH_MAX];
             output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));

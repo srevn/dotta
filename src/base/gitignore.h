@@ -16,8 +16,8 @@
  *   Exclusion (`gitignore_eval`, `gitignore_is_ignored`) is git's. A rule that
  *   matches a directory excludes everything beneath it and no rule beneath it
  *   can re-include anything — so the ancestors are asked first, shallowest first,
- *   and the first one a rule excludes is both the verdict and the rule it is
- *   reported under. `.dottaignore`'s layers and `--exclude` read this.
+ *   and the first one a rule excludes is the verdict: that rule, at that rung.
+ *   `.dottaignore`'s layers and `--exclude` read this.
  *
  *   Selection (`gitignore_is_selected`) is not. A rule that matches an ancestor
  *   *reaches* everything beneath it, and nothing is final: the last rule in the
@@ -78,9 +78,9 @@
 
 /*
  * Origin tag - an opaque identifier assigned by the caller when appending rules,
- * returned verbatim by gitignore_eval and gitignore_rule_origin to say which of
- * the caller's inputs a rule came from. Its values are the caller's (core/ignore's
- * ignore_origin_t); a rule parsed alone carries 0.
+ * returned verbatim by gitignore_rule_origin to say which of the caller's inputs
+ * a rule came from. Its values are the caller's (core/ignore's ignore_origin_t);
+ * a rule parsed alone carries 0.
  */
 typedef uint8_t gitignore_origin_t;
 
@@ -108,11 +108,15 @@ typedef enum {
  */
 typedef struct gitignore_rule gitignore_rule_t;
 
+/*
+ * The exclusion program's answer for one path — git's, as check-ignore reports
+ * a pattern or none: the rule that excludes it, and the rung it names, counted
+ * up from the path itself. A negation is never the answer: a rung it re-includes
+ * settles nothing beneath it, and a path no rule excludes has no rule to name.
+ */
 typedef struct {
-    bool decided;                  /* true if any rule matched */
-    bool ignored;                  /* winning rule's effect (negation-aware) */
-    gitignore_origin_t origin;     /* origin of winning rule */
-    const char *pattern;           /* winning rule as written, borrowed; NULL when undecided */
+    const gitignore_rule_t *rule;  /* The rule that excludes the path; NULL: none does */
+    size_t rung;                   /* How far above the path it excluded: 0 the path itself */
 } gitignore_match_t;
 
 /**
@@ -221,9 +225,8 @@ error_t gitignore_ruleset_append_rules(
 );
 
 /**
- * Evaluate `path` against the ruleset.
- *
- * Exclusion, attributed — the reading `gitignore_is_ignored` answers as a bool.
+ * Evaluate `path` against the ruleset: exclusion, as git reads it — the rule
+ * that excludes the path and the rung it names, or none.
  *
  * `path` is relative to the ruleset's root — the directory the rules were written
  * for, as a `.gitignore`'s are relative to the directory it sits in. The walk
@@ -238,47 +241,40 @@ error_t gitignore_ruleset_append_rules(
  * At one rung the rules are scanned in reverse insertion order (last-match-wins),
  * each read as gitignore_rule_matches reads one. An ancestor a rule excludes
  * ends the walk — nothing beneath an excluded directory can be re-included —
- * and is the rule the verdict is reported under; an ancestor a rule un-excludes
- * settles nothing about what lies beneath it and the walk continues.
+ * and is the answer: that rule, and how many rungs of the path lie beneath it.
+ * An ancestor a rule un-excludes settles nothing about what lies beneath it,
+ * and the walk continues.
  *
- * Never fails. Always populates every field of *out; decided=false means no rule
- * matched any rung — the ruleset was silent, a fact about the rungs rather than
- * about the walk: any order over them answers it the same. No reader turns on
- * it: a program over more than this ruleset asks it a rung at a time
- * (gitignore_ruleset_find, core/ignore.h ignore_verdict). `pattern` and `origin`
- * name the excluding rule when `ignored`; when `decided && !ignored` they name
- * the deepest rule that matched and excluded nothing (git reports no pattern at
- * all for that path), and no caller reads them there. `pattern` is the rule as
- * written (gitignore_rule_pattern), borrowed from the arena the rule was parsed
- * into — for a rule composed in from another ruleset
- * (gitignore_ruleset_append_rules), not this one's.
+ * Never fails; a path past 4096 bytes is copied to the heap, and let go before
+ * the answer. The rule is the set's own record, valid until the next append
+ * (gitignore_ruleset_find), and says the rest through its accessors: its pattern
+ * as written, its origin, its line. Readers: gitignore_is_ignored, for core/scope.c
+ * scope_is_excluded.
  *
- * @param ruleset Ruleset (must not be NULL)
- * @param path    Relative path (must not be NULL)
+ * @param ruleset Ruleset (can be NULL: no rule)
+ * @param path    Relative path (can be NULL: no rule)
  * @param is_dir  True if path refers to a directory
- * @param out     Match result (must not be NULL)
+ * @return The rule that excludes the path and its rung; NULL and 0 where none does
  */
-void gitignore_eval(
+gitignore_match_t gitignore_eval(
     const gitignore_ruleset_t *ruleset,
     const char *path,
-    bool is_dir,
-    gitignore_match_t *out
+    bool is_dir
 );
 
 /**
- * Ignored-verdict shortcut for callers that do not care about origin attribution.
- * Wraps gitignore_eval and returns the last-match-wins boolean — true iff a rule
- * decided the path is ignored.
+ * Does a rule exclude `path` — gitignore_eval's answer, for a caller that needs
+ * no more than whether?
  *
- * Negation-aware: when the winning rule is `!pattern`, returns false (the path
- * is un-ignored). When no rule matches, returns false.
+ * A negation is never the answer: when the last rule to match is `!pattern`,
+ * and no ancestor was excluded, the path is not. When no rule matches, it is not.
  *
  * Safe on NULL ruleset or NULL path (returns false). Never fails.
  *
  * @param ruleset Ruleset (can be NULL)
  * @param path    Relative path (can be NULL)
  * @param is_dir  True if path refers to a directory
- * @return true iff the ruleset's verdict is "ignored"
+ * @return true iff a rule excludes the path
  */
 bool gitignore_is_ignored(
     const gitignore_ruleset_t *ruleset,

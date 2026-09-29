@@ -42,19 +42,13 @@
  * length and the shortcuts above reach further. A *dangling* escape is kept rather
  * than dropped — the one shape where dropping it changed an answer.
  *
- * One deliberate difference from git, and it is this module's own: where a negated
- * ancestor ends git's report with no pattern at all, the rule is kept here as
- * `decided && !ignored`, which no reader turns on any longer — core/ignore's
- * ladder asks a rung at a time. The parity suite compares patterns only where
- * both answers ignore.
- *
- * And one at the door, which the parity suite cannot see, for it asks only about
- * files: git hands a command-line entry to its list unread (`ls-files -x '#foo'`
- * matches a file named `#foo`, `-x 'foo '` keeps the space, `-x ''` is taken
- * and matches nothing), where a pattern here is read as the line it would be in
- * a file, and refused where that line makes no rule, or opens with `~/`, which
- * git reads as a directory named `~` and its writer as home (validate_pattern;
- * gitignore.h says why).
+ * One deliberate difference from git, at the door, which the parity suite cannot
+ * see, for it asks only about files: git hands a command-line entry to its list
+ * unread (`ls-files -x '#foo'` matches a file named `#foo`, `-x 'foo '` keeps
+ * the space, `-x ''` is taken and matches nothing), where a pattern here is read
+ * as the line it would be in a file, and refused where that line makes no rule,
+ * or opens with `~/`, which git reads as a directory named `~` and its writer
+ * as home (validate_pattern; gitignore.h says why).
  *
  * What git has and this file must not take, for want of a subject: per-pattern
  * base/baselen (git reads a .gitignore per directory; dotta stores one at each
@@ -69,11 +63,11 @@
  * folded, as git reads one. ASCII's alone, which is all wildmatch folds.
  *
  * What is this file's own, which git has no need for: the per-rule origin tag,
- * the rule as written and its line kept for the verdict's report, arena lifetime
- * and the composition it allows (a ruleset's compiled rules copied into another,
- * their strings shared), `decided`, the rule parsed and asked alone that
- * infra/pathspec reads, and the selection program beside the exclusion one
- * (gitignore.h has both).
+ * the rule as written, its line and the rung it excluded, kept for the verdict's
+ * report, arena lifetime and the composition it allows (a ruleset's compiled
+ * rules copied into another, their strings shared), the rule parsed and asked
+ * alone that infra/pathspec reads, and the selection program beside the exclusion
+ * one (gitignore.h has both).
  *
  * Adaptations of shape only: drops macros, attributes and assignments
  * (gitignore-only, no gitattributes), drops the file-source abstraction — rules
@@ -580,6 +574,17 @@ static size_t copy_subject(char *dst, const char *path, bool *is_dir) {
     return len;
 }
 
+/* How far above the path a rung of the subject stands: the rungs beneath it,
+ * counted from `from` — where the next one begins — to the end, an empty component
+ * no rung. The subject copy_subject left ends in a component. */
+static size_t rungs_beneath(const char *from) {
+    size_t rungs = 0;
+    for (const char *c = from; *c; c++)
+        rungs += *c != '/' && (c == from || c[-1] == '/');
+
+    return rungs;
+}
+
 /* --- Public API ------------------------------------------------------ */
 
 gitignore_ruleset_t *gitignore_ruleset_create(arena_t *arena, gitignore_case_t casing) {
@@ -663,20 +668,13 @@ error_t gitignore_ruleset_append_rules(
     return NULL;
 }
 
-void gitignore_eval(
-    const gitignore_ruleset_t *set, const char *path, bool is_dir,
-    gitignore_match_t *out
+gitignore_match_t gitignore_eval(
+    const gitignore_ruleset_t *set, const char *path, bool is_dir
 ) {
-    if (!out)
-        return;
-
-    out->decided = false;
-    out->ignored = false;
-    out->origin = 0;
-    out->pattern = NULL;
+    gitignore_match_t match = { 0 };
 
     if (!set || !path)
-        return;
+        return match;
 
     /* Copy to a mutable, NUL-terminated buffer. The walk cuts the subject in
      * place at each `/` and restores it, so the buffer holds the whole path at
@@ -698,12 +696,9 @@ void gitignore_eval(
     /* Git's own order (dir.c: prep_exclude, then last_matching_pattern): every
      * ancestor of the path, shallowest first, and then the path itself. An excluded
      * directory is final — nothing beneath it can be re-included — so the first
-     * ancestor a rule excludes ends the walk and is the rule the verdict is
-     * reported under. An ancestor a rule *un*-excludes settles nothing about
-     * what lies beneath it; it is kept only so a caller can tell "our rules spoke"
-     * from "our rules were silent" (`decided`). */
-    const gitignore_rule_t *match = NULL;
-
+     * ancestor a rule excludes ends the walk and is the answer, standing as many
+     * rungs above the path as lie beneath it. An ancestor a rule *un*-excludes
+     * settles nothing about what lies beneath it, and the walk goes on. */
     size_t len = copy_subject(p, path, &is_dir);
 
     if (len > 0) {
@@ -714,41 +709,33 @@ void gitignore_eval(
                 continue;
             }
             *slash = '\0';
-            const gitignore_rule_t *rung = match_rung(
+            const gitignore_rule_t *rule = match_rung(
                 set, p, (size_t) (slash - p), base, true
             );
             *slash = '/';
             base = slash + 1;
 
-            if (rung) {
-                match = rung;
-                if (!(rung->flags & GITIGNORE_FLAG_NEGATIVE))
-                    goto cleanup;
+            if (rule && !(rule->flags & GITIGNORE_FLAG_NEGATIVE)) {
+                match = (gitignore_match_t){ rule, rungs_beneath(base) };
+                goto cleanup;
             }
         }
 
         const gitignore_rule_t *leaf = match_rung(set, p, len, base, is_dir);
-        if (leaf)
-            match = leaf;
+        if (leaf && !(leaf->flags & GITIGNORE_FLAG_NEGATIVE))
+            match.rule = leaf;
     }
 
 cleanup:
     free(heap);
 
-    if (match) {
-        out->decided = true;
-        out->ignored = !(match->flags & GITIGNORE_FLAG_NEGATIVE);
-        out->origin = match->origin;
-        out->pattern = match->pattern;
-    }
+    return match;
 }
 
 bool gitignore_is_ignored(
     const gitignore_ruleset_t *set, const char *path, bool is_dir
 ) {
-    gitignore_match_t m;
-    gitignore_eval(set, path, is_dir, &m);
-    return m.decided && m.ignored;
+    return gitignore_eval(set, path, is_dir).rule != NULL;
 }
 
 bool gitignore_is_selected(

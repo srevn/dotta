@@ -196,28 +196,35 @@ typedef struct {
 /**
  * What the filter made of the diverged items, in scope
  *
- * One walk partitions every in-scope item three ways. Accepted — the run's work:
- * a deployed item on the capture route, a deleted path, a new file under a tracked
- * directory when a flag or the config asked for it. Refused — a deployed item
- * on any other route (workspace_item_route), counted under that route so the
- * census names the table's own reason; a multi-bit divergence counts under the
- * route that refused it. Or neither — a state that is another verb's, and, under
- * --only-new, every deployed and deleted item: the user asked about new files,
- * nothing about the others answers that, so none is accepted and none is counted
- * (a refused route would name a reason the user did not ask for).
+ * One walk partitions every in-scope item four ways. Excluded — an -e pattern's,
+ * whatever the state rule would say of it: answered for the command's trace,
+ * and never touched. Accepted — the run's work: a deployed item on the capture
+ * route, a deleted path, a new file under a tracked directory when a flag or
+ * the config asked for it. Refused — a deployed item on any other route
+ * (workspace_item_route), counted under that route so the census names the table's
+ * own reason; a multi-bit divergence counts under the route that refused it. Or
+ * neither — a state that is another verb's, and, under --only-new, every deployed
+ * and deleted item: the user asked about new files, nothing about the others
+ * answers that, so none is accepted and none is counted (a refused route would
+ * name a reason the user did not ask for).
  *
- * The equation: in-scope deployed items = accepted deployed ∪ Σ refused[arm],
- * by one switch that routes each item once — nothing is counted twice, nothing
- * falls through. The UNVERIFIABLE arm keeps a second index beside it, for the
- * same reason the first one exists: one route, three ways out (workspace_fault_t),
- * and the census prints a line per class. Σ faults[f] == refused[UNVERIFIABLE],
- * and faults[NONE] is zero by the fold's invariant. CAPTURE's slot stays zero
- * (that arm is accepted) and CLEAN's (the diverged items hold no clean row);
- * REASSIGNED's counts a reassignment the census has no line for — apply
- * acknowledges it, the filter only declines it.
+ * The two lists are slices one classification fills (core/workspace.h
+ * workspace_buckets_t), each in the diverged items' order, in the arena the
+ * partition was made in — the items borrowed, the workspace's.
+ *
+ * The equation: in-scope deployed items no pattern spared = accepted deployed ∪
+ * Σ refused[arm], by one switch that routes each item once — nothing is counted
+ * twice, nothing falls through. The UNVERIFIABLE arm keeps a second index beside
+ * it, for the same reason the first one exists: one route, three ways out
+ * (workspace_fault_t), and the census prints a line per class. Σ faults[f] ==
+ * refused[UNVERIFIABLE], and faults[NONE] is zero by the fold's invariant.
+ * CAPTURE's slot stays zero (that arm is accepted) and CLEAN's (the diverged
+ * items hold no clean row); REASSIGNED's counts a reassignment the census has
+ * no line for — apply acknowledges it, the filter only declines it.
  */
 typedef struct {
-    workspace_items_t accepted;              /* The run's work; the spine is the arena's */
+    workspace_items_t accepted;              /* The run's work */
+    workspace_items_t excluded;              /* In scope, spared by -e — traced, never touched */
     size_t refused[WORKSPACE_ROUTE_COUNT];   /* In scope, deployed, refused — by the route that refused it */
     size_t faults[WORKSPACE_FAULT_COUNT];    /* The UNVERIFIABLE arm again — by whose remedy the look is */
 } partition_t;
@@ -227,21 +234,22 @@ typedef struct {
  *
  * The scope first: the profiles and paths the user named, then the patterns they
  * excluded — the order every scope reader asks in (core/scope.h
- * scope_accepts_entry) — each item a pattern spares logged. Then the state rule
- * under the flags, and for a deployed item the route: the partition (partition_t).
+ * scope_accepts_entry). Then the state rule under the flags, and for a deployed
+ * item the route: the partition (partition_t). It decides in silence: what it
+ * answers, the command says (cmd_update traces the excluded, as apply traces
+ * its plans').
  *
  * @param ws Workspace (must not be NULL)
  * @param opts Update options (must not be NULL)
  * @param scope Operation scope (must not be NULL)
- * @param out Output context, for the verbose "Excluded" log (must not be NULL)
- * @param arena Arena the accepted items' spine lives in (must not be NULL)
+ * @param arena Arena the partition's lists live in: the command's (must not be
+ *              NULL)
  * @param partition Output, zeroed then filled (must not be NULL)
  */
 static void update_partition(
     const workspace_t *ws,
     const cmd_update_options_t *opts,
     const scope_t *scope,
-    output_t *out,
     arena_t *arena,
     partition_t *partition
 ) {
@@ -253,9 +261,10 @@ static void update_partition(
 
     *partition = (partition_t){ 0 };
 
+    /* Each item is added to its list as the walk decides it, and both lists are
+     * filled once the walk is done — the arena's, beside the items they borrow */
     workspace_items_t diverged = workspace_diverged(ws);
-    ptr_array_t accepted;
-    ptr_array_init(&accepted, arena);
+    workspace_buckets_t *buckets = workspace_buckets_create(arena);
 
     for (size_t i = 0; i < diverged.count; i++) {
         const workspace_item_t *item = diverged.entries[i];
@@ -270,11 +279,11 @@ static void update_partition(
         }
 
         /* A pattern's, by the mount-relative name: asked apart from the two above
-         * so the arm keeps its verbose log, which is the pattern's — it fires
-         * for every item in scope the pattern hits, whatever the state rule would
-         * then say of it */
+         * because what it spares is answered — every item in scope the pattern
+         * hits, whatever the state rule would then say of it — for the command's
+         * trace */
         if (scope_is_excluded(scope, item->storage_path, item->item_kind)) {
-            output_info(out, OUTPUT_VERBOSE, "Excluded: %s", item->filesystem_path);
+            workspace_buckets_add(buckets, item, &partition->excluded);
             continue;
         }
 
@@ -322,13 +331,10 @@ static void update_partition(
                 continue;
         }
 
-        ptr_array_push(&accepted, item);
+        workspace_buckets_add(buckets, item, &partition->accepted);
     }
 
-    partition->accepted = (workspace_items_t){
-        .entries = (const workspace_item_t *const *) accepted.entries,
-        .count = accepted.count,
-    };
+    workspace_buckets_fill(buckets);
 }
 
 /**
@@ -1518,7 +1524,17 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     /* Partition the diverged items: the scope, the flags, and for a deployed
      * item the route table. */
     partition_t partition;
-    update_partition(ws, opts, scope, out, ctx->arena, &partition);
+    update_partition(ws, opts, scope, ctx->arena, &partition);
+
+    /* What the patterns spared, one verbose line each — as apply traces what
+     * its plans spared (output_info gates on the verbosity, so a normal run pays
+     * only the loop) */
+    for (size_t i = 0; i < partition.excluded.count; i++) {
+        output_info(
+            out, OUTPUT_VERBOSE, "Excluded: %s",
+            partition.excluded.entries[i]->filesystem_path
+        );
+    }
 
     /* What the filter refused, said once — above the exit below, so a workspace
      * whose only divergence is stale explains itself, and above the prompt. One

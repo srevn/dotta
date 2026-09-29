@@ -90,9 +90,8 @@ typedef struct {
 /* One directory's answer: the repository that governs it and where it stands
  * inside, or the failure that left it none. */
 typedef struct {
-    const char *place;                 /* The kernel's spelling, through its '/'; NULL with a failure */
     const repository_t *repository;    /* NULL: none governs it */
-    const char *prefix;                /* Where it stands in the workdir, a suffix of `place`; NULL: nowhere */
+    const char *prefix;                /* Where it stands in the workdir, a suffix of its key; NULL: nowhere */
     dev_t dev;                         /* Its filesystem, where the walk up stops */
     error_t failure;                   /* Why it has no answer; NULL when it has one */
 } directory_t;
@@ -554,13 +553,12 @@ static error_t source_discover(
  * reads as its parent reads (libgit2 walks past a level it cannot stat). Memoised
  * in the one map every spelling shares; the prefix points into the key.
  */
-static const directory_t *source_place(source_filter_t *f, const char *physical, size_t len) {
+static directory_t *source_place(source_filter_t *f, const char *physical, size_t len) {
     directory_t *d = hashmap_get_n(f->directories, physical, len);
     if (d) return d;
 
     char *key = arena_strndup(f->arena, physical, len);
     d = arena_calloc(f->arena, 1, sizeof(*d));
-    d->place = key;
 
     struct stat st;
     const repository_t *repository = NULL;
@@ -598,57 +596,71 @@ static const directory_t *source_place(source_filter_t *f, const char *physical,
 }
 
 /**
+ * The kernel's spelling of the directory `path`'s first `len` bytes spell, through
+ * its '/', into `physical` (2 × PATH_MAX bytes): the nearest directory at or
+ * above it that stands, resolved through the funnel — a directory a sudo'd walk
+ * entered is one it resolves — and what lies beneath that one, as spelled
+ *
+ * @return NULL, or why the spelling resolves to nothing
+ */
+static error_t source_physical(const char *path, size_t len, char *physical) {
+    /* realpath's own limit: a spelling past it names nothing the kernel resolves */
+    char spelled[PATH_MAX];
+    if (len >= sizeof(spelled)) {
+        return error_from_errno(ENAMETOOLONG, "Failed to resolve path '%.*s'", (int) len, path);
+    }
+    memcpy(spelled, path, len);
+    spelled[len] = '\0';
+
+    /* Cut back a directory at a time to the nearest one that stands: one frame,
+     * however much of the spelling is not made yet. A part not there, or a file
+     * where a directory would be, is not made yet (ENOENT, ENOTDIR); anything
+     * else is the spelling's failure, and so is a root that does not resolve. */
+    size_t stands = len;
+    while (!fs_realpath(spelled, physical)) {
+        if ((errno != ENOENT && errno != ENOTDIR) || stands == 1) {
+            return error_from_errno(errno, "Failed to resolve path '%s'", spelled);
+        }
+        stands = source_parent(spelled, stands);
+        spelled[stands] = '\0';
+    }
+
+    /* The part that stands, through its '/', and the rest as spelled: realpath's
+     * answer is under PATH_MAX, and so is the rest. */
+    size_t n = strlen(physical);
+    if (physical[n - 1] != '/') physical[n++] = '/';
+    memcpy(physical + n, path + stands, len - stands);
+    physical[n + len - stands] = '\0';
+
+    return NULL;
+}
+
+/**
  * The answer for the directory `path`'s first `len` bytes spell, through its
  * '/' — its kernel spelling's (source_place), resolved once per spelling
  *
  * A directory that is not there — `ignore --test` asks about a path before it
- * is made — is spelled as it will be once it is, beneath its parent's kernel
- * spelling, and reads as its parent reads until then: git's rules are the path's,
- * whether it stands or not. A spelling that resolves to nothing else is its own
- * failure.
+ * is made — is spelled as it will be once it is, beneath the kernel's spelling
+ * of the nearest one that stands, and reads as that one reads until then: git's
+ * rules are the path's, whether it stands or not. A spelling that resolves to
+ * nothing else is its own failure.
  */
 static const directory_t *source_directory(source_filter_t *f, const char *path, size_t len) {
     directory_t *d = hashmap_get_n(f->directories, path, len);
     if (d) return d;
 
-    /* The kernel's spelling, through the funnel: a directory a sudo'd walk entered
-     * is one it resolves. PATH_MAX for realpath, one more for the '/'. */
-    char spelled[PATH_MAX], physical[PATH_MAX + 1];
-    size_t n = (size_t) snprintf(spelled, sizeof(spelled), "%.*s", (int) len, path);
-
-    if (n >= sizeof(spelled)) {
+    char physical[2 * PATH_MAX];
+    error_t failure = source_physical(path, len, physical);
+    if (failure) {
         d = arena_calloc(f->arena, 1, sizeof(*d));
-        d->failure = error_from_errno(
-            ENAMETOOLONG, "Failed to resolve path '%.*s'", (int) len, path
-        );
-    } else if (fs_realpath(spelled, physical)) {
-        n = strlen(physical);
-        if (physical[n - 1] != '/') {
-            physical[n++] = '/';
-            physical[n] = '\0';
-        }
-        d = (directory_t *) source_place(f, physical, n);
+        d->failure = failure;
+    } else {
+        size_t n = strlen(physical);
+        d = source_place(f, physical, n);
 
         /* A spelling that is its own kernel's is the entry the walk up just made:
          * one key, never two. */
-        if (n == len && memcmp(physical, spelled, n) == 0) return d;
-    } else if ((errno == ENOENT || errno == ENOTDIR) && len > 1) {
-        /* Its parent's answer stands for it where the parent has none — a failure
-         * — and otherwise its own spelling beneath the parent's place does. */
-        size_t above = source_parent(spelled, len);
-        d = (directory_t *) source_directory(f, path, above);
-        if (d->place) {
-            n = (size_t) snprintf(physical, sizeof(physical), "%s%s", d->place, spelled + above);
-            if (n < sizeof(physical)) {
-                d = (directory_t *) source_place(f, physical, n);
-            } else {
-                d = arena_calloc(f->arena, 1, sizeof(*d));
-                d->failure = error_from_errno(ENAMETOOLONG, "Failed to resolve path '%s'", spelled);
-            }
-        }
-    } else {
-        d = arena_calloc(f->arena, 1, sizeof(*d));
-        d->failure = error_from_errno(errno, "Failed to resolve path '%s'", spelled);
+        if (n == len && memcmp(physical, path, n) == 0) return d;
     }
 
     hashmap_set(f->directories, arena_strndup(f->arena, path, len), d);

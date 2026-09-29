@@ -265,7 +265,10 @@ $(LIBDOTTA): $(LIB_OBJ)
 
 # Tests — the unit binaries live in the build type's tree beside the objects
 # they were linked from; under BUILD_TYPE=debug they are sanitizer binaries,
-# the runtime coming in through the same flags on the link.
+# the runtime coming in through the same flags on the link. They link with
+# -pthread, which a suite that runs an ask on a stack of its own needs
+# (tests/test-source.c stack_used) and a platform with its threads outside libc
+# (FreeBSD's libthr) needs said.
 TESTS_DIR := tests
 TESTS_BIN_DIR := $(BUILD_DIR)/tests
 TESTS_SRC := $(wildcard $(TESTS_DIR)/test-*.c)
@@ -277,7 +280,7 @@ $(TESTS_BIN_DIR):
 $(TESTS_BIN_DIR)/%: $(TESTS_DIR)/%.c $(LIBDOTTA) | $(TESTS_BIN_DIR)
 	@echo "CC TEST $<"
 	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) \
-	    $< $(LIBDOTTA) $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -o $@
+	    $< $(LIBDOTTA) $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -pthread -o $@
 
 # Suites are independent; run this many at a time (JOBS=1 keeps start order)
 JOBS ?= 8

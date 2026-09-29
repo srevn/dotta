@@ -11,9 +11,9 @@
 #include <string.h>
 #include <time.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/error.h"
-#include "base/heap.h"
 #include "base/output.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
@@ -336,37 +336,135 @@ static void status_print_workspace(
      * filtered profile that reads Clean still counts the divergence it hides. */
     if (diverged.count == 0 && !output_is_verbose(out)) return;
 
-    /* The status line, one fold whatever the filter: the diverged items the filter
-     * reaches, those of them dotta could not verify, and those it hides. A scope
-     * is Clean iff it reaches none. Invalid is reserved for what the analysis
-     * could not establish: an item carrying DIVERGENCE_UNVERIFIED (an unreadable
-     * path, a comparison that could not run, a Git probe that did not answer)
-     * is one no verb resolves by default — apply skips it and the user must look.
-     * Anything else it reaches is Dirty: work some verb takes, an orphan included
-     * — pending work, not an invalid workspace. With no filter every item is
-     * reached and none is hidden. */
-    size_t scoped_diverged = 0;
-    size_t scoped_unverified = 0;
-    size_t hidden_count = 0;
+    /* The status line, one fold whatever the filter: the diverged items shown,
+     * those of them dotta could not verify, and those the filter hides. A scope
+     * is Clean iff none is shown. Invalid is reserved for what the analysis could
+     * not establish: an item carrying DIVERGENCE_UNVERIFIED (an unreadable path,
+     * a comparison that could not run, a Git probe that did not answer) is one
+     * no verb resolves by default — apply skips it and the user must look. Anything
+     * else shown is Dirty: work some verb takes, an orphan included — pending
+     * work, not an invalid workspace. With no filter every item is shown and
+     * none is hidden. */
+    size_t shown = 0;
+    size_t unverified = 0;
+    size_t hidden = 0;
+
+    /* The sections, in the order they print: each item shown is added to its
+     * section's bucket as the walk decides it, and the nine are filled once the
+     * walk is done (core/workspace.h workspace_buckets_t). They are the printer's
+     * own, in a frame it frees once they are printed — nothing here outlives
+     * the call (include/runtime.h "Memory"). */
+    arena_t *frame = arena_create(0);
+    workspace_buckets_t *buckets = workspace_buckets_create(frame);
+
+    workspace_items_t conflicts = { 0 };
+    workspace_items_t squatted = { 0 };
+    workspace_items_t displaced = { 0 };
+    workspace_items_t unverifiable = { 0 };
+    workspace_items_t uncommitted = { 0 };
+    workspace_items_t reassigned = { 0 };
+    workspace_items_t undeployed = { 0 };
+    workspace_items_t new_files = { 0 };
+    workspace_items_t orphaned = { 0 };
 
     for (size_t i = 0; i < diverged.count; i++) {
         const workspace_item_t *item = diverged.entries[i];
 
+        /* Coherent Scope: under a profile filter only its profiles' items are
+         * shown, so status matches what apply would do; the rest are hidden,
+         * and counted beneath the sections */
         if (!scope_accepts_profile(scope, item->profile)) {
-            hidden_count++;
+            hidden++;
             continue;
         }
 
-        scoped_diverged++;
+        /* The fold counts every item shown, never a section's size: an unverified
+         * orphan lists under Issues and still makes the line Invalid */
+        shown++;
         if (item->divergence & DIVERGENCE_UNVERIFIED) {
-            scoped_unverified++;
+            unverified++;
+        }
+
+        switch (item->state) {
+            case WORKSPACE_STATE_DEPLOYED:
+                /* One bucket per route — the same table update's filter and skip
+                 * counter read (workspace_item_route), so no section promises a
+                 * verb the verb refuses */
+                switch (workspace_item_route(item)) {
+                    case WORKSPACE_ROUTE_DISPLACED_TRACKED:
+                    case WORKSPACE_ROUTE_DISPLACED_DERIVED:
+                        /* Not looked at, so no path bit of its own — the squatter's
+                         * section names the way out */
+                        workspace_buckets_add(buckets, item, &displaced);
+                        break;
+
+                    case WORKSPACE_ROUTE_CONFLICT:
+                    case WORKSPACE_ROUTE_KIND:
+                        /* Neither verb's by default — its own header names the
+                         * way out */
+                        workspace_buckets_add(buckets, item, &conflicts);
+                        break;
+
+                    case WORKSPACE_ROUTE_KIND_DERIVED:
+                        /* One verb and no decision — its own header names the
+                         * verb */
+                        workspace_buckets_add(buckets, item, &squatted);
+                        break;
+
+                    case WORKSPACE_ROUTE_UNVERIFIABLE:
+                        workspace_buckets_add(buckets, item, &unverifiable);
+                        break;
+
+                    case WORKSPACE_ROUTE_STALE:
+                        /* Apply's work, the same bucket as a path never deployed;
+                         * the [stale] tag says which */
+                        workspace_buckets_add(buckets, item, &undeployed);
+                        break;
+
+                    case WORKSPACE_ROUTE_CAPTURE:
+                        /* Real divergence → uncommitted changes */
+                        workspace_buckets_add(buckets, item, &uncommitted);
+                        break;
+
+                    case WORKSPACE_ROUTE_REASSIGNED:
+                        /* Pure profile reassignment (no filesystem divergence) */
+                        workspace_buckets_add(buckets, item, &reassigned);
+                        break;
+
+                    case WORKSPACE_ROUTE_CLEAN:
+                        /* None: a diverged item has something to say
+                         * (workspace_diverged), and the fold above counted each
+                         * one */
+                        break;
+                }
+                break;
+
+            case WORKSPACE_STATE_DELETED:
+                /* Deleted paths, either kind → uncommitted changes */
+                workspace_buckets_add(buckets, item, &uncommitted);
+                break;
+
+            case WORKSPACE_STATE_UNDEPLOYED:
+                workspace_buckets_add(buckets, item, &undeployed);
+                break;
+
+            case WORKSPACE_STATE_UNTRACKED:
+                workspace_buckets_add(buckets, item, &new_files);
+                break;
+
+            case WORKSPACE_STATE_ORPHANED:
+            case WORKSPACE_STATE_RELEASED:
+                workspace_buckets_add(buckets, item, &orphaned);
+                break;
         }
     }
+
+    workspace_buckets_fill(buckets);
 
     output_section(out, OUTPUT_NORMAL, "Workspace status");
 
     /* The line: the fold's decision, in the same words filtered or not */
-    if (scoped_diverged == 0) {
+    if (shown == 0) {
         /* Active paths the filter reaches, both kinds — what stands aligned at
          * a path is not a question about which kind stands there. With no filter
          * every item is accepted, so this is the whole view. Counted here, the
@@ -398,700 +496,575 @@ static void status_print_workspace(
                 "  Clean - all states aligned\n"
             );
         }
-    } else if (scoped_unverified > 0) {
+    } else if (unverified > 0) {
         output_colored(
             out, OUTPUT_NORMAL, OUTPUT_COLOR_RED,
             "  Invalid - %zu item%s dotta could not verify\n",
-            scoped_unverified, scoped_unverified == 1 ? "" : "s"
+            unverified, unverified == 1 ? "" : "s"
         );
     } else {
         output_colored(
             out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW,
             "  Dirty - %zu item%s diverged\n",
-            scoped_diverged, scoped_diverged == 1 ? "" : "s"
+            shown, shown == 1 ? "" : "s"
         );
     }
 
-    /* The sections: the diverged items the filter reaches */
-    if (scoped_diverged > 0) {
-        /* Single allocation for all category pointers (9 categories ×
-         * scoped_diverged slots, as many as a section can hold) Memory layout:
-         * [conflicts][unverifiable][uncommitted][undeployed][new_files]
-         * [orphaned][reassigned][squatted][displaced] This provides cache-friendly
-         * contiguous memory with a single allocation and free. */
-        const workspace_item_t **categorized =
-            heap_calloc(scoped_diverged, 9 * sizeof(workspace_item_t *));
+    /* Section 1: Conflicts — the buckets no default verb resolves lead; this
+     * one's header carries the remedy, true of every row beneath it (content
+     * moved on both sides, or a kind the copy cannot commit on a row a plan can
+     * hold — a squatted rung dotta only passes through has the next section,
+     * since no flag lifts it). `add --force` is qualified because it takes one
+     * of the two and not the other: a kind change is a re-shaping of the tree
+     * and add refuses it by the claim standing at the path, naming `dotta remove`
+     * (cmds/add.c) */
+    if (conflicts.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Conflicts",
+            "changed on both sides or a different kind on disk; "
+            "\"dotta diff\" to compare, \"dotta apply --force\" to "
+            "keep Git's, \"dotta add --force\" to keep disk's bytes "
+            "when the kind matches, \"dotta remove\" to untrack"
+        );
 
-        /* Category arrays (pointer arithmetic into single allocation) */
-        const workspace_item_t **conflicts = categorized;
-        const workspace_item_t **unverifiable = categorized + scoped_diverged;
-        const workspace_item_t **uncommitted = categorized + scoped_diverged * 2;
-        const workspace_item_t **undeployed = categorized + scoped_diverged * 3;
-        const workspace_item_t **new_files = categorized + scoped_diverged * 4;
-        const workspace_item_t **orphaned = categorized + scoped_diverged * 5;
-        const workspace_item_t **reassigned = categorized + scoped_diverged * 6;
-        const workspace_item_t **squatted = categorized + scoped_diverged * 7;
-        const workspace_item_t **displaced = categorized + scoped_diverged * 8;
+        for (size_t i = 0; i < conflicts.count; i++) {
+            const workspace_item_t *item = conflicts.entries[i];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256];
+            char path[PATH_MAX + 2];
 
-        size_t conflict_count = 0;
-        size_t unverifiable_count = 0;
-        size_t uncommitted_count = 0;
-        size_t undeployed_count = 0;
-        size_t new_count = 0;
-        size_t orphaned_count = 0;
-        size_t reassigned_count = 0;
-        size_t squatted_count = 0;
-        size_t displaced_count = 0;
-        for (size_t i = 0; i < diverged.count; i++) {
-            const workspace_item_t *item = diverged.entries[i];
+            if (workspace_item_tags(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                snprintf(
+                    path, sizeof(path), "%s%s", item->filesystem_path,
+                    path_kind_suffix(item->item_kind)
+                );
+                output_list_add(
+                    list, tags, tag_count, color, path, metadata
+                );
+            }
+        }
 
-            /* Apply profile filter if specified (Coherent Scope)
-             *
-             * When profile filter is active, only show items from matching
-             * profiles. This ensures status output matches what apply would do.
-             */
-            if (!scope_accepts_profile(scope, item->profile)) {
-                continue;  /* Skip items from other profiles */
+        output_list_render(list);
+        output_list_free(list);
+    }
+
+    /* Section 2: Squatted ancestors — a different kind stands at a directory
+     * dotta only passes through (the route's KIND_DERIVED): never planned, so
+     * no flag lifts it and no decision pends. One verb, the named re-derivation,
+     * in the words update's counted line already uses. */
+    if (squatted.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Squatted ancestors",
+            "a different kind stands at a directory dotta only passes "
+            "through; \"dotta update <dir>\" re-derives it"
+        );
+
+        for (size_t i = 0; i < squatted.count; i++) {
+            const workspace_item_t *item = squatted.entries[i];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256];
+            char path[PATH_MAX + 2];
+
+            if (workspace_item_tags(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                snprintf(
+                    path, sizeof(path), "%s%s", item->filesystem_path,
+                    path_kind_suffix(item->item_kind)
+                );
+                output_list_add(
+                    list, tags, tag_count, color, path, metadata
+                );
+            }
+        }
+
+        output_list_render(list);
+        output_list_free(list);
+    }
+
+    /* Section 3: Displaced paths — beneath a squatter one of the two sections
+     * above holds (the route's DISPLACED_* arms, the claimant's): nothing there
+     * was looked at, so the line shows [displaced] and only what no look decides
+     * or disproves beside it (the blob's verdict, a reassignment), and the header
+     * sends the user to the squatter, whose own section names its verb. The header
+     * opens with the predicate, as every sentence about such a path does, and
+     * spells the squatter out where the other four name it with the word — this
+     * is where the word is grounded (core/workspace.h workspace_displaced_t).
+     * Named by section rather than "above": under -p the squatter's row may be
+     * filtered while a child is not, and the bare status lists both. */
+    if (displaced.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Displaced paths",
+            "not looked at: a different kind stands at a directory above "
+            "them; resolve that directory first (\"dotta status\" lists "
+            "it under Conflicts or Squatted ancestors)"
+        );
+
+        for (size_t i = 0; i < displaced.count; i++) {
+            const workspace_item_t *item = displaced.entries[i];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256];
+            char path[PATH_MAX + 2];
+
+            if (workspace_item_tags(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                snprintf(
+                    path, sizeof(path), "%s%s", item->filesystem_path,
+                    path_kind_suffix(item->item_kind)
+                );
+                output_list_add(
+                    list, tags, tag_count, color, path, metadata
+                );
+            }
+        }
+
+        output_list_render(list);
+        output_list_free(list);
+    }
+
+    /* Section 4: Unverifiable paths — the other no-verb bucket: dotta could not
+     * look, so no verb is promised. The header says only that, and a key beneath
+     * names each failed look and its way out, one line per tag string the block
+     * shows — the Issues key's shape, for the reason that block has one: the
+     * tag is a word the reader has to be taught, and one sentence over three
+     * refusals is how a locked path came to be told to fix its permissions. A
+     * key rather than a closer because a closer speaks only for a class that
+     * has a remedy, and [unverified] has none — it would stand on the screen
+     * unexplained. */
+    if (unverifiable.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Unverifiable paths",
+            "dotta could not verify these paths"
+        );
+
+        /* Keyed by the exact tags the line shows, the way Issues is keyed, so
+         * the column below reads back against the one above. Three classes
+         * (workspace_fault_t), and the policy bit before the class and a pending
+         * reassignment after it can each ride on the line ([unencrypted]
+         * [unreadable] [reassigned]), so twelve keys bound the domain. */
+        struct { char tags[64]; const char *hint; } legend[12];
+        size_t legend_count = 0;
+        size_t legend_width = 0;
+
+        for (size_t i = 0; i < unverifiable.count; i++) {
+            const workspace_item_t *item = unverifiable.entries[i];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256];
+            char path[PATH_MAX + 2];
+
+            if (!workspace_item_tags(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                continue;
+            }
+            snprintf(
+                path, sizeof(path), "%s%s", item->filesystem_path,
+                path_kind_suffix(item->item_kind)
+            );
+            output_list_add(
+                list, tags, tag_count, color, path, metadata
+            );
+
+            /* What the failed look was, then the way out of it: a key for the
+             * locked rows, root for the unreadable ones and only where the run
+             * holds none. The residual class has no remedy to name — there is
+             * no one remedy for a foreign epoch, a cipher this build does not
+             * read and an I/O error — so its line names the verb that will print
+             * the cause instead. */
+            const char *hint = NULL;
+
+            switch (item->fault) {
+                case WORKSPACE_FAULT_LOCKED:
+                    hint = "encrypted, and no key opened it; "
+                        "'dotta key set' unlocks it";
+                    break;
+                case WORKSPACE_FAULT_UNREADABLE:
+                    hint = identity()->privileged
+                        ? "permissions refused the read"
+                        : "permissions refused the read; "
+                        "sudo would lift it";
+                    break;
+                case WORKSPACE_FAULT_NONE:
+                case WORKSPACE_FAULT_UNVERIFIED:
+                    hint = "no remedy dotta can name; the verb that "
+                        "meets it prints why";
+                    break;
             }
 
-            switch (item->state) {
-                case WORKSPACE_STATE_DEPLOYED:
-                    /* One bucket per route — the same table update's filter and
-                     * skip counter read (workspace_item_route), so no section
-                     * promises a verb the verb refuses */
-                    switch (workspace_item_route(item)) {
-                        case WORKSPACE_ROUTE_DISPLACED_TRACKED:
-                        case WORKSPACE_ROUTE_DISPLACED_DERIVED:
-                            /* Not looked at, so no path bit of its own — the
-                             * squatter's section names the way out */
-                            displaced[displaced_count++] = item;
-                            break;
+            /* Same bracketing and spacing the list gives the item line, so the
+             * column below matches the one above */
+            char key[64] = "";
+            for (size_t t = 0; t < tag_count; t++) {
+                size_t used = strlen(key);
+                snprintf(
+                    key + used, sizeof(key) - used, "%s[%s]",
+                    t > 0 ? " " : "", tags[t]
+                );
+            }
 
-                        case WORKSPACE_ROUTE_CONFLICT:
-                        case WORKSPACE_ROUTE_KIND:
-                            /* Neither verb's by default — its own header names
-                             * the way out */
-                            conflicts[conflict_count++] = item;
-                            break;
+            size_t slot = 0;
+            while (slot < legend_count && strcmp(legend[slot].tags, key) != 0) {
+                slot++;
+            }
+            if (slot == legend_count &&
+                legend_count < sizeof(legend) / sizeof(legend[0])) {
+                size_t len = strlen(key);
+                memcpy(legend[legend_count].tags, key, len + 1);
+                legend[legend_count].hint = hint;
+                legend_count++;
+                if (len > legend_width) legend_width = len;
+            }
+        }
 
-                        case WORKSPACE_ROUTE_KIND_DERIVED:
-                            /* One verb and no decision — its own header names
-                             * the verb */
-                            squatted[squatted_count++] = item;
-                            break;
+        output_list_render(list);
+        output_list_free(list);
 
-                        case WORKSPACE_ROUTE_UNVERIFIABLE:
-                            unverifiable[unverifiable_count++] = item;
-                            break;
+        if (legend_count > 0) {
+            output_gap(out, OUTPUT_NORMAL);
+            for (size_t i = 0; i < legend_count; i++) {
+                output_hintline(
+                    out, OUTPUT_NORMAL, "  %-*s - %s",
+                    (int) legend_width, legend[i].tags, legend[i].hint
+                );
+            }
+        }
+    }
 
-                        case WORKSPACE_ROUTE_STALE:
-                            /* Apply's work, the same bucket as a path never
-                             * deployed; the [stale] tag says which */
-                            undeployed[undeployed_count++] = item;
-                            break;
+    /* Section 5: Uncommitted Changes */
+    if (uncommitted.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Uncommitted changes",
+            "use \"dotta update\" to commit these changes"
+        );
 
-                        case WORKSPACE_ROUTE_CAPTURE:
-                            /* Real divergence → uncommitted changes */
-                            uncommitted[uncommitted_count++] = item;
-                            break;
+        for (size_t i = 0; i < uncommitted.count; i++) {
+            const workspace_item_t *item = uncommitted.entries[i];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256];
+            char path[PATH_MAX + 2];
 
-                        case WORKSPACE_ROUTE_REASSIGNED:
-                            /* Pure profile reassignment (no filesystem
-                             * divergence) */
-                            reassigned[reassigned_count++] = item;
-                            break;
+            if (workspace_item_tags(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                snprintf(
+                    path, sizeof(path), "%s%s", item->filesystem_path,
+                    path_kind_suffix(item->item_kind)
+                );
+                output_list_add(
+                    list, tags, tag_count, color, path, metadata
+                );
+            }
+        }
 
-                        case WORKSPACE_ROUTE_CLEAN:
-                            /* None: a diverged item has something to say
-                             * (workspace_diverged), and the line above counted
-                             * each one */
+        output_list_render(list);
+        output_list_free(list);
+    }
+
+    /* Section 6: Profile Reassignments */
+    if (reassigned.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Profile reassignments",
+            "run \"dotta apply\" to acknowledge"
+        );
+
+        for (size_t i = 0; i < reassigned.count; i++) {
+            const workspace_item_t *item = reassigned.entries[i];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256];
+            char path[PATH_MAX + 2];
+
+            if (workspace_item_tags(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                snprintf(
+                    path, sizeof(path), "%s%s", item->filesystem_path,
+                    path_kind_suffix(item->item_kind)
+                );
+                output_list_add(
+                    list, tags, tag_count, color, path, metadata
+                );
+            }
+        }
+
+        output_list_render(list);
+        output_list_free(list);
+    }
+
+    /* Section 7: Undeployed changes — apply's work, both kinds: what Git has
+     * and disk does not, a path apply is to create or a move of Git's disk has
+     * not followed ([stale]). Named as its twin, Uncommitted changes, is. */
+    if (undeployed.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Undeployed changes",
+            "use \"dotta apply\" to deploy these changes"
+        );
+
+        for (size_t i = 0; i < undeployed.count; i++) {
+            const workspace_item_t *item = undeployed.entries[i];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256];
+            char path[PATH_MAX + 2];
+
+            if (workspace_item_tags(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                snprintf(
+                    path, sizeof(path), "%s%s", item->filesystem_path,
+                    path_kind_suffix(item->item_kind)
+                );
+                output_list_add(
+                    list, tags, tag_count, color, path, metadata
+                );
+            }
+        }
+
+        output_list_render(list);
+        output_list_free(list);
+    }
+
+    /* Section 8: New Files */
+    if (new_files.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "New files",
+            "use \"dotta update --include-new\" to track these files"
+        );
+
+        for (size_t i = 0; i < new_files.count; i++) {
+            const workspace_item_t *item = new_files.entries[i];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256];
+            char path[PATH_MAX + 2];
+
+            if (workspace_item_tags(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                snprintf(
+                    path, sizeof(path), "%s%s", item->filesystem_path,
+                    path_kind_suffix(item->item_kind)
+                );
+                output_list_add(
+                    list, tags, tag_count, color, path, metadata
+                );
+            }
+        }
+
+        output_list_render(list);
+        output_list_free(list);
+    }
+
+    /* Section 9: Issues (orphaned) */
+    if (orphaned.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Issues",
+            "run \"dotta apply\" to prune orphaned paths"
+        );
+
+        /* The header promises a prune; a clean orphaned file gets one and needs
+         * no more words. Every other hint is keyed below by the exact tags its
+         * line shows, once per distinct tag string, so the key reads back against
+         * the list it follows. The verdict is cleanup's (cleanup_verdict, the
+         * one producer the preview reads too) — this only names it. PRUNABLE is
+         * the one verdict status cannot finish — the remainder and the run's
+         * reach are preflight's, from the disk — and the directory hint says
+         * so; it shares the bare [orphaned] key with the files, so the sentence
+         * is written to be true of both. */
+        struct { char tags[64]; const char *hint; } legend[16];
+        size_t legend_count = 0;
+        size_t legend_width = 0;
+
+        /* One sentence for every [relocated] key, wherever the verdict put the
+         * item — a pruned custom/ re-target and a skipped home move share the
+         * tag string across kinds and fates, so the sentence is written to be
+         * true of all of them, the way the bare [orphaned] key's is. */
+        static const char relocated_hint[] =
+            "the claim deploys elsewhere now (target or home moved); "
+            "apply prunes the old copy — a moved home holds it "
+            "behind --force";
+
+        for (size_t i = 0; i < orphaned.count; i++) {
+            const workspace_item_t *item = orphaned.entries[i];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256];
+            char path[PATH_MAX + 2];
+
+            if (!workspace_item_tags(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                continue;
+            }
+            snprintf(
+                path, sizeof(path), "%s%s", item->filesystem_path,
+                path_kind_suffix(item->item_kind)
+            );
+            output_list_add(
+                list, tags, tag_count, color, path, metadata
+            );
+
+            const char *hint = NULL;
+
+            switch (cleanup_verdict(item, false)) {
+                case CLEANUP_ABSENT:
+                    hint = "already gone from disk; apply reclaims its entry";
+                    break;
+
+                case CLEANUP_RELEASED:
+                    /* The displaced read comes first: such an item was never
+                     * looked at, so neither sibling sentence is true of it —
+                     * the same precedence the verdict's own arms take. The last
+                     * sentence is the bare [released] key's, which a file and a
+                     * directory share — the legend keeps the first hint a key
+                     * meets — so, like the bare [orphaned] key's, it is written
+                     * to be true of both and names no kind. */
+                    hint = item->displaced != WORKSPACE_DISPLACED_NONE
+                        ? "not looked at, beneath a squatted directory; "
+                        "apply releases its entry, the path stays"
+                        : (item->divergence & DIVERGENCE_TYPE)
+                        ? "what dotta put there is gone, another kind of "
+                        "path stands in its place; apply releases its "
+                        "entry, the path stays"
+                        : "its claim is no longer in Git, dotta never "
+                        "deployed it, or its record names it under another "
+                        "spelling of its path; apply releases its "
+                        "entry, the path stays";
+                    break;
+
+                case CLEANUP_SKIPPED:
+                    if (item->item_kind == PATH_KIND_DIRECTORY) {
+                        /* The two ways a directory reaches SKIPPED here
+                         * (force=false): the workspace could not verify it, or
+                         * the relocation skip — so the tail is the relocation,
+                         * no third way existing. Unverified is read first, which
+                         * is the file table's order and the inverse of
+                         * cleanup_verdict's arms, deliberately: --force lifts
+                         * the relocation skip and never the unverified bit, so
+                         * on a directory carrying both the failed look's wording
+                         * is the one that stays true. Worded by whose remedy it
+                         * is; a directory seals no content, so its failed look
+                         * is never the key's. */
+                        hint = (item->divergence & DIVERGENCE_UNVERIFIED)
+                            ? (item->fault == WORKSPACE_FAULT_UNREADABLE
+                               ? "cannot be read; apply skips it"
+                               : "could not be verified; apply skips it")
+                            : relocated_hint;
+                        break;
+                    }
+                    switch (cleanup_skip_reason(item)) {
+                        case CLEANUP_SKIP_UNVERIFIED:
+                            /* Worded by whose remedy the failed look is, so the
+                             * hint and the tag it is keyed by say the same thing
+                             * (workspace_fault_t). */
+                            switch (item->fault) {
+                                case WORKSPACE_FAULT_LOCKED:
+                                    hint = "encrypted, and no key opened it "
+                                        "('dotta key set'); apply skips it, "
+                                        "--force prunes it";
+                                    break;
+                                case WORKSPACE_FAULT_UNREADABLE:
+                                    hint = "cannot be read; "
+                                        "apply skips it, --force prunes it";
+                                    break;
+                                case WORKSPACE_FAULT_NONE:
+                                case WORKSPACE_FAULT_UNVERIFIED:
+                                    hint = "could not be verified; "
+                                        "apply skips it, --force prunes it";
+                                    break;
+                            }
+                            break;
+                        case CLEANUP_SKIP_RELOCATED:
+                            hint = relocated_hint;
+                            break;
+                        /* The key names what changed — [modified], [type], [mode],
+                         * [ownership] — so the hint says only that it did. */
+                        case CLEANUP_SKIP_MODIFIED:
+                        case CLEANUP_SKIP_TYPE_CHANGED:
+                        case CLEANUP_SKIP_CLAIM_CHANGED:
+                            hint = "changed since deployment; "
+                                "apply skips it, --force prunes it";
+                            break;
+                        case CLEANUP_SKIP_NONE:
                             break;
                     }
                     break;
 
-                case WORKSPACE_STATE_DELETED:
-                    /* Deleted files → uncommitted changes */
-                    uncommitted[uncommitted_count++] = item;
-                    break;
-
-                case WORKSPACE_STATE_UNDEPLOYED:
-                    undeployed[undeployed_count++] = item;
-                    break;
-
-                case WORKSPACE_STATE_UNTRACKED:
-                    new_files[new_count++] = item;
-                    break;
-
-                case WORKSPACE_STATE_ORPHANED:
-                case WORKSPACE_STATE_RELEASED:
-                    orphaned[orphaned_count++] = item;
+                case CLEANUP_PRUNABLE:
+                    if (item->relocation != WORKSPACE_RELOCATION_NONE) {
+                        hint = relocated_hint;
+                    } else if (item->item_kind == PATH_KIND_DIRECTORY) {
+                        hint = "apply prunes it; a directory still holding "
+                            "something not dotta's to remove is released "
+                            "instead";
+                    }
                     break;
             }
-        }
+            if (!hint) continue;
 
-        /* Section 1: Conflicts — the buckets no default verb resolves lead; this
-         * one's header carries the remedy, true of every row beneath it (content
-         * moved on both sides, or a kind the copy cannot commit on a row a plan
-         * can hold — a squatted rung dotta only passes through has the next
-         * section, since no flag lifts it). `add --force` is qualified because
-         * it takes one of the two and not the other: a kind change is a re-shaping
-         * of the tree and add refuses it by the claim standing at the path, naming
-         * `dotta remove` (cmds/add.c) */
-        if (conflict_count > 0) {
-            output_list_t *list = output_list_create(
-                out, "Conflicts",
-                "changed on both sides or a different kind on disk; "
-                "\"dotta diff\" to compare, \"dotta apply --force\" to "
-                "keep Git's, \"dotta add --force\" to keep disk's bytes "
-                "when the kind matches, \"dotta remove\" to untrack"
-            );
-
-            for (size_t i = 0; i < conflict_count; i++) {
-                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                size_t tag_count;
-                output_color_t color;
-                char metadata[256];
-                char path[PATH_MAX + 2];
-
-                if (workspace_item_tags(
-                    conflicts[i], tags, &tag_count,
-                    &color, metadata, sizeof(metadata)
-                    )) {
-                    snprintf(
-                        path, sizeof(path), "%s%s", conflicts[i]->filesystem_path,
-                        path_kind_suffix(conflicts[i]->item_kind)
-                    );
-                    output_list_add(
-                        list, tags, tag_count, color, path, metadata
-                    );
-                }
-            }
-
-            output_list_render(list);
-            output_list_free(list);
-        }
-
-        /* Section 2: Squatted ancestors — a different kind stands at a directory
-         * dotta only passes through (the route's KIND_DERIVED): never planned,
-         * so no flag lifts it and no decision pends. One verb, the named
-         * re-derivation, in the words update's counted line already uses. */
-        if (squatted_count > 0) {
-            output_list_t *list = output_list_create(
-                out, "Squatted ancestors",
-                "a different kind stands at a directory dotta only passes "
-                "through; \"dotta update <dir>\" re-derives it"
-            );
-
-            for (size_t i = 0; i < squatted_count; i++) {
-                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                size_t tag_count;
-                output_color_t color;
-                char metadata[256];
-                char path[PATH_MAX + 2];
-
-                if (workspace_item_tags(
-                    squatted[i], tags, &tag_count,
-                    &color, metadata, sizeof(metadata)
-                    )) {
-                    snprintf(
-                        path, sizeof(path), "%s%s", squatted[i]->filesystem_path,
-                        path_kind_suffix(squatted[i]->item_kind)
-                    );
-                    output_list_add(
-                        list, tags, tag_count, color, path, metadata
-                    );
-                }
-            }
-
-            output_list_render(list);
-            output_list_free(list);
-        }
-
-        /* Section 3: Displaced paths — beneath a squatter one of the two sections
-         * above holds (the route's DISPLACED_* arms, the claimant's): nothing
-         * there was looked at, so the line shows [displaced] and only what no
-         * look decides or disproves beside it (the blob's verdict, a reassignment),
-         * and the header sends the user to the squatter, whose own section names
-         * its verb. The header opens with the predicate, as every sentence about
-         * such a path does, and spells the squatter out where the other four
-         * name it with the word — this is where the word is grounded
-         * (core/workspace.h workspace_displaced_t). Named by section rather than
-         * "above": under -p the squatter's row may be filtered while a child is
-         * not, and the bare status lists both. */
-        if (displaced_count > 0) {
-            output_list_t *list = output_list_create(
-                out, "Displaced paths",
-                "not looked at: a different kind stands at a directory above "
-                "them; resolve that directory first (\"dotta status\" lists "
-                "it under Conflicts or Squatted ancestors)"
-            );
-
-            for (size_t i = 0; i < displaced_count; i++) {
-                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                size_t tag_count;
-                output_color_t color;
-                char metadata[256];
-                char path[PATH_MAX + 2];
-
-                if (workspace_item_tags(
-                    displaced[i], tags, &tag_count,
-                    &color, metadata, sizeof(metadata)
-                    )) {
-                    snprintf(
-                        path, sizeof(path), "%s%s", displaced[i]->filesystem_path,
-                        path_kind_suffix(displaced[i]->item_kind)
-                    );
-                    output_list_add(
-                        list, tags, tag_count, color, path, metadata
-                    );
-                }
-            }
-
-            output_list_render(list);
-            output_list_free(list);
-        }
-
-        /* Section 4: Unverifiable paths — the other no-verb bucket: dotta could
-         * not look, so no verb is promised. The header says only that, and a
-         * key beneath names each failed look and its way out, one line per tag
-         * string the block shows — the Issues key's shape, for the reason that
-         * block has one: the tag is a word the reader has to be taught, and one
-         * sentence over three refusals is how a locked path came to be told to
-         * fix its permissions. A key rather than a closer because a closer speaks
-         * only for a class that has a remedy, and [unverified] has none — it
-         * would stand on the screen unexplained. */
-        if (unverifiable_count > 0) {
-            output_list_t *list = output_list_create(
-                out, "Unverifiable paths",
-                "dotta could not verify these paths"
-            );
-
-            /* Keyed by the exact tags the line shows, the way Issues is keyed,
-             * so the column below reads back against the one above. Three classes
-             * (workspace_fault_t), and the policy bit before the class and a
-             * pending reassignment after it can each ride on the line
-             * ([unencrypted] [unreadable] [reassigned]), so twelve keys bound
-             * the domain. */
-            struct { char tags[64]; const char *hint; } legend[12];
-            size_t legend_count = 0;
-            size_t legend_width = 0;
-
-            for (size_t i = 0; i < unverifiable_count; i++) {
-                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                size_t tag_count;
-                output_color_t color;
-                char metadata[256];
-                char path[PATH_MAX + 2];
-
-                if (!workspace_item_tags(
-                    unverifiable[i], tags, &tag_count,
-                    &color, metadata, sizeof(metadata)
-                    )) {
-                    continue;
-                }
+            /* Same bracketing and spacing the list gives the item line, so the
+             * column below matches the one above */
+            char key[64] = "";
+            for (size_t t = 0; t < tag_count; t++) {
+                size_t used = strlen(key);
                 snprintf(
-                    path, sizeof(path), "%s%s", unverifiable[i]->filesystem_path,
-                    path_kind_suffix(unverifiable[i]->item_kind)
+                    key + used, sizeof(key) - used, "%s[%s]",
+                    t > 0 ? " " : "", tags[t]
                 );
-                output_list_add(
-                    list, tags, tag_count, color, path, metadata
+            }
+
+            size_t slot = 0;
+            while (slot < legend_count && strcmp(legend[slot].tags, key) != 0) {
+                slot++;
+            }
+            if (slot == legend_count && legend_count < 16) {
+                size_t len = strlen(key);
+                memcpy(legend[legend_count].tags, key, len + 1);
+                legend[legend_count].hint = hint;
+                legend_count++;
+                if (len > legend_width) legend_width = len;
+            }
+        }
+
+        output_list_render(list);
+        output_list_free(list);
+
+        if (legend_count > 0) {
+            output_gap(out, OUTPUT_NORMAL);
+            for (size_t i = 0; i < legend_count; i++) {
+                output_hintline(
+                    out, OUTPUT_NORMAL, "  %-*s - %s",
+                    (int) legend_width, legend[i].tags, legend[i].hint
                 );
-
-                /* What the failed look was, then the way out of it: a key for
-                 * the locked rows, root for the unreadable ones and only where
-                 * the run holds none. The residual class has no remedy to name
-                 * — there is no one remedy for a foreign epoch, a cipher this
-                 * build does not read and an I/O error — so its line names the
-                 * verb that will print the cause instead. */
-                const char *hint = NULL;
-
-                switch (unverifiable[i]->fault) {
-                    case WORKSPACE_FAULT_LOCKED:
-                        hint = "encrypted, and no key opened it; "
-                            "'dotta key set' unlocks it";
-                        break;
-                    case WORKSPACE_FAULT_UNREADABLE:
-                        hint = identity()->privileged
-                            ? "permissions refused the read"
-                            : "permissions refused the read; "
-                            "sudo would lift it";
-                        break;
-                    case WORKSPACE_FAULT_NONE:
-                    case WORKSPACE_FAULT_UNVERIFIED:
-                        hint = "no remedy dotta can name; the verb that "
-                            "meets it prints why";
-                        break;
-                }
-
-                /* Same bracketing and spacing the list gives the item line, so
-                 * the column below matches the one above */
-                char key[64] = "";
-                for (size_t t = 0; t < tag_count; t++) {
-                    size_t used = strlen(key);
-                    snprintf(
-                        key + used, sizeof(key) - used, "%s[%s]",
-                        t > 0 ? " " : "", tags[t]
-                    );
-                }
-
-                size_t slot = 0;
-                while (slot < legend_count && strcmp(legend[slot].tags, key) != 0) {
-                    slot++;
-                }
-                if (slot == legend_count &&
-                    legend_count < sizeof(legend) / sizeof(legend[0])) {
-                    size_t len = strlen(key);
-                    memcpy(legend[legend_count].tags, key, len + 1);
-                    legend[legend_count].hint = hint;
-                    legend_count++;
-                    if (len > legend_width) legend_width = len;
-                }
-            }
-
-            output_list_render(list);
-            output_list_free(list);
-
-            if (legend_count > 0) {
-                output_gap(out, OUTPUT_NORMAL);
-                for (size_t i = 0; i < legend_count; i++) {
-                    output_hintline(
-                        out, OUTPUT_NORMAL, "  %-*s - %s",
-                        (int) legend_width, legend[i].tags, legend[i].hint
-                    );
-                }
             }
         }
-
-        /* Section 5: Uncommitted Changes */
-        if (uncommitted_count > 0) {
-            output_list_t *list = output_list_create(
-                out, "Uncommitted changes",
-                "use \"dotta update\" to commit these changes"
-            );
-
-            for (size_t i = 0; i < uncommitted_count; i++) {
-                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                size_t tag_count;
-                output_color_t color;
-                char metadata[256];
-                char path[PATH_MAX + 2];
-
-                if (workspace_item_tags(
-                    uncommitted[i], tags, &tag_count,
-                    &color, metadata, sizeof(metadata)
-                    )) {
-                    snprintf(
-                        path, sizeof(path), "%s%s", uncommitted[i]->filesystem_path,
-                        path_kind_suffix(uncommitted[i]->item_kind)
-                    );
-                    output_list_add(
-                        list, tags, tag_count, color, path, metadata
-                    );
-                }
-            }
-
-            output_list_render(list);
-            output_list_free(list);
-        }
-
-        /* Section 6: Profile Reassignments */
-        if (reassigned_count > 0) {
-            output_list_t *list = output_list_create(
-                out, "Profile reassignments",
-                "run \"dotta apply\" to acknowledge"
-            );
-
-            for (size_t i = 0; i < reassigned_count; i++) {
-                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                size_t tag_count;
-                output_color_t color;
-                char metadata[256];
-                char path[PATH_MAX + 2];
-
-                if (workspace_item_tags(
-                    reassigned[i], tags, &tag_count,
-                    &color, metadata, sizeof(metadata)
-                    )) {
-                    snprintf(
-                        path, sizeof(path), "%s%s", reassigned[i]->filesystem_path,
-                        path_kind_suffix(reassigned[i]->item_kind)
-                    );
-                    output_list_add(
-                        list, tags, tag_count, color, path, metadata
-                    );
-                }
-            }
-
-            output_list_render(list);
-            output_list_free(list);
-        }
-
-        /* Section 7: Undeployed changes — apply's work, both kinds: what Git
-         * has and disk does not, a path apply is to create or a move of Git's
-         * disk has not followed ([stale]). Named as its twin, Uncommitted changes,
-         * is. */
-        if (undeployed_count > 0) {
-            output_list_t *list = output_list_create(
-                out, "Undeployed changes",
-                "use \"dotta apply\" to deploy these changes"
-            );
-
-            for (size_t i = 0; i < undeployed_count; i++) {
-                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                size_t tag_count;
-                output_color_t color;
-                char metadata[256];
-                char path[PATH_MAX + 2];
-
-                if (workspace_item_tags(
-                    undeployed[i], tags, &tag_count,
-                    &color, metadata, sizeof(metadata)
-                    )) {
-                    snprintf(
-                        path, sizeof(path), "%s%s", undeployed[i]->filesystem_path,
-                        path_kind_suffix(undeployed[i]->item_kind)
-                    );
-                    output_list_add(
-                        list, tags, tag_count, color, path, metadata
-                    );
-                }
-            }
-
-            output_list_render(list);
-            output_list_free(list);
-        }
-
-        /* Section 8: New Files */
-        if (new_count > 0) {
-            output_list_t *list = output_list_create(
-                out, "New files",
-                "use \"dotta update --include-new\" to track these files"
-            );
-
-            for (size_t i = 0; i < new_count; i++) {
-                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                size_t tag_count;
-                output_color_t color;
-                char metadata[256];
-                char path[PATH_MAX + 2];
-
-                if (workspace_item_tags(
-                    new_files[i], tags, &tag_count,
-                    &color, metadata, sizeof(metadata)
-                    )) {
-                    snprintf(
-                        path, sizeof(path), "%s%s", new_files[i]->filesystem_path,
-                        path_kind_suffix(new_files[i]->item_kind)
-                    );
-                    output_list_add(
-                        list, tags, tag_count, color, path, metadata
-                    );
-                }
-            }
-
-            output_list_render(list);
-            output_list_free(list);
-        }
-
-        /* Section 9: Issues (orphaned) */
-        if (orphaned_count > 0) {
-            output_list_t *list = output_list_create(
-                out, "Issues",
-                "run \"dotta apply\" to prune orphaned paths"
-            );
-
-            /* The header promises a prune; a clean orphaned file gets one and
-             * needs no more words. Every other hint is keyed below by the exact
-             * tags its line shows, once per distinct tag string, so the key reads
-             * back against the list it follows. The verdict is cleanup's
-             * (cleanup_verdict, the one producer the preview reads too) — this
-             * only names it. PRUNABLE is the one verdict status cannot finish —
-             * the remainder and the run's reach are preflight's, from the disk
-             * — and the directory hint says so; it shares the bare [orphaned]
-             * key with the files, so the sentence is written to be true of both. */
-            struct { char tags[64]; const char *hint; } legend[16];
-            size_t legend_count = 0;
-            size_t legend_width = 0;
-
-            /* One sentence for every [relocated] key, wherever the verdict put
-             * the item — a pruned custom/ re-target and a skipped home move share
-             * the tag string across kinds and fates, so the sentence is written
-             * to be true of all of them, the way the bare [orphaned] key's is. */
-            static const char relocated_hint[] =
-                "the claim deploys elsewhere now (target or home moved); "
-                "apply prunes the old copy — a moved home holds it "
-                "behind --force";
-
-            for (size_t i = 0; i < orphaned_count; i++) {
-                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                size_t tag_count;
-                output_color_t color;
-                char metadata[256];
-                char path[PATH_MAX + 2];
-
-                if (!workspace_item_tags(
-                    orphaned[i], tags, &tag_count,
-                    &color, metadata, sizeof(metadata)
-                    )) {
-                    continue;
-                }
-                snprintf(
-                    path, sizeof(path), "%s%s", orphaned[i]->filesystem_path,
-                    path_kind_suffix(orphaned[i]->item_kind)
-                );
-                output_list_add(
-                    list, tags, tag_count, color, path, metadata
-                );
-
-                const char *hint = NULL;
-                bool is_dir = (orphaned[i]->item_kind == PATH_KIND_DIRECTORY);
-
-                switch (cleanup_verdict(orphaned[i], false)) {
-                    case CLEANUP_ABSENT:
-                        hint = "already gone from disk; apply reclaims its entry";
-                        break;
-
-                    case CLEANUP_RELEASED:
-                        /* The displaced read comes first: such an item was never
-                         * looked at, so neither sibling sentence is true of it
-                         * — the same precedence the verdict's own arms take.
-                         * The last sentence is the bare [released] key's, which
-                         * a file and a directory share — the legend keeps the
-                         * first hint a key meets — so, like the bare [orphaned]
-                         * key's, it is written to be true of both and names no
-                         * kind. */
-                        hint = orphaned[i]->displaced != WORKSPACE_DISPLACED_NONE
-                            ? "not looked at, beneath a squatted directory; "
-                            "apply releases its entry, the path stays"
-                            : (orphaned[i]->divergence & DIVERGENCE_TYPE)
-                            ? "what dotta put there is gone, another kind of "
-                            "path stands in its place; apply releases its "
-                            "entry, the path stays"
-                            : "its claim is no longer in Git, dotta never "
-                            "deployed it, or its record names it under another "
-                            "spelling of its path; apply releases its "
-                            "entry, the path stays";
-                        break;
-
-                    case CLEANUP_SKIPPED:
-                        if (is_dir) {
-                            /* The two ways a directory reaches SKIPPED here
-                             * (force=false): the workspace could not verify it,
-                             * or the relocation skip — so the tail is the
-                             * relocation, no third way existing. Unverified is
-                             * read first, which is the file table's order and
-                             * the inverse of cleanup_verdict's arms, deliberately:
-                             * --force lifts the relocation skip and never the
-                             * unverified bit, so on a directory carrying both
-                             * the failed look's wording is the one that stays
-                             * true. Worded by whose remedy it is; a directory
-                             * seals no content, so its failed look is never the
-                             * key's. */
-                            hint = (orphaned[i]->divergence & DIVERGENCE_UNVERIFIED)
-                                ? (orphaned[i]->fault == WORKSPACE_FAULT_UNREADABLE
-                                   ? "cannot be read; apply skips it"
-                                   : "could not be verified; apply skips it")
-                                : relocated_hint;
-                            break;
-                        }
-                        switch (cleanup_skip_reason(orphaned[i])) {
-                            case CLEANUP_SKIP_UNVERIFIED:
-                                /* Worded by whose remedy the failed look is, so
-                                 * the hint and the tag it is keyed by say the
-                                 * same thing (workspace_fault_t). */
-                                switch (orphaned[i]->fault) {
-                                    case WORKSPACE_FAULT_LOCKED:
-                                        hint = "encrypted, and no key opened it "
-                                            "('dotta key set'); apply skips it, "
-                                            "--force prunes it";
-                                        break;
-                                    case WORKSPACE_FAULT_UNREADABLE:
-                                        hint = "cannot be read; "
-                                            "apply skips it, --force prunes it";
-                                        break;
-                                    case WORKSPACE_FAULT_NONE:
-                                    case WORKSPACE_FAULT_UNVERIFIED:
-                                        hint = "could not be verified; "
-                                            "apply skips it, --force prunes it";
-                                        break;
-                                }
-                                break;
-                            case CLEANUP_SKIP_RELOCATED:
-                                hint = relocated_hint;
-                                break;
-                            /* The key names what changed — [modified], [type],
-                             * [mode], [ownership] — so the hint says only that
-                             * it did. */
-                            case CLEANUP_SKIP_MODIFIED:
-                            case CLEANUP_SKIP_TYPE_CHANGED:
-                            case CLEANUP_SKIP_CLAIM_CHANGED:
-                                hint = "changed since deployment; "
-                                    "apply skips it, --force prunes it";
-                                break;
-                            case CLEANUP_SKIP_NONE:
-                                break;
-                        }
-                        break;
-
-                    case CLEANUP_PRUNABLE:
-                        if (orphaned[i]->relocation != WORKSPACE_RELOCATION_NONE) {
-                            hint = relocated_hint;
-                        } else if (is_dir) {
-                            hint = "apply prunes it; a directory still holding "
-                                "something not dotta's to remove is released "
-                                "instead";
-                        }
-                        break;
-                }
-                if (!hint) continue;
-
-                /* Same bracketing and spacing the list gives the item line, so
-                 * the column below matches the one above */
-                char key[64] = "";
-                for (size_t t = 0; t < tag_count; t++) {
-                    size_t used = strlen(key);
-                    snprintf(
-                        key + used, sizeof(key) - used, "%s[%s]",
-                        t > 0 ? " " : "", tags[t]
-                    );
-                }
-
-                size_t slot = 0;
-                while (slot < legend_count && strcmp(legend[slot].tags, key) != 0) {
-                    slot++;
-                }
-                if (slot == legend_count && legend_count < 16) {
-                    size_t len = strlen(key);
-                    memcpy(legend[legend_count].tags, key, len + 1);
-                    legend[legend_count].hint = hint;
-                    legend_count++;
-                    if (len > legend_width) legend_width = len;
-                }
-            }
-
-            output_list_render(list);
-            output_list_free(list);
-
-            if (legend_count > 0) {
-                output_gap(out, OUTPUT_NORMAL);
-                for (size_t i = 0; i < legend_count; i++) {
-                    output_hintline(
-                        out, OUTPUT_NORMAL, "  %-*s - %s",
-                        (int) legend_width, legend[i].tags, legend[i].hint
-                    );
-                }
-            }
-        }
-
-        /* Cleanup (single free for all category arrays) */
-        free(categorized);
     }
 
+    /* The sections are printed, and their frame goes with them */
+    arena_free(frame);
+
     /* The diverged items the filter hides, counted */
-    if (hidden_count > 0) {
+    if (hidden > 0) {
         output_styled(
             out, OUTPUT_NORMAL, "  {dim}(%zu item%s hidden){reset}\n",
-            hidden_count, hidden_count == 1 ? "" : "s"
+            hidden, hidden == 1 ? "" : "s"
         );
     }
 }

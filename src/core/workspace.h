@@ -739,8 +739,9 @@ static inline divergence_type_t workspace_claims_moved(
  *   workspace_directories, workspace_files), and the diverged items
  *   (workspace_diverged) — borrow for the workspace's life;
  * - a classification's buckets (workspace_buckets_t: deploy's plan, core/deploy.h
- *   deploy_partition_t; cleanup's plan and verdicts, core/cleanup.h) point into
- *   arrays in the arena its buckets were made in;
+ *   deploy_partition_t; cleanup's plan and verdicts, core/cleanup.h; status's
+ *   sections, cmds/status.c status_print_workspace) point into arrays in the
+ *   arena its buckets were made in;
  * - update's filters lend a spine in the arena the caller named.
  * The items are the workspace's however long a slice lives. Nothing frees a slice.
  */
@@ -1130,8 +1131,8 @@ workspace_items_t workspace_directories(const workspace_t *ws);
  * (core/deploy.h deploy_preflight_t, the receipts).
  *
  * Readers: core/deploy.c deploy_plan_build (through deploy_classify),
- * core/cleanup.c cleanup_plan_build and cleanup_preflight. A reader not on this
- * list is a bug.
+ * core/cleanup.c cleanup_plan_build and cleanup_preflight, cmds/status.c
+ * status_print_workspace. A reader not on this list is a bug.
  */
 typedef struct workspace_buckets workspace_buckets_t;
 

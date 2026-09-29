@@ -470,8 +470,9 @@ typedef struct dotta_run {
  *         refspecs (`sys/gitops.c` gitops_fetch_branches), a diff's attribution
  *         index (`core/manifest.c` manifest_diff), a listing read to decide
  *         (`sys/filesystem.c` fs_remove_empty_dir, `sys/gitops.c`
- *         gitops_branch_blocker, `infra/epoch.c` walk_ciphertext), and a walk
- *         whose answer is an error (`sys/filesystem.c` fs_remove_dir).
+ *         gitops_branch_blocker, `infra/epoch.c` walk_ciphertext), a printer's
+ *         sections (`cmds/status.c` status_print_workspace), and a walk whose
+ *         answer is an error (`sys/filesystem.c` fs_remove_dir).
  *
  *       - A handle's own. Made by its opener and freed by its closer: the sheet
  *         (core/metadata.h), a printer's list (base/output.h output_list_t).

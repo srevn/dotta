@@ -135,27 +135,6 @@ static error_t update_capture(
 }
 
 /**
- * The plan's shape, counted once
- *
- * Filled by one walk over the partition's accepted items; the preview gates its
- * sections on these and the new-files prompt binds on new_files. Buckets follow
- * the preview's sections: the modified fate splits by kind (a directory's
- * modification is a claim recapture, not a content commit), deleted deliberately
- * does not (a deleted directory is a deletion), and the deployed files split by
- * what diverged (core/workspace.h divergence_type_t): a path bit is a modification,
- * the blob bit, ENCRYPTION, is a policy violation. A file with both kinds of
- * bit counts in both; a violator with nothing changed on disk counts only as a
- * violation — it is committed for the re-store, not for a modification.
- */
-typedef struct {
-    size_t modified_files;  /* DEPLOYED files with a path bit: divergent content or metadata */
-    size_t new_files;       /* UNTRACKED files from tracked directories */
-    size_t deleted;         /* DELETED paths, both kinds */
-    size_t modified_dirs;   /* DEPLOYED directories: claim capture */
-    size_t encryption;      /* DEPLOYED policy violators (a path bit beside it or alone) */
-} counts_t;
-
-/**
  * What one profile's update commit did, path by path
  *
  * Filled by the walk that does the work — one writer per item: the capture for
@@ -208,7 +187,17 @@ typedef struct {
  * answers that, so none is accepted and none is counted (a refused route would
  * name a reason the user did not ask for).
  *
- * The two lists are slices one classification fills (core/workspace.h
+ * An accepted item is answered by its fate as well — the preview lists one section
+ * per fate, and the new-files prompt counts new_files. The modified fate splits
+ * by kind (a directory's modification is a claim recapture, not a content commit),
+ * deleted deliberately does not (a deleted directory is a deletion), and the
+ * deployed files split by what diverged (core/workspace.h divergence_type_t): a
+ * path bit is a modification, the blob bit, ENCRYPTION, a policy violation. A
+ * file with both kinds of bit is in both; a violator with nothing changed on
+ * disk only among the violations — it is committed for the re-store, not for a
+ * modification. So every accepted item has a fate, and a file may have two.
+ *
+ * The lists are slices one classification fills (core/workspace.h
  * workspace_buckets_t), each in the diverged items' order, in the arena the
  * partition was made in — the items borrowed, the workspace's.
  *
@@ -224,6 +213,14 @@ typedef struct {
  */
 typedef struct {
     workspace_items_t accepted;              /* The run's work */
+
+    /* The accepted items by fate, in the preview's order */
+    workspace_items_t modified_files;        /* DEPLOYED files with a path bit: divergent content or metadata */
+    workspace_items_t new_files;             /* UNTRACKED files from tracked directories */
+    workspace_items_t deleted;               /* DELETED paths, both kinds */
+    workspace_items_t modified_dirs;         /* DEPLOYED directories: claim capture */
+    workspace_items_t unencrypted;           /* DEPLOYED policy violators (a path bit beside it or alone) */
+
     workspace_items_t excluded;              /* In scope, spared by -e — traced, never touched */
     size_t refused[WORKSPACE_ROUTE_COUNT];   /* In scope, deployed, refused — by the route that refused it */
     size_t faults[WORKSPACE_FAULT_COUNT];    /* The UNVERIFIABLE arm again — by whose remedy the look is */
@@ -261,7 +258,7 @@ static void update_partition(
 
     *partition = (partition_t){ 0 };
 
-    /* Each item is added to its list as the walk decides it, and both lists are
+    /* Each item is added to its lists as the walk decides it, and every list is
      * filled once the walk is done — the arena's, beside the items they borrow */
     workspace_items_t diverged = workspace_diverged(ws);
     workspace_buckets_t *buckets = workspace_buckets_create(arena);
@@ -306,13 +303,31 @@ static void update_partition(
                     }
                     continue;
                 }
+
+                /* The capture's fate: a directory's is its claim; a file's is
+                 * what diverged — a path bit a modification, the ENCRYPTION bit
+                 * a violation, so a file with both is both, and a violator nothing
+                 * changed on disk only a violation */
+                if (item->item_kind == PATH_KIND_DIRECTORY) {
+                    workspace_buckets_add(buckets, item, &partition->modified_dirs);
+                } else {
+                    if ((item->divergence & ~DIVERGENCE_ENCRYPTION) != DIVERGENCE_NONE) {
+                        workspace_buckets_add(buckets, item, &partition->modified_files);
+                    }
+                    if (item->divergence & DIVERGENCE_ENCRYPTION) {
+                        workspace_buckets_add(buckets, item, &partition->unencrypted);
+                    }
+                }
                 break;
             }
 
             case WORKSPACE_STATE_DELETED:
                 /* Removed from disk since deployment: the deletion is update's
-                 * to commit, unless the user asked about new files alone */
+                 * to commit, unless the user asked about new files alone. One
+                 * fate for both kinds, and a deleted violator is a deletion too:
+                 * its commit resolves the violation by removing the plaintext. */
                 if (opts->only_new) continue;
+                workspace_buckets_add(buckets, item, &partition->deleted);
                 break;
 
             case WORKSPACE_STATE_UNTRACKED:
@@ -320,6 +335,7 @@ static void update_partition(
                  * load found one: it scans only where the run asked for new files
                  * — by flag (--include-new, --only-new), or by config, for the
                  * consent prompt (cmd_update's analyze_untracked) */
+                workspace_buckets_add(buckets, item, &partition->new_files);
                 break;
 
             case WORKSPACE_STATE_UNDEPLOYED:
@@ -1151,45 +1167,30 @@ static error_t update_execute(
 /**
  * Render the preview: the run's work, grouped by fate
  *
- * One section per fate — modified, new, deleted (both kinds), directory claims,
- * encryption violations — each gated on the plan's counts, every hint speaking
- * update's own voice: what this run will do. A dry run renders identically; whether
- * anything was written is the summary's one line at the end of the run, not the
- * preview's.
+ * One section per fate the partition answered — modified, new, deleted (both
+ * kinds), directory claims, encryption violations — each listing its fate's items
+ * and none when it holds none, every hint speaking update's own voice: what this
+ * run will do. A dry run renders identically; whether anything was written is
+ * the summary's one line at the end of the run, not the preview's.
  *
  * @param out Output context (must not be NULL)
- * @param items The accepted items (may be NULL when item_count is 0: a named
- *              run whose rows all held still has nothing to preview — its filter
- *              context printed ahead of the census)
- * @param item_count Number of items
- * @param counts The accepted items counted by fate (must not be NULL)
+ * @param partition The partition, whose fates are read (must not be NULL; a named
+ *                  run whose rows all held still has none to preview — its filter
+ *                  context printed ahead of the census)
  */
-static void update_print_preview(
-    output_t *out,
-    const workspace_item_t **items,
-    size_t item_count,
-    const counts_t *counts
-) {
+static void update_print_preview(output_t *out, const partition_t *partition) {
     CHECK_NULL(out);
-    CHECK_NULL(counts);
+    CHECK_NULL(partition);
 
     /* Display modified files section */
-    if (counts->modified_files > 0) {
+    if (partition->modified_files.count > 0) {
         output_list_t *list = output_list_create(
             out, "Modified files",
             "will be committed to their profiles"
         );
 
-        for (size_t i = 0; i < item_count; i++) {
-            const workspace_item_t *item = items[i];
-
-            /* The counted set: a DEPLOYED file with a path bit. An ENCRYPTION-only
-             * violator lists in the policy section below. */
-            if (item->item_kind != PATH_KIND_FILE ||
-                item->state != WORKSPACE_STATE_DEPLOYED ||
-                (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
-                continue;
-            }
+        for (size_t i = 0; i < partition->modified_files.count; i++) {
+            const workspace_item_t *item = partition->modified_files.entries[i];
 
             /* Extract tags using shared helper */
             const char *tags[WORKSPACE_ITEM_MAX_TAGS];
@@ -1215,32 +1216,28 @@ static void update_print_preview(
     }
 
     /* Display new files section */
-    if (counts->new_files > 0) {
+    if (partition->new_files.count > 0) {
         output_list_t *list = output_list_create(
             out, "New files",
             "will be added to their profiles"
         );
 
-        for (size_t i = 0; i < item_count; i++) {
-            const workspace_item_t *item = items[i];
+        for (size_t i = 0; i < partition->new_files.count; i++) {
+            const workspace_item_t *item = partition->new_files.entries[i];
 
-            if (item->item_kind == PATH_KIND_FILE &&
-                item->state == WORKSPACE_STATE_UNTRACKED
-            ) {
-                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                size_t tag_count;
-                output_color_t color;
-                char metadata[256];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256];
 
-                if (workspace_item_tags(
-                    item, tags, &tag_count, &color,
-                    metadata, sizeof(metadata)
-                    )) {
-                    output_list_add(
-                        list, tags, tag_count, color,
-                        item->filesystem_path, metadata
-                    );
-                }
+            if (workspace_item_tags(
+                item, tags, &tag_count, &color,
+                metadata, sizeof(metadata)
+                )) {
+                output_list_add(
+                    list, tags, tag_count, color,
+                    item->filesystem_path, metadata
+                );
             }
         }
 
@@ -1251,18 +1248,14 @@ static void update_print_preview(
     /* Display deleted paths section — one fate, both kinds: a deleted directory
      * is a deletion, so it lists beside the deleted files rather than under a
      * section that promises a metadata update */
-    if (counts->deleted > 0) {
+    if (partition->deleted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Deleted paths",
             "will be removed from their profiles"
         );
 
-        for (size_t i = 0; i < item_count; i++) {
-            const workspace_item_t *item = items[i];
-
-            if (item->state != WORKSPACE_STATE_DELETED) {
-                continue;
-            }
+        for (size_t i = 0; i < partition->deleted.count; i++) {
+            const workspace_item_t *item = partition->deleted.entries[i];
 
             const char *tags[WORKSPACE_ITEM_MAX_TAGS];
             size_t tag_count;
@@ -1308,19 +1301,14 @@ static void update_print_preview(
     }
 
     /* Display modified directories section */
-    if (counts->modified_dirs > 0) {
+    if (partition->modified_dirs.count > 0) {
         output_list_t *list = output_list_create(
             out, "Modified directories",
             "directory metadata will be updated"
         );
 
-        for (size_t i = 0; i < item_count; i++) {
-            const workspace_item_t *item = items[i];
-
-            if (item->item_kind != PATH_KIND_DIRECTORY ||
-                item->state == WORKSPACE_STATE_DELETED) {
-                continue;
-            }
+        for (size_t i = 0; i < partition->modified_dirs.count; i++) {
+            const workspace_item_t *item = partition->modified_dirs.entries[i];
 
             /* Extract tags and metadata using helper */
             const char *tags[WORKSPACE_ITEM_MAX_TAGS];
@@ -1358,23 +1346,14 @@ static void update_print_preview(
     }
 
     /* Display encryption policy violations section */
-    if (counts->encryption > 0) {
+    if (partition->unencrypted.count > 0) {
         output_list_t *list = output_list_create(
             out, "Encryption policy violations",
             "match auto-encrypt patterns but are stored as plaintext"
         );
 
-        for (size_t i = 0; i < item_count; i++) {
-            const workspace_item_t *item = items[i];
-
-            /* DEPLOYED violators only — the set the section's count gated on: a
-             * deleted violator is in the deleted section, and its commit resolves
-             * the violation by removing the plaintext. */
-            if (item->item_kind != PATH_KIND_FILE ||
-                item->state != WORKSPACE_STATE_DEPLOYED ||
-                !(item->divergence & DIVERGENCE_ENCRYPTION)) {
-                continue;
-            }
+        for (size_t i = 0; i < partition->unencrypted.count; i++) {
+            const workspace_item_t *item = partition->unencrypted.entries[i];
 
             char metadata[512];
             snprintf(
@@ -1688,37 +1667,9 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         return NULL;
     }
 
-    /* The plan's shape, counted once: the preview gates its sections on these
-     * and the new-files prompt binds on new_files */
-    counts_t counts = { 0 };
-    for (size_t i = 0; i < partition.accepted.count; i++) {
-        const workspace_item_t *item = partition.accepted.entries[i];
-
-        if (item->state == WORKSPACE_STATE_DELETED) {
-            counts.deleted++;
-        } else if (item->item_kind == PATH_KIND_DIRECTORY) {
-            counts.modified_dirs++;
-        } else if (item->state == WORKSPACE_STATE_UNTRACKED) {
-            counts.new_files++;
-        } else {
-            /* A DEPLOYED file on the capture route, counted by what diverged: a
-             * path bit is a modification, the ENCRYPTION bit a violation, and a
-             * violator with nothing changed on disk is not a modified file —
-             * the policy section alone names it. */
-            if ((item->divergence & ~DIVERGENCE_ENCRYPTION) != DIVERGENCE_NONE) {
-                counts.modified_files++;
-            }
-            if (item->divergence & DIVERGENCE_ENCRYPTION) {
-                counts.encryption++;
-            }
-        }
-    }
-
-    /* Preview: what this run will do, grouped by fate */
-    update_print_preview(
-        out, (const workspace_item_t **) partition.accepted.entries,
-        partition.accepted.count, &counts
-    );
+    /* Preview: what this run will do, grouped by the fates the partition
+     * answered */
+    update_print_preview(out, &partition);
 
     /* The hooks fire around the work — after the nothing-exit (a no-op run fires
      * nothing), before the prompt: apply's order. The preview's verdicts predate
@@ -1751,14 +1702,14 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * left is asked the nothing-exit's own question, so a named run whose
          * only accepted items were new files still re-derives the chains it
          * named. */
-        if (counts.new_files > 0 && config->confirm_new_files &&
+        if (partition.new_files.count > 0 && config->confirm_new_files &&
             !opts->include_new && !opts->only_new) {
 
             char confirm_msg[128];
             snprintf(
                 confirm_msg, sizeof(confirm_msg), "Found %zu new file%s. Add %s to profiles?",
-                counts.new_files, counts.new_files == 1 ? "" : "s",
-                counts.new_files == 1 ? "it" : "them"
+                partition.new_files.count, partition.new_files.count == 1 ? "" : "s",
+                partition.new_files.count == 1 ? "it" : "them"
             );
             if (!output_confirm(out, confirm_msg, false)) {
                 const workspace_item_t **writable =

@@ -1099,14 +1099,15 @@ workspace_items_t workspace_directories(const workspace_t *ws);
 /**
  * The buckets a classification of the workspace's items fills
  *
- * A producer that classifies items — each into one bucket of its answer, or into
- * none — adds each item to its bucket as it decides it, the bucket named by the
- * slice it will be: a field of the result the producer returns, or a local. Once
- * the last is added, the fill sets every bucket's slice over its items, in the
- * order they were added — a stable grouping, with no comparator and no path order.
- * So a classification spells its buckets once, as its answer's own slices: no
- * container per bucket, no cast, and the slice every reader holds
- * (workspace_items_t).
+ * A producer that classifies items — each into the buckets of its answer that
+ * hold it: one, several (update's partition lists an item as the run's work and
+ * again by its fate), or none — adds each item to its buckets as it decides it,
+ * a bucket named by the slice it will be: a field of the result the producer
+ * returns, or a local. Once the last is added, the fill sets every bucket's slice
+ * over its items, in the order they were added — a stable grouping, with no
+ * comparator and no path order. So a classification spells its buckets once, as
+ * its answer's own slices: no container per bucket, no cast, and the slice every
+ * reader holds (workspace_items_t).
  *
  * What the producer owes the construction:
  *   - a slice is empty ({ 0 }) when first added to, and belongs to these buckets

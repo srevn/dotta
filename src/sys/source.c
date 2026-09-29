@@ -309,37 +309,44 @@ static const file_t *source_gitignore(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Add one file to the configuration at `level`. A file the invoker cannot read
- * is absent, as to git: libgit2 answers GIT_ENOTFOUND for one (config_file_open),
- * and its own repository open reads that as absent too (repository.c load_config).
+ * Add one file to the configuration at `level`. A file that is not there is absent.
+ * One there that the invoker cannot read — libgit2 answers GIT_ENOTFOUND for it
+ * (config_file_open) — is the repository's failure where it is its own, as git
+ * refuses the repository (config.c do_git_config_sequence, access_or_die), and
+ * absent where it is the machine's, as git skips a global or XDG file it cannot
+ * read. git refuses its system file too, but the one libgit2 finds is libgit2's
+ * (/etc), which need not be git's, so it is read as the machine's.
  *
- * @return 0, or libgit2's error for a file that does not parse
+ * @return NULL, or why the file could not be read: one that does not parse, or
+ *         one of the repository's own that the invoker cannot read
  */
-static int source_config(git_config *config, const char *path, git_config_level_t level) {
+static error_t source_config(git_config *config, const char *path, git_config_level_t level) {
     int rc = git_config_add_file_ondisk(config, path, level, NULL, 0);
+    if (rc != GIT_ENOTFOUND) return rc < 0 ? error_from_git(rc) : NULL;
 
-    return rc == GIT_ENOTFOUND ? 0 : rc;
+    return level >= GIT_CONFIG_LEVEL_LOCAL
+        ? error_from_errno(EACCES, "Failed to read '%s'", path) : NULL;
 }
 
 /**
  * A boolean of the configuration; false where it is not set.
  *
- * @return 0, or libgit2's error for a value that does not parse
+ * @return NULL, or libgit2's error for a value that does not parse
  */
-static int source_bool(git_config *config, const char *key, bool *out) {
+static error_t source_bool(git_config *config, const char *key, bool *out) {
     int value = 0;
     int rc = git_config_get_bool(&value, config, key);
 
     *out = rc == 0 && value;
-    return rc == GIT_ENOTFOUND ? 0 : rc;
+    return rc < 0 && rc != GIT_ENOTFOUND ? error_from_git(rc) : NULL;
 }
 
 /**
  * A string of the configuration, into the arena; NULL where it is not set.
  *
- * @return 0, or libgit2's error
+ * @return NULL, or libgit2's error
  */
-static int source_string(
+static error_t source_string(
     source_filter_t *f, git_config *config, const char *key, const char **out
 ) {
     git_buf value = GIT_BUF_INIT;
@@ -347,7 +354,7 @@ static int source_string(
 
     *out = rc == 0 ? arena_strdup(f->arena, value.ptr) : NULL;
     git_buf_dispose(&value);
-    return rc == GIT_ENOTFOUND ? 0 : rc;
+    return rc < 0 && rc != GIT_ENOTFOUND ? error_from_git(rc) : NULL;
 }
 
 /**
@@ -382,7 +389,9 @@ static const repository_t *source_repository(
     /* One configuration, read whole and let go before anything is answered. An
      * extension is the repository's own, so its file is asked alone whether a
      * worktree's is read (git's check_repository_format reads nothing else); a
-     * file that does not parse is libgit2's error, naming the file. */
+     * file that does not parse is libgit2's error, naming the file, and one of
+     * the repository's own that the invoker cannot read is its failure
+     * (source_config). */
     static const struct {
         int (*find)(git_buf *path);
         git_config_level_t level;
@@ -395,31 +404,34 @@ static const repository_t *source_repository(
 
     git_config *config = NULL;
     int rc = git_config_new(&config);
-    if (rc == 0) {
-        rc = source_config(
-            config, arena_str_format(f->arena, "%sconfig", commondir), GIT_CONFIG_LEVEL_LOCAL
-        );
+    if (rc < 0) {
+        r->failure = error_from_git(rc);
+        return r;
     }
-    if (rc == 0) rc = source_bool(config, "extensions.worktreeconfig", &worktree_config);
-    if (rc == 0 && worktree_config) {
-        rc = source_config(
+
+    error_t err = source_config(
+        config, arena_str_format(f->arena, "%sconfig", commondir), GIT_CONFIG_LEVEL_LOCAL
+    );
+    if (!err) err = source_bool(config, "extensions.worktreeconfig", &worktree_config);
+    if (!err && worktree_config) {
+        err = source_config(
             config, arena_str_format(f->arena, "%sconfig.worktree", gitdir),
             GIT_CONFIG_LEVEL_WORKTREE
         );
     }
-    for (size_t i = 0; rc == 0 && i < sizeof(levels) / sizeof(levels[0]); i++) {
+    for (size_t i = 0; !err && i < sizeof(levels) / sizeof(levels[0]); i++) {
         git_buf path = GIT_BUF_INIT;
-        if (levels[i].find(&path) == 0) rc = source_config(config, path.ptr, levels[i].level);
+        if (levels[i].find(&path) == 0) err = source_config(config, path.ptr, levels[i].level);
         git_buf_dispose(&path);
     }
-    if (rc == 0) rc = source_bool(config, "core.bare", &bare);
-    if (rc == 0) rc = source_bool(config, "core.ignorecase", &ignorecase);
-    if (rc == 0) rc = source_string(f, config, "core.worktree", &worktree);
-    if (rc == 0) rc = source_string(f, config, "core.excludesfile", &excludesfile);
+    if (!err) err = source_bool(config, "core.bare", &bare);
+    if (!err) err = source_bool(config, "core.ignorecase", &ignorecase);
+    if (!err) err = source_string(f, config, "core.worktree", &worktree);
+    if (!err) err = source_string(f, config, "core.excludesfile", &excludesfile);
     git_config_free(config);
 
-    if (rc < 0) {
-        r->failure = error_from_git(rc);
+    if (err) {
+        r->failure = err;
         return r;
     }
 
@@ -464,7 +476,7 @@ static const repository_t *source_repository(
         );
     } else if (*excludesfile) {
         const char *path = NULL;
-        error_t err = fs_expand_tilde(excludesfile, f->arena, &path);
+        err = fs_expand_tilde(excludesfile, f->arena, &path);
         if (err) {
             r->excludes_file.failure = error_wrap(err, "Failed to read core.excludesFile");
         } else {

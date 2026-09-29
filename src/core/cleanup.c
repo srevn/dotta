@@ -36,26 +36,6 @@
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Order two orphaned directories deepest first
- *
- * Descending path length, then ascending path so the order is total and the reports
- * are reproducible.
- */
-static int cleanup_depth_order(const void *a, const void *b) {
-    const char *pa = (*(const workspace_item_t *const *) a)->filesystem_path;
-    const char *pb = (*(const workspace_item_t *const *) b)->filesystem_path;
-
-    size_t la = strlen(pa);
-    size_t lb = strlen(pb);
-
-    if (la != lb) {
-        return (la < lb) ? 1 : -1;
-    }
-
-    return strcmp(pa, pb);
-}
-
-/**
  * Build the cleanup plan
  */
 cleanup_plan_t *cleanup_plan_build(
@@ -111,23 +91,6 @@ cleanup_plan_t *cleanup_plan_build(
         } else {
             ptr_array_push(&plan->files, item);
         }
-    }
-
-    /* Deepest first, established once. A child's path is its parent's path plus
-     * a separator and a name, so it is strictly longer; descending length therefore
-     * places every directory after its own descendants, and two paths of equal
-     * length can never be parent and child. That order is what lets a single
-     * pass decide a directory whose emptiness depends on its children — no second
-     * look, no iterating to a fixpoint.
-     *
-     * Established here rather than borrowed from the state layer's ORDER BY
-     * filesystem_path: it is this module's correctness that rests on it, and a
-     * producer two layers away is free to change its sort. */
-    if (plan->directories.count > 1) {
-        qsort(
-            plan->directories.entries, plan->directories.count,
-            sizeof(*plan->directories.entries), cleanup_depth_order
-        );
     }
 
     return plan;
@@ -253,6 +216,26 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
 
     return (!force && cleanup_skip_reason(item) != CLEANUP_SKIP_NONE)
         ? CLEANUP_SKIPPED : CLEANUP_PRUNABLE;
+}
+
+/**
+ * Order two orphaned directories deepest first
+ *
+ * Descending path length, then ascending path so the order is total and the reports
+ * are reproducible.
+ */
+static int cleanup_depth_order(const void *a, const void *b) {
+    const char *pa = (*(const workspace_item_t *const *) a)->filesystem_path;
+    const char *pb = (*(const workspace_item_t *const *) b)->filesystem_path;
+
+    size_t la = strlen(pa);
+    size_t lb = strlen(pb);
+
+    if (la != lb) {
+        return (la < lb) ? 1 : -1;
+    }
+
+    return strcmp(pa, pb);
 }
 
 /**
@@ -456,20 +439,33 @@ cleanup_preflight_t *cleanup_preflight(
         }
     }
 
+    /* The directories deepest first, sorted here once, on a copy of the pass's
+     * own: a child's path is its parent's plus a separator and a name, so it is
+     * strictly longer, and descending length decides every directory after all
+     * of those beneath it — two paths of one length are never parent and child.
+     * The pass whose correctness rests on the order establishes it, rather than
+     * borrow the plan's (the workspace's) or the state layer's ORDER BY
+     * filesystem_path beneath that, which a producer two layers away is free to
+     * change. At a count of zero the arena still answers a place of its own,
+     * which is all qsort asks of an empty base. */
+    size_t dir_count = plan->directories.count;
+    const workspace_item_t **dirs = arena_calloc(arena, dir_count, sizeof(*dirs));
+
+    for (size_t i = 0; i < dir_count; i++) dirs[i] = plan->directories.entries[i];
+    qsort(dirs, dir_count, sizeof(*dirs), cleanup_depth_order);
+
     /* A directory's verdict is the strongest class left in it once this run has
      * acted (fate_t): prunable when everything in it is OS metadata or gone;
      * skipped while something skipped is left; released once something permanent
-     * is. That is what the prune arrives at by acting, read off the plan here
-     * in one pass because the plan orders every child before its parent — a
-     * directory's own fate enters the set as it is decided, which is what lets
-     * a parent read each child's class off the set: its pruned children gone,
-     * its skipped ones skipped, its released ones permanent.
+     * is. That is what the prune arrives at by acting, read here in one pass —
+     * no second look, no iterating to a fixpoint: a directory's own fate enters
+     * the set as it is decided, which is what lets a parent read each child's
+     * class off the set — its pruned children gone, its skipped ones skipped,
+     * its released ones permanent.
      *
      * The buckets fill in walk order: deepest first. */
-    workspace_items_t dirs = workspace_items(&plan->directories);
-
-    for (size_t i = 0; i < dirs.count; i++) {
-        const workspace_item_t *item = dirs.entries[i];
+    for (size_t i = 0; i < dir_count; i++) {
+        const workspace_item_t *item = dirs[i];
         const char *path = item->filesystem_path;
         fate_t fate = FATE_UNPLANNED;
 
@@ -557,7 +553,7 @@ cleanup_preflight_t *cleanup_preflight(
  * is re-checked here and nothing pretends to be.
  *
  * Files first, then the directories those files emptied, deepest first, in the
- * verdicts' order (the plan's): every child's turn comes before its parent's,
+ * verdicts' order (the preflight's): every child's turn comes before its parent's,
  * so a parent this run empties is seen empty when its own comes — the whole reason
  * the old iterate-until-stable loop existed.
  *

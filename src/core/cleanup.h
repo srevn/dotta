@@ -51,7 +51,7 @@
  *   that names the parent and closes with the sudo line — the shape deploy's
  *   PERMISSION skip has on the other engine
  *
- * Directory pruning is one deepest-first pass, ordered by the plan. Children
+ * Directory pruning is one deepest-first pass, ordered by the preflight. Children
  * are decided before parents, so a parent emptied by its children needs no second
  * look and the preview predicts the outcome the prune arrives at.
  *
@@ -96,13 +96,13 @@
  * directory the filter does not cover stays, and the next run that covers it
  * prunes it.
  *
- * `directories` is sorted deepest-first here, once, so preflight predicts and
- * execute prunes in the same order. A value of the arena it was built in: nothing
- * frees one.
+ * Each bucket keeps the order the workspace lends its diverged items in: the
+ * preflight orders the directories it walks (cleanup_preflight). A value of the
+ * arena it was built in: nothing frees one.
  */
 typedef struct {
     ptr_array_t files;         /* ORPHANED / RELEASED file items in scope */
-    ptr_array_t directories;   /* ORPHANED / RELEASED directory items in scope, deepest first */
+    ptr_array_t directories;   /* ORPHANED / RELEASED directory items in scope */
     ptr_array_t excluded;      /* Both kinds, spared by -e — reported, never touched */
 } cleanup_plan_t;
 
@@ -414,13 +414,14 @@ typedef struct {
  *
  * Files: cleanup_verdict from the item — every field it reads was written at
  * workspace load — then, for a prunable one, the parent's reach (one fs_eaccess).
- * Directories: cleanup_verdict from the item likewise (a released or unverified
- * directory is left alone, unprobed), then for each candidate the view (an active
- * path beneath it) and one readdir, against the files above, the directories
- * already decided beneath them, and — for an entry outside the plan — its workspace
- * item; then, for one nothing but gone entries is left in, the parent's reach.
- * The reach is asked last, of what the run would otherwise remove: a directory
- * a permanent entry keeps is released whoever owns its parent.
+ * Directories, deepest first — an order this pass establishes (cleanup.c
+ * cleanup_depth_order): cleanup_verdict from the item likewise (a released or
+ * unverified directory is left alone, unprobed), then for each candidate the
+ * view (an active path beneath it) and one readdir, against the files above,
+ * the directories already decided beneath them, and — for an entry outside the
+ * plan — its workspace item; then, for one nothing but gone entries is left in,
+ * the parent's reach. The reach is asked last, of what the run would otherwise
+ * remove: a directory a permanent entry keeps is released whoever owns its parent.
  *
  * READ-ONLY: modifies neither the filesystem, the state database nor Git.
  *

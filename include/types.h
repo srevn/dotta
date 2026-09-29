@@ -83,6 +83,11 @@ typedef struct {
 
 /**
  * Pointer array - borrowed pointers, the spine in the arena it was made in
+ *
+ * Each slot holds a void *: a reader converts every slot it reads to its own
+ * type (`const T *x = arr.entries[i]`), and nothing reads the spine as a T ** —
+ * a cast of entries, or a comparator that sorts it through one. C11 §6.5p7 admits
+ * no access to a void * through another pointer type.
  */
 typedef struct {
     void **entries;

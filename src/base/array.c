@@ -173,8 +173,9 @@ void ptr_array_push(ptr_array_t *arr, const void *p) {
         arr->arena, arr->entries, &arr->capacity, arr->count + 1, sizeof(*arr->entries)
     );
 
-    /* Storage is type-erased void *; the caller's const intent (if any) is
-     * re-applied at retrieval through their cast back to T ** / const T **. */
+    /* The slot is a void *, so a const the pointer carried is dropped here, and
+     * the reader's own type restores it as each slot is read (include/types.h
+     * ptr_array_t) */
     arr->entries[arr->count++] = (void *) p;
 }
 

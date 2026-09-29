@@ -1,36 +1,67 @@
 /**
- * source.h - Queries against a source tree's ignore rules
+ * source.h - A source tree's ignore rules, as git reads them
  *
  * When a user runs `dotta add` against a file that lives inside a git repository,
- * they usually want dotta to skip whatever that repo's `.gitignore` already
- * excludes (build artefacts, `node_modules/`, secrets in `.env`) without having
- * to restate every pattern in `.dottaignore`. This module is the single adapter
- * over libgit2's nested-gitignore + attr-stack machinery for that one question.
+ * they usually want dotta to skip whatever that repository already excludes (build
+ * artefacts, `node_modules/`, secrets in `.env`) without having to restate every
+ * pattern in `.dottaignore`. This module answers that one question, and answers
+ * it as git(1) does: it finds the repository, reads its stack — each `.gitignore`
+ * from the workdir down, `$GIT_COMMON_DIR/info/exclude`, and `core.excludesFile`
+ * (git's default `$XDG_CONFIG_HOME/git/ignore`, else `~/.config/git/ignore`,
+ * where none is set) — and matches it with base/gitignore in git's order. The
+ * specification is git itself: tests/test-source-parity.c asks `git check-ignore`
+ * the same questions, layout by layout.
  *
- * The answer is libgit2's, and libgit2 differs from git(1) on nested negation:
- * it stops at the first rung that decides, so `build/` followed by `!build/keep`
- * leaves `build/keep` un-ignored where git excludes it. `base/gitignore` reads
- * the rung order git reads; this adapter cannot, and no libgit2 release carries
- * the fix (libgit2#7339, open upstream). A source tree whose `.gitignore` holds
- * a negation beneath a directory rule is therefore read more permissively than
- * the same rules in `.dottaignore` would be. Which repository's rules are read
- * is this module's own question and is answered below; the divergence is about
- * the order the rungs of one repository decide in, and is untouched by it.
+ * Which repository answers is git's discovery: the one whose `.git` a directory
+ * holds, else the directory itself where it is a git directory (bare), else its
+ * parent's — stopping where the walk up would cross into another filesystem. A
+ * nested repository answers for its own contents, and a repository's own root
+ * is an entry of whatever contains its parent. Its workdir is where the `.git`
+ * was found, unless its configuration says otherwise (`core.worktree`, `core.bare`,
+ * neither of which a linked worktree reads). A directory that is not there reads
+ * as it will once it is — git's rules are the path's, and `ignore --test` asks
+ * about a path before it is made — and so does one the invoker cannot look at,
+ * which discovery walks past as git does.
  *
  * It is intentionally orthogonal to `core/ignore`, which compiles the user's
  * own `.dottaignore` + config + CLI layers inside the dotta repo. A consumer
  * that wants both behaviours calls both modules — no hidden cross-wiring.
  *
- * Lifetime: command-scoped. One handle per command, shared across any profile /
- * directory iterations the command runs. The handle remembers one directory's
- * answer — the repository that governs it, and where it stands inside — and asks
- * again at every directory it is given, because a repository is a boundary and
- * not a subtree: a nested repository's `.git/info/exclude` is visible through
- * no handle but its own. A failure is an answer it remembers too, and the handle
- * is its retry boundary: a fresh handle asks again.
+ * What it reads, and as whom. The repository — its discovery and its configuration
+ * — is read as the invoker: libgit2 reads the configuration by path, as the
+ * invoker, and a repository only root could find would be one whose configuration
+ * dotta cannot read. The rule files are read through sys/filesystem's funnel,
+ * whose reach a walk enters a directory with: a directory a sudo'd walk could
+ * list is one whose rules it can read.
  *
- * Threading: not thread-safe — mirrors libgit2's per-handle model. A handle must
- * not be used concurrently from multiple threads.
+ * What it does not read, stated. A conditional include (`includeIf`) is not
+ * evaluated: libgit2 evaluates one only for a repository it has opened, and this
+ * module opens none, since git's newer formats (reftable, sha256) keep libgit2
+ * from opening one at all. Nor is git's environment configuration
+ * (`GIT_CONFIG_GLOBAL` and the rest), which libgit2 reads none of, nor a
+ * repository's owner (`safe.directory`): its rules can only exclude more.
+ * `core.excludesFile` spelled from another user's home (`~user/`) is refused,
+ * as every tilde dotta reads is (sys/filesystem.h fs_expand_tilde).
+ *
+ * What cannot be read is a failure, never an answer. What git reads as absent
+ * by rule reads absent here: a rule file that is not there, and an in-tree
+ * `.gitignore` that is a link (git opens one without following it). Anything
+ * else is a failure of the layer — a rule file that cannot be opened or read,
+ * is not a regular file, holds a NUL or does not compile; a configuration that
+ * does not parse; a `.git` file that names no repository; a `core.worktree` that
+ * names nothing — each minted once per cause and answered again for every entry
+ * that reaches it: a directory's, a repository's, a file's. A configuration file
+ * the invoker cannot read is absent, as it is to git and libgit2.
+ *
+ * Lifetime: the arena's. A filter lives in the arena it was made in, every answer
+ * it keeps with it, and nothing frees it; no libgit2 handle outlives a call. It
+ * remembers every directory it was asked about, under every spelling, and every
+ * file it read: one per command, shared across every profile and directory the
+ * command asks about. A failure is an answer it remembers too, and the filter
+ * is the retry boundary: a fresh one asks again.
+ *
+ * Threading: not thread-safe. A filter must not be used concurrently from multiple
+ * threads.
  */
 
 #ifndef DOTTA_SYS_SOURCE_H
@@ -39,73 +70,94 @@
 #include <stdbool.h>
 #include <types.h>
 
+typedef struct gitignore_rule gitignore_rule_t;
 typedef struct source_filter source_filter_t;
+
+/**
+ * The rule that decides one rung, and the file it was read from
+ *
+ * Both are the filter's own and live as long as its arena. `rule` is read through
+ * base/gitignore's accessors (its pattern, its line in `file`, whether it negates).
+ */
+typedef struct {
+    const gitignore_rule_t *rule;      /* NULL: no rule decides the rung */
+    const char *file;                  /* The file it was read from, absolute; NULL with no rule */
+} source_rule_t;
 
 /**
  * Create a source filter.
  *
- * @return The filter (caller frees via source_filter_free)
+ * @param arena Arena the filter and everything it reads live in (must not be NULL)
+ * @return The filter, the arena's; never NULL
  */
-source_filter_t *source_filter_create(void);
+source_filter_t *source_filter_create(arena_t *arena);
 
 /**
- * Free a source filter, the directory it last answered for and the repository
- * handle it was holding.
+ * The rule of the source repository's stack that decides `path` itself.
  *
- * @param f Filter (may be NULL)
+ * git's last_matching_pattern_from_lists, asked of the repository that governs
+ * `path`'s directory: each `.gitignore` from that directory up to the workdir,
+ * the deepest first, each reading the path from its own directory; then
+ * `info/exclude`, then the excludes file, reading it from the workdir. The first
+ * list with a rule that matches decides, and within a list the last such rule
+ * does — a negation as readily as any, for the caller to read. No ancestor of
+ * `path` is asked: the climb over its rungs is the caller's.
+ *
+ * `out->rule` is NULL where no rule decides the rung, where no repository governs
+ * the directory or its workdir does not contain it (a bare repository, a
+ * `core.worktree` elsewhere), and where `path` names no entry — nothing after
+ * its last `/` ("/"). A directory is asked with `is_dir`, which a directory-only
+ * rule (`node_modules/`) needs.
+ *
+ * Readers: source_filter_excludes (below), until core/ignore's climb asks the
+ * rungs itself; tests/test-source-parity.c, which climbs over it as git does.
+ *
+ * @param f      Filter (must not be NULL)
+ * @param path   Absolute path (must start with `/`)
+ * @param is_dir True if the path refers to a directory
+ * @param out    The deciding rule and its file (must not be NULL)
+ * @return Error (the failure the rule could not be read past) or NULL on success
  */
-void source_filter_free(source_filter_t *f);
+error_t source_filter_find(
+    source_filter_t *f,
+    const char *path,
+    bool is_dir,
+    source_rule_t *out
+);
 
 /**
- * Test whether `abs_path` is excluded by the gitignore rules of the repository
- * that contains it.
+ * Test whether `abs_path` is excluded by the ignore rules of its directory's
+ * repository.
  *
- * The rules are those of the repository containing `abs_path`'s **directory**,
- * and the innermost one: a nested repository answers for its own contents and
- * no repository above it is consulted, and a repository's own root is judged by
- * whatever contains its parent. That is the rule git walks a tree by — the outer
- * never forms an opinion about a nested repository's files — and it is the rule
- * this handle answers by however many directories it has been asked about before:
- * a warm handle answers what a fresh one would.
+ * git's climb over the rungs of the path beneath that repository's workdir: every
+ * directory on the way down, shallowest first, each asked as source_filter_find
+ * asks one; then the path itself. The first rung a rule excludes is the verdict
+ * — an excluded directory is final, and a rule beneath it cannot re-include
+ * anything — and a rung a negation decides settles nothing beneath it. That is
+ * `git check-ignore` from the repository, the tree's own rules at every rung
+ * and no other repository's: a nested repository's root, which its parent's
+ * repository judges, is not asked of it here.
  *
- * Semantics:
- *   - Returns `*out = false` (no error) for "not excluded" and for "no verdict"
- *     alike, and the two are deliberately one answer: no repository above the
- *     directory, a bare one, a workdir that does not contain the directory
- *     (`core.worktree` pointing away), and rules that simply do not match all
- *     read the same to a caller that layers this beneath its own.
- *   - Returns `*out = true` only when libgit2's `git_ignore_path_is_ignored`
- *     reports a positive match against that repository's rules, asked with the
- *     trailing `/` a directory needs for a directory-only pattern.
- *   - Uses `git_repository_discover` with `across_fs = 0`, so a source repo on
- *     a different filesystem than the directory is treated as "not in a repo" —
- *     matches git's own behaviour.
- *   - Returns an error where the rules cannot be read — a repository that will
- *     not open, a directory discovery or `realpath` cannot answer for, a query
- *     libgit2 cannot complete — and that failure is answered again, the one error,
- *     for every entry it stands for: a repository's while discovery keeps answering
- *     that repository, a directory's while the entries asked about are its own.
- *     Each is minted once per cause (base/error.h "Lifetime"), so a caller that
- *     goes on past it keeps one error however many entries it asks about.
+ * `*out` is false for "not excluded" and for "no verdict" alike — no repository
+ * governs the directory, or its workdir does not contain it — and the two are
+ * deliberately one answer to a caller that layers this beneath its own. A path
+ * that names no entry answers false.
  *
- * Policy: this function answers the mechanical question "is this path ignored
- * by its source repo?". The policy "do we consult that answer at all?" belongs
- * with the caller (typically via `config.respect_gitignore`). A caller that wants
- * layer-5 off for a given operation simply does not build a filter — there is
- * no flag to wire through.
+ * Policy: whether to consult the answer at all belongs with the caller (typically
+ * `config.respect_gitignore`); a caller that wants the layer off does not build
+ * a filter. Readers: cmds/add.c add_excluded, core/workspace.c workspace_scan,
+ * cmds/ignore.c source_gitignore_matches; built by cmds/add.c cmd_add,
+ * core/workspace.c workspace_analyze_untracked and cmds/ignore.c test_path_ignore.
  *
- * Preconditions: `abs_path` must start with `/` and must name an entry — one
- * with nothing after its last `/` has no name for a rule to match and answers
- * `false`. Callers with possibly-relative input must resolve it first (in-tree
- * callers either ride path_input_filesystem_path, path_input_resolve, realpath,
- * or feed a pre-resolved state filesystem path), and every one of those sheds a
- * trailing `/` on the way.
+ * Preconditions: `abs_path` must start with `/`. Callers with possibly-relative
+ * input resolve it first (path_input_filesystem_path, path_input_resolve, realpath,
+ * or a state filesystem path), and every one of those sheds a trailing `/`.
  *
  * @param f        Filter (must not be NULL)
  * @param abs_path Absolute path (must start with `/`)
  * @param is_dir   True if the path refers to a directory
  * @param out      Output boolean (must not be NULL)
- * @return Error or NULL on success
+ * @return Error (the failure the verdict could not be read past) or NULL on success
  */
 error_t source_filter_excludes(
     source_filter_t *f,

@@ -669,8 +669,8 @@ static bool source_gitignore_matches(
     error_t err = source_filter_excludes(filter, abs_path, is_directory, &excluded);
     if (err) {
         /* Surfaced (above): warned for every asker no layer decided, and dropped
-         * — the one error the source repository or directory gave, answered again
-         * for each (sys/source.h). */
+         * — the one error the source repository, directory or rule file gave,
+         * answered again for each (sys/source.h). */
         output_warning(
             out, OUTPUT_NORMAL,
             "Source .gitignore check failed: %s", error_message(err)
@@ -844,10 +844,6 @@ static error_t test_path_ignore(
         if (err) return err;
     }
 
-    /* What the cleanup releases, established before the first goto so the label
-     * never reads an uninitialised one. */
-    source_filter_t *source_filter = NULL;
-
     /* The key the user named, fixed for every asker: the resolver's sum, its
      * tag the whole condition the loop's arms read and its member the argument's
      * own reading. A second reading stands beside it, one per key — a name's
@@ -908,20 +904,19 @@ static error_t test_path_ignore(
     }
 
     /* Source .gitignore filter (opt-in via config). Built once for the whole
-     * invocation so the discovered repo handle is reused across the loop. */
+     * invocation, in its arena, so every directory and rule file it reads is
+     * read once across the loop. */
+    source_filter_t *source_filter = NULL;
     if (config && config->respect_gitignore) {
-        source_filter = source_filter_create();
+        source_filter = source_filter_create(ctx->arena);
     }
 
     /* Layered-rules builder — the baseline compiled once, each profile's ruleset
      * composed on first request; no CLI layer, for --test takes no -e. The arena's,
-     * with nothing for the cleanup to release. */
+     * as the filter is. */
     ignore_rules_t *ignore_rules = NULL;
     err = ignore_rules_create(repo, config, NULL, ctx->arena, &ignore_rules);
-    if (err) {
-        err = error_wrap(err, "Failed to build ignore rules");
-        goto cleanup;
-    }
+    if (err) return error_wrap(err, "Failed to build ignore rules");
 
     /* The askers: the profile named, the enabled set, or the one asker that is
      * no profile — which names through the shared roots and meets the baseline
@@ -935,10 +930,7 @@ static error_t test_path_ignore(
 
     if (!specific_profile) {
         err = profile_resolve_enabled(repo, state, ctx->arena, &enabled);
-        if (err) {
-            err = error_wrap(err, "Failed to load profiles");
-            goto cleanup;
-        }
+        if (err) return error_wrap(err, "Failed to load profiles");
 
         if (enabled.count > 0) {
             askers = (const char *const *) enabled.entries;
@@ -1010,10 +1002,7 @@ static error_t test_path_ignore(
 
         const gitignore_ruleset_t *rules = NULL;
         err = ignore_rules_for_profile(ignore_rules, asker, &rules);
-        if (err) {
-            err = error_wrap(err, "Failed to build ignore rules");
-            goto cleanup;
-        }
+        if (err) return error_wrap(err, "Failed to build ignore rules");
 
         /* The rules on the subject; where no layer decided, the source tree's
          * .gitignore on the path — the lowest layer, so a `!` above it wins. */
@@ -1052,9 +1041,7 @@ static error_t test_path_ignore(
         }
     }
 
-cleanup:
-    source_filter_free(source_filter);
-    return err;
+    return NULL;
 }
 
 /**

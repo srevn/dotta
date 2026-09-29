@@ -2544,8 +2544,8 @@ static void workspace_scan(
          * a repository whose rules name it is not entered, which is the answer
          * the directory would get under any other name. The layer's own failure
          * leaves no verdict, and its error is dropped — the one its source
-         * repository or directory gave, answered again for every entry beneath
-         * (sys/source.h). */
+         * repository, directory or rule file gave, answered again for every entry
+         * that reaches it (sys/source.h). */
         gitignore_match_t match;
         gitignore_eval(scan->rules, label_tail(name), is_dir, &match);
         bool ignored = match.decided && match.ignored;
@@ -2649,12 +2649,13 @@ static error_t workspace_analyze_untracked(
     error_t err = ignore_rules_create(ws->repo, config, NULL, ws->arena, &ignore_rules);
     if (err) return error_wrap(err, "Failed to build ignore rules");
 
-    /* Source-tree .gitignore filter — built once for the whole scan so the
-     * discovered source-repo handle is reused across every root. Driven by config;
-     * policy decision lives here, not in the ignore module. */
+    /* Source-tree .gitignore filter — built once for the whole scan, in the
+     * workspace's arena, so every directory and every rule file it reads is read
+     * once across every root. Driven by config; policy decision lives here, not
+     * in the ignore module. */
     source_filter_t *source_filter = NULL;
     if (config && config->respect_gitignore) {
-        source_filter = source_filter_create();
+        source_filter = source_filter_create(ws->arena);
     }
 
     for (size_t r = 0; r < root_count; r++) {
@@ -2684,10 +2685,9 @@ static error_t workspace_analyze_untracked(
         const gitignore_ruleset_t *rules = NULL;
         err = ignore_rules_for_profile(ignore_rules, root->profile, &rules);
         if (err) {
-            err = error_wrap(
+            return error_wrap(
                 err, "Failed to load ignore patterns for profile '%s'", root->profile
             );
-            goto cleanup;
         }
 
         /* What this root's walk runs under: the rows it meets are named by the
@@ -2709,10 +2709,7 @@ static error_t workspace_analyze_untracked(
         arena_free(scratch);
     }
 
-cleanup:
-    source_filter_free(source_filter);
-
-    return err;
+    return NULL;
 }
 
 /**

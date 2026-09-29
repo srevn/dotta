@@ -45,6 +45,12 @@
  * primitives serve both worlds (fs_create_dir, fs_remove_dir, fs_write_file:
  * the temp scripts' directory, init's repository) and carry the reach with them;
  * on the invoker's own paths it never fires.
+ *
+ * One more reads raw, and on purpose: a source repository's layout — its `.git`,
+ * a gitdir's HEAD, commondir, objects and refs — which sys/source discovers as
+ * the invoker, because the repository's configuration is libgit2's to read as
+ * the invoker, and a repository found through the reach would be one dotta could
+ * not configure (sys/source.h). The rule files beneath it are this module's.
  */
 
 #ifndef DOTTA_FILESYSTEM_H

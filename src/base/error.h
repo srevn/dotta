@@ -26,9 +26,10 @@
  * core/metadata.h metadata_ownership). A genuine failure the loop goes on past
  * is minted once per cause and answered again — an immutable error is safe to
  * hand every reader — so what the run keeps is counted by the causes, never by
- * the loop (sys/source.h: a repository that will not open is one error for every
- * entry beneath it; the keymgr's standing refusal, one for every row after it).
- * A loop that still mints per row says its bound where it does.
+ * the loop (sys/source.h: a repository whose configuration does not parse is
+ * one error for every entry beneath it; the keymgr's standing refusal, one for
+ * every row after it). A loop that still mints per row says its bound where it
+ * does.
  *
  * ERR_PERMISSION
  * --------------

@@ -393,7 +393,7 @@ static bool add_excluded(
 ) {
     /* Both layers ask for the directory bit, which is the kind read as the two
      * APIs want it: a gitignore rule with a trailing slash matches a directory
-     * alone, and the source filter's attr stack needs the same distinction. */
+     * alone, and the source filter's rules need the same distinction. */
     bool is_directory = kind == PATH_KIND_DIRECTORY;
 
     /* A claim meets the operation's own filter and no rule of discovery: the -e
@@ -422,8 +422,8 @@ static bool add_excluded(
         );
         if (err) {
             /* Degraded (above): warned for every entry no layer decided, and
-             * dropped — the one error its source repository or directory gave,
-             * answered again for each (sys/source.h). */
+             * dropped — the one error its source repository, directory or rule
+             * file gave, answered again for each (sys/source.h). */
             output_warning(
                 walk->ctx->out, OUTPUT_VERBOSE,
                 "Source .gitignore check failed for %s: %s", filesystem_path,
@@ -1604,12 +1604,13 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* Source-tree .gitignore filter (opt-in via config).
      *
-     * Built once per command and shared across the whole collection walk so the
-     * discovered source-repo handle is reused for every file under the same source
-     * tree. What degrades is a query — add_excluded reads one that fails as "not
-     * excluded", so an odd source repository never blocks a path the user named. */
+     * Built once per command, in its arena, and shared across the whole collection
+     * walk, so every directory and every rule file it reads is read once for
+     * every file beneath it. What degrades is a query — add_excluded reads one
+     * that fails as "not excluded", so an odd source repository never blocks a
+     * path the user named. */
     if (config && config->respect_gitignore) {
-        source_filter = source_filter_create();
+        source_filter = source_filter_create(ctx->arena);
     }
 
     /* Build hook invocation */
@@ -2642,12 +2643,11 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
 cleanup:
-    /* Free resources in reverse order of allocation. The listing and the view
-     * are the arena's. */
+    /* Free resources in reverse order of allocation. The listing, the view and
+     * the source filter are the arena's. */
     if (metadata) metadata_free(metadata);
     stage_admission_free(admission);
     stage_free(stage);
-    source_filter_free(source_filter);
 
     return err;
 }

@@ -502,7 +502,11 @@ static error_t add_admit(
  * Every directory walked into is listed — the walk is the sole source of directory
  * tracking — and so is every regular file and symlink child a branch can hold.
  * Symlinks are never followed: a symlink to a directory is an entry like any
- * other, and a special file is no entry at all.
+ * other, and a special file is no entry at all. One directory is walked into
+ * and never listed: one the profile only passes through, which a rule of discovery
+ * excludes — entered for the claims beneath it wherever the operation's -e admits
+ * it, while beneath it every entry but a claim meets the rung that closed it;
+ * as the ancestry's rungs earn no record, it earns none.
  *
  * Each child is named here, once, by the claim standing at it — this command's
  * own where it has listed one there, else the profile's own (core/manifest.h
@@ -622,16 +626,37 @@ static error_t add_collect(
             walk->view, walk->profile, child_fs
         );
 
-        /* Left out by a rule, the subtree with it: said at VERBOSE, under the
-         * layer and the rule that excluded it. */
+        /* Left out by a rule, and never listed. */
         const ignore_verdict_t verdict = add_excluded(
             walk, held, child_fs, child_storage, kind
         );
         if (verdict.origin != IGNORE_ORIGIN_NONE) {
-            output_info(
-                out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')", child_fs,
-                ignore_origin_describe(verdict.origin), verdict.pattern
-            );
+            /* A directory the profile only passes through holds claims beneath
+             * it, and a claim meets the operation's -e alone: the walk enters
+             * it wherever that layer admits it, and every entry beneath but a
+             * claim meets the rung that closed it. Anything else goes with its
+             * subtree. */
+            ignore_verdict_t claims = verdict;
+            if (manifest_is_derived(held) && kind == PATH_KIND_DIRECTORY) {
+                (void) ignore_verdict(
+                    walk->excludes, NULL, child_storage, NULL, kind, &claims
+                );
+            }
+
+            /* Said at VERBOSE where the rule decided this very entry, under the
+             * layer and the rule: beneath a directory the walk passes through,
+             * that directory's own line said it. */
+            if (verdict.rung == 0) {
+                output_info(
+                    out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')%s", child_fs,
+                    ignore_origin_describe(verdict.origin), verdict.pattern,
+                    claims.origin == IGNORE_ORIGIN_NONE
+                        ? ", entered for the claims beneath it" : ""
+                );
+            }
+            if (claims.origin == IGNORE_ORIGIN_NONE) {
+                RETURN_IF_ERROR(add_collect(walk, scratch, child_fs, depth + 1));
+            }
             continue;
         }
 

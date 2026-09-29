@@ -37,10 +37,11 @@
  * A claim is no discovery, and only the operation's own -e reaches it: the filter
  * apply and update ask of what they hold (core/scope.h scope_is_excluded), and
  * add of what its profile holds (cmds/add.c add_excluded). A directory a profile
- * only passes through claims nothing, so naming one is a discovery. Readers of
- * the rule: cmds/add.c cmd_add and add_collect, which look up the profile's claim
- * before any rule is asked; core/workspace.c workspace_scan, which asks the view
- * before any rule.
+ * only passes through claims nothing, so naming one is a discovery; it holds
+ * claims all the same, so a walk that finds it excluded enters it where the -e
+ * layer admits it, and lists it nowhere. Readers of the rule: cmds/add.c cmd_add
+ * and add_collect, which look up the profile's claim before any rule is asked;
+ * core/workspace.c workspace_scan, which asks the view before any rule.
  *
  * Runtime shape
  * -------------

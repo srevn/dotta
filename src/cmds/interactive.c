@@ -77,8 +77,8 @@ typedef struct {
 
 typedef enum {
     INTERACTIVE_CONTINUE,     /* Keep looping; re-render and read next key */
-    INTERACTIVE_EXIT_OK,      /* User quit cleanly */
-    INTERACTIVE_EXIT_ERROR    /* Quit on error; out_err carries the cause */
+    INTERACTIVE_SAVE,         /* Save the edits (view_save), then keep looping */
+    INTERACTIVE_EXIT          /* The session ends: a quit key, or the input's end */
 } interactive_result_t;
 
 /* Save-time diff plan: made in the view's arena at each save, new_order's names
@@ -683,10 +683,7 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
     }
 }
 
-static interactive_result_t handle_key_normal(
-    view_t *view, git_repository *repo, state_t *deploy_state, int key,
-    error_t *out_err
-) {
+static interactive_result_t handle_key_normal(view_t *view, int key) {
     switch (key) {
         case TERM_KEY_UP:
         case 'k':
@@ -765,36 +762,22 @@ static interactive_result_t handle_key_normal(
             return INTERACTIVE_CONTINUE;
 
         case 'w':
-        case 'W': {
-            if (!view->modified) {
-                return INTERACTIVE_CONTINUE;
-            }
-            error_t err = view_save(repo, deploy_state, view);
-            if (err) {
-                *out_err = err;
-                return INTERACTIVE_EXIT_ERROR;
-            }
-            return INTERACTIVE_CONTINUE;
-        }
+        case 'W':
+            return view->modified ? INTERACTIVE_SAVE : INTERACTIVE_CONTINUE;
 
         case 'q':
         case 'Q':
         case TERM_KEY_ESCAPE:
         case TERM_KEY_CTRL_C:
         case TERM_KEY_CTRL_D:
-            return INTERACTIVE_EXIT_OK;
+            return INTERACTIVE_EXIT;
 
         default:
             return INTERACTIVE_CONTINUE;
     }
 }
 
-static interactive_result_t view_handle_key(
-    view_t *view, git_repository *repo, state_t *deploy_state, int key,
-    error_t *out_err
-) {
-    *out_err = NULL;
-
+static interactive_result_t view_handle_key(view_t *view, int key) {
     /* No key at all — the input stream ended, or the read failed (base/terminal.h):
      * the quit Ctrl-D already spells, taken above both dispatchers because each
      * would take it for a key it does not know, ignore it, and read the same
@@ -804,13 +787,13 @@ static interactive_result_t view_handle_key(
      * what stops the session. A prompt open at that moment is abandoned, as Esc
      * then q abandons it. */
     if (key < 0) {
-        return INTERACTIVE_EXIT_OK;
+        return INTERACTIVE_EXIT;
     }
 
     if (view->prompt.active) {
         return handle_key_prompt(view, key);
     }
-    return handle_key_normal(view, repo, deploy_state, key, out_err);
+    return handle_key_normal(view, key);
 }
 
 /* --- Run --- */
@@ -858,24 +841,27 @@ static error_t view_loop(
     view_t *view, git_repository *repo, state_t *deploy_state, int initial_lines
 ) {
     int lines_drawn = initial_lines;
-    interactive_result_t result = INTERACTIVE_CONTINUE;
-    error_t loop_err = NULL;
 
-    while (result == INTERACTIVE_CONTINUE) {
-        int key = terminal_read_key();
-        result = view_handle_key(view, repo, deploy_state, key, &loop_err);
-        if (result == INTERACTIVE_CONTINUE) {
-            terminal_cursor_up(lines_drawn - 1);
-            lines_drawn = view_render(view);
+    /* A key's handler decides what comes next and the loop does it: the save is
+     * the one step that can fail, and its failure ends the session. */
+    for (;;) {
+        switch (view_handle_key(view, terminal_read_key())) {
+            case INTERACTIVE_CONTINUE:
+                break;
+
+            case INTERACTIVE_SAVE: {
+                error_t err = view_save(repo, deploy_state, view);
+                if (err) return err;
+                break;
+            }
+
+            case INTERACTIVE_EXIT:
+                return NULL;
         }
-    }
 
-    /* The one exit that errs hands its cause out (INTERACTIVE_EXIT_ERROR) */
-    if (result == INTERACTIVE_EXIT_ERROR) {
-        CHECK_NULL(loop_err);
-        return loop_err;
+        terminal_cursor_up(lines_drawn - 1);
+        lines_drawn = view_render(view);
     }
-    return NULL;
 }
 
 static error_t interactive_run(

@@ -1093,13 +1093,13 @@ static int select_delta(
 /**
  * Diff two commits
  *
- * The commits are looked for in the enabled set, narrowed to the profiles -p
- * names where it names any (core/profiles.h profile_resolve_commit), as the
- * workspace arm looks for its one. The path filter is derived from scope_paths
- * (raw CLI positional args, never narrowed) and applied delta by delta as the
- * diff is generated (select_delta, each delta by both its names under this
- * machine's table), so the diff printed — names, stats, patch — is the selection
- * and nothing else.
+ * The two commits are one search's (core/profiles.h profile_resolve_range): the
+ * first profile holding both, in the enabled set narrowed to the profiles -p
+ * names where it names any, as the workspace arm looks for its one. The path
+ * filter is derived from scope_paths (raw CLI positional args, never narrowed)
+ * and applied delta by delta as the diff is generated (select_delta, each delta
+ * by both its names under this machine's table), so the diff printed — names,
+ * stats, patch — is the selection and nothing else.
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, this
  *            machine's mount table, the command arena and the output)
@@ -1135,38 +1135,20 @@ static error_t diff_commits(
     error_t err = NULL;
     git_commit *commit1 = NULL;
     git_commit *commit2 = NULL;
-    /* Both borrowed from the enabled set, which outlives this call. */
-    const char *profile1_name = NULL;
-    const char *profile2_name = NULL;
+    const char *profile = NULL;  /* borrowed from the enabled set, which outlives this call */
     git_tree *tree1 = NULL;
     git_tree *tree2 = NULL;
     git_diff *diff = NULL;
 
-    /* Resolve each end in the enabled set, the search answering for every profile
-     * ahead of the holder (core/profiles.h): a profile that will not read cancels
-     * the range rather than let a later one answer for it. */
-    err = profile_resolve_commit(
-        repo, scope_enabled(scope), filter, commit1_ref, &commit1, &profile1_name
+    /* Both ends in one search: the first profile whose history holds both, each
+     * profile's tip read once for the two (core/profiles.h). A profile that will
+     * not read cancels the range rather than let a later one answer for it, and
+     * ends held only by different profiles are no range. */
+    err = profile_resolve_range(
+        repo, scope_enabled(scope), filter, commit1_ref, commit2_ref, &commit1,
+        &commit2, &profile
     );
     if (err) goto cleanup;
-
-    err = profile_resolve_commit(
-        repo, scope_enabled(scope), filter, commit2_ref, &commit2, &profile2_name
-    );
-    if (err) goto cleanup;
-
-    /* Validate both commits are from the same profile. Dotta profiles are orphan
-     * branches — comparing commits across profiles would diff two completely
-     * unrelated trees, producing meaningless output. */
-    if (strcmp(profile1_name, profile2_name) != 0) {
-        err = ERROR(
-            ERR_VALIDATION,
-            "Commits belong to different profiles ('%s' and '%s'); "
-            "cross-profile commit comparison is not supported",
-            profile1_name, profile2_name
-        );
-        goto cleanup;
-    }
 
     /* Print diff range header */
     char oid1_str[8], oid2_str[8];
@@ -1180,7 +1162,7 @@ static error_t diff_commits(
     output_gap(out, OUTPUT_NORMAL);
 
     /* Print second commit header (the "new" one) */
-    print_commit_header(out, commit2, profile2_name);
+    print_commit_header(out, commit2, profile);
 
     /* Get trees from the two commits in hand — the OID helper beside this one
      * would look each of them up a second time (the workspace arm above reads
@@ -1205,7 +1187,7 @@ static error_t diff_commits(
      * selection is borrowed for the call: libgit2 reads the payload only while
      * generating. */
     delta_select_t selection = {
-        .filter = file_filter, .mounts = mounts, .profile = profile1_name,
+        .filter = file_filter, .mounts = mounts, .profile = profile,
         .arena  = arena
     };
     git_diff_options diff_opts;

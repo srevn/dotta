@@ -266,6 +266,87 @@ static error_t profile_unheld(const char *commit_ref, const string_array_t *filt
     return err;
 }
 
+/* The ends one search is asked for: a commit's one, a range's two */
+#define PROFILE_ENDS_MAX 2
+
+/*
+ * The search both entries make: the first profile holding every end, and the
+ * commit each end names in it. The ends are read once, before any profile is
+ * asked, so a spelling that names nothing is its own failure and no profile is
+ * passed over for it; then each profile the filter admits, from the highest
+ * precedence down — the last enabled wins every path it shares, so its tip is
+ * the HEAD the view reads — has its tip read once and every end asked of that
+ * one tip. Nothing is published until a profile holds them all.
+ *
+ * Each end's first holder is kept as the search goes, for the refusal: an end
+ * no profile holds is that end's absence, said of what was searched, and ends
+ * held only apart are a range no one profile's history holds.
+ */
+static error_t profile_holder(
+    git_repository *repo,
+    const string_array_t *enabled,
+    const string_array_t *filter,
+    const char *const spellings[],
+    size_t count,
+    git_commit *out_commits[],
+    const char **out_profile
+) {
+    CHECK_ARG(count >= 1 && count <= PROFILE_ENDS_MAX, "a search asks one or two ends");
+
+    gitops_revision_t revs[PROFILE_ENDS_MAX];
+    for (size_t end = 0; end < count; end++) {
+        RETURN_IF_ERROR(gitops_revision_resolve(repo, spellings[end], &revs[end]));
+    }
+
+    const char *holders[PROFILE_ENDS_MAX] = { NULL };
+    for (size_t i = enabled->count; i-- > 0;) {
+        const char *profile = enabled->entries[i];
+        if (filter && !string_array_contains(filter, profile)) continue;
+
+        /* The profile's tip, read once, and every end asked of it. A tip or a
+         * history that will not read ends the search where it stands, whatever
+         * a later profile would have said: what comes back is the first holder
+         * in precedence order, a claim about every profile ahead of it, and a
+         * branch that would not read is one the claim cannot be made over. */
+        git_commit *tip = NULL;
+        RETURN_IF_ERROR(gitops_load_branch_commit(repo, profile, &tip));
+
+        git_commit *found[PROFILE_ENDS_MAX] = { NULL };
+        size_t held = 0;
+        error_t err = NULL;
+        for (size_t end = 0; !err && end < count; end++) {
+            err = gitops_revision_find(repo, &revs[end], profile, tip, &found[end]);
+            if (!found[end]) continue;
+            held++;
+            if (!holders[end]) holders[end] = profile;
+        }
+        git_commit_free(tip);
+
+        if (!err && held == count) {
+            for (size_t end = 0; end < count; end++) out_commits[end] = found[end];
+            *out_profile = profile;
+            return NULL;
+        }
+        for (size_t end = 0; end < count; end++) git_commit_free(found[end]);
+        if (err) return err;
+    }
+
+    /* Every profile searched was asked: an end none holds is its absence */
+    for (size_t end = 0; end < count; end++) {
+        if (!holders[end]) return profile_unheld(spellings[end], filter);
+    }
+
+    /* Each end held, and no profile holding both. Dotta profiles are orphan
+     * branches — a range across two would diff two unrelated trees, producing
+     * meaningless output. */
+    return ERROR(
+        ERR_VALIDATION,
+        "Commits belong to different profiles ('%s' and '%s'); "
+        "cross-profile commit comparison is not supported",
+        holders[0], holders[1]
+    );
+}
+
 /**
  * Which enabled profile holds a commit
  */
@@ -283,40 +364,40 @@ error_t profile_resolve_commit(
     CHECK_NULL(out_commit);
     CHECK_NULL(out_profile);
 
-    /* The revision once, whatever the set: a spelling that names nothing is its
-     * own failure, before any profile could be passed over for it. */
-    gitops_revision_t rev;
-    RETURN_IF_ERROR(gitops_revision_resolve(repo, commit_ref, &rev));
+    const char *const spellings[] = { commit_ref };
+    return profile_holder(repo, enabled, filter, spellings, 1, out_commit, out_profile);
+}
 
-    /* From the highest precedence down: the last enabled wins every path it shares,
-     * so its tip is the HEAD the view reads (hwxg). */
-    for (size_t i = enabled->count; i-- > 0;) {
-        const char *profile = enabled->entries[i];
-        if (filter && !string_array_contains(filter, profile)) continue;
+/**
+ * Which enabled profile holds both ends of a range
+ */
+error_t profile_resolve_range(
+    git_repository *repo,
+    const string_array_t *enabled,
+    const string_array_t *filter,
+    const char *from_ref,
+    const char *to_ref,
+    git_commit **out_from,
+    git_commit **out_to,
+    const char **out_profile
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(enabled);
+    CHECK_NULL(from_ref);
+    CHECK_NULL(to_ref);
+    CHECK_NULL(out_from);
+    CHECK_NULL(out_to);
+    CHECK_NULL(out_profile);
 
-        /* The profile's tip, read once, and the revision asked of it. A tip or
-         * a history that will not read ends the search where it stands, whatever
-         * a later profile would have said: what comes back is the first holder
-         * in precedence order, a claim about every profile ahead of it, and a
-         * branch that would not read is one the claim cannot be made over. */
-        git_commit *tip = NULL;
-        RETURN_IF_ERROR(gitops_load_branch_commit(repo, profile, &tip));
+    const char *const spellings[] = { from_ref, to_ref };
+    git_commit *commits[PROFILE_ENDS_MAX] = { NULL };
+    RETURN_IF_ERROR(
+        profile_holder(repo, enabled, filter, spellings, 2, commits, out_profile)
+    );
 
-        git_commit *commit = NULL;
-        error_t err = gitops_revision_find(repo, &rev, profile, tip, &commit);
-        git_commit_free(tip);
-        if (err) return err;
-
-        /* Nothing is published until a profile answers. */
-        if (commit) {
-            *out_commit = commit;
-            *out_profile = profile;
-            return NULL;
-        }
-    }
-
-    /* Every profile searched was asked, and each said the commit is not its. */
-    return profile_unheld(commit_ref, filter);
+    *out_from = commits[0];
+    *out_to = commits[1];
+    return NULL;
 }
 
 /**

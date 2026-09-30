@@ -13,6 +13,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "base/arena.h"
@@ -21,7 +22,6 @@
 #include "base/heap.h"
 #include "base/refspec.h"
 #include "base/string.h"
-#include "sys/filesystem.h"
 #include "sys/identity.h"
 #include "sys/transfer.h"
 
@@ -329,32 +329,36 @@ typedef struct {
  * The loose store beneath a listing, read whole (the header). Git's own reading
  * of a refs directory: a dot-entry is not a ref and neither is a `.lock` (a write
  * in flight) — no valid name begins with the one or ends with the other; a
- * directory is a namespace to enter; a regular file or a link is a ref. Every
- * ref is looked up the way libgit2 reads one, whether or not the enumeration
- * named it — one judge for the loose store, so a file the enumeration listed
- * and one it dropped meet the same rule, and a name Git refuses (an editor's
- * `work~`) refuses either way. The refusal is the listing's, in Git's words.
- * What resolves is listed under the name libgit2 gives it — its normalized
- * spelling, the enumeration's own, so a name readdir spells otherwise (decomposed,
- * on a filesystem that stores it so) is found listed and never listed twice —
- * unless the enumeration listed it. What vanished since the directory was read
- * holds nothing, a dangling link included, and so does a link to a directory:
- * libgit2 enters one (GIT_ITERATOR_DESCEND_SYMLINKS) and the walk does not, which
- * is what keeps it finite with no depth count; what stands beneath a linked
- * directory is the enumeration's reading, proved by nothing. A device or a fifo
- * is nothing libgit2 would list. A directory that will not open, or an entry
- * that will not stat, is the walk's own refusal, naming the directory. A namespace
- * with no directory holds no loose refs.
+ * directory is a namespace to enter, a link to one included, and a regular file
+ * is a ref, a link to one included. Every ref is looked up the way libgit2 reads
+ * one, whether or not the enumeration named it — one judge for the loose store,
+ * so a file the enumeration listed and one it dropped meet the same rule, and a
+ * name Git refuses (an editor's `work~`) refuses either way. The refusal is the
+ * listing's, in Git's words. What resolves is listed under the name libgit2 gives
+ * it — its normalized spelling, the enumeration's own, so a name readdir spells
+ * otherwise (decomposed, on a filesystem that stores it so) is found listed and
+ * never listed twice — unless the enumeration listed it. What vanished since
+ * the directory was read holds nothing, a dangling link included. A device or a
+ * fifo is nothing libgit2 would list. A directory that will not open, or an entry
+ * whose node will not stat, is the walk's own refusal, naming the directory. A
+ * namespace with no directory holds no loose refs.
+ *
+ * The store is libgit2's file, read as the invoker, as libgit2 reads it: raw
+ * calls, never the funnel's second try as root (sys/filesystem.h), so the walk
+ * sees what the lookups it corroborates see. A refusal is the repository's, as
+ * git's is (ERR_GIT), and never a path's reach.
  *
  * The cost is one open and one parse per loose ref — the read libgit2 made once
  * already — and a scan of the listing per ref: tens of branches, well under a
  * millisecond.
  */
-static error_t walk_loose_refs(const loose_walk_t *walk, const char *dir) {
-    DIR *d = fs_opendir(dir);
+static error_t gitops_walk_loose(const loose_walk_t *walk, const char *dir) {
+    DIR *d = opendir(dir);
     if (!d) {
         if (errno == ENOENT) return NULL;
-        return error_from_errno(errno, "Cannot read the refs under '%s'", dir);
+        return ERROR(
+            ERR_GIT, "Cannot read the refs under '%s': %s", dir, strerror(errno)
+        );
     }
 
     /* errno cleared before every readdir: a NULL is the end, or the error it names */
@@ -368,22 +372,32 @@ static error_t walk_loose_refs(const loose_walk_t *walk, const char *dir) {
 
         char *path = heap_str_format("%s/%s", dir, name);
 
-        switch (fs_lstat_occupant(path, NULL)) {
-            case FS_OCCUPANT_DIRECTORY:
-                err = walk_loose_refs(walk, path);
-                break;
-
-            case FS_OCCUPANT_REGULAR:
-            case FS_OCCUPANT_SYMLINK: {
-                git_reference *ref = NULL;
-                int rc = git_reference_lookup(
-                    &ref, walk->repo, path + walk->refname_at
+        /* Through a link to what it names, as Git's listing reads one
+         * (lib/git/refs/files-backend.c loose_fill_ref_dir, whose get_dtype follows
+         * it) and as libgit2's enumeration descends one. No entry names nothing
+         * — ENOENT or ENOTDIR, a dangling link or one gone since the directory
+         * was read. Every other refusal fails the listing closed: ELOOP past
+         * the kernel's links — a link that loops is entered as many levels deep
+         * as the kernel allows, then refused — and EACCES or ENAMETOOLONG beneath
+         * a link. Git lists past what it cannot read, and libgit2 ends its loose
+         * listing at the first link it cannot stat; this listing's absences are
+         * acted on (the census), so what it cannot read is its refusal. */
+        struct stat st;
+        if (stat(path, &st) != 0) {
+            if (errno != ENOENT && errno != ENOTDIR) {
+                err = ERROR(
+                    ERR_GIT, "Cannot read the refs under '%s': %s", dir,
+                    strerror(errno)
                 );
-                if (rc == GIT_ENOTFOUND) break;
-                if (rc < 0) {
-                    err = error_from_git(rc);
-                    break;
-                }
+            }
+        } else if (S_ISDIR(st.st_mode)) {
+            err = gitops_walk_loose(walk, path);
+        } else if (S_ISREG(st.st_mode)) {
+            git_reference *ref = NULL;
+            int rc = git_reference_lookup(&ref, walk->repo, path + walk->refname_at);
+            if (rc < 0 && rc != GIT_ENOTFOUND) {
+                err = error_from_git(rc);
+            } else if (rc == 0) {
                 /* The namespace's components lead the name whatever their spelling
                  * — normalization moves no '/' — and what follows them is the
                  * name beneath it. */
@@ -395,18 +409,7 @@ static error_t walk_loose_refs(const loose_walk_t *walk, const char *dir) {
                     string_array_push(walk->names, listed);
                 }
                 git_reference_free(ref);
-                break;
             }
-
-            case FS_OCCUPANT_NONE:
-            case FS_OCCUPANT_OTHER:
-                break;
-
-            case FS_OCCUPANT_UNKNOWN:
-                err = error_from_errno(
-                    errno, "Cannot read the refs under '%s'", dir
-                );
-                break;
         }
 
         free(path);
@@ -414,7 +417,9 @@ static error_t walk_loose_refs(const loose_walk_t *walk, const char *dir) {
     }
 
     if (!err && errno != 0) {
-        err = error_from_errno(errno, "Cannot read the refs under '%s'", dir);
+        err = ERROR(
+            ERR_GIT, "Cannot read the refs under '%s': %s", dir, strerror(errno)
+        );
     }
     closedir(d);
     return err;
@@ -481,7 +486,7 @@ error_t gitops_list_refs(
         slash = strchr(slash + 1, '/')) {
         walk.depth++;
     }
-    RETURN_IF_ERROR(walk_loose_refs(&walk, dir));
+    RETURN_IF_ERROR(gitops_walk_loose(&walk, dir));
 
     *out = names;
     return NULL;

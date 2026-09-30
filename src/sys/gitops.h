@@ -16,17 +16,20 @@
  * here classifies all three.
  *
  * For a ref listing that is necessary and not sufficient: libgit2's filesystem
- * refdb reads `packed-refs` loudly and the loose store as far as it can — a ref
- * file it cannot open or parse is skipped with the error cleared, a directory
- * it cannot open is an empty one, and its walk of a directory stops at a link it
- * cannot stat (refdb_fs.c `refdb_fs_backend__iterator_next`, `iter_load_paths`;
- * iterator.c `filesystem_iterator_frame_push`) — so an unreadable `refs/heads`
- * enumerates as nothing and ends GIT_ITEROVER. So every listing here reads the
- * loose store itself and looks each ref file up (gitops_list_refs). A LISTING
- * IS COMPLETE OR AN ERROR — Git's own words for the ref, the same a singular
- * lookup says of it, or the walk's for a directory it could not read — and a
- * caller acting on an absence in one (the census, the blocker, init's adoption
- * test) holds no proof of its own.
+ * refdb reads `packed-refs` loudly the first time on a handle — a parse it refused
+ * leaves an empty packed store it serves after — and the loose store as far as
+ * it can — a ref file it cannot open or parse is skipped with the error cleared,
+ * a directory it cannot open is an empty one, and its walk of a directory stops
+ * at a link it cannot stat (refdb_fs.c `refdb_fs_backend__iterator_next`,
+ * `iter_load_paths`; iterator.c `filesystem_iterator_frame_push`) — so an
+ * unreadable `refs/heads` enumerates as nothing and ends GIT_ITEROVER. So every
+ * listing here parses packed-refs afresh and reads the loose store itself, looking
+ * each ref file up (gitops_list_refs). A LISTING IS COMPLETE OR AN ERROR — Git's
+ * own words for the ref, the same a singular lookup says of it, or the walk's
+ * for a directory it could not read — and a caller acting on an absence in one
+ * (the census, the blocker, init's adoption test) holds no proof of its own. A
+ * singular lookup that misses proves no absence either, and the one that must
+ * says so (gitops_reference_find).
  */
 
 #ifndef DOTTA_GITOPS_H
@@ -251,14 +254,18 @@ error_t gitops_branch_blocker(
  * under the namespace first, on a reference database that has read nothing yet
  * — packed-refs parsed whole, so a damaged file refuses the listing every time and
  * never lists as a store without packed refs (gitops_reference_find says why);
- * then the loose store beneath it, read whole, every ref file looked up: a refusal
- * is the listing's, in Git's words, and a ref the enumeration did not name is
- * appended under the name libgit2 gives it — one born since the enumeration read,
- * one behind a directory this run reads through and libgit2 does not (a run that
- * holds root), one past a dangling link, where libgit2's walk of the directory
- * stops. Loose refs are named by their path, so a namespace with no directory
- * holds no loose refs (a remote never fetched, every ref packed) and is not an
- * error. Order is the enumeration's, the appended after it.
+ * then the loose store beneath it, read whole as the invoker, as libgit2 reads
+ * it, every ref file looked up: a refusal is the listing's, in Git's words, and
+ * a ref the enumeration did not name is appended under the name libgit2 gives
+ * it — one born since the enumeration read, one past a link the enumeration could
+ * not stat, where libgit2's walk of the directory stops. A link to a directory
+ * is a namespace, entered as Git's own listing enters one; what the kernel refuses
+ * beneath it — a link that loops past its limit, a directory the invoker cannot
+ * read — refuses the listing, naming the directory, where git lists past it: an
+ * absence in this listing is acted on. Loose refs are named by their path, so a
+ * namespace with no directory holds no loose refs (a remote never fetched, every
+ * ref packed) and is not an error. Order is the enumeration's, the appended after
+ * it.
  *
  * gitops_list_branches and gitops_list_remote_tracking are this under their
  * namespaces; init's adoption test asks it of "refs" whole.

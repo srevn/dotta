@@ -1,8 +1,9 @@
 /**
  * stage.c - One ref's next tree, staged in memory: implementation
  *
- * See stage.h. The stage composes four libgit2 primitives: the ref resolved once
- * (git_reference_name_to_id), an ownerless index seeded from the tip's tree
+ * See stage.h. The stage composes four primitives: the ref resolved once, its
+ * absence proven (sys/gitops.h gitops_resolve_reference_oid,
+ * gitops_reference_exists), an ownerless index seeded from the tip's tree
  * (git_index_new + git_index_read_tree — never git_repository_index, the
  * checked-out branch's staging area), the tree written straight to the ODB
  * (git_index_write_tree_to — never git_index_write, which wants a backing file),
@@ -113,16 +114,10 @@ error_t stage_open(git_repository *repo, const char *refname, stage_t **out) {
     CHECK_NULL(out);
     *out = NULL;
 
+    /* The tip, or the ref's absence proven — a packed-refs that will not parse
+     * is its own failure, never "not found" (sys/gitops.h gitops_reference_find) */
     git_oid tip;
-    int rc = git_reference_name_to_id(&tip, repo, refname);
-    if (rc == GIT_ENOTFOUND) {
-        return ERROR(ERR_NOT_FOUND, "Reference '%s' does not exist", refname);
-    }
-    if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc), "Failed to resolve reference '%s'", refname
-        );
-    }
+    RETURN_IF_ERROR(gitops_resolve_reference_oid(repo, refname, &tip));
 
     return stage_seed(repo, refname, &tip, out);
 }
@@ -133,15 +128,15 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out) {
     CHECK_NULL(out);
     *out = NULL;
 
-    git_oid tip;
-    int rc = git_reference_name_to_id(&tip, repo, refname);
-    if (rc == 0) {
+    /* Absent, and proven so: the proof leaves the handle on a reference database
+     * that read packed-refs whole, and the root commit's create-only write decides
+     * the name free on that reading — a cache emptied by an earlier refused parse
+     * would let it stand a loose ref over a packed branch (sys/gitops.h
+     * gitops_reference_find). */
+    bool exists = false;
+    RETURN_IF_ERROR(gitops_reference_exists(repo, refname, &exists));
+    if (exists) {
         return ERROR(ERR_EXISTS, "Reference '%s' already exists", refname);
-    }
-    if (rc != GIT_ENOTFOUND) {
-        return error_wrap(
-            error_from_git(rc), "Failed to resolve reference '%s'", refname
-        );
     }
 
     return stage_seed(repo, refname, NULL, out);

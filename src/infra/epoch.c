@@ -59,31 +59,29 @@ static error_t local_has_ciphertext(
 /**
  * Resolve refs/dotta/epoch to a tree.
  *
- * Returns ERR_NOT_FOUND when the ref is missing, the canonical "uninitialized"
- * diagnostic. Caller is responsible for freeing `*out_tree` via `git_tree_free`
- * on success.
+ * Returns ERR_NOT_FOUND when the ref is missing — its absence proven, never a
+ * lookup's word alone — the canonical "uninitialized" diagnostic. Caller is
+ * responsible for freeing `*out_tree` via `git_tree_free` on success.
  */
 static error_t resolve_epoch_tree(
     git_repository *repo, git_tree **out_tree
 ) {
     *out_tree = NULL;
 
+    /* The ref, or its absence proven (sys/gitops.h gitops_reference_find): a
+     * packed-refs that will not parse is a failure, and never the "no epoch"
+     * whose readers adopt without a census or mint over sealed files. */
     git_reference *ref = NULL;
-    int git_err = git_reference_lookup(&ref, repo, EPOCH_REF);
-    if (git_err == GIT_ENOTFOUND) {
-        return ERROR(
-            ERR_NOT_FOUND,
-            "Epoch ref '%s' not found",
-            EPOCH_REF
-        );
+    RETURN_IF_ERROR(gitops_reference_find(repo, EPOCH_REF, &ref));
+    if (!ref) {
+        return ERROR(ERR_NOT_FOUND, "Epoch ref '%s' not found", EPOCH_REF);
     }
-    if (git_err < 0) return error_from_git(git_err);
 
     /* Peel through any annotated-tag layers down to the commit. The ref is created
      * as a direct commit by epoch_init, but peeling defends against future shapes
      * (signed-tag wrappers, symbolic refs) without changing the load semantics. */
     git_object *commit_obj = NULL;
-    git_err = git_reference_peel(&commit_obj, ref, GIT_OBJECT_COMMIT);
+    int git_err = git_reference_peel(&commit_obj, ref, GIT_OBJECT_COMMIT);
     git_reference_free(ref);
     if (git_err < 0) {
         return error_wrap(
@@ -1074,12 +1072,11 @@ static error_t inspect_remote_epoch(
      * target. A missing local ref is DIVERGENT (a joiner that has no epoch yet
      * must converge to the remote's). */
     git_oid local_oid;
-    git_err = git_reference_name_to_id(&local_oid, repo, EPOCH_REF);
-    if (git_err == GIT_ENOTFOUND) {
+    RETURN_IF_ERROR(gitops_reference_oid(repo, EPOCH_REF, &local_oid));
+    if (git_oid_is_zero(&local_oid)) {
         *out_status = EPOCH_REMOTE_DIVERGENT;
         return NULL;
     }
-    if (git_err < 0) return error_from_git(git_err);
 
     *out_status = git_oid_equal(&local_oid, &remote_oid)
         ? EPOCH_REMOTE_EQUAL

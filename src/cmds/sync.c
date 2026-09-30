@@ -114,29 +114,34 @@ static error_t pull_branch_ff(
         );
     }
 
-    git_reference *local_ref = NULL;
-    git_reference *remote_ref = NULL;
-
-    int git_err = git_reference_lookup(&local_ref, repo, local_refname);
+    /* The branch that moves, read through a symbolic one to the ref it names:
+     * its target is what the fast-forward compares and sets. Its absence is no
+     * answer here — the caller asks of a branch it holds — so the lookup's failure
+     * is the failure. */
+    git_reference *branch = NULL;
+    int git_err = git_reference_lookup(&branch, repo, local_refname);
     if (git_err < 0) return error_from_git(git_err);
 
-    git_err = git_reference_lookup(&remote_ref, repo, remote_refname);
-    if (git_err < 0) {
-        git_reference_free(local_ref);
-        if (git_err == GIT_ENOTFOUND) {
-            /* Remote branch doesn't exist */
-            return NULL;
-        }
-        return error_from_git(git_err);
-    }
-
-    const git_oid *remote_oid = git_reference_target(remote_ref);
+    git_reference *local_ref = NULL;
+    git_err = git_reference_resolve(&local_ref, branch);
+    git_reference_free(branch);
+    if (git_err < 0) return error_from_git(git_err);
     const git_oid *local_oid = git_reference_target(local_ref);
 
-    /* Check if branches are at the same commit (up-to-date) */
-    if (git_oid_equal(local_oid, remote_oid)) {
+    /* The remote-tracking tip, or its absence proven (sys/gitops.h
+     * gitops_reference_oid): nothing fetched for the branch is nothing to do,
+     * and a packed-refs that will not parse is the failure it is, never a remote
+     * branch that is not there. */
+    git_oid remote_oid;
+    err = gitops_reference_oid(repo, remote_refname, &remote_oid);
+    if (err || git_oid_is_zero(&remote_oid)) {
         git_reference_free(local_ref);
-        git_reference_free(remote_ref);
+        return err;
+    }
+
+    /* Check if branches are at the same commit (up-to-date) */
+    if (git_oid_equal(local_oid, &remote_oid)) {
+        git_reference_free(local_ref);
         /* Already up-to-date, nothing to do */
         return NULL;
     }
@@ -144,17 +149,15 @@ static error_t pull_branch_ff(
     /* Check if fast-forward is possible by checking if local is ancestor of remote.
      * A graph question about the two commits, independent of HEAD: the store
      * checks nothing out, and the branch being moved is never the current one. */
-    git_err = git_graph_descendant_of(repo, remote_oid, local_oid);
+    git_err = git_graph_descendant_of(repo, &remote_oid, local_oid);
     if (git_err < 0) {
         git_reference_free(local_ref);
-        git_reference_free(remote_ref);
         return error_from_git(git_err);
     }
 
     if (git_err == 0) {
         /* local is NOT an ancestor of remote - cannot fast-forward */
         git_reference_free(local_ref);
-        git_reference_free(remote_ref);
         return ERROR(
             ERR_CONFLICT, "Cannot fast-forward '%s' - branches have diverged",
             branch_name
@@ -166,10 +169,9 @@ static error_t pull_branch_ff(
     /* Perform fast-forward */
     git_reference *updated_ref = NULL;
     git_err = git_reference_set_target(
-        &updated_ref, local_ref, remote_oid, "sync: Fast-forward pull"
+        &updated_ref, local_ref, &remote_oid, "sync: Fast-forward pull"
     );
     git_reference_free(local_ref);
-    git_reference_free(remote_ref);
 
     if (git_err < 0) return error_from_git(git_err);
 

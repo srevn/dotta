@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <git2.h>
+#include <git2/sys/repository.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
@@ -149,24 +150,108 @@ void gitops_close_repository(git_repository *repo) {
 /**
  * Branch/Reference operations
  */
+
+/*
+ * A reference database that has never read the store, installed on the handle.
+ * libgit2 reads packed-refs again when the file changed and never when it did
+ * not — not even one whose parse it refused: it stamps the file before parsing
+ * and keeps the stamp over a failed parse, then serves the emptied cache as the
+ * store until the file changes (util/sortedcache.c git_sortedcache_lockandload,
+ * refdb_fs.c packed_reload). So a decision that rests on what the store does
+ * not hold — an absence, a listing's completeness, a name free for a create —
+ * reads through a database that has read nothing yet. The handle keeps its own
+ * count of the one it is given (git_repository_set_refdb), and a reference or
+ * an iterator from the old one keeps that one alive (refdb.c counts each).
+ */
+static error_t gitops_reopen_refdb(git_repository *repo) {
+    git_refdb *fresh = NULL;
+    int rc = git_refdb_open(&fresh, repo);
+    if (rc < 0) {
+        return error_wrap(error_from_git(rc), "Cannot read the references");
+    }
+
+    rc = git_repository_set_refdb(repo, fresh);
+    git_refdb_free(fresh);
+    if (rc < 0) {
+        return error_wrap(error_from_git(rc), "Cannot read the references");
+    }
+    return NULL;
+}
+
+error_t gitops_reference_find(
+    git_repository *repo, const char *refname, git_reference **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(refname);
+    CHECK_NULL(out);
+    CHECK_ARG(refname[0] != '\0', "Reference name cannot be empty");
+
+    /* A loose ref answers "not there" only where no file stands, or a directory
+     * does — an unreadable one is GIT_ELOCKED (fs_path.c git_fs_path_set_error)
+     * — so a lookup that finds, or fails, is the answer. */
+    *out = NULL;
+    int rc = git_reference_lookup(out, repo, refname);
+    if (rc != GIT_ENOTFOUND) {
+        return rc < 0 ? error_from_git(rc) : NULL;
+    }
+
+    /* A miss read packed-refs one of two ways, and neither proves it: under the
+     * sorted trait, which git and libgit2 both write, a search that one damaged
+     * record steers past its own name — and every name before it, where it sits
+     * at the first probe (refdb_fs.c packed_lookup); otherwise a cached parse a
+     * refused one left empty. So the name is listed through a database that has
+     * read nothing: the iterator parses the file whole and refuses a damaged
+     * one. A refname carries no byte libgit2's glob reads specially — the reference
+     * rule refuses '*', '?', '[' and '\' — so the name is its own glob. */
+    RETURN_IF_ERROR(gitops_reopen_refdb(repo));
+
+    git_reference_iterator *iter = NULL;
+    rc = git_reference_iterator_glob_new(&iter, repo, refname);
+    if (rc < 0) {
+        return error_wrap(
+            error_from_git(rc), "Cannot read reference '%s'", refname
+        );
+    }
+    const char *listed = NULL;
+    rc = git_reference_next_name(&listed, iter);
+    git_reference_iterator_free(iter);
+    if (rc == GIT_ITEROVER) return NULL;
+    if (rc < 0) {
+        return error_wrap(
+            error_from_git(rc), "Cannot read reference '%s'", refname
+        );
+    }
+
+    /* Listed: asked once more, of the database whose cache the parse just filled
+     * — an unsorted file's lookup reads that cache and finds it. A sorted file's
+     * search can miss a name its parse lists, records out of order or CRLF line
+     * ends, and that is no absence. */
+    rc = git_reference_lookup(out, repo, refname);
+    if (rc == GIT_ENOTFOUND) {
+        return ERROR(
+            ERR_GIT, "Reference '%s' is listed but no lookup reaches it", refname
+        );
+    }
+    if (rc < 0) {
+        return error_wrap(
+            error_from_git(rc), "Cannot read reference '%s'", refname
+        );
+    }
+    return NULL;
+}
+
 error_t gitops_reference_exists(
     git_repository *repo, const char *refname, bool *exists
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(refname);
     CHECK_NULL(exists);
-    CHECK_ARG(refname[0] != '\0', "Reference name cannot be empty");
 
     git_reference *ref = NULL;
-    int rc = git_reference_lookup(&ref, repo, refname);
-    if (rc == GIT_ENOTFOUND) {
-        *exists = false;
-        return NULL;
-    }
-    if (rc < 0) return error_from_git(rc);
+    RETURN_IF_ERROR(gitops_reference_find(repo, refname, &ref));
+    *exists = ref != NULL;
     git_reference_free(ref);
 
-    *exists = true;
     return NULL;
 }
 
@@ -344,9 +429,13 @@ error_t gitops_list_refs(
     CHECK_NULL(out);
     CHECK_ARG(namespace[0] != '\0', "Reference namespace cannot be empty");
 
-    /* libgit2's enumeration under the namespace: the packed refs, loudly; the
-     * loose ones as far as it could read them. The glob walks the namespace's
-     * own directory and nothing beside it; a name is listed past "<namespace>/". */
+    /* libgit2's enumeration under the namespace: the packed refs, loudly, parsed
+     * by a database that has read nothing yet — one that met a refused parse
+     * would list no packed ref at all (gitops_reopen_refdb); the loose ones as
+     * far as it could read them. The glob walks the namespace's own directory
+     * and nothing beside it; a name is listed past "<namespace>/". */
+    RETURN_IF_ERROR(gitops_reopen_refdb(repo));
+
     char glob[DOTTA_REFNAME_MAX];
     int written = snprintf(glob, sizeof(glob), "%s/*", namespace);
     if (written < 0 || (size_t) written >= sizeof(glob)) {
@@ -483,19 +572,16 @@ error_t gitops_delete_branch(git_repository *repo, const char *name) {
 static error_t resolve_ref_to_tree(
     git_repository *repo, const char *ref_name, git_tree **out_tree
 ) {
-    /* Get reference */
+    /* The reference, or its absence proven (gitops_reference_find) */
     git_reference *ref = NULL;
-    int err = git_reference_lookup(&ref, repo, ref_name);
-    if (err < 0) {
-        return error_wrap(
-            error_from_git(err),
-            "Failed to lookup reference '%s'", ref_name
-        );
+    RETURN_IF_ERROR(gitops_reference_find(repo, ref_name, &ref));
+    if (!ref) {
+        return ERROR(ERR_NOT_FOUND, "Reference '%s' not found", ref_name);
     }
 
     /* Peel reference to get the underlying object */
     git_object *obj = NULL;
-    err = git_reference_peel(&obj, ref, GIT_OBJECT_ANY);
+    int err = git_reference_peel(&obj, ref, GIT_OBJECT_ANY);
     git_reference_free(ref);
     if (err < 0) {
         return error_wrap(
@@ -1278,11 +1364,49 @@ error_t gitops_create_reference(
     CHECK_NULL(name);
     CHECK_NULL(oid);
 
+    /* A create that must not overwrite decides the name free, and libgit2 asks
+     * its cached parse of packed-refs — one a refused parse left empty would
+     * find every packed name free, and the loose ref written would stand over a
+     * packed branch. So the decision reads a database that has read nothing. */
+    if (!force) RETURN_IF_ERROR(gitops_reopen_refdb(repo));
+
     git_reference *ref = NULL;
     int err = git_reference_create(&ref, repo, name, oid, force, NULL);
     if (err < 0) return error_from_git(err);
 
     git_reference_free(ref);
+
+    return NULL;
+}
+
+error_t gitops_reference_oid(
+    git_repository *repo, const char *ref_name, git_oid *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(ref_name);
+    CHECK_NULL(out);
+
+    /* Found, or its absence proven (gitops_reference_find): a packed-refs that
+     * will not parse is its own failure, never a reference that is not there. */
+    git_reference *ref = NULL;
+    RETURN_IF_ERROR(gitops_reference_find(repo, ref_name, &ref));
+    if (!ref) {
+        memset(out, 0, sizeof(*out));
+        return NULL;
+    }
+
+    /* Through a symbolic reference to the one it names: one that names nothing
+     * stands, and resolves to no id. */
+    git_reference *direct = NULL;
+    int err = git_reference_resolve(&direct, ref);
+    git_reference_free(ref);
+    if (err < 0) {
+        return error_wrap(
+            error_from_git(err), "Failed to resolve reference '%s'", ref_name
+        );
+    }
+    git_oid_cpy(out, git_reference_target(direct));
+    git_reference_free(direct);
 
     return NULL;
 }
@@ -1294,18 +1418,9 @@ error_t gitops_resolve_reference_oid(
     CHECK_NULL(ref_name);
     CHECK_NULL(out);
 
-    int err = git_reference_name_to_id(out, repo, ref_name);
-    if (err < 0) {
-        if (err == GIT_ENOTFOUND) {
-            return ERROR(
-                ERR_NOT_FOUND, "Reference '%s' not found",
-                ref_name
-            );
-        }
-        return error_wrap(
-            error_from_git(err),
-            "Failed to resolve reference '%s'", ref_name
-        );
+    RETURN_IF_ERROR(gitops_reference_oid(repo, ref_name, out));
+    if (git_oid_is_zero(out)) {
+        return ERROR(ERR_NOT_FOUND, "Reference '%s' not found", ref_name);
     }
 
     return NULL;

@@ -145,14 +145,51 @@ error_t gitops_init_repository(git_repository **out, const char *path);
 void gitops_close_repository(git_repository *repo);
 
 /**
+ * The reference at a full name, or NULL where none stands
+ *
+ * NULL is an absence proven on a fresh read of the store, never a lookup's word
+ * alone: a lookup that misses has read packed-refs through two readers libgit2
+ * does not keep sound, a search of the file and a cache of its parse. So a miss
+ * is asked again of a reference database that has never read the file, whose
+ * listing of the name parses it whole — a damaged file refuses there — and a
+ * name that listing holds and no lookup reaches (records out of order, CRLF line
+ * ends under the sorted trait) is the failure. The reference comes back as it
+ * is stored: a symbolic one is not resolved.
+ *
+ * A miss leaves the handle on that fresh reference database, so a create-only
+ * write that follows a proven absence finds the name free on the store as the
+ * proof read it (sys/stage.c stage_orphan's root commit, gitops_create_reference
+ * without force). A reference or an iterator held from before keeps the database
+ * it came from — libgit2 counts it — so nothing a caller holds is freed under it.
+ *
+ * One corner stays open: under `core.precomposeunicode` the lookup reads a name
+ * in decomposed Unicode as its composed form and the listing does not, so in a
+ * file whose order hides the composed name a decomposed spelling reads absent.
+ * The branch rule (gitops_branch_refname) passes a decomposed name.
+ *
+ * Readers: gitops_reference_exists, and every presence question through it;
+ * gitops_reference_oid, and the readers of an id through it (its header);
+ * gitops_load_tree and gitops_load_branch_tree; infra/epoch.c resolve_epoch_tree.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param refname Full reference name (must not be NULL or empty)
+ * @param out The reference (caller frees with git_reference_free), or NULL:
+ *            none stands (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t gitops_reference_find(
+    git_repository *repo, const char *refname, git_reference **out
+);
+
+/**
  * Check if a reference exists
  *
  * The singular: the ref resolves, or it is absent. Anything else — a loose ref
- * that will not open, one whose bytes are not an OID — is the error, never an
- * absence, and every caller propagates it: a bool that read it as "no" once sent
- * the user to fetch a profile that was here. One lookup answers it for any ref
- * (a branch, the epoch, the baseline); a name outside refs/heads is the caller's
- * to spell in full.
+ * that will not open, one whose bytes are not an OID, a packed-refs that will
+ * not parse — is the error, never an absence, and every caller propagates it: a
+ * bool that read it as "no" once sent the user to fetch a profile that was here.
+ * gitops_reference_find answers it for any ref (a branch, the epoch, the baseline),
+ * its absence proven; a name outside refs/heads is the caller's to spell in full.
  *
  * @param repo Repository (must not be NULL)
  * @param refname Full reference name (must not be NULL or empty)
@@ -211,15 +248,17 @@ error_t gitops_branch_blocker(
  *
  * The names beneath `namespace` — "refs/heads" lists a branch as "p", "refs"
  * lists it as "heads/p" — complete or an error (the header). libgit2's enumeration
- * under the namespace first; then the loose store beneath it, read whole, every
- * ref file looked up: a refusal is the listing's, in Git's words, and a ref the
- * enumeration did not name is appended under the name libgit2 gives it — one
- * born since the enumeration read, one behind a directory this run reads through
- * and libgit2 does not (a run that holds root), one past a dangling link, where
- * libgit2's walk of the directory stops. Loose refs are named by their path, so
- * a namespace with no directory holds no loose refs (a remote never fetched,
- * every ref packed) and is not an error. Order is the enumeration's, the appended
- * after it.
+ * under the namespace first, on a reference database that has read nothing yet
+ * — packed-refs parsed whole, so a damaged file refuses the listing every time and
+ * never lists as a store without packed refs (gitops_reference_find says why);
+ * then the loose store beneath it, read whole, every ref file looked up: a refusal
+ * is the listing's, in Git's words, and a ref the enumeration did not name is
+ * appended under the name libgit2 gives it — one born since the enumeration read,
+ * one behind a directory this run reads through and libgit2 does not (a run that
+ * holds root), one past a dangling link, where libgit2's walk of the directory
+ * stops. Loose refs are named by their path, so a namespace with no directory
+ * holds no loose refs (a remote never fetched, every ref packed) and is not an
+ * error. Order is the enumeration's, the appended after it.
  *
  * gitops_list_branches and gitops_list_remote_tracking are this under their
  * namespaces; init's adoption test asks it of "refs" whole.
@@ -747,6 +786,10 @@ error_t gitops_resolve_default_remote(
 /**
  * Create reference
  *
+ * Without `force` the name must be free, and that is decided on a fresh read of
+ * the store (gitops_reference_find says why): a packed ref of the name refuses
+ * the create, and a packed-refs that will not parse refuses it too.
+ *
  * @param repo Repository (must not be NULL)
  * @param name Reference name (e.g., "refs/heads/mybranch") (must not be NULL)
  * @param oid Target OID (must not be NULL)
@@ -761,11 +804,34 @@ error_t gitops_create_reference(
 );
 
 /**
+ * The id a reference names, or Git's null id where none stands
+ *
+ * gitops_reference_find, read through a symbolic reference to the one it names:
+ * the null id — all zeros, git_oid_is_zero, Git's own id for no object — only
+ * where the absence is proven, and a symbolic reference that names nothing is a
+ * failure, not an absence. For the readers that act on a reference's absence as
+ * an answer: sys/upstream.c upstream_analyze_profile (no branch, no remote branch),
+ * cmds/sync.c pull_branch_ff (nothing fetched to fast-forward to), infra/epoch.c
+ * inspect_remote_epoch (no local epoch), and gitops_resolve_reference_oid, which
+ * refuses it.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param ref_name Full reference name (must not be NULL or empty)
+ * @param out The id, or the null id (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t gitops_reference_oid(
+    git_repository *repo,
+    const char *ref_name,
+    git_oid *out
+);
+
+/**
  * Resolve reference name to OID
  *
- * Convenience function that resolves a reference name directly to its target
- * OID without exposing the intermediate reference object. Handles symbolic
- * references transparently.
+ * gitops_reference_oid for a reader that needs the reference: its absence, proven,
+ * is refused (ERR_NOT_FOUND, naming the reference), and so is a symbolic reference
+ * that names nothing, in Git's words.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (e.g., "refs/heads/main") (must not be NULL)

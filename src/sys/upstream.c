@@ -49,53 +49,34 @@ error_t upstream_analyze_profile(
         );
     }
 
-    /* Local branch absent → UNKNOWN (already set above). */
-    git_reference *local_ref = NULL;
-    int git_err = git_reference_lookup(&local_ref, repo, local_refname);
-    if (git_err == GIT_ENOTFOUND) {
-        return NULL;
-    } else if (git_err < 0) {
-        return error_from_git(git_err);
+    /* Each side's tip, or its absence proven (sys/gitops.h gitops_reference_oid):
+     * a packed-refs that will not parse is the analysis's failure, never a branch
+     * or a remote branch that is not there. A symbolic branch is read through
+     * to the one it names. */
+    git_oid local_oid;
+    RETURN_IF_ERROR(gitops_reference_oid(repo, local_refname, &local_oid));
+    if (git_oid_is_zero(&local_oid)) {
+        return NULL;                  /* no local branch: UNKNOWN, set above */
     }
 
-    /* Remote branch absent → NO_REMOTE. */
-    git_reference *remote_ref = NULL;
-    git_err = git_reference_lookup(&remote_ref, repo, remote_refname);
-    if (git_err == GIT_ENOTFOUND) {
-        git_reference_free(local_ref);
+    git_oid remote_oid;
+    RETURN_IF_ERROR(gitops_reference_oid(repo, remote_refname, &remote_oid));
+    if (git_oid_is_zero(&remote_oid)) {
         out->state = UPSTREAM_NO_REMOTE;
         return NULL;
-    } else if (git_err < 0) {
-        git_reference_free(local_ref);
-        return error_from_git(git_err);
-    }
-
-    /* Get OIDs */
-    const git_oid *local_oid = git_reference_target(local_ref);
-    const git_oid *remote_oid = git_reference_target(remote_ref);
-
-    if (!local_oid || !remote_oid) {
-        git_reference_free(local_ref);
-        git_reference_free(remote_ref);
-        return ERROR(ERR_GIT, "Branch reference has no target OID");
     }
 
     /* Check if identical */
-    if (git_oid_equal(local_oid, remote_oid)) {
-        git_reference_free(local_ref);
-        git_reference_free(remote_ref);
+    if (git_oid_equal(&local_oid, &remote_oid)) {
         out->state = UPSTREAM_UP_TO_DATE;
         return NULL;
     }
 
     /* Calculate ahead/behind */
     size_t ahead = 0, behind = 0;
-    git_err = git_graph_ahead_behind(
-        &ahead, &behind, repo, local_oid, remote_oid
+    int git_err = git_graph_ahead_behind(
+        &ahead, &behind, repo, &local_oid, &remote_oid
     );
-    git_reference_free(local_ref);
-    git_reference_free(remote_ref);
-
     if (git_err < 0) return error_from_git(git_err);
 
     out->ahead = ahead;

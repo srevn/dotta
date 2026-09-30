@@ -108,7 +108,10 @@ error_t stage_open(git_repository *repo, const char *refname, stage_t **out);
  * — the commit will be a root
  *
  * A ref that is present is refused (ERR_EXISTS): the writer expected to create
- * it. One that cannot be read is an error in Git's words. `refname` is copied.
+ * it. One that cannot be read is an error in Git's words, and so is a packed-refs
+ * that will not parse: the absence is proven on a fresh read of the store
+ * (sys/gitops.h gitops_reference_find), and the root commit decides the name
+ * free on that reading. `refname` is copied.
  *
  * @param repo Repository (must not be NULL; borrowed for the stage's lifetime)
  * @param refname Full reference name (must not be NULL)

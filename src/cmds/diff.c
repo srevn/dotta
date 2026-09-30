@@ -969,10 +969,10 @@ static error_t diff_commit_to_workspace(
 
     /* Step 3: Get tree from THE HISTORICAL COMMIT (not HEAD!) — from the commit
      * in hand, the OID helper beside it being a second lookup of what is here. */
-    int git_err = git_commit_tree(&tree, commit);
-    if (git_err < 0) {
+    int rc = git_commit_tree(&tree, commit);
+    if (rc < 0) {
         err = error_wrap(
-            error_from_git(git_err), "Failed to get tree from commit"
+            error_from_git(rc), "Failed to get tree from commit"
         );
         goto cleanup;
     }
@@ -1167,18 +1167,18 @@ static error_t diff_commits(
     /* Get trees from the two commits in hand — the OID helper beside this one
      * would look each of them up a second time (the workspace arm above reads
      * its tree the same way). */
-    int ret = git_commit_tree(&tree1, commit1);
-    if (ret < 0) {
+    int rc = git_commit_tree(&tree1, commit1);
+    if (rc < 0) {
         err = error_wrap(
-            error_from_git(ret), "Failed to get tree from commit %s", oid1_str
+            error_from_git(rc), "Failed to get tree from commit %s", oid1_str
         );
         goto cleanup;
     }
 
-    ret = git_commit_tree(&tree2, commit2);
-    if (ret < 0) {
+    rc = git_commit_tree(&tree2, commit2);
+    if (rc < 0) {
         err = error_wrap(
-            error_from_git(ret), "Failed to get tree from commit %s", oid2_str
+            error_from_git(rc), "Failed to get tree from commit %s", oid2_str
         );
         goto cleanup;
     }
@@ -1205,11 +1205,11 @@ static error_t diff_commits(
 
     if (opts->name_only) {
         /* Name-only: list changed file paths without diff content or stats */
-        ret = git_diff_print(
+        rc = git_diff_print(
             diff, GIT_DIFF_FORMAT_NAME_ONLY, print_diff_line_cb, out
         );
-        if (ret < 0) {
-            err = error_from_git(ret);
+        if (rc < 0) {
+            err = error_from_git(rc);
             goto cleanup;
         }
     } else {
@@ -1219,9 +1219,9 @@ static error_t diff_commits(
 
         output_gap(out, OUTPUT_NORMAL);
 
-        ret = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out);
-        if (ret < 0) {
-            err = error_from_git(ret);
+        rc = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out);
+        if (rc < 0) {
+            err = error_from_git(rc);
             goto cleanup;
         }
     }

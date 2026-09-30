@@ -499,17 +499,17 @@ static error_t show_diff_preview(
      * blobs in the Git ODB that would persist until gc.
      */
     git_patch *patch = NULL;
-    int ret = git_patch_from_buffers(
+    int rc = git_patch_from_buffers(
         &patch,
         standing_plaintext.data, standing_plaintext.size, standing_name,
         target_plaintext.data, target_plaintext.size, standing_name,
         NULL  /* options */
     );
 
-    if (ret < 0) {
+    if (rc < 0) {
         buffer_deinit(&standing_plaintext);
         buffer_deinit(&target_plaintext);
-        return error_from_git(ret);
+        return error_from_git(rc);
     }
 
     /* Get patch stats */
@@ -533,8 +533,8 @@ static error_t show_diff_preview(
 
     /* Print patch */
     git_buf buf = { 0 };
-    ret = git_patch_to_buf(&buf, patch);
-    if (ret < 0) {
+    rc = git_patch_to_buf(&buf, patch);
+    if (rc < 0) {
         output_warning(out, OUTPUT_NORMAL, "Could not format diff output");
     } else if (buf.ptr) {
         output_print_diff(out, OUTPUT_NORMAL, buf.ptr);
@@ -803,9 +803,9 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* Step 5: the target commit's tree, opened once and lent to everything below
      * that reads the commit. */
-    int ret = git_commit_tree(&target_tree, target_commit);
-    if (ret < 0) {
-        err = error_from_git(ret);
+    int rc = git_commit_tree(&target_tree, target_commit);
+    if (rc < 0) {
+        err = error_from_git(rc);
         goto cleanup;
     }
 
@@ -920,9 +920,9 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * the write (step 14) rather than standing in its way. So the sheet must
      * not answer here, which is why core/profiles.h profile_holds names this
      * read as one of its non-readers. */
-    ret = git_tree_entry_bypath(&standing_entry, stage_tree(stage), restored_name);
-    if (ret < 0 && ret != GIT_ENOTFOUND) {
-        err = error_from_git(ret);
+    rc = git_tree_entry_bypath(&standing_entry, stage_tree(stage), restored_name);
+    if (rc < 0 && rc != GIT_ENOTFOUND) {
+        err = error_from_git(rc);
         goto cleanup;
     }
 
@@ -987,12 +987,12 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
             goto cleanup;
         }
 
-        ret = git_odb_hash(
+        rc = git_odb_hash(
             &restored_blob, rebound.data, rebound.size, GIT_OBJECT_BLOB
         );
-        if (ret < 0) {
+        if (rc < 0) {
             err = error_wrap(
-                error_from_git(ret), "Cannot identify the resealed '%s'",
+                error_from_git(rc), "Cannot identify the resealed '%s'",
                 restored_name
             );
             goto cleanup;

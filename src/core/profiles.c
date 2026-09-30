@@ -157,10 +157,10 @@ string_array_t profile_detect(arena_t *arena, const string_array_t *available_br
         hostname[sizeof(hostname) - 1] = '\0';
 
         char host_prefix[DOTTA_REFNAME_MAX];
-        int ret = snprintf(
+        int n = snprintf(
             host_prefix, sizeof(host_prefix), "hosts/%s", hostname
         );
-        if (ret >= 0 && (size_t) ret < sizeof(host_prefix)) {
+        if (n >= 0 && (size_t) n < sizeof(host_prefix)) {
             match_hierarchical_profiles(available_branches, host_prefix, &profiles);
         }
     }
@@ -447,9 +447,9 @@ static bool tree_entry_content_path(
 
     /* The path within the branch is the walk root and the entry's name: libgit2
      * supplies the root as "" or "dir/", and an empty one is the name alone. */
-    int ret = snprintf(buf, size, "%s%s", root ? root : "", name);
+    int n = snprintf(buf, size, "%s%s", root ? root : "", name);
 
-    if (ret < 0 || (size_t) ret >= size) {
+    if (n < 0 || (size_t) n >= size) {
         *out_err = ERROR(
             ERR_INTERNAL, "Path exceeds maximum length: %s%s",
             root ? root : "", name
@@ -658,9 +658,9 @@ error_t profile_get_tree_stats(
 
     /* The files: one walk, one ODB handle, sizes read from the object headers. */
     git_odb *odb = NULL;
-    int git_err = git_repository_odb(&odb, repo);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
+    int rc = git_repository_odb(&odb, repo);
+    if (rc < 0) {
+        err = error_from_git(rc);
         goto cleanup;
     }
 
@@ -712,7 +712,7 @@ error_t profile_get_tree_stats(
          * an absence, so the count refuses rather than counts a directory the
          * branch may not hold. */
         git_tree_entry *entry = NULL;
-        int rc = git_tree_entry_bypath(&entry, tree, items[i]->key);
+        rc = git_tree_entry_bypath(&entry, tree, items[i]->key);
         if (rc == 0) {
             bool is_blob = git_tree_entry_type(entry) == GIT_OBJECT_BLOB;
             git_tree_entry_free(entry);

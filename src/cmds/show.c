@@ -247,11 +247,11 @@ static error_t show_source(
 
     /* The commit is in hand, so its tree is one dereference and not a second
      * lookup by oid. */
-    int ret = git_commit_tree(out_tree, commit);
-    if (ret < 0) {
+    int rc = git_commit_tree(out_tree, commit);
+    if (rc < 0) {
         git_commit_free(commit);
         return error_wrap(
-            error_from_git(ret), "Failed to load tree from commit '%s'", commit_ref
+            error_from_git(rc), "Failed to load tree from commit '%s'", commit_ref
         );
     }
 
@@ -464,9 +464,9 @@ static error_t show_commit(
     git_diff_stats *stats = NULL;
 
     /* Get commit tree — from the commit in hand, not by a second lookup */
-    int ret = git_commit_tree(&commit_tree, commit);
-    if (ret < 0) {
-        err = error_from_git(ret);
+    int rc = git_commit_tree(&commit_tree, commit);
+    if (rc < 0) {
+        err = error_from_git(rc);
         goto cleanup;
     }
 
@@ -557,11 +557,11 @@ static error_t show_commit(
     output_gap(out, OUTPUT_NORMAL);
 
     /* Print the diff with color */
-    ret = git_diff_print(
+    rc = git_diff_print(
         diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out
     );
-    if (ret < 0) {
-        err = error_from_git(ret);
+    if (rc < 0) {
+        err = error_from_git(rc);
         goto cleanup;
     }
 

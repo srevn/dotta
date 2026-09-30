@@ -119,13 +119,13 @@ static error_t pull_branch_ff(
      * answer here — the caller asks of a branch it holds — so the lookup's failure
      * is the failure. */
     git_reference *branch = NULL;
-    int git_err = git_reference_lookup(&branch, repo, local_refname);
-    if (git_err < 0) return error_from_git(git_err);
+    int rc = git_reference_lookup(&branch, repo, local_refname);
+    if (rc < 0) return error_from_git(rc);
 
     git_reference *local_ref = NULL;
-    git_err = git_reference_resolve(&local_ref, branch);
+    rc = git_reference_resolve(&local_ref, branch);
     git_reference_free(branch);
-    if (git_err < 0) return error_from_git(git_err);
+    if (rc < 0) return error_from_git(rc);
     const git_oid *local_oid = git_reference_target(local_ref);
 
     /* The remote-tracking tip, or its absence proven (sys/gitops.h
@@ -149,13 +149,13 @@ static error_t pull_branch_ff(
     /* Check if fast-forward is possible by checking if local is ancestor of remote.
      * A graph question about the two commits, independent of HEAD: the store
      * checks nothing out, and the branch being moved is never the current one. */
-    git_err = git_graph_descendant_of(repo, &remote_oid, local_oid);
-    if (git_err < 0) {
+    rc = git_graph_descendant_of(repo, &remote_oid, local_oid);
+    if (rc < 0) {
         git_reference_free(local_ref);
-        return error_from_git(git_err);
+        return error_from_git(rc);
     }
 
-    if (git_err == 0) {
+    if (rc == 0) {
         /* local is NOT an ancestor of remote - cannot fast-forward */
         git_reference_free(local_ref);
         return ERROR(
@@ -164,16 +164,16 @@ static error_t pull_branch_ff(
         );
     }
 
-    /* git_err == 1 means local IS an ancestor of remote - can fast-forward */
+    /* rc == 1 means local IS an ancestor of remote - can fast-forward */
 
     /* Perform fast-forward */
     git_reference *updated_ref = NULL;
-    git_err = git_reference_set_target(
+    rc = git_reference_set_target(
         &updated_ref, local_ref, &remote_oid, "sync: Fast-forward pull"
     );
     git_reference_free(local_ref);
 
-    if (git_err < 0) return error_from_git(git_err);
+    if (rc < 0) return error_from_git(rc);
 
     git_reference_free(updated_ref);
     *updated = true;
@@ -205,15 +205,15 @@ static error_t sync_fetch_phase(
 
     /* Check if remote exists */
     git_remote *remote = NULL;
-    int git_err = git_remote_lookup(&remote, repo, remote_name);
-    if (git_err == GIT_ENOTFOUND) {
+    int rc = git_remote_lookup(&remote, repo, remote_name);
+    if (rc == GIT_ENOTFOUND) {
         return ERROR(
             ERR_NOT_FOUND, "No remote '%s' configured\n"
             "Hint: Run 'dotta remote add %s <url>' to add a remote",
             remote_name, remote_name
         );
-    } else if (git_err < 0) {
-        return error_from_git(git_err);
+    } else if (rc < 0) {
+        return error_from_git(rc);
     }
     git_remote_free(remote);
 

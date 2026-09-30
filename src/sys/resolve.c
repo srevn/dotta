@@ -154,17 +154,17 @@ static error_t resolve_merge_trees(
     git_commit *remote_commit = NULL;
     git_oid merge_commit_oid;
 
-    int git_err = git_commit_lookup(&local_commit, ctx->repo, &ctx->saved_oid);
-    if (git_err < 0) {
+    int rc = git_commit_lookup(&local_commit, ctx->repo, &ctx->saved_oid);
+    if (rc < 0) {
         git_index_free(merged_index);
-        return error_from_git(git_err);
+        return error_from_git(rc);
     }
 
-    git_err = git_commit_lookup(&remote_commit, ctx->repo, &remote_oid);
-    if (git_err < 0) {
+    rc = git_commit_lookup(&remote_commit, ctx->repo, &remote_oid);
+    if (rc < 0) {
         git_commit_free(local_commit);
         git_index_free(merged_index);
-        return error_from_git(git_err);
+        return error_from_git(rc);
     }
 
     /* Create merge commit */

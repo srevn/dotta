@@ -111,7 +111,7 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
 /**
  * End an op on this transfer session.
  *
- * Classifies `git_err` into last_outcome and advances the credential state machine:
+ * Classifies `rc` into last_outcome and advances the credential state machine:
  *
  *   NOT_ACQUIRED  + anything     → NOT_ACQUIRED   (no helper fill happened)
  *   ACQUIRED      + OK           → VALIDATED      (terminal)
@@ -123,9 +123,9 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
  * NULL-safe.
  *
  * @param xfer    Transfer context (may be NULL)
- * @param git_err libgit2 return code (0, GIT_EAUTH, or other negative)
+ * @param rc libgit2 return code (0, GIT_EAUTH, or other negative)
  */
-void transfer_op_end(transfer_context_t *xfer, int git_err);
+void transfer_op_end(transfer_context_t *xfer, int rc);
 
 /**
  * Return the outcome of the most recent op.

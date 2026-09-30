@@ -385,7 +385,7 @@ static error_t generate_text_diff(
     diff_opts.flags = GIT_DIFF_NORMAL;
 
     /* Buffer to buffer, the two sides in the order they were handed in */
-    int git_err = git_diff_buffers(
+    int rc = git_diff_buffers(
         old_side->data, old_side->size, path_label,
         new_side->data, new_side->size, path_label,
         &diff_opts,
@@ -396,9 +396,9 @@ static error_t generate_text_diff(
         &diff_output
     );
 
-    if (git_err < 0) {
+    if (rc < 0) {
         buffer_deinit(&diff_output);
-        return error_from_git(git_err);
+        return error_from_git(rc);
     }
 
     /* Extract result - transfer ownership and free buffer structure */

@@ -335,9 +335,9 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     if (err) goto cleanup;
 
     git_remote *remote = NULL;
-    int git_err = git_remote_create(&remote, repo, "origin", opts->url);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
+    int rc = git_remote_create(&remote, repo, "origin", opts->url);
+    if (rc < 0) {
+        err = error_from_git(rc);
         goto cleanup;
     }
     git_remote_free(remote);

@@ -369,8 +369,8 @@ static int collect_tree_callback(
     /* Build path relative to the walked tree (root carries its own trailing '/'
      * at nested levels). */
     char rel[1024];
-    int ret = snprintf(rel, sizeof(rel), "%s%s", root, name);
-    if (ret < 0 || (size_t) ret >= sizeof(rel)) {
+    int n = snprintf(rel, sizeof(rel), "%s%s", root, name);
+    if (n < 0 || (size_t) n >= sizeof(rel)) {
         ctx->error = ERROR(
             ERR_INTERNAL, "Path exceeds maximum length: %s%s", root, name
         );

@@ -133,9 +133,9 @@ static bool url_is_local(const char *url) {
  * surface a misclassified case, widen the match (e.g., inspect
  * giterr_last()->klass).
  */
-static transfer_outcome_t classify_outcome(int git_err) {
-    if (git_err == 0) return TRANSFER_OUTCOME_OK;
-    if (git_err == GIT_EAUTH) return TRANSFER_OUTCOME_AUTH_FAILED;
+static transfer_outcome_t classify_outcome(int rc) {
+    if (rc == 0) return TRANSFER_OUTCOME_OK;
+    if (rc == GIT_EAUTH) return TRANSFER_OUTCOME_AUTH_FAILED;
     return TRANSFER_OUTCOME_OTHER_FAILURE;
 }
 
@@ -287,15 +287,15 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction) {
 /**
  * End an op — fold stats, classify outcome, advance state machine.
  */
-void transfer_op_end(transfer_context_t *xfer, int git_err) {
+void transfer_op_end(transfer_context_t *xfer, int rc) {
     if (!xfer) return;
 
-    xfer->last_outcome = classify_outcome(git_err);
+    xfer->last_outcome = classify_outcome(rc);
 
     /* Fold per-op values into cumulative stats. Only count ops that actually
      * transferred data — connect+ls (list_remote_branches) and up-to-date fetches
      * would otherwise pollute the summary. */
-    if (git_err == 0 &&
+    if (rc == 0 &&
         (xfer->op.last_count > 0 || xfer->op.last_bytes > 0)) {
         if (xfer->op.direction == GIT_DIRECTION_PUSH) {
             xfer->stats.push_ops++;

@@ -612,7 +612,7 @@ int credential_try_ssh(
     }
 
     char *pub_key_path = heap_str_format("%s.pub", ssh_key_path);
-    int err = git_credential_ssh_key_new(
+    int rc = git_credential_ssh_key_new(
         out,
         username ? username : "git",
         pub_key_path,
@@ -624,7 +624,7 @@ int credential_try_ssh(
     free(pub_key_path);
     free(ssh_key_path);
 
-    return (err == 0) ? 0 : -1;
+    return (rc == 0) ? 0 : -1;
 }
 
 int credential_make_userpass(

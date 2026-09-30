@@ -189,12 +189,12 @@ static error_t stats_walk(
     if (err) return err;
 
     /* Create revwalker */
-    int git_err = git_revwalk_new(&walker, repo);
-    if (git_err < 0) return error_from_git(git_err);
+    int rc = git_revwalk_new(&walker, repo);
+    if (rc < 0) return error_from_git(rc);
 
-    git_err = git_revwalk_push(walker, &head_oid);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
+    rc = git_revwalk_push(walker, &head_oid);
+    if (rc < 0) {
+        err = error_from_git(rc);
         goto cleanup;
     }
 
@@ -206,12 +206,12 @@ static error_t stats_walk(
      * one — the callers report an absence in it as fact. */
     for (;;) {
         git_oid oid;
-        git_err = git_revwalk_next(&oid, walker);
-        if (git_err == GIT_ITEROVER) {
+        rc = git_revwalk_next(&oid, walker);
+        if (rc == GIT_ITEROVER) {
             break;
         }
-        if (git_err < 0) {
-            err = error_from_git(git_err);
+        if (rc < 0) {
+            err = error_from_git(rc);
             goto cleanup;
         }
 
@@ -221,18 +221,18 @@ static error_t stats_walk(
         }
 
         git_commit *commit = NULL;
-        git_err = git_commit_lookup(&commit, repo, &oid);
-        if (git_err < 0) {
-            err = error_from_git(git_err);
+        rc = git_commit_lookup(&commit, repo, &oid);
+        if (rc < 0) {
+            err = error_from_git(rc);
             goto cleanup;
         }
 
         /* Get commit tree */
         git_tree *tree = NULL;
-        git_err = git_commit_tree(&tree, commit);
-        if (git_err < 0) {
+        rc = git_commit_tree(&tree, commit);
+        if (rc < 0) {
             git_commit_free(commit);
-            err = error_from_git(git_err);
+            err = error_from_git(rc);
             goto cleanup;
         }
 
@@ -240,14 +240,14 @@ static error_t stats_walk(
         git_tree *parent_tree = NULL;
         if (git_commit_parentcount(commit) > 0) {
             git_commit *parent = NULL;
-            git_err = git_commit_parent(&parent, commit, 0);
-            if (git_err == 0) {
-                git_err = git_commit_tree(&parent_tree, parent);
+            rc = git_commit_parent(&parent, commit, 0);
+            if (rc == 0) {
+                rc = git_commit_tree(&parent_tree, parent);
                 git_commit_free(parent);
-                if (git_err < 0) {
+                if (rc < 0) {
                     git_tree_free(tree);
                     git_commit_free(commit);
-                    err = error_from_git(git_err);
+                    err = error_from_git(rc);
                     goto cleanup;
                 }
             }
@@ -255,16 +255,16 @@ static error_t stats_walk(
 
         /* Create diff */
         git_diff *diff = NULL;
-        git_err = git_diff_tree_to_tree(&diff, repo, parent_tree, tree, NULL);
+        rc = git_diff_tree_to_tree(&diff, repo, parent_tree, tree, NULL);
 
         if (parent_tree) {
             git_tree_free(parent_tree);
         }
         git_tree_free(tree);
 
-        if (git_err < 0) {
+        if (rc < 0) {
             git_commit_free(commit);
-            err = error_from_git(git_err);
+            err = error_from_git(rc);
             goto cleanup;
         }
 
@@ -349,8 +349,8 @@ error_t stats_blob_size(
 
     /* Get object database */
     git_odb *odb = NULL;
-    int git_err = git_repository_odb(&odb, repo);
-    if (git_err < 0) return error_from_git(git_err);
+    int rc = git_repository_odb(&odb, repo);
+    if (rc < 0) return error_from_git(rc);
 
     error_t err = stats_blob_size_with_odb(odb, blob_oid, out);
     git_odb_free(odb);
@@ -371,8 +371,8 @@ error_t stats_blob_size_with_odb(
 
     size_t size;
     git_object_t type;
-    int git_err = git_odb_read_header(&size, &type, odb, blob_oid);
-    if (git_err < 0) return error_from_git(git_err);
+    int rc = git_odb_read_header(&size, &type, odb, blob_oid);
+    if (rc < 0) return error_from_git(rc);
 
     if (type != GIT_OBJECT_BLOB) {
         return ERROR(ERR_INVALID_ARG, "Object is not a blob");

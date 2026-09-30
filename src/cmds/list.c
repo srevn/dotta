@@ -480,8 +480,8 @@ static error_t list_files(
         if (verbose) {
             /* Get file stats */
             git_tree_entry *entry = NULL;
-            int git_err = git_tree_entry_bypath(&entry, tree, storage_path);
-            if (git_err == 0) {
+            int rc = git_tree_entry_bypath(&entry, tree, storage_path);
+            if (rc == 0) {
                 /* The stamp the branch's own claim makes of this entry, read as
                  * the view projects it: never onto a link, whose bytes are its
                  * target and never a seal (core/manifest.c manifest_apply_claim).

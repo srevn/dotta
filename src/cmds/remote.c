@@ -98,8 +98,8 @@ static error_t remote_list(
     }
 
     git_strarray remotes = { 0 };
-    int git_err = git_remote_list(&remotes, repo);
-    if (git_err < 0) return error_from_git(git_err);
+    int rc = git_remote_list(&remotes, repo);
+    if (rc < 0) return error_from_git(rc);
 
     if (remotes.count == 0) {
         output_info(out, OUTPUT_NORMAL, "No remotes configured");
@@ -114,10 +114,10 @@ static error_t remote_list(
         if (output_is_verbose(out)) {
             /* Show URLs for fetch and push */
             git_remote *remote = NULL;
-            git_err = git_remote_lookup(&remote, repo, remote_name);
-            if (git_err < 0) {
+            rc = git_remote_lookup(&remote, repo, remote_name);
+            if (rc < 0) {
                 git_strarray_dispose(&remotes);
-                return error_from_git(git_err);
+                return error_from_git(rc);
             }
 
             const char *fetch_url = git_remote_url(remote);
@@ -185,8 +185,8 @@ static error_t remote_add(
 
     /* Check if remote already exists */
     git_remote *existing = NULL;
-    int git_err = git_remote_lookup(&existing, repo, name);
-    if (git_err == 0) {
+    int rc = git_remote_lookup(&existing, repo, name);
+    if (rc == 0) {
         /* Remote exists */
         git_remote_free(existing);
         return ERROR(
@@ -194,15 +194,15 @@ static error_t remote_add(
             "Hint: Use 'dotta remote set-url %s <url>' to change the URL",
             name, name
         );
-    } else if (git_err != GIT_ENOTFOUND) {
+    } else if (rc != GIT_ENOTFOUND) {
         /* Unexpected error */
-        return error_from_git(git_err);
+        return error_from_git(rc);
     }
 
     /* Create remote */
     git_remote *remote = NULL;
-    git_err = git_remote_create(&remote, repo, name, url);
-    if (git_err < 0) return error_from_git(git_err);
+    rc = git_remote_create(&remote, repo, name, url);
+    if (rc < 0) return error_from_git(rc);
 
     git_remote_free(remote);
 
@@ -228,17 +228,17 @@ static error_t remote_remove(
 
     /* Check if remote exists */
     git_remote *remote = NULL;
-    int git_err = git_remote_lookup(&remote, repo, name);
-    if (git_err == GIT_ENOTFOUND) {
+    int rc = git_remote_lookup(&remote, repo, name);
+    if (rc == GIT_ENOTFOUND) {
         return ERROR(ERR_NOT_FOUND, "Remote '%s' not found", name);
-    } else if (git_err < 0) {
-        return error_from_git(git_err);
+    } else if (rc < 0) {
+        return error_from_git(rc);
     }
     git_remote_free(remote);
 
     /* Delete remote */
-    git_err = git_remote_delete(repo, name);
-    if (git_err < 0) return error_from_git(git_err);
+    rc = git_remote_delete(repo, name);
+    if (rc < 0) return error_from_git(rc);
 
     /* Success message */
     output_success(
@@ -273,17 +273,17 @@ static error_t remote_set_url(
 
     /* Check if remote exists */
     git_remote *remote = NULL;
-    int git_err = git_remote_lookup(&remote, repo, name);
-    if (git_err == GIT_ENOTFOUND) {
+    int rc = git_remote_lookup(&remote, repo, name);
+    if (rc == GIT_ENOTFOUND) {
         return ERROR(ERR_NOT_FOUND, "Remote '%s' not found", name);
-    } else if (git_err < 0) {
-        return error_from_git(git_err);
+    } else if (rc < 0) {
+        return error_from_git(rc);
     }
     git_remote_free(remote);
 
     /* Set new URL */
-    git_err = git_remote_set_url(repo, name, new_url);
-    if (git_err < 0) return error_from_git(git_err);
+    rc = git_remote_set_url(repo, name, new_url);
+    if (rc < 0) return error_from_git(rc);
 
     /* Success message */
     output_success(
@@ -318,26 +318,26 @@ static error_t remote_rename(
 
     /* Check if old remote exists */
     git_remote *remote = NULL;
-    int git_err = git_remote_lookup(&remote, repo, old_name);
-    if (git_err == GIT_ENOTFOUND) {
+    int rc = git_remote_lookup(&remote, repo, old_name);
+    if (rc == GIT_ENOTFOUND) {
         return ERROR(ERR_NOT_FOUND, "Remote '%s' not found", old_name);
-    } else if (git_err < 0) {
-        return error_from_git(git_err);
+    } else if (rc < 0) {
+        return error_from_git(rc);
     }
     git_remote_free(remote);
 
     /* Check if new name already exists */
-    git_err = git_remote_lookup(&remote, repo, new_name);
-    if (git_err == 0) {
+    rc = git_remote_lookup(&remote, repo, new_name);
+    if (rc == 0) {
         git_remote_free(remote);
         return ERROR(ERR_EXISTS, "Remote '%s' already exists", new_name);
-    } else if (git_err != GIT_ENOTFOUND) {
-        return error_from_git(git_err);
+    } else if (rc != GIT_ENOTFOUND) {
+        return error_from_git(rc);
     }
 
     /* Rename remote */
     git_strarray problems = { 0 };
-    git_err = git_remote_rename(&problems, repo, old_name, new_name);
+    rc = git_remote_rename(&problems, repo, old_name, new_name);
 
     if (problems.count > 0) {
         /* Show warnings about problematic refspecs */
@@ -355,7 +355,7 @@ static error_t remote_rename(
 
     git_strarray_dispose(&problems);
 
-    if (git_err < 0) return error_from_git(git_err);
+    if (rc < 0) return error_from_git(rc);
 
     /* Success message */
     output_success(
@@ -379,11 +379,11 @@ static error_t remote_show(
 
     /* Lookup remote */
     git_remote *remote = NULL;
-    int git_err = git_remote_lookup(&remote, repo, name);
-    if (git_err == GIT_ENOTFOUND) {
+    int rc = git_remote_lookup(&remote, repo, name);
+    if (rc == GIT_ENOTFOUND) {
         return ERROR(ERR_NOT_FOUND, "Remote '%s' not found", name);
-    } else if (git_err < 0) {
-        return error_from_git(git_err);
+    } else if (rc < 0) {
+        return error_from_git(rc);
     }
 
     /* Show remote information */
@@ -401,22 +401,22 @@ static error_t remote_show(
 
     /* Show fetch refspecs */
     git_strarray refspecs = { 0 };
-    git_err = git_remote_get_fetch_refspecs(&refspecs, remote);
-    if (git_err == 0 && refspecs.count > 0) {
+    rc = git_remote_get_fetch_refspecs(&refspecs, remote);
+    if (rc == 0 && refspecs.count > 0) {
         output_print(out, OUTPUT_NORMAL, "  Fetch refspecs:\n");
         for (size_t i = 0; i < refspecs.count; i++) {
             output_print(out, OUTPUT_NORMAL, "    %s\n", refspecs.strings[i]);
         }
     }
-    if (git_err == 0) {
+    if (rc == 0) {
         git_strarray_dispose(&refspecs);
     }
 
     /* Show push refspecs */
     memset(&refspecs, 0, sizeof(refspecs));
-    git_err = git_remote_get_push_refspecs(&refspecs, remote);
+    rc = git_remote_get_push_refspecs(&refspecs, remote);
 
-    if (git_err == 0 && refspecs.count > 0) {
+    if (rc == 0 && refspecs.count > 0) {
         output_print(
             out, OUTPUT_NORMAL, "  Push refspecs:\n"
         );
@@ -427,7 +427,7 @@ static error_t remote_show(
             );
         }
     }
-    if (git_err == 0) {
+    if (rc == 0) {
         git_strarray_dispose(&refspecs);
     }
 

@@ -561,11 +561,11 @@ int main(int argc, char **argv) {
      * context and may override verbosity via CLI flags. */
     output_t *out = output_create(stdout, config->verbosity, config->color);
 
-    int ret = run_spec(spec, argc, argv, prog, config, out);
+    int status = run_spec(spec, argc, argv, prog, config, out);
 
     gitops_shutdown();
     output_free(out);
     arena_free(process);
 
-    return ret;
+    return status;
 }

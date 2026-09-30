@@ -1276,13 +1276,13 @@ error_t metadata_load_from_tree(
     /* Look for .dotta/metadata.json (use bypath for nested paths). No entry is
      * a sheet claiming nothing — the settled answer every reader wants — and
      * only a lookup that failed to look is an error. */
-    int git_err = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
-    if (git_err == GIT_ENOTFOUND) {
+    int rc = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
+    if (rc == GIT_ENOTFOUND) {
         *out = metadata_create_empty();
         return NULL;
     }
-    if (git_err < 0) {
-        err = error_from_git(git_err);
+    if (rc < 0) {
+        err = error_from_git(rc);
         goto cleanup;
     }
 

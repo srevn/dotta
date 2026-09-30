@@ -74,10 +74,10 @@ error_t upstream_analyze_profile(
 
     /* Calculate ahead/behind */
     size_t ahead = 0, behind = 0;
-    int git_err = git_graph_ahead_behind(
+    int rc = git_graph_ahead_behind(
         &ahead, &behind, repo, &local_oid, &remote_oid
     );
-    if (git_err < 0) return error_from_git(git_err);
+    if (rc < 0) return error_from_git(rc);
 
     out->ahead = ahead;
     out->behind = behind;

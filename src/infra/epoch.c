@@ -81,21 +81,21 @@ static error_t resolve_epoch_tree(
      * as a direct commit by epoch_init, but peeling defends against future shapes
      * (signed-tag wrappers, symbolic refs) without changing the load semantics. */
     git_object *commit_obj = NULL;
-    int git_err = git_reference_peel(&commit_obj, ref, GIT_OBJECT_COMMIT);
+    int rc = git_reference_peel(&commit_obj, ref, GIT_OBJECT_COMMIT);
     git_reference_free(ref);
-    if (git_err < 0) {
+    if (rc < 0) {
         return error_wrap(
-            error_from_git(git_err),
+            error_from_git(rc),
             "Failed to peel '%s' to a commit", EPOCH_REF
         );
     }
 
     git_commit *commit = (git_commit *) commit_obj;
-    git_err = git_commit_tree(out_tree, commit);
+    rc = git_commit_tree(out_tree, commit);
     git_commit_free(commit);
-    if (git_err < 0) {
+    if (rc < 0) {
         return error_wrap(
-            error_from_git(git_err),
+            error_from_git(rc),
             "Failed to load tree from '%s'", EPOCH_REF
         );
     }
@@ -133,8 +133,8 @@ static error_t read_epoch_blob(
     }
 
     git_blob *blob = NULL;
-    int git_err = git_blob_lookup(&blob, repo, git_tree_entry_id(entry));
-    if (git_err < 0) return error_from_git(git_err);
+    int rc = git_blob_lookup(&blob, repo, git_tree_entry_id(entry));
+    if (rc < 0) return error_from_git(rc);
 
     git_object_size_t got = git_blob_rawsize(blob);
     if (got != size) {
@@ -199,19 +199,19 @@ static error_t read_epoch_commit(
     git_repository *repo, const git_oid *oid, kdf_epoch_t *out
 ) {
     git_commit *commit = NULL;
-    int git_err = git_commit_lookup(&commit, repo, oid);
-    if (git_err < 0) {
+    int rc = git_commit_lookup(&commit, repo, oid);
+    if (rc < 0) {
         return error_wrap(
-            error_from_git(git_err), "Failed to load the epoch commit"
+            error_from_git(rc), "Failed to load the epoch commit"
         );
     }
 
     git_tree *tree = NULL;
-    git_err = git_commit_tree(&tree, commit);
+    rc = git_commit_tree(&tree, commit);
     git_commit_free(commit);
-    if (git_err < 0) {
+    if (rc < 0) {
         return error_wrap(
-            error_from_git(git_err), "Failed to load the epoch commit's tree"
+            error_from_git(rc), "Failed to load the epoch commit's tree"
         );
     }
 
@@ -391,8 +391,8 @@ error_t epoch_push(
     if (!exists) return NULL;
 
     git_remote *remote = NULL;
-    int git_err = git_remote_lookup(&remote, repo, remote_name);
-    if (git_err < 0) return error_from_git(git_err);
+    int rc = git_remote_lookup(&remote, repo, remote_name);
+    if (rc < 0) return error_from_git(rc);
 
     git_push_options push_opts;
     git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
@@ -408,17 +408,17 @@ error_t epoch_push(
     git_strarray refs = { refspecs, 1 };
 
     transfer_op_begin(xfer, GIT_DIRECTION_PUSH);
-    git_err = git_remote_push(remote, &refs, &push_opts);
-    transfer_op_end(xfer, git_err);
+    rc = git_remote_push(remote, &refs, &push_opts);
+    transfer_op_end(xfer, rc);
     git_remote_free(remote);
 
-    if (git_err < 0) {
+    if (rc < 0) {
         /* Bare: the boundary (cmd_sync's establish arm) prefixes exactly one
          * layer of context, and its warning renders error_message — outermost
          * only — so a wrap here would displace the actual libgit2 reason
          * (non-fast-forward, rejected namespace, auth) with a restatement of
          * what the caller already says. */
-        return error_from_git(git_err);
+        return error_from_git(rc);
     }
 
     return NULL;
@@ -458,16 +458,16 @@ static error_t probe_remote_epoch(
     transfer_configure_callbacks(&callbacks, xfer, GIT_DIRECTION_FETCH);
 
     transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
-    int git_err = git_remote_connect(
+    int rc = git_remote_connect(
         remote, GIT_DIRECTION_FETCH, &callbacks, NULL, NULL
     );
-    transfer_op_end(xfer, git_err);
-    if (git_err < 0) return error_from_git(git_err);
+    transfer_op_end(xfer, rc);
+    if (rc < 0) return error_from_git(rc);
 
     const git_remote_head **heads = NULL;
     size_t heads_len = 0;
-    git_err = git_remote_ls(&heads, &heads_len, remote);
-    if (git_err < 0) return error_from_git(git_err);
+    rc = git_remote_ls(&heads, &heads_len, remote);
+    if (rc < 0) return error_from_git(rc);
 
     for (size_t i = 0; i < heads_len; i++) {
         if (heads[i] == NULL || heads[i]->name == NULL
@@ -491,8 +491,8 @@ error_t epoch_fetch(
     CHECK_NULL(xfer);
 
     git_remote *remote = NULL;
-    int git_err = git_remote_lookup(&remote, repo, remote_name);
-    if (git_err < 0) return error_from_git(git_err);
+    int rc = git_remote_lookup(&remote, repo, remote_name);
+    if (rc < 0) return error_from_git(rc);
 
     /* Look before taking. The advertisement gives a clean ERR_NOT_FOUND surface
      * for "this remote is not a dotta repository", where asking for a ref the
@@ -532,14 +532,14 @@ error_t epoch_fetch(
     git_strarray refs = { refspecs, 1 };
 
     transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
-    git_err = git_remote_download(remote, &refs, &fetch_opts);
-    transfer_op_end(xfer, git_err);
+    rc = git_remote_download(remote, &refs, &fetch_opts);
+    transfer_op_end(xfer, rc);
     git_remote_free(remote);  /* freeing the remote closes the transport */
 
-    if (git_err < 0) {
+    if (rc < 0) {
         /* Bare, matching epoch_push: the boundaries (sync's adopt arm, clone's
          * acquisition gate) each attach their own single layer of context. */
-        return error_from_git(git_err);
+        return error_from_git(rc);
     }
 
     /* Judge the bytes while no ref names them. This is the epoch acquisition
@@ -573,10 +573,10 @@ error_t epoch_fetch(
      * unsupported end-to-end: a re-minted epoch cannot even be published (the
      * push is non-force), and a clone whose ciphertext the old epoch keys lands
      * on CONFLICT, not adopt. NULL ref_out: libgit2 frees the handle it makes. */
-    git_err = git_reference_create(NULL, repo, EPOCH_REF, &advertised, 1, NULL);
-    if (git_err < 0) {
+    rc = git_reference_create(NULL, repo, EPOCH_REF, &advertised, 1, NULL);
+    if (rc < 0) {
         return error_wrap(
-            error_from_git(git_err),
+            error_from_git(rc),
             "Failed to point '%s' at the epoch fetched from '%s'",
             EPOCH_REF, remote_name
         );
@@ -768,15 +768,15 @@ static error_t walk_ciphertext(
         err = gitops_branch_refname(refname, sizeof(refname), branch);
         if (err) goto cleanup;
 
-        int git_err = git_revwalk_new(&walker, repo);
-        if (git_err < 0) {
-            err = error_from_git(git_err);
+        int rc = git_revwalk_new(&walker, repo);
+        if (rc < 0) {
+            err = error_from_git(rc);
             goto cleanup;
         }
         git_revwalk_sorting(walker, GIT_SORT_NONE);
-        git_err = git_revwalk_push_ref(walker, refname);
-        if (git_err < 0) {
-            err = error_from_git(git_err);
+        rc = git_revwalk_push_ref(walker, refname);
+        if (rc < 0) {
+            err = error_from_git(rc);
             goto cleanup;
         }
 
@@ -785,19 +785,19 @@ static error_t walk_ciphertext(
              * and a negative code is a walk that ended early — which has proved
              * no absence, and an absence is what both callers act on. */
             git_oid commit_oid;
-            git_err = git_revwalk_next(&commit_oid, walker);
-            if (git_err == GIT_ITEROVER) {
+            rc = git_revwalk_next(&commit_oid, walker);
+            if (rc == GIT_ITEROVER) {
                 break;
             }
-            if (git_err < 0) {
-                err = error_from_git(git_err);
+            if (rc < 0) {
+                err = error_from_git(rc);
                 goto cleanup;
             }
 
             git_commit *commit = NULL;
-            git_err = git_commit_lookup(&commit, repo, &commit_oid);
-            if (git_err < 0) {
-                err = error_from_git(git_err);
+            rc = git_commit_lookup(&commit, repo, &commit_oid);
+            if (rc < 0) {
+                err = error_from_git(rc);
                 goto cleanup;
             }
 
@@ -816,10 +816,10 @@ static error_t walk_ciphertext(
             }
 
             git_tree *tree = NULL;
-            git_err = git_commit_tree(&tree, commit);
+            rc = git_commit_tree(&tree, commit);
             git_commit_free(commit);
-            if (git_err < 0) {
-                err = error_from_git(git_err);
+            if (rc < 0) {
+                err = error_from_git(rc);
                 goto cleanup;
             }
 
@@ -1050,8 +1050,8 @@ static error_t inspect_remote_epoch(
     CHECK_NULL(out_status);
 
     git_remote *remote = NULL;
-    int git_err = git_remote_lookup(&remote, repo, remote_name);
-    if (git_err < 0) return error_from_git(git_err);
+    int rc = git_remote_lookup(&remote, repo, remote_name);
+    if (rc < 0) return error_from_git(rc);
 
     bool present = false;
     git_oid remote_oid;

@@ -37,7 +37,7 @@
  * claim: the profile being added to, for add; any enabled profile, for the scan.
  * A claim is no discovery, and only the operation's own -e reaches it: the filter
  * apply and update ask of what they hold (core/scope.h scope_is_excluded), and
- * add of what its profile holds (cmds/add.c add_excluded). A directory a profile
+ * add of what its profile holds (cmds/add.c add_verdict). A directory a profile
  * only passes through claims nothing, so naming one is a discovery; it holds
  * claims all the same, so a walk that finds it excluded enters it where the -e
  * layer admits it, and lists it nowhere. Readers of the rule: cmds/add.c cmd_add
@@ -321,14 +321,23 @@ source_filter_t *ignore_source(ignore_rules_t *rules);
  * places on this machine — asks the four alone, and cannot fail.
  *
  * A rung the source layer cannot read is no verdict: a rung beneath it that a
- * rule excludes excludes the path whatever the unread one says. Its failure is
- * the answer only where no rung is excluded — the first such failure, and `*out`
- * no exclusion — for the reader to choose its fate; so is the failure of a place
- * whose directory resolves to nothing, which leaves the layer no rung to ask. A
- * path the four exclude asks the source layer nothing, so no failure of its reaches
- * it.
+ * rule excludes excludes the path whatever the unread one says, and a `!` of
+ * the four at it re-opens it as it re-opens a rung the source excludes — the
+ * user's word at that rung, whatever the source says or cannot say there, and
+ * the rungs beneath it still asked. The failure is the answer only where no rung
+ * is excluded — the topmost such failure, the one git meets first, and `*out`
+ * no exclusion — and so is the failure of a place whose directory resolves to
+ * nothing, which leaves the layer no rung to ask. A path the four exclude asks
+ * the source layer nothing, so no failure of its reaches it.
  *
- * Readers: cmds/add.c add_excluded (a claim with the -e layer alone, anything
+ * A failure is never read as no exclusion — what could not be read may be what
+ * git excludes — and each reader says it in its own voice: cmds/add.c refuses
+ * the path, named or walked, collection preceding capture so the refusal costs
+ * nothing; core/workspace.c workspace_scan withholds what it could not judge, a
+ * directory not entered, and says each cause once; cmds/ignore.c ignore_test
+ * says the asker could not tell, and why.
+ *
+ * Readers: cmds/add.c add_verdict (a claim with the -e layer alone, anything
  * else with every layer), core/workspace.c workspace_scan, cmds/ignore.c
  * ignore_test.
  *

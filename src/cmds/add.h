@@ -74,7 +74,9 @@ typedef struct {
  * profile only passes through claims nothing: naming one makes a new claim. It
  * holds the claims beneath it all the same, so a walk that finds one excluded
  * enters it for them wherever the command's own `-e` admits it — and lists it
- * nowhere, every entry beneath but a claim meeting the rule that closed it.
+ * nowhere, every entry beneath but a claim meeting the rule that closed it. A
+ * path Git's rules cannot be read for refuses the add, named or walked: what
+ * git would exclude there is unknown, and collection precedes capture.
  *
  * **The chosen name is the subject of two matchers**, its label stripped: the
  * `.dottaignore` layers and the auto-encryption patterns (core/ignore,

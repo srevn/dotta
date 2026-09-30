@@ -245,7 +245,7 @@ static inline bool manifest_is_claim(
  * second name for one path, where a derived claim names nothing and so blocks
  * nothing (cmds/add.c cmd_add, cmds/revert.c refuse_second_name); add's rule
  * question, where it claims nothing either and so is a discovery, meeting every
- * rule (cmds/add.c add_excluded); and the walk that enters such a directory for
+ * rule (cmds/add.c add_verdict); and the walk that enters such a directory for
  * the claims beneath it, and the refusal that names the update re-capturing them
  * (cmds/add.c add_collect, add_refuse_excluded). Every other `tracked` read in
  * the tree stands where the kind is already settled and asks the field's own
@@ -809,7 +809,7 @@ size_t manifest_holders(
  * and nothing it names, so the namer alone would climb past it and answer a name
  * the branch never held; and add's two questions of a path it names or walks
  * (cmds/add.c cmd_add and add_collect): which rules reach it — a claim meets
- * the -e layer alone, no rule of discovery (add_excluded) — and whether the
+ * the -e layer alone, no rule of discovery (add_verdict) — and whether the
  * profile's own claim agrees with what stands there now — the one reading that
  * sees an explicit claim with nothing beneath it for either of the branch's
  * documents to find, and a derived row included, since a profile holding a subtree
@@ -997,11 +997,12 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  * the prospective name a claim search falls through to (core/profiles.c
  * profile_claim_name); the name every capture lands under — add's argument arm,
  * its walk, and the one refusal its completed selection owes, all over the
- * command's own listing (cmds/add.c cmd_add, add_collect, add_refuse_moves);
- * and the name the untracked scan offers a new path under, one per entry its
- * guards let through, with no pending layer — the scan admits nothing
- * (core/workspace.c workspace_scan). The settle of a contribution's collisions
- * asks the same rule (core/manifest.c manifest_settle).
+ * command's own listing (cmds/add.c cmd_add, add_collect, add_refuse_moves),
+ * and the frame a walk's refusal offers to leave out, named as the walk named
+ * it (add_refuse_unjudged); and the name the untracked scan offers a new path
+ * under, one per entry its guards let through, with no pending layer — the scan
+ * admits nothing (core/workspace.c workspace_scan). The settle of a contribution's
+ * collisions asks the same rule (core/manifest.c manifest_settle).
  *
  * @param arena Arena the name lives in (must not be NULL)
  * @param manifest Manifest (must not be NULL)

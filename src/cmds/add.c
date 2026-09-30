@@ -16,6 +16,7 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/gitignore.h"
 #include "base/hashmap.h"
 #include "base/output.h"
 #include "base/string.h"
@@ -94,8 +95,8 @@ typedef struct {
  * alone, from the tree the stage opened at, under this command's table. Every
  * name comes from it (core/manifest.h manifest_name, over `listing`), so does
  * the claim standing at a path (manifest_lookup_claim) — which rules reach the
- * path (add_excluded) and what kind it must be — and so does the one refusal
- * the completed selection owes (add_refuse_moves).
+ * path (add_verdict) and what kind it must be — and so does the one refusal the
+ * completed selection owes (add_refuse_moves).
  *
  * `admission` and `sheet` are the two documents one commit carries, and the walk
  * asks both whether the commit has room for a name before a byte is read. The
@@ -349,7 +350,7 @@ static error_t add_spell(
 }
 
 /**
- * Does a rule leave this path out of the add?
+ * The ladder's answer for a path this add would list, as the command reads it
  *
  * Which rules are asked turns on whose the path is (core/ignore.h, what the rules
  * reach). `held` is the row the profile holds at the path, NULL where it holds
@@ -375,40 +376,32 @@ static error_t add_spell(
  * that one can uncover the next, beneath it or in the layer below: the refusal
  * offers the `-e` re-opening exactly that rung, and the next refusal names the
  * next (add_refuse_excluded). A source layer that cannot answer, where no rung
- * is excluded, degrades to a verbose warning and no exclusion, so an odd source
- * repository never blocks the user from adding a file they explicitly named.
+ * is excluded, answers its failure, and the path is refused rather than read as
+ * excluded by nothing — what could not be read may be what git excludes — named
+ * or walked (add_refuse_unjudged).
+ *
+ * @return The source layer's failure, where no rung is excluded; NULL otherwise
  */
-static ignore_verdict_t add_excluded(
+static error_t add_verdict(
     const walk_t *walk, const manifest_row_t *held, const char *filesystem_path,
-    const char *storage_path, path_kind_t kind
+    const char *storage_path, path_kind_t kind, ignore_verdict_t *out
 ) {
-    ignore_verdict_t verdict;
-
     /* A claim meets the operation's own filter and no rule of discovery: the -e
      * layer alone, as apply and update ask it of what they hold (core/scope.h
      * scope_is_excluded). So a claim a rule names is re-captured, as update
      * re-captures it and as git stages a tracked file its rules ignore, and a
      * `-e` still leaves it out. No source layer is asked, so nothing can fail. */
     if (held && !manifest_is_derived(held)) {
-        (void) ignore_verdict(walk->excludes, NULL, storage_path, NULL, kind, &verdict);
-        return verdict;
+        return ignore_verdict(walk->excludes, NULL, storage_path, NULL, kind, out);
     }
 
-    /* Anything else meets every layer. Degraded (above): a source layer that
-     * cannot answer is warned for every entry no rule excludes, and dropped —
-     * the one error its source repository, directory or rule file gave, answered
-     * again for each (sys/source.h) — leaving the verdict no exclusion. */
-    error_t err = ignore_verdict(
-        walk->rules, walk->source, storage_path, filesystem_path, kind, &verdict
+    /* Anything else meets every layer, and a source layer that cannot answer
+     * where no rung is excluded answers its failure: the one error its repository,
+     * directory or rule file gave, the same for every entry that reaches it
+     * (sys/source.h). */
+    return ignore_verdict(
+        walk->rules, walk->source, storage_path, filesystem_path, kind, out
     );
-    if (err) {
-        output_warning(
-            walk->ctx->out, OUTPUT_VERBOSE, "Source .gitignore check failed for %s: %s",
-            filesystem_path, error_message(err)
-        );
-    }
-
-    return verdict;
 }
 
 /**
@@ -490,6 +483,50 @@ static error_t add_admit(
     }
 
     return stage_admit_blob(walk->admission, storage_path);
+}
+
+/**
+ * Refuse a walk that met an entry Git's ignore rules could not judge
+ *
+ * What the source layer cannot read may be what git excludes, so the walk refuses
+ * rather than list it (core/ignore.h ignore_verdict): collection precedes capture,
+ * and the refusal costs nothing. A frame's entries read one chain of lists, so
+ * what failed for one fails for every sibling that chain has not decided first,
+ * and the narrow way past is to leave the frame out. An -e excluding it is final
+ * — the source layer is never asked beneath it — and is offered where the walk
+ * found the frame beneath what the user named and a pattern names it; turning
+ * Git's rules off is the other way, and at what the user named, or at a root,
+ * the one.
+ *
+ * One line, the remedy a clause: cmd_add wraps every refusal of the walk with
+ * the argument it began at, and a second line would print outside that chain
+ * (the depth bound's refusal is the same shape). The remedy rides the wrap until
+ * error_hint lifts it (base/error.h, rr4n).
+ */
+static error_t add_refuse_unjudged(
+    const walk_t *walk, arena_t *scratch, const char *directory, size_t depth,
+    error_t failure
+) {
+    /* The frame's name, as the walk named it — its claim, else its composition,
+     * else a root's word — and the rule leaving exactly it out: none for what
+     * the user named, nor for a root, whose empty tail no pattern names. Both
+     * are the entry's scratch: the refusal copies what it prints. */
+    const char *name = manifest_name(
+        scratch, walk->view, walk->profile, directory, walk->listing
+    );
+    const char *leave = depth > 0 ? gitignore_literal(scratch, label_tail(name), true) : NULL;
+    if (!leave) {
+        return error_wrap(
+            failure, "Cannot tell what Git's ignore rules exclude in '%s'; turn them off "
+            "with respect_gitignore = false to add it", directory
+        );
+    }
+
+    return error_wrap(
+        failure, "Cannot tell what Git's ignore rules exclude in '%s'; leave it out with "
+        "-e %s, or turn them off with respect_gitignore = false", directory,
+        str_shell_quote(scratch, leave)
+    );
 }
 
 /**
@@ -617,7 +654,7 @@ static error_t add_collect(
         );
 
         /* What the profile already claims at the path, asked before any rule: a
-         * claim is no discovery, and meets the -e layer alone (add_excluded).
+         * claim is no discovery, and meets the -e layer alone (add_verdict).
          * The row is the path's own authority on kind too, a derived one included
          * — it says the profile holds a subtree beneath the path, which a path
          * that became a file cannot carry — and it is the one reading that sees
@@ -627,10 +664,14 @@ static error_t add_collect(
             walk->view, walk->profile, child_fs
         );
 
+        /* What Git's rules could not judge refuses the walk, whose frame was
+         * entered clean: beneath an excluded rung every verdict is that exclusion,
+         * so the failure is this entry's own, asked of the frame's lists. */
+        ignore_verdict_t verdict;
+        error_t failure = add_verdict(walk, held, child_fs, child_storage, kind, &verdict);
+        if (failure) return add_refuse_unjudged(walk, scratch, directory, depth, failure);
+
         /* Left out by a rule, and never listed. */
-        const ignore_verdict_t verdict = add_excluded(
-            walk, held, child_fs, child_storage, kind
-        );
         if (verdict.origin != IGNORE_ORIGIN_NONE) {
             /* A directory the profile only passes through holds claims beneath
              * it, and a claim meets the operation's -e alone: the walk enters
@@ -1638,7 +1679,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* The -e layer, compiled once: a pattern the grammar refuses is refused here,
      * under the flag's name and before the pre-add hook runs. The same rules
      * are the builder's top layer, and the whole of what a claim meets
-     * (add_excluded). */
+     * (add_verdict). */
     const gitignore_ruleset_t *excludes = NULL;
     err = ignore_excludes_compile(
         opts->exclude_patterns, opts->exclude_count, ctx->arena, &excludes
@@ -1919,7 +1960,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
 
         /* What the profile already claims at the path, asked before any rule: a
-         * claim is no discovery, and meets the -e layer alone (add_excluded).
+         * claim is no discovery, and meets the -e layer alone (add_verdict).
          * The row is the path's own authority on kind too, a derived one included
          * — it says the profile holds a subtree beneath the path, which a path
          * that became a file cannot carry — and it is the one reading that sees
@@ -1939,9 +1980,24 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * rules name it, or name a directory above it, is refused here as any
          * ignored directory is, unless the profile already tracks it; at "/"
          * the path names no entry and asks nothing. */
-        const ignore_verdict_t verdict = add_excluded(
-            &walk, held, filesystem_path, storage_path, kind
-        );
+        ignore_verdict_t verdict;
+        err = add_verdict(&walk, held, filesystem_path, storage_path, kind, &verdict);
+        if (err) {
+            /* Git's rules could not be read for the path, the four having excluded
+             * nothing: never read as admitted, since what could not be read may
+             * be what git excludes. The failure names what could not be read;
+             * the way past is the repository's to mend, or the switch. No -e is
+             * offered: a `!` at a rung that cannot be read re-opens it
+             * (core/ignore.h ignore_verdict), which would admit what git may
+             * exclude, and a repository that fails whole fails at every rung
+             * inside it. One line, since the sudo line wraps a refusal only root
+             * can lift (add_dispatch). */
+            err = error_wrap(
+                err, "Cannot tell whether '%s' is ignored by Git's ignore rules; turn "
+                "them off with respect_gitignore = false to add it anyway", file
+            );
+            goto cleanup;
+        }
         if (verdict.origin != IGNORE_ORIGIN_NONE) {
             err = add_refuse_excluded(&walk, file, storage_path, kind, held, &verdict);
             goto cleanup;

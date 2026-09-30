@@ -49,6 +49,7 @@
 #include <time.h>
 
 #include "base/arena.h"
+#include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/heap.h"
@@ -2299,7 +2300,9 @@ static scan_root_t *workspace_find_root(
  * depth 0 of its own. Nothing here is written by a frame; the struct is one value
  * the recursion passes down, the roots are read through it and never written,
  * and the strings a frame makes live in the walk's scratch, handed down beside
- * it (workspace_scan).
+ * it (workspace_scan). One list is written through it: the source layer's failures
+ * the scan has said, one array the driver makes for every root's walk, so each
+ * cause is said once whichever walk meets it.
  */
 typedef struct {
     workspace_t *ws;                   /* The view, the record, the arena offers live in */
@@ -2308,6 +2311,7 @@ typedef struct {
     const char *profile;               /* The owner of the root this walk began at */
     const gitignore_ruleset_t *rules;  /* That profile's layered ruleset */
     source_filter_t *source;           /* The source layer, the builder's; NULL: turned off */
+    ptr_array_t *failures;             /* The source layer's failures said: one line a cause */
 } scan_t;
 
 /**
@@ -2376,8 +2380,10 @@ typedef struct {
  * under the winner's name, from a depth 0 of its own.
  *
  * Cannot fail: what the filesystem refuses is said where it happens and the
- * siblings go on, and absence is silent. The lines go to stderr, as the driver's
- * do — core has no output handle.
+ * siblings go on, and absence is silent. What Git's ignore rules could not judge
+ * is withheld — a file not offered, a directory not entered — and the siblings
+ * go on, its cause said once for the whole scan (scan_t). The lines go to stderr,
+ * as the driver's do — core has no output handle.
  *
  * @param scan      What the walk runs under (must not be NULL)
  * @param scratch   The walk's: every frame's listing and every entry's strings
@@ -2466,6 +2472,7 @@ static void workspace_scan(
          * not a new file; offered, the capture refuses it by its noun and takes
          * the whole profile's update with it (cmds/add.c reads it the same way). */
         struct stat st;
+        path_kind_t kind = PATH_KIND_FILE;
         fs_occupant_t occupant = fs_lstat_occupant(child, &st);
         switch (occupant) {
             case FS_OCCUPANT_NONE:
@@ -2482,14 +2489,15 @@ static void workspace_scan(
                 continue;
 
             case FS_OCCUPANT_DIRECTORY:
+                kind = PATH_KIND_DIRECTORY;
+                break;
+
             case FS_OCCUPANT_REGULAR:
             case FS_OCCUPANT_SYMLINK:
                 break;
         }
 
-        bool is_dir = occupant == FS_OCCUPANT_DIRECTORY;
-
-        if (is_dir) {
+        if (kind == PATH_KIND_DIRECTORY) {
             /* Another scan root's directory — by identity, whatever this frame
              * joined — is that root's to enumerate, from a depth 0 of its own
              * and under its owner's names and rules. Asked of the identity, the
@@ -2541,20 +2549,29 @@ static void workspace_scan(
          * the lowest layer, so a `!` rule above it re-opens its rung. That one
          * reads where the path physically stands and not the name, so a root
          * standing inside a repository whose rules name it is not entered, which
-         * is the answer the directory would get under any other name. The layer's
-         * failure, the answer only where no rung is excluded, leaves no verdict,
-         * and its error is dropped — the one its source repository, directory
-         * or rule file gave, answered again for every entry that reaches it
-         * (sys/source.h). */
+         * is the answer the directory would get under any other name. */
         ignore_verdict_t verdict;
-        (void) ignore_verdict(
-            scan->rules, scan->source, name, child,
-            is_dir ? PATH_KIND_DIRECTORY : PATH_KIND_FILE, &verdict
-        );
+        error_t failure = ignore_verdict(scan->rules, scan->source, name, child, kind, &verdict);
+        if (failure) {
+            /* What Git's rules could not judge may be what git excludes, so it
+             * is withheld — a directory not entered — and the siblings go on.
+             * One failure answers every entry that reaches its cause
+             * (sys/source.h), so the error is the cause, and it is said the first
+             * time the scan meets it: causes are few, and the list of those said
+             * is asked whole. */
+            if (!ptr_array_contains(scan->failures, failure)) {
+                fprintf(
+                    stderr, "warning: %s; new files Git's ignore rules could not judge "
+                    "are not listed\n", error_message(failure)
+                );
+                ptr_array_push(scan->failures, failure);
+            }
+            continue;
+        }
         if (verdict.origin != IGNORE_ORIGIN_NONE) continue;
 
         /* Settled: a directory is descended, and anything else offered. */
-        if (!is_dir) {
+        if (kind == PATH_KIND_FILE) {
             workspace_add_untracked(ws, child, name, scan->profile, occupant, &st);
             continue;
         }
@@ -2572,9 +2589,11 @@ static void workspace_scan(
  * give it (core/manifest.h manifest_name), minus what that profile's ignore layers
  * and the source tree exclude — and nothing at all beneath a path the view holds
  * a blob at, a tracked root of its own included (workspace_blob_above). A
- * best-effort look, said once per directory it could not list and once per path
- * it could not look at: not a snapshot, and not an admission — what the commit
- * can hold at that name is update's question at its capture (cmds/update.c).
+ * best-effort look, said once per directory it could not list, once per path it
+ * could not look at, and once per cause Git's ignore rules could not be read
+ * for, whatever they could not judge withheld: not a snapshot, and not an admission
+ * — what the commit can hold at that name is update's question at its capture
+ * (cmds/update.c).
  *
  * The driver enumerates the view's tracked directories, one scan each, and the
  * walk descends only into directories the view does not track (scan_root_t).
@@ -2649,6 +2668,11 @@ static error_t workspace_analyze_untracked(
     ignore_rules_t *ignore_rules = NULL;
     RETURN_IF_ERROR(ignore_rules_create(ws->repo, config, NULL, ws->arena, &ignore_rules));
 
+    /* The source layer's failures said, one list for every root's walk: a cause
+     * that fails the entries of two tracked directories is said once. */
+    ptr_array_t failures;
+    ptr_array_init(&failures, ws->arena);
+
     for (size_t r = 0; r < root_count; r++) {
         const scan_root_t *root = &roots[r];
 
@@ -2686,6 +2710,7 @@ static error_t workspace_analyze_untracked(
             .profile    = root->profile,
             .rules      = rules,
             .source     = ignore_source(ignore_rules),
+            .failures   = &failures,
         };
 
         /* The walk's one scratch, freed whatever the walk met: every frame's

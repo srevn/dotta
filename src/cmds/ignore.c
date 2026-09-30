@@ -773,7 +773,10 @@ static path_kind_t ignore_kind(
  * decide discovery (core/ignore.h, what the rules reach), and a path its profile
  * tracks is re-captured by add and update whatever they say. So where the argument
  * is a path its asker tracks, a verdict that excludes it is followed by a note
- * saying so; a storage name builds no view to know, and says nothing.
+ * saying so; a storage name builds no view to know, and says nothing. An asker
+ * whose Git's rules cannot be read for the path could not tell, and says why —
+ * never NOT IGNORED, which what could not be read may belie — and the note follows
+ * that answer too, which the rules do not decide for a tracked path either.
  *
  * Cost: a filesystem argument pays a manifest build — a tree walk and a sheet
  * load per enabled profile — where it read the table alone. cmds/completion.c
@@ -959,35 +962,32 @@ static error_t ignore_test(
 
         /* The ladder's one question: the rules on the name, and where they exclude
          * nothing, the source tree's on the path — the lowest layer, so a `!`
-         * above it re-opens its rung. A source layer that cannot answer, where
-         * no rung is excluded, is said at NORMAL, for every asker it fails, and
-         * read as no exclusion so the rest of the output stays coherent — the
-         * one error its source repository, directory or rule file gave, answered
-         * again for each (sys/source.h). */
+         * above it re-opens its rung. Three answers, in the order of the header's
+         * fates (core/ignore.h ignore_verdict). */
         ignore_verdict_t verdict;
         error_t failure = ignore_verdict(
             rules, ignore_source(ignore_rules), name, filesystem_path, kind, &verdict
         );
         if (failure) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Source .gitignore check failed: %s",
-                error_message(failure)
+            /* Git's rules could not be read where the four exclude nothing: never
+             * read as no exclusion, since what could not be read may be what
+             * git excludes. The asker could not tell, and the failure's one line
+             * says why (sys/source.h) — answered again for each asker it fails. */
+            output_styled(out, OUTPUT_NORMAL, "{yellow}?{reset} %sCOULD NOT TELL\n", who);
+            output_info(out, OUTPUT_NORMAL, "  Reason: %s", error_message(failure));
+        } else if (verdict.origin != IGNORE_ORIGIN_NONE) {
+            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} %sIGNORED\n", who);
+            output_info(
+                out, OUTPUT_NORMAL, "  Reason: %s", ignore_verdict_describe(ctx->arena, &verdict)
             );
-        }
-
-        if (verdict.origin == IGNORE_ORIGIN_NONE) {
+        } else {
             output_success(out, OUTPUT_NORMAL, "%sNOT IGNORED", who);
             continue;
         }
 
-        output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} %sIGNORED\n", who);
-        output_info(
-            out, OUTPUT_NORMAL, "  Reason: %s", ignore_verdict_describe(ctx->arena, &verdict)
-        );
-
         /* A path this asker tracks is no discovery: add and update re-capture
          * it whatever the rules say, and only an -e leaves it out. Said beneath
-         * the verdict that would read otherwise, where a view names the path —
+         * the verdicts that would read otherwise, where a view names the path —
          * a claim, never a directory the asker only passes through. */
         const manifest_row_t *held = view
             ? manifest_lookup_claim(view, asker, filesystem_path) : NULL;

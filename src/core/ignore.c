@@ -234,15 +234,11 @@ error_t ignore_blob_read(git_repository *repo, const char *refname, buffer_t *ou
     *out = (buffer_t){ 0 };
 
     /* An absent ref is not an error — callers read an empty buffer as "no
-     * baseline/profile .dottaignore yet". */
-    bool exists = false;
-    RETURN_IF_ERROR(gitops_reference_exists(repo, refname, &exists));
-    if (!exists) return NULL;
-
-    /* Existence just verified, so a tree load failure is a real error (I/O,
-     * corruption) rather than an absence; the loader names the ref. */
+     * baseline/profile .dottaignore yet" — and any other failure of the read is
+     * one (I/O, corruption), naming the ref. */
     git_tree *tree = NULL;
-    RETURN_IF_ERROR(gitops_load_tree(repo, refname, &tree));
+    error_t err = gitops_reference_tree(repo, refname, &tree);
+    if (err || !tree) return err;
 
     const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
     if (!entry) {
@@ -251,7 +247,7 @@ error_t ignore_blob_read(git_repository *repo, const char *refname, buffer_t *ou
     }
 
     gitops_blob_view_t view;
-    error_t err = gitops_blob_view_open(repo, git_tree_entry_id(entry), &view);
+    err = gitops_blob_view_open(repo, git_tree_entry_id(entry), &view);
     git_tree_free(tree);
     if (err) return err;
 

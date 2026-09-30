@@ -172,7 +172,8 @@ void gitops_close_repository(git_repository *repo);
  *
  * Readers: gitops_reference_exists, and every presence question through it;
  * gitops_reference_oid, and the readers of an id through it (its header);
- * gitops_load_tree and gitops_load_branch_tree; infra/epoch.c resolve_epoch_tree.
+ * gitops_reference_tree, and the readers of a tree through it (its header);
+ * infra/epoch.c resolve_epoch_tree.
  *
  * @param repo Repository (must not be NULL)
  * @param refname Full reference name (must not be NULL or empty)
@@ -335,19 +336,50 @@ error_t gitops_list_remote_tracking(
 error_t gitops_delete_branch(git_repository *repo, const char *name);
 
 /**
- * Load tree from reference
+ * The tree a reference names, or NULL where no reference stands
+ *
+ * gitops_reference_find, peeled to a tree: a commit's for a commit-backed branch,
+ * the tree itself for an orphan-tree one. NULL is the reference's absence, proven;
+ * one that stands and names no tree is a failure. For the readers that act on
+ * the absence as an answer, in one read where a presence question and a load
+ * were two: core/ignore.c ignore_blob_read (no .dottaignore yet) and
+ * gitops_branch_tree.
  *
  * @param repo Repository (must not be NULL)
- * @param ref_name Reference name (e.g., "refs/heads/main") (must not be NULL)
- * @param out Tree object (must not be NULL, caller must free with git_tree_free)
+ * @param ref_name Full reference name (must not be NULL or empty)
+ * @param out The tree (caller frees with git_tree_free), or NULL: none stands
+ *            (must not be NULL)
  * @return Error or NULL on success
  */
-error_t gitops_load_tree(git_repository *repo, const char *ref_name, git_tree **out);
+error_t gitops_reference_tree(
+    git_repository *repo, const char *ref_name, git_tree **out
+);
+
+/**
+ * The tree a branch names, or NULL where the branch does not stand
+ *
+ * gitops_reference_tree of refs/heads/<name>, the name through the branch rule
+ * (gitops_branch_refname) on the way. Readers: core/manifest.c manifest_build
+ * (a profile whose branch is gone contributes nothing), core/workspace.c
+ * compute_orphan_authority (an orphan whose branch is gone is lost),
+ * sys/bootstrap.c bootstrap_exists, and gitops_load_branch_tree, which refuses
+ * the absence.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param branch_name Branch name (must not be NULL)
+ * @param out The tree (caller frees with git_tree_free), or NULL: the branch
+ *            does not stand (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t gitops_branch_tree(
+    git_repository *repo, const char *branch_name, git_tree **out
+);
 
 /**
  * Load tree from a branch by name
  *
- * Convenience wrapper: builds "refs/heads/<branch_name>" and resolves to tree.
+ * gitops_branch_tree for a reader that needs the branch: its absence, proven,
+ * is refused (ERR_NOT_FOUND, naming the reference).
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)

@@ -1299,19 +1299,16 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
 /**
  * Per-profile authority cache entry (one analysis pass)
  *
- * exists:   refs/heads/<profile> resolved at first sight.
- * tree:     the branch's HEAD tree, loaded lazily on the first in-tree
- *           question and kept for the rest of the pass; NULL until then and forever
- *           if !exists. Stored only on success, so "tree == NULL" also reads as
- *           "not loaded yet — try again" for the next row.
+ * tree:     the branch's HEAD tree, read at the profile's first row and kept for the
+ *           rest of the pass; NULL where the branch is gone. The entry is made
+ *           only once the read answers, so a failed one caches nothing.
  * metadata: the tree's metadata.json, loaded lazily on the first directory question
  *           the tree leaves open (a blob at the name answers one alone) and kept
  *           likewise. A tree without metadata.json stores an empty collection —
  *           a profile without metadata backs no directory, and the lookup says
- *           so — so the same rule holds: NULL is "not loaded yet", never "absent".
+ *           so — so NULL is "not loaded yet", never "absent".
  */
 typedef struct {
-    bool exists;
     git_tree *tree;
     metadata_t *metadata;
 } authority_cache_t;
@@ -1392,11 +1389,10 @@ static orphan_authority_t compute_orphan_authority(
 ) {
     authority_cache_t *cached = hashmap_get(cache, profile);
     if (!cached) {
-        /* First row of this profile: does its branch still exist? A ref lookup,
-         * not a tree load — a profile whose branch is gone answers here, and
-         * every later row reads the cached answer. */
-        bool exists = false;
-        error_t err = gitops_branch_exists(repo, profile, &exists);
+        /* First row of this profile: its branch's tree, or none where the branch
+         * is gone — one read, and every later row reads the cached answer. */
+        git_tree *tree = NULL;
+        error_t err = gitops_branch_tree(repo, profile, &tree);
         if (err) {
             return ORPHAN_AUTHORITY_UNVERIFIED;
         }
@@ -1404,26 +1400,14 @@ static orphan_authority_t compute_orphan_authority(
         /* Cached only once answered: a failure above caches nothing, so a transient
          * one is the next row's to retry rather than the profile's verdict. */
         cached = heap_calloc(1, sizeof(*cached));
-        cached->exists = exists;
+        cached->tree = tree;                /* Ownership transfers to the cache */
         hashmap_set(cache, profile, cached);
     }
 
-    if (!cached->exists) {
+    if (!cached->tree) {
         /* The branch was deleted behind the record: nothing in Git can back the
          * path, and its content may be recoverable from no profile at all. */
         return ORPHAN_AUTHORITY_LOST;
-    }
-
-    if (!cached->tree) {
-        /* The branch's HEAD tree, on the first question that needs it and kept
-         * for the pass. Stored on success alone, so a failed load is retried by
-         * the next row instead of condemning the whole profile. */
-        git_tree *tree = NULL;
-        error_t err = gitops_load_branch_tree(repo, profile, &tree);
-        if (err) {
-            return ORPHAN_AUTHORITY_UNVERIFIED;
-        }
-        cached->tree = tree;                /* Ownership transfers to the cache */
     }
 
     /* The tree at the name, asked first and for either kind: a blob there is

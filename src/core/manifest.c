@@ -1245,29 +1245,19 @@ error_t manifest_build(
     for (size_t i = 0; i < profiles.count; i++) {
         const char *profile = profiles.entries[i].name;
 
-        /* Does the branch exist? Asked separately because the tree loader maps
-         * a missing ref to ERR_GIT like every other failure, and "gone" must
-         * not be confused with "broken": gone is an observation — the profile
-         * contributes nothing, is not listed among the view's profiles, and the
-         * workspace reads its records as orphans — broken is an error that must
-         * propagate. */
-        bool exists = false;
-        err = gitops_branch_exists(repo, profile, &exists);
-        if (err) {
-            return error_wrap(
-                err, "Failed to look up branch for profile '%s'", profile
-            );
-        }
-        if (!exists) continue;
-
-        /* Load tree for this profile (scoped to iteration). */
+        /* The profile's tree, scoped to the iteration, or none where its branch
+         * is gone — and "gone" is not "broken": gone is an observation — the
+         * profile contributes nothing, is not listed among the view's profiles,
+         * and the workspace reads its records as orphans — broken is an error
+         * that must propagate. */
         git_tree *tree = NULL;
-        err = gitops_load_branch_tree(repo, profile, &tree);
+        err = gitops_branch_tree(repo, profile, &tree);
         if (err) {
             return error_wrap(
                 err, "Failed to load tree for profile '%s'", profile
             );
         }
+        if (!tree) continue;
 
         /* The profile's claims: its own sheet, read by the step from the tree
          * just opened, and its blobs. One view, many sheets — each read under

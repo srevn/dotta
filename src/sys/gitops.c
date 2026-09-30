@@ -567,30 +567,28 @@ error_t gitops_delete_branch(git_repository *repo, const char *name) {
  * Tree operations
  */
 
-/**
- * Resolve a Git reference to its tree
- *
- * Shared implementation for gitops_load_tree and gitops_load_branch_tree: the
- * reference peeled to whatever it names — a commit's tree for a commit-backed
- * branch, the tree itself for an orphan-tree one.
- */
-static error_t resolve_ref_to_tree(
-    git_repository *repo, const char *ref_name, git_tree **out_tree
+error_t gitops_reference_tree(
+    git_repository *repo, const char *ref_name, git_tree **out
 ) {
-    /* The reference, or its absence proven (gitops_reference_find) */
+    CHECK_NULL(repo);
+    CHECK_NULL(ref_name);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    /* The reference, or its absence proven (gitops_reference_find): a packed-refs
+     * that will not parse is a failure, never a tree that is not there. */
     git_reference *ref = NULL;
-    RETURN_IF_ERROR(gitops_reference_find(repo, ref_name, &ref));
-    if (!ref) {
-        return ERROR(ERR_NOT_FOUND, "Reference '%s' not found", ref_name);
-    }
+    error_t err = gitops_reference_find(repo, ref_name, &ref);
+    if (err || !ref) return err;
 
     /* Peel reference to get the underlying object */
     git_object *obj = NULL;
-    int err = git_reference_peel(&obj, ref, GIT_OBJECT_ANY);
+    int rc = git_reference_peel(&obj, ref, GIT_OBJECT_ANY);
     git_reference_free(ref);
-    if (err < 0) {
+    if (rc < 0) {
         return error_wrap(
-            error_from_git(err), "Failed to peel reference '%s'",
+            error_from_git(rc), "Failed to peel reference '%s'",
             ref_name
         );
     }
@@ -603,11 +601,11 @@ static error_t resolve_ref_to_tree(
          * SAFETY: We verified obj_type == GIT_OBJECT_COMMIT, so this cast is safe
          */
         git_commit *commit = (git_commit *) obj;
-        err = git_commit_tree(out_tree, commit);
+        rc = git_commit_tree(out, commit);
         git_object_free(obj);
-        if (err < 0) return error_from_git(err);
+        if (rc < 0) return error_from_git(rc);
     } else if (obj_type == GIT_OBJECT_TREE) {
-        *out_tree = (git_tree *) obj;
+        *out = (git_tree *) obj;
     } else {
         /* Unexpected object type */
         git_object_free(obj);
@@ -620,15 +618,20 @@ static error_t resolve_ref_to_tree(
     return NULL;
 }
 
-error_t gitops_load_tree(
-    git_repository *repo, const char *ref_name, git_tree **out
+error_t gitops_branch_tree(
+    git_repository *repo, const char *branch_name, git_tree **out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(ref_name);
+    CHECK_NULL(branch_name);
     CHECK_NULL(out);
-    CHECK_ARG(ref_name[0] != '\0', "Reference name cannot be empty");
 
-    return resolve_ref_to_tree(repo, ref_name, out);
+    *out = NULL;
+
+    char refname[DOTTA_REFNAME_MAX];
+    error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
+    if (err) return err;
+
+    return gitops_reference_tree(repo, refname, out);
 }
 
 error_t gitops_load_branch_tree(
@@ -644,7 +647,13 @@ error_t gitops_load_branch_tree(
     );
     if (err) return err;
 
-    return resolve_ref_to_tree(repo, refname, out_tree);
+    err = gitops_reference_tree(repo, refname, out_tree);
+    if (err) return err;
+    if (!*out_tree) {
+        return ERROR(ERR_NOT_FOUND, "Reference '%s' not found", refname);
+    }
+
+    return NULL;
 }
 
 error_t gitops_tree_walk(

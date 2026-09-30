@@ -769,9 +769,13 @@ static bool stands_as_directory(
  * Every asker gets a subject, so every turn casts a verdict: a name's own tail,
  * or the tail of the name the asker gives the path — `""` at a root of its own,
  * which no rule reaches (base/gitignore.c), so a root tests NOT IGNORED for every
- * asker and its entries are what a pattern can name. The summary therefore reads
- * one accumulator: a run over enabled profiles ends TRACKED or IGNORED, and there
- * is no third thing for it to say.
+ * asker and its entries are what a pattern can name.
+ *
+ * The verdicts are the answer, and no line sums them into a forecast: the rules
+ * decide discovery (core/ignore.h, what the rules reach), and a path its profile
+ * tracks is re-captured by add and update whatever they say. So where the argument
+ * is a path its asker tracks, a verdict that excludes it is followed by a note
+ * saying so; a storage name builds no view to know, and says nothing.
  *
  * Cost: a filesystem argument pays a manifest build — a tree walk and a sheet
  * load per enabled profile — where it read the table alone. cmds/completion.c
@@ -875,11 +879,11 @@ static error_t test_path_ignore(
     RETURN_IF_ERROR(ignore_rules_create(repo, config, NULL, ctx->arena, &ignore_rules));
 
     /* The askers: the profile named, the enabled set, or the one asker that is
-     * no profile — which names through the shared roots and meets the baseline
-     * and config layers alone. `askers` starts at the parameter itself, an array
-     * of one that is both the named-profile and the nothing-enabled case; the
-     * enabled set replaces it when it holds any, and so does what the preamble
-     * and the summary key on. */
+     * no profile — which names through the shared roots and meets the baseline,
+     * the config's layer and Git's rules. `askers` starts at the parameter itself,
+     * an array of one that is both the named-profile and the nothing-enabled
+     * case; the enabled set replaces it when it holds any, and so does what the
+     * preamble keys on. */
     const char *const *askers = &specific_profile;
     size_t asker_count = 1;
     string_array_t enabled = { 0 };
@@ -895,10 +899,14 @@ static error_t test_path_ignore(
             output_info(out, OUTPUT_NORMAL, "Enabled profiles: %zu", asker_count);
             output_gap(out, OUTPUT_NORMAL);
         } else {
+            /* The layers the one asker that is no profile meets, in the words
+             * its verdict names them by: Git's where the builder opened them. */
             output_info(out, OUTPUT_NORMAL, "No enabled profiles found");
             output_info(
-                out, OUTPUT_NORMAL,
-                "Testing against baseline .dottaignore and config patterns only"
+                out, OUTPUT_NORMAL, "%s", ignore_source(ignore_rules)
+                    ? "Testing against the baseline .dottaignore, config file patterns "
+                "and Git's ignore rules"
+                    : "Testing against the baseline .dottaignore and config file patterns"
             );
         }
     }
@@ -914,8 +922,6 @@ static error_t test_path_ignore(
         );
     }
 
-    bool any_ignored = false;
-
     for (size_t i = 0; i < asker_count; i++) {
         const char *asker = askers[i];
 
@@ -927,26 +933,32 @@ static error_t test_path_ignore(
             snprintf(who, sizeof(who), "Profile '%s': ", asker);
         }
 
-        /* The asker's reading, seeded with the key the user named: a storage
-         * name is one name for every asker alike, a path is the machine's one
-         * reading and the kind observed there once. The arm fills the half the
-         * argument did not name. */
-        const char *name = arg.key == PATH_KEY_STORAGE ? arg.storage_path : NULL;
-        const char *filesystem_path = arg.key == PATH_KEY_FILESYSTEM ? arg.filesystem_path : NULL;
-        bool is_directory = argument_is_directory;
+        /* The asker's reading of the key the user named: each arm keeps the half
+         * the argument gave and fills the half it did not. */
+        const char *name;
+        const char *filesystem_path;
+        bool is_directory;
+        switch (arg.key) {
+            case PATH_KEY_STORAGE:
+                /* One name for every asker alike, standing where this asker's
+                 * target puts it, and what stands there: a custom/ name places
+                 * only under a profile with a target. */
+                name = arg.storage_path;
+                filesystem_path = mount_resolve(ctx->arena, mounts, asker, name);
+                is_directory = stands_as_directory(
+                    who, test_path, filesystem_path, trailing_slash, out
+                );
+                break;
 
-        if (arg.key == PATH_KEY_STORAGE) {
-            /* Where this asker's target puts the name, and what stands there: a
-             * custom/ name places only under a profile with a target. */
-            filesystem_path = mount_resolve(ctx->arena, mounts, asker, name);
-            is_directory = stands_as_directory(
-                who, test_path, filesystem_path, trailing_slash, out
-            );
-        } else {
-            /* What this asker calls the path: the claims it holds above it, else
-             * its own roots — the word alone at one of them, whose tail is ""
-             * and which no rule reaches. */
-            name = manifest_name(ctx->arena, view, asker, filesystem_path, NULL);
+            case PATH_KEY_FILESYSTEM:
+                /* The machine's one reading and the kind observed there once,
+                 * and what this asker calls the path: the claims it holds above
+                 * it, else its own roots — the word alone at one of them, whose
+                 * tail is "" and which no rule reaches. */
+                name = manifest_name(ctx->arena, view, asker, arg.filesystem_path, NULL);
+                filesystem_path = arg.filesystem_path;
+                is_directory = argument_is_directory;
+                break;
         }
 
         output_info(
@@ -976,26 +988,28 @@ static error_t test_path_ignore(
             );
         }
 
-        if (verdict.origin != IGNORE_ORIGIN_NONE) {
-            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} %sIGNORED\n", who);
-            output_info(
-                out, OUTPUT_NORMAL, "  Reason: %s", ignore_verdict_describe(ctx->arena, &verdict)
-            );
-            any_ignored = true;
-        } else {
+        if (verdict.origin == IGNORE_ORIGIN_NONE) {
             output_success(out, OUTPUT_NORMAL, "%sNOT IGNORED", who);
+            continue;
         }
-    }
 
-    if (enabled.count > 0) {
-        output_gap(out, OUTPUT_NORMAL);
-        if (any_ignored) {
+        output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} %sIGNORED\n", who);
+        output_info(
+            out, OUTPUT_NORMAL, "  Reason: %s", ignore_verdict_describe(ctx->arena, &verdict)
+        );
+
+        /* A path this asker tracks is no discovery: add and update re-capture
+         * it whatever the rules say, and only an -e leaves it out. Said beneath
+         * the verdict that would read otherwise, where a view names the path —
+         * a claim, never a directory the asker only passes through. */
+        const manifest_row_t *held = view
+            ? manifest_lookup_claim(view, asker, filesystem_path) : NULL;
+        if (held && !manifest_is_derived(held)) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "Result: Path would be IGNORED during add/update operations"
+                "  Profile '%s' tracks it: add and update re-capture it whatever these "
+                "rules say", asker
             );
-        } else {
-            output_success(out, OUTPUT_NORMAL, "Result: Path would be TRACKED");
         }
     }
 

@@ -813,7 +813,10 @@ size_t manifest_holders(
  * profile's own claim agrees with what stands there now — the one reading that
  * sees an explicit claim with nothing beneath it for either of the branch's
  * documents to find, and a derived row included, since a profile holding a subtree
- * beneath a path is a statement a path that became a file contradicts.
+ * beneath a path is a statement a path that became a file contradicts; and `ignore
+ * --test`'s note beneath a verdict that excludes a path its asker tracks, which
+ * add and update re-capture whatever the rules say (cmds/ignore.c
+ * test_path_ignore).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,

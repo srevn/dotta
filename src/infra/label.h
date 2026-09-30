@@ -174,8 +174,8 @@ label_split_t label_split(const char *s);
  * storage arm and the question its neighbour asks of a positional whose slot is
  * undecided (infra/path.c path_input_resolve, path_input_announces_path), the
  * two input heads that dispatch on shape before reading it (cmds/add.c cmd_add,
- * cmds/ignore.c test_path_ignore) and export's profile slot's own grammar
- * (cmds/export.c export_post_parse).
+ * cmds/ignore.c ignore_test) and export's profile slot's own grammar (cmds/export.c
+ * export_post_parse).
  */
 bool label_prefixes(const char *s);
 
@@ -224,9 +224,9 @@ label_t label_of(const char *storage_path);
  * for --exclude, a row's or an orphan's (core/scope.c scope_is_excluded), the
  * policy of a name for auto_encrypt (core/policy.c
  * encryption_policy_matches_auto_patterns), and `ignore --test`'s trace of the
- * subject it matched (cmds/ignore.c test_path_ignore). One reader cuts rather
- * than matches: the negation that re-opens a verdict's rung, spelled from the
- * tail cut there (core/ignore.c ignore_verdict_negation). One reader counts rather
+ * subject it matched (cmds/ignore.c ignore_test). One reader cuts rather than
+ * matches: the negation that re-opens a verdict's rung, spelled from the tail
+ * cut there (core/ignore.c ignore_verdict_negation). One reader counts rather
  * than matches: the climb, whose rungs are the separators in the tail
  * (core/metadata.c metadata_capture_ancestors).
  *

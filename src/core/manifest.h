@@ -459,8 +459,8 @@ error_t manifest_build_tree(
  * manifest_build_tree. No policy enters here: no raw argument, no fallback, no
  * enabled-set question, and the branch need not be enabled.
  *
- * Readers: `ignore --test`'s named arm (cmds/ignore.c test_path_ignore); the
- * two cross-branch searches (core/profiles.c profile_discover_claims,
+ * Readers: `ignore --test`'s named arm (cmds/ignore.c ignore_test); the two
+ * cross-branch searches (core/profiles.c profile_discover_claims,
  * profile_build_filesystem_index), which build one per local branch; and the
  * target producer (core/profiles.c profile_needs_target), which builds one under
  * a table that binds nothing and reads the health slice alone.
@@ -815,8 +815,7 @@ size_t manifest_holders(
  * documents to find, and a derived row included, since a profile holding a subtree
  * beneath a path is a statement a path that became a file contradicts; and `ignore
  * --test`'s note beneath a verdict that excludes a path its asker tracks, which
- * add and update re-capture whatever the rules say (cmds/ignore.c
- * test_path_ignore).
+ * add and update re-capture whatever the rules say (cmds/ignore.c ignore_test).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,
@@ -994,15 +993,15 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  * — the sentinel encloses them all — so no reader meets an absence and none asks
  * a second authority what one would have meant.
  *
- * Readers: `ignore --test`'s subject, one per asker (cmds/ignore.c
- * test_path_ignore); the prospective name a claim search falls through to
- * (core/profiles.c profile_claim_name); the name every capture lands under —
- * add's argument arm, its walk, and the one refusal its completed selection owes,
- * all over the command's own listing (cmds/add.c cmd_add, add_collect,
- * add_refuse_moves); and the name the untracked scan offers a new path under,
- * one per entry its guards let through, with no pending layer — the scan admits
- * nothing (core/workspace.c workspace_scan). The settle of a contribution's
- * collisions asks the same rule (core/manifest.c manifest_settle).
+ * Readers: `ignore --test`'s subject, one per asker (cmds/ignore.c ignore_test);
+ * the prospective name a claim search falls through to (core/profiles.c
+ * profile_claim_name); the name every capture lands under — add's argument arm,
+ * its walk, and the one refusal its completed selection owes, all over the
+ * command's own listing (cmds/add.c cmd_add, add_collect, add_refuse_moves);
+ * and the name the untracked scan offers a new path under, one per entry its
+ * guards let through, with no pending layer — the scan admits nothing
+ * (core/workspace.c workspace_scan). The settle of a contribution's collisions
+ * asks the same rule (core/manifest.c manifest_settle).
  *
  * @param arena Arena the name lives in (must not be NULL)
  * @param manifest Manifest (must not be NULL)

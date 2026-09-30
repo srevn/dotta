@@ -37,11 +37,15 @@
  * reads it, and two lines are one rule iff their spans are equal byte for byte —
  * so `foo` and `foo   ` are one rule while `foo` and `  foo` are two, and a
  * blank or comment line names none. `span` is the pattern's own, which the caller
- * has already asked for — never zero, since require_patterns refused every argument
- * that makes no rule. A span is the rule's identity, not its line: the caller
- * writes the pattern whole.
+ * has already asked for — never zero, since ignore_require_patterns refused every
+ * argument that makes no rule. A span is the rule's identity, not its line: the
+ * caller writes the pattern whole.
+ *
+ * Presence, not standing: a line a later `!` shadows is still held, so `--add
+ * foo` over `foo` and then `!foo` adds nothing, and the rule stays shadowed.
+ * The file is edited as lines; what its rules decide is the verdict's question.
  */
-static bool pattern_exists(const char *content, const char *pattern, size_t span) {
+static bool ignore_holds(const char *content, const char *pattern, size_t span) {
     const char *line = gitignore_file_lines(content);
 
     /* A line and its newline are one step; the last line needs no newline. */
@@ -68,7 +72,7 @@ static bool pattern_exists(const char *content, const char *pattern, size_t span
  * named `~`, are refused in its words, which quote the argument where its words
  * are the reason. The flag is named here.
  */
-static error_t require_patterns(const char *flag, char **patterns, size_t count) {
+static error_t ignore_require_patterns(const char *flag, char **patterns, size_t count) {
     for (size_t i = 0; i < count; i++) {
         error_t err = gitignore_validate_pattern(patterns[i]);
         if (err) {
@@ -84,11 +88,12 @@ static error_t require_patterns(const char *flag, char **patterns, size_t count)
  *
  * The edit would write it and take it back — two receipts for a file that ends
  * as it began, or differs by a separator newline alone. Compared as rules, as
- * pattern_exists compares them: `--add foo --remove 'foo   '` names one rule.
- * Every span is nonzero here, since require_patterns refused the rest, and the
- * rule is quoted as written — its span, the spelling a verdict reports it under.
+ * ignore_holds compares them: `--add foo --remove 'foo   '` names one rule.
+ * Every span is nonzero here, since ignore_require_patterns refused the rest,
+ * and the rule is quoted as written — its span, the spelling a verdict reports
+ * it under.
  */
-static error_t require_disjoint(
+static error_t ignore_require_disjoint(
     char **add_patterns,
     size_t add_count,
     char **remove_patterns,
@@ -117,23 +122,23 @@ static error_t require_disjoint(
 /**
  * Add patterns to .dottaignore content
  *
- * Appends each pattern as it was given, and its newline — the line require_patterns
- * read it as, so the file reads back the rule the pattern was checked as — skipping
- * a pattern whose rule is already present, in the file or earlier in the batch.
- * Deduplication is by rule (pattern_exists), against the accumulating buffer.
- * The pattern, never its span: `foo<CR><SP>` is the rule foo<CR>, and its span
- * written back alone would be the rule foo.
+ * Appends each pattern as it was given, and its newline — the line
+ * ignore_require_patterns read it as, so the file reads back the rule the pattern
+ * was checked as — skipping a pattern whose rule is already present, in the file
+ * or earlier in the batch. Deduplication is by rule (ignore_holds), against the
+ * accumulating buffer. The pattern, never its span: `foo<CR><SP>` is the rule
+ * foo<CR>, and its span written back alone would be the rule foo.
  *
  * `existing_content` is the file as read, or the seed — never empty, since
- * ignore_blob_text answers an empty blob as absent and modify_dottaignore seeds
- * the absent one — so no pattern lands at the head of the file, where a byte-order
+ * ignore_blob_text answers an empty blob as absent and ignore_modify seeds the
+ * absent one — so no pattern lands at the head of the file, where a byte-order
  * mark in front of it would be the file's and not the pattern's.
  *
  * Contract: the new content is NULL iff *added_count == 0. The helper never hands
  * back a buffer that is byte-identical to its input, so callers can treat NULL
  * as "nothing changed" without further checks.
  */
-static char *add_patterns_to_content(
+static char *ignore_add(
     const char *existing_content,
     char **patterns,
     size_t pattern_count,
@@ -166,21 +171,21 @@ static char *add_patterns_to_content(
     /*
      * Single pass: span, deduplicate, append.
      *
-     * Checking pattern_exists() against the accumulated result buffer handles
-     * both existing-content dedup and batch dedup in one call: previously appended
+     * Checking ignore_holds() against the accumulated result buffer handles both
+     * existing-content dedup and batch dedup in one call: previously appended
      * patterns are already in the buffer.
      */
     for (size_t i = 0; i < pattern_count; i++) {
         const char *p = patterns[i];
         size_t length = strlen(p);
-        if (pattern_exists(result, p, gitignore_rule_span(p, length))) {
+        if (ignore_holds(result, p, gitignore_rule_span(p, length))) {
             continue;
         }
 
         memcpy(pos, p, length);
         pos += length;
         *pos++ = '\n';
-        *pos = '\0';  /* Keep result valid for next pattern_exists call */
+        *pos = '\0';  /* Keep result valid for next ignore_holds call */
         (*added_count)++;
     }
 
@@ -199,7 +204,7 @@ static char *add_patterns_to_content(
  * Remove patterns from .dottaignore content
  *
  * Filters existing_content line-by-line, dropping every line that names the same
- * rule as an entry in patterns — equal spans, byte for byte, as pattern_exists
+ * rule as an entry in patterns — equal spans, byte for byte, as ignore_holds
  * reads them; a blank or comment line names none and is always kept, and so are
  * the bytes before the first line (gitignore_file_lines), which are the file's.
  * Requests are counted by rule, as --add counts them: two that name one rule —
@@ -209,7 +214,7 @@ static char *add_patterns_to_content(
  * Contract: the new content is NULL iff *removed_count == 0. Callers can treat
  * NULL as "nothing changed" without a content compare.
  */
-static char *remove_patterns_from_content(
+static char *ignore_remove(
     const char *existing_content,
     char **patterns,
     size_t pattern_count,
@@ -251,7 +256,7 @@ static char *remove_patterns_from_content(
 
         /* The first request that names this line's rule, in the order given. A
          * blank or comment line's span is zero, which no request's is:
-         * require_patterns refused every argument that makes no rule. */
+         * ignore_require_patterns refused every argument that makes no rule. */
         size_t i;
         for (i = 0; i < pattern_count; i++) {
             if (spans[i] == span && memcmp(line, patterns[i], span) == 0) {
@@ -324,7 +329,7 @@ static char *remove_patterns_from_content(
  * @param out_size    Receives byte count of result (excludes NUL)
  * @return Error or NULL on success
  */
-static error_t edit_content_via_editor(
+static error_t ignore_editor(
     const char *seed,
     size_t seed_size,
     char **out_content,
@@ -383,46 +388,46 @@ static error_t edit_content_via_editor(
 }
 
 /**
- * File-local scope for the two .dottaignore-editing surfaces: the baseline at
- * its own ref, and any named profile branch.
+ * The .dottaignore an edit changes: the baseline at its own ref, or a named
+ * profile's on its branch.
  *
- * Captures everything that differs between the two so edit_dottaignore and
- * modify_dottaignore stay ref-agnostic. Constructed on the stack in cmd_ignore;
- * the profile's refname lives in that frame too, its label in the command arena.
+ * Captures everything that differs between the two so ignore_edit and ignore_modify
+ * stay ref-agnostic. Constructed on the stack in cmd_ignore; the profile's refname
+ * lives in that frame too, its layer's words in the command arena.
  */
 typedef struct {
     const char *refname;        /* BASELINE_REF or the profile's branch ref */
-    const char *display_label;  /* "baseline" or "profile 'X'" */
-    const char *default_seed;   /* default content / profile template */
-} dottaignore_scope_t;
+    const char *layer;          /* The layer, as the screens name it: "baseline" or "profile 'X'" */
+    const char *seed;           /* What stands in where it has none: defaults or template */
+} dottaignore_t;
 
 /**
  * Edit a .dottaignore via external editor.
  *
- * Called with scope->refname already verified to exist (cmd_ignore hoists that
- * check). Loads existing content, delegates to the editor helper, commits the
- * result back to the same ref.
+ * Called with dottaignore->refname already verified to exist (cmd_ignore hoists
+ * that check). Loads existing content, delegates to the editor helper, commits
+ * the result back to the same ref.
  *
  * The bytes, not the text (ignore_blob_read): a human reads the file here, so a
  * .dottaignore every other reader refuses — one holding a NUL — opens as it stands,
  * to be mended. The write refuses what those readers would.
  */
-static error_t edit_dottaignore(
+static error_t ignore_edit(
     git_repository *repo,
-    const dottaignore_scope_t *scope,
+    const dottaignore_t *dottaignore,
     output_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(scope);
+    CHECK_NULL(dottaignore);
 
     char *existing_content = NULL;
     size_t existing_size = 0;
     error_t err = ignore_blob_read(
-        repo, scope->refname, &existing_content, &existing_size
+        repo, dottaignore->refname, &existing_content, &existing_size
     );
     if (err) {
         return error_wrap(
-            err, "Failed to load %s .dottaignore", scope->display_label
+            err, "Failed to load %s .dottaignore", dottaignore->layer
         );
     }
 
@@ -432,19 +437,19 @@ static error_t edit_dottaignore(
         seed = existing_content;
         seed_size = existing_size;
     } else {
-        seed = scope->default_seed;
+        seed = dottaignore->seed;
         seed_size = strlen(seed);
     }
 
     char *new_content = NULL;
     size_t new_size = 0;
-    err = edit_content_via_editor(
+    err = ignore_editor(
         seed, seed_size, &new_content, &new_size
     );
     if (err) {
         free(existing_content);
         return error_wrap(
-            err, "Failed to edit %s .dottaignore", scope->display_label
+            err, "Failed to edit %s .dottaignore", dottaignore->layer
         );
     }
 
@@ -461,29 +466,29 @@ static error_t edit_dottaignore(
         free(new_content);
         output_info(
             out, OUTPUT_NORMAL, "No changes to %s .dottaignore",
-            scope->display_label
+            dottaignore->layer
         );
         return NULL;
     }
 
     char *commit_msg = heap_str_format(
-        "Update %s .dottaignore", scope->display_label
+        "Update %s .dottaignore", dottaignore->layer
     );
 
     err = ignore_blob_write(
-        repo, scope->refname, new_content, new_size, commit_msg
+        repo, dottaignore->refname, new_content, new_size, commit_msg
     );
     free(commit_msg);
     free(new_content);
 
     if (err) {
         return error_wrap(
-            err, "Failed to update %s .dottaignore", scope->display_label
+            err, "Failed to update %s .dottaignore", dottaignore->layer
         );
     }
 
     output_success(
-        out, OUTPUT_NORMAL, "Updated %s .dottaignore", scope->display_label
+        out, OUTPUT_NORMAL, "Updated %s .dottaignore", dottaignore->layer
     );
     return NULL;
 }
@@ -491,9 +496,9 @@ static error_t edit_dottaignore(
 /**
  * Add / remove patterns in a .dottaignore non-interactively.
  *
- * Called with scope->refname already verified to exist. Load existing content —
- * the text (ignore_blob_text), which the transforms read a line at a time — apply
- * add/remove transforms, commit the result if it actually changed.
+ * Called with dottaignore->refname already verified to exist. Load existing content
+ * — the text (ignore_blob_text), which the transforms read a line at a time —
+ * apply add/remove transforms, commit the result if it actually changed.
  *
  * Ownership is linear: `owned` is the single buffer this function frees at every
  * exit. Each transform either leaves `owned` untouched (helper returned NULL =
@@ -502,9 +507,9 @@ static error_t edit_dottaignore(
  * changed, which is what lets this function get by with one variable and no
  * pointer-identity comparisons.
  */
-static error_t modify_dottaignore(
+static error_t ignore_modify(
     git_repository *repo,
-    const dottaignore_scope_t *scope,
+    const dottaignore_t *dottaignore,
     char **add_patterns,
     size_t add_count,
     char **remove_patterns,
@@ -512,13 +517,13 @@ static error_t modify_dottaignore(
     output_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(scope);
+    CHECK_NULL(dottaignore);
 
     char *owned = NULL;
-    error_t err = ignore_blob_text(repo, scope->refname, &owned);
+    error_t err = ignore_blob_text(repo, dottaignore->refname, &owned);
     if (err) {
         return error_wrap(
-            err, "Failed to load %s .dottaignore", scope->display_label
+            err, "Failed to load %s .dottaignore", dottaignore->layer
         );
     }
 
@@ -528,14 +533,14 @@ static error_t modify_dottaignore(
     if (!owned && add_count == 0) {
         output_info(
             out, OUTPUT_NORMAL, "No %s .dottaignore exists",
-            scope->display_label
+            dottaignore->layer
         );
         return NULL;
     }
 
     /* Seed with default/template when file is absent and adds exist. */
     if (!owned && add_count > 0) {
-        owned = heap_strdup(scope->default_seed);
+        owned = heap_strdup(dottaignore->seed);
     }
 
     size_t total_added = 0;
@@ -544,7 +549,7 @@ static error_t modify_dottaignore(
 
     if (add_count > 0) {
         size_t added = 0;
-        char *next = add_patterns_to_content(owned, add_patterns, add_count, &added);
+        char *next = ignore_add(owned, add_patterns, add_count, &added);
         if (next) {
             free(owned);
             owned = next;
@@ -555,7 +560,7 @@ static error_t modify_dottaignore(
     if (remove_count > 0) {
         size_t removed = 0;
         size_t not_found = 0;
-        char *next = remove_patterns_from_content(
+        char *next = ignore_remove(
             owned, remove_patterns, remove_count, &removed, &not_found
         );
         /* not_found is populated whether or not the buffer changed — always capture
@@ -594,22 +599,22 @@ static error_t modify_dottaignore(
     if (total_added > 0 && total_removed > 0) {
         commit_msg = heap_str_format(
             "Update %s .dottaignore (added %zu, removed %zu patterns)",
-            scope->display_label, total_added, total_removed
+            dottaignore->layer, total_added, total_removed
         );
     } else if (total_added > 0) {
         commit_msg = heap_str_format(
             "Add %zu pattern%s to %s .dottaignore",
-            total_added, total_added == 1 ? "" : "s", scope->display_label
+            total_added, total_added == 1 ? "" : "s", dottaignore->layer
         );
     } else {
         commit_msg = heap_str_format(
             "Remove %zu pattern%s from %s .dottaignore",
-            total_removed, total_removed == 1 ? "" : "s", scope->display_label
+            total_removed, total_removed == 1 ? "" : "s", dottaignore->layer
         );
     }
 
     err = ignore_blob_write(
-        repo, scope->refname,
+        repo, dottaignore->refname,
         owned, strlen(owned), commit_msg
     );
 
@@ -618,7 +623,7 @@ static error_t modify_dottaignore(
 
     if (err) {
         return error_wrap(
-            err, "Failed to update %s .dottaignore", scope->display_label
+            err, "Failed to update %s .dottaignore", dottaignore->layer
         );
     }
 
@@ -626,14 +631,14 @@ static error_t modify_dottaignore(
         output_success(
             out, OUTPUT_NORMAL,
             "Added %zu pattern%s to %s .dottaignore",
-            total_added, total_added == 1 ? "" : "s", scope->display_label
+            total_added, total_added == 1 ? "" : "s", dottaignore->layer
         );
     }
     if (total_removed > 0) {
         output_success(
             out, OUTPUT_NORMAL,
             "Removed %zu pattern%s from %s .dottaignore",
-            total_removed, total_removed == 1 ? "" : "s", scope->display_label
+            total_removed, total_removed == 1 ? "" : "s", dottaignore->layer
         );
     }
     if (total_not_found > 0) {
@@ -778,7 +783,7 @@ static path_kind_t ignore_kind(
  * filesystem argument, as it refuses status, apply and list. The named profile's
  * arm is insulated by construction, and a storage argument builds nothing.
  */
-static error_t test_path_ignore(
+static error_t ignore_test(
     const dotta_ctx_t *ctx,
     const char *test_path,
     const char *profile
@@ -1031,41 +1036,42 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     }
 
     /* --test is a read-only query that walks every enabled profile by itself;
-     * it doesn't use dottaignore_scope_t. Dispatch early. */
+     * it doesn't use dottaignore_t. Dispatch early. */
     if (has_test) {
-        return test_path_ignore(ctx, opts->test_path, opts->profile);
+        return ignore_test(ctx, opts->test_path, opts->profile);
     }
 
     /* A pattern is checked before its file is opened: an argument that names no
      * rule, or names two, is refused by name rather than written, and so is a
      * rule both added and removed, which the edit would write and take back. */
     RETURN_IF_ERROR(
-        require_patterns("--add", opts->add_patterns, opts->add_count)
+        ignore_require_patterns("--add", opts->add_patterns, opts->add_count)
     );
     RETURN_IF_ERROR(
-        require_patterns("--remove", opts->remove_patterns, opts->remove_count)
+        ignore_require_patterns("--remove", opts->remove_patterns, opts->remove_count)
     );
     RETURN_IF_ERROR(
-        require_disjoint(
+        ignore_require_disjoint(
         opts->add_patterns, opts->add_count,
         opts->remove_patterns, opts->remove_count
         )
     );
 
-    /* The scope for edit / modify: the file's home, its name on the screen, and
-     * what an editor opens on when the file is not there yet. Each arm establishes
-     * its home before naming it — the profile named must be here, the baseline's
-     * ref must stand — so edit and modify start on a ref that exists. The profile's
-     * refname lives in this frame, its label in the command arena. */
+    /* The .dottaignore edit and modify change: the file's home, its layer on
+     * the screen, and what an editor opens on when the file is not there yet.
+     * Each arm establishes its home before naming it — the profile named must
+     * be here, the baseline's ref must stand — so edit and modify start on a
+     * ref that exists. The profile's refname lives in this frame, its layer's
+     * words in the command arena. */
     char refname[DOTTA_REFNAME_MAX];
-    dottaignore_scope_t scope;
+    dottaignore_t dottaignore;
     if (opts->profile) {
         RETURN_IF_ERROR(profile_require(repo, opts->profile));
         RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), opts->profile));
-        scope = (dottaignore_scope_t){
+        dottaignore = (dottaignore_t){
             .refname = refname,
-            .display_label = arena_str_format(ctx->arena, "profile '%s'", opts->profile),
-            .default_seed = ignore_profile_template(),
+            .layer = arena_str_format(ctx->arena, "profile '%s'", opts->profile),
+            .seed = ignore_profile_template(),
         };
     } else {
         /* Seeded by `dotta init` and `dotta clone`; absent only by hand, and
@@ -1080,20 +1086,20 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
                 BASELINE_REF
             );
         }
-        scope = (dottaignore_scope_t){
+        dottaignore = (dottaignore_t){
             .refname = BASELINE_REF,
-            .display_label = "baseline",
-            .default_seed = ignore_baseline_defaults(),
+            .layer = "baseline",
+            .seed = ignore_baseline_defaults(),
         };
     }
 
     if (has_modify) {
-        return modify_dottaignore(
-            repo, &scope, opts->add_patterns, opts->add_count,
+        return ignore_modify(
+            repo, &dottaignore, opts->add_patterns, opts->add_count,
             opts->remove_patterns, opts->remove_count, out
         );
     }
-    return edit_dottaignore(repo, &scope, out);
+    return ignore_edit(repo, &dottaignore, out);
 }
 
 /* ══════════════════════════════════════════════════════════════════

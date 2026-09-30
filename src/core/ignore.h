@@ -330,7 +330,7 @@ source_filter_t *ignore_source(ignore_rules_t *rules);
  *
  * Readers: cmds/add.c add_excluded (a claim with the -e layer alone, anything
  * else with every layer), core/workspace.c workspace_scan, cmds/ignore.c
- * test_path_ignore.
+ * ignore_test.
  *
  * @param rules           The layers the path meets, composed (ignore_ruleset), or
  *                        the -e layer alone (can be NULL: no rules)
@@ -362,7 +362,7 @@ error_t ignore_verdict(
  * verdict holds it, absolute: the kernel's spelling for a tree's own lists, the
  * configuration's for core.excludesFile (sys/source.h), so no one home abbreviates
  * the three. Readers: cmds/add.c add_collect (the walk's VERBOSE line) and
- * add_refuse_excluded (the refusal), cmds/ignore.c test_path_ignore (the Reason).
+ * add_refuse_excluded (the refusal), cmds/ignore.c ignore_test (the Reason).
  *
  * @param arena   Arena the words live in (must not be NULL)
  * @param verdict The verdict (must not be NULL)

@@ -192,3 +192,13 @@ void ptr_array_clear(ptr_array_t *arr) {
     if (!arr) return;
     arr->count = 0;
 }
+
+bool ptr_array_contains(const ptr_array_t *arr, const void *p) {
+    if (!arr) return false;
+
+    for (size_t i = 0; i < arr->count; i++) {
+        if (arr->entries[i] == p) return true;
+    }
+
+    return false;
+}

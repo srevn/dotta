@@ -189,4 +189,12 @@ void ptr_array_reserve(ptr_array_t *arr, size_t cap);
  */
 void ptr_array_clear(ptr_array_t *arr);
 
+/**
+ * Linear search for p, by identity: the pointer itself, NULL a value like any
+ * other (ptr_array_push).
+ *
+ * @return true if found; false on NULL
+ */
+bool ptr_array_contains(const ptr_array_t *arr, const void *p);
+
 #endif /* DOTTA_ARRAY_H */

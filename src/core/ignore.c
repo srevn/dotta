@@ -478,8 +478,9 @@ source_filter_t *ignore_source(ignore_rules_t *r) {
 }
 
 /**
- * Does a `!` of the four re-open this directory of the place — decide a rung of
- * the name that is the same directory, at whatever height each stands?
+ * The next rung of the name, past its first `from` bytes, that is this directory
+ * of the place: the name's bytes through that rung, which a '/' ends — or 0 where
+ * no rung further down is.
  *
  * Each rung of the name above the path is spelled where the path is — the name's
  * tail ends `spelled`, `head` bytes in — through its '/', and its directory is
@@ -487,10 +488,30 @@ source_filter_t *ignore_source(ignore_rules_t *r) {
  * of one directory, as the kernel spells it. So a link the spelled place passes
  * through, which can set a directory the name reaches at one height at another
  * height of the place, changes nothing, and a directory no rung of the name reaches
- * — above its top, or behind such a link — is the source layer's alone. A spelling
- * the filter cannot resolve names no directory. Asked where the source excludes
- * the directory or cannot read it, the four having excluded nothing: a rule of
- * theirs at a rung is a `!` or none.
+ * — above its top, or behind such a link — is none of them. A spelling the filter
+ * cannot resolve names no directory.
+ */
+static size_t ignore_name_rung(
+    source_filter_t *source, const char *spelled, size_t head, const char *name,
+    size_t from, const source_directory_t *directory
+) {
+    for (const char *cut = strchr(name + from, '/'); cut; cut = strchr(cut + 1, '/')) {
+        const source_directory_t *named = NULL;
+        if (!source_filter_directory(source, spelled, head + (size_t) (cut - name) + 1, &named) &&
+            named == directory) {
+            return (size_t) (cut - name);
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * Does a `!` of the four re-open this directory of the place — decide a rung of
+ * the name that is the same directory, at whatever height each stands
+ * (ignore_name_rung)? Asked where the source excludes the directory or cannot
+ * read it, the four having excluded nothing: a rule of theirs at a rung is a
+ * `!` or none.
  *
  * `name` is the tail, cut here and put back.
  */
@@ -498,16 +519,11 @@ static bool ignore_reopened(
     const gitignore_ruleset_t *rules, source_filter_t *source, const char *spelled,
     size_t head, char *name, const source_directory_t *directory
 ) {
-    for (char *cut = strchr(name, '/'); cut; cut = strchr(cut + 1, '/')) {
-        const source_directory_t *named = NULL;
-        if (source_filter_directory(source, spelled, head + (size_t) (cut - name) + 1, &named) ||
-            named != directory) {
-            continue;
-        }
-
-        *cut = '\0';
+    for (size_t cut = ignore_name_rung(source, spelled, head, name, 0, directory); cut;
+        cut = ignore_name_rung(source, spelled, head, name, cut + 1, directory)) {
+        name[cut] = '\0';
         const gitignore_rule_t *rule = gitignore_ruleset_find(rules, name, true);
-        *cut = '/';
+        name[cut] = '/';
         if (gitignore_rule_negated(rule)) return true;
     }
 
@@ -575,9 +591,8 @@ error_t ignore_verdict(
      * up, so the last it finds is the verdict. */
     error_t failure = NULL;
     char *name = NULL;
-    size_t rung = 1;
     for (const source_directory_t *above = directory; above;
-        above = source_directory_parent(above), rung++) {
+        above = source_directory_parent(above)) {
         source_rule_t found;
         error_t err = source_directory_rule(above, &found);
         if (!err && !found.rule) continue;
@@ -594,11 +609,22 @@ error_t ignore_verdict(
          * is kept, the answer only where nothing is excluded. */
         if (err) {
             failure = err;
-        } else {
-            *out = (ignore_verdict_t){
-                IGNORE_ORIGIN_SOURCE, gitignore_rule_pattern(found.rule), rung
-            };
+            continue;
         }
+
+        /* The rung the verdict names is the name's: the first rung of it that
+         * is this directory, where a `!` of the four re-opens it, counted by
+         * the separators from its end to the path's — or none, where no rung of
+         * the name is this directory. */
+        size_t rung = IGNORE_RUNG_UNNAMED;
+        size_t cut = ignore_name_rung(source, spelled, head, name, 0, above);
+        if (cut) {
+            rung = 0;
+            for (const char *sep = name + cut; sep; sep = strchr(sep + 1, '/')) rung++;
+        }
+        *out = (ignore_verdict_t){
+            IGNORE_ORIGIN_SOURCE, gitignore_rule_pattern(found.rule), rung
+        };
     }
 
     free(name);

@@ -140,21 +140,31 @@ typedef enum {
 } ignore_origin_t;
 
 /**
+ * The rung a verdict names where the source layer excluded a directory no rung
+ * of the path's name is: the root the name stands under or one above it, or one
+ * behind a link the name passes through (ignore_verdict). A name's rungs count
+ * up from 0, and this is outside them, as an absence must be.
+ */
+#define IGNORE_RUNG_UNNAMED SIZE_MAX
+
+/**
  * The ladder's answer for one path: whether a rule leaves it out, which, and where
  *
  * The origin is the answer — IGNORE_ORIGIN_NONE where no rule excludes the path,
  * else the layer whose rule does — so nothing beside it restates the verdict.
- * The rung is where on the path the rule excluded it, counted up from the path
- * itself: 0 where the rule names the path, 1 where it names the directory the
- * path stands in, and so on — the name's rung at that height where one of the
- * four decided, the place's where the source layer did (ignore_verdict). The
- * pattern is borrowed from the arena its rule was parsed into, the command's or
- * longer.
+ * The rung is where on the path's name the rule excluded it, counted up from
+ * the path itself: 0 where the rule names the path, 1 where it names the directory
+ * the path stands in, and so on. The source layer excludes a directory the path
+ * physically stands in, and the verdict names it by the first rung of the name
+ * that is that directory as the kernel spells it — the rung a `!` of the four
+ * re-opens it at — or IGNORE_RUNG_UNNAMED where no rung of the name is
+ * (ignore_verdict). The pattern is borrowed from the arena its rule was parsed
+ * into, the command's or longer.
  */
 typedef struct {
     ignore_origin_t origin;   /* The layer whose rule excludes the path; NONE: none does */
     const char *pattern;      /* That rule as written; NULL with NONE */
-    size_t rung;              /* How far above the path it excluded: 0 the path itself */
+    size_t rung;              /* How far above the path, in its name: 0 the path itself */
 } ignore_verdict_t;
 
 /**
@@ -298,6 +308,8 @@ source_filter_t *ignore_source(ignore_rules_t *rules);
  * at two. At the path it re-opens the path itself. A rung of the place no rung
  * of the name is — above the name's top, the root it lies under and what contains
  * it, or behind a link the name passes through — is the source layer's alone.
+ * The verdict speaks the name's rungs either way: a directory of the place by
+ * the first rung of the name that is it, and one no rung is by IGNORE_RUNG_UNNAMED.
  *
  * `source` NULL — the configuration turned the layer off, or the reader asks a
  * layer alone, add's -e of a claim — or `filesystem_path` NULL — a name no binding

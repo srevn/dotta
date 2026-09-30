@@ -54,7 +54,9 @@
  * reads, it matches nothing its writer named. `/` anchors the pattern at the
  * top of the rules' directory, and `\~/` names the directory called `~`. A list
  * of patterns is its caller's to walk, each entry one pattern — never the lines
- * of a file: no mark is shed from an entry and no newline splits one.
+ * of a file: no mark is shed from an entry and no newline splits one. A line
+ * may be of any length and a set may hold any number of rules, as git's may:
+ * what bounds either is the medium it came in.
  *
  * And a ruleset takes a third input, which the grammar never reads again: the
  * rules another ruleset compiled (gitignore_ruleset_append_rules), copied in
@@ -146,16 +148,14 @@ gitignore_ruleset_t *gitignore_ruleset_create(
  * file's, not its first rule's; one anywhere else is pattern content. A final
  * line needs no terminator. Empty content is accepted (no rules appended). Each
  * rule keeps the line it was read from (gitignore_rule_line), counted as git
- * counts one: from 1, every line counted, comments and blanks among them. Returns
- * ERR_VALIDATION if any line exceeds 4096 bytes, naming it, or the cumulative
- * rule count exceeds 10000.
+ * counts one: from 1, every line counted, comments and blanks among them. Never
+ * fails: every line is a rule or none.
  *
  * @param ruleset Ruleset to append into (must not be NULL)
  * @param content A gitignore file's text (must not be NULL; may be empty)
  * @param origin  Caller-chosen origin tag
- * @return Error or NULL on success
  */
-error_t gitignore_ruleset_append_file(
+void gitignore_ruleset_append_file(
     gitignore_ruleset_t *ruleset,
     const char *content,
     gitignore_origin_t origin
@@ -181,11 +181,9 @@ const char *gitignore_file_lines(const char *content);
  * Append one pattern as one rule, tagged with `origin`.
  *
  * The pattern is read as gitignore_rule_parse reads one — the line it would be
- * in a file — and refused exactly as it refuses one: a newline, a length past
- * 4096 bytes, a line that makes no rule. It is not a file: no byte-order mark
- * is shed from it and no newline is split. A refusal stores nothing, and a set
- * already holding 10 000 rules refuses the next (ERR_VALIDATION). The rule's
- * strings are the set's arena's.
+ * in a file — and refused exactly as it refuses one (gitignore_validate_pattern).
+ * It is not a file: no byte-order mark is shed from it and no newline is split.
+ * A refusal stores nothing. The rule's strings are the set's arena's.
  *
  * @param ruleset Ruleset to append into (must not be NULL)
  * @param pattern One pattern (must not be NULL)
@@ -207,18 +205,13 @@ error_t gitignore_ruleset_append_pattern(
  * a ruleset that was itself composed lends strings it borrowed. Appending to
  * `from` later does not reach `ruleset`; resetting or freeing a backing arena
  * invalidates it. `from` may be `ruleset` itself, and a NULL `from` is an absent
- * layer that appends nothing.
- *
- * The cap counts the composed ruleset: one already holding 10 000 rules refuses
- * the next (ERR_VALIDATION), and the rules before it stay appended — a caller
- * publishes a ruleset only once every append to it has returned.
+ * layer that appends nothing. Never fails.
  *
  * @param ruleset Ruleset to append into (must not be NULL)
  * @param from    Rules to copy (can be NULL: nothing)
  * @param origin  Caller-chosen origin tag applied to every copy
- * @return Error or NULL on success
  */
-error_t gitignore_ruleset_append_rules(
+void gitignore_ruleset_append_rules(
     gitignore_ruleset_t *ruleset,
     const gitignore_ruleset_t *from,
     gitignore_origin_t origin
@@ -365,14 +358,13 @@ const gitignore_rule_t *gitignore_ruleset_rule(
  *
  * gitignore_rule_parse's refusals with nothing kept, for a caller that writes
  * the pattern itself and asks the grammar first (cmds/ignore's --add and --remove).
- * In order: a newline (a pattern is one line), a length past 4096 bytes, a line
- * that would make no rule — a comment, in its own words and with the escape that
- * makes it a pattern; anything else as naming nothing — and a rule spelled from
- * home, a `~/` opening it past a `!`, with its anchored spelling and the escape
- * that names a directory called `~`. A refusal about what the pattern says quotes
- * it, bounded by that order to one line of at most 4096 bytes; one about its
- * shape quotes nothing. The caller names its door around the refusal and repeats
- * none of it.
+ * In order: a newline (a pattern is one line), a line that would make no rule —
+ * a comment, in its own words and with the escape that makes it a pattern; anything
+ * else as naming nothing — and a rule spelled from home, a `~/` opening it past
+ * a `!`, with its anchored spelling and the escape that names a directory called
+ * `~`. A refusal about what the pattern says quotes it, bounded by that order
+ * to one line; one about its shape quotes nothing. The caller names its door
+ * around the refusal and repeats none of it.
  *
  * @param pattern One pattern (must not be NULL)
  * @return Error (ERR_VALIDATION), or NULL when the pattern is one rule
@@ -493,8 +485,7 @@ gitignore_origin_t gitignore_rule_origin(const gitignore_rule_t *rule);
  * own door would have split on it. A caller holding a whole file splits first;
  * a caller holding one string it means as a single rule should put it through
  * `gitignore_validate_pattern` (or `gitignore_rule_parse`, which keeps the rule),
- * which refuses an embedded newline, an over-long line and a line that makes no
- * rule, by name.
+ * which refuses an embedded newline and a line that makes no rule, by name.
  *
  * Allocates nothing, never fails. Safe on a NULL line (0).
  *

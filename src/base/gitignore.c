@@ -87,10 +87,10 @@
 #include "base/heap.h"
 #include "base/wildmatch.h"
 
-/* Size limits: a pattern's length and a ruleset's count, refused past either. */
-#define MAX_PATTERN_LENGTH 4096
-#define MAX_RULES          10000
-#define PATH_STACK_BUFFER  4096
+/* A subject's copy on the stack; a longer one is copied to the heap. A line and
+ * a ruleset have no bound of their own, as git's have none: what bounds a pattern
+ * is the medium it came in (gitignore.h). */
+#define PATH_STACK_BUFFER 4096
 
 /* Rule flags — module-private. ICASE is the holding set's, stamped on the rule
  * as it enters (push_rule), and never the parse's. */
@@ -194,19 +194,15 @@ static size_t unescape_spaces(char *str) {
 
 /* --- Rule storage ---------------------------------------------------- */
 
-/* The one way a rule enters a set: the cap, the growth, the copy, the tag. The
- * cap counts rules stored, never lines read — a blank or comment line at index
- * 10 000 must not falsely trip the limit. The rule comes by value: the caller's
- * copy, taken before any growth runs, so the array it was read from — this set's
- * own, when a set appends itself — need not outlive the push. The tag is the
- * set's origin and the set's casing both: a copy from another set is read as
- * this one reads its rules, whatever the set it came from folded. */
-static error_t push_rule(
+/* The one way a rule enters a set: the growth, the copy, the tag. The rule comes
+ * by value: the caller's copy, taken before any growth runs, so the array it
+ * was read from — this set's own, when a set appends itself — need not outlive
+ * the push. The tag is the set's origin and the set's casing both: a copy from
+ * another set is read as this one reads its rules, whatever the set it came from
+ * folded. */
+static void push_rule(
     gitignore_ruleset_t *set, gitignore_rule_t rule, gitignore_origin_t origin
 ) {
-    if (set->count >= MAX_RULES)
-        return ERROR(ERR_VALIDATION, "gitignore: exceeds %d rules", MAX_RULES);
-
     set->rules = arena_grow(
         set->arena, set->rules, &set->capacity, set->count + 1, sizeof(*set->rules)
     );
@@ -216,8 +212,6 @@ static error_t push_rule(
     if (set->casing == GITIGNORE_CASE_INSENSITIVE)
         rule.flags |= GITIGNORE_FLAG_ICASE;
     set->rules[set->count++] = rule;
-
-    return NULL;
 }
 
 /* --- The rule as written --------------------------------------------- */
@@ -344,11 +338,10 @@ static void parse_line(
 
 /* One pattern — a string meant as one rule — refused unless it is one. It is
  * read as the line it would be in a file (parse_line reads it so): it must be
- * one line, no longer than a pattern may be, and make a rule. The refusals speak
- * the pattern's noun. One about what the pattern says quotes it — the checks
- * before it bound the quote to one line of at most 4096 bytes — and one about
- * its shape does not. `#` is tested beside rule_span's own test of it: one module,
- * one definition of a comment.
+ * one line and make a rule. The refusals speak the pattern's noun. One about
+ * what the pattern says quotes it — the check before it bounds the quote to one
+ * line — and one about its shape does not. `#` is tested beside rule_span's own
+ * test of it: one module, one definition of a comment.
  *
  * A rule is refused too where its writer cannot have meant it: a `~/` opening
  * the pattern, past a `!`. A shell reads that as home and the grammar as a
@@ -361,11 +354,6 @@ static void parse_line(
 static error_t validate_pattern(const char *pattern, size_t len) {
     if (memchr(pattern, '\n', len))
         return ERROR(ERR_VALIDATION, "gitignore: a pattern is one line");
-    if (len > MAX_PATTERN_LENGTH)
-        return ERROR(
-            ERR_VALIDATION, "gitignore: a pattern exceeds %d bytes",
-            MAX_PATTERN_LENGTH
-        );
     if (rule_span(pattern, len) == 0) {
         if (*pattern == '#')
             return ERROR(
@@ -597,7 +585,7 @@ gitignore_ruleset_t *gitignore_ruleset_create(arena_t *arena, gitignore_case_t c
     return set;
 }
 
-error_t gitignore_ruleset_append_file(
+void gitignore_ruleset_append_file(
     gitignore_ruleset_t *set, const char *content, gitignore_origin_t origin
 ) {
     CHECK_NULL(set);
@@ -607,28 +595,19 @@ error_t gitignore_ruleset_append_file(
 
     /* A line and its newline are one step; the last line needs no newline. The
      * lines are numbered as git numbers them, from 1 and every one — a comment
-     * and a blank line among them — so a rule names its line in the file, and
-     * so does the refusal of one. */
+     * and a blank line among them — so a rule names its line in the file. */
     for (size_t number = 1; *line; number++) {
         size_t len = strcspn(line, "\n");
-
-        if (len > MAX_PATTERN_LENGTH)
-            return ERROR(
-                ERR_VALIDATION, "gitignore: line %zu exceeds %d bytes", number,
-                MAX_PATTERN_LENGTH
-            );
 
         gitignore_rule_t rule = { 0 };
         parse_line(set->arena, line, len, &rule);
         if (rule.pattern) {
             rule.line = number;
-            RETURN_IF_ERROR(push_rule(set, rule, origin));
+            push_rule(set, rule, origin);
         }
 
         line += len + (line[len] == '\n');
     }
-
-    return NULL;
 }
 
 const char *gitignore_file_lines(const char *content) {
@@ -649,10 +628,12 @@ error_t gitignore_ruleset_append_pattern(
 
     gitignore_rule_t rule = { 0 };
     RETURN_IF_ERROR(parse_rule(set->arena, pattern, &rule));
-    return push_rule(set, rule, origin);
+    push_rule(set, rule, origin);
+
+    return NULL;
 }
 
-error_t gitignore_ruleset_append_rules(
+void gitignore_ruleset_append_rules(
     gitignore_ruleset_t *set, const gitignore_ruleset_t *from,
     gitignore_origin_t origin
 ) {
@@ -663,9 +644,7 @@ error_t gitignore_ruleset_append_rules(
      * the block it was read from cannot reach it. */
     size_t count = from ? from->count : 0;
     for (size_t i = 0; i < count; i++)
-        RETURN_IF_ERROR(push_rule(set, from->rules[i], origin));
-
-    return NULL;
+        push_rule(set, from->rules[i], origin);
 }
 
 gitignore_match_t gitignore_eval(

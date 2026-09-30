@@ -66,16 +66,15 @@
  * by rule reads absent here: a rule file that is not there, and an in-tree
  * `.gitignore` that is a link (git opens one without following it). Anything
  * else is a failure of the layer — a rule file that cannot be opened or read,
- * is not a regular file, holds a NUL or does not compile; a configuration that
- * does not parse, or a file of the repository's own configuration that the invoker
- * cannot read; a `.git` file that names no repository, a `.git` that is neither
- * a file nor a directory, a git directory whose commondir names nothing; a
- * `core.worktree` that names nothing, or stands beside `core.bare` — each minted
- * once per cause and answered again for every entry that reaches it: a directory's,
- * a repository's, a file's. One of the machine's configuration files that the
- * invoker cannot read is absent, as git skips a global or XDG file; the system
- * file libgit2 finds is its own, which need not be git's, and is read as the
- * machine's.
+ * is not a regular file, or holds a NUL; a configuration that does not parse,
+ * or a file of the repository's own configuration that the invoker cannot read;
+ * a `.git` file that names no repository, a `.git` that is neither a file nor a
+ * directory, a git directory whose commondir names nothing; a `core.worktree`
+ * that names nothing, or stands beside `core.bare` — each minted once per cause
+ * and answered again for every entry that reaches it: a directory's, a
+ * repository's, a file's. One of the machine's configuration files that the invoker
+ * cannot read is absent, as git skips a global or XDG file; the system file libgit2
+ * finds is its own, which need not be git's, and is read as the machine's.
  *
  * Lifetime: the arena's. A filter lives in the arena it was made in, every answer
  * it keeps with it, and nothing frees it; no libgit2 handle outlives a call. It

@@ -207,16 +207,14 @@ error_t ignore_excludes_compile(
  *     command-scoped.
  *
  * Refused here: a baseline Git cannot read or that is not text ("Failed to load
- * baseline .dottaignore") and one that does not compile ("Failed to parse baseline
- * .dottaignore"). Refused at the first profile query: a profile's .dottaignore
- * that does not load, is not text or does not compile, and a composed ruleset
- * past the cap. The config's layer was refused, if at all, where the file was
- * loaded. Each refusal names its layer, so a caller returns it as it stands.
+ * baseline .dottaignore"). Refused at the first profile query: a profile's
+ * .dottaignore that does not load or is not text. The config's layer was refused,
+ * if at all, where the file was loaded. Each refusal names its layer, so a caller
+ * returns it as it stands.
  *
- * Input validation:
- *   - Per-pattern length: 4096 bytes (the gitignore engine).
- *   - Per-ruleset rule count: 10,000 (the gitignore engine).
- *   - A `.dottaignore` blob: at most 1 MB, and text (ignore_blob_text).
+ * Input validation: a `.dottaignore` blob is at most 1 MB, and text
+ * (ignore_blob_text) — the one bound on its lines and rules, which the grammar
+ * reads at any length and count (base/gitignore.h).
  *
  * @param repo      Repository (must not be NULL)
  * @param config    Configuration (may be NULL)
@@ -248,9 +246,8 @@ error_t ignore_rules_create(
  * `profile_require` first.
  *
  * The profile's .dottaignore is the one layer read here, and its refusal names
- * the profile ("Failed to load .dottaignore for profile '<name>'", "Failed to
- * parse …"); a composed ruleset past the cap is the engine's own refusal. A caller
- * returns either as it stands, and adds nothing to it.
+ * the profile ("Failed to load .dottaignore for profile '<name>'"). A caller
+ * returns it as it stands, and adds nothing to it.
  *
  * @param rules   Builder (must not be NULL)
  * @param profile Profile name (may be NULL or "")

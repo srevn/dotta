@@ -294,13 +294,11 @@ static void source_read(
         return;
     }
 
+    /* Every line is a rule or none, as git reads one: a line of any length, and
+     * as many as the file holds. */
     gitignore_ruleset_t *rules = gitignore_ruleset_create(f->arena, casing);
-    err = gitignore_ruleset_append_file(rules, text.data, 0);
+    gitignore_ruleset_append_file(rules, text.data, 0);
     buffer_deinit(&text);
-    if (err) {
-        out->failure = error_wrap(err, "Failed to parse '%s'", path);
-        return;
-    }
 
     out->rules = rules;
 }

@@ -39,9 +39,10 @@
 #include "sys/stage.h"
 
 /* Size cap on `.dottaignore` blobs — an ignore-specific policy guarding against
- * a runaway file pulled in from Git. The underlying gitignore engine already
- * caps per-pattern length and rule count. Typed as size_t so the multiplication
- * happens in size_t and the comparison against blob sizes stays warning-clean. */
+ * a runaway file pulled in from Git, and the one bound on its lines and rules:
+ * the grammar holds a line of any length and a set of any size (base/gitignore.h).
+ * Typed as size_t so the multiplication happens in size_t and the comparison
+ * against blob sizes stays warning-clean. */
 #define MAX_DOTTAIGNORE_SIZE ((size_t) 1024 * 1024)   /* 1 MB */
 
 /**
@@ -202,10 +203,8 @@ static error_t ignore_compose(
     gitignore_ruleset_t *rs = gitignore_ruleset_create(r->arena, GITIGNORE_CASE_SENSITIVE);
 
     /* 1. Baseline / builtin fallback (lowest precedence). */
-    RETURN_IF_ERROR(
-        gitignore_ruleset_append_rules(
+    gitignore_ruleset_append_rules(
         rs, r->baseline_rules, (gitignore_origin_t) r->baseline_origin
-        )
     );
 
     /* 2. Profile-specific `.dottaignore` (if the profile was named and has a
@@ -223,31 +222,21 @@ static error_t ignore_compose(
             );
         }
         if (content) {
-            err = gitignore_ruleset_append_file(
+            gitignore_ruleset_append_file(
                 rs, content, (gitignore_origin_t) IGNORE_ORIGIN_PROFILE
             );
             free(content);
-            if (err) {
-                return error_wrap(
-                    err, "Failed to parse .dottaignore for profile '%s'",
-                    profile
-                );
-            }
         }
     }
 
     /* 3. The config's patterns, compiled at load. */
-    RETURN_IF_ERROR(
-        gitignore_ruleset_append_rules(
+    gitignore_ruleset_append_rules(
         rs, r->config_rules, (gitignore_origin_t) IGNORE_ORIGIN_CONFIG
-        )
     );
 
     /* 4. CLI excludes — highest precedence, appended last. */
-    RETURN_IF_ERROR(
-        gitignore_ruleset_append_rules(
+    gitignore_ruleset_append_rules(
         rs, r->cli_rules, (gitignore_origin_t) IGNORE_ORIGIN_CLI
-        )
     );
 
     *out = rs;
@@ -422,13 +411,10 @@ error_t ignore_rules_create(
     }
 
     ignore_origin_t origin = blob ? IGNORE_ORIGIN_BASELINE : IGNORE_ORIGIN_BUILTIN;
-    err = gitignore_ruleset_append_file(
+    gitignore_ruleset_append_file(
         baseline, blob ? blob : DEFAULT_DOTTAIGNORE, (gitignore_origin_t) origin
     );
     free(blob);
-    if (err) {
-        return error_wrap(err, "Failed to parse baseline .dottaignore");
-    }
 
     /* The builder is published last, once every layer it holds is in hand. */
     ignore_rules_t *r = arena_calloc(arena, 1, sizeof(*r));

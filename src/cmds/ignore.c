@@ -120,135 +120,81 @@ static error_t ignore_require_disjoint(
 }
 
 /**
- * Add patterns to .dottaignore content
+ * Append each pattern whose rule the file does not hold, as a line of its own
  *
- * Appends each pattern as it was given, and its newline — the line
- * ignore_require_patterns read it as, so the file reads back the rule the pattern
- * was checked as — skipping a pattern whose rule is already present, in the file
- * or earlier in the batch. Deduplication is by rule (ignore_holds), against the
- * accumulating buffer. The pattern, never its span: `foo<CR><SP>` is the rule
- * foo<CR>, and its span written back alone would be the rule foo.
+ * Written as given, with its newline — the line ignore_require_patterns read it
+ * as, so the file reads back the rule the pattern was checked as. The pattern,
+ * never its span: `foo<CR><SP>` is the rule foo<CR>, and its span written back
+ * alone would be the rule foo. Deduplication is by rule (ignore_holds), against
+ * the file as it grows.
  *
- * `existing_content` is the file as read, or the seed — never empty, since
- * ignore_blob_text answers an empty blob as absent and ignore_modify seeds the
- * absent one — so no pattern lands at the head of the file, where a byte-order
- * mark in front of it would be the file's and not the pattern's.
+ * `file` is the file as read, or the seed — never empty, since ignore_blob_text
+ * answers an empty blob as absent and ignore_modify seeds the absent one — so
+ * no pattern lands at the head of the file, where a byte-order mark in front of
+ * it would be the file's and not the pattern's.
  *
- * Contract: the new content is NULL iff *added_count == 0. The helper never hands
- * back a buffer that is byte-identical to its input, so callers can treat NULL
- * as "nothing changed" without further checks.
+ * @return How many were appended
  */
-static char *ignore_add(
-    const char *existing_content,
-    char **patterns,
-    size_t pattern_count,
-    size_t *added_count
-) {
-    CHECK_NULL(existing_content);
-    CHECK_NULL(patterns);
-    CHECK_NULL(added_count);
+static size_t ignore_add(buffer_t *file, char **patterns, size_t count) {
+    CHECK_NULL(file);
 
-    *added_count = 0;
-
-    size_t existing_len = strlen(existing_content);
-
-    /* Upper bound: as if every pattern were written */
-    size_t max_size = existing_len + 1;      /* +1 for possible separator */
-    for (size_t i = 0; i < pattern_count; i++) {
-        max_size += strlen(patterns[i]) + 1; /* pattern + newline */
-    }
-
-    char *result = heap_alloc(max_size + 1);  /* +1 for null terminator */
-
-    /* Seed result with existing content, ended by a newline */
-    memcpy(result, existing_content, existing_len);
-    char *pos = result + existing_len;
-    if (existing_content[existing_len - 1] != '\n') {
-        *pos++ = '\n';
-    }
-    *pos = '\0';
-
-    /*
-     * Single pass: span, deduplicate, append.
-     *
-     * Checking ignore_holds() against the accumulated result buffer handles both
-     * existing-content dedup and batch dedup in one call: previously appended
-     * patterns are already in the buffer.
-     */
-    for (size_t i = 0; i < pattern_count; i++) {
+    /* Asking ignore_holds of the file as it grows answers both the file's own
+     * rules and the batch's: a pattern appended earlier is in the file. */
+    size_t added = 0;
+    for (size_t i = 0; i < count; i++) {
         const char *p = patterns[i];
         size_t length = strlen(p);
-        if (ignore_holds(result, p, gitignore_rule_span(p, length))) {
+        if (ignore_holds(file->data, p, gitignore_rule_span(p, length))) {
             continue;
         }
 
-        memcpy(pos, p, length);
-        pos += length;
-        *pos++ = '\n';
-        *pos = '\0';  /* Keep result valid for next ignore_holds call */
-        (*added_count)++;
+        /* A last line without its newline gains one before a pattern follows
+         * it, so no pattern joins a line of the file's. */
+        if (file->data[file->size - 1] != '\n') {
+            buffer_append(file, "\n", 1);
+        }
+        buffer_append(file, p, length);
+        buffer_append(file, "\n", 1);
+        added++;
     }
 
-    /* Nothing was added: the seeded buffer is a byte-for-byte copy of
-     * existing_content. Drop it and signal "no change" via NULL so the caller
-     * can skip a free(). */
-    if (*added_count == 0) {
-        free(result);
-        return NULL;
-    }
-
-    return result;
+    return added;
 }
 
 /**
- * Remove patterns from .dottaignore content
+ * Take out every line naming a rule a pattern names, counting the requests by rule
  *
- * Filters existing_content line-by-line, dropping every line that names the same
- * rule as an entry in patterns — equal spans, byte for byte, as ignore_holds
- * reads them; a blank or comment line names none and is always kept, and so are
- * the bytes before the first line (gitignore_file_lines), which are the file's.
+ * A line goes where its span equals a request's, byte for byte, as ignore_holds
+ * reads them; a blank or comment line names none and stays, and so do the bytes
+ * before the first line (gitignore_file_lines), which are the file's. The kept
+ * lines move down over the ones taken out, in place — removal only shrinks.
  * Requests are counted by rule, as --add counts them: two that name one rule —
- * `foo` and `foo   ` — are one request, removed or not found once.
- * `*not_found_count` is always populated, whether or not the buffer changed.
+ * `foo` and `foo   ` — are one request, removed or missing once.
  *
- * Contract: the new content is NULL iff *removed_count == 0. Callers can treat
- * NULL as "nothing changed" without a content compare.
+ * @return The requests a line named; `*missing` the rest
  */
-static char *ignore_remove(
-    const char *existing_content,
-    char **patterns,
-    size_t pattern_count,
-    size_t *removed_count,
-    size_t *not_found_count
-) {
-    CHECK_NULL(existing_content);
-    CHECK_NULL(patterns);
-    CHECK_NULL(removed_count);
-    CHECK_NULL(not_found_count);
+static size_t ignore_remove(buffer_t *file, char **patterns, size_t count, size_t *missing) {
+    CHECK_NULL(file);
+    CHECK_NULL(missing);
 
-    *removed_count = 0;
-    *not_found_count = 0;
-
-    /* The new content (the same size or smaller); each request's rule, its span
-     * asked once and read on every line; and whether a line named it */
-    char *result = heap_alloc(strlen(existing_content) + 1);
-    size_t *spans = heap_calloc(pattern_count, sizeof(*spans));
-    bool *found = heap_calloc(pattern_count, sizeof(*found));
-    for (size_t i = 0; i < pattern_count; i++) {
+    /* Each request's rule, its span asked once and read on every line; and whether
+     * a line named it */
+    size_t *spans = heap_calloc(count, sizeof(*spans));
+    bool *found = heap_calloc(count, sizeof(*found));
+    for (size_t i = 0; i < count; i++) {
         spans[i] = gitignore_rule_span(patterns[i], strlen(patterns[i]));
     }
 
     /* The lines begin where the grammar says, and the bytes before them — a
-     * byte-order mark — are the file's: copied through whatever is removed behind
-     * them, so removing the first rule never removes the mark, nor makes the
-     * file's a mark the next line holds as pattern content. */
-    const char *line = gitignore_file_lines(existing_content);
-    size_t head = (size_t) (line - existing_content);
-    memcpy(result, existing_content, head);
-    char *pos = result + head;
+     * byte-order mark — are the file's: the kept lines are written from where
+     * the first line begins, so removing the first rule never removes the mark,
+     * nor makes the file's a mark the next line holds as pattern content. */
+    const char *line = gitignore_file_lines(file->data);
+    char *kept = file->data + (line - file->data);
 
     /* Line by line, zero-allocation: a line and its newline are one step, and
-     * the last line needs no newline. */
+     * the last line needs no newline. What is kept is written behind the read,
+     * never ahead of it. */
     while (*line) {
         size_t len = strcspn(line, "\n");
         size_t step = len + (line[len] == '\n');
@@ -258,28 +204,30 @@ static char *ignore_remove(
          * blank or comment line's span is zero, which no request's is:
          * ignore_require_patterns refused every argument that makes no rule. */
         size_t i;
-        for (i = 0; i < pattern_count; i++) {
+        for (i = 0; i < count; i++) {
             if (spans[i] == span && memcmp(line, patterns[i], span) == 0) {
                 break;
             }
         }
 
-        if (i < pattern_count) {
+        if (i < count) {
             found[i] = true;
         } else {
             /* Not removed: kept as written (preserves original formatting) */
-            memcpy(pos, line, step);
-            pos += step;
+            memmove(kept, line, step);
+            kept += step;
         }
 
         line += step;
     }
-    *pos = '\0';
+    buffer_resize(file, (size_t) (kept - file->data));
 
     /* Counted by rule, as --add counts: a request naming the rule of an earlier
      * one is that request again — the walk marked the earlier — and is neither
      * removed nor missing a second time. */
-    for (size_t i = 0; i < pattern_count; i++) {
+    size_t removed = 0;
+    *missing = 0;
+    for (size_t i = 0; i < count; i++) {
         size_t first;
         for (first = 0; first < i; first++) {
             if (spans[first] == spans[i] &&
@@ -292,55 +240,34 @@ static char *ignore_remove(
         }
 
         if (found[i]) {
-            (*removed_count)++;
+            removed++;
         } else {
-            (*not_found_count)++;
+            (*missing)++;
         }
     }
 
     free(spans);
     free(found);
 
-    /* No line matched — the seeded buffer would be identical to the input. Drop
-     * it and signal "no change" via NULL so the caller can skip a free().
-     * *not_found_count is still set above, so the "patterns not found" diagnostic
-     * fires correctly. */
-    if (*removed_count == 0) {
-        free(result);
-        return NULL;
-    }
-
-    return result;
+    return removed;
 }
 
 /**
- * Edit content in an external editor via a temporary file.
+ * The file's bytes, through the user's editor: written to a temporary file the
+ * editor opens, and read back once it closes.
  *
- * Seeds a fresh mkstemp file with `seed` (may be empty when `seed_size == 0`),
- * launches the user's preferred editor via editor_launch_with_env (DOTTA_EDITOR
- * / VISUAL / EDITOR, falling back to `vi`), then reads the post-edit contents
- * into a heap-owned NUL-terminated buffer. The tempfile is unlinked on every
- * exit path.
+ * `file` holds the bytes the editor opens on, and after it the bytes the editor
+ * left — read back into it (sys/filesystem.h fs_read_file), what it held before
+ * released first. A fresh mkstemp file in $TMPDIR, else /tmp, unlinked on every
+ * exit; the editor is the user's (editor_launch_with_env: DOTTA_EDITOR, VISUAL,
+ * EDITOR, falling back to `vi`). On failure `file` holds what the failure left,
+ * and the caller releases it.
  *
- * @param seed        Seed content (must not be NULL; may be empty)
- * @param seed_size   Bytes of seed to write (0 skips the write call)
- * @param out_content Receives heap-allocated NUL-terminated result (caller frees;
- *                    never NULL on success)
- * @param out_size    Receives byte count of result (excludes NUL)
+ * @param file The bytes, in and out (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t ignore_editor(
-    const char *seed,
-    size_t seed_size,
-    char **out_content,
-    size_t *out_size
-) {
-    CHECK_NULL(seed);
-    CHECK_NULL(out_content);
-    CHECK_NULL(out_size);
-
-    *out_content = NULL;
-    *out_size = 0;
+static error_t ignore_editor(buffer_t *file) {
+    CHECK_NULL(file);
 
     const char *tmpdir = getenv("TMPDIR");
     if (!tmpdir || !*tmpdir) {
@@ -355,9 +282,9 @@ static error_t ignore_editor(
         return ERROR(ERR_FS, "Failed to create temporary file");
     }
 
-    if (seed_size > 0) {
-        ssize_t written = write(fd, seed, seed_size);
-        if (written < 0 || (size_t) written != seed_size) {
+    if (file->size > 0) {
+        ssize_t written = write(fd, file->data, file->size);
+        if (written < 0 || (size_t) written != file->size) {
             close(fd);
             unlink(tmpfile);
             free(tmpfile);
@@ -366,25 +293,17 @@ static error_t ignore_editor(
     }
     close(fd);
 
+    /* What the editor leaves is the file from here on: read back into the one
+     * buffer, the bytes it opened on released first. */
     error_t err = editor_launch_with_env(tmpfile);
-    if (err) {
-        unlink(tmpfile);
-        free(tmpfile);
-        return err;
+    if (!err) {
+        buffer_deinit(file);
+        err = fs_read_file(tmpfile, file);
     }
-
-    buffer_t content = BUFFER_INIT;
-    err = fs_read_file(tmpfile, &content);
     unlink(tmpfile);
     free(tmpfile);
-    if (err) {
-        buffer_deinit(&content);
-        return err;
-    }
 
-    *out_size = content.size;
-    *out_content = buffer_detach(&content);
-    return NULL;
+    return err;
 }
 
 /**
@@ -420,34 +339,22 @@ static error_t ignore_edit(
     CHECK_NULL(repo);
     CHECK_NULL(dottaignore);
 
-    char *existing_content = NULL;
-    size_t existing_size = 0;
-    error_t err = ignore_blob_read(
-        repo, dottaignore->refname, &existing_content, &existing_size
-    );
+    /* The file's bytes, or its seed where it has none: what the editor opens
+     * on, and one buffer from here to the write. */
+    buffer_t file = BUFFER_INIT;
+    error_t err = ignore_blob_read(repo, dottaignore->refname, &file);
     if (err) {
         return error_wrap(
             err, "Failed to load %s .dottaignore", dottaignore->layer
         );
     }
-
-    const char *seed;
-    size_t seed_size;
-    if (existing_content) {
-        seed = existing_content;
-        seed_size = existing_size;
-    } else {
-        seed = dottaignore->seed;
-        seed_size = strlen(seed);
+    if (file.size == 0) {
+        buffer_append_string(&file, dottaignore->seed);
     }
 
-    char *new_content = NULL;
-    size_t new_size = 0;
-    err = ignore_editor(
-        seed, seed_size, &new_content, &new_size
-    );
-    free(existing_content);
+    err = ignore_editor(&file);
     if (err) {
+        buffer_deinit(&file);
         return error_wrap(
             err, "Failed to edit %s .dottaignore", dottaignore->layer
         );
@@ -463,10 +370,10 @@ static error_t ignore_edit(
      * leaves a NUL is refused before it is staged, changed or not. */
     bool committed = false;
     err = ignore_blob_write(
-        repo, dottaignore->refname, new_content, new_size, commit_msg, &committed
+        repo, dottaignore->refname, file.data, file.size, commit_msg, &committed
     );
     free(commit_msg);
-    free(new_content);
+    buffer_deinit(&file);
 
     if (err) {
         return error_wrap(
@@ -490,16 +397,11 @@ static error_t ignore_edit(
 /**
  * Add / remove patterns in a .dottaignore non-interactively.
  *
- * Called with dottaignore->refname already verified to exist. Load existing content
- * — the text (ignore_blob_text), which the transforms read a line at a time —
- * apply add/remove transforms, commit the result if it actually changed.
- *
- * Ownership is linear: `owned` is the single buffer this function frees at every
- * exit. Each transform either leaves `owned` untouched (helper returned NULL =
- * no change) or hands back a fresh buffer we adopt after dropping the old one.
- * The helper contracts guarantee a non-NULL return iff the content actually
- * changed, which is what lets this function get by with one variable and no
- * pointer-identity comparisons.
+ * Called with dottaignore->refname already verified to exist. Loads the text
+ * (ignore_blob_text) into one buffer, which --add and --remove each change in
+ * place, each answering its count, and commits it where a count says it changed:
+ * a line appended grows the file and a line taken out shrinks it, so the stage
+ * is asked nothing the counts have not said.
  */
 static error_t ignore_modify(
     git_repository *repo,
@@ -513,8 +415,8 @@ static error_t ignore_modify(
     CHECK_NULL(repo);
     CHECK_NULL(dottaignore);
 
-    char *owned = NULL;
-    error_t err = ignore_blob_text(repo, dottaignore->refname, &owned);
+    buffer_t text = BUFFER_INIT;
+    error_t err = ignore_blob_text(repo, dottaignore->refname, &text);
     if (err) {
         return error_wrap(
             err, "Failed to load %s .dottaignore", dottaignore->layer
@@ -522,9 +424,9 @@ static error_t ignore_modify(
     }
 
     /* Nothing to work with: no existing file and no adds to seed one. Wording
-     * uses "%s .dottaignore" so it composes naturally for both scopes: "No baseline
+     * uses "%s .dottaignore" so it composes naturally for both layers: "No baseline
      * .dottaignore exists" / "No profile 'foo' .dottaignore exists". */
-    if (!owned && add_count == 0) {
+    if (text.size == 0 && add_count == 0) {
         output_info(
             out, OUTPUT_NORMAL, "No %s .dottaignore exists",
             dottaignore->layer
@@ -532,45 +434,19 @@ static error_t ignore_modify(
         return NULL;
     }
 
-    /* Seed with default/template when file is absent and adds exist. */
-    if (!owned && add_count > 0) {
-        owned = heap_strdup(dottaignore->seed);
+    /* The file, or its seed where it has none — as the editor opens it — so the
+     * adds have a file to land in. */
+    if (text.size == 0) {
+        buffer_append_string(&text, dottaignore->seed);
     }
 
-    size_t total_added = 0;
-    size_t total_removed = 0;
-    size_t total_not_found = 0;
-
-    if (add_count > 0) {
-        size_t added = 0;
-        char *next = ignore_add(owned, add_patterns, add_count, &added);
-        if (next) {
-            free(owned);
-            owned = next;
-            total_added = added;
-        }
-    }
-
-    if (remove_count > 0) {
-        size_t removed = 0;
-        size_t not_found = 0;
-        char *next = ignore_remove(
-            owned, remove_patterns, remove_count, &removed, &not_found
-        );
-        /* not_found is populated whether or not the buffer changed — always capture
-         * so the "patterns not found" diagnostic fires even when nothing was
-         * removed. */
-        total_not_found = not_found;
-        if (next) {
-            free(owned);
-            owned = next;
-            total_removed = removed;
-        }
-    }
+    size_t added = ignore_add(&text, add_patterns, add_count);
+    size_t missing = 0;
+    size_t removed = ignore_remove(&text, remove_patterns, remove_count, &missing);
 
     /* Nothing actually changed — report why and return early. */
-    if (total_added == 0 && total_removed == 0) {
-        free(owned);
+    if (added == 0 && removed == 0) {
+        buffer_deinit(&text);
 
         if (add_count > 0 && remove_count > 0) {
             output_info(
@@ -590,30 +466,29 @@ static error_t ignore_modify(
     }
 
     char *commit_msg = NULL;
-    if (total_added > 0 && total_removed > 0) {
+    if (added > 0 && removed > 0) {
         commit_msg = heap_str_format(
             "Update %s .dottaignore (added %zu, removed %zu patterns)",
-            dottaignore->layer, total_added, total_removed
+            dottaignore->layer, added, removed
         );
-    } else if (total_added > 0) {
+    } else if (added > 0) {
         commit_msg = heap_str_format(
             "Add %zu pattern%s to %s .dottaignore",
-            total_added, total_added == 1 ? "" : "s", dottaignore->layer
+            added, added == 1 ? "" : "s", dottaignore->layer
         );
     } else {
         commit_msg = heap_str_format(
             "Remove %zu pattern%s from %s .dottaignore",
-            total_removed, total_removed == 1 ? "" : "s", dottaignore->layer
+            removed, removed == 1 ? "" : "s", dottaignore->layer
         );
     }
 
     err = ignore_blob_write(
-        repo, dottaignore->refname,
-        owned, strlen(owned), commit_msg, NULL
+        repo, dottaignore->refname, text.data, text.size, commit_msg, NULL
     );
 
     free(commit_msg);
-    free(owned);
+    buffer_deinit(&text);
 
     if (err) {
         return error_wrap(
@@ -621,25 +496,25 @@ static error_t ignore_modify(
         );
     }
 
-    if (total_added > 0) {
+    if (added > 0) {
         output_success(
             out, OUTPUT_NORMAL,
             "Added %zu pattern%s to %s .dottaignore",
-            total_added, total_added == 1 ? "" : "s", dottaignore->layer
+            added, added == 1 ? "" : "s", dottaignore->layer
         );
     }
-    if (total_removed > 0) {
+    if (removed > 0) {
         output_success(
             out, OUTPUT_NORMAL,
             "Removed %zu pattern%s from %s .dottaignore",
-            total_removed, total_removed == 1 ? "" : "s", dottaignore->layer
+            removed, removed == 1 ? "" : "s", dottaignore->layer
         );
     }
-    if (total_not_found > 0) {
+    if (missing > 0) {
         output_info(
             out, OUTPUT_NORMAL,
             "Warning: %zu pattern%s not found (already removed or never added)",
-            total_not_found, total_not_found == 1 ? "" : "s"
+            missing, missing == 1 ? "" : "s"
         );
     }
 

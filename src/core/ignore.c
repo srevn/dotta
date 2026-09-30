@@ -30,6 +30,7 @@
 #include <string.h>
 
 #include "base/arena.h"
+#include "base/buffer.h"
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "base/heap.h"
@@ -213,19 +214,19 @@ static error_t ignore_compose(
         char refname[DOTTA_REFNAME_MAX];
         RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), profile));
 
-        char *content = NULL;
+        buffer_t content = BUFFER_INIT;
         error_t err = ignore_blob_text(r->repo, refname, &content);
         if (err) {
             return error_wrap(
                 err, "Failed to load .dottaignore for profile '%s'", profile
             );
         }
-        if (content) {
+        if (content.size) {
             gitignore_ruleset_append_file(
-                rs, content, (gitignore_origin_t) IGNORE_ORIGIN_PROFILE
+                rs, content.data, (gitignore_origin_t) IGNORE_ORIGIN_PROFILE
             );
-            free(content);
         }
+        buffer_deinit(&content);
     }
 
     /* 3. The config's patterns, compiled at load. */
@@ -242,19 +243,15 @@ static error_t ignore_compose(
     return NULL;
 }
 
-error_t ignore_blob_read(
-    git_repository *repo, const char *refname, char **out_content, size_t *out_size
-) {
+error_t ignore_blob_read(git_repository *repo, const char *refname, buffer_t *out) {
     CHECK_NULL(repo);
     CHECK_NULL(refname);
-    CHECK_NULL(out_content);
-    CHECK_NULL(out_size);
+    CHECK_NULL(out);
     CHECK_ARG(refname[0] != '\0', "Reference name cannot be empty");
 
-    *out_content = NULL;
-    *out_size = 0;
+    *out = (buffer_t){ 0 };
 
-    /* An absent ref is not an error — callers treat NULL content as "no
+    /* An absent ref is not an error — callers read an empty buffer as "no
      * baseline/profile .dottaignore yet". */
     bool exists = false;
     RETURN_IF_ERROR(gitops_reference_exists(repo, refname, &exists));
@@ -271,48 +268,37 @@ error_t ignore_blob_read(
         return NULL;
     }
 
-    void *content = NULL;
-    size_t size = 0;
-    error_t err = gitops_read_blob_content(
-        repo, git_tree_entry_id(entry), &content, &size
-    );
+    gitops_blob_view_t view;
+    error_t err = gitops_blob_view_open(repo, git_tree_entry_id(entry), &view);
     git_tree_free(tree);
     if (err) return err;
 
-    if (size > MAX_DOTTAIGNORE_SIZE) {
-        free(content);
-        return ERROR(
+    /* The one copy, and the cap asked before it. An empty blob appends nothing,
+     * so it reads as absent — nothing to parse, and an empty buffer is the one
+     * "no file" answer every reader asks. */
+    if (view.size <= MAX_DOTTAIGNORE_SIZE) {
+        buffer_append(out, view.data, view.size);
+    } else {
+        err = ERROR(
             ERR_VALIDATION,
             ".dottaignore at '%s' exceeds capacity (max %zu bytes, actual %zu)",
-            refname, (size_t) MAX_DOTTAIGNORE_SIZE, size
+            refname, (size_t) MAX_DOTTAIGNORE_SIZE, view.size
         );
     }
+    gitops_blob_view_close(&view);
 
-    /* Treat empty blobs as absent — nothing to parse, and it lets callers use
-     * "content == NULL" as the single "no source" check. */
-    if (size == 0) {
-        free(content);
-        return NULL;
-    }
-
-    *out_content = content;
-    *out_size = size;
-    return NULL;
+    return err;
 }
 
-error_t ignore_blob_text(
-    git_repository *repo, const char *refname, char **out_text
-) {
-    size_t size = 0;
-    RETURN_IF_ERROR(ignore_blob_read(repo, refname, out_text, &size));
+error_t ignore_blob_text(git_repository *repo, const char *refname, buffer_t *out) {
+    RETURN_IF_ERROR(ignore_blob_read(repo, refname, out));
 
     /* A NUL would end every string reading of the file — the rules compiled from
      * it, the lines --add and --remove rewrite — and what stood behind it would
      * be lost without a word. Here the bytes are still in hand with their
      * length. */
-    if (*out_text && memchr(*out_text, '\0', size)) {
-        free(*out_text);
-        *out_text = NULL;
+    if (out->size && memchr(out->data, '\0', out->size)) {
+        buffer_deinit(out);
         return ERROR(
             ERR_VALIDATION,
             ".dottaignore at '%s' is not text: it holds a NUL byte", refname
@@ -403,17 +389,17 @@ error_t ignore_rules_create(
      * they are made. */
     gitignore_ruleset_t *baseline = gitignore_ruleset_create(arena, GITIGNORE_CASE_SENSITIVE);
 
-    char *blob = NULL;
+    buffer_t blob = BUFFER_INIT;
     error_t err = ignore_blob_text(repo, BASELINE_REF, &blob);
     if (err) {
         return error_wrap(err, "Failed to load baseline .dottaignore");
     }
 
-    ignore_origin_t origin = blob ? IGNORE_ORIGIN_BASELINE : IGNORE_ORIGIN_BUILTIN;
+    ignore_origin_t origin = blob.size ? IGNORE_ORIGIN_BASELINE : IGNORE_ORIGIN_BUILTIN;
     gitignore_ruleset_append_file(
-        baseline, blob ? blob : DEFAULT_DOTTAIGNORE, (gitignore_origin_t) origin
+        baseline, blob.size ? blob.data : DEFAULT_DOTTAIGNORE, (gitignore_origin_t) origin
     );
-    free(blob);
+    buffer_deinit(&blob);
 
     /* The builder is published last, once every layer it holds is in hand. */
     ignore_rules_t *r = arena_calloc(arena, 1, sizeof(*r));

@@ -406,38 +406,35 @@ const char *ignore_verdict_negation(
 );
 
 /**
- * Read a `.dottaignore` blob from a ref into a heap buffer: its bytes, as Git
- * holds them.
+ * Read a `.dottaignore` blob from a ref into a buffer: its bytes, as Git holds
+ * them — as sys/filesystem's fs_read_file reads a file into one.
  *
  * The editor's read (cmds/ignore's edit mode), which hands the bytes to a human
  * and reads them back — the one reader that interprets nothing, and so the one
  * that can mend a file the others refuse. Every reader that interprets the file,
  * its rules or its lines, reads ignore_blob_text.
  *
- * Returns (*out_content = NULL, *out_size = 0) without error when any of the
- * following hold:
+ * Leaves `out` empty, without error, when the file is absent:
  *   - The ref does not exist
  *   - Its tree has no `.dottaignore` at the root
  *   - The blob is empty
  *
- * Only I/O failures, malformed trees, or the 1 MB size cap produce an error.
+ * Only I/O failures, malformed trees, or the 1 MB size cap produce an error,
+ * the cap asked before a byte is copied; on failure `out` is empty too.
  *
- * On success with non-NULL content, `*out_content` is a heap-allocated
- * NUL-terminated buffer of `*out_size` bytes, which may hold a NUL of its own —
- * the size is its length, never strlen. The caller owns it.
+ * `out` is written, never read (base/buffer.h): its bytes may hold a NUL of their
+ * own, so the size is their length, never strlen. The caller owns them.
  *
- * @param repo        Repository (must not be NULL)
- * @param refname     Full reference name — BASELINE_REF, or a profile's through
- *                    gitops_branch_refname (must not be NULL or empty)
- * @param out_content Output content (must not be NULL); NULL when absent
- * @param out_size    Output size in bytes (must not be NULL)
+ * @param repo    Repository (must not be NULL)
+ * @param refname Full reference name — BASELINE_REF, or a profile's through
+ *                gitops_branch_refname (must not be NULL or empty)
+ * @param out     The bytes; empty when the file is absent (must not be NULL)
  * @return Error or NULL on success
  */
 error_t ignore_blob_read(
     git_repository *repo,
     const char *refname,
-    char **out_content,
-    size_t *out_size
+    buffer_t *out
 );
 
 /**
@@ -451,19 +448,20 @@ error_t ignore_blob_read(
  * cmds/ignore's --add / --remove. The editor reads the bytes, so a file refused
  * here is mended by `dotta ignore`.
  *
- * Absent — no ref, no entry, an empty blob — as ignore_blob_read answers it.
+ * Absent — no ref, no entry, an empty blob — as ignore_blob_read answers it:
+ * `out` empty. On failure `out` is empty too.
  *
- * @param repo     Repository (must not be NULL)
- * @param refname  Full reference name — BASELINE_REF, or a profile's through
- *                 gitops_branch_refname (must not be NULL or empty)
- * @param out_text Output text, heap-allocated and owned by the caller (must not
- *                 be NULL); NULL when absent
+ * @param repo    Repository (must not be NULL)
+ * @param refname Full reference name — BASELINE_REF, or a profile's through
+ *                gitops_branch_refname (must not be NULL or empty)
+ * @param out     The text, NUL-terminated and owned by the caller; empty when the
+ *                file is absent (must not be NULL)
  * @return Error or NULL on success
  */
 error_t ignore_blob_text(
     git_repository *repo,
     const char *refname,
-    char **out_text
+    buffer_t *out
 );
 
 /**

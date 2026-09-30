@@ -390,14 +390,14 @@ fail:
  * where the last empty line lands. A mapping the prompt was refused (ERR_MEMORY,
  * base/secure.h) passes through as itself.
  */
-static error_t nothing_read(error_t read_err) {
-    if (error_code(read_err) == ERR_MEMORY) {
-        return read_err;
+static error_t nothing_read(error_t err) {
+    if (error_code(err) == ERR_MEMORY) {
+        return err;
     }
     return ERROR(
         ERR_LOCKED,
         "No passphrase: %s; set DOTTA_ENCRYPTION_PASSPHRASE, or run "
-        "'dotta key set' at a terminal", error_message(read_err)
+        "'dotta key set' at a terminal", error_message(err)
     );
 }
 
@@ -639,7 +639,8 @@ static error_t resolve_master(keymgr *km, const keymgr_witness_t *in_hand) {
     }
 
     keymgr_proof_t proof = { 0 };
-    RETURN_IF_ERROR(obtain(km, in_hand, &proof));
+    error_t err = obtain(km, in_hand, &proof);
+    if (err) return err;
     (void) keep(km, &proof);
     return NULL;
 }
@@ -660,7 +661,8 @@ static error_t acquire_subkeys(
     uint8_t out_mac_key[KDF_KEY_SIZE],
     uint8_t out_prf_key[KDF_KEY_SIZE]
 ) {
-    RETURN_IF_ERROR(resolve_master(km, in_hand));
+    error_t err = resolve_master(km, in_hand);
+    if (err) return err;
     kdf_siv_subkeys(km->master_key, profile, out_mac_key, out_prf_key);
 
     return NULL;
@@ -676,7 +678,8 @@ error_t keymgr_set(keymgr *km) {
     km->refusal = NULL;
 
     keymgr_proof_t proof = { 0 };
-    RETURN_IF_ERROR(obtain(km, NULL, &proof));
+    error_t err = obtain(km, NULL, &proof);
+    if (err) return err;
     return keep(km, &proof);
 }
 

@@ -69,7 +69,8 @@ error_t scope_build(
         for (size_t i = 0; i < in->profile_count; i++) {
             const char *name = in->profiles[i];
             if (!string_array_contains(&s->enabled, name)) {
-                RETURN_IF_ERROR(profile_require(repo, name));
+                err = profile_require(repo, name);
+                if (err) return err;
                 return ERROR(
                     ERR_INVALID_ARG, "Profile '%s' is not enabled\n"
                     "Hint: Run 'dotta profile enable %s' first", name, name
@@ -92,11 +93,10 @@ error_t scope_build(
 
     /* 5. The -e layer, compiled once (core/ignore): a pattern the grammar refuses
      *    refuses the scope, under the flag's name. */
-    RETURN_IF_ERROR(
-        ignore_excludes_compile(
+    err = ignore_excludes_compile(
         in->exclude_patterns, in->exclude_count, arena, &s->excludes_ruleset
-        )
     );
+    if (err) return err;
 
     *out = s;
     return NULL;

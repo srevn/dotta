@@ -94,7 +94,8 @@ static error_t read_string(
     toml_datum_t value, const char *section, const char *key, arena_t *arena,
     const char **out
 ) {
-    RETURN_IF_ERROR(read_text(value, section, key, out));
+    error_t err = read_text(value, section, key, out);
+    if (err) return err;
 
     /* The parse's string, then the arena's copy of it: the parse is gone once
      * the file is read, and the configuration is not. */
@@ -111,7 +112,8 @@ static error_t read_path(
     const char **out
 ) {
     const char *text = NULL;
-    RETURN_IF_ERROR(read_text(value, section, key, &text));
+    error_t err = read_text(value, section, key, &text);
+    if (err) return err;
 
     if (text[0] == '\0') {
         return ERROR(
@@ -130,9 +132,10 @@ static error_t read_verbosity(
     toml_datum_t value, const char *section, const char *key, output_verbosity_t *out
 ) {
     const char *word = NULL;
-    RETURN_IF_ERROR(read_text(value, section, key, &word));
+    error_t err = read_text(value, section, key, &word);
+    if (err) return err;
 
-    error_t err = output_parse_verbosity(word, out);
+    err = output_parse_verbosity(word, out);
     return err ? error_wrap(err, "Invalid [%s] %s", section, key) : NULL;
 }
 
@@ -140,9 +143,10 @@ static error_t read_color(
     toml_datum_t value, const char *section, const char *key, output_color_mode_t *out
 ) {
     const char *word = NULL;
-    RETURN_IF_ERROR(read_text(value, section, key, &word));
+    error_t err = read_text(value, section, key, &word);
+    if (err) return err;
 
-    error_t err = output_parse_color_mode(word, out);
+    err = output_parse_color_mode(word, out);
     return err ? error_wrap(err, "Invalid [%s] %s", section, key) : NULL;
 }
 
@@ -150,9 +154,10 @@ static error_t read_strategy(
     toml_datum_t value, const char *section, const char *key, sync_strategy_t *out
 ) {
     const char *word = NULL;
-    RETURN_IF_ERROR(read_text(value, section, key, &word));
+    error_t err = read_text(value, section, key, &word);
+    if (err) return err;
 
-    error_t err = config_parse_strategy(word, out);
+    err = config_parse_strategy(word, out);
     return err ? error_wrap(err, "Invalid [%s] %s", section, key) : NULL;
 }
 
@@ -405,7 +410,8 @@ static error_t read_sections(toml_datum_t top, config_t *config, arena_t *arena)
                     section
                 );
             }
-            RETURN_IF_ERROR(read_key(table.u.tab.value[k], section, key, config, arena));
+            error_t err = read_key(table.u.tab.value[k], section, key, config, arena);
+            if (err) return err;
         }
     }
     return NULL;
@@ -429,7 +435,7 @@ static error_t read_file(const char *path, config_t *config, arena_t *arena) {
         /* No config file - every key keeps its default */
         return NULL;
     }
-    RETURN_IF_ERROR(err);
+    if (err) return err;
 
     /* A read is capped at 256 MB, far below INT_MAX, and ends in the NUL the
      * parser checks for; the parse copies what it keeps. */
@@ -450,14 +456,15 @@ error_t config_load(arena_t *arena, config_t **out) {
     *out = NULL;
 
     const char *path = NULL;
-    RETURN_IF_ERROR(config_get_path(arena, &path));
+    error_t err = config_get_path(arena, &path);
+    if (err) return err;
 
     /* Start with defaults */
     config_t *config = config_create_default(arena);
 
     /* The file over the defaults: each key it names is checked as it is read
      * (read_key), a directory as the spelling it is (read_path). */
-    error_t err = read_file(path, config, arena);
+    err = read_file(path, config, arena);
 
     /* The directories, each read once as the kernel will open it (sys/filesystem.h
      * fs_make_absolute), and only from the value that won: the hooks' is the

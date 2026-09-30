@@ -336,7 +336,8 @@ static error_t dest_resolve(
     const char **out
 ) {
     const char *expanded = NULL;
-    RETURN_IF_ERROR(fs_expand_tilde(dest, arena, &expanded));
+    error_t err = fs_expand_tilde(dest, arena, &expanded);
+    if (err) return err;
 
     size_t len = strlen(expanded);
     bool beneath = name[0] != '\0' &&

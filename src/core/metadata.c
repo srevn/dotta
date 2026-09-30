@@ -833,10 +833,9 @@ error_t metadata_capture_ancestors(
         size_t cut = (size_t) (sep - storage_path);
 
         rung[cut] = '\0';
-        RETURN_IF_ERROR(
-            capture_ancestor(metadata, mounts, profile, rung, arena, captured, retired)
-        );
+        error_t err = capture_ancestor(metadata, mounts, profile, rung, arena, captured, retired);
         rung[cut] = '/';
+        if (err) return err;
     }
 
     return NULL;

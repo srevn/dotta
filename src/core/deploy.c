@@ -1008,9 +1008,10 @@ error_t deploy_preflight(
         gid_t gid = (gid_t) -1;
 
         if (skip.reason == DEPLOY_SKIP_NONE) {
-            RETURN_IF_ERROR(
-                check_ownership(opts, &verdicts->warnings, item->row, &uid, &gid, &skip.reason)
+            error_t err = check_ownership(
+                opts, &verdicts->warnings, item->row, &uid, &gid, &skip.reason
             );
+            if (err) return err;
         }
 
         if (skip.reason != DEPLOY_SKIP_NONE) {
@@ -1117,11 +1118,10 @@ error_t deploy_preflight(
         gid_t gid = (gid_t) -1;
 
         if (skip.reason == DEPLOY_SKIP_NONE) {
-            RETURN_IF_ERROR(
-                check_ownership(
+            error_t err = check_ownership(
                 opts, &verdicts->warnings, item->row, &uid, &gid, &skip.reason
-                )
             );
+            if (err) return err;
         }
 
         if (skip.reason != DEPLOY_SKIP_NONE) {
@@ -1189,11 +1189,10 @@ error_t deploy_preflight(
          * behind (fs_create_dir_exclusive) — the under-approximation this pass
          * accepts for a foreign-owned derived claim above a landing the invoker
          * can write. */
-        RETURN_IF_ERROR(
-            resolve_deployment_ownership(
+        error_t err = resolve_deployment_ownership(
             item->row, opts->strict_ownership, &verdicts->warnings, &v->uid, &v->gid
-            )
         );
+        if (err) return err;
     }
 
     *out = verdicts;
@@ -1320,11 +1319,10 @@ static error_t materialize_directory(
 ) {
     const manifest_row_t *dir = v->item->row;
 
-    RETURN_IF_ERROR(
-        fs_create_dir_with_ownership(
+    error_t err = fs_create_dir_with_ownership(
         dir->filesystem_path, working_mode(dir->mode), v->uid, v->gid
-        )
     );
+    if (err) return err;
     hold_directory(run, dir->filesystem_path, dir->mode);
 
     return NULL;
@@ -1371,11 +1369,10 @@ static error_t create_ancestor(deploy_run_t *run, const char *path) {
 
         const manifest_row_t *dir = v->item->row;
 
-        RETURN_IF_ERROR(
-            fs_create_dir_exclusive(
+        error_t err = fs_create_dir_exclusive(
             dir->filesystem_path, working_mode(dir->mode), v->uid, v->gid
-            )
         );
+        if (err) return err;
         hold_directory(run, dir->filesystem_path, dir->mode);
 
         /* On the receipt once — and bounds the sized array: a parent present at
@@ -1676,6 +1673,7 @@ cleanup:
  */
 static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
     const char *path = v->item->filesystem_path;
+    error_t err = NULL;
 
     switch (v->occupant) {
         case FS_OCCUPANT_DIRECTORY:
@@ -1686,7 +1684,7 @@ static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
             /* Absent — or beneath a non-directory, which preflight blocked when
              * unplanned and the directory pass replaces when planned (prefix
              * order); one still there is ensure_parents' named error. */
-            RETURN_IF_ERROR(ensure_parents(run, path));
+            err = ensure_parents(run, path);
             break;
 
         case FS_OCCUPANT_UNKNOWN:
@@ -1700,13 +1698,14 @@ static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
             /* A single node in the way, cleared before the mkdir — the node the
              * verdict named. It can never be a directory (that is the first arm),
              * and --force was preflight's question. */
-            RETURN_IF_ERROR(clear_occupant(path, v->occupant));
+            err = clear_occupant(path, v->occupant);
             break;
     }
+    if (err) return err;
 
     /* Create-or-fix with atomic ownership and permissions (fchown/fchmod on the
      * directory fd — no window with wrong metadata). Idempotent. */
-    error_t err = materialize_directory(run, v);
+    err = materialize_directory(run, v);
     if (err) {
         return error_wrap(err, "Failed to create directory: %s", path);
     }

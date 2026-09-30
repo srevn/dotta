@@ -859,7 +859,8 @@ error_t fs_create_dir_exclusive(
  */
 static error_t fs_remove_subtree(arena_t *scratch, const char *path) {
     fs_listing_t listing;
-    RETURN_IF_ERROR(fs_listing_init(&listing, scratch, path));
+    error_t err = fs_listing_init(&listing, scratch, path);
+    if (err) return err;
 
     for (const char *full_path; (full_path = fs_listing_next(&listing)) != NULL;) {
         /* Use lstat to determine type WITHOUT following symlinks. This prevents
@@ -875,10 +876,12 @@ static error_t fs_remove_subtree(arena_t *scratch, const char *path) {
         }
 
         if (S_ISDIR(st.st_mode)) {
-            RETURN_IF_ERROR(fs_remove_subtree(scratch, full_path));
+            err = fs_remove_subtree(scratch, full_path);
+            if (err) return err;
         } else {
             /* Regular file, symlink, or any other type: unlink */
-            RETURN_IF_ERROR(fs_remove_file(full_path));
+            err = fs_remove_file(full_path);
+            if (err) return err;
         }
     }
 
@@ -1258,11 +1261,13 @@ error_t fs_make_absolute(const char *path, arena_t *arena, const char **out) {
      * still relative, then the fold over the whole — the kernel's, which keeps
      * a `..` only it can read. */
     const char *expanded = NULL;
-    RETURN_IF_ERROR(fs_expand_tilde(path, arena, &expanded));
+    error_t err = fs_expand_tilde(path, arena, &expanded);
+    if (err) return err;
 
     if (expanded[0] != '/') {
         const char *cwd = NULL;
-        RETURN_IF_ERROR(fs_working_directory(arena, &cwd));
+        err = fs_working_directory(arena, &cwd);
+        if (err) return err;
         expanded = str_path_join(arena, cwd, expanded);
     }
 

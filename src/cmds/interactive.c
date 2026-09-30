@@ -134,7 +134,8 @@ static error_t build_items(git_repository *repo, state_t *deploy_state, view_t *
     arena_t *arena = view->arena;
 
     string_array_t all_profiles;
-    RETURN_IF_ERROR(gitops_list_branches(repo, arena, &all_profiles));
+    error_t err = gitops_list_branches(repo, arena, &all_profiles);
+    if (err) return err;
 
     if (all_profiles.count == 0) {
         return error_create(ERR_NOT_FOUND, "no profiles found in repository");
@@ -233,7 +234,8 @@ static error_t view_create(
     view_t *view = arena_calloc(arena, 1, sizeof(*view));
     view->arena = arena;
 
-    RETURN_IF_ERROR(build_items(repo, deploy_state, view));
+    error_t err = build_items(repo, deploy_state, view);
+    if (err) return err;
     read_targets(repo, deploy_state, view);
 
     *out = view;

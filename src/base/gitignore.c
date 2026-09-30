@@ -387,7 +387,8 @@ static error_t parse_rule(
     arena_t *arena, const char *pattern, gitignore_rule_t *out
 ) {
     size_t len = strlen(pattern);
-    RETURN_IF_ERROR(validate_pattern(pattern, len));
+    error_t err = validate_pattern(pattern, len);
+    if (err) return err;
     parse_line(arena, pattern, len, out);
 
     return NULL;
@@ -636,7 +637,8 @@ error_t gitignore_ruleset_append_pattern(
     CHECK_NULL(pattern);
 
     gitignore_rule_t rule = { 0 };
-    RETURN_IF_ERROR(parse_rule(set->arena, pattern, &rule));
+    error_t err = parse_rule(set->arena, pattern, &rule);
+    if (err) return err;
     push_rule(set, rule, origin);
 
     return NULL;
@@ -812,7 +814,8 @@ error_t gitignore_rule_parse(
     *out = NULL;
 
     gitignore_rule_t rule = { 0 };
-    RETURN_IF_ERROR(parse_rule(arena, pattern, &rule));
+    error_t err = parse_rule(arena, pattern, &rule);
+    if (err) return err;
 
     gitignore_rule_t *copy = arena_alloc(arena, sizeof(*copy));
     *copy = rule;

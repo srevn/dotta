@@ -1113,10 +1113,11 @@ static error_t update_execute(
         /* The profile's stage: the branch as it stands now, the parent of the
          * commit the walk makes. Its life is this iteration's. */
         char refname[DOTTA_REFNAME_MAX];
-        RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), profile));
+        error_t err = gitops_branch_refname(refname, sizeof(refname), profile);
+        if (err) return err;
 
         stage_t *stage = NULL;
-        error_t err = stage_open(repo, refname, &stage);
+        err = stage_open(repo, refname, &stage);
         if (err) return error_wrap(err, "Failed to open profile '%s'", profile);
 
         /* Update this profile on its stage */
@@ -1425,7 +1426,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .exclude_count    = opts->exclude_count,
     };
     scope_t *scope = NULL;
-    RETURN_IF_ERROR(scope_build(repo, state, &scope_inputs, ctx->arena, &scope));
+    error_t err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
+    if (err) return err;
 
     if (scope_enabled(scope)->count == 0) {
         return ERROR(
@@ -1460,7 +1462,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             config->auto_detect_new_files) /* Explicit flags or config auto-detect */
     };
     workspace_t *ws = NULL;
-    error_t err = workspace_load(
+    err = workspace_load(
         repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
     );
     if (err) return error_wrap(err, "Failed to analyze workspace");
@@ -1474,7 +1476,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * Files actually updated by this command get their record written separately
      * inside update_write_record(); this flush covers the clean files the analysis
      * verified but didn't modify. */
-    RETURN_IF_ERROR(workspace_flush(ws));
+    err = workspace_flush(ws);
+    if (err) return err;
 
     /* The run's filter context, ahead of everything the filter says against it:
      * the verbose "Excluded" log, the census, the nothing-exit and the preview */
@@ -1697,7 +1700,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .dry_run    = opts->dry_run,
     };
 
-    RETURN_IF_ERROR(hook_fire_pre(config, out, &hook_inv));
+    err = hook_fire_pre(config, out, &hook_inv);
+    if (err) return err;
 
     /* The run's work: the accepted items — less the new files, where the user
      * declines them below. A value the command holds; the partition's list is

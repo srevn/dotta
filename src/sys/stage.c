@@ -117,7 +117,8 @@ error_t stage_open(git_repository *repo, const char *refname, stage_t **out) {
     /* The tip, or the ref's absence proven — a packed-refs that will not parse
      * is its own failure, never "not found" (sys/gitops.h gitops_reference_find) */
     git_oid tip;
-    RETURN_IF_ERROR(gitops_resolve_reference_oid(repo, refname, &tip));
+    error_t err = gitops_resolve_reference_oid(repo, refname, &tip);
+    if (err) return err;
 
     return stage_seed(repo, refname, &tip, out);
 }
@@ -134,7 +135,8 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out) {
      * would let it stand a loose ref over a packed branch (sys/gitops.h
      * gitops_reference_find). */
     bool exists = false;
-    RETURN_IF_ERROR(gitops_reference_exists(repo, refname, &exists));
+    error_t err = gitops_reference_exists(repo, refname, &exists);
+    if (err) return err;
     if (exists) {
         return ERROR(ERR_EXISTS, "Reference '%s' already exists", refname);
     }
@@ -170,7 +172,8 @@ error_t stage_put(
 
     /* The id is answered once the entry stands: a refused put names no blob the
      * tree holds */
-    RETURN_IF_ERROR(stage_put_blob(st, path, &blob, mode));
+    error_t err = stage_put_blob(st, path, &blob, mode);
+    if (err) return err;
     if (out_blob) {
         git_oid_cpy(out_blob, &blob);
     }
@@ -253,7 +256,8 @@ static error_t put_entry(git_index *index, const git_index_entry *entry) {
         );
     }
 
-    RETURN_IF_ERROR(admit_tree_path(index, path));
+    error_t err = admit_tree_path(index, path);
+    if (err) return err;
 
     /* A directory where the file goes: any entry beneath the path. The index is
      * sorted, so one prefix probe answers. */
@@ -344,7 +348,8 @@ error_t stage_admit_blob(stage_admission_t *adm, const char *path) {
 error_t stage_admit_subtree(const stage_admission_t *adm, const char *path) {
     CHECK_NULL(adm);
     CHECK_NULL(path);
-    RETURN_IF_ERROR(admit_tree_path(adm->index, path));
+    error_t err = admit_tree_path(adm->index, path);
+    if (err) return err;
 
     /* A file at the path itself: a blob and a subtree cannot both stand there,
      * and nothing beneath it could be committed either. Entries beneath the path

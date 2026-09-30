@@ -72,7 +72,8 @@ static error_t resolve_epoch_tree(
      * packed-refs that will not parse is a failure, and never the "no epoch"
      * whose readers adopt without a census or mint over sealed files. */
     git_reference *ref = NULL;
-    RETURN_IF_ERROR(gitops_reference_find(repo, EPOCH_REF, &ref));
+    error_t err = gitops_reference_find(repo, EPOCH_REF, &ref);
+    if (err) return err;
     if (!ref) {
         return ERROR(ERR_NOT_FOUND, "Epoch ref '%s' not found", EPOCH_REF);
     }
@@ -1072,7 +1073,8 @@ static error_t inspect_remote_epoch(
      * target. A missing local ref is DIVERGENT (a joiner that has no epoch yet
      * must converge to the remote's). */
     git_oid local_oid;
-    RETURN_IF_ERROR(gitops_reference_oid(repo, EPOCH_REF, &local_oid));
+    err = gitops_reference_oid(repo, EPOCH_REF, &local_oid);
+    if (err) return err;
     if (git_oid_is_zero(&local_oid)) {
         *out_status = EPOCH_REMOTE_DIVERGENT;
         return NULL;

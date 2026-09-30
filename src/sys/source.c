@@ -233,7 +233,8 @@ static error_t source_commondir(source_filter_t *f, const char *gitdir, const ch
     const char *commondir = gitdir;
     if (source_stat(gitdir, "commondir", &st) == 0) {
         const char *named = NULL;
-        RETURN_IF_ERROR(source_line(f, gitdir, "commondir", &named));
+        error_t err = source_line(f, gitdir, "commondir", &named);
+        if (err) return err;
 
         commondir = source_resolve(
             f, named[0] == '/' ? named : arena_str_format(f->arena, "%s%s", gitdir, named)
@@ -696,7 +697,8 @@ static error_t source_discover(
         /* A `.git` directory: the repository, where it is one. */
         if (S_ISDIR(st.st_mode)) {
             const char *gitdir = arena_str_format(f->arena, "%s.git/", directory);
-            RETURN_IF_ERROR(source_commondir(f, gitdir, &commondir));
+            error_t err = source_commondir(f, gitdir, &commondir);
+            if (err) return err;
             if (commondir) {
                 *out = source_repository(f, directory, gitdir, commondir);
                 return NULL;
@@ -705,7 +707,8 @@ static error_t source_discover(
             /* A `.git` file: the gitdir it names, relative to its own directory
              * — a linked worktree's, a submodule's, a separate git dir's. */
             const char *named = NULL;
-            RETURN_IF_ERROR(source_line(f, directory, ".git", &named));
+            error_t err = source_line(f, directory, ".git", &named);
+            if (err) return err;
             if (strncmp(named, "gitdir: ", 8) != 0) {
                 return ERROR(ERR_VALIDATION, "Invalid gitfile format: '%s.git'", directory);
             }
@@ -714,7 +717,8 @@ static error_t source_discover(
             const char *gitdir = source_resolve(
                 f, named[0] == '/' ? named : arena_str_format(f->arena, "%s%s", directory, named)
             );
-            if (gitdir) RETURN_IF_ERROR(source_commondir(f, gitdir, &commondir));
+            err = gitdir ? source_commondir(f, gitdir, &commondir) : NULL;
+            if (err) return err;
             if (!commondir) {
                 return ERROR(
                     ERR_VALIDATION, "'%s.git' names no git repository: '%s'", directory, named
@@ -733,7 +737,8 @@ static error_t source_discover(
     /* The directory itself: a bare repository, or a walk begun inside a gitdir.
      * No `.git` was found in it, so no workdir either unless core.worktree names
      * one. */
-    RETURN_IF_ERROR(source_commondir(f, directory, &commondir));
+    error_t err = source_commondir(f, directory, &commondir);
+    if (err) return err;
     if (commondir) *out = source_repository(f, NULL, directory, commondir);
 
     return NULL;

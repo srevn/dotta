@@ -220,29 +220,28 @@ static void transfer_commit_credential_decision(transfer_context_t *ctx) {
     }
 
     credential_url_t u = { 0 };
-    error_t parse_err = credential_url_parse(ctx->url, &u);
-    if (parse_err) {
+    error_t err = credential_url_parse(ctx->url, &u);
+    if (err) {
         /* URL came from gitops_get_remote_url, so a parse failure here is an
          * internal correctness issue rather than user-actionable. Surface
          * verbose-only. */
         output_print(
             ctx->output, OUTPUT_VERBOSE,
             "credential helper: skipping commit — %s\n",
-            error_message(parse_err)
+            error_message(err)
         );
         return;
     }
 
-    error_t commit_err =
-        (ctx->credential_state == CRED_STATE_VALIDATED)
+    err = ctx->credential_state == CRED_STATE_VALIDATED
         ? credential_helper_approve(&u, ctx->username, ctx->password)
         : credential_helper_reject(&u, ctx->username, ctx->password);
 
-    if (commit_err) {
+    if (err) {
         output_warning(
             ctx->output, OUTPUT_NORMAL,
             "credential helper: %s",
-            error_message(commit_err)
+            error_message(err)
         );
     }
 
@@ -498,27 +497,27 @@ int transfer_credentials_callback(
          * and dropped — at most one per operation, which the anti-loop above
          * asks once. */
         credential_url_t u = { 0 };
-        error_t parse_err = credential_url_parse(url, &u);
+        error_t err = credential_url_parse(url, &u);
         char *fresh_user = NULL;
         char *fresh_pass = NULL;
 
-        if (parse_err) {
+        if (err) {
             output_print(
                 ctx->output, OUTPUT_VERBOSE,
-                "credential URL parse: %s\n", error_message(parse_err)
+                "credential URL parse: %s\n", error_message(err)
             );
         } else {
-            error_t fill_err = credential_helper_fill(
+            err = credential_helper_fill(
                 &u, username_from_url, &fresh_user, &fresh_pass
             );
             credential_url_deinit(&u);
 
-            if (fill_err) {
+            if (err) {
                 /* Exec failure / timeout / malformed response — surface to the
                  * user so they can diagnose helper issues. */
                 output_warning(
                     ctx->output, OUTPUT_NORMAL,
-                    "credential helper: %s", error_message(fill_err)
+                    "credential helper: %s", error_message(err)
                 );
             }
         }

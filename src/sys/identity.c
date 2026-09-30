@@ -220,7 +220,8 @@ error_t identity_init(arena_t *arena) {
     /* The drop, where root was obtained for a user, and before the groups are
      * read: the list below is what the kernel checks the invoker's chown against,
      * and it is the invoker's only after initgroups. */
-    if (self.privileged && self.uid != 0) RETURN_IF_ERROR(drop_to_invoker());
+    error_t err = self.privileged && self.uid != 0 ? drop_to_invoker() : NULL;
+    if (err) return err;
 
     /* The kernel's supplementary list for this process. Sized by asking, never
      * by NGROUPS_MAX; a list getgroups cannot read is an empty one, and

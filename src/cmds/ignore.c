@@ -681,7 +681,8 @@ static error_t ignore_test(
 
     /* The profile named must be here before anything is read under it: the view
      * below is its branch, and the refusal names both ways out. */
-    if (profile) RETURN_IF_ERROR(profile_require(repo, profile));
+    error_t err = profile ? profile_require(repo, profile) : NULL;
+    if (err) return err;
 
     /* The key the user named, fixed for every asker: the resolver's sum, its
      * tag the whole condition the loop's arms read and its member the argument's
@@ -691,7 +692,6 @@ static error_t ignore_test(
     path_input_t arg;                         /* the key: a name or a path */
     manifest_t *view = NULL;                  /* a path's: where each asker names it */
 
-    error_t err = NULL;
     if (label_prefixes(test_path)) {
         /* A storage shape, read by the one resolver that reads input shapes — a
          * name and never a path, since the same predicate dispatched here
@@ -742,7 +742,8 @@ static error_t ignore_test(
      * and so is its source layer, so every directory and rule file it reads is
      * read once across the loop. */
     ignore_rules_t *ignore_rules = NULL;
-    RETURN_IF_ERROR(ignore_rules_create(repo, config, NULL, ctx->arena, &ignore_rules));
+    err = ignore_rules_create(repo, config, NULL, ctx->arena, &ignore_rules);
+    if (err) return err;
 
     /* The askers: the profile named, the enabled set, or the one asker that is
      * no profile — which names through the shared roots and meets the baseline,
@@ -827,7 +828,8 @@ static error_t ignore_test(
         );
 
         const gitignore_ruleset_t *rules = NULL;
-        RETURN_IF_ERROR(ignore_ruleset(ignore_rules, asker, &rules));
+        err = ignore_ruleset(ignore_rules, asker, &rules);
+        if (err) return err;
 
         /* The ladder's one question: the rules on the name, and where they exclude
          * nothing, the source tree's on the path — the lowest layer, so a `!`
@@ -908,18 +910,16 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
      * rule, or names two, is refused by name rather than written, and so is a
      * rule both added and removed, which the edit would write and take back.
      * The editor takes none, so for it there is nothing to check. */
-    RETURN_IF_ERROR(
-        ignore_require_patterns("--add", opts->add_patterns, opts->add_count)
+    error_t err = ignore_require_patterns("--add", opts->add_patterns, opts->add_count);
+    if (err) return err;
+
+    err = ignore_require_patterns("--remove", opts->remove_patterns, opts->remove_count);
+    if (err) return err;
+
+    err = ignore_require_disjoint(
+        opts->add_patterns, opts->add_count, opts->remove_patterns, opts->remove_count
     );
-    RETURN_IF_ERROR(
-        ignore_require_patterns("--remove", opts->remove_patterns, opts->remove_count)
-    );
-    RETURN_IF_ERROR(
-        ignore_require_disjoint(
-        opts->add_patterns, opts->add_count,
-        opts->remove_patterns, opts->remove_count
-        )
-    );
+    if (err) return err;
 
     /* The .dottaignore edit and modify change: the file's home, its layer on
      * the screen, and what an editor opens on when the file is not there yet.
@@ -930,8 +930,11 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     char refname[DOTTA_REFNAME_MAX];
     dottaignore_t dottaignore;
     if (opts->profile) {
-        RETURN_IF_ERROR(profile_require(repo, opts->profile));
-        RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), opts->profile));
+        err = profile_require(repo, opts->profile);
+        if (err) return err;
+
+        err = gitops_branch_refname(refname, sizeof(refname), opts->profile);
+        if (err) return err;
         dottaignore = (dottaignore_t){
             .refname = refname,
             .layer = arena_str_format(ctx->arena, "profile '%s'", opts->profile),
@@ -941,7 +944,8 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         /* Seeded by `dotta init` and `dotta clone`; absent only by hand, and
          * init is what puts it back. */
         bool seeded = false;
-        RETURN_IF_ERROR(gitops_reference_exists(repo, BASELINE_REF, &seeded));
+        err = gitops_reference_exists(repo, BASELINE_REF, &seeded);
+        if (err) return err;
         if (!seeded) {
             return ERROR(
                 ERR_NOT_FOUND,

@@ -1140,9 +1140,7 @@ static error_t status_print_remote(
         }
 
         /* Perform batched fetch — single network op for all branches */
-        error_t fetch_err = gitops_fetch_branches(
-            repo, remote_name, check, xfer
-        );
+        err = gitops_fetch_branches(repo, remote_name, check, xfer);
 
         /* Resolve the "Fetching from ..." preamble line (verbose only) */
         if (verbose) {
@@ -1151,7 +1149,7 @@ static error_t status_print_remote(
                  * (callback-finalized, mid-progress error, up-to-date). */
                 transfer_progress_resolved(xfer);
                 output_clear_line(out);
-            } else if (fetch_err) {
+            } else if (err) {
                 /* Non-TTY + error: finish the line before the warning */
                 output_endline(out, OUTPUT_VERBOSE);
             } else {
@@ -1160,11 +1158,11 @@ static error_t status_print_remote(
             }
         }
 
-        if (fetch_err) {
+        if (err) {
             /* Non-fatal: warn and continue with status display */
             output_warning(
                 out, OUTPUT_VERBOSE, "Failed to fetch branches: %s",
-                error_message(fetch_err)
+                error_message(err)
             );
         }
 
@@ -1256,13 +1254,13 @@ static error_t status_print_remote(
              * line, its error dropped — at most two per profile, the local and
              * the remote. */
             git_commit *local_commit = NULL;
-            error_t commit_err = gitops_load_branch_commit(repo, profile, &local_commit);
+            err = gitops_load_branch_commit(repo, profile, &local_commit);
 
             /* Status line — always shown regardless of commit loading */
             output_print(out, OUTPUT_VERBOSE, "  Status:         ");
             output_colored(out, OUTPUT_VERBOSE, color, "%s\n", status_str);
 
-            if (!commit_err) {
+            if (!err) {
                 const git_oid *local_oid = git_commit_id(local_commit);
                 char local_oid_str[8];
                 git_oid_tostr(local_oid_str, sizeof(local_oid_str), local_oid);
@@ -1284,15 +1282,14 @@ static error_t status_print_remote(
             /* Remote commit info — guaranteed reachable per the enclosing filter
              * above. */
             char remote_ref[DOTTA_REFNAME_MAX];
-            error_t remote_ref_err = gitops_build_refname(
+            err = gitops_build_refname(
                 remote_ref, sizeof(remote_ref), "refs/remotes/%s/%s",
                 remote_name, profile
             );
             git_commit *remote_commit = NULL;
-            commit_err = remote_ref_err ? remote_ref_err
-                                        : gitops_load_commit(repo, remote_ref, &remote_commit);
+            if (!err) err = gitops_load_commit(repo, remote_ref, &remote_commit);
 
-            if (!commit_err) {
+            if (!err) {
                 const git_oid *remote_oid = git_commit_id(remote_commit);
                 char remote_oid_str[8];
                 git_oid_tostr(remote_oid_str, sizeof(remote_oid_str), remote_oid);
@@ -1372,7 +1369,8 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         .profile_count = opts->profile_count,
     };
     scope_t *scope = NULL;
-    RETURN_IF_ERROR(scope_build(repo, state, &scope_inputs, ctx->arena, &scope));
+    error_t err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
+    if (err) return err;
 
     /* Load workspace for divergence analysis (only needed for local status)
      *
@@ -1385,7 +1383,7 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             .analyze_orphans   = true,
             .analyze_untracked = config->auto_detect_new_files
         };
-        error_t err = workspace_load(
+        err = workspace_load(
             repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
         );
         if (err) return error_wrap(err, "Failed to load workspace");
@@ -1395,7 +1393,8 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
          * — the confirmations seeding the fast path for subsequent status calls.
          * The flush keeps the failure of the transaction it takes, so status
          * renders what the load read whatever the flush met. */
-        RETURN_IF_ERROR(workspace_flush(ws));
+        err = workspace_flush(ws);
+        if (err) return err;
     }
 
     /* The enabled profiles and the last deployment of each */

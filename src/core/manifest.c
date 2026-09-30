@@ -1304,7 +1304,8 @@ error_t manifest_build_tree(
 
     /* One contribution, settled and layered like any other, so a tree view answers
      * manifest_lookup_claim and manifest_name exactly as an enabled view does. */
-    RETURN_IF_ERROR(manifest_contribute(manifest, repo, tree, profile, arena));
+    error_t err = manifest_contribute(manifest, repo, tree, profile, arena);
+    if (err) return err;
 
     manifest_layer(manifest, arena);
 

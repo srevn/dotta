@@ -53,7 +53,8 @@ error_t editor_launch(const char *editor, const char *file_path) {
      * are its own (sys/process.h process_foreground). */
     char *const argv[] = { (char *) editor, (char *) file_path, NULL };
     process_result_t result;
-    RETURN_IF_ERROR(process_foreground(argv, &result));
+    error_t err = process_foreground(argv, &result);
+    if (err) return err;
 
     /* An editor that could not be run says why: the errno's word, and ERR_NOT_FOUND
      * for a program no PATH entry holds (error_from_errno). */

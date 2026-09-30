@@ -369,7 +369,8 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
          * that is not a profile is a typo, not a skip */
         string_array_init_cap(&profiles, ctx->arena, opts->profile_count);
         for (size_t i = 0; i < opts->profile_count; i++) {
-            RETURN_IF_ERROR(profile_require(repo, opts->profiles[i]));
+            err = profile_require(repo, opts->profiles[i]);
+            if (err) return err;
             string_array_push(&profiles, opts->profiles[i]);
         }
     } else if (opts->all_profiles) {
@@ -384,7 +385,8 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
         profile_order(&profiles);
     } else {
         /* Use enabled profiles from state */
-        RETURN_IF_ERROR(profile_resolve_enabled(repo, state, ctx->arena, &profiles));
+        err = profile_resolve_enabled(repo, state, ctx->arena, &profiles);
+        if (err) return err;
 
         /* No profiles enabled — expected case, show guidance */
         if (profiles.count == 0) {

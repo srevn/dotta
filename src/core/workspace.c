@@ -1086,9 +1086,9 @@ static void workspace_analyze_file(
          * most one per path. */
         if (git_moved && (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
             compare_result_t at_base;
-            error_t verify_err = workspace_compare_base(ws, item, &at_base);
+            err = workspace_compare_base(ws, item, &at_base);
 
-            disk_at_base = !verify_err && at_base == CMP_EQUAL;
+            disk_at_base = !err && at_base == CMP_EQUAL;
         }
     }
 
@@ -2650,7 +2650,8 @@ static error_t workspace_analyze_untracked(
      * the scan reads no -e, and update's excludes filter the items it nominates,
      * afterwards (scope_is_excluded). */
     ignore_rules_t *ignore_rules = NULL;
-    RETURN_IF_ERROR(ignore_rules_create(ws->repo, config, NULL, ws->arena, &ignore_rules));
+    error_t err = ignore_rules_create(ws->repo, config, NULL, ws->arena, &ignore_rules);
+    if (err) return err;
 
     /* The source layer's failures said, one list for every root's walk: a cause
      * that fails the entries of two tracked directories is said once. */
@@ -2682,7 +2683,8 @@ static error_t workspace_analyze_untracked(
          * files as untracked, which the user could then `dotta add` by accident.
          * A corrupt .dottaignore must surface so the user can fix it. */
         const gitignore_ruleset_t *rules = NULL;
-        RETURN_IF_ERROR(ignore_ruleset(ignore_rules, root->profile, &rules));
+        err = ignore_ruleset(ignore_rules, root->profile, &rules);
+        if (err) return err;
 
         /* What this root's walk runs under: the rows it meets are named by the
          * owner's contribution and excluded by its layers, and the roots are

@@ -36,14 +36,14 @@ error_t repo_create_target(
      * location is the answer. */
     const char *configured = config->repo_dir;
     const char *path = configured;
-    if (explicit_path != NULL) {
-        RETURN_IF_ERROR(fs_make_absolute(explicit_path, arena, &path));
-    }
+    error_t err = explicit_path ? fs_make_absolute(explicit_path, arena, &path) : NULL;
+    if (err) return err;
 
     /* The directory holding the repository, not the repository: the clone refuses
      * a target that is not empty, and the init makes its own leaf
      * (gitops_init_repository), so neither caller wants this to reach it. */
-    RETURN_IF_ERROR(fs_ensure_parent_dirs(path));
+    err = fs_ensure_parent_dirs(path);
+    if (err) return err;
 
     /* An explicit path may still name the configured location — `dotta clone
      * <url> "$DOTTA_REPO_DIR"` does — and that is not elsewhere. */

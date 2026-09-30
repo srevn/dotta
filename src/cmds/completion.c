@@ -263,8 +263,8 @@ void completion_refspecs(
         const char *branch = branches.entries[i];
 
         git_tree *tree = NULL;
-        error_t load_err = gitops_load_branch_tree(repo, branch, &tree);
-        if (load_err) continue;  /* not a branch, or unloadable: silent */
+        error_t err = gitops_load_branch_tree(repo, branch, &tree);
+        if (err) continue;  /* not a branch, or unloadable: silent */
 
         walk.branch = branch;
         /* A walk's error is benign on the cap's abort, and silent otherwise;
@@ -299,8 +299,8 @@ static size_t commits_walk(
          * of the same name would win and offer commits no branch holds. A name
          * that is no branch, or a tip that will not read, offers nothing. */
         git_commit *tip = NULL;
-        error_t load_err = gitops_load_branch_commit(repo, branch, &tip);
-        if (load_err) continue;
+        error_t err = gitops_load_branch_commit(repo, branch, &tip);
+        if (err) continue;
 
         git_revwalk *walker = NULL;
         if (git_revwalk_new(&walker, repo) != 0) {

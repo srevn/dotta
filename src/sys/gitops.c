@@ -203,7 +203,8 @@ error_t gitops_reference_find(
      * read nothing: the iterator parses the file whole and refuses a damaged
      * one. A refname carries no byte libgit2's glob reads specially — the reference
      * rule refuses '*', '?', '[' and '\' — so the name is its own glob. */
-    RETURN_IF_ERROR(gitops_reopen_refdb(repo));
+    error_t err = gitops_reopen_refdb(repo);
+    if (err) return err;
 
     git_reference_iterator *iter = NULL;
     rc = git_reference_iterator_glob_new(&iter, repo, refname);
@@ -248,7 +249,8 @@ error_t gitops_reference_exists(
     CHECK_NULL(exists);
 
     git_reference *ref = NULL;
-    RETURN_IF_ERROR(gitops_reference_find(repo, refname, &ref));
+    error_t err = gitops_reference_find(repo, refname, &ref);
+    if (err) return err;
     *exists = ref != NULL;
     git_reference_free(ref);
 
@@ -263,7 +265,8 @@ error_t gitops_branch_exists(
     CHECK_NULL(exists);
 
     char refname[DOTTA_REFNAME_MAX];
-    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), name));
+    error_t err = gitops_branch_refname(refname, sizeof(refname), name);
+    if (err) return err;
 
     return gitops_reference_exists(repo, refname, exists);
 }
@@ -281,13 +284,14 @@ error_t gitops_branch_blocker(
     /* Only a name Git accepts stands anywhere to be blocked: one it refuses is
      * refused here, in the branch rule's words, and never scanned. */
     char refname[DOTTA_REFNAME_MAX];
-    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), name));
+    error_t err = gitops_branch_refname(refname, sizeof(refname), name);
+    if (err) return err;
 
     /* The branches, in a frame of this call's own: the answer is copied out of
      * it into the caller's buffer before it goes. */
     arena_t *frame = arena_create(0);
     string_array_t branches;
-    error_t err = gitops_list_branches(repo, frame, &branches);
+    err = gitops_list_branches(repo, frame, &branches);
 
     size_t len = strlen(name);
     for (size_t i = 0; !err && i < branches.count; i++) {
@@ -439,7 +443,8 @@ error_t gitops_list_refs(
      * would list no packed ref at all (gitops_reopen_refdb); the loose ones as
      * far as it could read them. The glob walks the namespace's own directory
      * and nothing beside it; a name is listed past "<namespace>/". */
-    RETURN_IF_ERROR(gitops_reopen_refdb(repo));
+    error_t err = gitops_reopen_refdb(repo);
+    if (err) return err;
 
     char glob[DOTTA_REFNAME_MAX];
     int written = snprintf(glob, sizeof(glob), "%s/*", namespace);
@@ -455,7 +460,6 @@ error_t gitops_list_refs(
     string_array_t names;
     string_array_init(&names, arena);
 
-    error_t err = NULL;
     for (;;) {
         /* Classified, not compared: GIT_ITEROVER is the enumeration finished,
          * and a negative code one that never did. */
@@ -486,7 +490,8 @@ error_t gitops_list_refs(
         slash = strchr(slash + 1, '/')) {
         walk.depth++;
     }
-    RETURN_IF_ERROR(gitops_walk_loose(&walk, dir));
+    err = gitops_walk_loose(&walk, dir);
+    if (err) return err;
 
     *out = names;
     return NULL;
@@ -530,7 +535,8 @@ error_t gitops_delete_branch(git_repository *repo, const char *name) {
     CHECK_NULL(name);
 
     char refname[DOTTA_REFNAME_MAX];
-    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), name));
+    error_t err = gitops_branch_refname(refname, sizeof(refname), name);
+    if (err) return err;
 
     git_reference *ref = NULL;
     int rc = git_reference_lookup(&ref, repo, refname);
@@ -706,7 +712,8 @@ error_t gitops_load_branch_commit(
     CHECK_NULL(out);
 
     char refname[DOTTA_REFNAME_MAX];
-    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), branch));
+    error_t err = gitops_branch_refname(refname, sizeof(refname), branch);
+    if (err) return err;
 
     /* Through a symbolic branch to the one it names: `git symbolic-ref` makes
      * one legally, and every other reader of a branch reads through it. */
@@ -912,15 +919,17 @@ error_t gitops_resolve_commit_in_branch(
     /* The revision first: a spelling that names nothing refuses before the branch
      * is read, whichever branch is named. */
     gitops_revision_t rev;
-    RETURN_IF_ERROR(gitops_revision_resolve(repo, commit_ref, &rev));
+    error_t err = gitops_revision_resolve(repo, commit_ref, &rev);
+    if (err) return err;
 
     /* The tip, read once, and the revision asked of it: HEAD's steps and the
      * membership of a commit are one tip's answers, never two reads of a ref
      * that may move between them. */
     git_commit *tip = NULL;
-    RETURN_IF_ERROR(gitops_load_branch_commit(repo, branch_name, &tip));
+    err = gitops_load_branch_commit(repo, branch_name, &tip);
+    if (err) return err;
 
-    error_t err = gitops_revision_find(repo, &rev, branch_name, tip, out_commit);
+    err = gitops_revision_find(repo, &rev, branch_name, tip, out_commit);
     git_commit_free(tip);
     if (err || *out_commit) return err;
 
@@ -979,7 +988,8 @@ error_t gitops_fetch_branch(
 
     /* The refspec's source is the branch's ref, spelled where every one is. */
     char refname[DOTTA_REFNAME_MAX];
-    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), branch_name));
+    error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
+    if (err) return err;
 
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, remote_name);
@@ -992,7 +1002,7 @@ error_t gitops_fetch_branch(
     );
 
     char refspec[DOTTA_REFSPEC_MAX];
-    error_t err = gitops_build_refname(
+    err = gitops_build_refname(
         refspec, sizeof(refspec), "%s:refs/remotes/%s/%s",
         refname, remote_name, branch_name
     );
@@ -1092,7 +1102,8 @@ error_t gitops_push_branch(
 
     /* The refspec's halves are the branch's ref, spelled where every one is. */
     char refname[DOTTA_REFNAME_MAX];
-    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), branch_name));
+    error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
+    if (err) return err;
 
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, remote_name);
@@ -1105,7 +1116,7 @@ error_t gitops_push_branch(
     );
 
     char refspec[DOTTA_REFSPEC_MAX];
-    error_t err = gitops_build_refname(
+    err = gitops_build_refname(
         refspec, sizeof(refspec), "%s:%s", refname, refname
     );
     if (err) {
@@ -1139,7 +1150,8 @@ error_t gitops_force_push_branch(
 
     /* The refspec's halves are the branch's ref, spelled where every one is. */
     char refname[DOTTA_REFNAME_MAX];
-    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), branch_name));
+    error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
+    if (err) return err;
 
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, remote_name);
@@ -1153,7 +1165,7 @@ error_t gitops_force_push_branch(
 
     /* Force push refspec ('+' prefix accepts non-fast-forward update) */
     char refspec[DOTTA_REFSPEC_MAX];
-    error_t err = gitops_build_refname(
+    err = gitops_build_refname(
         refspec, sizeof(refspec), "+%s:%s", refname, refname
     );
     if (err) {
@@ -1187,7 +1199,8 @@ error_t gitops_delete_remote_branch(
 
     /* The refspec's halves are the branch's ref, spelled where every one is. */
     char refname[DOTTA_REFNAME_MAX];
-    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), branch_name));
+    error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
+    if (err) return err;
 
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, remote_name);
@@ -1201,7 +1214,7 @@ error_t gitops_delete_remote_branch(
 
     /* Delete remote branch using empty refspec: :refs/heads/branch */
     char refspec[DOTTA_REFSPEC_MAX];
-    error_t err = gitops_build_refname(
+    err = gitops_build_refname(
         refspec, sizeof(refspec), ":%s", refname
     );
     if (err) {
@@ -1360,7 +1373,8 @@ error_t gitops_resolve_default_remote(
     git_strarray_dispose(&remotes);
 
     /* URL is optional, and so is a remote's: one without a URL answers NULL. */
-    if (out_url) RETURN_IF_ERROR(gitops_get_remote_url(repo, name, arena, out_url));
+    error_t err = out_url ? gitops_get_remote_url(repo, name, arena, out_url) : NULL;
+    if (err) return err;
 
     *out_name = name;
 
@@ -1382,7 +1396,8 @@ error_t gitops_create_reference(
      * its cached parse of packed-refs — one a refused parse left empty would
      * find every packed name free, and the loose ref written would stand over a
      * packed branch. So the decision reads a database that has read nothing. */
-    if (!force) RETURN_IF_ERROR(gitops_reopen_refdb(repo));
+    error_t err = force ? NULL : gitops_reopen_refdb(repo);
+    if (err) return err;
 
     git_reference *ref = NULL;
     int rc = git_reference_create(&ref, repo, name, oid, force, NULL);
@@ -1403,7 +1418,8 @@ error_t gitops_reference_oid(
     /* Found, or its absence proven (gitops_reference_find): a packed-refs that
      * will not parse is its own failure, never a reference that is not there. */
     git_reference *ref = NULL;
-    RETURN_IF_ERROR(gitops_reference_find(repo, ref_name, &ref));
+    error_t err = gitops_reference_find(repo, ref_name, &ref);
+    if (err) return err;
     if (!ref) {
         memset(out, 0, sizeof(*out));
         return NULL;
@@ -1432,7 +1448,8 @@ error_t gitops_resolve_reference_oid(
     CHECK_NULL(ref_name);
     CHECK_NULL(out);
 
-    RETURN_IF_ERROR(gitops_reference_oid(repo, ref_name, out));
+    error_t err = gitops_reference_oid(repo, ref_name, out);
+    if (err) return err;
     if (git_oid_is_zero(out)) {
         return ERROR(ERR_NOT_FOUND, "Reference '%s' not found", ref_name);
     }

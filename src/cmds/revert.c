@@ -67,7 +67,8 @@ static error_t select_profile(
     *out_profile = NULL;
 
     if (opts->profile) {
-        RETURN_IF_ERROR(profile_require(repo, opts->profile));
+        error_t err = profile_require(repo, opts->profile);
+        if (err) return err;
         *out_profile = opts->profile;
         return NULL;
     }
@@ -339,11 +340,9 @@ static error_t entry_to_restore(
     const char *name = arg->key == PATH_KEY_STORAGE ? arg->storage_path : NULL;
     profile_held_t held = { .kind = PROFILE_HELD_NOTHING };
 
-    if (name) {
-        RETURN_IF_ERROR(
-            profile_holds(repo, target_tree, target_sheet, profile, name, &held)
-        );
-    }
+    error_t err = name
+        ? profile_holds(repo, target_tree, target_sheet, profile, name, &held) : NULL;
+    if (err) return err;
 
     /* Only a name the commit holds in neither document falls back to the claim
      * standing at the path, and a path argument starts here. The claim is asked
@@ -351,15 +350,13 @@ static error_t entry_to_restore(
      * construction: the row came from them. */
     if (held.kind == PROFILE_HELD_NOTHING && filesystem_path) {
         const manifest_row_t *row = NULL;
-        RETURN_IF_ERROR(
-            claim_standing(ctx, target_tree, profile, filesystem_path, &row)
-        );
+        err = claim_standing(ctx, target_tree, profile, filesystem_path, &row);
+        if (err) return err;
 
         if (row) {
             name = row->storage_path;
-            RETURN_IF_ERROR(
-                profile_holds(repo, target_tree, target_sheet, profile, name, &held)
-            );
+            err = profile_holds(repo, target_tree, target_sheet, profile, name, &held);
+            if (err) return err;
         }
     }
 

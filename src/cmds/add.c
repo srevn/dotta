@@ -324,7 +324,8 @@ static error_t add_spell(
     /* The answer is the arena's, as the composition it reads is: the caller keys,
      * names and walks from it, and the refusal below simply returns. */
     const char *spelled = NULL;
-    RETURN_IF_ERROR(path_input_filesystem_path(composed, arena, &spelled));
+    error_t err = path_input_filesystem_path(composed, arena, &spelled);
+    if (err) return err;
 
     /* One check for every escape, whatever the shape: `..` walked out of a path
      * that started inside, or a path spelled from here while the user stands
@@ -602,7 +603,8 @@ static error_t add_collect(
      * and its name — go at the next entry, the frames of its subtree with them;
      * what outlives the entry is a listed path's, copied at its door (add_list). */
     fs_listing_t listing;
-    RETURN_IF_ERROR(fs_listing_init(&listing, scratch, directory));
+    error_t err = fs_listing_init(&listing, scratch, directory);
+    if (err) return err;
 
     for (const char *child_fs; (child_fs = fs_listing_next(&listing)) != NULL;) {
         /* One lstat names what stands there, and the kind follows from it: a
@@ -698,9 +700,9 @@ static error_t add_collect(
                         ? ", entered for the claims beneath it" : ""
                 );
             }
-            if (claims.origin == IGNORE_ORIGIN_NONE) {
-                RETURN_IF_ERROR(add_collect(walk, scratch, child_fs, depth + 1));
-            }
+            err = claims.origin == IGNORE_ORIGIN_NONE
+                ? add_collect(walk, scratch, child_fs, depth + 1) : NULL;
+            if (err) return err;
             continue;
         }
 
@@ -723,7 +725,7 @@ static error_t add_collect(
          * the run failing, and publishing a selection past one would commit a
          * silently partial capture. A conflict is warned and dropped, one per
          * child it skips. */
-        error_t err = add_admit(walk, child_storage, kind);
+        err = add_admit(walk, child_storage, kind);
         if (err) {
             if (error_code(err) != ERR_CONFLICT) return err;
             output_warning(
@@ -736,9 +738,9 @@ static error_t add_collect(
         add_list(walk, child_fs, child_storage, occupant);
 
         /* Settled, so the descent is one statement. */
-        if (kind == PATH_KIND_DIRECTORY) {
-            RETURN_IF_ERROR(add_collect(walk, scratch, child_fs, depth + 1));
-        }
+        err = kind == PATH_KIND_DIRECTORY
+            ? add_collect(walk, scratch, child_fs, depth + 1) : NULL;
+        if (err) return err;
     }
 
     return NULL;

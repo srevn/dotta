@@ -251,9 +251,9 @@ static error_t list_profiles(
          * branch. */
         if (verbose) {
             git_commit *last_commit = NULL;
-            error_t commit_err = gitops_load_branch_commit(repo, profile, &last_commit);
+            err = gitops_load_branch_commit(repo, profile, &last_commit);
 
-            if (!commit_err) {
+            if (!err) {
                 const git_oid *oid = git_commit_id(last_commit);
                 char oid_str[LIST_SHORT_OID_BUF_SIZE];
                 git_oid_tostr(oid_str, sizeof(oid_str), oid);
@@ -282,8 +282,8 @@ static error_t list_profiles(
          * dropped, one per such branch */
         if (show_remote) {
             upstream_info_t info;
-            error_t upstream_err = upstream_analyze_profile(repo, remote_name, profile, &info);
-            if (!upstream_err) {
+            err = upstream_analyze_profile(repo, remote_name, profile, &info);
+            if (!err) {
                 print_upstream_state(out, &info);
             }
         }
@@ -375,11 +375,11 @@ static error_t list_files(
          * profile twice more and nothing else, and this line names it a third
          * time (base/error.h error_root). */
         profile_stats_t stats = { 0 };
-        error_t stats_err = profile_get_tree_stats(repo, tree, opts->profile, &stats);
-        if (stats_err) {
+        err = profile_get_tree_stats(repo, tree, opts->profile, &stats);
+        if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
-                opts->profile, error_message(error_root(stats_err))
+                opts->profile, error_message(error_root(err))
             );
         }
 
@@ -515,10 +515,10 @@ static error_t list_files(
                  * the same failure (core/profiles.h profile_get_tree_stats).
                  * The header's error is dropped, one per unreadable blob. */
                 size_t size = 0;
-                error_t size_err = stats_blob_size(
+                err = stats_blob_size(
                     repo, git_tree_entry_id(entry), &size
                 );
-                if (!size_err) {
+                if (!err) {
                     size_t display_size = content_estimated_plaintext_size(size, encrypted);
 
                     char size_str[32];
@@ -636,13 +636,15 @@ static error_t list_file_history(
      * both arms, which differ in where each key's answer comes from and not in
      * which keys they take. */
     path_input_t arg;
-    RETURN_IF_ERROR(path_input_resolve(opts->file_path, ctx->arena, &arg));
+    err = path_input_resolve(opts->file_path, ctx->arena, &arg);
+    if (err) return err;
 
     if (profile) {
         /* The profile named must be here before anything is read under it; then
          * its tip, which is both where the claim is looked for and what the
          * pre-check below reads (core/profiles.h profile_claim_name). */
-        RETURN_IF_ERROR(profile_require(repo, profile));
+        err = profile_require(repo, profile);
+        if (err) return err;
 
         err = gitops_load_branch_tree(repo, profile, &tree);
         if (err) {

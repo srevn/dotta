@@ -145,7 +145,8 @@ error_t path_input_resolve(
  */
 static error_t path_working_directory(arena_t *arena, const char **out) {
     const char *cwd = NULL;
-    RETURN_IF_ERROR(fs_working_directory(arena, &cwd));
+    error_t err = fs_working_directory(arena, &cwd);
+    if (err) return err;
     *out = cwd;
 
     const identity_t *id = identity();
@@ -183,14 +184,16 @@ error_t path_input_filesystem_path(const char *input, arena_t *arena, const char
      * a path still relative joins the working directory, and `.`, `..` and doubled
      * slashes fold out lexically. */
     const char *path = NULL;
-    RETURN_IF_ERROR(fs_expand_tilde(input, arena, &path));
+    error_t err = fs_expand_tilde(input, arena, &path);
+    if (err) return err;
 
     /* An absolute spelling — typed, or the tilde's — is the user's own and stands.
      * A relative one joins the working directory, spelled for a key before the
      * join so that the tail stays the user's own too. */
     if (path[0] != '/') {
         const char *cwd = NULL;
-        RETURN_IF_ERROR(path_working_directory(arena, &cwd));
+        err = path_working_directory(arena, &cwd);
+        if (err) return err;
         path = str_path_join(arena, cwd, path);
     }
 

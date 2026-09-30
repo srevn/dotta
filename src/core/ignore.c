@@ -194,10 +194,11 @@ static error_t ignore_compose(
      *    normal and silently contributes no rules. */
     if (profile[0] != '\0') {
         char refname[DOTTA_REFNAME_MAX];
-        RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), profile));
+        error_t err = gitops_branch_refname(refname, sizeof(refname), profile);
+        if (err) return err;
 
         buffer_t content = BUFFER_INIT;
-        error_t err = ignore_blob_text(r->repo, refname, &content);
+        err = ignore_blob_text(r->repo, refname, &content);
         if (err) {
             return error_wrap(
                 err, "Failed to load .dottaignore for profile '%s'", profile
@@ -269,7 +270,8 @@ error_t ignore_blob_read(git_repository *repo, const char *refname, buffer_t *ou
 }
 
 error_t ignore_blob_text(git_repository *repo, const char *refname, buffer_t *out) {
-    RETURN_IF_ERROR(ignore_blob_read(repo, refname, out));
+    error_t err = ignore_blob_read(repo, refname, out);
+    if (err) return err;
 
     /* A NUL would end every string reading of the file — the rules compiled from
      * it, the lines --add and --remove rewrite — and what stood behind it would
@@ -310,9 +312,10 @@ error_t ignore_blob_write(
     }
 
     stage_t *stage = NULL;
-    RETURN_IF_ERROR(stage_open(repo, refname, &stage));
+    error_t err = stage_open(repo, refname, &stage);
+    if (err) return err;
 
-    error_t err = stage_put(
+    err = stage_put(
         stage, ".dottaignore", content, size, GIT_FILEMODE_BLOB, NULL
     );
     if (!err) {
@@ -419,7 +422,8 @@ error_t ignore_ruleset(
 
     /* Compose fresh and cache. */
     gitignore_ruleset_t *rs = NULL;
-    RETURN_IF_ERROR(ignore_compose(r, key, &rs));
+    error_t err = ignore_compose(r, key, &rs);
+    if (err) return err;
 
     r->profiles = arena_grow(
         r->arena, r->profiles, &r->profile_capacity, r->profile_count + 1,
@@ -542,9 +546,8 @@ error_t ignore_verdict(
     /* A place whose directory resolves to nothing leaves the layer no rung, and
      * its failure is the answer, the four having excluded nothing. */
     const source_directory_t *directory = NULL;
-    RETURN_IF_ERROR(
-        source_filter_directory(source, spelled, (size_t) (entry - spelled), &directory)
-    );
+    error_t err = source_filter_directory(source, spelled, (size_t) (entry - spelled), &directory);
+    if (err) return err;
 
     /* Every directory the place stands beneath, from its own up to "/", each
      * with the rule that excludes it kept by the filter, asked once of the
@@ -558,7 +561,7 @@ error_t ignore_verdict(
     for (const source_directory_t *above = directory; above;
         above = source_directory_parent(above)) {
         source_rule_t found;
-        error_t err = source_directory_rule(above, &found);
+        err = source_directory_rule(above, &found);
         if (!err && !found.rule) continue;
 
         /* A `!` of the four re-opens the rung it names against the source's rules
@@ -602,7 +605,7 @@ error_t ignore_verdict(
      * where nothing above it is excluded — and a `!` of the four at the path
      * re-opens it. Its failure is the answer only where no rung above failed. */
     source_rule_t found;
-    error_t err = source_filter_find(
+    err = source_filter_find(
         source, directory, entry, kind == PATH_KIND_DIRECTORY, &found
     );
     if (!err && !found.rule) return failure;
@@ -700,13 +703,14 @@ error_t ignore_seed_baseline(git_repository *repo) {
      * even the entry taken away by hand — so the question is the ref's, never
      * the file's. */
     bool seeded = false;
-    RETURN_IF_ERROR(gitops_reference_exists(repo, BASELINE_REF, &seeded));
+    error_t err = gitops_reference_exists(repo, BASELINE_REF, &seeded);
+    if (err) return err;
     if (seeded) return NULL;
 
     /* A root commit on an orphan's stage. A ref that appeared since the look —
      * two inits racing — is refused at the open or at the commit. */
     stage_t *stage = NULL;
-    error_t err = stage_orphan(repo, BASELINE_REF, &stage);
+    err = stage_orphan(repo, BASELINE_REF, &stage);
     if (!err) {
         err = stage_put(
             stage, ".dottaignore", DEFAULT_DOTTAIGNORE,

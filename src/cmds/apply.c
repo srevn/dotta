@@ -1837,7 +1837,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .exclude_count    = opts->exclude_count,
     };
     scope_t *scope = NULL;
-    RETURN_IF_ERROR(scope_build(repo, state, &scope_inputs, ctx->arena, &scope));
+    error_t err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
+    if (err) return err;
 
     output_print(
         out, OUTPUT_VERBOSE, "Using %zu profile%s:\n",
@@ -1879,7 +1880,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .analyze_untracked = false
     };
     workspace_t *ws = NULL;
-    error_t err = workspace_load(
+    err = workspace_load(
         repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
     );
     if (err) return error_wrap(err, "Failed to load workspace");
@@ -1902,7 +1903,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * do, and ends the run in the flush's own words, which name the write and
      * the path it failed at; a preview's keeps the failure of its own, as status's
      * does. */
-    RETURN_IF_ERROR(workspace_flush(ws));
+    err = workspace_flush(ws);
+    if (err) return err;
 
     /* Both kinds: a scope of tracked directories alone is a workspace, not an
      * empty one. */
@@ -2602,7 +2604,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     };
 
     /* Execute pre-apply hook */
-    RETURN_IF_ERROR(hook_fire_pre(config, out, &hook_inv));
+    err = hook_fire_pre(config, out, &hook_inv);
+    if (err) return err;
 
     /* Confirm before deployment if configured (unless --force or --dry-run) */
     if (config->confirm_destructive && !opts->force && !opts->dry_run) {

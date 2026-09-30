@@ -1336,8 +1336,11 @@ error_t state_begin(state_t *state) {
      * something does — most often a store another process published since this
      * handle's load — and either way what stands there is admitted or refused. */
     if (!state->db) {
-        RETURN_IF_ERROR(state_create(state->db_path));
-        RETURN_IF_ERROR(state_admit(state));
+        error_t err = state_create(state->db_path);
+        if (err) return err;
+
+        err = state_admit(state);
+        if (err) return err;
     }
 
     /* The lock. BUSY is another connection holding it past the busy timeout,
@@ -1390,12 +1393,13 @@ error_t state_commit(state_t *state) {
      * after it would take in whatever another connection lands once the lock is
      * let go — the one commit the resume is there to see. */
     int64_t data_version = 0;
-    RETURN_IF_ERROR(state_data_version(state, &data_version));
+    error_t err = state_data_version(state, &data_version);
+    if (err) return err;
 
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "COMMIT;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t err = ERROR(
+        err = ERROR(
             ERR_STATE_INVALID, "Failed to commit transaction: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
         );
@@ -1424,13 +1428,14 @@ error_t state_commit(state_t *state) {
 error_t state_resume(state_t *state) {
     CHECK_NULL(state);
 
-    RETURN_IF_ERROR(state_begin(state));
+    error_t err = state_begin(state);
+    if (err) return err;
 
     /* The question the lock was taken back to ask, under it: another connection's
      * commit since this handle's last one moved the version off the one that
      * commit kept. */
     int64_t data_version = 0;
-    error_t err = state_data_version(state, &data_version);
+    err = state_data_version(state, &data_version);
     if (!err && data_version != state->data_version) {
         err = ERROR(
             ERR_CONFLICT, "Another process wrote to the database since this one last did"

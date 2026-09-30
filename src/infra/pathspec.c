@@ -182,7 +182,8 @@ error_t pathspec_create(
         entry_t entry = { 0 };
 
         if (strpbrk(input, "*?[")) {
-            RETURN_IF_ERROR(compile_rule(input, arena, &entry));
+            error_t err = compile_rule(input, arena, &entry);
+            if (err) return err;
             spec->rule_count++;
         } else {
             /* An exact entry in the key the input names, one per key however

@@ -1290,7 +1290,8 @@ static error_t diff_workspace(
      * the confirmations seeding the fast path for subsequent status/apply calls.
      * The flush keeps the failure of the transaction it takes, so diff renders
      * what the load read whatever the flush met. */
-    RETURN_IF_ERROR(workspace_flush(ws));
+    err = workspace_flush(ws);
+    if (err) return err;
 
     /* Step 3: Get pre-analyzed divergence from workspace */
     workspace_items_t diverged = workspace_diverged(ws);
@@ -1418,7 +1419,8 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         .files         = opts->files,
         .file_count    = opts->file_count,
     };
-    RETURN_IF_ERROR(scope_build(repo, state, &scope_inputs, ctx->arena, &scope));
+    error_t err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
+    if (err) return err;
 
     if (scope_enabled(scope)->count == 0) {
         output_info(out, OUTPUT_NORMAL, "No enabled profiles found");

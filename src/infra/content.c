@@ -549,9 +549,8 @@ error_t content_capture_file(
 
     /* The capture's twin of the read's locked root, asked before anything is
      * opened: a seal on a run with no key in reach at all. */
-    if (should_encrypt) {
-        RETURN_IF_ERROR(content_require_encryption(keymgr, storage_path));
-    }
+    error_t err = should_encrypt ? content_require_encryption(keymgr, storage_path) : NULL;
+    if (err) return err;
 
     /* Step 1: One look — open the descriptor whose bytes are answered
      *
@@ -603,7 +602,7 @@ error_t content_capture_file(
      * plaintext path we rely on fs_read_fd's own bounds and libgit2's blob handling
      * rather than duplicating the policy here. */
     buffer_t bytes = BUFFER_INIT;
-    error_t err = fs_read_fd(fd, &bytes);
+    err = fs_read_fd(fd, &bytes);
     close(fd);
     if (err) {
         return error_wrap(err, "Failed to read file '%s'", filesystem_path);
@@ -687,7 +686,8 @@ error_t content_capture_link(const char *filesystem_path, content_capture_t *out
     /* The read, after the look: the entry's bytes are the target, as read — never
      * judged, never sealed. */
     buffer_t bytes = BUFFER_INIT;
-    RETURN_IF_ERROR(fs_read_symlink(filesystem_path, &bytes));
+    error_t err = fs_read_symlink(filesystem_path, &bytes);
+    if (err) return err;
 
     /* The same link, looked at again: another renamed over it is another inode,
      * and a new one at a freed inode carries a ctime of its own (the header). */

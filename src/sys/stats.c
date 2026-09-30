@@ -153,7 +153,8 @@ static error_t populate_tree_paths(
         .file_count = 0
     };
 
-    RETURN_IF_ERROR(gitops_tree_walk(tree, populate_tree_paths_callback, &data));
+    error_t err = gitops_tree_walk(tree, populate_tree_paths_callback, &data);
+    if (err) return err;
 
     *out_count = data.file_count;
     return NULL;

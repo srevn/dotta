@@ -54,13 +54,15 @@ error_t upstream_analyze_profile(
      * or a remote branch that is not there. A symbolic branch is read through
      * to the one it names. */
     git_oid local_oid;
-    RETURN_IF_ERROR(gitops_reference_oid(repo, local_refname, &local_oid));
+    err = gitops_reference_oid(repo, local_refname, &local_oid);
+    if (err) return err;
     if (git_oid_is_zero(&local_oid)) {
         return NULL;                  /* no local branch: UNKNOWN, set above */
     }
 
     git_oid remote_oid;
-    RETURN_IF_ERROR(gitops_reference_oid(repo, remote_refname, &remote_oid));
+    err = gitops_reference_oid(repo, remote_refname, &remote_oid);
+    if (err) return err;
     if (git_oid_is_zero(&remote_oid)) {
         out->state = UPSTREAM_NO_REMOTE;
         return NULL;
@@ -142,10 +144,12 @@ error_t upstream_discover_branches(
     /* Every remote tracking branch, and every local one: both listings are the
      * answer's arena's */
     string_array_t remote_branches;
-    RETURN_IF_ERROR(gitops_list_remote_tracking(repo, remote_name, arena, &remote_branches));
+    error_t err = gitops_list_remote_tracking(repo, remote_name, arena, &remote_branches);
+    if (err) return err;
 
     string_array_t local_branches;
-    RETURN_IF_ERROR(gitops_list_branches(repo, arena, &local_branches));
+    err = gitops_list_branches(repo, arena, &local_branches);
+    if (err) return err;
 
     /* Set difference, in place and in the remote's order: what is here already
      * leaves the remote listing, which is then the answer */
@@ -173,7 +177,8 @@ error_t upstream_ensure_tracking_branch(
 
     /* Already here: a fetch never moves a local branch. */
     bool exists = false;
-    RETURN_IF_ERROR(gitops_branch_exists(repo, branch_name, &exists));
+    error_t err = gitops_branch_exists(repo, branch_name, &exists);
+    if (err) return err;
     if (exists) return NULL;
 
     /* A name Git's ref namespace cannot hold beside the ones already here. The
@@ -182,7 +187,8 @@ error_t upstream_ensure_tracking_branch(
      * pushed, standing where a fetched one would go. Refused by name, ahead of
      * the ref write whose own message names only one of the two. */
     char blocker[DOTTA_REFNAME_MAX];
-    RETURN_IF_ERROR(gitops_branch_blocker(repo, branch_name, blocker, sizeof(blocker)));
+    err = gitops_branch_blocker(repo, branch_name, blocker, sizeof(blocker));
+    if (err) return err;
     if (blocker[0]) {
         return ERROR(
             ERR_CONFLICT,
@@ -193,7 +199,7 @@ error_t upstream_ensure_tracking_branch(
 
     /* Get remote ref */
     git_oid target_oid;
-    error_t err = gitops_resolve_remote_branch_oid(
+    err = gitops_resolve_remote_branch_oid(
         repo, remote_name, branch_name, &target_oid
     );
     if (err) return err;

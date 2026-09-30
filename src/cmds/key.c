@@ -65,7 +65,8 @@ static error_t key_set(const dotta_ctx_t *ctx) {
 
     /* The ladder's refusal names its cause and the way out; the save's error is
      * the verb's own failure. Neither gains a wrap here. */
-    RETURN_IF_ERROR(keymgr_set(keymgr));
+    error_t err = keymgr_set(keymgr);
+    if (err) return err;
 
     if (config->session_timeout == 0) {
         output_success(

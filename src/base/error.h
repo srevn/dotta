@@ -1,7 +1,7 @@
 /**
  * error.h - Error handling for dotta
  *
- * Centralized error handling with context tracking and propagation helpers.
+ * Centralized error handling with context tracking.
  *
  * Lifetime
  * --------
@@ -30,6 +30,28 @@
  * one error for every entry beneath it; the keymgr's standing refusal, one for
  * every row after it). A loop that still mints per row says its bound where it
  * does.
+ *
+ * Propagation
+ * -----------
+ * A failure passed on returns where it is met, in plain sight. The first step
+ * declares `err` and each later one assigns it — one taken under a condition
+ * answering NULL where it is not — and the last returns the call:
+ *
+ *     error_t err = f(…);
+ *     if (err) return err;
+ *     err = c ? g(…) : NULL;
+ *     if (err) return err;
+ *     return h(…);
+ *
+ * A run of steps whose every outcome meets one tail — a release, a wrap they
+ * share — chains, and reads `err` once after the run; an optional lookup asks
+ * its answer beside the failure:
+ *
+ *     if (!err) err = h(…);
+ *     if (err || !x) return err;
+ *
+ * A failure in hand is `err`, and an int a call answers is `rc`: a second failure
+ * held in one body is a second job.
  *
  * ERR_PERMISSION
  * --------------
@@ -216,12 +238,6 @@ __attribute__((format(printf, 1, 2)));
 /* Create error (error_create) */
 #define ERROR(code, ...) \
     error_create(code, __VA_ARGS__)
-
-/* Return if expression produces error */
-#define RETURN_IF_ERROR(expr) do { \
-    error_t _err = (expr); \
-    if (_err != NULL) return _err; \
-} while(0)
 
 /*
  * A condition the caller owed, checked where it is relied on: broken, it is a

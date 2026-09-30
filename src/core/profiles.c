@@ -40,7 +40,8 @@ error_t profile_require(git_repository *repo, const char *name) {
     CHECK_NULL(name);
 
     bool exists = false;
-    RETURN_IF_ERROR(gitops_branch_exists(repo, name, &exists));
+    error_t err = gitops_branch_exists(repo, name, &exists);
+    if (err) return err;
     if (!exists) {
         return ERROR(
             ERR_NOT_FOUND, "Profile '%s' doesn't exist locally\n"
@@ -295,7 +296,8 @@ static error_t profile_holder(
 
     gitops_revision_t revs[PROFILE_ENDS_MAX];
     for (size_t end = 0; end < count; end++) {
-        RETURN_IF_ERROR(gitops_revision_resolve(repo, spellings[end], &revs[end]));
+        error_t err = gitops_revision_resolve(repo, spellings[end], &revs[end]);
+        if (err) return err;
     }
 
     const char *holders[PROFILE_ENDS_MAX] = { NULL };
@@ -309,11 +311,11 @@ static error_t profile_holder(
          * in precedence order, a claim about every profile ahead of it, and a
          * branch that would not read is one the claim cannot be made over. */
         git_commit *tip = NULL;
-        RETURN_IF_ERROR(gitops_load_branch_commit(repo, profile, &tip));
+        error_t err = gitops_load_branch_commit(repo, profile, &tip);
+        if (err) return err;
 
         git_commit *found[PROFILE_ENDS_MAX] = { NULL };
         size_t held = 0;
-        error_t err = NULL;
         for (size_t end = 0; !err && end < count; end++) {
             err = gitops_revision_find(repo, &revs[end], profile, tip, &found[end]);
             if (!found[end]) continue;
@@ -391,9 +393,8 @@ error_t profile_resolve_range(
 
     const char *const spellings[] = { from_ref, to_ref };
     git_commit *commits[PROFILE_ENDS_MAX] = { NULL };
-    RETURN_IF_ERROR(
-        profile_holder(repo, enabled, filter, spellings, 2, commits, out_profile)
-    );
+    error_t err = profile_holder(repo, enabled, filter, spellings, 2, commits, out_profile);
+    if (err) return err;
 
     *out_from = commits[0];
     *out_to = commits[1];
@@ -994,7 +995,8 @@ error_t profile_claim_name(
     *out_storage = NULL;
 
     manifest_t *view = NULL;
-    RETURN_IF_ERROR(manifest_build_tree(repo, tree, profile, mounts, arena, &view));
+    error_t err = manifest_build_tree(repo, tree, profile, mounts, arena, &view);
+    if (err) return err;
 
     /* The claim standing there, before the name one would take: a derived claim
      * is held and names nothing, so the ascent climbs past it and would answer

@@ -139,7 +139,8 @@ static error_t remove_settle(
 
     /* The view that remains — what still provides each candidate now */
     manifest_t *after = NULL;
-    RETURN_IF_ERROR(manifest_build(ctx->run.repo, ctx->run.state, ctx->arena, &after));
+    error_t err = manifest_build(ctx->run.repo, ctx->run.state, ctx->arena, &after);
+    if (err) return err;
 
     /* The settle's one moment: every order it places carries it (state_order_prune) */
     time_t now = time(NULL);
@@ -150,10 +151,12 @@ static error_t remove_settle(
         if (manifest_lookup(after, candidate->path)) {
             settlement->fallback++;
         } else if (delete_files && (candidate->named || candidate->record->deployed_at > 0)) {
-            RETURN_IF_ERROR(state_order_prune(ctx->run.state, candidate->path, now));
+            err = state_order_prune(ctx->run.state, candidate->path, now);
+            if (err) return err;
             settlement->ordered++;
         } else {
-            RETURN_IF_ERROR(state_retire(ctx->run.state, candidate->path));
+            err = state_retire(ctx->run.state, candidate->path);
+            if (err) return err;
             settlement->released++;
         }
     }
@@ -194,7 +197,8 @@ static error_t remove_paths_candidates(
     /* The record, one read — empty where the database does not exist */
     state_record_t *records = NULL;
     size_t record_count = 0;
-    RETURN_IF_ERROR(state_records(ctx->run.state, ctx->arena, &records, &record_count));
+    error_t err = state_records(ctx->run.state, ctx->arena, &records, &record_count);
+    if (err) return err;
     if (record_count == 0) return NULL;
 
     candidate_t *candidates = arena_calloc(
@@ -261,7 +265,8 @@ static error_t remove_profile_candidates(
     /* The record, one read — empty where the database does not exist */
     state_record_t *records = NULL;
     size_t record_count = 0;
-    RETURN_IF_ERROR(state_records(ctx->run.state, ctx->arena, &records, &record_count));
+    error_t err = state_records(ctx->run.state, ctx->arena, &records, &record_count);
+    if (err) return err;
     if (record_count == 0) return NULL;
 
     candidate_t *candidates = arena_calloc(ctx->arena, record_count, sizeof(*candidates));

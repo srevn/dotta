@@ -633,7 +633,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             }
 
             err = profile_resolve_commit(
-                repo, &profiles, opts->commit, &source, &profile
+                repo, &profiles, NULL, opts->commit, &source, &profile
             );
             if (err) goto cleanup;
         }

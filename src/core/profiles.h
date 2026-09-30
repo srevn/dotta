@@ -137,12 +137,19 @@ error_t profile_resolve_enabled(
  *
  * The revision is read once, before any profile is asked (sys/gitops.h
  * gitops_revision_resolve): a spelling that names no commit refuses there, in
- * Git's words, and no profile is passed over for it. Then the set is asked in
- * the order it is given — the enabled set's precedence order at both readers —
- * each profile's tip read once and the revision asked of it (gitops_revision_find),
- * and the first profile holding it is the answer: the tip itself or a commit
- * its history reaches, or for HEAD's steps a history long enough to take them.
- * A profile behind that one is never asked: the order has already decided.
+ * Git's words, and no profile is passed over for it. Then the enabled set is
+ * asked from its highest precedence down — the last enabled first, the profile
+ * that wins every path it shares — so `HEAD` is the tip of the profile the view
+ * reads, and a history too short for `HEAD~N` is passed for the next one down.
+ * Each profile's tip is read once and the revision asked of it
+ * (gitops_revision_find), and the first profile holding it is the answer: the
+ * tip itself or a commit its history reaches, or for HEAD's steps a history long
+ * enough to take them. A profile behind that one is never asked: the order has
+ * already decided.
+ *
+ * `filter` narrows the search to the profiles it names — the ones -p named, each
+ * an enabled profile (core/scope.h scope_build refuses any other) — still asked
+ * in the enabled set's order; NULL asks every enabled profile.
  *
  * Answered for every profile ahead of the answer, or an error. A profile whose
  * history does not hold the revision is an answer, and the search moves on; a
@@ -155,28 +162,32 @@ error_t profile_resolve_enabled(
  * shape of what the complete searches beside it promise (profile_discover_claims:
  * a falsely unique answer is one a verb acts on).
  *
- * Absence is every profile's: ERR_NOT_FOUND naming the commit, with no cause
- * under it, because one profile's sentence is not this one's. An empty set is
- * that same absence; both readers refuse an empty enabled set in their own words
- * before they ask.
+ * Absence is every searched profile's: ERR_NOT_FOUND naming the commit and what
+ * was searched — any enabled profile, or the profiles the filter names — with
+ * no cause under it, because one profile's sentence is not this one's. An empty
+ * set is that same absence; both readers refuse an empty enabled set in their
+ * own words before they ask.
  *
- * Readers: diff.c diff_commit_to_workspace and diff_commits (the workspace arm,
- * and both ends of a range), show.c cmd_show (a commit named with no profile).
- * A caller that names the profile resolves in it directly
- * (gitops_resolve_commit_in_branch) — the question there is not which profile.
+ * Readers: diff.c diff_commit_to_workspace (the filter -p's), show.c cmd_show
+ * (a commit named with no profile, no filter). A caller that names one profile
+ * resolves in it directly (gitops_resolve_commit_in_branch) — the question there
+ * is not which profile.
  *
  * @param repo Repository (must not be NULL)
- * @param enabled_profiles Profile names, asked in this order (must not be NULL)
+ * @param enabled The enabled set, in precedence order (must not be NULL)
+ * @param filter The profiles the search may ask, or NULL for all of `enabled`
  * @param commit_ref Commit reference (must not be NULL)
  * @param out_commit The resolved commit (must not be NULL, caller must free with
  *                   git_commit_free); its OID is git_commit_id's
  * @param out_profile The profile that holds it (must not be NULL; borrowed from
- *                    `enabled_profiles`, valid for as long as it is)
- * @return Error (ERR_NOT_FOUND when no profile holds it) or NULL on success
+ *                    `enabled`, valid for as long as it is)
+ * @return Error (ERR_NOT_FOUND when no profile searched holds it) or NULL on
+ *         success
  */
 error_t profile_resolve_commit(
     git_repository *repo,
-    const string_array_t *enabled_profiles,
+    const string_array_t *enabled,
+    const string_array_t *filter,
     const char *commit_ref,
     git_commit **out_commit,
     const char **out_profile

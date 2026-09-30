@@ -13,6 +13,7 @@
 
 #include "base/arena.h"
 #include "base/array.h"
+#include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
@@ -233,18 +234,51 @@ error_t profile_resolve_enabled(
     return NULL;
 }
 
+/*
+ * The search's absence, said of what it searched: every enabled profile, or the
+ * ones the filter names — a filter that left the holder out has not made the
+ * commit "any enabled profile"'s absence. No cause under it: one profile's sentence
+ * is not this one's.
+ */
+static error_t profile_unheld(const char *commit_ref, const string_array_t *filter) {
+    if (!filter) {
+        return ERROR(
+            ERR_NOT_FOUND, "Commit '%s' not found in any enabled profile",
+            commit_ref
+        );
+    }
+    if (filter->count == 1) {
+        return ERROR(
+            ERR_NOT_FOUND, "Commit '%s' not found in profile '%s'", commit_ref,
+            filter->entries[0]
+        );
+    }
+
+    buffer_t searched = BUFFER_INIT;
+    for (size_t i = 0; i < filter->count; i++) {
+        buffer_appendf(&searched, "%s'%s'", i > 0 ? ", " : "", filter->entries[i]);
+    }
+    error_t err = ERROR(
+        ERR_NOT_FOUND, "Commit '%s' not found in profiles %s", commit_ref,
+        searched.data
+    );
+    buffer_deinit(&searched);
+    return err;
+}
+
 /**
  * Which enabled profile holds a commit
  */
 error_t profile_resolve_commit(
     git_repository *repo,
-    const string_array_t *enabled_profiles,
+    const string_array_t *enabled,
+    const string_array_t *filter,
     const char *commit_ref,
     git_commit **out_commit,
     const char **out_profile
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(enabled_profiles);
+    CHECK_NULL(enabled);
     CHECK_NULL(commit_ref);
     CHECK_NULL(out_commit);
     CHECK_NULL(out_profile);
@@ -254,8 +288,11 @@ error_t profile_resolve_commit(
     gitops_revision_t rev;
     RETURN_IF_ERROR(gitops_revision_resolve(repo, commit_ref, &rev));
 
-    for (size_t i = 0; i < enabled_profiles->count; i++) {
-        const char *profile = enabled_profiles->entries[i];
+    /* From the highest precedence down: the last enabled wins every path it shares,
+     * so its tip is the HEAD the view reads (hwxg). */
+    for (size_t i = enabled->count; i-- > 0;) {
+        const char *profile = enabled->entries[i];
+        if (filter && !string_array_contains(filter, profile)) continue;
 
         /* The profile's tip, read once, and the revision asked of it. A tip or
          * a history that will not read ends the search where it stands, whatever
@@ -278,11 +315,8 @@ error_t profile_resolve_commit(
         }
     }
 
-    /* Every profile was asked, and each said the commit is not its. No cause
-     * under it: one profile's sentence is not this one's. */
-    return ERROR(
-        ERR_NOT_FOUND, "Commit '%s' not found in any enabled profile", commit_ref
-    );
+    /* Every profile searched was asked, and each said the commit is not its. */
+    return profile_unheld(commit_ref, filter);
 }
 
 /**

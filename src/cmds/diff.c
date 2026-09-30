@@ -891,12 +891,13 @@ static bool validate_filter_paths(
  *
  * CURRENT LIMITATION: Single-profile comparison only. When multiple profiles
  * are enabled, this function compares only the profile that contains the specified
- * commit (first match in precedence order)
+ * commit (the first holder, from the highest precedence down)
  *
- * Type-enforced invariant: historical commit search walks the persistent enabled
- * set via scope_enabled — the CLI filter must not hide commits belonging to other
- * enabled profiles. The path filter is derived from scope_paths (raw CLI positional
- * args, never narrowed).
+ * The commit is looked for in the enabled set, narrowed to the profiles -p names
+ * where it names any (core/profiles.h profile_resolve_commit): -p is how a spelling
+ * every profile holds — HEAD, HEAD~N — names the profile it means, as `show -p`
+ * names it, and a commit of a profile -p left out is not found. The path filter
+ * is derived from scope_paths (raw CLI positional args, never narrowed).
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, this
  *            machine's mount table, and the borrowed command arena that backs
@@ -923,7 +924,11 @@ static error_t diff_commit_to_workspace(
     arena_t *arena = ctx->arena;
     output_t *out = ctx->out;
 
-    const string_array_t *profiles = scope_enabled(scope);
+    /* The profiles the commit is looked for in: the enabled set, narrowed to
+     * the ones -p names where it names any (the scope's face is exactly that
+     * set). */
+    const string_array_t *searched = scope_profiles(scope);
+    const string_array_t *filter = scope_filters_profiles(scope) ? searched : NULL;
     const pathspec_t *file_filter = scope_paths(scope);
 
     error_t err = NULL;
@@ -931,20 +936,22 @@ static error_t diff_commit_to_workspace(
     const char *profile = NULL;  /* borrowed from the enabled set */
     git_tree *tree = NULL;
 
-    /* Step 1: Resolve commit to find which profile contains it. The search is
-     * the enabled set's and answers for every profile ahead of the holder, so a
-     * profile that will not read cancels the diff rather than let a later one
-     * answer in its place (core/profiles.h). */
-    err = profile_resolve_commit(repo, profiles, commit_ref, &commit, &profile);
+    /* Step 1: Resolve commit to find which profile contains it. The search answers
+     * for every profile ahead of the holder, so a profile that will not read
+     * cancels the diff rather than let a later one answer in its place
+     * (core/profiles.h). */
+    err = profile_resolve_commit(
+        repo, scope_enabled(scope), filter, commit_ref, &commit, &profile
+    );
     if (err) goto cleanup;
 
     /* Step 2: Print commit header */
     char oid_str[8];
     git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(commit));
 
-    /* Warn when multiple profiles are enabled: only the profile containing the
-     * commit is compared against the filesystem. */
-    if (profiles->count > 1) {
+    /* Warn when more than one profile was searched: only the profile containing
+     * the commit is compared against the filesystem. */
+    if (searched->count > 1) {
         output_info(
             out, OUTPUT_NORMAL, "Note: comparing commit against profile '%s' only "
             "(commit-to-workspace compares one profile at a time)", profile
@@ -1086,13 +1093,13 @@ static int select_delta(
 /**
  * Diff two commits
  *
- * Type-enforced invariant: historical commit search walks the persistent enabled
- * set via scope_enabled — hiding commits behind the CLI filter would make
- * legitimately-referenceable commits unreachable. The path filter is derived
- * from scope_paths (raw CLI positional args, never narrowed) and applied delta
- * by delta as the diff is generated (select_delta, each delta by both its names
- * under this machine's table), so the diff printed — names, stats, patch — is
- * the selection and nothing else.
+ * The commits are looked for in the enabled set, narrowed to the profiles -p
+ * names where it names any (core/profiles.h profile_resolve_commit), as the
+ * workspace arm looks for its one. The path filter is derived from scope_paths
+ * (raw CLI positional args, never narrowed) and applied delta by delta as the
+ * diff is generated (select_delta, each delta by both its names under this
+ * machine's table), so the diff printed — names, stats, patch — is the selection
+ * and nothing else.
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, this
  *            machine's mount table, the command arena and the output)
@@ -1120,7 +1127,9 @@ static error_t diff_commits(
     arena_t *arena = ctx->arena;
     output_t *out = ctx->out;
 
-    const string_array_t *profiles = scope_enabled(scope);
+    /* The profiles -p names, or NULL: every enabled one */
+    const string_array_t *filter = scope_filters_profiles(scope)
+        ? scope_profiles(scope) : NULL;
     const pathspec_t *file_filter = scope_paths(scope);
 
     error_t err = NULL;
@@ -1137,12 +1146,12 @@ static error_t diff_commits(
      * ahead of the holder (core/profiles.h): a profile that will not read cancels
      * the range rather than let a later one answer for it. */
     err = profile_resolve_commit(
-        repo, profiles, commit1_ref, &commit1, &profile1_name
+        repo, scope_enabled(scope), filter, commit1_ref, &commit1, &profile1_name
     );
     if (err) goto cleanup;
 
     err = profile_resolve_commit(
-        repo, profiles, commit2_ref, &commit2, &profile2_name
+        repo, scope_enabled(scope), filter, commit2_ref, &commit2, &profile2_name
     );
     if (err) goto cleanup;
 
@@ -1410,8 +1419,10 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled  — the persistent enabled set (the CLI filter's bound,
-     *                    historical-mode branch resolution search).
+     *   scope_enabled  — the persistent enabled set (the CLI filter's bound, and
+     *                    the order the historical arms' search asks in).
+     *   scope_profiles — the profiles that search asks: -p's where it names any
+     *                    (scope_filters_profiles), else the enabled set.
      *   scope_paths    — CLI positional file filter (the range arm's delta
      *                    selection, the commit arm's comparison, and the coverage
      *                    answers both arms with a view give).

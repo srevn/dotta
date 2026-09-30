@@ -286,12 +286,14 @@ source_filter_t *ignore_source(ignore_rules_t *rules);
  * and the source layer is not asked. A `!` of theirs re-opens the rung it names
  * against the source's rules too, that rung and no other, so the source's rules
  * beneath it still speak. The source layer asks each rung of its own directory's
- * repository.
+ * repository, and keeps each directory's answer with the directory (sys/source.h
+ * source_directory_rule): a path pays for its own entry, and reads the rungs
+ * above it.
  *
  * One path, two subjects, their rungs counted up from the path itself. The name's
  * tail ends `filesystem_path`, component for component (cmds/add.h, THE KEY
  * INVARIANT) — a contract, checked where the place is read. The source layer
- * reads the place in the kernel's spelling (sys/source.h source_filter_physical),
+ * reads the place in the kernel's spelling (sys/source.h source_filter_directory),
  * so a place spelled through a link is read where the link leads — and a `!` of
  * the four re-opens the directory its rung names as the kernel spells it, wherever
  * the place stands beneath it: at the height its rung has in the name or at

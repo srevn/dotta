@@ -14,13 +14,22 @@
  *     directory, memoised: a directory's answer is its own `.git`'s, or its
  *     parent's.
  *
- *   - One map holds every directory's answer under every spelling it was asked
- *     by. A spelling is resolved once (realpath, through the funnel), and the
- *     kernel's spelling is answered by the walk up — every prefix of a resolved
- *     path is resolved too, so the walk never resolves again, and a spelling
- *     with no link in it is its own kernel's spelling and one key. A spelled
- *     directory's entry is its kernel spelling's, shared, and keeps that spelling:
- *     what a climb over a place climbs (source_filter_physical).
+ *   - One map holds every directory under every spelling it was asked by. A
+ *     spelling is resolved once (realpath, through the funnel), and the kernel's
+ *     spelling is answered by the walk up — every prefix of a resolved path is
+ *     resolved too, so the walk never resolves again, and a spelling with no
+ *     link in it is its own kernel's spelling and one key. A spelled directory's
+ *     entry is its kernel spelling's, shared: the directory a climb over a place
+ *     climbs (sys/source.h source_directory_t).
+ *
+ *   - A directory is made with the directory above it, whatever discovery finds
+ *     there, and with the rule that excludes it — its name, an entry of that
+ *     one — asked of that one's repository once. git asks each directory once
+ *     on its way down, against the lists above it before it pushes its own, and
+ *     its stack stands for every path beneath until the traversal leaves (dir.c
+ *     prep_exclude); the filter keeps each answer for its arena's life, per
+ *     directory rather than per traversal. A climb over a place is a walk up
+ *     those links, one kept answer a rung, and only the place's own entry is asked.
  *
  *   - The repository is read as the invoker: raw stat, open and realpath for
  *     its layout, and libgit2 for its configuration (sys/source.h). The rule
@@ -88,19 +97,23 @@ typedef struct {
     error_t failure;                   /* Why its configuration or layout could not be read */
 } repository_t;
 
-/* One directory's answer: its kernel spelling, the repository that governs it
- * and where it stands inside, or the failure that left it none. */
-typedef struct {
+/* One directory: its kernel spelling, the repository that governs it and where
+ * it stands inside, or the failure that left it none; the directory above it,
+ * and the rule that excludes it, an entry of that one. */
+struct source_directory {
     const char *physical;              /* The kernel's spelling, through its '/': its key; NULL: it resolves to nothing */
     const repository_t *repository;    /* NULL: none governs it */
     const char *prefix;                /* Where it stands in the workdir, a suffix of `physical`; NULL: nowhere */
     dev_t dev;                         /* Its filesystem, where the walk up stops */
-    error_t failure;                   /* Why it has no answer; NULL when it has one */
-} directory_t;
+    error_t failure;                   /* Why its entries have no answer; NULL when they have one */
+    const source_directory_t *parent;  /* The directory above; NULL at "/" */
+    source_rule_t rule;                /* The rule that excludes it, asked of the one above */
+    error_t rule_failure;              /* Why that could not be read; NULL when it was */
+};
 
 struct source_filter {
     arena_t *arena;                    /* Borrowed; backs all of it */
-    hashmap_t *directories;            /* A directory through its '/', any spelling → directory_t */
+    hashmap_t *directories;            /* Any spelling of a directory, through its '/' → the directory */
     hashmap_t *ceilings;               /* GIT_CEILING_DIRECTORIES, each through its '/'; NULL: none */
     bool across;                       /* GIT_DISCOVERY_ACROSS_FILESYSTEM: the walk up crosses them */
     error_t failure;                   /* Why the environment gives discovery no reading */
@@ -529,6 +542,62 @@ static const repository_t *source_repository(
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * The rung
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * The rule that excludes `name` — its first `len` bytes — an entry of `directory`:
+ * git's last_matching_pattern_from_lists, asked of the lists of the repository
+ * that governs the directory, the entry spelled from the workdir. The first list
+ * with a rule that matches decides, and a file that could not be read answers
+ * its failure where it comes in that order. Asked of an entry (source_filter_find),
+ * and of each directory when it is made, an entry of the one above (source_place).
+ */
+static error_t source_find(
+    source_filter_t *f, const source_directory_t *directory, const char *name, size_t len,
+    bool is_dir, source_rule_t *out
+) {
+    *out = (source_rule_t){ 0 };
+
+    /* The environment's failure and the directory's are the entry's, and a
+     * directory no workdir holds has no rule to find. */
+    if (f->failure) return f->failure;
+    if (directory->failure) return directory->failure;
+    if (!directory->prefix) return NULL;
+
+    /* The entry spelled from the workdir — the directory's prefix and the name
+     * — in the filter's scratch, which the next query takes back. */
+    size_t root = strlen(directory->prefix);
+    f->rung = arena_grow(f->arena, f->rung, &f->rung_capacity, root + len + 1, 1);
+    memcpy(f->rung, directory->prefix, root);
+    memcpy(f->rung + root, name, len);
+    f->rung[root + len] = '\0';
+
+    /* The chain from the directory: each .gitignore up to the workdir, deepest
+     * first, then info/exclude and the excludes file — git pushes those two the
+     * other way round and reads its lists last first (dir.c
+     * setup_standard_excludes). Each list reads the entry from its own root, a
+     * suffix of it, and one that decides is never read past, so no file after
+     * it can fail the entry. */
+    for (const file_t *file = source_gitignore(f, directory->repository, f->rung, root); file;
+        file = file->next) {
+        if (file->failure) return file->failure;
+
+        /* A negation decides the entry as surely, and excludes nothing: git's
+         * answer is the pattern that excludes, or none (sys/source.h). */
+        const gitignore_rule_t *rule = gitignore_ruleset_find(
+            file->rules, f->rung + file->root, is_dir
+        );
+        if (rule) {
+            if (!gitignore_rule_negated(rule)) *out = (source_rule_t){ rule, file->path };
+            return NULL;
+        }
+    }
+
+    return NULL;
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * Discovery
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -637,25 +706,32 @@ static error_t source_discover(
 }
 
 /**
- * The answer for a directory in the kernel's spelling, through its '/' — the
- * repository at it, else its parent's answer, unless its parent is a ceiling or
- * stands on another filesystem, where git's walk up stops (setup.c
- * repo_discovery_find_dir)
+ * The directory in the kernel's spelling, through its '/' — the repository at
+ * it, else its parent's, unless its parent is a ceiling or stands on another
+ * filesystem, where git's walk up stops (setup.c repo_discovery_find_dir) — with
+ * the directory above it and the rule that excludes it
  *
  * A directory the invoker cannot look into is one discovery cannot examine: it
  * reads as its parent reads, as libgit2 walks past a level it cannot stat — git
  * itself cannot work there as the invoker at all (sys/source.h). Memoised in
- * the one map every spelling shares, under the kernel's spelling, which the answer
- * keeps: the prefix points into it.
+ * the one map every spelling shares, under the kernel's spelling, which the
+ * directory keeps: the prefix points into it.
  */
-static directory_t *source_place(source_filter_t *f, const char *physical, size_t len) {
-    directory_t *d = hashmap_get_n(f->directories, physical, len);
+static source_directory_t *source_place(source_filter_t *f, const char *physical, size_t len) {
+    source_directory_t *d = hashmap_get_n(f->directories, physical, len);
     if (d) return d;
 
     char *key = arena_strndup(f->arena, physical, len);
     d = arena_calloc(f->arena, 1, sizeof(*d));
     d->physical = key;
 
+    /* The directory above first, whatever discovery finds here: the next rung
+     * up every climb over a place beneath this one, and the directory whose
+     * repository this one's own rule is asked of. "/" has none. */
+    size_t above = source_parent(key, len);
+    d->parent = above ? source_place(f, key, above) : NULL;
+
+    /* The repository at this level, where the invoker can look into it. */
     struct stat st;
     const repository_t *repository = NULL;
 
@@ -670,13 +746,11 @@ static directory_t *source_place(source_filter_t *f, const char *physical, size_
      * is one still asks its own `.git`), and never across a filesystem unless
      * the environment says so. git compares each level with where its walk began;
      * one level with the next meets the first change as surely. */
-    size_t above = source_parent(key, len);
-    if (!d->failure && !repository && above && !hashmap_get_n(f->ceilings, key, above)) {
-        const directory_t *parent = source_place(f, key, above);
-        if (rc != 0) d->dev = parent->dev;
-        if (f->across || d->dev == parent->dev) {
-            repository = parent->repository;
-            d->failure = parent->failure;
+    if (!d->failure && !repository && d->parent && !hashmap_get_n(f->ceilings, key, above)) {
+        if (rc != 0) d->dev = d->parent->dev;
+        if (f->across || d->dev == d->parent->dev) {
+            repository = d->parent->repository;
+            d->failure = d->parent->failure;
         }
     }
 
@@ -690,6 +764,14 @@ static directory_t *source_place(source_filter_t *f, const char *physical, size_
         if (!d->failure && root && strncmp(key, repository->workdir, root) == 0) {
             d->prefix = key + root;
         }
+    }
+
+    /* The rule that excludes it — its name, an entry of the directory above —
+     * asked of that one's repository once, and kept. */
+    if (d->parent) {
+        d->rule_failure = source_find(
+            f, d->parent, key + above, len - above - 1, true, &d->rule
+        );
     }
 
     hashmap_set(f->directories, key, d);
@@ -737,17 +819,20 @@ static error_t source_physical(const char *path, size_t len, char *physical) {
 }
 
 /**
- * The answer for the directory `path`'s first `len` bytes spell, through its
- * '/' — its kernel spelling's (source_place), resolved once per spelling
+ * The directory `path`'s first `len` bytes spell, through its '/' — its kernel
+ * spelling's (source_place), resolved once per spelling
  *
  * A directory that is not there — `ignore --test` asks about a path before it
  * is made — is spelled as it will be once it is, beneath the kernel's spelling
  * of the nearest one that stands, and reads as that one reads until then: git's
  * rules are the path's, whether it stands or not. A spelling that resolves to
- * nothing else is its own failure.
+ * nothing else keeps its failure in an entry of its own, which is no directory:
+ * its `physical` is NULL.
  */
-static const directory_t *source_directory(source_filter_t *f, const char *path, size_t len) {
-    directory_t *d = hashmap_get_n(f->directories, path, len);
+static const source_directory_t *source_directory(
+    source_filter_t *f, const char *path, size_t len
+) {
+    source_directory_t *d = hashmap_get_n(f->directories, path, len);
     if (d) return d;
 
     char physical[2 * PATH_MAX];
@@ -766,63 +851,6 @@ static const directory_t *source_directory(source_filter_t *f, const char *path,
 
     hashmap_set(f->directories, arena_strndup(f->arena, path, len), d);
     return d;
-}
-
-/* ══════════════════════════════════════════════════════════════════
- * The rung
- * ══════════════════════════════════════════════════════════════════ */
-
-/**
- * The rule of `repository`'s stack that excludes `rung` — git's
- * last_matching_pattern_from_lists, the rung spelled from the workdir: the first
- * list with a rule that matches decides, and a file that could not be read answers
- * its failure where it comes in that order.
- */
-static error_t source_decide(
-    source_filter_t *f, const repository_t *repository, const char *rung, bool is_dir,
-    source_rule_t *out
-) {
-    *out = (source_rule_t){ 0 };
-
-    /* The chain from the rung's own directory: each .gitignore up to the workdir,
-     * deepest first, then info/exclude and the excludes file — git pushes those
-     * two the other way round and reads its lists last first (dir.c
-     * setup_standard_excludes). Each list reads the rung from its own root, a
-     * suffix of it, and one that decides is never read past, so no file after
-     * it can fail the rung. */
-    const char *slash = strrchr(rung, '/');
-    size_t root = slash ? (size_t) (slash - rung) + 1 : 0;
-
-    for (const file_t *file = source_gitignore(f, repository, rung, root); file;
-        file = file->next) {
-        if (file->failure) return file->failure;
-
-        /* A negation decides the rung as surely, and excludes nothing: git's
-         * answer is the pattern that excludes, or none (sys/source.h). */
-        const gitignore_rule_t *rule = gitignore_ruleset_find(
-            file->rules, rung + file->root, is_dir
-        );
-        if (rule) {
-            if (!gitignore_rule_negated(rule)) *out = (source_rule_t){ rule, file->path };
-            return NULL;
-        }
-    }
-
-    return NULL;
-}
-
-/**
- * The rung `name` is in its directory's workdir: the directory's prefix and the
- * name, spelled in the filter's scratch, which the next query takes back
- */
-static char *source_rung(source_filter_t *f, const char *prefix, const char *name) {
-    size_t head = strlen(prefix), tail = strlen(name);
-
-    f->rung = arena_grow(f->arena, f->rung, &f->rung_capacity, head + tail + 1, 1);
-    memcpy(f->rung, prefix, head);
-    memcpy(f->rung + head, name, tail + 1);
-
-    return f->rung;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -852,48 +880,53 @@ source_filter_t *source_filter_create(arena_t *arena) {
     return f;
 }
 
-error_t source_filter_physical(
-    source_filter_t *f, const char *path, size_t len, const char **out
+error_t source_filter_directory(
+    source_filter_t *f, const char *path, size_t len, const source_directory_t **out
 ) {
     CHECK_NULL(f);
     CHECK_NULL(path);
     CHECK_NULL(out);
     CHECK_ARG(
         len > 0 && path[0] == '/' && path[len - 1] == '/',
-        "source_filter_physical requires a directory spelled absolute, through its '/'"
+        "source_filter_directory requires a directory spelled absolute, through its '/'"
     );
 
-    /* The directory's answer under this spelling — the same entry every spelling
-     * of it shares — and the spelling it was stored under. One that resolves to
-     * nothing keeps no spelling, and its failure says why; a failure of discovery
-     * leaves the spelling standing, since the directory is where it is either
-     * way. */
-    const directory_t *d = source_directory(f, path, len);
-    *out = d->physical;
+    /* The directory under this spelling — the entry every spelling of it shares.
+     * One that resolves to nothing is no directory, and its failure says why; a
+     * failure of discovery leaves the directory standing, since it is where it
+     * is either way. */
+    const source_directory_t *d = source_directory(f, path, len);
+    *out = d->physical ? d : NULL;
 
     return d->physical ? NULL : d->failure;
 }
 
+const source_directory_t *source_directory_parent(const source_directory_t *directory) {
+    CHECK_NULL(directory);
+
+    return directory->parent;
+}
+
+error_t source_directory_rule(const source_directory_t *directory, source_rule_t *out) {
+    CHECK_NULL(directory);
+    CHECK_NULL(out);
+
+    *out = directory->rule;
+    return directory->rule_failure;
+}
+
 error_t source_filter_find(
-    source_filter_t *f, const char *path, bool is_dir, source_rule_t *out
+    source_filter_t *f, const source_directory_t *directory, const char *name, bool is_dir,
+    source_rule_t *out
 ) {
     CHECK_NULL(f);
-    CHECK_NULL(path);
+    CHECK_NULL(directory);
+    CHECK_NULL(name);
     CHECK_NULL(out);
-    CHECK_ARG(path[0] == '/', "source_filter requires absolute paths");
+    CHECK_ARG(
+        *name && !strchr(name, '/'),
+        "source_filter_find requires an entry: a name, holding no '/'"
+    );
 
-    *out = (source_rule_t){ 0 };
-
-    /* The name the path ends in, and the directory it stands in — through the
-     * separator, so "/" is a directory like any other and the name is never empty
-     * and never holds one. A path that names no entry asks nothing. */
-    const char *name = strrchr(path, '/') + 1;
-    if (!*name) return NULL;
-    if (f->failure) return f->failure;
-
-    const directory_t *d = source_directory(f, path, (size_t) (name - path));
-    if (d->failure) return d->failure;
-    if (!d->prefix) return NULL;
-
-    return source_decide(f, d->repository, source_rung(f, d->prefix, name), is_dir, out);
+    return source_find(f, directory, name, strlen(name), is_dir, out);
 }

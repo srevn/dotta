@@ -492,65 +492,37 @@ source_filter_t *ignore_source(ignore_rules_t *r) {
 }
 
 /**
- * How many rungs a place has: its components, its leading '/' being none — a
- * place always names an entry, so it is never "/"
- */
-static size_t ignore_rungs(const char *place) {
-    size_t rungs = 1;
-    for (const char *c = place + 1; *c; c++) rungs += *c == '/';
-
-    return rungs;
-}
-
-/**
- * One rung deeper into a place cut in place: the separator cut last put back,
- * and the next one cut — none past the last, where the whole place is the rung
- * — so the place reads as the rung asked. A first rung is never empty, so the
- * search starts past the place's leading '/'.
- */
-static char *ignore_descend(char *place, char *cut) {
-    if (cut) *cut = '/';
-    cut = strchr(cut ? cut + 1 : place + 1, '/');
-    if (cut) *cut = '\0';
-
-    return cut;
-}
-
-/**
  * Does a `!` of the four re-open this directory of the place — decide a rung of
  * the name that is the same directory, at whatever height each stands?
  *
  * Each rung of the name above the path is spelled where the path is — the name's
- * tail ends `spelled`, `head` bytes in — through its '/', and resolved as the
- * kernel spells it (sys/source.h source_filter_physical), since the place is
- * read where it physically stands: a link the spelled place passes through can
- * set a directory the name reaches at one height at another height of the place,
- * and a directory no rung of the name reaches — above its top, or behind such a
- * link — is the source layer's alone. A spelling the filter cannot resolve names
- * no directory. Asked where the source excludes the directory or cannot read
- * it, the four having excluded nothing: a rule of theirs at a rung is a `!` or
- * none.
+ * tail ends `spelled`, `head` bytes in — through its '/', and its directory is
+ * the filter's (sys/source.h source_filter_directory): one for every spelling
+ * of one directory, as the kernel spells it. So a link the spelled place passes
+ * through, which can set a directory the name reaches at one height at another
+ * height of the place, changes nothing, and a directory no rung of the name reaches
+ * — above its top, or behind such a link — is the source layer's alone. A spelling
+ * the filter cannot resolve names no directory. Asked where the source excludes
+ * the directory or cannot read it, the four having excluded nothing: a rule of
+ * theirs at a rung is a `!` or none.
  *
- * `name` is the tail, cut here and put back; `directory` is the place cut at
- * its rung.
+ * `name` is the tail, cut here and put back.
  */
 static bool ignore_reopened(
     const gitignore_ruleset_t *rules, source_filter_t *source, const char *spelled,
-    size_t head, char *name, const char *directory
+    size_t head, char *name, const source_directory_t *directory
 ) {
-    size_t n = strlen(directory);
-
     for (char *cut = strchr(name, '/'); cut; cut = strchr(cut + 1, '/')) {
-        const char *physical = NULL;
-        if (source_filter_physical(source, spelled, head + (size_t) (cut - name) + 1, &physical) ||
-            strncmp(physical, directory, n) != 0 || physical[n] != '/' || physical[n + 1] != '\0') {
+        const source_directory_t *named = NULL;
+        if (source_filter_directory(source, spelled, head + (size_t) (cut - name) + 1, &named) ||
+            named != directory) {
             continue;
         }
 
         *cut = '\0';
         const gitignore_rule_t *rule = gitignore_ruleset_find(rules, name, true);
         *cut = '/';
-        if (rule) return true;
+        if (gitignore_rule_negated(rule)) return true;
     }
 
     return false;
@@ -603,63 +575,69 @@ error_t ignore_verdict(
 
     /* A place whose directory resolves to nothing leaves the layer no rung, and
      * its failure is the answer, the four having excluded nothing. */
-    const char *directory = NULL;
-    error_t failure = source_filter_physical(
-        source, spelled, (size_t) (entry - spelled), &directory
+    const source_directory_t *directory = NULL;
+    RETURN_IF_ERROR(
+        source_filter_directory(source, spelled, (size_t) (entry - spelled), &directory)
     );
-    if (failure) return failure;
 
-    /* The two subjects in one transient, the heap's, each cut in place: the place
-     * in the kernel's spelling, at the rung asked, and the name's tail, where a
-     * `!` of the four is looked for. */
-    size_t directory_len = strlen(directory), entry_len = strlen(entry);
-    char *place = heap_alloc(directory_len + entry_len + 1 + tail_len + 1);
-    memcpy(place, directory, directory_len);
-    memcpy(place + directory_len, entry, entry_len + 1);
-
-    char *name = place + directory_len + entry_len + 1;
-    memcpy(name, tail, tail_len + 1);
-
-    /* Top down, git's order, each rung counted up from the path itself — 0 the
-     * path, 1 its directory — and on to "/", above the name's top. */
-    char *place_cut = NULL;
-
-    for (size_t rung = ignore_rungs(place); rung-- > 0;) {
-        bool is_dir = rung > 0 || kind == PATH_KIND_DIRECTORY;
-        place_cut = ignore_descend(place, place_cut);
-
-        /* The place's rung, asked of its own directory's repository — a nested
-         * repository's root of the one around it, as a walk meets it, and home's
-         * own entries of home, as git asked from there judges them. */
+    /* Every directory the place stands beneath, from its own up to "/", each
+     * with the rule that excludes it kept by the filter, asked once of the
+     * repository of the directory above (sys/source.h source_directory_rule) —
+     * a nested repository's root by the one around it, as a walk meets it, and
+     * home's own entries by home, as git asked from there judges them. git comes
+     * down from the top and stops at the first rung excluded; this climb goes
+     * up, so the last it finds is the verdict. */
+    error_t failure = NULL;
+    char *name = NULL;
+    size_t rung = 1;
+    for (const source_directory_t *above = directory; above;
+        above = source_directory_parent(above), rung++) {
         source_rule_t found;
-        error_t err = source_filter_find(source, place, is_dir, &found);
+        error_t err = source_directory_rule(above, &found);
         if (!err && !found.rule) continue;
 
         /* A `!` of the four re-opens the rung it names against the source's rules
-         * too, asked where the source excludes the rung or cannot read it: at
-         * the path, a `!` of theirs at the path; above it, one at a rung of the
-         * name that is this directory, wherever the place stands beneath it. */
-        if (rung == 0 ? gitignore_rule_negated(gitignore_ruleset_find(rules, tail, is_dir))
-                      : ignore_reopened(rules, source, spelled, head, name, place)) {
-            continue;
-        }
+         * too: one at a rung of the name that is this directory, wherever the
+         * place stands beneath it. The name is copied, to be cut, the first time
+         * one is looked for. */
+        if (!name) name = heap_strndup(tail, tail_len);
+        if (ignore_reopened(rules, source, spelled, head, name, above)) continue;
 
-        /* A rung it cannot read is no verdict, since a rung beneath it that a
-         * rule excludes excludes the path whatever this one says: the first failure
-         * is kept, and the climb goes on. */
+        /* A rung it cannot read is no verdict, since one beneath it that a rule
+         * excludes excludes the path whatever this one says: the topmost failure
+         * is kept, the answer only where nothing is excluded. */
         if (err) {
-            if (!failure) failure = err;
-            continue;
+            failure = err;
+        } else {
+            *out = (ignore_verdict_t){
+                IGNORE_ORIGIN_SOURCE, gitignore_rule_pattern(found.rule), rung
+            };
         }
-        *out = (ignore_verdict_t){
-            IGNORE_ORIGIN_SOURCE, gitignore_rule_pattern(found.rule), rung
-        };
-        break;
     }
-    free(place);
 
-    /* A failure is the answer only where nothing excluded the path. */
-    return out->origin == IGNORE_ORIGIN_NONE ? failure : NULL;
+    free(name);
+    if (out->origin != IGNORE_ORIGIN_NONE) return NULL;
+
+    /* The path's own entry last, the one rung the filter does not keep, asked
+     * where nothing above it is excluded — and a `!` of the four at the path
+     * re-opens it. Its failure is the answer only where no rung above failed. */
+    source_rule_t found;
+    error_t err = source_filter_find(
+        source, directory, entry, kind == PATH_KIND_DIRECTORY, &found
+    );
+    if (!err && !found.rule) return failure;
+    if (gitignore_rule_negated(
+        gitignore_ruleset_find(rules, tail, kind == PATH_KIND_DIRECTORY)
+        )) {
+        return failure;
+    }
+    if (err) return failure ? failure : err;
+
+    *out = (ignore_verdict_t){
+        IGNORE_ORIGIN_SOURCE, gitignore_rule_pattern(found.rule), 0
+    };
+
+    return NULL;
 }
 
 const char *ignore_origin_describe(ignore_origin_t origin) {

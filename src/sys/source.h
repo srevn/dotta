@@ -79,10 +79,11 @@
  *
  * Lifetime: the arena's. A filter lives in the arena it was made in, every answer
  * it keeps with it, and nothing frees it; no libgit2 handle outlives a call. It
- * remembers every directory it was asked about, under every spelling, and every
- * file it read: one per command, shared across every profile and directory the
- * command asks about. A failure is an answer it remembers too, and the filter
- * is the retry boundary: a fresh one asks again.
+ * remembers every directory it was asked about, under every spelling, with every
+ * directory above it and the rule excluding each one, and every file it read:
+ * one per command, shared across every profile and directory the command asks
+ * about. A failure is an answer it remembers too, and the filter is the retry
+ * boundary: a fresh one asks again.
  *
  * Threading: not thread-safe. A filter must not be used concurrently from multiple
  * threads.
@@ -96,6 +97,16 @@
 
 typedef struct gitignore_rule gitignore_rule_t;
 typedef struct source_filter source_filter_t;
+
+/**
+ * One directory, as the kernel spells it: where a path in it physically stands.
+ *
+ * The filter's, for its arena's life, and read through the functions below: the
+ * directory above it, and the rule that excludes it. Every spelling of one
+ * directory answers the same one, so two spellings name one directory exactly
+ * when they answer one pointer.
+ */
+typedef struct source_directory source_directory_t;
 
 /**
  * The rule that excludes one rung, and the file it was read from
@@ -124,80 +135,117 @@ source_filter_t *source_filter_create(arena_t *arena);
 
 /**
  * The directory `path`'s first `len` bytes spell, through its '/', as the kernel
- * spells it: where a path in that directory physically stands, and so where
- * source_filter_find reads one from.
+ * spells it: where a path in it physically stands, and so what source_filter_find
+ * reads one from.
  *
  * A place's kernel spelling is its directory's, answered here, and its own name
  * as spelled — git follows no link, and reads one it meets at the end as an entry.
- * A climb over a place's rungs climbs that spelling: a link the place is spelled
- * through leads to a directory whose own ancestors are the rungs git reads, and
- * the directories the spelling passed through on the way to it are not among
- * them. A directory not made yet is spelled as it will be once it is, beneath
- * the kernel's spelling of the nearest one that stands.
+ * A climb over a place's rungs climbs that directory and the ones above it
+ * (source_directory_parent): a link the place is spelled through leads to a
+ * directory whose own ancestors are the rungs git reads, and the directories
+ * the spelling passed through on the way to it are not among them. A directory
+ * not made yet is spelled as it will be once it is, beneath the kernel's spelling
+ * of the nearest one that stands.
  *
- * Every spelling of one directory answers the same string, the filter's for its
- * arena's life: resolved once per spelling, as the rung query resolves one. What
- * the discovery environment refuses is discovery's failure, never this answer's.
+ * Resolved once per spelling. What the discovery environment refuses is discovery's
+ * failure, never this answer's: the directory is where it is either way.
  *
- * Readers: core/ignore.c ignore_verdict — the place it climbs, and whether a
- * rung of a name is the place's own; tests/test-source-parity.c compare.
+ * Preconditions: `path` is absolute. Callers with possibly-relative input resolve
+ * it first (path_input_filesystem_path, path_input_resolve, realpath, or a state
+ * filesystem path), and the directory a path stands in is its spelling through
+ * its last '/'.
+ *
+ * Readers: core/ignore.c ignore_verdict, the place it climbs, and ignore_reopened,
+ * which directory a rung of a name is; tests/test-source.c,
+ * tests/test-source-parity.c compare.
  *
  * @param f    Filter (must not be NULL)
  * @param path A directory, spelled absolute (must not be NULL)
  * @param len  Bytes of `path` that spell it, through its '/'
- * @param out  The kernel's spelling, through its '/'; NULL on error (must not be NULL)
+ * @param out  The directory; NULL on error (must not be NULL)
  * @return Error (why the spelling resolves to nothing) or NULL on success
  */
-error_t source_filter_physical(
+error_t source_filter_directory(
     source_filter_t *f,
     const char *path,
     size_t len,
-    const char **out
+    const source_directory_t **out
 );
 
 /**
- * The rule of the source repository's stack that excludes `path` itself.
+ * The directory above `directory`, as the kernel spells it: the next rung up a
+ * climb over a place beneath it.
+ *
+ * @param directory A directory of the filter's (must not be NULL)
+ * @return The directory above; NULL at "/"
+ */
+const source_directory_t *source_directory_parent(const source_directory_t *directory);
+
+/**
+ * The rule that excludes `directory` itself: its name, an entry of the directory
+ * above, asked of that directory's repository — source_filter_find's question.
+ *
+ * Asked once, when the filter made the directory, and kept with it. git asks
+ * each directory once on its way down, against the lists pushed above it, and
+ * its stack stands for every path beneath until the traversal leaves the directory
+ * (dir.c prep_exclude); the filter keeps the same answer per directory, for its
+ * arena's life. So a climb over a place reads one kept answer a rung, for every
+ * path beneath one directory. "/" names no entry, and has none.
+ *
+ * Readers: core/ignore.c ignore_verdict, whose climb over a place reads it for
+ * each directory the place stands beneath; tests/test-source.c,
+ * tests/test-source-parity.c compare.
+ *
+ * @param directory A directory of the filter's (must not be NULL)
+ * @param out       The excluding rule and its file (must not be NULL)
+ * @return Error (the failure the rule could not be read past) or NULL on success
+ */
+error_t source_directory_rule(
+    const source_directory_t *directory,
+    source_rule_t *out
+);
+
+/**
+ * The rule of the source repository's stack that excludes `name`, an entry of
+ * `directory`.
  *
  * git's last_matching_pattern_from_lists, asked of the repository that governs
- * `path`'s directory: each `.gitignore` from that directory up to the workdir,
- * the deepest first, each reading the path from its own directory; then
+ * the directory: each `.gitignore` from the directory up to the workdir, the
+ * deepest first, each reading the entry from its own directory; then
  * `info/exclude`, then the excludes file, reading it from the workdir. The first
  * list with a rule that matches decides, and within a list the last such rule
  * does — a negation too, which excludes nothing, and no list after it is read.
- * The directory is read where it physically stands (source_filter_physical), so
- * every spelling of a path in it is asked one question.
  *
- * No ancestor of `path` is asked. The climb is the caller's, over the path's
- * kernel spelling from the top, each rung asked of its own directory's repository
- * — git's traversal, where a directory is an entry of the repository it stands
- * in, and a nested repository's root an entry of the one around it.
+ * No ancestor is asked. The climb is the caller's, over the directory and the
+ * ones above it (source_directory_parent), each one's own rule kept with it
+ * (source_directory_rule) — git's traversal, where a directory is an entry of
+ * the repository it stands in, and a nested repository's root an entry of the
+ * one around it.
  *
- * `out->rule` is NULL where no rule excludes the rung — none decides it, or a
- * negation does — where no repository governs the directory or its workdir does
- * not contain it (a bare repository, a `core.worktree` elsewhere), and where
- * `path` names no entry — nothing after its last `/` ("/"). A directory is asked
- * with `is_dir`, which a directory-only rule (`node_modules/`) needs.
+ * `out->rule` is NULL where no rule excludes the entry — none decides it, or a
+ * negation does — and where no repository governs the directory or its workdir
+ * does not contain it (a bare repository, a `core.worktree` elsewhere). An entry
+ * that is a directory is asked with `is_dir`, which a directory-only rule
+ * (`node_modules/`) needs.
  *
  * Policy: whether to consult the answer at all belongs with the caller — the
  * builder of the ladder's layers reads `config.respect_gitignore`, and a caller
  * that wants the layer off does not build a filter. Readers: core/ignore.c
- * ignore_verdict, the ladder's one question, whose climb asks every rung of the
- * place; tests/test-source-parity.c climb, which climbs over it as git does from
- * the path's own directory. Built by core/ignore.c ignore_rules_create.
+ * ignore_verdict, for the path's own entry; tests/test-source.c, and
+ * tests/test-source-parity.c climb, which climbs over it as git does from the
+ * path's own directory. Built by core/ignore.c ignore_rules_create.
  *
- * Preconditions: `path` must start with `/`. Callers with possibly-relative input
- * resolve it first (path_input_filesystem_path, path_input_resolve, realpath,
- * or a state filesystem path), and every one of those sheds a trailing `/`.
- *
- * @param f      Filter (must not be NULL)
- * @param path   Absolute path (must start with `/`)
- * @param is_dir True if the path refers to a directory
- * @param out    The excluding rule and its file (must not be NULL)
+ * @param f         Filter (must not be NULL)
+ * @param directory A directory of the filter's (must not be NULL)
+ * @param name      The entry: a name, never empty and holding no '/' (must not be NULL)
+ * @param is_dir    True if the entry is a directory
+ * @param out       The excluding rule and its file (must not be NULL)
  * @return Error (the failure the rule could not be read past) or NULL on success
  */
 error_t source_filter_find(
     source_filter_t *f,
-    const char *path,
+    const source_directory_t *directory,
+    const char *name,
     bool is_dir,
     source_rule_t *out
 );

@@ -66,7 +66,7 @@ patterns = [                  # Personal ignore patterns (not shared)
     ".DS_Store",
     "*.local",
 ]
-respect_gitignore = true      # Honor source .gitignore when adding
+respect_gitignore = true      # Read Git's ignore rules where a path stands
 ```
 
 ### [output]
@@ -147,7 +147,7 @@ Dotta uses a multi-layered ignore system (in precedence order):
 2. **Config patterns** -- `[ignore] patterns` in config.toml (user-specific)
 3. **Profile `.dottaignore`** -- per-profile overrides, can negate with `!`
 4. **Baseline `.dottaignore`** -- repository-wide, machine-local, version-controlled
-5. **Source `.gitignore`** -- from the directory being added (lowest priority)
+5. **Git's ignore rules** -- each `.gitignore`, `.git/info/exclude` and `core.excludesFile`, read where each path physically stands (lowest priority)
 
 The layers decide what is new: what `dotta add` picks up while it walks a directory, and what `status` offers beneath a tracked one. A path a profile already tracks is not new to it, so `dotta add` re-captures it whatever the patterns say, as `dotta update` does; only the command's own `--exclude` leaves it out, as it does for `apply` and `update`.
 
@@ -178,7 +178,7 @@ dotta ignore --test home/.cache/x/
 
 **Pattern syntax** follows `.gitignore` conventions: `*` (wildcard), `?` (single char), `[abc]` (class), `!` (negate), a trailing `/` for directories, a leading `/` to anchor at the top of that directory (`/.cache/` is `~/.cache` alone; `.cache/` is every `.cache` directory).
 
-Profile `.dottaignore` files start empty and inherit all baseline patterns. Use `!pattern` in a profile to override a baseline ignore — a *pattern*, not a directory an earlier layer excluded. As in git, an excluded directory is final: with a baseline `.cache/`, `!.cache/keep.conf` does nothing and `!.cache/` is what re-opens it. The same holds for `--exclude`: `-e 'build/' -e '!build/keep'` keeps nothing, while `-e 'build/*' -e '!build/keep'` keeps the file, because a pattern that matches no directory builds no barrier. It holds across the source repository's rules too: they are read directory by directory beneath the four, so a `!` re-opens the directory it names against them and no more — over a `.gitignore` holding `gen/` and `.env`, `-e '!gen/'` takes `gen/keep.txt` and still leaves `gen/.env` out. `dotta ignore --test` names the rule that excluded a path, which is the one to clear.
+Profile `.dottaignore` files start empty and inherit all baseline patterns. Use `!pattern` in a profile to override a baseline ignore — a *pattern*, not a directory an earlier layer excluded. As in git, an excluded directory is final: with a baseline `.cache/`, `!.cache/keep.conf` does nothing and `!.cache/` is what re-opens it. The same holds for `--exclude`: `-e 'build/' -e '!build/keep'` keeps nothing, while `-e 'build/*' -e '!build/keep'` keeps the file, because a pattern that matches no directory builds no barrier. It holds across Git's ignore rules too: they are read directory by directory beneath the four, so a `!` re-opens the directory it names against them and no more — over a `.gitignore` holding `gen/` and `.env`, `-e '!gen/'` takes `gen/keep.txt` and still leaves `gen/.env` out. `dotta ignore --test` names the rule that excluded a path — for Git's, its file and line — which is the one to clear.
 
 ## Bootstrap
 

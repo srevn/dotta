@@ -74,7 +74,7 @@ dotta add web /            # tracks the machine's root as root
 
 A tracked home is just a tracked directory: `apply` restores its permissions, `update --include-new` looks inside it for new files, and on scope exit it is released while anything dotta did not put there still stands in it. Once it holds nothing but dotta's own copies, dotta removes it — the same rule every directory gets.
 
-Ignore patterns cannot exclude a root. A pattern is matched against the stored name with `home/`, `root/` or `custom/` stripped off, and a root's name is just that word, so nothing is left to match. `dotta add web ~ -e '*'` tracks the home directory and nothing inside it. One exception: a home that sits inside a Git repository whose `.gitignore` excludes it is refused, with a message saying so — set `respect_gitignore = false` to add it anyway.
+Ignore patterns cannot exclude a root. A pattern is matched against the stored name with `home/`, `root/` or `custom/` stripped off, and a root's name is just that word, so nothing is left to match. `dotta add web ~ -e '*'` tracks the home directory and nothing inside it. One exception: Git's ignore rules are read where a path physically stands, so a root that a repository around it excludes — a target inside a project's ignored directory — is refused, and no `-e` reaches it; `respect_gitignore = false` is the one way past.
 
 Use `add --force` to update an existing entry. To give the same pathname another stored name, remove its entry first.
 

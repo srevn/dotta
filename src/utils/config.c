@@ -240,7 +240,7 @@ config_t *config_create_default(arena_t *arena) {
     config->confirm_new_files = true;  /* Default: confirm before adding new files */
 
     /* [ignore] defaults */
-    config->respect_gitignore = true;                 /* Default: respect .gitignore */
+    config->respect_gitignore = true;                 /* Default: read Git's ignore rules */
 
     config->verbosity = OUTPUT_NORMAL;
     config->color = OUTPUT_COLOR_AUTO;

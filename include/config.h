@@ -69,7 +69,7 @@ struct config {
 
     /* [ignore] */
     const gitignore_ruleset_t *ignore_ruleset; /* patterns, compiled at load; NULL when absent */
-    bool respect_gitignore;                    /* Check .gitignore in source directories */
+    bool respect_gitignore;                    /* The source layer: Git's ignore rules, read or not */
 
     /* [output] */
     output_verbosity_t verbosity; /* quiet, normal or verbose (base/output) */

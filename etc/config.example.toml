@@ -131,7 +131,7 @@ confirm_new_files = true
 #   2. Config ignore patterns (user-specific, below)
 #   3. Profile .dottaignore file (per-profile overrides, can negate with `!`)
 #   4. Baseline .dottaignore file (repository-wide, machine-local, version-controlled)
-#   5. Source .gitignore (when adding from git repos)
+#   5. Git's ignore rules, where each path stands (lowest priority)
 #
 # A pattern is matched against the path relative to its mount root — what a
 # .gitignore at ~ (home/ files), at / (root/ files) or at the deployment target
@@ -176,9 +176,11 @@ patterns = [
     "Thumbs.db",             # Windows
 ]
 
-# Respect Source .gitignore
-# When adding files from a git repository, check its .gitignore too
-# Prevents accidentally adding files that are ignored in the source repo
+# Respect Git's ignore rules
+# Read each .gitignore, .git/info/exclude and core.excludesFile where a path
+# physically stands, beneath the four layers above: what git excludes is not
+# added, and status does not offer it. Where they cannot be read, the path is
+# refused rather than admitted.
 # Default: true
 respect_gitignore = true
 

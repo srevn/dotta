@@ -135,15 +135,19 @@ error_t profile_resolve_enabled(
 /**
  * The enabled profile that holds a commit, and the commit
  *
- * The set is asked in the order it is given — the enabled set's precedence order
- * at both readers — and the first profile the commit is reachable from is the
- * answer. A profile behind that one is never asked: the order has already decided.
+ * The revision is read once, before any profile is asked (sys/gitops.h
+ * gitops_revision_resolve): a spelling that names no commit refuses there, in
+ * Git's words, and no profile is passed over for it. Then the set is asked in
+ * the order it is given — the enabled set's precedence order at both readers —
+ * each profile's tip read once and the revision asked of it (gitops_revision_find),
+ * and the first profile holding it is the answer: the tip itself or a commit
+ * its history reaches, or for HEAD's steps a history long enough to take them.
+ * A profile behind that one is never asked: the order has already decided.
  *
- * Answered for every profile ahead of the answer, or an error. ERR_NOT_FOUND is
- * one profile's own answer — the commit is not its — and the search moves on;
- * every other code is a rung of the resolution that could not be made, arriving
- * under a sentence that names both the rung and the branch (sys/gitops.h), and
- * it ends the search where it stands, whatever a later profile would have said.
+ * Answered for every profile ahead of the answer, or an error. A profile whose
+ * history does not hold the revision is an answer, and the search moves on; a
+ * tip or a history that will not read is a failure, naming the branch, and it
+ * ends the search where it stands, whatever a later profile would have said.
  * The asymmetry is the whole of the rule: what comes back is the first holder
  * *in precedence order*, which is a claim about every profile ahead of it, and
  * a branch that would not read is one the claim cannot be made over — where a

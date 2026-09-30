@@ -23,18 +23,8 @@ bool refspec_looks_like_commit(const char *token) {
         return false;
     }
 
-    /* Check for @ (current commit shorthand) */
-    if (strcmp(token, "@") == 0) {
-        return true;
-    }
-
-    /* HEAD and its variations: the word alone, or a modifier standing right after
-     * it (HEAD~1, HEAD^, HEAD~3^2, HEAD@{1}). The byte past the four is the whole
-     * of the rule — a prefix test alone reads every word that begins with those
-     * letters as a commit, and a profile named HEADER is not one. */
-    if (strncmp(token, "HEAD", 4) == 0 &&
-        (token[4] == '\0' || token[4] == '~' || token[4] == '^' ||
-        token[4] == '@')) {
+    /* HEAD's spellings, `@` among them: one rule for the lexer and the resolver */
+    if (refspec_ancestry(token)) {
         return true;
     }
 
@@ -71,7 +61,32 @@ bool refspec_looks_like_commit(const char *token) {
     return false;
 }
 
-error_t parse_refspec(arena_t *arena, const char *input, refspec_t *out) {
+const char *refspec_ancestry(const char *spelling) {
+    if (!spelling) {
+        return NULL;
+    }
+
+    /* `@` alone is HEAD, as git reads it: the tip itself, no steps — the empty
+     * string the spelling ends with */
+    if (strcmp(spelling, "@") == 0) {
+        return spelling + 1;
+    }
+
+    /* HEAD alone, or a modifier standing right after it (HEAD~1, HEAD^, HEAD~3^2,
+     * HEAD@{1}). The byte past the four is the whole of the rule — a prefix test
+     * alone reads every word that begins with those letters as a commit, and a
+     * profile named HEADER is not one. */
+    if (strncmp(spelling, "HEAD", 4) != 0) {
+        return NULL;
+    }
+    const char *steps = spelling + 4;
+    if (steps[0] == '\0' || steps[0] == '~' || steps[0] == '^' || steps[0] == '@') {
+        return steps;
+    }
+    return NULL;
+}
+
+error_t refspec_parse(arena_t *arena, const char *input, refspec_t *out) {
     CHECK_NULL(arena);
     CHECK_NULL(input);
     CHECK_NULL(out);

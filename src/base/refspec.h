@@ -6,7 +6,9 @@
  * the '@' splits — what a commit reference looks like, with no repository in
  * hand — which those same commands ask of a whole positional where a slot of
  * theirs could hold one. Git's revision spellings are read here and in no lower
- * module; resolving one against a store is sys/gitops's.
+ * module — a commit reference's shape, and where HEAD's steps begin; resolving
+ * one against a store is sys/gitops's, HEAD's steps walked back from a branch's
+ * tip.
  */
 
 #ifndef DOTTA_REFSPEC_H
@@ -20,9 +22,9 @@
  * The lexical half of the syntax below: what may stand after the last '@', and
  * — for the verbs whose positional slot could hold one — what a whole token may
  * be. It recognizes the spellings that name a commit with nothing looked up:
- * `HEAD` where the word ends there or a modifier follows it (`HEAD~1`, `HEAD^`,
- * `HEAD~3^2`, `HEAD@{1}`), `@` for the current commit, a bare SHA of 7 to 40
- * hex digits, and a SHA carrying a modifier (`a4f2c8e^`, `def4567~2`).
+ * HEAD's (refspec_ancestry — `HEAD` where the word ends there or a modifier follows
+ * it, `HEAD~1`, `HEAD^`, `HEAD~3^2`, `HEAD@{1}`, and `@`), a bare SHA of 7 to
+ * 40 hex digits, and a SHA carrying a modifier (`a4f2c8e^`, `def4567~2`).
  *
  * A shape and never an existence: nothing is resolved and no store is read, so
  * a tag and a branch name are refused here whatever the repository holds — and
@@ -43,9 +45,30 @@
 bool refspec_looks_like_commit(const char *token);
 
 /**
+ * The steps a HEAD spelling takes back from a branch's tip
+ *
+ * dotta's HEAD is a branch's tip, whichever branch a verb reads (sys/gitops.h
+ * gitops_revision_t), and `@` alone is HEAD, as git reads it. So `HEAD` and `@`
+ * answer "", the tip itself, and HEAD with a modifier right after it answers
+ * the modifier on: `HEAD~3^2` is "~3^2", `HEAD@{1}` is "@{1}". Every other spelling
+ * answers NULL, a word that merely begins with the four letters among them —
+ * `HEADER` is a profile name like any other.
+ *
+ * The shape alone: which steps a branch can take is the resolver's to say, so a
+ * modifier it refuses is still HEAD's here. Readers: refspec_looks_like_commit,
+ * whose HEAD and `@` spellings are exactly these, and sys/gitops.c
+ * gitops_revision_resolve, which reads the steps and walks them.
+ *
+ * @param spelling The spelling to read (may be NULL, which is nobody's HEAD)
+ * @return The steps after HEAD, borrowed from `spelling` ("" for the tip), or
+ *         NULL for a spelling that is not HEAD's
+ */
+const char *refspec_ancestry(const char *spelling);
+
+/**
  * Parsed refspec components.
  *
- * String fields point into the arena supplied to parse_refspec, which owns their
+ * String fields point into the arena supplied to refspec_parse, which owns their
  * storage — the caller MUST NOT free them individually. A field is NULL when
  * the corresponding component is absent from the input (except `file`, which is
  * always set on success).
@@ -81,6 +104,6 @@ typedef struct {
  * @param out   Parsed components. Untouched on error.
  * @return Error or NULL on success.
  */
-error_t parse_refspec(arena_t *arena, const char *input, refspec_t *out);
+error_t refspec_parse(arena_t *arena, const char *input, refspec_t *out);
 
 #endif /* DOTTA_REFSPEC_H */

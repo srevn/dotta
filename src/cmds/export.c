@@ -1628,7 +1628,7 @@ static error_t export_post_parse(
 
     if (o->positional_count == 1) {
         refspec_t rs = { 0 };
-        error_t err = parse_refspec(arena, first, &rs);
+        error_t err = refspec_parse(arena, first, &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse target specification");
         }
@@ -1653,7 +1653,7 @@ static error_t export_post_parse(
          * token to distinguish it from a path or commit, and heuristics on user
          * paths are how silent misroutes happen. */
         refspec_t rs = { 0 };
-        error_t err = parse_refspec(arena, args[0], &rs);
+        error_t err = refspec_parse(arena, args[0], &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse target specification");
         }
@@ -1692,7 +1692,7 @@ static error_t export_post_parse(
             o->commit = args[1];
         } else {
             refspec_t rs = { 0 };
-            error_t err = parse_refspec(arena, args[1], &rs);
+            error_t err = refspec_parse(arena, args[1], &rs);
             if (err != NULL) {
                 return error_wrap(err, "Failed to parse file specification");
             }

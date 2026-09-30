@@ -250,37 +250,31 @@ static error_t list_profiles(
          * tip that will not read shows none: its error is dropped, one per such
          * branch. */
         if (verbose) {
-            char refname[DOTTA_REFNAME_MAX];
-            error_t ref_err = gitops_branch_refname(
-                refname, sizeof(refname), profile
-            );
-            if (!ref_err) {
-                git_commit *last_commit = NULL;
-                error_t commit_err = gitops_get_commit(repo, refname, &last_commit);
+            git_commit *last_commit = NULL;
+            error_t commit_err = gitops_load_branch_commit(repo, profile, &last_commit);
 
-                if (!commit_err && last_commit) {
-                    const git_oid *oid = git_commit_id(last_commit);
-                    char oid_str[LIST_SHORT_OID_BUF_SIZE];
-                    git_oid_tostr(oid_str, sizeof(oid_str), oid);
+            if (!commit_err) {
+                const git_oid *oid = git_commit_id(last_commit);
+                char oid_str[LIST_SHORT_OID_BUF_SIZE];
+                git_oid_tostr(oid_str, sizeof(oid_str), oid);
 
-                    const char *message = git_commit_message(last_commit);
-                    const char *newline = strchr(message, '\n');
-                    size_t msg_len = newline ? (size_t) (newline - message) : strlen(message);
-                    if (msg_len > 40) {
-                        msg_len = 40;
-                    }
-
-                    const git_signature *author = git_commit_author(last_commit);
-                    char time_str[64];
-                    timeutil_relative(author->when.time, time_str, sizeof(time_str));
-
-                    output_styled(
-                        out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
-                        oid_str, (int) msg_len, message, time_str
-                    );
-
-                    git_commit_free(last_commit);
+                const char *message = git_commit_message(last_commit);
+                const char *newline = strchr(message, '\n');
+                size_t msg_len = newline ? (size_t) (newline - message) : strlen(message);
+                if (msg_len > 40) {
+                    msg_len = 40;
                 }
+
+                const git_signature *author = git_commit_author(last_commit);
+                char time_str[64];
+                timeutil_relative(author->when.time, time_str, sizeof(time_str));
+
+                output_styled(
+                    out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
+                    oid_str, (int) msg_len, message, time_str
+                );
+
+                git_commit_free(last_commit);
             }
         }
 

@@ -1255,19 +1255,14 @@ static error_t status_print_remote(
             /* Get local commit info. A commit lookup here that fails prints no
              * line, its error dropped — at most two per profile, the local and
              * the remote. */
-            char local_ref[DOTTA_REFNAME_MAX];
-            error_t local_ref_err = gitops_branch_refname(
-                local_ref, sizeof(local_ref), profile
-            );
             git_commit *local_commit = NULL;
-            error_t commit_err = local_ref_err ? local_ref_err
-                                : gitops_get_commit(repo, local_ref, &local_commit);
+            error_t commit_err = gitops_load_branch_commit(repo, profile, &local_commit);
 
             /* Status line — always shown regardless of commit loading */
             output_print(out, OUTPUT_VERBOSE, "  Status:         ");
             output_colored(out, OUTPUT_VERBOSE, color, "%s\n", status_str);
 
-            if (!commit_err && local_commit) {
+            if (!commit_err) {
                 const git_oid *local_oid = git_commit_id(local_commit);
                 char local_oid_str[8];
                 git_oid_tostr(local_oid_str, sizeof(local_oid_str), local_oid);
@@ -1295,9 +1290,9 @@ static error_t status_print_remote(
             );
             git_commit *remote_commit = NULL;
             commit_err = remote_ref_err ? remote_ref_err
-                                        : gitops_get_commit(repo, remote_ref, &remote_commit);
+                                        : gitops_load_commit(repo, remote_ref, &remote_commit);
 
-            if (!commit_err && remote_commit) {
+            if (!commit_err) {
                 const git_oid *remote_oid = git_commit_id(remote_commit);
                 char remote_oid_str[8];
                 git_oid_tostr(remote_oid_str, sizeof(remote_oid_str), remote_oid);

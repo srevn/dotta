@@ -18,6 +18,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/heap.h"
+#include "base/refspec.h"
 #include "base/string.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
@@ -570,7 +571,7 @@ error_t gitops_tree_walk(
 /**
  * Commit operations
  */
-error_t gitops_get_commit(
+error_t gitops_load_commit(
     git_repository *repo, const char *ref_name, git_commit **out
 ) {
     CHECK_NULL(repo);
@@ -595,6 +596,246 @@ error_t gitops_get_commit(
     }
 
     return NULL;
+}
+
+error_t gitops_load_branch_commit(
+    git_repository *repo, const char *branch, git_commit **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch);
+    CHECK_NULL(out);
+
+    char refname[DOTTA_REFNAME_MAX];
+    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), branch));
+
+    /* Through a symbolic branch to the one it names: `git symbolic-ref` makes
+     * one legally, and every other reader of a branch reads through it. */
+    git_oid tip;
+    int rc = git_reference_name_to_id(&tip, repo, refname);
+    if (rc < 0) {
+        return error_wrap(error_from_git(rc), "Cannot read branch '%s'", branch);
+    }
+
+    /* The tip is read as a commit, as the stage reads the parent it commits on
+     * (sys/stage.c): a branch naming a tag or a tree has no commit at its tip. */
+    rc = git_commit_lookup(out, repo, &tip);
+    if (rc < 0) {
+        return error_wrap(
+            error_from_git(rc), "Cannot read the tip of branch '%s'", branch
+        );
+    }
+
+    return NULL;
+}
+
+/*
+ * One of HEAD's steps, read at the cursor and the cursor moved past it: the step's
+ * operator, `~` or `^`, with its count — 1 where none is written — or 0 where
+ * the text at the cursor is no step. The count saturates rather than wraps: no
+ * history is 2^64 commits deep, so a count past that reaches beyond the root
+ * like any count longer than the history, git's own reading of one that overflows
+ * (lib/git/object-name.c get_nth_ancestor). The digits are ASCII's ten, whatever
+ * the locale's classes hold.
+ */
+static char gitops_revision_step(const char **cursor, size_t *count) {
+    const char *p = *cursor;
+    const char op = *p++;
+    if (op != '~' && op != '^') return 0;
+
+    size_t n = *p >= '0' && *p <= '9' ? 0 : 1;
+    for (; *p >= '0' && *p <= '9'; p++) {
+        const size_t digit = (size_t) (*p - '0');
+        n = n > (SIZE_MAX - digit) / 10 ? SIZE_MAX : n * 10 + digit;
+    }
+
+    *cursor = p;
+    *count = n;
+    return op;
+}
+
+error_t gitops_revision_resolve(
+    git_repository *repo, const char *spelling, gitops_revision_t *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(spelling);
+    CHECK_NULL(out);
+
+    /* HEAD's steps are read whole now, so one the walk would not take refuses
+     * before any branch is read; gitops_revision_find walks them from each tip. */
+    const char *ancestry = refspec_ancestry(spelling);
+    if (ancestry) {
+        for (const char *step = ancestry; *step;) {
+            size_t count = 0;
+            if (!gitops_revision_step(&step, &count)) {
+                return ERROR(
+                    ERR_INVALID_ARG,
+                    "Cannot resolve '%s': after HEAD, dotta reads ~N and ^N steps",
+                    spelling
+                );
+            }
+        }
+        *out = (gitops_revision_t){ .spelling = spelling, .ancestry = ancestry };
+        return NULL;
+    }
+
+    /* Every other spelling is git's, and names one commit whichever branch is
+     * asked after, so it is resolved here, once. revparse answers a typo, a lost
+     * commit and a tag whose object is gone alike (GIT_ENOTFOUND), and nothing
+     * after it could tell them apart: a spelling that does not resolve is the
+     * failure, and never a branch passed over. */
+    git_object *named = NULL;
+    int rc = git_revparse_single(&named, repo, spelling);
+    if (rc < 0) {
+        return error_wrap(error_from_git(rc), "Cannot resolve '%s'", spelling);
+    }
+
+    /* Peeled to a commit: an annotated tag's id is the tag's, and the commit is
+     * the one it names, so the id the revision holds is always a commit's — the
+     * reachability query reads commits. A tree or a blob names none, refused
+     * here rather than as a failure later. A commit peels to a counted reference
+     * to itself, which is why the named object is freed on its own. */
+    git_object *commit = NULL;
+    rc = git_object_peel(&commit, named, GIT_OBJECT_COMMIT);
+    git_object_free(named);
+    if (rc < 0) {
+        return error_wrap(
+            error_from_git(rc), "'%s' does not point to a commit", spelling
+        );
+    }
+
+    *out = (gitops_revision_t){ .spelling = spelling };
+    git_oid_cpy(&out->commit, git_object_id(commit));
+    git_object_free(commit);
+    return NULL;
+}
+
+error_t gitops_revision_find(
+    git_repository *repo, const gitops_revision_t *rev, const char *branch,
+    git_commit *tip, git_commit **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(rev);
+    CHECK_NULL(branch);
+    CHECK_NULL(tip);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    if (!rev->ancestry) {
+        /* A commit resolved repository-wide may be any branch's, and read as
+         * this one's without asking it would be misattributed. It is the branch's
+         * where the tip is that commit or reaches it through its parents — the
+         * graph answers the tip itself as reachable, which descendant_of does
+         * not (graph.c). A history it cannot read is the failure, as `git
+         * merge-base --is-ancestor` fails it: an unread object below the commit
+         * decides nothing. */
+        int rc = git_graph_reachable_from_any(repo, &rev->commit, git_commit_id(tip), 1);
+        if (rc < 0) {
+            return error_wrap(
+                error_from_git(rc),
+                "Cannot tell whether commit '%s' is reachable from branch '%s'",
+                rev->spelling, branch
+            );
+        }
+        if (rc == 0) return NULL;
+
+        rc = git_commit_lookup(out, repo, &rev->commit);
+        if (rc < 0) {
+            return error_wrap(
+                error_from_git(rc), "Cannot read commit '%s'", rev->spelling
+            );
+        }
+        return NULL;
+    }
+
+    /* HEAD's steps, walked back from the tip this branch was read at. The walk
+     * holds its own reference from the start — the tip is the answer to HEAD
+     * itself — and git_commit_dup's one answer is 0 (a count taken, nothing
+     * made). */
+    git_commit *at = NULL;
+    (void) git_commit_dup(&at, tip);
+
+    for (const char *step = rev->ancestry; *step;) {
+        size_t count = 0;
+        const char op = gitops_revision_step(&step, &count);
+        CHECK_ARG(op != 0, "a revision's steps are the ones its resolve read");
+
+        /* `~N` takes N first parents; `^N` takes one step, to the Nth parent,
+         * and `^0` none — it is the commit itself. */
+        size_t steps = count;
+        size_t nth = 0;
+        if (op == '^') {
+            if (count == 0) continue;
+            steps = 1;
+            nth = count - 1;
+        }
+
+        for (; steps > 0; steps--) {
+            /* The count read off the parsed commit is the evidence: a parent
+             * past it is a history shorter than the steps reach — no commit, an
+             * answer — while one it names is there to load, and a load that fails
+             * is an object the store lost, though libgit2 answers GIT_ENOTFOUND. */
+            if (nth >= git_commit_parentcount(at)) {
+                git_commit_free(at);
+                return NULL;
+            }
+
+            git_commit *parent = NULL;
+            int rc = git_commit_parent(&parent, at, (unsigned int) nth);
+            git_commit_free(at);
+            if (rc < 0) {
+                return error_wrap(
+                    error_from_git(rc), "Cannot walk '%s' in branch '%s'",
+                    rev->spelling, branch
+                );
+            }
+            at = parent;
+        }
+    }
+
+    *out = at;
+    return NULL;
+}
+
+/**
+ * Resolve commit reference within a branch
+ */
+error_t gitops_resolve_commit_in_branch(
+    git_repository *repo, const char *branch_name, const char *commit_ref,
+    git_commit **out_commit
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch_name);
+    CHECK_NULL(commit_ref);
+    CHECK_NULL(out_commit);
+
+    /* The revision first: a spelling that names nothing refuses before the branch
+     * is read, whichever branch is named. */
+    gitops_revision_t rev;
+    RETURN_IF_ERROR(gitops_revision_resolve(repo, commit_ref, &rev));
+
+    /* The tip, read once, and the revision asked of it: HEAD's steps and the
+     * membership of a commit are one tip's answers, never two reads of a ref
+     * that may move between them. */
+    git_commit *tip = NULL;
+    RETURN_IF_ERROR(gitops_load_branch_commit(repo, branch_name, &tip));
+
+    error_t err = gitops_revision_find(repo, &rev, branch_name, tip, out_commit);
+    git_commit_free(tip);
+    if (err || *out_commit) return err;
+
+    /* The branch has no commit for it: HEAD's steps reach past its history, or
+     * its history does not hold the commit. */
+    if (rev.ancestry) {
+        return ERROR(
+            ERR_NOT_FOUND, "'%s' names no commit of branch '%s'", commit_ref,
+            branch_name
+        );
+    }
+    return ERROR(
+        ERR_NOT_FOUND, "Commit '%s' is not reachable from branch '%s'",
+        commit_ref, branch_name
+    );
 }
 
 /**
@@ -1170,157 +1411,6 @@ error_t gitops_read_blob_content(
     *out_size = view.size;
 
     gitops_blob_view_close(&view);
-    return NULL;
-}
-
-/**
- * Resolve commit reference within a branch
- */
-error_t gitops_resolve_commit_in_branch(
-    git_repository *repo, const char *branch_name, const char *commit_ref,
-    git_commit **out_commit
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(commit_ref);
-    CHECK_NULL(out_commit);
-
-    /* Build the branch refname. */
-    char ref_name[DOTTA_REFNAME_MAX];
-    error_t err_build = gitops_branch_refname(
-        ref_name, sizeof(ref_name), branch_name
-    );
-    if (err_build) return err_build;
-
-    /* Look up the branch and capture its tip OID by value.
-     *
-     * The tip is the authoritative reference for downstream reachability checks.
-     * Copying the OID (20 bytes) decouples this function from the git_reference
-     * handle's lifetime, so we can release branch_ref immediately and operate
-     * on the OID alone. */
-    git_reference *branch_ref = NULL;
-    int ret = git_reference_lookup(&branch_ref, repo, ref_name);
-    if (ret < 0) {
-        return error_wrap(
-            error_from_git(ret), "Cannot read branch '%s'", branch_name
-        );
-    }
-
-    const git_oid *tip_target = git_reference_target(branch_ref);
-    if (!tip_target) {
-        git_reference_free(branch_ref);
-        return ERROR(
-            ERR_GIT, "Branch '%s' has no target", branch_name
-        );
-    }
-    git_oid branch_tip_oid;
-    git_oid_cpy(&branch_tip_oid, tip_target);
-    git_reference_free(branch_ref);
-
-    /* Fast path: "HEAD" resolves to the tip we just captured.
-     *
-     * Skips revparse and the reachability check below — both would be redundant
-     * since the tip is, by definition, reachable from itself. */
-    if (strcmp(commit_ref, "HEAD") == 0) {
-        ret = git_commit_lookup(out_commit, repo, &branch_tip_oid);
-        if (ret < 0) {
-            return error_wrap(
-                error_from_git(ret), "Cannot read the tip of branch '%s'",
-                branch_name
-            );
-        }
-        return NULL;
-    }
-
-    /* Build the input string for git_revparse_single.
-     *
-     * "HEAD~N" / "HEAD^N" must resolve relative to branch_name (not the
-     * repository's HEAD), so we rewrite them as "<branch>~N" / "<branch>^N".
-     * Anything else (raw SHA, tag, "<branch>~N") is passed through as-is — the
-     * reachability check below catches inputs that resolve to commits on other
-     * branches, regardless of input syntax.
-     *
-     * Exact "HEAD" was matched above; using str_starts_with("HEAD") alone would
-     * also match strings like a hypothetical "HEADLESS" tag and misroute them
-     * into the ancestry-rewrite path. */
-    char *allocated_ref = NULL;
-    const char *resolve_ref = commit_ref;
-
-    if (str_starts_with(commit_ref, "HEAD~") ||
-        str_starts_with(commit_ref, "HEAD^")) {
-        allocated_ref = heap_str_format("%s%s", branch_name, commit_ref + 4);
-        resolve_ref = allocated_ref;
-    }
-
-    git_object *obj = NULL;
-    ret = git_revparse_single(&obj, repo, resolve_ref);
-    free(allocated_ref);  /* NULL-safe */
-    if (ret < 0) {
-        return ERROR(
-            ERR_NOT_FOUND, "Commit '%s' not found in branch '%s'",
-            commit_ref, branch_name
-        );
-    }
-
-    /* Peel to a commit object.
-     *
-     * Annotated tags wrap commits — git_revparse_single returns the tag object
-     * whose OID is the tag's, not the commit's. Peeling normalises
-     * tag/commit/symbolic-ref inputs to a commit so what is handed back is always
-     * a commit and the reachability check below operates on commit OIDs (as
-     * git_graph_descendant_of requires).
-     *
-     * For inputs that are already commits, peel returns a refcount-bumped reference
-     * to the same object — which is why obj is freed separately.
-     *
-     * Inputs that cannot be peeled to a commit (trees, blobs) yield an error
-     * here rather than a confusing failure later. */
-    git_object *commit_obj = NULL;
-    ret = git_object_peel(&commit_obj, obj, GIT_OBJECT_COMMIT);
-    git_object_free(obj);
-    if (ret < 0) {
-        return error_wrap(
-            error_from_git(ret),
-            "Reference '%s' does not point to a commit", commit_ref
-        );
-    }
-
-    /* Constrain the resolved commit to ones reachable from branch_name.
-     *
-     * git_revparse_single resolves repository-wide; without this check, a SHA
-     * that exists on a different branch would resolve successfully and silently
-     * misattribute the commit. The invariant we enforce: the resolved OID must
-     * equal the branch tip or be one of its ancestors.
-     *
-     * git_graph_descendant_of returns 0 for self, so an exact tip match needs
-     * an explicit oid_equal short-circuit (the same pairing sync.c uses for
-     * fast-forward checks). */
-    const git_oid *resolved_oid = git_object_id(commit_obj);
-    if (!git_oid_equal(resolved_oid, &branch_tip_oid)) {
-        int reach = git_graph_descendant_of(
-            repo, &branch_tip_oid, resolved_oid
-        );
-        if (reach < 0) {
-            git_object_free(commit_obj);
-            return error_wrap(
-                error_from_git(reach),
-                "Cannot tell whether commit '%s' is reachable from branch '%s'",
-                commit_ref, branch_name
-            );
-        }
-        if (reach == 0) {
-            git_object_free(commit_obj);
-            return ERROR(
-                ERR_NOT_FOUND,
-                "Commit '%s' is not reachable from branch '%s'",
-                commit_ref, branch_name
-            );
-        }
-    }
-
-    /* SAFETY: peel(GIT_OBJECT_COMMIT) guarantees commit_obj's type. */
-    *out_commit = (git_commit *) commit_obj;
-
     return NULL;
 }
 

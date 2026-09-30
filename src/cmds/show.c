@@ -442,9 +442,9 @@ static int print_diff_line_cb(
  * Show commit with diff
  *
  * A commit already resolved, and the profile it was resolved in: whichever arm
- * of cmd_show named the profile did the resolving, so nothing here can fail with
- * the absence a search reads as "try the next profile" (core/profiles.h
- * profile_resolve_commit). Both are borrowed — the commit is the caller's to free.
+ * of cmd_show named the profile did the resolving, and the search (core/profiles.h
+ * profile_resolve_commit) is over before anything here prints. Both are borrowed
+ * — the commit is the caller's to free.
  */
 static error_t show_commit(
     git_repository *repo,
@@ -602,8 +602,8 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
          * set answers as a whole — the first holder in precedence order, and a
          * profile that will not read ends that search rather than let a later
          * one answer in its place (core/profiles.h profile_resolve_commit). Either
-         * way the printer below is handed a commit and a profile, and no rung
-         * of it can be mistaken for "not this profile's, try the next". */
+         * way the printer below is handed a commit and a profile, and nothing
+         * it does is part of the search. */
         if (profile) {
             err = profile_require(repo, profile);
             if (err) goto cleanup;
@@ -816,7 +816,7 @@ static error_t show_post_parse(
         /* File mode: parse [profile:]file[@commit] into arena. */
         o->mode = SHOW_FILE;
         refspec_t rs = { 0 };
-        error_t err = parse_refspec(arena, arg, &rs);
+        error_t err = refspec_parse(arena, arg, &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse file specification");
         }
@@ -840,7 +840,7 @@ static error_t show_post_parse(
         /* <profile> <file[@commit]> — refspec profile wins if present. */
         o->profile = args[0];
         refspec_t rs = { 0 };
-        error_t err = parse_refspec(arena, args[1], &rs);
+        error_t err = refspec_parse(arena, args[1], &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse file specification");
         }

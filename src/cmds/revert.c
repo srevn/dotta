@@ -1273,7 +1273,7 @@ cleanup:
  *
  * Forms (POSITIONAL_RAW min=0, max=3; commit is always required):
  *   0 args        → error "file specification is required"
- *   1 arg         → parse [profile:]<file>[@commit] via parse_refspec
+ *   1 arg         → parse [profile:]<file>[@commit] via refspec_parse
  *   2 args        → <file> <commit>         when arg[1] is a git ref;
  *                   <profile> <file[@commit]> otherwise (refspec on 2nd)
  *   3 args        → <profile> <file> <commit>
@@ -1301,7 +1301,7 @@ static error_t revert_post_parse(
     if (o->positional_count == 1) {
         /* [profile:]<file>[@commit] */
         refspec_t rs = { 0 };
-        error_t err = parse_refspec(arena, args[0], &rs);
+        error_t err = refspec_parse(arena, args[0], &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse file specification");
         }
@@ -1317,7 +1317,7 @@ static error_t revert_post_parse(
             /* <profile> <file[@commit]> — refspec profile wins if present. */
             o->profile = args[0];
             refspec_t rs = { 0 };
-            error_t err = parse_refspec(arena, args[1], &rs);
+            error_t err = refspec_parse(arena, args[1], &rs);
             if (err != NULL) {
                 return error_wrap(err, "Failed to parse file specification");
             }

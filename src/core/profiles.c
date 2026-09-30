@@ -249,30 +249,32 @@ error_t profile_resolve_commit(
     CHECK_NULL(out_commit);
     CHECK_NULL(out_profile);
 
+    /* The revision once, whatever the set: a spelling that names nothing is its
+     * own failure, before any profile could be passed over for it. */
+    gitops_revision_t rev;
+    RETURN_IF_ERROR(gitops_revision_resolve(repo, commit_ref, &rev));
+
     for (size_t i = 0; i < enabled_profiles->count; i++) {
         const char *profile = enabled_profiles->entries[i];
+
+        /* The profile's tip, read once, and the revision asked of it. A tip or
+         * a history that will not read ends the search where it stands, whatever
+         * a later profile would have said: what comes back is the first holder
+         * in precedence order, a claim about every profile ahead of it, and a
+         * branch that would not read is one the claim cannot be made over. */
+        git_commit *tip = NULL;
+        RETURN_IF_ERROR(gitops_load_branch_commit(repo, profile, &tip));
+
         git_commit *commit = NULL;
+        error_t err = gitops_revision_find(repo, &rev, profile, tip, &commit);
+        git_commit_free(tip);
+        if (err) return err;
 
-        error_t err = gitops_resolve_commit_in_branch(
-            repo, profile, commit_ref, &commit
-        );
-
-        if (!err) {
-            /* Nothing is published until a profile answers. */
+        /* Nothing is published until a profile answers. */
+        if (commit) {
             *out_commit = commit;
             *out_profile = profile;
             return NULL;
-        }
-
-        /* ERR_NOT_FOUND is this profile's own answer — the commit is not its,
-         * and the search moves on, the answer's error dropped: one per profile
-         * that says so. Every other code is a rung of the resolution that could
-         * not be made (sys/gitops.h), and it ends the search where it stands,
-         * whatever a later profile would have said: what comes back is the first
-         * holder in precedence order, a claim about every profile ahead of it,
-         * and a branch that would not read is one the claim cannot be made over. */
-        if (error_code(err) != ERR_NOT_FOUND) {
-            return err;
         }
     }
 

@@ -294,24 +294,20 @@ static size_t commits_walk(
     for (size_t b = 0; b < branch_count; b++) {
         const char *branch = branches[b];
 
-        /* Resolve reference using DWIM (handles branches, tags, remotes) */
-        git_reference *ref = NULL;
-        if (git_reference_dwim(&ref, repo, branch) != 0) {
-            continue;  /* not a branch: nothing from it */
-        }
-
-        /* Peel to commit (handles symbolic refs and tags automatically) */
-        git_object *obj = NULL;
-        int git_err = git_reference_peel(&obj, ref, GIT_OBJECT_COMMIT);
-        git_reference_free(ref);
-        if (git_err != 0) continue;
+        /* The branch's tip, as every verb that takes one of these commits reads
+         * it (sys/gitops.h gitops_load_branch_commit) — never a DWIM, whose tag
+         * of the same name would win and offer commits no branch holds. A name
+         * that is no branch, or a tip that will not read, offers nothing. */
+        git_commit *tip = NULL;
+        error_t load_err = gitops_load_branch_commit(repo, branch, &tip);
+        if (load_err) continue;
 
         git_revwalk *walker = NULL;
         if (git_revwalk_new(&walker, repo) != 0) {
-            git_object_free(obj);
+            git_commit_free(tip);
             continue;
         }
-        git_revwalk_push(walker, git_object_id(obj));
+        git_revwalk_push(walker, git_commit_id(tip));
         git_revwalk_sorting(walker, GIT_SORT_TIME);
 
         git_oid oid;
@@ -353,7 +349,7 @@ static size_t commits_walk(
         }
 
         git_revwalk_free(walker);
-        git_object_free(obj);
+        git_commit_free(tip);
     }
 
     return emitted;
@@ -405,7 +401,7 @@ static void commits_emit(
  */
 const char *completion_profile_of(const dotta_ctx_t *ctx, const char *token) {
     refspec_t rs = { 0 };
-    error_t err = parse_refspec(ctx->arena, token, &rs);
+    error_t err = refspec_parse(ctx->arena, token, &rs);
     if (err) {
         return token;
     }

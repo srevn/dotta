@@ -400,49 +400,131 @@ error_t gitops_read_blob_content(
 );
 
 /**
- * Get commit from reference
+ * Load the commit a reference names
+ *
+ * The reference read through a symbolic one to the object it names, and that
+ * object read as a commit: a reference to anything else refuses at the read, in
+ * Git's words.
  *
  * @param repo Repository (must not be NULL)
- * @param ref_name Reference name (must not be NULL)
+ * @param ref_name Full reference name (must not be NULL)
  * @param out Commit object (must not be NULL, caller must free with
  *            git_commit_free)
  * @return Error or NULL on success
  */
-error_t gitops_get_commit(
+error_t gitops_load_commit(
     git_repository *repo,
     const char *ref_name,
     git_commit **out
 );
 
 /**
- * Resolve a commit reference reachable from a branch
+ * Load the commit at a branch's tip
  *
- * Resolves commit_ref to a commit OID and verifies that commit is reachable from
- * branch_name's tip — i.e. equals the tip or is one of its ancestors.
+ * refs/heads/<branch> through the branch rule (gitops_branch_refname), read as
+ * gitops_load_commit reads a reference — through a symbolic branch to the one
+ * it names — and every failure names the branch. Readers: the revision's two
+ * askers, gitops_resolve_commit_in_branch and core/profiles.c
+ * profile_resolve_commit, which read a branch's tip once and ask it; list.c
+ * list_files and status.c's upstream lines, which print it; completion.c
+ * commits_walk, which walks back from it.
  *
- * Supported syntax:
- * - "HEAD"             — branch's tip
- * - "HEAD~N", "HEAD^N" — ancestry relative to the branch (not repo HEAD)
- * - Full or short SHA  — must point to a commit reachable from the branch
- * - Annotated/lightweight tags — peeled to commit, must be reachable
+ * @param repo Repository (must not be NULL)
+ * @param branch Branch name (must not be NULL)
+ * @param out The tip (must not be NULL, caller must free with git_commit_free)
+ * @return Error or NULL on success
+ */
+error_t gitops_load_branch_commit(
+    git_repository *repo,
+    const char *branch,
+    git_commit **out
+);
+
+/**
+ * A revision a user named, read before any branch is chosen
  *
- * Reachability invariant: git_revparse_single resolves repository-wide, so a
- * SHA from another branch would otherwise succeed and silently misattribute the
- * commit. This function enforces the constraint the name implies.
+ * Two kinds of spelling name a commit. HEAD's — `HEAD`, `@`, and HEAD with its
+ * steps back, `~N` and `^N` in any chain (base/refspec.h refspec_ancestry) —
+ * names a commit of a branch, and only once the branch is chosen: its tip, and
+ * the steps back from it. Every other spelling is git's revision syntax and names
+ * one commit whichever branch is asked after — an id, a short id, a tag peeled
+ * to its commit, `<id>~N` — so it is resolved once, when the revision is read.
  *
- * Returns ERR_NOT_FOUND if commit_ref cannot be resolved or if it resolves to a
- * commit not reachable from branch_name's tip. Every other failure is a rung of
- * the resolution that could not be made — the branch unreadable, its tip
- * unreadable, a reference that peels to no commit, an ancestry the walk could
- * not decide — and each is ERR_GIT under a sentence naming both the rung and
- * the branch. A caller therefore adds nothing by restating the subject: a wrap
- * saying "not found" over one of them would name a fate this function did not
- * reach. Readers, none of which wraps: export.c cmd_export (the refspec's
- * @commit), revert.c cmd_revert (the commit reverted to), show.c show_source
- * and cmd_show (a file's tree, and a commit shown under a named profile), and
- * profiles.c profile_resolve_commit, which asks a whole set and is the one reader
- * that reads the code — ERR_NOT_FOUND meaning "not this branch's, ask the next"
- * and every other code ending its search.
+ * Nothing is held but the spelling and one commit's id, so the value needs no
+ * release and is copied freely; it is valid while the spelling is.
+ */
+typedef struct {
+    const char *spelling;   /* as typed, borrowed: what every refusal names */
+    const char *ancestry;   /* HEAD's steps, borrowed ("" the tip); NULL: a commit */
+    git_oid commit;         /* the commit the spelling names; unread where ancestry is */
+} gitops_revision_t;
+
+/**
+ * Read a revision
+ *
+ * HEAD's steps are read whole, so one dotta does not walk — anything after HEAD
+ * but `~N` and `^N`, `HEAD@{1}` and `HEAD^{commit}` among them — refuses here,
+ * before any branch is. A count too large for any history is read as it is: the
+ * walk answers that it reaches past the root.
+ *
+ * Every other spelling is resolved now, and resolving it is required: one that
+ * names no commit is the failure, in Git's words, whatever kept it from naming
+ * one — a typo, an ambiguous short id, a commit or a tag object the store has
+ * lost — and a spelling that names a tree or a blob refuses as naming no commit.
+ * No branch is ever passed over for a spelling that does not resolve.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param spelling The revision as typed (must not be NULL; borrowed by `out`)
+ * @param out The revision (must not be NULL; left as it was on a failure)
+ * @return Error or NULL on success
+ */
+error_t gitops_revision_resolve(
+    git_repository *repo,
+    const char *spelling,
+    gitops_revision_t *out
+);
+
+/**
+ * The commit a revision names in a branch, or NULL where the branch has none
+ *
+ * A query, asked of a tip the caller read once (gitops_load_branch_commit) so
+ * every revision asked of a branch is asked of one tip. HEAD's steps are walked
+ * back from it, and NULL is the history shorter than they reach — proven by the
+ * parent count each commit on the way was read with, never by a lookup that missed.
+ * A commit is the branch's where the tip is that commit or reaches it through
+ * its parents, and NULL is a history that does not hold it. A parent the walk
+ * could not load and a history the query could not read are the failures, each
+ * naming the revision and the branch — even where libgit2 answers GIT_ENOTFOUND,
+ * which here is an object the store has lost and never an answer.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param rev The revision (must not be NULL)
+ * @param branch The tip's branch, for what a failure names (must not be NULL)
+ * @param tip The branch's tip (must not be NULL; borrowed)
+ * @param out The commit (caller frees with git_commit_free), or NULL: none in
+ *            the branch (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t gitops_revision_find(
+    git_repository *repo,
+    const gitops_revision_t *rev,
+    const char *branch,
+    git_commit *tip,
+    git_commit **out
+);
+
+/**
+ * The commit a revision names in a named branch, or a refusal
+ *
+ * The revision read (gitops_revision_resolve), the branch's tip read once
+ * (gitops_load_branch_commit), and the one asked of the other
+ * (gitops_revision_find); a revision the branch has no commit for is the refusal
+ * that says so — HEAD's steps reaching past the branch's history, a commit its
+ * history does not hold. Every failure names what failed, the revision or the
+ * branch, so a caller adds nothing by restating the subject. Readers, none of
+ * which wraps: export.c cmd_export (the refspec's @commit), revert.c cmd_revert
+ * (the commit reverted to), show.c show_source and cmd_show (a file's tree, and
+ * a commit shown under a named profile).
  *
  * The commit is the whole answer, and its OID is read off it (git_commit_id):
  * nothing is handed back beside it, so no caller holds two views of one fact
@@ -450,7 +532,7 @@ error_t gitops_get_commit(
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
- * @param commit_ref Commit reference (must not be NULL)
+ * @param commit_ref The revision as typed (must not be NULL)
  * @param out_commit Resolved commit object (must not be NULL, caller must free
  *                   with git_commit_free)
  * @return Error or NULL on success

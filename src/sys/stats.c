@@ -150,7 +150,13 @@ static error_t stats_walk(
             goto cleanup;
         }
 
-        /* Get parent tree (if exists) */
+        /* Get parent tree (if exists). A parent the commit names and that will
+         * not load is the walk's failure, as its tree's is: read as no parent,
+         * the commit would be diffed against the empty tree and credited with
+         * every file it holds. The revwalk above parses a parent more lightly
+         * than a load does (commit_list.c commit_quick_parse reads no tree id
+         * and no author), so reaching the commit proves nothing about its
+         * parent. */
         git_tree *parent_tree = NULL;
         if (git_commit_parentcount(commit) > 0) {
             git_commit *parent = NULL;
@@ -158,12 +164,12 @@ static error_t stats_walk(
             if (rc == 0) {
                 rc = git_commit_tree(&parent_tree, parent);
                 git_commit_free(parent);
-                if (rc < 0) {
-                    git_tree_free(tree);
-                    git_commit_free(commit);
-                    err = error_from_git(rc);
-                    goto cleanup;
-                }
+            }
+            if (rc < 0) {
+                git_tree_free(tree);
+                git_commit_free(commit);
+                err = error_from_git(rc);
+                goto cleanup;
             }
         }
 

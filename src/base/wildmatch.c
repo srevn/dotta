@@ -12,7 +12,12 @@
  * Modified by Wayne Davison to special-case '/' matching, to make '**' work
  * differently than '*', and to fix the character-class code.
  *
- * Imported from git.git.
+ * Imported from git.git. It departs from git's in cost alone, in one branch,
+ * and its answers are git's: a <star star slash> link returns the abort its
+ * recursion met, where git's drops it and so searches the text twice over a link
+ * — a line of links costs time doubling with each, in git as well — and a chain
+ * of links is stepped over as its one link, where git's recurses a frame a link
+ * and runs a long chain out of stack.
  */
 
 #include "base/wildmatch.h"
@@ -126,12 +131,12 @@ static int dowild(const uchar *p, const uchar *text, unsigned int flags) {
                 continue;
             case '*':
                 if (*++p == '*') {
-                    const uchar *prev_p = p - 2;
+                    const uchar *prev_p = p;
                     while (*++p == '*') {}
                     if (!(flags & WM_PATHNAME))
                         /* without WM_PATHNAME, '*' == '**' */
                         match_slash = 1;
-                    else if ((prev_p < pattern || *prev_p == '/') &&
+                    else if ((prev_p - pattern < 2 || *(prev_p - 2) == '/') &&
                         (*p == '\0' || *p == '/' ||
                         (p[0] == '\\' && p[1] == '/'))) {
                         /*
@@ -141,10 +146,31 @@ static int dowild(const uchar *p, const uchar *text, unsigned int flags) {
                          * This helps make foo/<*><*>/bar (<> because otherwise
                          * it breaks C comment syntax) match both foo/bar and
                          * foo/a/bar.
+                         *
+                         * A chain of such links matches what its first one does
+                         * — no directories or any, twice over, is no directories
+                         * or any — so the rest is taken from past the last link:
+                         * one frame for the chain, where a frame a link would
+                         * run a long chain out of stack.
+                         */
+                        while (p[0] == '/' && p[1] == '*' && p[2] == '*') {
+                            const uchar *next = p + 3;
+                            while (*next == '*') next++;
+                            if (*next != '/' && *next != '\0')
+                                break;
+                            p = next;
+                        }
+                        /*
+                         * The rest with no directory consumed is its earliest
+                         * start, so an abort there is final for every later one,
+                         * as the loop below reads each recursion's abort. Dropped,
+                         * it would send each link to search the text twice over:
+                         * time doubling with every link of a line.
                          */
                         if (p[0] == '/' &&
-                            dowild(p + 1, text, flags) == WM_MATCH)
-                            return WM_MATCH;
+                            ((matched = dowild(p + 1, text, flags)) == WM_MATCH ||
+                            matched == WM_ABORT_ALL))
+                            return matched;
                         match_slash = 1;
                     } else /* WM_PATHNAME is set */
                         match_slash = 0;

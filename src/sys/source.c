@@ -32,7 +32,8 @@
  *     those links, one kept answer a rung, and only the place's own entry is asked.
  *
  *   - The repository is read as the invoker: raw stat, open and realpath for
- *     its layout, and libgit2 for its configuration (sys/source.h). The rule
+ *     its layout, and libgit2 for its configuration (sys/source.h), so a refusal
+ *     there is the repository's failure, ERR_GIT, and never a reach. The rule
  *     files are read through the funnel (sys/filesystem), without following a
  *     final link for an in-tree `.gitignore` (git's open_nofollow), O_NONBLOCK
  *     so a FIFO in one's place cannot wedge the open (git's own open would).
@@ -158,27 +159,33 @@ static int source_stat(const char *directory, const char *name, struct stat *st)
  * A path a file of the layout names — a `.git` file's gitdir, a `commondir` —
  * read as the invoker, as git reads one: the file's text with its trailing CR
  * and LF off (setup.c read_gitfile_gently, get_common_dir_noenv), into the arena.
+ * Every failure is the repository's (ERR_GIT), since no identity reads it through.
  */
 static error_t source_line(
     source_filter_t *f, const char *directory, const char *name, const char **out
 ) {
+    /* A spelling past the kernel's reach names nothing it opens. */
     char path[PATH_MAX];
     if ((size_t) snprintf(path, sizeof(path), "%s%s", directory, name) >= sizeof(path)) {
-        return error_from_errno(ENAMETOOLONG, "Failed to open '%s%s'", directory, name);
+        return ERROR(
+            ERR_GIT, "Failed to open '%s%s': %s", directory, name, strerror(ENAMETOOLONG)
+        );
     }
 
+    /* Raw, as the invoker under every identity: a refusal here is the repository's,
+     * not a reach a run holding root would read through. */
     int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
-        return error_from_errno(errno, "Failed to open '%s'", path);
+        return ERROR(ERR_GIT, "Failed to open '%s': %s", path, strerror(errno));
     }
 
     /* fs_read_fd's word names no file, a descriptor having none: the failure is
-     * minted again with the file's, one line. */
+     * minted again with the file's, one line, and the repository's. */
     buffer_t text = BUFFER_INIT;
     error_t err = fs_read_fd(fd, &text);
     close(fd);
     if (err) {
-        return ERROR(error_code(err), "Failed to read '%s': %s", path, error_message(err));
+        return ERROR(ERR_GIT, "Failed to read '%s': %s", path, error_message(err));
     }
 
     size_t len = text.size;
@@ -232,8 +239,9 @@ static error_t source_commondir(source_filter_t *f, const char *gitdir, const ch
             f, named[0] == '/' ? named : arena_str_format(f->arena, "%s%s", gitdir, named)
         );
         if (!commondir) {
-            return error_from_errno(
-                errno, "Failed to resolve commondir '%s' of '%s'", named, gitdir
+            return ERROR(
+                ERR_GIT, "Failed to resolve commondir '%s' of '%s': %s", named, gitdir,
+                strerror(errno)
             );
         }
     }
@@ -361,11 +369,15 @@ static error_t source_config(git_config *config, const char *path, git_config_le
     /* There, and not to be read: the machine's is absent, as git skips one. */
     if (level < GIT_CONFIG_LEVEL_LOCAL) return NULL;
 
-    /* The repository's own is its failure. libgit2 says why only for a directory,
-     * and nothing where access(2) refused the file: the word is the kernel's,
-     * asked again as libgit2 asked it, and where access(2) passes, the file is
-     * the directory libgit2 refused. */
-    return error_from_errno(access(path, R_OK) != 0 ? errno : EISDIR, "Failed to read '%s'", path);
+    /* The repository's own is its failure, read as the invoker under every identity
+     * (ERR_GIT, never a reach). libgit2 says why only for a directory, and nothing
+     * where access(2) refused the file: the word is the kernel's, asked again
+     * as libgit2 asked it, and where access(2) passes, the file is the directory
+     * libgit2 refused. */
+    return ERROR(
+        ERR_GIT, "Failed to read '%s': %s", path,
+        strerror(access(path, R_OK) != 0 ? errno : EISDIR)
+    );
 }
 
 /**
@@ -502,8 +514,9 @@ static const repository_t *source_repository(
                 ? arena_str_format(f->arena, "%s%s", gitdir, worktree) : worktree
         );
         if (!r->workdir) {
-            r->failure = error_from_errno(
-                errno, "Failed to resolve core.worktree '%s' of '%s'", worktree, gitdir
+            r->failure = ERROR(
+                ERR_GIT, "Failed to resolve core.worktree '%s' of '%s': %s", worktree, gitdir,
+                strerror(errno)
             );
             return r;
         }

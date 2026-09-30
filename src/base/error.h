@@ -50,11 +50,14 @@
  * a setuid-family EAGAIN is not ERR_FS, and identity_init returns to main() before
  * there is a command to read them.
  *
- * core/state's refusals are outside it by subsystem too: SQLite opens the store's
- * database as the invoker on every run, and no second try spans a call into it
- * (sys/filesystem), so a refusal there is a broken installation to report, never
- * a reach a root run would have. They are ERR_STATE_INVALID; an ERR_PERMISSION
- * would send add's and update's tails to offer a sudo that changes nothing.
+ * A refusal met where no second try spans the call is outside it too, and is
+ * coded by its subsystem: no identity a run can take reads through it, and an
+ * ERR_PERMISSION would send add's and update's tails to offer a sudo that changes
+ * nothing. core/state's — SQLite opens the store's database as the invoker on
+ * every run (sys/filesystem) — are ERR_STATE_INVALID, a broken installation to
+ * report; sys/source's reads of a source repository — its layout raw, its
+ * configuration through libgit2, both as the invoker under every identity
+ * (sys/source.h) — are ERR_GIT, the repository's failure, as git's own is.
  */
 
 #ifndef DOTTA_ERROR_H
@@ -124,8 +127,8 @@ error_code_t error_code_from_errno(int errno_val);
  * errno into the argument before anything that could move it (a close, a free).
  * A site that codes its refusal by subsystem rather than by errno (a session
  * file's ERR_CRYPTO, the drop's ERR_PERMISSION, the store database's
- * ERR_STATE_INVALID) keeps its own spelling; every ERR_FS born from a refusal
- * reads through here.
+ * ERR_STATE_INVALID, a source repository's ERR_GIT) keeps its own spelling; every
+ * ERR_FS born from a refusal reads through here.
  *
  * @param errno_val errno value
  * @param fmt Format string (printf-style) for the caller's part of the message

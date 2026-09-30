@@ -42,9 +42,12 @@
  * What it reads, and as whom. The repository — its discovery and its configuration
  * — is read as the invoker: libgit2 reads the configuration by path, as the
  * invoker, and a repository only root could find would be one whose configuration
- * dotta cannot read. The rule files are read through sys/filesystem's funnel,
- * whose reach a walk enters a directory with: a directory a sudo'd walk could
- * list is one whose rules it can read.
+ * dotta cannot read. So a refusal on the repository is its failure under every
+ * identity, ERR_GIT — never the ERR_PERMISSION a sudo line answers (base/error.h).
+ * The rule files are read through sys/filesystem's funnel, whose reach a walk
+ * enters a directory with: a directory a sudo'd walk could list is one whose
+ * rules it can read, and a refusal on one is a reach, which a run that holds
+ * root reads through.
  *
  * What it does not read, stated. A conditional include (`includeIf`) is not
  * evaluated: libgit2 evaluates one only for a repository it has opened, and this
@@ -74,10 +77,11 @@
  * and answered again for every entry that reaches it: a directory's, a
  * repository's, a file's. Each is one line, naming the file or the setting it
  * could not read and why, since the screens that report one print its message
- * alone (core/ignore.h ignore_verdict's readers). One of the machine's
- * configuration files that the invoker cannot read is absent, as git skips a
- * global or XDG file; the system file libgit2 finds is its own, which need not
- * be git's, and is read as the machine's.
+ * alone (core/ignore.h ignore_verdict's readers). Each is a failure git has too,
+ * or a rule file's that git warns of and skips; none is a bound dotta keeps on
+ * its own inputs. One of the machine's configuration files that the invoker cannot
+ * read is absent, as git skips a global or XDG file; the system file libgit2
+ * finds is its own, which need not be git's, and is read as the machine's.
  *
  * Lifetime: the arena's. A filter lives in the arena it was made in, every answer
  * it keeps with it, and nothing frees it; no libgit2 handle outlives a call. It

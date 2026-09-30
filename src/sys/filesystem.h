@@ -50,7 +50,9 @@
  * a gitdir's HEAD, commondir, objects and refs — which sys/source discovers as
  * the invoker, because the repository's configuration is libgit2's to read as
  * the invoker, and a repository found through the reach would be one dotta could
- * not configure (sys/source.h). The rule files beneath it are this module's.
+ * not configure (sys/source.h). A refusal there is the repository's failure
+ * (ERR_GIT), as git's is; the rule files beneath it are this module's, and so
+ * is their refusal's reach.
  */
 
 #ifndef DOTTA_FILESYSTEM_H

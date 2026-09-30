@@ -72,9 +72,12 @@
  * spelled from the home of a user the system does not know (a known user's is
  * read from that user's home, as git expands it) — each minted once per cause
  * and answered again for every entry that reaches it: a directory's, a
- * repository's, a file's. One of the machine's configuration files that the invoker
- * cannot read is absent, as git skips a global or XDG file; the system file libgit2
- * finds is its own, which need not be git's, and is read as the machine's.
+ * repository's, a file's. Each is one line, naming the file or the setting it
+ * could not read and why, since the screens that report one print its message
+ * alone (core/ignore.h ignore_verdict's readers). One of the machine's
+ * configuration files that the invoker cannot read is absent, as git skips a
+ * global or XDG file; the system file libgit2 finds is its own, which need not
+ * be git's, and is read as the machine's.
  *
  * Lifetime: the arena's. A filter lives in the arena it was made in, every answer
  * it keeps with it, and nothing frees it; no libgit2 handle outlives a call. It

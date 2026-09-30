@@ -47,7 +47,10 @@
  *   - Nothing is freed one by one: the answers, the rules and the errors live
  *     for the arena, and the one scratch — the rung asked — grows in it to the
  *     longest and is taken back by the next query. A failure is an answer like
- *     any other, minted once per cause (base/error.h "Lifetime").
+ *     any other, minted once per cause (base/error.h "Lifetime"), and one line:
+ *     a cause whose words name nothing — fs_read_fd's, a descriptor having no
+ *     name — is minted again with the name, where its protocol would have the
+ *     caller wrap it.
  */
 
 #include "sys/source.h"
@@ -169,11 +172,13 @@ static error_t source_line(
         return error_from_errno(errno, "Failed to open '%s'", path);
     }
 
+    /* fs_read_fd's word names no file, a descriptor having none: the failure is
+     * minted again with the file's, one line. */
     buffer_t text = BUFFER_INIT;
     error_t err = fs_read_fd(fd, &text);
     close(fd);
     if (err) {
-        return error_wrap(err, "Failed to read '%s'", path);
+        return ERROR(error_code(err), "Failed to read '%s': %s", path, error_message(err));
     }
 
     size_t len = text.size;
@@ -276,12 +281,14 @@ static void source_read(
     }
 
     /* The whole file, a regular one: a directory or a FIFO in its place is refused
-     * here (fs_read_fd), not read as nothing. */
+     * here (fs_read_fd), not read as nothing — in words that name no file, a
+     * descriptor having none, so the failure is minted again with the file's,
+     * one line. */
     buffer_t text = BUFFER_INIT;
     error_t err = fs_read_fd(fd, &text);
     close(fd);
     if (err) {
-        out->failure = error_wrap(err, "Failed to read '%s'", path);
+        out->failure = ERROR(error_code(err), "Failed to read '%s': %s", path, error_message(err));
         return;
     }
 
@@ -336,7 +343,8 @@ static const file_t *source_gitignore(
 /**
  * Add one file to the configuration at `level`. A file that is not there is absent.
  * One there that the invoker cannot read — libgit2 answers GIT_ENOTFOUND for it
- * (config_file_open) — is the repository's failure where it is its own, as git
+ * (config_file_open), and says nothing of why where access(2) refused it — is
+ * the repository's failure where it is its own, in the kernel's word, as git
  * refuses the repository (config.c do_git_config_sequence, access_or_die), and
  * absent where it is the machine's, as git skips a global or XDG file it cannot
  * read. git refuses its system file too, but the one libgit2 finds is libgit2's
@@ -346,11 +354,18 @@ static const file_t *source_gitignore(
  *         one of the repository's own that the invoker cannot read
  */
 static error_t source_config(git_config *config, const char *path, git_config_level_t level) {
+    /* Read, or not there: libgit2's answer; a file that does not parse, its error. */
     int rc = git_config_add_file_ondisk(config, path, level, NULL, 0);
     if (rc != GIT_ENOTFOUND) return rc < 0 ? error_from_git(rc) : NULL;
 
-    return level >= GIT_CONFIG_LEVEL_LOCAL
-        ? error_from_errno(EACCES, "Failed to read '%s'", path) : NULL;
+    /* There, and not to be read: the machine's is absent, as git skips one. */
+    if (level < GIT_CONFIG_LEVEL_LOCAL) return NULL;
+
+    /* The repository's own is its failure. libgit2 says why only for a directory,
+     * and nothing where access(2) refused the file: the word is the kernel's,
+     * asked again as libgit2 asked it, and where access(2) passes, the file is
+     * the directory libgit2 refused. */
+    return error_from_errno(access(path, R_OK) != 0 ? errno : EISDIR, "Failed to read '%s'", path);
 }
 
 /**

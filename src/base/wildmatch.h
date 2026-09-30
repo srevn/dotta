@@ -33,6 +33,10 @@ int wildmatch(const char *pattern, const char *text, unsigned int flags);
  * A shorter answer bounds the head that can be compared that way. git's
  * simple_length (dir.c:680); `no_wildcard(p)` is `p[literal_length(p)] == '\0'`.
  *
+ * Readers: base/gitignore.c parse_line (the literal head a compare answers) and
+ * gitignore_literal (the bytes a literal escapes) — a second copy of the alphabet
+ * anywhere else is a bug.
+ *
  * @param pattern NUL-terminated pattern (must not be NULL)
  * @return Byte count, 0 when the first byte can glob
  */

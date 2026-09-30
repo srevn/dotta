@@ -66,8 +66,9 @@
  * the rule as written, its line and the rung it excluded, kept for the verdict's
  * report, arena lifetime and the composition it allows (a ruleset's compiled
  * rules copied into another, their strings shared), the rule parsed and asked
- * alone that infra/pathspec reads, and the selection program beside the exclusion
- * one (gitignore.h has both).
+ * alone that infra/pathspec reads, the selection program beside the exclusion
+ * one (gitignore.h has both), and the rule that names one path (gitignore_literal),
+ * the grammar read backwards.
  *
  * Adaptations of shape only: drops macros, attributes and assignments
  * (gitignore-only, no gitattributes), drops the file-source abstraction — rules
@@ -541,21 +542,29 @@ static size_t rung_subject(const char **rung, const char **basename) {
     return strlen(*rung);
 }
 
-/* The subject a walk cuts, copied into `dst` (room for strlen(path) + 1): the
- * leading slashes are the caller's spelling and are dropped, and a trailing one
- * is read as the directory hint it is — `*is_dir` is set by one, never cleared.
- * Answers the length written; 0 for a subject with nothing left in it, so no
- * scan is ever asked about an empty rung. */
-static size_t copy_subject(char *dst, const char *path, bool *is_dir) {
-    while (*path == '/')
-        path++;
+/* A whole path as a subject — the one a walk cuts, and the one a literal names:
+ * the leading slashes are the caller's spelling and are dropped, and a trailing
+ * one is read as the directory hint it is — `*is_dir` is set by one, never cleared.
+ * Answers the subject's length, from where `*path` now points; 0 for one with
+ * nothing left in it, which no rule reaches. */
+static size_t path_subject(const char **path, bool *is_dir) {
+    while (**path == '/')
+        (*path)++;
 
-    size_t len = strlen(path);
-    while (len > 0 && path[len - 1] == '/') {
+    size_t len = strlen(*path);
+    while (len > 0 && (*path)[len - 1] == '/') {
         len--;
         *is_dir = true;
     }
 
+    return len;
+}
+
+/* The subject a walk cuts (path_subject), copied into `dst` (room for strlen(path)
+ * + 1). Answers the length written; 0 for a subject with nothing left in it, so
+ * no scan is ever asked about an empty rung. */
+static size_t copy_subject(char *dst, const char *path, bool *is_dir) {
+    size_t len = path_subject(&path, is_dir);
     memcpy(dst, path, len);
     dst[len] = '\0';
 
@@ -842,4 +851,60 @@ gitignore_origin_t gitignore_rule_origin(const gitignore_rule_t *rule) {
 
 size_t gitignore_rule_span(const char *line, size_t len) {
     return line ? rule_span(line, len) : 0;
+}
+
+/* --- The rule that names one path ------------------------------------ */
+
+const char *gitignore_literal(arena_t *arena, const char *path, bool is_dir) {
+    CHECK_NULL(arena);
+    CHECK_NULL(path);
+
+    /* The subject gitignore_eval judges: its leading slashes the spelling's, a
+     * trailing one the directory hint. */
+    size_t len = path_subject(&path, &is_dir);
+
+    /* What no line of the grammar holds: nothing, which no rule reaches; a newline,
+     * since a rule is one line; a file's final carriage return, which a line's
+     * terminator takes (rule_span) — a directory's marker stands behind one and
+     * keeps it. */
+    if (len == 0 || memchr(path, '\n', len) || (!is_dir && path[len - 1] == '\r'))
+        return NULL;
+
+    /* Sized for the worst, as a quote is (base/string.c str_shell_quote): the
+     * anchor, two bytes a byte, the marker and the NUL. A count no memory could
+     * hold is exhaustion. */
+    if (len > (SIZE_MAX - 3) / 2)
+        heap_die(SIZE_MAX);
+    char *rule = arena_alloc(arena, 2 * len + 3);
+    char *at = rule;
+    *at++ = '/';
+
+    /* Each byte the matcher reads as more than itself behind a `\`, the runs
+     * between as they stand: the alphabet is asked of the matcher, never restated.
+     * A run ends where the subject does, and a hint's slashes may stand past it. */
+    const char *end = path + len;
+    for (const char *p = path; p < end;) {
+        size_t run = wildmatch_literal_length(p);
+        if (run > (size_t) (end - p))
+            run = (size_t) (end - p);
+        memcpy(at, p, run);
+        at += run;
+        p += run;
+        if (p < end) {
+            *at++ = '\\';
+            *at++ = *p++;
+        }
+    }
+
+    /* A final space the grammar trims (rule_span) is kept by its escape. A space
+     * is never the matcher's, so the last byte written is the path's own. */
+    if (at[-1] == ' ') {
+        at[-1] = '\\';
+        *at++ = ' ';
+    }
+    if (is_dir)
+        *at++ = '/';
+    *at = '\0';
+
+    return rule;
 }

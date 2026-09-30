@@ -495,4 +495,32 @@ gitignore_origin_t gitignore_rule_origin(const gitignore_rule_t *rule);
  */
 size_t gitignore_rule_span(const char *line, size_t len);
 
+/**
+ * The rule that names `path` and no other: anchored at the top of the rules'
+ * directory, every byte the matcher reads as more than itself escaped — its
+ * alphabet, asked of it (base/wildmatch.h wildmatch_literal_length) — a final
+ * space escaped against the trim, and the directory marker behind it where
+ * `is_dir`. `foo[1].md` is `/foo\[1].md` — a `]` with no class open is the
+ * matcher's literal — and the directory `.config` is `/.config/`. The grammar
+ * reads it back whole (gitignore_rule_span is its length), and it matches the
+ * path at its rung and nothing else there, as its set compares letters. A caller
+ * passes it as it stands to leave exactly that path out, or behind a `!` to re-open
+ * exactly that rung.
+ *
+ * `path` is read as gitignore_eval reads one: relative to the rules' directory,
+ * its leading slashes shed and a trailing one the directory hint.
+ *
+ * NULL where no line of the grammar holds it: nothing to name (the rules' own
+ * directory, which no rule reaches), a newline anywhere (a rule is one line),
+ * or a file's final carriage return (a line's terminator takes it; a directory's
+ * marker stands behind one and keeps it). A leading `#` or `!` needs nothing:
+ * the anchor stands before it, so it is never column 0.
+ *
+ * @param arena  Arena the rule lives in (must not be NULL)
+ * @param path   The path (must not be NULL)
+ * @param is_dir True if the path names a directory
+ * @return The rule, the arena's; NULL where no line holds one
+ */
+const char *gitignore_literal(arena_t *arena, const char *path, bool is_dir);
+
 #endif /* DOTTA_GITIGNORE_H */

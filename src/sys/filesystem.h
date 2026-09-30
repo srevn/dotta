@@ -660,17 +660,18 @@ error_t fs_working_directory(arena_t *arena, const char **out);
  * A path as the kernel will open it: absolute, folded wherever the kernel reads
  * the fold the same, no link resolved
  *
- * A leading tilde expands under HOME (fs_expand_tilde, whose `~user` refusal is
- * this function's one), a relative path joins the working directory as the shell
- * spells it (fs_working_directory), and the whole folds (base/string.h
- * str_path_fold): `.` and empty components always, and a `..` where the component
- * it takes is a directory — the directory holding it, whatever stands above —
- * or is a file or nothing at all, which the kernel has no reading of. After a
- * link the `..` stays, and so does one whose look is refused: the kernel steps
- * out of what a link reaches, and a fold by the string would name another
- * directory. Unlike fs_canonicalize_path, which resolves every link through
- * realpath(3), a link stays the entry it is reached through, and the path need
- * not exist; the filesystem is asked only at a `..`, and of the working directory.
+ * A leading tilde expands as the shell expands one (fs_expand_tilde, whose refusal
+ * of a login the system does not know is this function's one), a relative path
+ * joins the working directory as the shell spells it (fs_working_directory),
+ * and the whole folds (base/string.h str_path_fold): `.` and empty components
+ * always, and a `..` where the component it takes is a directory — the directory
+ * holding it, whatever stands above — or is a file or nothing at all, which the
+ * kernel has no reading of. After a link the `..` stays, and so does one whose
+ * look is refused: the kernel steps out of what a link reaches, and a fold by
+ * the string would name another directory. Unlike fs_canonicalize_path, which
+ * resolves every link through realpath(3), a link stays the entry it is reached
+ * through, and the path need not exist; the filesystem is asked only at a `..`,
+ * and of the working directory.
  *
  * Readers: the store's directory, the one reading its two sources share so that
  * the two can be compared — the configured one, settled at load (utils/config.c),
@@ -727,17 +728,21 @@ error_t fs_canonicalize_path(const char *path, arena_t *arena, const char **out)
 char *fs_parent_dir(const char *path);
 
 /**
- * Expand a leading tilde to the invoker's home (sys/identity).
+ * Expand a leading tilde, as the shell and git expand one: `~` alone or before
+ * a '/' is the invoker's home (sys/identity), and `~login` that user's home, as
+ * the system's user database answers it.
  *
  * Examples:
- *   ~/.bashrc -> /home/user/.bashrc
- *   ~/foo/bar -> /home/user/foo/bar
- *   ~         -> /home/user          (so does ~/)
+ *   ~/.bashrc      -> /home/user/.bashrc
+ *   ~/foo/bar      -> /home/user/foo/bar
+ *   ~              -> /home/user          (so does ~/)
+ *   ~alice/.bashrc -> /home/alice/.bashrc (whoever runs it)
  *
- * The tail joins HOME at one separator (base/string.h str_path_join), so `~//x`
- * is `~/x`. Inputs without a leading '~' are copied verbatim — into the arena,
- * like every answer, so no answer shares its lifetime with the caller's input.
- * ~user/foo (other-user expansion) is refused.
+ * The tail joins the home at one separator (base/string.h str_path_join), so
+ * `~//x` is `~/x`. Inputs without a leading '~' are copied verbatim — into the
+ * arena, like every answer, so no answer shares its lifetime with the caller's
+ * input. A login the system does not know, or one with no home, is refused
+ * (ERR_INVALID_ARG), as git refuses one (path.c interpolate_path).
  *
  * @param path Path with optional ~ prefix (must not be NULL)
  * @param arena Arena the expanded path lives in (must not be NULL)

@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pwd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -1317,21 +1318,30 @@ error_t fs_expand_tilde(const char *path, arena_t *arena, const char **out) {
         return NULL;
     }
 
+    /* The home the prefix names, up to the first '/': none, the invoker's; a
+     * login, that user's, as the system's user database answers it. The login
+     * is asked for and let go: a transient of the call's. */
+    size_t login = strcspn(path + 1, "/");
+    const char *rest = path + 1 + login;
     const char *home = identity()->home;
-    const char *rest = path + 1;  /* skip ~ */
-    if (rest[0] == '\0' || (rest[0] == '/' && rest[1] == '\0')) {
-        *out = arena_strdup(arena, home);
-        return NULL;
-    }
-    if (rest[0] != '/') {
-        return ERROR(
-            ERR_INVALID_ARG, "~user syntax not supported (got '%s')",
-            path
-        );
+    if (login > 0) {
+        char *name = heap_strndup(path + 1, login);
+        const struct passwd *pw = getpwnam(name);
+        free(name);
+
+        if (!pw) {
+            return ERROR(ERR_INVALID_ARG, "'%s' names a user this system does not know", path);
+        }
+        if (!pw->pw_dir || pw->pw_dir[0] == '\0') {
+            return ERROR(ERR_INVALID_ARG, "'%s' names a user with no home directory", path);
+        }
+        home = pw->pw_dir;
     }
 
-    /* The tail's own separators fold into the one the join writes */
-    *out = str_path_join(arena, home, rest);
+    /* The home itself, alone or with its '/'; else the tail, whose own separators
+     * fold into the one the join writes. */
+    *out = rest[0] == '\0' || (rest[0] == '/' && rest[1] == '\0')
+        ? arena_strdup(arena, home) : str_path_join(arena, home, rest);
     return NULL;
 }
 

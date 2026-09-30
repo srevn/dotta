@@ -44,9 +44,9 @@
  * the same), so every reader meets one spelling: [hooks] hooks_dir, and the store's
  * — DOTTA_REPO_DIR where it is set, else [core] repo_dir, else the default beneath
  * HOME. Each is read once, from the value that won: a spelling no load can settle
- * (`~user`) is refused here where it won, whether or not the command would have
- * read it — under its key and the file, or under the variable — and a [core]
- * repo_dir the variable outranks is never read.
+ * (a `~login` the system does not know) is refused here where it won, whether
+ * or not the command would have read it — under its key and the file, or under
+ * the variable — and a [core] repo_dir the variable outranks is never read.
  *
  * @param arena The arena the configuration lives in — the process's, main's
  *              (include/runtime.h); a refused load leaves its parts there (must

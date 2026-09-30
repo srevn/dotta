@@ -508,10 +508,12 @@ static const repository_t *source_repository(
     r->info_exclude.next = &r->excludes_file;
 
     /* core.excludesFile as git reads a path (config.c git_config_pathname): `~`
-     * expanded, relative to the workdir, where git reads it from, and set empty,
-     * naming no file. `:(optional)` before it makes a file that is not there
-     * the key unset — read as it is where nothing sets it: git's default
-     * (environment.c repo_excludes_file, path.c xdg_config_home). */
+     * and `~user` expanded as git expands them (path.c interpolate_path;
+     * sys/filesystem.h fs_expand_tilde), relative to the workdir, where git reads
+     * it from, and set empty, naming no file. `:(optional)` before it makes a
+     * file that is not there the key unset — read as it is where nothing sets
+     * it: git's default (environment.c repo_excludes_file, path.c
+     * xdg_config_home). */
     bool optional = excludesfile && strncmp(excludesfile, ":(optional)", 11) == 0;
     if (optional) excludesfile += 11;
 
@@ -519,13 +521,19 @@ static const repository_t *source_repository(
         const char *path = NULL;
         err = fs_expand_tilde(excludesfile, f->arena, &path);
         if (err) {
-            r->excludes_file.failure = error_wrap(err, "Failed to read core.excludesFile");
-        } else {
-            source_read(
-                f, path[0] == '/' ? path : str_path_join(f->arena, r->workdir, path), 0,
-                r->casing, &r->excludes_file
+            /* A user the system does not know: git refuses the configuration
+             * itself, and every command in the repository with it (config.c
+             * git_config_pathname dies, `:(optional)` or not) — the repository's
+             * failure, as a configuration that does not parse is, and one line. */
+            r->failure = ERROR(
+                ERR_VALIDATION, "Failed to expand core.excludesFile: %s", error_message(err)
             );
+            return r;
         }
+        source_read(
+            f, path[0] == '/' ? path : str_path_join(f->arena, r->workdir, path), 0,
+            r->casing, &r->excludes_file
+        );
     }
     if (!excludesfile || (optional && !r->excludes_file.rules && !r->excludes_file.failure)) {
         const char *xdg = getenv("XDG_CONFIG_HOME");

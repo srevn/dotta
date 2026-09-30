@@ -57,10 +57,8 @@
  * rules are plain files whatever the format, and reading them where libgit2 cannot
  * open the repository is what this module is for; and its layout keys are read
  * with the includes libgit2 follows, where git's format pass reads the file alone.
- * `core.excludesFile` spelled from another user's home (`~user/`) is refused,
- * as every tilde dotta reads is (sys/filesystem.h fs_expand_tilde), and one spelled
- * from git's own install (`%(prefix)/`) names a place dotta cannot know: it is
- * read from the workdir, and is not there.
+ * `core.excludesFile` spelled from git's own install (`%(prefix)/`) names a place
+ * dotta cannot know: it is read from the workdir, and is not there.
  *
  * What cannot be read is a failure, never an answer. What git reads as absent
  * by rule reads absent here: a rule file that is not there, and an in-tree
@@ -70,7 +68,9 @@
  * or a file of the repository's own configuration that the invoker cannot read;
  * a `.git` file that names no repository, a `.git` that is neither a file nor a
  * directory, a git directory whose commondir names nothing; a `core.worktree`
- * that names nothing, or stands beside `core.bare` — each minted once per cause
+ * that names nothing, or stands beside `core.bare`, or a `core.excludesFile`
+ * spelled from the home of a user the system does not know (a known user's is
+ * read from that user's home, as git expands it) — each minted once per cause
  * and answered again for every entry that reaches it: a directory's, a
  * repository's, a file's. One of the machine's configuration files that the invoker
  * cannot read is absent, as git skips a global or XDG file; the system file libgit2

@@ -433,8 +433,9 @@ static error_t list_files(
             );
         }
 
+        /* The history behind each row, sought for the rows alone */
         err = stats_build_file_commit_map(
-            repo, opts->profile, tree, ctx->arena, &commit_map
+            repo, opts->profile, &files, ctx->arena, &commit_map
         );
         if (err) {
             /* Non-fatal: continue without commit info */

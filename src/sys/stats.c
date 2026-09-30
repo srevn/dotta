@@ -11,18 +11,12 @@
 
 #include <ctype.h>
 #include <git2.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/hashmap.h"
-#include "base/heap.h"
 #include "sys/gitops.h"
-
-/* Configuration constants */
-#define PATH_BUFFER_SIZE 1024
-#define HASHMAP_INITIAL_SIZE 256
 
 /**
  * File -> commit map (opaque type)
@@ -80,93 +74,12 @@ static commit_info_t stats_commit_info(arena_t *arena, const git_commit *commit)
 }
 
 /**
- * Tree walk callback data (for populating file paths into hashmap)
- */
-struct tree_populate_data {
-    hashmap_t *map;
-    size_t file_count;
-};
-
-/**
- * Tree walk callback: add each blob path to hashmap with NULL value
- *
- * Pre-populates the map with all file paths from the current tree. NULL values
- * serve as sentinels for "not yet mapped to a commit". This ensures the commit
- * walker only processes files that actually exist in the current tree, preventing
- * premature early termination.
- */
-static int populate_tree_paths_callback(
-    const char *root,
-    const git_tree_entry *entry,
-    void *payload
-) {
-    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-        return 0;
-    }
-
-    struct tree_populate_data *data = payload;
-
-    const char *name = git_tree_entry_name(entry);
-    size_t root_len = root ? strlen(root) : 0;
-    size_t name_len = strlen(name);
-    size_t path_len = root_len + name_len;
-
-    /* Build full path (root is directory prefix, e.g. "home/") */
-    char stack_buf[PATH_BUFFER_SIZE];
-    char *path = stack_buf;
-
-    if (path_len >= sizeof(stack_buf)) {
-        path = heap_alloc(path_len + 1);
-    }
-
-    memcpy(path, root, root_len);
-    memcpy(path + root_len, name, name_len);
-    path[path_len] = '\0';
-
-    hashmap_set(data->map, path, NULL);
-
-    if (path != stack_buf) {
-        free(path);
-    }
-
-    data->file_count++;
-    return 0;
-}
-
-/**
- * Populate hashmap with all file paths from tree
- *
- * Walks the tree once, adding all blob paths as keys with NULL values. Returns
- * the total file count for early termination tracking.
- */
-static error_t populate_tree_paths(
-    git_tree *tree,
-    hashmap_t *map,
-    size_t *out_count
-) {
-    CHECK_NULL(tree);
-    CHECK_NULL(map);
-    CHECK_NULL(out_count);
-
-    struct tree_populate_data data = {
-        .map        = map,
-        .file_count = 0
-    };
-
-    error_t err = gitops_tree_walk(tree, populate_tree_paths_callback, &data);
-    if (err) return err;
-
-    *out_count = data.file_count;
-    return NULL;
-}
-
-/**
  * Unified commit walker
  *
  * Walks commit history and processes diffs based on mode:
  * - MAP mode: Populates pre-seeded hashmap entries with commit info. The map
- *   must be pre-populated with current-tree paths (NULL values) to ensure only
- *   valid files are mapped and early termination is correct.
+ *   must be pre-populated with the names to map (NULL values) to ensure only
+ *   they are mapped and early termination is correct.
  * - HISTORY mode: Collects all commits that modified a specific file.
  *
  * Every info it makes is the walk's arena's, so a walk that fails partway leaves
@@ -389,47 +302,48 @@ error_t stats_blob_size_with_odb(
 error_t stats_build_file_commit_map(
     git_repository *repo,
     const char *branch_name,
-    git_tree *tree,
+    const string_array_t *paths,
     arena_t *arena,
     file_commit_map_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(branch_name);
-    CHECK_NULL(tree);
+    CHECK_NULL(paths);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    /* Pre-populate map with all current-tree file paths (NULL values). This ensures
-     * the commit walker only maps files that actually exist in the current tree,
-     * preventing spurious entries from deleted/renamed files and fixing premature
-     * early termination. The map owns its keys, so a path built on the walk's
-     * stack is copied into the arena as it takes its slot. */
-    hashmap_t *paths = hashmap_create(arena, HASHMAP_INITIAL_SIZE);
-    size_t files_needed;
-    error_t err = populate_tree_paths(tree, paths, &files_needed);
-    if (err) return err;
+    /* Pre-populate the map with the caller's names (NULL values), and only them.
+     * The commit walker maps a name the map holds and no other, so a file deleted
+     * or renamed along the history is never credited, and the walk stops once
+     * every name is mapped — a name nobody reads, left in, would hold it to the
+     * root commit. The map owns its keys, copied into the arena as each takes
+     * its slot. */
+    hashmap_t *map = hashmap_create(arena, paths->count);
+    for (size_t i = 0; i < paths->count; i++) {
+        hashmap_set(map, paths->entries[i], NULL);
+    }
 
     /* Initialize walk context */
     walk_t walk = {
         .mode             = WALK_MODE_MAP,
         .target_path      = NULL,
         .arena            = arena,
-        .map              = paths,
+        .map              = map,
         .commits          = NULL,
         .commits_count    = 0,
         .commits_capacity = 0,
         .files_found      = 0,
-        .files_needed     = files_needed
+        .files_needed     = hashmap_size(map)
     };
 
     /* Walk commits to build map */
-    err = stats_walk(repo, branch_name, &walk);
+    error_t err = stats_walk(repo, branch_name, &walk);
     if (err) return err;
 
-    file_commit_map_t *map = arena_calloc(arena, 1, sizeof(*map));
-    map->map = paths;
+    file_commit_map_t *commit_map = arena_calloc(arena, 1, sizeof(*commit_map));
+    commit_map->map = map;
 
-    *out = map;
+    *out = commit_map;
     return NULL;
 }
 

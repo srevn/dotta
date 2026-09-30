@@ -100,22 +100,26 @@ error_t stats_blob_size_with_odb(
 /**
  * Build file→commit mapping
  *
- * Walks commit history from newest to oldest, building a mapping from each file
- * (in the given tree) to its most recent commit.
+ * Walks commit history from newest to oldest, mapping each of `paths` to the
+ * most recent commit that touched it. The names are the caller's: which of a
+ * tree's blobs a screen reads is knowledge this layer does not have (the header),
+ * so the reader hands in the listing it prints — the branch's content, never
+ * its machinery (cmds/list.c list_files) — and the map holds those names and no
+ * other.
  *
- * Optimization: Stops early when all files in tree have been found. This makes
- * the operation much faster for profiles where files were modified recently (common
- * case).
+ * Stops early once every name is mapped, which makes a history whose listed files
+ * all changed recently cheap however long it is. Each name is met first at its
+ * newest commit, so stopping sooner changes no answer.
  *
  * Performance: O(commits_needed × files_per_commit) - with early termination
- * Memory: O(files_in_tree) - one slot per file, and one commit_info per commit
- * that maps a file, shared by every file it maps
+ * Memory: O(paths) - one slot per name, and one commit_info per commit that maps
+ * a name, shared by every name it maps
  *
  * Note: This is expensive (history walk). Use only in verbose mode.
  *
  * @param repo Repository (required)
  * @param branch_name Branch name (required, e.g., "global")
- * @param tree Tree containing files to track (required)
+ * @param paths The names to map: storage paths the branch's tip holds (required)
  * @param arena Arena the map, its keys and its commits live in (required)
  * @param out File→commit map (required; left as it was on a failure)
  * @return Error or NULL on success
@@ -123,7 +127,7 @@ error_t stats_blob_size_with_odb(
 error_t stats_build_file_commit_map(
     git_repository *repo,
     const char *branch_name,
-    git_tree *tree,
+    const string_array_t *paths,
     arena_t *arena,
     file_commit_map_t **out
 );

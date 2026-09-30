@@ -28,7 +28,7 @@ ifeq ($(filter $(BUILD_TYPE),release debug coverage),)
 $(error BUILD_TYPE must be 'release', 'debug' or 'coverage' (got '$(BUILD_TYPE)'))
 endif
 
-CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror $(FEATURE_MACROS)
+CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Werror $(FEATURE_MACROS)
 ifeq ($(BUILD_TYPE),debug)
 CFLAGS += -g -O0 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
 else ifeq ($(BUILD_TYPE),coverage)

@@ -22,12 +22,13 @@
  *
  * The source tree's own rules — what git excludes where a path physically stands,
  * when the user runs `dotta add` against files that live inside a git repository
- * — are the fifth layer and the lowest (sys/source.h). The builder opens it where
- * the configuration respects it (ignore_source), and the ladder's one question
- * asks it where the four exclude nothing (ignore_verdict): a directory it excludes
- * is final like any other, and a `!` in any of the four re-opens the rung it
- * names against the source's rules too — that rung and not what lies beneath
- * it, where the source's finer rules still speak.
+ * — are the fifth layer and the lowest (sys/source.h): the source layer, and on
+ * every screen Git's ignore rules, which is what it reads. The builder opens it
+ * where the configuration respects it (ignore_source), and the ladder's one
+ * question asks it where the four exclude nothing (ignore_verdict): a directory
+ * it excludes is final like any other, and a `!` in any of the four re-opens
+ * the rung it names against the source's rules too — that rung and not what lies
+ * beneath it, where the source's finer rules still speak.
  *
  * What the rules reach
  * --------------------
@@ -131,7 +132,7 @@ typedef struct ignore_rules ignore_rules_t;
  */
 typedef enum {
     IGNORE_ORIGIN_NONE = 0,   /* No rule matched */
-    IGNORE_ORIGIN_SOURCE,     /* The source repository's rules (lowest priority) */
+    IGNORE_ORIGIN_SOURCE,     /* Git's ignore rules, where the path stands (lowest priority) */
     IGNORE_ORIGIN_BUILTIN,    /* Compiled defaults (fallback when baseline absent) */
     IGNORE_ORIGIN_BASELINE,   /* Baseline .dottaignore at BASELINE_REF */
     IGNORE_ORIGIN_PROFILE,    /* Profile .dottaignore on its branch */
@@ -158,12 +159,16 @@ typedef enum {
  * physically stands in, and the verdict names it by the first rung of the name
  * that is that directory as the kernel spells it — the rung a `!` of the four
  * re-opens it at — or IGNORE_RUNG_UNNAMED where no rung of the name is
- * (ignore_verdict). The pattern is borrowed from the arena its rule was parsed
- * into, the command's or longer.
+ * (ignore_verdict). The source layer's rule names the file it was read from,
+ * absolute as sys/source read it, and its line there; the four's live in no file
+ * a path names. Every string is borrowed from the arena its rule was read into,
+ * the command's or longer.
  */
 typedef struct {
     ignore_origin_t origin;   /* The layer whose rule excludes the path; NONE: none does */
     const char *pattern;      /* That rule as written; NULL with NONE */
+    const char *file;         /* The file the source layer read it from, absolute; NULL for the four */
+    size_t line;              /* Its line in that file, 1-based as git counts; 0 with no file */
     size_t rung;              /* How far above the path, in its name: 0 the path itself */
 } ignore_verdict_t;
 
@@ -347,13 +352,49 @@ error_t ignore_verdict(
 );
 
 /**
- * Describe an origin tag for diagnostic display: the layer a verdict names
- * (ignore_verdict_t), in the words its readers print.
+ * A verdict for the screen: the layer and the rule as written — `baseline
+ * .dottaignore: '*.log'` — and for the source layer's rule, the file and line
+ * it was read at before it, as git's check-ignore -v names a rule: `Git's ignore
+ * rules: /home/u/proj/.gitignore:1: 'gen/'`. "not ignored" where no rule excludes
+ * the path.
  *
- * @param origin Origin tag
- * @return Human-readable static string (never NULL, never to be freed)
+ * The one producer of the layers' words on a screen. The file is printed as the
+ * verdict holds it, absolute: the kernel's spelling for a tree's own lists, the
+ * configuration's for core.excludesFile (sys/source.h), so no one home abbreviates
+ * the three. Readers: cmds/add.c add_collect (the walk's VERBOSE line) and
+ * add_refuse_excluded (the refusal), cmds/ignore.c test_path_ignore (the Reason).
+ *
+ * @param arena   Arena the words live in (must not be NULL)
+ * @param verdict The verdict (must not be NULL)
+ * @return The words; never NULL
  */
-const char *ignore_origin_describe(ignore_origin_t origin);
+const char *ignore_verdict_describe(arena_t *arena, const ignore_verdict_t *verdict);
+
+/**
+ * The negation that re-opens the rung a verdict names: `!` and the rule naming
+ * that rung of the path's name and nothing else (base/gitignore.h
+ * gitignore_literal) — what -e takes to let the path past it. Clearing the rung
+ * can uncover the next, beneath it or in the layer below, which the verdict asked
+ * again names.
+ *
+ * NULL where no pattern reaches the rung: IGNORE_RUNG_UNNAMED, a root's own rung
+ * (its tail is empty, and no rule reaches it), or a name no line of the grammar
+ * holds (a newline in it, or a file's final carriage return). Reader: cmds/add.c
+ * add_refuse_excluded.
+ *
+ * @param arena        Arena the negation lives in (must not be NULL)
+ * @param verdict      A verdict that excludes the path (must not be NULL)
+ * @param storage_path The name the verdict was asked of (must not be NULL)
+ * @param kind         What stands there: the path's own rung is marked a directory
+ *                     where it is one, and every rung above it is one
+ * @return The negation, the arena's; NULL where no pattern reaches the rung
+ */
+const char *ignore_verdict_negation(
+    arena_t *arena,
+    const ignore_verdict_t *verdict,
+    const char *storage_path,
+    path_kind_t kind
+);
 
 /**
  * Read a `.dottaignore` blob from a ref into a heap buffer: its bytes, as Git

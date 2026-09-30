@@ -372,11 +372,11 @@ static error_t add_spell(
  * the path, where one of theirs does, else the source tree's: within each an
  * excluded directory is final, so the climb ends at the first rung a rule excludes
  * and never reaches the rules below it (core/ignore.h ignore_verdict). Clearing
- * that one can uncover the next, beneath it or in the layer below, which is why
- * the refusal offers one `-e` per rule rather than one flag and a promise. A
- * source layer that cannot answer, where no rung is excluded, degrades to a verbose
- * warning and no exclusion, so an odd source repository never blocks the user
- * from adding a file they explicitly named.
+ * that one can uncover the next, beneath it or in the layer below: the refusal
+ * offers the `-e` re-opening exactly that rung, and the next refusal names the
+ * next (add_refuse_excluded). A source layer that cannot answer, where no rung
+ * is excluded, degrades to a verbose warning and no exclusion, so an odd source
+ * repository never blocks the user from adding a file they explicitly named.
  */
 static ignore_verdict_t add_excluded(
     const walk_t *walk, const manifest_row_t *held, const char *filesystem_path,
@@ -646,11 +646,13 @@ static error_t add_collect(
 
             /* Said at VERBOSE where the rule decided this very entry, under the
              * layer and the rule: beneath a directory the walk passes through,
-             * that directory's own line said it. */
-            if (verdict.rung == 0) {
+             * that directory's own line said it. The words are made only where
+             * they print — a walk can exclude thousands — in the entry's
+             * scratch. */
+            if (verdict.rung == 0 && output_is_verbose(out)) {
                 output_info(
-                    out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')%s", child_fs,
-                    ignore_origin_describe(verdict.origin), verdict.pattern,
+                    out, OUTPUT_VERBOSE, "Excluded: %s (%s)%s", child_fs,
+                    ignore_verdict_describe(scratch, &verdict),
                     claims.origin == IGNORE_ORIGIN_NONE
                         ? ", entered for the claims beneath it" : ""
                 );
@@ -699,6 +701,74 @@ static error_t add_collect(
     }
 
     return NULL;
+}
+
+/**
+ * Refuse a path named on the command line that a rule excludes
+ *
+ * The refusal names the rule — the layer, and for Git's rules the file and line
+ * it was read at (core/ignore.h ignore_verdict_describe) — and offers the -e
+ * that re-opens exactly the rung it closed (ignore_verdict_negation): clearing
+ * it can uncover the next rung, which the next refusal names. The operation's
+ * own -e is named and offered nothing, since this command said it. Where no -e
+ * reaches the rung, the refusal says so and names what does: respect_gitignore
+ * for Git's rules, the rule itself for the four's. A directory the profile only
+ * passes through holds claims beneath it, which update re-captures without making
+ * the directory one, and the refusal names that too.
+ *
+ * The argument is echoed as typed, and every command line it offers is quoted
+ * for the shell the user types it back into (base/string.h str_shell_quote).
+ */
+static error_t add_refuse_excluded(
+    const walk_t *walk, const char *file, const char *storage_path, path_kind_t kind,
+    const manifest_row_t *held, const ignore_verdict_t *verdict
+) {
+    arena_t *arena = walk->ctx->arena;
+    const char *rule = ignore_verdict_describe(arena, verdict);
+
+    /* The operation's own -e: this command said it, and nothing is offered. */
+    if (verdict->origin == IGNORE_ORIGIN_CLI) {
+        return ERROR(ERR_INVALID_ARG, "'%s' is ignored by %s", file, rule);
+    }
+
+    /* A directory the profile only passes through: naming it makes a claim, and
+     * what the profile already holds beneath it is update's to re-capture,
+     * whichever way past the rule is taken. */
+    const char *beneath = manifest_is_derived(held)
+        ? arena_str_format(
+        arena, "\nProfile '%s' holds paths beneath it: dotta update -p %s %s "
+        "re-captures them", walk->profile, walk->profile, str_shell_quote(arena, file)
+        ) : "";
+
+    /* The -e re-opening the rung, where a pattern reaches it: beside the switch
+     * for Git's rules, which dotta does not write, and alone for the four's. */
+    const char *negation = ignore_verdict_negation(arena, verdict, storage_path, kind);
+    if (negation && verdict->origin == IGNORE_ORIGIN_SOURCE) {
+        return ERROR(
+            ERR_INVALID_ARG, "'%s' is ignored by %s\n"
+            "Add it anyway with -e %s, or turn Git's rules off with respect_gitignore = "
+            "false%s", file, rule, str_shell_quote(arena, negation), beneath
+        );
+    }
+    if (negation) {
+        return ERROR(
+            ERR_INVALID_ARG, "'%s' is ignored by %s\nAdd it anyway with -e %s%s", file,
+            rule, str_shell_quote(arena, negation), beneath
+        );
+    }
+
+    /* No pattern reaches the rung, and the layer's own way past is the one left. */
+    if (verdict->origin == IGNORE_ORIGIN_SOURCE) {
+        return ERROR(
+            ERR_INVALID_ARG, "'%s' is ignored by %s\n"
+            "No -e can re-open it; turn Git's rules off with respect_gitignore = false "
+            "to add it%s", file, rule, beneath
+        );
+    }
+    return ERROR(
+        ERR_INVALID_ARG, "'%s' is ignored by %s\n"
+        "No -e can re-open it; change that rule to add it%s", file, rule, beneath
+    );
 }
 
 /**
@@ -757,15 +827,12 @@ static error_t add_refuse_moves(const walk_t *walk) {
         output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));
 
         return ERROR(
-            ERR_INVALID_ARG,
-            "Profile '%s' names '%s' as '%s'\n\n"
+            ERR_INVALID_ARG, "Profile '%s' names '%s' as '%s'\n\n"
             "This command's directory claims would name it '%s', which it does "
-            "not capture — a directory must be named before the paths beneath "
-            "it.\n"
+            "not capture — a directory must be named before the paths beneath it.\n"
             "  dotta add %s --force %s   captures those bytes under that name\n"
             "  dotta remove %s %s   gives that name up instead",
-            walk->profile, shown, kept, next,
-            walk->profile, next, walk->profile, next
+            walk->profile, shown, kept, next, walk->profile, next, walk->profile, next
         );
     }
 
@@ -1865,33 +1932,18 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         /* A path named on the command line meets the rules the walk would ask
          * of it, but a verdict against it is an error, not a silent skip: the
          * user asked for it by name, and the answer says which rule stands in
-         * the way and how to get past it. A re-capture of a claim meets -e alone,
-         * so no rule of discovery refuses it. The source tree's rules read where
-         * the path physically stands and not the name, over every rung of it,
-         * so a root standing inside a repository whose rules name it, or name a
-         * directory above it, is refused here as any ignored directory is, unless
-         * the profile already tracks it; at "/" the path names no entry and asks
-         * nothing. */
+         * the way and how to get past it (add_refuse_excluded). A re-capture of
+         * a claim meets -e alone, so no rule of discovery refuses it. The source
+         * tree's rules read where the path physically stands and not the name,
+         * over every rung of it, so a root standing inside a repository whose
+         * rules name it, or name a directory above it, is refused here as any
+         * ignored directory is, unless the profile already tracks it; at "/"
+         * the path names no entry and asks nothing. */
         const ignore_verdict_t verdict = add_excluded(
             &walk, held, filesystem_path, storage_path, kind
         );
-        if (verdict.origin == IGNORE_ORIGIN_SOURCE) {
-            err = ERROR(
-                ERR_INVALID_ARG,
-                "'%s' is ignored by its source tree's .gitignore\n"
-                "Set respect_gitignore = false in the config to add it",
-                file
-            );
-            goto cleanup;
-        }
         if (verdict.origin != IGNORE_ORIGIN_NONE) {
-            err = ERROR(
-                ERR_INVALID_ARG, "'%s' is ignored by %s: '%s'\n"
-                "Add it anyway with -e '!%s' — one -e per rule that "
-                "excludes it — or edit the rule with 'dotta ignore'",
-                file, ignore_origin_describe(verdict.origin), verdict.pattern,
-                verdict.pattern
-            );
+            err = add_refuse_excluded(&walk, file, storage_path, kind, held, &verdict);
             goto cleanup;
         }
 

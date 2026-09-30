@@ -505,7 +505,7 @@ size_t gitignore_rule_span(const char *line, size_t len);
  * reads it back whole (gitignore_rule_span is its length), and it matches the
  * path at its rung and nothing else there, as its set compares letters. A caller
  * passes it as it stands to leave exactly that path out, or behind a `!` to re-open
- * exactly that rung.
+ * exactly that rung. Readers: core/ignore.c ignore_verdict_negation, behind a `!`.
  *
  * `path` is read as gitignore_eval reads one: relative to the rules' directory,
  * its leading slashes shed and a trailing one the directory hint.

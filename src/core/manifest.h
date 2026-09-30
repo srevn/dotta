@@ -243,11 +243,13 @@ static inline bool manifest_is_claim(
  * on reads [ancestor] (core/workspace.c workspace_item_tags);
  * update's derive-scope slice (cmds/update.c cmd_update); the two refusals of a
  * second name for one path, where a derived claim names nothing and so blocks
- * nothing (cmds/add.c cmd_add, cmds/revert.c refuse_second_name); and add's rule
+ * nothing (cmds/add.c cmd_add, cmds/revert.c refuse_second_name); add's rule
  * question, where it claims nothing either and so is a discovery, meeting every
- * rule (cmds/add.c add_excluded). Every other `tracked` read in the tree stands
- * where the kind is already settled and asks the field's own meaning, not this
- * predicate.
+ * rule (cmds/add.c add_excluded); and the walk that enters such a directory for
+ * the claims beneath it, and the refusal that names the update re-capturing them
+ * (cmds/add.c add_collect, add_refuse_excluded). Every other `tracked` read in
+ * the tree stands where the kind is already settled and asks the field's own
+ * meaning, not this predicate.
  */
 static inline bool manifest_is_derived(const manifest_row_t *row) {
     return row && row->type == PATH_TYPE_DIRECTORY && !row->tracked;

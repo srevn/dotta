@@ -549,8 +549,9 @@ error_t ignore_verdict(
     );
     if (match.rule) {
         *out = (ignore_verdict_t){
-            (ignore_origin_t) gitignore_rule_origin(match.rule),
-            gitignore_rule_pattern(match.rule), match.rung
+            .origin = (ignore_origin_t) gitignore_rule_origin(match.rule),
+            .pattern = gitignore_rule_pattern(match.rule),
+            .rung = match.rung,
         };
         return NULL;
     }
@@ -623,7 +624,11 @@ error_t ignore_verdict(
             for (const char *sep = name + cut; sep; sep = strchr(sep + 1, '/')) rung++;
         }
         *out = (ignore_verdict_t){
-            IGNORE_ORIGIN_SOURCE, gitignore_rule_pattern(found.rule), rung
+            .origin = IGNORE_ORIGIN_SOURCE,
+            .pattern = gitignore_rule_pattern(found.rule),
+            .file = found.file,
+            .line = gitignore_rule_line(found.rule),
+            .rung = rung,
         };
     }
 
@@ -646,23 +651,74 @@ error_t ignore_verdict(
     if (err) return failure ? failure : err;
 
     *out = (ignore_verdict_t){
-        IGNORE_ORIGIN_SOURCE, gitignore_rule_pattern(found.rule), 0
+        .origin = IGNORE_ORIGIN_SOURCE,
+        .pattern = gitignore_rule_pattern(found.rule),
+        .file = found.file,
+        .line = gitignore_rule_line(found.rule),
     };
 
     return NULL;
 }
 
-const char *ignore_origin_describe(ignore_origin_t origin) {
-    switch (origin) {
+const char *ignore_verdict_describe(arena_t *arena, const ignore_verdict_t *verdict) {
+    CHECK_NULL(arena);
+    CHECK_NULL(verdict);
+
+    /* The layer, in the words every screen names it by: the source layer's are
+     * Git's, whose rules it reads. */
+    const char *layer = NULL;
+    switch (verdict->origin) {
         case IGNORE_ORIGIN_NONE:     return "not ignored";
-        case IGNORE_ORIGIN_SOURCE:   return "source .gitignore";
-        case IGNORE_ORIGIN_BUILTIN:  return "built-in defaults";
-        case IGNORE_ORIGIN_BASELINE: return "baseline .dottaignore";
-        case IGNORE_ORIGIN_PROFILE:  return "profile .dottaignore";
-        case IGNORE_ORIGIN_CONFIG:   return "config file patterns";
-        case IGNORE_ORIGIN_CLI:      return "CLI --exclude patterns";
+        case IGNORE_ORIGIN_SOURCE:   layer = "Git's ignore rules"; break;
+        case IGNORE_ORIGIN_BUILTIN:  layer = "built-in defaults"; break;
+        case IGNORE_ORIGIN_BASELINE: layer = "baseline .dottaignore"; break;
+        case IGNORE_ORIGIN_PROFILE:  layer = "profile .dottaignore"; break;
+        case IGNORE_ORIGIN_CONFIG:   layer = "config file patterns"; break;
+        case IGNORE_ORIGIN_CLI:      layer = "CLI --exclude patterns"; break;
     }
-    CHECK_ARG(false, "an ignore origin no enumerator names");
+    CHECK_ARG(layer, "an ignore origin no enumerator names");
+
+    /* The rule as written, behind the file and line the source layer read it
+     * at, as git's check-ignore -v names one. */
+    return verdict->file
+        ? arena_str_format(
+        arena, "%s: %s:%zu: '%s'", layer, verdict->file, verdict->line, verdict->pattern
+           ) : arena_str_format(arena, "%s: '%s'", layer, verdict->pattern);
+}
+
+const char *ignore_verdict_negation(
+    arena_t *arena, const ignore_verdict_t *verdict, const char *storage_path, path_kind_t kind
+) {
+    CHECK_NULL(arena);
+    CHECK_NULL(verdict);
+    CHECK_NULL(storage_path);
+    CHECK_ARG(
+        verdict->origin != IGNORE_ORIGIN_NONE,
+        "a verdict that excludes nothing re-opens nothing"
+    );
+
+    /* A directory no rung of the name is, no pattern of the name reaches. */
+    if (verdict->rung == IGNORE_RUNG_UNNAMED) return NULL;
+
+    /* The rung's own bytes of the name: the tail, with one component cut away
+     * for each rung the verdict names above the path. */
+    const char *tail = label_tail(storage_path);
+    size_t through = strlen(tail);
+    for (size_t up = verdict->rung; up > 0; up--) {
+        while (through > 0 && tail[through - 1] != '/') through--;
+        if (through > 0) through--;
+    }
+
+    /* The rule naming that rung and nothing else, from a copy of it the call
+     * lets go: the path's own rung marked a directory where it is one, and every
+     * rung above it one — and behind it the `!` that re-opens it. */
+    char *subject = heap_strndup(tail, through);
+    const char *rule = gitignore_literal(
+        arena, subject, verdict->rung > 0 || kind == PATH_KIND_DIRECTORY
+    );
+    free(subject);
+
+    return rule ? arena_str_format(arena, "!%s", rule) : NULL;
 }
 
 const char *ignore_baseline_defaults(void) {

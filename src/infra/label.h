@@ -224,7 +224,9 @@ label_t label_of(const char *storage_path);
  * for --exclude, a row's or an orphan's (core/scope.c scope_is_excluded), the
  * policy of a name for auto_encrypt (core/policy.c
  * encryption_policy_matches_auto_patterns), and `ignore --test`'s trace of the
- * subject it matched (cmds/ignore.c test_path_ignore). One reader counts rather
+ * subject it matched (cmds/ignore.c test_path_ignore). One reader cuts rather
+ * than matches: the negation that re-opens a verdict's rung, spelled from the
+ * tail cut there (core/ignore.c ignore_verdict_negation). One reader counts rather
  * than matches: the climb, whose rungs are the separators in the tail
  * (core/metadata.c metadata_capture_ancestors).
  *

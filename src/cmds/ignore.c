@@ -979,8 +979,7 @@ static error_t test_path_ignore(
         if (verdict.origin != IGNORE_ORIGIN_NONE) {
             output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} %sIGNORED\n", who);
             output_info(
-                out, OUTPUT_NORMAL, "  Reason: %s: '%s'",
-                ignore_origin_describe(verdict.origin), verdict.pattern
+                out, OUTPUT_NORMAL, "  Reason: %s", ignore_verdict_describe(ctx->arena, &verdict)
             );
             any_ignored = true;
         } else {

@@ -647,16 +647,9 @@ static error_t modify_dottaignore(
     return NULL;
 }
 
-/* The longest `who` an asker's line carries: "Profile '" (9), a profile name,
- * "': " (3) and the terminator, rounded. The name is bounded by the ref it becomes,
- * not by git's 255 — that one is per component and a profile name has several:
- * gitops_build_refname refuses a name that will not fit DOTTA_REFNAME_MAX after
- * "refs/heads/", and every site that turns a profile into a ref goes through it
- * (sys/gitops.h). */
-#define IGNORE_ASKER_MAX 288
-
 /**
- * The kind the rules are asked with: what stands where the argument stands.
+ * The kind the rules are asked with: what stands where the argument stands, or
+ * `hint` where nothing can be looked at.
  *
  * One lstat, the link itself and never its target — add's walk and the untracked
  * scan both classify this way and offer a symlink whole (cmds/add.c add_collect,
@@ -667,11 +660,11 @@ static error_t modify_dottaignore(
  * `filesystem_path` is NULL for a custom/ name this asker binds no target for:
  * the name stands nowhere, so nothing can be looked at and the source tree has
  * no path to be asked about either. That, an absent path and an unreadable one
- * are one answer — the kind was not observed and the trailing-slash hint stands
- * in, which is what lets a rule be tested against a path that does not exist
- * yet — and each says which at VERBOSE, so a verdict that leaned on the hint
- * says so. An unreadable path is never reported as an absent one (sys/filesystem.h:
- * a reader must never infer absence from a failure to look).
+ * are one answer — the kind was not observed and `hint`, the argument's trailing
+ * slash, stands in, which is what lets a rule be tested against a path that does
+ * not exist yet — and each says which at VERBOSE, so a verdict that leaned on
+ * the hint says so. An unreadable path is never reported as an absent one
+ * (sys/filesystem.h: a reader must never infer absence from a failure to look).
  *
  * An observed leaf is a leaf whatever the hint says: `--test ~/foo/` where ~/foo
  * is a file is matched as a file.
@@ -682,11 +675,11 @@ static error_t modify_dottaignore(
  * is the argument as the user wrote it — the only thing there is to name when
  * nothing stands anywhere for it to be.
  */
-static bool stands_as_directory(
+static path_kind_t ignore_kind(
     const char *who,
     const char *typed,
     const char *filesystem_path,
-    bool trailing_slash,
+    path_kind_t hint,
     output_t *out
 ) {
     if (!filesystem_path) {
@@ -695,17 +688,17 @@ static bool stands_as_directory(
             "%s'%s' has no deployment target here: only the name is matched",
             who, typed
         );
-        return trailing_slash;
+        return hint;
     }
 
     switch (fs_lstat_occupant(filesystem_path, NULL)) {
         case FS_OCCUPANT_DIRECTORY:
-            return true;
+            return PATH_KIND_DIRECTORY;
 
         case FS_OCCUPANT_REGULAR:
         case FS_OCCUPANT_SYMLINK:
         case FS_OCCUPANT_OTHER:
-            return false;
+            return PATH_KIND_FILE;
 
         case FS_OCCUPANT_NONE:
             output_info(
@@ -722,7 +715,7 @@ static bool stands_as_directory(
             break;
     }
 
-    return trailing_slash;
+    return hint;
 }
 
 /**
@@ -788,7 +781,7 @@ static bool stands_as_directory(
 static error_t test_path_ignore(
     const dotta_ctx_t *ctx,
     const char *test_path,
-    const char *specific_profile
+    const char *profile
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(test_path);
@@ -802,30 +795,26 @@ static error_t test_path_ignore(
      * thing read from it: both readings below shed a trailing slash of their
      * own — the resolver's storage arm sheds it, and str_path_fold folds it away
      * — so nothing here has to hand them a shortened copy. Shortening it *before*
-     * the dispatch is what used to read `home/` as the working directory's
-     * `home`. */
+     * the dispatch is what used to read `home/` as the working directory's `home`.
+     * It is the kind the argument alone gives, which stands wherever nothing
+     * can be looked at (ignore_kind). */
     size_t len = strlen(test_path);
-    bool trailing_slash = len > 1 && test_path[len - 1] == '/';
+    const path_kind_t hint = len > 1 && test_path[len - 1] == '/'
+        ? PATH_KIND_DIRECTORY : PATH_KIND_FILE;
 
     /* The profile named must be here before anything is read under it: the view
      * below is its branch, and the refusal names both ways out. */
-    error_t err = NULL;
-    if (specific_profile) {
-        err = profile_require(repo, specific_profile);
-        if (err) return err;
-    }
+    if (profile) RETURN_IF_ERROR(profile_require(repo, profile));
 
     /* The key the user named, fixed for every asker: the resolver's sum, its
      * tag the whole condition the loop's arms read and its member the argument's
-     * own reading. A path's kind stands beside it, observed there once, so the
-     * loop reads what the argument gave and asks nothing of it again. The table
-     * is the run's until a view is built, and then the view's own — the one its
-     * rows were placed by. */
+     * own reading. The table is the run's until a view is built, and then the
+     * view's own — the one its rows were placed by. */
     const mount_table_t *mounts = ctx->run.mounts;
     path_input_t arg;                         /* the key: a name or a path */
-    bool argument_is_directory = false;       /* a path's kind, observed there once */
     manifest_t *view = NULL;                  /* a path's: where each asker names it */
 
+    error_t err = NULL;
     if (label_prefixes(test_path)) {
         /* A storage shape, read by the one resolver that reads input shapes — a
          * name and never a path, since the same predicate dispatched here
@@ -858,9 +847,9 @@ static error_t test_path_ignore(
              * so a view is built and the table the rows were placed by is the
              * view's from here on — the named profile's arm hands in the very
              * table this lends back (core/manifest.h manifest_mounts). */
-            if (specific_profile) {
+            if (profile) {
                 err = manifest_build_branch(
-                    repo, specific_profile, mounts, ctx->arena, &view
+                    repo, profile, mounts, ctx->arena, &view
                 );
             } else {
                 err = manifest_build(repo, state, ctx->arena, &view);
@@ -884,11 +873,11 @@ static error_t test_path_ignore(
      * an array of one that is both the named-profile and the nothing-enabled
      * case; the enabled set replaces it when it holds any, and so does what the
      * preamble keys on. */
-    const char *const *askers = &specific_profile;
+    const char *const *askers = &profile;
     size_t asker_count = 1;
     string_array_t enabled = { 0 };
 
-    if (!specific_profile) {
+    if (!profile) {
         err = profile_resolve_enabled(repo, state, ctx->arena, &enabled);
         if (err) return error_wrap(err, "Failed to load profiles");
 
@@ -911,33 +900,29 @@ static error_t test_path_ignore(
         }
     }
 
-    /* The kind a filesystem argument is asked with: one reading for every asker,
-     * so one observation and no asker to name it. Taken after the preamble rather
-     * than where the key was read, so the note it may print stands under the
-     * same header the per-asker notes of a storage name stand under — one command
-     * saying one thing in one order. */
-    if (arg.key == PATH_KEY_FILESYSTEM) {
-        argument_is_directory = stands_as_directory(
-            "", test_path, arg.filesystem_path, trailing_slash, out
-        );
-    }
+    /* The kind the argument gives: a path's, one reading for every asker, so
+     * one observation and no asker to name it — the loop reads it and asks nothing
+     * of the path again; a name's, the hint, which each asker's look refines
+     * where its target puts the name. Taken after the preamble rather than where
+     * the key was read, so the note it may print stands under the same header
+     * the per-asker notes of a storage name stand under — one command saying
+     * one thing in one order. */
+    const path_kind_t argument_kind = arg.key == PATH_KEY_FILESYSTEM
+        ? ignore_kind("", test_path, arg.filesystem_path, hint, out) : hint;
 
     for (size_t i = 0; i < asker_count; i++) {
         const char *asker = askers[i];
 
-        /* Whose answer this is, on every line of the turn. One value, so each
-         * message below is spelled once and no site can forget the form the asker
-         * that is no profile needs. */
-        char who[IGNORE_ASKER_MAX] = "";
-        if (asker) {
-            snprintf(who, sizeof(who), "Profile '%s': ", asker);
-        }
+        /* Whose answer this is, on every line of the turn. One value, in the
+         * command's arena, so each message below is spelled once and no site
+         * can forget the form the asker that is no profile needs. */
+        const char *who = asker ? arena_str_format(ctx->arena, "Profile '%s': ", asker) : "";
 
         /* The asker's reading of the key the user named: each arm keeps the half
          * the argument gave and fills the half it did not. */
         const char *name;
         const char *filesystem_path;
-        bool is_directory;
+        path_kind_t kind;
         switch (arg.key) {
             case PATH_KEY_STORAGE:
                 /* One name for every asker alike, standing where this asker's
@@ -945,9 +930,7 @@ static error_t test_path_ignore(
                  * only under a profile with a target. */
                 name = arg.storage_path;
                 filesystem_path = mount_resolve(ctx->arena, mounts, asker, name);
-                is_directory = stands_as_directory(
-                    who, test_path, filesystem_path, trailing_slash, out
-                );
+                kind = ignore_kind(who, test_path, filesystem_path, argument_kind, out);
                 break;
 
             case PATH_KEY_FILESYSTEM:
@@ -957,13 +940,13 @@ static error_t test_path_ignore(
                  * tail is "" and which no rule reaches. */
                 name = manifest_name(ctx->arena, view, asker, arg.filesystem_path, NULL);
                 filesystem_path = arg.filesystem_path;
-                is_directory = argument_is_directory;
+                kind = argument_kind;
                 break;
         }
 
         output_info(
             out, OUTPUT_VERBOSE, "%sMatching '%s' as '%s'%s", who, test_path,
-            label_tail(name), is_directory ? " (a directory)" : ""
+            label_tail(name), kind == PATH_KIND_DIRECTORY ? " (a directory)" : ""
         );
 
         const gitignore_ruleset_t *rules = NULL;
@@ -978,8 +961,7 @@ static error_t test_path_ignore(
          * again for each (sys/source.h). */
         ignore_verdict_t verdict;
         error_t failure = ignore_verdict(
-            rules, ignore_source(ignore_rules), name, filesystem_path,
-            is_directory ? PATH_KIND_DIRECTORY : PATH_KIND_FILE, &verdict
+            rules, ignore_source(ignore_rules), name, filesystem_path, kind, &verdict
         );
         if (failure) {
             output_warning(

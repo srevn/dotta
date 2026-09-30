@@ -12,17 +12,17 @@
  * Modified by Wayne Davison to special-case '/' matching, to make '**' work
  * differently than '*', and to fix the character-class code.
  *
- * Imported from git.git. It departs from git's in cost alone, in one branch,
- * and its answers are git's: a <star star slash> link returns the abort its
- * recursion met, where git's drops it and so searches the text twice over a link
- * — a line of links costs time doubling with each, in git as well — and a chain
- * of links is stepped over as its one link, where git's recurses a frame a link
- * and runs a long chain out of stack.
+ * Imported from git.git, its classes and case read from git's own table (below)
+ * as git's are. It departs from git's in cost alone, in one branch, and its answers
+ * are git's: a <star star slash> link returns the abort its recursion met, where
+ * git's drops it and so searches the text twice over a link — a line of links
+ * costs time doubling with each, in git as well — and a chain of links is stepped
+ * over as its one link, where git's recurses a frame a link and runs a long chain
+ * out of stack.
  */
 
 #include "base/wildmatch.h"
 
-#include <ctype.h>
 #include <string.h>
 
 #define GIT_SPACE 0x01
@@ -71,34 +71,25 @@ typedef unsigned char uchar;
                     && *(class) == *(litmatch) \
                     && strncmp((char*)class, litmatch, len) == 0)
 
-#if defined STDC_HEADERS || !defined isascii
-#define ISASCII(c) 1
-#else
-#define ISASCII(c) isascii(c)
-#endif
-
-#ifdef isblank
-#define ISBLANK(c) (ISASCII(c) && isblank(c))
-#else
-#define ISBLANK(c) ((c) == ' ' || (c) == '\t')
-#endif
-
-#ifdef isgraph
-#define ISGRAPH(c) (ISASCII(c) && isgraph(c))
-#else
-#define ISGRAPH(c) (ISASCII(c) && isprint(c) && !isspace(c))
-#endif
-
-#define ISPRINT(c) (ISASCII(c) && isprint(c))
-#define ISDIGIT(c) (ISASCII(c) && isdigit(c))
-#define ISALNUM(c) (ISASCII(c) && isalnum(c))
-#define ISALPHA(c) (ISASCII(c) && isalpha(c))
-#define ISCNTRL(c) (ISASCII(c) && iscntrl(c))
-#define ISLOWER(c) (ISASCII(c) && islower(c))
-#define ISPUNCT(c) (ISASCII(c) && ispunct(c))
-#define ISSPACE(c) (ISASCII(c) && isspace(c))
-#define ISUPPER(c) (ISASCII(c) && isupper(c))
-#define ISXDIGIT(c) (ISASCII(c) && isxdigit(c))
+/* Classes and case as git's own matcher reads them — its sane-ctype.h over the
+ * table above: ASCII alone, and no locale. The C library's would read `\v` and
+ * `\f` as space, and a set LC_CTYPE would give bytes past 0x7F classes and case,
+ * which git's never has. */
+#define ISSPACE(c)  sane_istest(c, GIT_SPACE)
+#define ISDIGIT(c)  sane_istest(c, GIT_DIGIT)
+#define ISALPHA(c)  sane_istest(c, GIT_ALPHA)
+#define ISALNUM(c)  sane_istest(c, GIT_ALPHA | GIT_DIGIT)
+#define ISCNTRL(c)  sane_istest(c, GIT_CNTRL)
+#define ISPUNCT(c) \
+        sane_istest(c, GIT_PUNCT | GIT_REGEX_SPECIAL | GIT_GLOB_SPECIAL | GIT_PATHSPEC_MAGIC)
+#define ISPRINT(c)  ((c) >= 0x20 && (c) <= 0x7e)
+#define ISGRAPH(c)  (ISPRINT(c) && !ISSPACE(c))
+#define ISBLANK(c)  ((c) == ' ' || (c) == '\t')
+#define ISXDIGIT(c) (ISDIGIT(c) || (ISALPHA(c) && ((c) | 0x20) <= 'f'))
+#define ISLOWER(c)  (ISALPHA(c) && ((c) & 0x20))
+#define ISUPPER(c)  (ISALPHA(c) && !((c) & 0x20))
+#define TOLOWER(c)  (ISALPHA(c) ? ((c) | 0x20) : (c))
+#define TOUPPER(c)  (ISALPHA(c) ? ((c) & ~0x20) : (c))
 
 /* Match pattern "p" against "text" */
 static int dowild(const uchar *p, const uchar *text, unsigned int flags) {
@@ -111,9 +102,9 @@ static int dowild(const uchar *p, const uchar *text, unsigned int flags) {
         if ((t_ch = *text) == '\0' && p_ch != '*')
             return WM_ABORT_ALL;
         if ((flags & WM_CASEFOLD) && ISUPPER(t_ch))
-            t_ch = tolower(t_ch);
+            t_ch = TOLOWER(t_ch);
         if ((flags & WM_CASEFOLD) && ISUPPER(p_ch))
-            p_ch = tolower(p_ch);
+            p_ch = TOLOWER(p_ch);
         switch (p_ch) {
             case '\\':
                 /* Literal match with following character.  Note that the test
@@ -209,11 +200,11 @@ static int dowild(const uchar *p, const uchar *text, unsigned int flags) {
                     if (!is_glob_special(*p)) {
                         p_ch = *p;
                         if ((flags & WM_CASEFOLD) && ISUPPER(p_ch))
-                            p_ch = tolower(p_ch);
+                            p_ch = TOLOWER(p_ch);
                         while ((t_ch = *text) != '\0' &&
                             (match_slash || t_ch != '/')) {
                             if ((flags & WM_CASEFOLD) && ISUPPER(t_ch))
-                                t_ch = tolower(t_ch);
+                                t_ch = TOLOWER(t_ch);
                             if (t_ch == p_ch)
                                 break;
                             text++;
@@ -266,7 +257,7 @@ static int dowild(const uchar *p, const uchar *text, unsigned int flags) {
                         if (t_ch <= p_ch && t_ch >= prev_ch)
                             matched = 1;
                         else if ((flags & WM_CASEFOLD) && ISLOWER(t_ch)) {
-                            uchar t_ch_upper = toupper(t_ch);
+                            uchar t_ch_upper = TOUPPER(t_ch);
                             if (t_ch_upper <= p_ch && t_ch_upper >= prev_ch)
                                 matched = 1;
                         }

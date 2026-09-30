@@ -1124,12 +1124,12 @@ static error_t validate_content(
                     );
                 }
                 e->content_held = true;
-                if (e->content.size == 0) {
-                    return ERROR(
-                        ERR_INVALID_ARG, "Symlink '%s' has an empty target",
-                        e->storage_path
-                    );
-                }
+
+                /* Phase 2 and the listing read the target as a C string, and an
+                 * empty one is symlink(2)'s to take or refuse, as Git leaves
+                 * it: the reserve gives a buffer that holds no byte its
+                 * terminator. */
+                buffer_reserve(&e->content, e->content.size);
                 break;
             }
 

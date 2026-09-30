@@ -1,11 +1,12 @@
 /**
  * filesystem.h - Safe filesystem operations
  *
- * Provides filesystem operations with comprehensive error handling, input
- * validation, and resource management.
+ * Provides filesystem operations with comprehensive error handling and resource
+ * management.
  *
  * Design principles:
- * - Validate all inputs before use
+ * - A path is the kernel's to answer: handed to it as the caller spelled it, an
+ *   empty one included, and its refusal is the error
  * - Return errors for all failure cases
  * - Clean up resources on error paths
  * - No silent failures
@@ -429,7 +430,7 @@ error_t fs_remove_dir(const char *path);
  * - Symlinks: removed via unlink() (does NOT follow to target)
  * - Directories: removed via recursive rmdir
  *
- * @param path Path to clear (must not be NULL or empty)
+ * @param path Path to clear (must not be NULL)
  * @return Error or NULL on success
  */
 error_t fs_clear_path(const char *path);
@@ -765,6 +766,10 @@ error_t fs_expand_tilde(const char *path, arena_t *arena, const char **out);
  * and consistency. The link is the one node without a descriptor to fchown, so
  * the path-based call lives here, inside the primitive — lchown, which changes
  * the link itself and never its target. -1 for either half leaves it as created.
+ *
+ * The target goes to symlink(2) as it stands, an empty one included: whether
+ * the link can be made is the kernel's answer, as Git hands a link blob's bytes
+ * to it (lib/git/entry.c write_entry).
  *
  * @param target Link target (must not be NULL)
  * @param linkpath Link path (must not be NULL)

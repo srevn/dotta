@@ -1,7 +1,5 @@
 /**
  * filesystem.c - Safe filesystem operations implementation
- *
- * All functions validate inputs and handle errors explicitly.
  */
 
 #include "sys/filesystem.h"
@@ -30,16 +28,9 @@
 /* Maximum file size for fs_read_file (256 MB) */
 #define FS_MAX_READ_SIZE ((size_t) 256 * 1024 * 1024)
 
-/**
- * Helper: Validate path argument
- */
-static inline error_t validate_path(const char *path) {
-    CHECK_NULL(path);
-    if (path[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
-    }
-    return NULL;
-}
+/* A write's temp file, beside its target: the target's directory, then this —
+ * mkstemp's template, whose six Xs fs_mkstemp reads */
+#define FS_TMP_SUFFIX "/.dotta-tmp-XXXXXX"
 
 /**
  * The kernel's calls on managed paths
@@ -327,7 +318,7 @@ error_t fs_read_fd(int fd, buffer_t *out) {
 }
 
 error_t fs_read_file(const char *path, buffer_t *out) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
     CHECK_NULL(out);
 
     /* fs_read_fd clears this too, but an open that fails never reaches it. */
@@ -470,7 +461,7 @@ error_t fs_write_file_raw(
     gid_t gid,
     struct stat *out_st
 ) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
     CHECK_ARG(data != NULL || size == 0, "data cannot be NULL with a size");
 
     /* Ensure parent directory exists */
@@ -484,9 +475,14 @@ error_t fs_write_file_raw(
     /* Build temp file path in the target's own directory. Two names in one
      * directory are necessarily on one filesystem, so the rename below can never
      * fail with EXDEV — there is no cross-device case to fall back from, and no
-     * second write strategy at all. */
+     * second write strategy at all. The name spells the parent whole before its
+     * suffix, so the parent goes here, and the refusal below reads it there. */
     char tmp_path[PATH_MAX];
-    int n = snprintf(tmp_path, sizeof(tmp_path), "%s/.dotta-tmp-XXXXXX", parent);
+    int n = snprintf(tmp_path, sizeof(tmp_path), "%s" FS_TMP_SUFFIX, parent);
+    free(parent);
+    if (n < 0 || (size_t) n >= sizeof(tmp_path)) {
+        return ERROR(ERR_FS, "Path too long for atomic write of '%s'", path);
+    }
 
     /* Create temp file with restrictive 0600 mode (mkstemp guarantee).
      *
@@ -495,20 +491,13 @@ error_t fs_write_file_raw(
      * file before a single byte of the replacement is written, and does so for
      * every mkstemp errno, ENOSPC included. A write that cannot be atomic is
      * reported, not attempted. */
-    int fd = -1;
-    error_t tmp_err = NULL;
-
-    if (n < 0 || (size_t) n >= sizeof(tmp_path)) {
-        tmp_err = ERROR(ERR_FS, "Path too long for atomic write of '%s'", path);
-    } else if ((fd = fs_mkstemp(tmp_path)) < 0) {
-        tmp_err = error_from_errno(
-            errno, "Failed to create a temporary file in '%s' for '%s'",
-            parent, path
+    int fd = fs_mkstemp(tmp_path);
+    if (fd < 0) {
+        return error_from_errno(
+            errno, "Failed to create a temporary file in '%.*s' for '%s'",
+            n - (int) (sizeof(FS_TMP_SUFFIX) - 1), tmp_path, path
         );
     }
-
-    free(parent);  /* nothing below reads it */
-    if (tmp_err) return tmp_err;
 
     /* Write data to temp file with correct ownership and permissions.
      * SECURITY: All metadata is applied via fd operations before data is written.
@@ -533,7 +522,7 @@ error_t fs_write_file_raw(
 }
 
 error_t fs_write_file(const char *path, const buffer_t *content) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
     CHECK_NULL(content);
 
     return fs_write_file_raw(
@@ -548,15 +537,11 @@ error_t fs_write_file(const char *path, const buffer_t *content) {
 }
 
 error_t fs_copy_file(const char *src, const char *dst) {
-    RETURN_IF_ERROR(validate_path(src));
-    RETURN_IF_ERROR(validate_path(dst));
+    CHECK_NULL(src);
+    CHECK_NULL(dst);
 
-    /* Check source exists */
-    if (!fs_file_exists(src)) {
-        return ERROR(ERR_NOT_FOUND, "Source file not found: %s", src);
-    }
-
-    /* Get source permissions */
+    /* Get source permissions: the first look at the source, so one that is not
+     * there, or not the invoker's to read, is refused here in the kernel's words */
     mode_t mode;
     error_t err = fs_get_permissions(src, &mode);
     if (err) return err;
@@ -584,7 +569,7 @@ error_t fs_copy_file(const char *src, const char *dst) {
 }
 
 error_t fs_remove_file(const char *path) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
 
     if (fs_unlink(path) < 0) {
         if (errno == ENOENT) {
@@ -613,7 +598,7 @@ bool fs_file_exists(const char *path) {
  * Directory operations
  */
 error_t fs_create_dir(const char *path, bool parents) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
 
     /* Already exists? */
     if (fs_is_directory(path)) {
@@ -640,7 +625,7 @@ error_t fs_create_dir(const char *path, bool parents) {
 }
 
 error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
 
     /* A mode is at most 0777 by every producer's rule (the sheet's parse, the
      * factories, a stat's permission bits): a caller that hands more is broken. */
@@ -701,7 +686,7 @@ error_t fs_create_dir_with_ownership(
     uid_t uid,
     gid_t gid
 ) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
 
     /* A mode is at most 0777 by every producer's rule (the sheet's parse, the
      * factories, a stat's permission bits): a caller that hands more is broken. */
@@ -804,7 +789,7 @@ error_t fs_create_dir_exclusive(
     uid_t uid,
     gid_t gid
 ) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
 
     /* A mode is at most 0777 by every producer's rule (the sheet's parse, the
      * factories, a stat's permission bits): a caller that hands more is broken. */
@@ -909,7 +894,7 @@ static error_t fs_remove_subtree(arena_t *scratch, const char *path) {
 }
 
 error_t fs_remove_dir(const char *path) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
 
     if (!fs_is_directory(path)) {
         return NULL;  /* Not an error if doesn't exist */
@@ -924,7 +909,7 @@ error_t fs_remove_dir(const char *path) {
 }
 
 error_t fs_clear_path(const char *path) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
 
     struct stat st;
     if (fs_lstat(path, &st) != 0) {
@@ -1076,7 +1061,7 @@ static inline bool errno_means_not_empty(int code) {
 }
 
 error_t fs_remove_empty_dir(const char *path) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
 
     /* The whole story for a directory that is empty by the kernel's definition,
      * which is nearly all of them. */
@@ -1124,7 +1109,7 @@ error_t fs_remove_empty_dir(const char *path) {
 }
 
 error_t fs_list_dir(const char *path, arena_t *arena, string_array_t *out) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -1258,9 +1243,16 @@ static bool fs_folds(const char *through) {
 }
 
 error_t fs_make_absolute(const char *path, arena_t *arena, const char **out) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
     CHECK_NULL(arena);
     CHECK_NULL(out);
+
+    /* The empty string names no path, and a user can type it (`dotta init ""`):
+     * refused in git's words for it (lib/git/abspath.c strbuf_add_absolute_path),
+     * ahead of the join below, which takes no empty name. */
+    if (path[0] == '\0') {
+        return ERROR(ERR_INVALID_ARG, "The empty string is not a valid path");
+    }
 
     /* The shell's order: the tilde, then the working directory beneath a path
      * still relative, then the fold over the whole — the kernel's, which keeps
@@ -1279,7 +1271,7 @@ error_t fs_make_absolute(const char *path, arena_t *arena, const char **out) {
 }
 
 error_t fs_canonicalize_path(const char *path, arena_t *arena, const char **out) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -1352,8 +1344,8 @@ error_t fs_create_symlink(
     const char *target, const char *linkpath,
     uid_t uid, gid_t gid
 ) {
-    RETURN_IF_ERROR(validate_path(target));
-    RETURN_IF_ERROR(validate_path(linkpath));
+    CHECK_NULL(target);
+    CHECK_NULL(linkpath);
 
     if (fs_symlink(target, linkpath) < 0) {
         return error_from_errno(
@@ -1373,7 +1365,7 @@ error_t fs_create_symlink(
 }
 
 error_t fs_read_symlink(const char *linkpath, buffer_t *out) {
-    RETURN_IF_ERROR(validate_path(linkpath));
+    CHECK_NULL(linkpath);
     CHECK_NULL(out);
 
     *out = (buffer_t){ 0 };
@@ -1402,7 +1394,7 @@ error_t fs_read_symlink(const char *linkpath, buffer_t *out) {
  * Permission operations
  */
 error_t fs_get_permissions(const char *path, mode_t *out) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
     CHECK_NULL(out);
 
     struct stat st;
@@ -1415,7 +1407,7 @@ error_t fs_get_permissions(const char *path, mode_t *out) {
 }
 
 error_t fs_set_permissions(const char *path, mode_t mode) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
 
     if (fs_chmod(path, mode) < 0) {
         return error_from_errno(
@@ -1495,7 +1487,7 @@ const char *fs_stat_noun(const struct stat *st) {
  * Ensure parent directories exist
  */
 error_t fs_ensure_parent_dirs(const char *path) {
-    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(path);
 
     /* The directory the path stands in, made with its own parents where it is
      * missing; "." and "/" always stand. */

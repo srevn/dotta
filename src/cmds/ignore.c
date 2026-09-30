@@ -1018,32 +1018,27 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* --list-defaults is terminal: print the compiled defaults and exit.
-     * Discoverability aid — lets users inspect the safety patterns without grepping
-     * source or cloning the repo. */
-    if (opts->list_defaults) {
-        output_print(out, OUTPUT_NORMAL, "%s", ignore_baseline_defaults());
-        return NULL;
-    }
+    /* The two modes that change no .dottaignore: the compiled defaults, printed
+     * — a discoverability aid, the safety patterns read without grepping the
+     * source or cloning the repo — and the ladder's verdict, which walks every
+     * enabled profile by itself. */
+    switch (opts->mode) {
+        case IGNORE_MODE_DEFAULTS:
+            output_print(out, OUTPUT_NORMAL, "%s", ignore_baseline_defaults());
+            return NULL;
 
-    bool has_add = opts->add_count > 0;
-    bool has_remove = opts->remove_count > 0;
-    bool has_test = opts->test_path != NULL;
-    bool has_modify = has_add || has_remove;
+        case IGNORE_MODE_TEST:
+            return ignore_test(ctx, opts->test_path, opts->profile);
 
-    if (has_test && has_modify) {
-        return ERROR(ERR_INVALID_ARG, "Cannot use --test with --add or --remove");
-    }
-
-    /* --test is a read-only query that walks every enabled profile by itself;
-     * it doesn't use dottaignore_t. Dispatch early. */
-    if (has_test) {
-        return ignore_test(ctx, opts->test_path, opts->profile);
+        case IGNORE_MODE_EDIT:
+        case IGNORE_MODE_MODIFY:
+            break;
     }
 
     /* A pattern is checked before its file is opened: an argument that names no
      * rule, or names two, is refused by name rather than written, and so is a
-     * rule both added and removed, which the edit would write and take back. */
+     * rule both added and removed, which the edit would write and take back.
+     * The editor takes none, so for it there is nothing to check. */
     RETURN_IF_ERROR(
         ignore_require_patterns("--add", opts->add_patterns, opts->add_count)
     );
@@ -1093,7 +1088,7 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         };
     }
 
-    if (has_modify) {
+    if (opts->mode == IGNORE_MODE_MODIFY) {
         return ignore_modify(
             repo, &dottaignore, opts->add_patterns, opts->add_count,
             opts->remove_patterns, opts->remove_count, out
@@ -1105,6 +1100,44 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
 /* ══════════════════════════════════════════════════════════════════
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Settle the mode, one per run: --add and --remove make the edit one by rule,
+ * and change the file together; --test and --list-defaults are modes of their
+ * own. A flag that would make a second mode is refused before anything is read
+ * — two things asked, and one would be done. The profile is no mode: it names
+ * whose file an edit changes, or which asker --test asks, and beside
+ * --list-defaults it changes nothing the defaults are.
+ *
+ * One-node refusals only: the collector keeps an error's top message (base/args.c),
+ * so the pattern checks, whose refusal wraps the grammar's reason, stay in the
+ * command.
+ */
+static error_t ignore_post_parse(void *opts_v, arena_t *arena, const args_command_t *cmd) {
+    (void) arena;
+    (void) cmd;
+    cmd_ignore_options_t *o = opts_v;
+
+    /* Each flag refines the mode the ones before it left, and a refinement of
+     * anything but the editor is a second mode. */
+    o->mode = o->add_count > 0 || o->remove_count > 0 ? IGNORE_MODE_MODIFY : IGNORE_MODE_EDIT;
+    if (o->test_path) {
+        if (o->mode != IGNORE_MODE_EDIT) {
+            return ERROR(ERR_INVALID_ARG, "Cannot use --test with --add or --remove");
+        }
+        o->mode = IGNORE_MODE_TEST;
+    }
+    if (o->list_defaults) {
+        if (o->mode != IGNORE_MODE_EDIT) {
+            return ERROR(
+                ERR_INVALID_ARG, "Cannot use --list-defaults with --test, --add or --remove"
+            );
+        }
+        o->mode = IGNORE_MODE_DEFAULTS;
+    }
+
+    return NULL;
+}
 
 /**
  * What can stand at the cursor: a local profile, by -p or as the one positional;
@@ -1223,6 +1256,7 @@ const args_command_t spec_ignore = {
         "  %s ignore --test home/.cache/x/           # A storage path, as a directory\n",
     .opts_size   = sizeof(cmd_ignore_options_t),
     .opts        = ignore_opts,
+    .post_parse  = ignore_post_parse,
     .complete    = ignore_complete,
     .payload     = &(const dotta_needs_t){
         .repo    = DOTTA_REPO_OPEN,

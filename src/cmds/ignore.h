@@ -12,21 +12,35 @@
 #include <types.h>
 
 /**
+ * What a run of `dotta ignore` does, one per run (ignore_post_parse)
+ */
+typedef enum {
+    IGNORE_MODE_EDIT,           /* No mode's flag: the .dottaignore, in the editor */
+    IGNORE_MODE_MODIFY,         /* --add, --remove: the .dottaignore, rule by rule */
+    IGNORE_MODE_TEST,           /* --test: the ladder's verdict on a path, per asker */
+    IGNORE_MODE_DEFAULTS        /* --list-defaults: the compiled defaults */
+} ignore_mode_t;
+
+/**
  * Command options
  *
  * `profile` is written by `-p/--profile` or by the one optional positional —
- * the same field: once the flag has written it, a positional is unexpected.
+ * the same field: once the flag has written it, a positional is unexpected. `mode`
+ * is settled by the parse, from the flags that make one (ignore_post_parse).
  */
 typedef struct {
     /* User-facing (read by cmd_ignore). */
+    ignore_mode_t mode;         /* What the run does, settled by ignore_post_parse */
     const char *profile;        /* Profile name (NULL for baseline or all profiles) */
-    const char *test_path;      /* Path to test (NULL for edit mode) */
+    const char *test_path;      /* Path to test (IGNORE_MODE_TEST) */
     bool verbose;               /* Print verbose output */
-    bool list_defaults;         /* Print compiled default patterns and exit */
     char **add_patterns;        /* Patterns to add (NULL for none) */
     size_t add_count;           /* Number of patterns to add */
     char **remove_patterns;     /* Patterns to remove (NULL for none) */
     size_t remove_count;        /* Number of patterns to remove */
+
+    /* Read by ignore_post_parse alone. */
+    bool list_defaults;         /* --list-defaults: IGNORE_MODE_DEFAULTS */
 } cmd_ignore_options_t;
 
 /**

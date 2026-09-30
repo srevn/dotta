@@ -484,6 +484,9 @@ error_t ignore_blob_text(
  * @param content    Blob content (must not be NULL; may be empty)
  * @param size       Size in bytes (at most 1 MB, and no NUL among them)
  * @param commit_msg Commit message (must not be NULL)
+ * @param out_committed Whether a commit was made — the stage's own answer
+ *                   (sys/stage.h stage_commit), for the caller that must say
+ *                   "nothing changed" (optional, can be NULL)
  * @return Error or NULL on success
  */
 error_t ignore_blob_write(
@@ -491,7 +494,8 @@ error_t ignore_blob_write(
     const char *refname,
     const char *content,
     size_t size,
-    const char *commit_msg
+    const char *commit_msg,
+    bool *out_committed
 );
 
 /**

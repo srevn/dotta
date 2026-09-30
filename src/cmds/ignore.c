@@ -406,7 +406,7 @@ typedef struct {
  *
  * Called with dottaignore->refname already verified to exist (cmd_ignore hoists
  * that check). Loads existing content, delegates to the editor helper, commits
- * the result back to the same ref.
+ * the result back to the same ref, and says whether a commit was made.
  *
  * The bytes, not the text (ignore_blob_read): a human reads the file here, so a
  * .dottaignore every other reader refuses — one holding a NUL — opens as it stands,
@@ -446,37 +446,24 @@ static error_t ignore_edit(
     err = ignore_editor(
         seed, seed_size, &new_content, &new_size
     );
+    free(existing_content);
     if (err) {
-        free(existing_content);
         return error_wrap(
             err, "Failed to edit %s .dottaignore", dottaignore->layer
         );
-    }
-
-    /* No-op detection: compare against the pre-edit blob. When the blob was absent
-     * before the edit, any non-empty edit counts as a change (the editor only
-     * produced content because the default seed was non-empty; a user who wiped
-     * the buffer to empty still writes an empty blob intentionally). */
-    bool unchanged = existing_content
-        && new_size == existing_size
-        && (new_size == 0 || memcmp(new_content, existing_content, new_size) == 0);
-    free(existing_content);
-
-    if (unchanged) {
-        free(new_content);
-        output_info(
-            out, OUTPUT_NORMAL, "No changes to %s .dottaignore",
-            dottaignore->layer
-        );
-        return NULL;
     }
 
     char *commit_msg = heap_str_format(
         "Update %s .dottaignore", dottaignore->layer
     );
 
+    /* Whether anything changed is the stage's answer, asked of the tree the write
+     * would commit: one equal to the ref's commits nothing — the editor closed
+     * on the bytes the branch holds — and the receipt says which. An edit that
+     * leaves a NUL is refused before it is staged, changed or not. */
+    bool committed = false;
     err = ignore_blob_write(
-        repo, dottaignore->refname, new_content, new_size, commit_msg
+        repo, dottaignore->refname, new_content, new_size, commit_msg, &committed
     );
     free(commit_msg);
     free(new_content);
@@ -485,6 +472,13 @@ static error_t ignore_edit(
         return error_wrap(
             err, "Failed to update %s .dottaignore", dottaignore->layer
         );
+    }
+
+    if (!committed) {
+        output_info(
+            out, OUTPUT_NORMAL, "No changes to %s .dottaignore", dottaignore->layer
+        );
+        return NULL;
     }
 
     output_success(
@@ -615,7 +609,7 @@ static error_t ignore_modify(
 
     err = ignore_blob_write(
         repo, dottaignore->refname,
-        owned, strlen(owned), commit_msg
+        owned, strlen(owned), commit_msg, NULL
     );
 
     free(commit_msg);

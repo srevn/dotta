@@ -324,7 +324,7 @@ error_t ignore_blob_text(
 
 error_t ignore_blob_write(
     git_repository *repo, const char *refname, const char *content,
-    size_t size, const char *commit_msg
+    size_t size, const char *commit_msg, bool *out_committed
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(refname);
@@ -352,7 +352,7 @@ error_t ignore_blob_write(
         stage, ".dottaignore", content, size, GIT_FILEMODE_BLOB, NULL
     );
     if (!err) {
-        err = stage_commit(stage, commit_msg, NULL);
+        err = stage_commit(stage, commit_msg, out_committed);
     }
     stage_free(stage);
     return err;

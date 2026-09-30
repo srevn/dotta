@@ -98,13 +98,15 @@ typedef struct gitignore_rule gitignore_rule_t;
 typedef struct source_filter source_filter_t;
 
 /**
- * The rule that decides one rung, and the file it was read from
+ * The rule that excludes one rung, and the file it was read from
  *
- * Both are the filter's own and live as long as its arena. `rule` is read through
- * base/gitignore's accessors (its pattern, its line in `file`, whether it negates).
+ * A negation is never the answer: one that decides a rung excludes nothing, as
+ * git reads one (dir.c is_excluded). Both are the filter's own and live as long
+ * as its arena; `rule` is read through base/gitignore's accessors (its pattern,
+ * its line in `file`).
  */
 typedef struct {
-    const gitignore_rule_t *rule;      /* NULL: no rule decides the rung */
+    const gitignore_rule_t *rule;      /* NULL: no rule excludes the rung */
     const char *file;                  /* The file it was read from, absolute; NULL with no rule */
 } source_rule_t;
 
@@ -154,27 +156,27 @@ error_t source_filter_physical(
 );
 
 /**
- * The rule of the source repository's stack that decides `path` itself.
+ * The rule of the source repository's stack that excludes `path` itself.
  *
  * git's last_matching_pattern_from_lists, asked of the repository that governs
  * `path`'s directory: each `.gitignore` from that directory up to the workdir,
  * the deepest first, each reading the path from its own directory; then
  * `info/exclude`, then the excludes file, reading it from the workdir. The first
  * list with a rule that matches decides, and within a list the last such rule
- * does — a negation as readily as any, for the caller to read. The directory is
- * read where it physically stands (source_filter_physical), so every spelling
- * of a path in it is asked one question.
+ * does — a negation too, which excludes nothing, and no list after it is read.
+ * The directory is read where it physically stands (source_filter_physical), so
+ * every spelling of a path in it is asked one question.
  *
  * No ancestor of `path` is asked. The climb is the caller's, over the path's
  * kernel spelling from the top, each rung asked of its own directory's repository
  * — git's traversal, where a directory is an entry of the repository it stands
  * in, and a nested repository's root an entry of the one around it.
  *
- * `out->rule` is NULL where no rule decides the rung, where no repository governs
- * the directory or its workdir does not contain it (a bare repository, a
- * `core.worktree` elsewhere), and where `path` names no entry — nothing after
- * its last `/` ("/"). A directory is asked with `is_dir`, which a directory-only
- * rule (`node_modules/`) needs.
+ * `out->rule` is NULL where no rule excludes the rung — none decides it, or a
+ * negation does — where no repository governs the directory or its workdir does
+ * not contain it (a bare repository, a `core.worktree` elsewhere), and where
+ * `path` names no entry — nothing after its last `/` ("/"). A directory is asked
+ * with `is_dir`, which a directory-only rule (`node_modules/`) needs.
  *
  * Policy: whether to consult the answer at all belongs with the caller — the
  * builder of the ladder's layers reads `config.respect_gitignore`, and a caller
@@ -190,7 +192,7 @@ error_t source_filter_physical(
  * @param f      Filter (must not be NULL)
  * @param path   Absolute path (must start with `/`)
  * @param is_dir True if the path refers to a directory
- * @param out    The deciding rule and its file (must not be NULL)
+ * @param out    The excluding rule and its file (must not be NULL)
  * @return Error (the failure the rule could not be read past) or NULL on success
  */
 error_t source_filter_find(

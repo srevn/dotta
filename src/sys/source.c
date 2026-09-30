@@ -773,7 +773,7 @@ static const directory_t *source_directory(source_filter_t *f, const char *path,
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * The rule of `repository`'s stack that decides `rung` — git's
+ * The rule of `repository`'s stack that excludes `rung` — git's
  * last_matching_pattern_from_lists, the rung spelled from the workdir: the first
  * list with a rule that matches decides, and a file that could not be read answers
  * its failure where it comes in that order.
@@ -797,11 +797,13 @@ static error_t source_decide(
         file = file->next) {
         if (file->failure) return file->failure;
 
+        /* A negation decides the rung as surely, and excludes nothing: git's
+         * answer is the pattern that excludes, or none (sys/source.h). */
         const gitignore_rule_t *rule = gitignore_ruleset_find(
             file->rules, rung + file->root, is_dir
         );
         if (rule) {
-            *out = (source_rule_t){ rule, file->path };
+            if (!gitignore_rule_negated(rule)) *out = (source_rule_t){ rule, file->path };
             return NULL;
         }
     }

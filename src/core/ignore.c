@@ -633,7 +633,7 @@ error_t ignore_verdict(
          * own entries of home, as git asked from there judges them. */
         source_rule_t found;
         error_t err = source_filter_find(source, place, is_dir, &found);
-        if (!err && (!found.rule || gitignore_rule_negated(found.rule))) continue;
+        if (!err && !found.rule) continue;
 
         /* A `!` of the four re-opens the rung it names against the source's rules
          * too, asked where the source excludes the rung or cannot read it: at

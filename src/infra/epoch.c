@@ -33,14 +33,13 @@
 #include "infra/epoch.h"
 
 #include <git2.h>
-#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "base/arena.h"
+#include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "crypto/keymgr.h"
@@ -613,7 +612,7 @@ error_t epoch_fetch(
  * callback. */
 typedef struct {
     const char *branch;         /* the profile */
-    const char *storage_path;   /* the tree path, root ‖ name */
+    const char *storage_path;   /* the tree path the walk joined, lent for the call */
     const git_oid *oid;         /* the blob object, borrowed from the tree entry */
     content_kind_t kind;        /* ENCRYPTED or UNSUPPORTED_VERSION */
     const uint8_t *epoch_fp;    /* set iff ENCRYPTED: the header's; else NULL */
@@ -628,22 +627,23 @@ typedef bool (*epoch_ciphertext_fn)(const epoch_ciphertext_t *ct, void *payload)
 typedef struct {
     git_repository *repo;      /* borrowed; for blob loads */
     hashmap_t *seen;           /* borrowed; visited (object, branch, path) */
+    buffer_t key;              /* a binding's key, spelled per entry */
     epoch_ciphertext_fn fn;    /* the asker */
     void *payload;             /* the asker's, carried untouched */
     const char *branch;        /* the branch under walk */
-    bool stopped;              /* the asker stopped the walk */
-    error_t error;             /* the walk could not prove anything (borrowed) */
+    bool stopped;              /* the asker answered: every loop of the walk ends */
 } epoch_walk_t;
 
 /*
- * Tree-walk callback (pre-order). Returns 0 to continue, 1 to skip an
- * already-visited subtree, -1 to stop; the stop reason is disambiguated by the
- * payload — `stopped` means the asker answered, `error` means the walk could
- * not prove anything. gitops_tree_walk maps the -1 to a non-NULL error_t that
- * the driver discards in favour of the payload.
+ * Walk visitor (pre-order): a binding met before is skipped, a tree with every
+ * binding beneath it; a blob is judged by its header, and a ciphertext presented
+ * to the asker, whose answer stops the walk and is kept for the driver, whose
+ * history and branch loops end with it. A failure is the walk proving nothing,
+ * returned as it is.
  */
-static int epoch_walk_cb(
-    const char *root, const git_tree_entry *entry, void *payload
+static error_t epoch_present_blob(
+    const char *path, const git_tree_entry *entry, void *payload,
+    gitops_walk_t *next
 ) {
     epoch_walk_t *walk = payload;
 
@@ -651,42 +651,34 @@ static int epoch_walk_cb(
      * commit) has no bytes under this epoch. */
     git_object_t type = git_tree_entry_type(entry);
     if (type != GIT_OBJECT_BLOB && type != GIT_OBJECT_TREE) {
-        return 0;
+        return NULL;
     }
 
     /* The unit of the walk is the binding, not the object: one blob standing at
      * two paths, or at one path under two branches, is two witnesses (the SIV
      * binds the path, the pair the profile), and each must be presented. So the
-     * visited set keys by object, branch and path, and prunes a subtree only
-     * where the same tree stands at the same path of the same branch — where
-     * every binding beneath it recurs. History shares objects heavily between
-     * commits, and orphan profile branches share none, so this is still one visit
-     * per object in practice. The key's parts are bounded: the branch by its
-     * refname (gitops_build_refname), the path by PATH_MAX (checked here). */
+     * visited set keys by object, branch and path, and a binding met before is
+     * skipped — a tree only where the same tree stands at the same path of the
+     * same branch, where every binding beneath it recurs. History shares objects
+     * heavily between commits, and orphan profile branches share none, so this
+     * is still one visit per object in practice; a root tree two commits share
+     * costs one visit of each entry it holds. The key is spelled here and nowhere
+     * else, and no two bindings spell one: ':' stands in neither the id's hex
+     * nor a branch name (a refname refuses it), so the last field is the whole
+     * path, whatever it holds. */
     const git_oid *oid = git_tree_entry_id(entry);
-    char path[PATH_MAX];
-    int n = snprintf(
-        path, sizeof(path), "%s%s", root, git_tree_entry_name(entry)
-    );
-    if (n < 0 || (size_t) n >= sizeof(path)) {
-        walk->error = ERROR(
-            ERR_INVALID_ARG, "Tree path too long in '%s': %s%s",
-            walk->branch, root, git_tree_entry_name(entry)
-        );
-        return -1;
-    }
-
     char oid_hex[GIT_OID_SHA1_HEXSIZE + 1];
     git_oid_tostr(oid_hex, sizeof(oid_hex), oid);
 
-    char key[GIT_OID_SHA1_HEXSIZE + DOTTA_REFNAME_MAX + PATH_MAX + 3];
-    (void) snprintf(key, sizeof(key), "%s:%s:%s", oid_hex, walk->branch, path);
-    if (!hashmap_add(walk->seen, key, NULL)) {
-        return (type == GIT_OBJECT_TREE) ? 1 : 0;
+    buffer_clear(&walk->key);
+    buffer_appendf(&walk->key, "%s:%s:%s", oid_hex, walk->branch, path);
+    if (!hashmap_add(walk->seen, walk->key.data, NULL)) {
+        *next = GITOPS_WALK_SKIP;
+        return NULL;
     }
 
     if (type == GIT_OBJECT_TREE) {
-        return 0;  /* first visit: descend */
+        return NULL;  /* first visit: descend */
     }
 
     /* Judged as the entry it stands in: a link's bytes are its target, never a
@@ -696,22 +688,13 @@ static int epoch_walk_cb(
     error_t err = content_classify(
         walk->repo, oid, git_tree_entry_filemode(entry), &kind, fp
     );
-    if (err) {
-        walk->error = err;
-        return -1;
-    }
-    if (kind == CONTENT_PLAINTEXT) {
-        return 0;
-    }
+    if (err || kind == CONTENT_PLAINTEXT) return err;
 
     /* A ciphertext: present it with its bytes. The second open is a cached object
      * lookup, paid for the few blobs that are ciphertext. */
     gitops_blob_view_t view;
     err = gitops_blob_view_open(walk->repo, oid, &view);
-    if (err) {
-        walk->error = err;
-        return -1;
-    }
+    if (err) return err;
 
     const epoch_ciphertext_t ct = {
         .branch       = walk->branch,
@@ -722,13 +705,12 @@ static int epoch_walk_cb(
         .data         = view.data,
         .size         = view.size,
     };
-    const bool stop = walk->fn(&ct, walk->payload);
+    walk->stopped = walk->fn(&ct, walk->payload);
     gitops_blob_view_close(&view);
-    if (stop) {
-        walk->stopped = true;
-        return -1;
+    if (walk->stopped) {
+        *next = GITOPS_WALK_STOP;
     }
-    return 0;
+    return NULL;
 }
 
 /*
@@ -747,9 +729,10 @@ static int epoch_walk_cb(
 static error_t walk_ciphertext(
     git_repository *repo, epoch_ciphertext_fn fn, void *payload
 ) {
-    /* The branches and the trees already seen, in a frame of the walk's own:
+    /* The branches and the bindings already seen, in a frame of the walk's own:
      * each read inside the loop and dropped with it. The set owns its keys, so
-     * one built on the stack is copied into the frame only as it takes a slot. */
+     * one spelled in the walk's buffer is copied into the frame only as it takes
+     * a slot. */
     arena_t *frame = arena_create(0);
     string_array_t branches = { 0 };
     error_t err = gitops_list_branches(repo, frame, &branches);
@@ -802,20 +785,6 @@ static error_t walk_ciphertext(
                 goto cleanup;
             }
 
-            /* A commit whose root tree was already walked under this branch
-             * (identical content in an earlier commit) contributes nothing new
-             * — skip it before loading the tree. The key is the walk's: object,
-             * branch, path — the root's path being empty. */
-            char oid_hex[GIT_OID_SHA1_HEXSIZE + 1];
-            git_oid_tostr(oid_hex, sizeof(oid_hex), git_commit_tree_id(commit));
-
-            char key[GIT_OID_SHA1_HEXSIZE + DOTTA_REFNAME_MAX + 3];
-            (void) snprintf(key, sizeof(key), "%s:%s:", oid_hex, branch);
-            if (!hashmap_add(seen, key, NULL)) {
-                git_commit_free(commit);
-                continue;
-            }
-
             git_tree *tree = NULL;
             rc = git_commit_tree(&tree, commit);
             git_commit_free(commit);
@@ -824,21 +793,14 @@ static error_t walk_ciphertext(
                 goto cleanup;
             }
 
-            error_t walk_err = gitops_tree_walk(tree, epoch_walk_cb, &walk);
+            /* Every commit's tree is walked: what an earlier commit already held
+             * is skipped at its first entry (epoch_present_blob), so a tree two
+             * commits share costs a visit of each entry it holds and nothing
+             * beneath them. */
+            err = gitops_tree_walk(tree, epoch_present_blob, &walk);
             git_tree_free(tree);
-
-            /* The payload speaks first: behind the callback's own error and behind
-             * the asker's stop, the walk's error is the abort libgit2 stamped
-             * in reply — a benign stop wrapper, dropped. */
-            if (walk.error) {
-                err = walk.error;
-                goto cleanup;
-            }
-            if (walk.stopped) break;  /* short-circuit; outer loop exits too */
-            if (walk_err) {
-                err = walk_err;       /* genuine walk-machinery failure */
-                goto cleanup;
-            }
+            if (err) goto cleanup;
+            if (walk.stopped) break;  /* the asker answered: the branch loop ends too */
         }
 
         git_revwalk_free(walker);
@@ -854,6 +816,7 @@ cleanup:
     if (walker) {
         git_revwalk_free(walker);
     }
+    buffer_deinit(&walk.key);
     arena_free(frame);
     return err;
 }

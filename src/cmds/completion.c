@@ -186,52 +186,45 @@ void completion_directories(
     metadata_free(metadata);
 }
 
-/* Tree-walk state for completion_refspecs. */
+/* The refspec walk: where the tokens go, and how many went. */
 typedef struct {
     FILE *out;
     const char *branch;   /* current branch (source of the "<branch>:" prefix) */
     bool prefix;          /* prefix "<branch>:" (all branches) vs bare path (pinned) */
-    size_t cap;
-    size_t emitted;
-    bool truncated;
-} refspec_walk_ctx_t;
+    size_t emitted;       /* tokens printed so far, every branch's */
+} refspec_walk_t;
 
 /**
- * Tree-walk callback: emit one token per tracked file blob.
+ * Walk visitor: one token per tracked file blob
  *
- * The content gate every walk over a branch asks (infra/label.h label_prefixes):
- * a name in the grammar is content, and a blob under no label — a top-level one,
- * .dotta/, whatever a hand left beside them — is the branch's machinery and no
- * token. `root` is "" at the top level or "dir/.../" with a trailing slash, so
- * the gate reads the walk root where there is one and the entry's own name where
- * there is not, which is the joined name's answer and costs this walk no join:
- * it prints the two pieces and holds no name of its own.
+ * The content gate every walk over a branch asks (infra/label.h label_prefixes),
+ * of every entry's whole name: a name in the grammar is content, and whatever
+ * else a branch holds — a top-level blob under no label, .dotta/, whatever a
+ * hand left beside them — is its machinery, pruned with its subtree and no token.
+ * The walk stops at the cap, and the loop over the branches reads the count.
  */
-static int refspec_emit_cb(
-    const char *root, const git_tree_entry *entry, void *payload
+static error_t refspec_emit(
+    const char *path, const git_tree_entry *entry, void *payload,
+    gitops_walk_t *next
 ) {
-    refspec_walk_ctx_t *walk = payload;
+    refspec_walk_t *walk = payload;
 
-    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) return 0;  /* descend trees */
-
-    const char *name = git_tree_entry_name(entry);
-    if (!label_prefixes(root[0] ? root : name)) return 0;         /* the content gate */
+    if (!label_prefixes(path)) {                                  /* the content gate */
+        *next = GITOPS_WALK_SKIP;
+        return NULL;
+    }
+    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) return NULL;  /* descend trees */
 
     if (walk->prefix) {
-        fprintf(
-            walk->out, "%s:%s%s\n", walk->branch, root, name
-        );
+        fprintf(walk->out, "%s:%s\n", walk->branch, path);
     } else {
-        fprintf(
-            walk->out, "%s%s\t%s\n", root, name, walk->branch
-        );
+        fprintf(walk->out, "%s\t%s\n", path, walk->branch);
     }
 
-    if (++walk->emitted >= walk->cap) {
-        walk->truncated = true;
-        return -1;  /* abort: wrapped as a git error, marked benign via walk */
+    if (++walk->emitted >= COMPLETE_REFSPEC_FILES_MAX) {
+        *next = GITOPS_WALK_STOP;
     }
-    return 0;
+    return NULL;
 }
 
 /**
@@ -253,13 +246,14 @@ void completion_refspecs(
         string_array_sort(&branches); /* deterministic order under the cap */
     }
 
-    refspec_walk_ctx_t walk = {
+    refspec_walk_t walk = {
         .out    = out,
-        .cap    = COMPLETE_REFSPEC_FILES_MAX,
         .prefix = (pinned == NULL)
     };
 
-    for (size_t i = 0; i < branches.count; i++) {
+    /* Every branch until the cap is reached: the walk that reached it stopped
+     * there */
+    for (size_t i = 0; i < branches.count && walk.emitted < COMPLETE_REFSPEC_FILES_MAX; i++) {
         const char *branch = branches.entries[i];
 
         git_tree *tree = NULL;
@@ -267,11 +261,10 @@ void completion_refspecs(
         if (err) continue;  /* not a branch, or unloadable: silent */
 
         walk.branch = branch;
-        /* A walk's error is benign on the cap's abort, and silent otherwise;
-         * with the load's above, at most one per branch is dropped */
-        (void) gitops_tree_walk(tree, refspec_emit_cb, &walk);
+        /* A walk's failure is silent here, as the load's above: at most one per
+         * branch is dropped */
+        (void) gitops_tree_walk(tree, refspec_emit, &walk);
         git_tree_free(tree);
-        if (walk.truncated) break;           /* cap hit (the walk's error was the abort) */
     }
 }
 

@@ -394,16 +394,63 @@ error_t gitops_load_branch_tree(
 );
 
 /**
- * Walk tree with callback
+ * What a tree walk does after the entry its visitor was shown
+ *
+ * The visitor says it through its last parameter, which the walk sets to CONTINUE
+ * before each call, so a visitor with nothing to say leaves it.
+ *
+ * Readers: the walks over a profile's content, which SKIP machinery at their
+ * gate — a name under no label, a tree of it with everything beneath (infra/label.h
+ * label_prefixes) — core/manifest.c manifest_claim_blob, core/profiles.c
+ * profile_list_entry and profile_count_entry, cmds/export.c collect_entry, and
+ * cmds/completion.c refspec_emit, which also STOPs at its cap; and the ciphertext
+ * census, which SKIPs a binding it has met and STOPs where its asker has an answer
+ * (infra/epoch.c epoch_present_blob).
+ */
+typedef enum {
+    GITOPS_WALK_CONTINUE,   /* on to the next entry: a tree's own entries first */
+    GITOPS_WALK_SKIP,       /* past this entry, and at a tree everything beneath it */
+    GITOPS_WALK_STOP        /* the walk has its answer: end it, no failure */
+} gitops_walk_t;
+
+/**
+ * A tree walk's visitor
+ *
+ * Shown each entry in pre-order with the entry's path within the walked tree
+ * ("home", then "home/.bashrc"), joined by the walk and lent for the call, and
+ * the caller's payload, untouched. Its failure is its return, whatever `next`
+ * says; what the walk does next is `next`.
+ */
+typedef error_t (*gitops_visit_fn)(
+    const char *path,
+    const git_tree_entry *entry,
+    void *payload,
+    gitops_walk_t *next
+);
+
+/**
+ * Walk a tree, showing every entry to a visitor
+ *
+ * Pre-order: a tree is shown before its entries, so its visitor may skip them.
+ * The path is joined here, once per entry, and nothing bounds it but memory —
+ * Git's only bound on a name — so no visitor holds a buffer of its own or refuses
+ * a name for its length.
+ *
+ * Answers NULL where the walk finished and where the visitor stopped it; the
+ * visitor's failure, as the visitor made it; or the walk's own — a subtree that
+ * will not load — in libgit2's words. What the visitor answered is read from
+ * the walk's own state and never from libgit2, whose reply to a callback that
+ * ended its walk may be a sentence an earlier call left standing (errors.h
+ * git_error_set_after_callback_function sets one only where none stands).
  *
  * @param tree Tree to walk (must not be NULL)
- * @param callback Callback function (must not be NULL)
- * @param payload User data passed to callback
+ * @param visit The visitor (must not be NULL)
+ * @param payload Handed to the visitor untouched
  * @return Error or NULL on success
  */
 error_t gitops_tree_walk(
     const git_tree *tree,
-    git_treewalk_cb callback,
+    gitops_visit_fn visit,
     void *payload
 );
 

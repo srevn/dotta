@@ -27,11 +27,6 @@
 #include "sys/gitops.h"
 #include "sys/stats.h"
 
-/* Storage paths composed during a tree walk. A profile path is a storage label
- * plus what a mount-relative path can be, and every writer validated it long
- * before it reached Git; the walks below treat an overrun as corruption. */
-#define PROFILE_TREE_PATH_MAX 1024
-
 /**
  * Is there a profile of this name here, or refuse
  */
@@ -402,60 +397,34 @@ error_t profile_resolve_range(
 }
 
 /**
- * Compose a tree entry's storage path, and say whether the walk should see it
+ * Walk visitor: one entry of a profile tree, onto the listing where it is content
  *
- * Every walk over a profile tree below asks an entry the same three things: is
- * it a blob, does the name it stands at stand in the grammar, and what is its
- * path within the branch. Answered once here, so each walk differs only in what
- * it does with a path it accepts.
- *
- * `out_err` receives corruption and nothing else — a truncated join, or a path
- * whose shape no mount can place. An entry that is simply not content leaves it
- * untouched, which is what lets a caller read "false with no error" as "skip
- * this entry, keep walking".
- *
- * @param root Walk root as libgit2 supplies it ("" or "dir/")
- * @param entry Tree entry (must not be NULL)
- * @param buf Receives the storage path when the entry is accepted
- * @param size Size of buf
- * @param out_err Receives a corruption error (must not be NULL)
- * @return true when buf holds a content path the walk should process
+ * A content blob's storage path is pushed onto the listing, the payload; the
+ * branch's machinery is pruned with its subtree, a tree beneath a label is entered
+ * and a gitlink passed; a name the storage grammar refuses is the walk's failure.
  */
-static bool tree_entry_content_path(
-    const char *root,
+static error_t profile_list_entry(
+    const char *path,
     const git_tree_entry *entry,
-    char *buf,
-    size_t size,
-    error_t *out_err
+    void *payload,
+    gitops_walk_t *next
 ) {
-    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-        return false;
-    }
-
-    const char *name = git_tree_entry_name(entry);
+    string_array_t *paths = payload;
 
     /* The content gate: a managed path is a name in the grammar — beneath a label,
      * or the label's word alone, the namespace's own directory — and everything
      * else the branch carries is machinery, which no walk of content sees
-     * (infra/label.h label_prefixes). Asked of the two strings rather than the
-     * join, on the licence the gate's own header gives: the question reads no
-     * further than the first component, and a walk root is "" or carries one.
-     * So it is asked above the join, where the length a name must fit is the
-     * listing's concern and never machinery's. */
-    if (!label_prefixes(root && root[0] ? root : name)) {
-        return false;
+     * (infra/label.h label_prefixes). Asked of every entry's whole name, a tree's
+     * included, so a tree of machinery goes with everything beneath it. */
+    if (!label_prefixes(path)) {
+        *next = GITOPS_WALK_SKIP;
+        return NULL;
     }
 
-    /* The path within the branch is the walk root and the entry's name: libgit2
-     * supplies the root as "" or "dir/", and an empty one is the name alone. */
-    int n = snprintf(buf, size, "%s%s", root ? root : "", name);
-
-    if (n < 0 || (size_t) n >= size) {
-        *out_err = ERROR(
-            ERR_INTERNAL, "Path exceeds maximum length: %s%s",
-            root ? root : "", name
-        );
-        return false;
+    /* Content is a blob: a tree beneath a label is walked into, and a gitlink
+     * claims nothing. */
+    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
+        return NULL;
     }
 
     /* The entry name is Git's, not this machine's. A tree can name a subtree
@@ -467,44 +436,11 @@ static bool tree_entry_content_path(
      * (core/manifest.c manifest_claim_blob). Malformed here is corruption, not
      * an entry to skip: a walk that dropped it silently would leave the caller
      * a listing it cannot place and call it complete. */
-    error_t shape = label_validate_storage(buf);
-    if (shape) {
-        *out_err = shape;
-        return false;
-    }
+    error_t err = label_validate_storage(path);
+    if (err) return err;
 
-    return true;
-}
-
-/**
- * Tree walk callback data
- */
-struct walk_data {
-    string_array_t *paths;
-    error_t error;
-};
-
-/**
- * Tree walk callback
- */
-static int tree_walk_callback(
-    const char *root,
-    const git_tree_entry *entry,
-    void *payload
-) {
-    struct walk_data *data = (struct walk_data *) payload;
-
-    char storage_path[PROFILE_TREE_PATH_MAX];
-    if (!tree_entry_content_path(
-        root, entry, storage_path, sizeof(storage_path), &data->error
-        )) {
-        return data->error ? -1 : 0;
-    }
-
-    /* Add to array */
-    string_array_push(data->paths, storage_path);
-
-    return 0;
+    string_array_push(paths, path);
+    return NULL;
 }
 
 /**
@@ -519,21 +455,10 @@ error_t profile_list_tree_files(
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
+    /* The walk pushes straight onto the listing, handed out once it is whole */
     string_array_t paths;
     string_array_init(&paths, arena);
-    struct walk_data data = {
-        .paths = &paths,
-        .error = NULL
-    };
-
-    error_t err = gitops_tree_walk(tree, tree_walk_callback, &data);
-    if (data.error) {
-        /* The callback's error names the entry that failed; the walk's own is
-         * the abort libgit2 stamped in answer to it — an echo of this call's
-         * own decision, which names nothing and is dropped rather than reported
-         * in its place. */
-        err = data.error;
-    }
+    error_t err = gitops_tree_walk(tree, profile_list_entry, &paths);
     if (err) return err;
 
     *out = paths;
@@ -567,41 +492,48 @@ error_t profile_list_files(
 }
 
 /**
- * Tree walk data for the branch statistics
+ * The branch statistics' walk: what the count reads through, and the count so far
  */
-struct stats_walk_data {
+typedef struct {
     git_odb *odb;              /* Held for the walk: one handle, N header reads */
     const metadata_t *sheet;   /* The branch's claims: what the sizes are read through */
     size_t file_count;
     size_t total_size;
-    error_t error;
-};
+} count_walk_t;
 
 /**
- * Tree walk callback: count content blobs and accumulate the bytes they stand for
+ * Walk visitor: one entry of a profile tree, counted where it is content
+ *
+ * A content blob is counted, with the bytes it stands for; the branch's machinery
+ * is pruned with its subtree, a tree beneath a label is entered and a gitlink
+ * passed; a name the storage grammar refuses, a size that will not read and a
+ * total past what a size_t holds are the walk's failure.
  */
-static int stats_walk_callback(
-    const char *root,
+static error_t profile_count_entry(
+    const char *path,
     const git_tree_entry *entry,
-    void *payload
+    void *payload,
+    gitops_walk_t *next
 ) {
-    struct stats_walk_data *data = (struct stats_walk_data *) payload;
+    count_walk_t *walk = payload;
 
-    char storage_path[PROFILE_TREE_PATH_MAX];
-    if (!tree_entry_content_path(
-        root, entry, storage_path, sizeof(storage_path), &data->error
-        )) {
-        return data->error ? -1 : 0;
+    /* The content gate and the shape, asked as the file listing asks them
+     * (profile_list_entry): this is the fold of the rows that listing prints,
+     * so the two admit one set of names or the two screens disagree by a file. */
+    if (!label_prefixes(path)) {
+        *next = GITOPS_WALK_SKIP;
+        return NULL;
     }
+    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
+        return NULL;
+    }
+    error_t err = label_validate_storage(path);
+    if (err) return err;
 
+    /* The size from the object's header: nothing inflated */
     size_t size = 0;
-    error_t err = stats_blob_size_with_odb(
-        data->odb, git_tree_entry_id(entry), &size
-    );
-    if (err) {
-        data->error = err;
-        return -1;
-    }
+    err = stats_blob_size_with_odb(walk->odb, git_tree_entry_id(entry), &size);
+    if (err) return err;
 
     /* The bytes the entry stands for, not the bytes the object database holds:
      * a sealed blob carries the cipher's framing and its file does not, and the
@@ -611,23 +543,22 @@ static int stats_walk_callback(
      * fold of exactly the rows the file listing prints one by one, so the two
      * read the claim the same way or the two screens disagree by the framing
      * (cmds/list.c list_files). */
-    const metadata_item_t *claim = metadata_lookup(data->sheet, storage_path);
+    const metadata_item_t *claim = metadata_lookup(walk->sheet, path);
     bool encrypted = git_tree_entry_filemode(entry) != GIT_FILEMODE_LINK
         && claim && claim->encrypted;
 
     size = content_estimated_plaintext_size(size, encrypted);
 
-    if (data->total_size > SIZE_MAX - size) {
-        data->error = ERROR(
+    if (walk->total_size > SIZE_MAX - size) {
+        return ERROR(
             ERR_INTERNAL, "Profile size exceeds maximum representable value"
         );
-        return -1;
     }
 
-    data->file_count++;
-    data->total_size += size;
+    walk->file_count++;
+    walk->total_size += size;
 
-    return 0;
+    return NULL;
 }
 
 /**
@@ -665,22 +596,17 @@ error_t profile_get_tree_stats(
         goto cleanup;
     }
 
-    struct stats_walk_data data = {
+    count_walk_t walk = {
         .odb        = odb,
         .sheet      = metadata,
         .file_count = 0,
-        .total_size = 0,
-        .error      = NULL
+        .total_size = 0
     };
 
-    err = gitops_tree_walk(tree, stats_walk_callback, &data);
+    err = gitops_tree_walk(tree, profile_count_entry, &walk);
     git_odb_free(odb);
 
-    if (err || data.error) {
-        /* Prefer the callback's error — it names the entry that failed */
-        if (data.error) {
-            err = data.error;
-        }
+    if (err) {
         err = error_wrap(
             err, "Failed to read statistics for profile '%s'", profile
         );
@@ -704,7 +630,7 @@ error_t profile_get_tree_stats(
          *
          * One question, two witnesses, and they answer alike for every key the
          * grammar admits: the gate is asked of the whole name at every rung,
-         * the branch root's included (tree_entry_content_path), so a blob standing
+         * the branch root's included (profile_count_entry), so a blob standing
          * at a label's own word is a blob to both witnesses as one standing beneath
          * the word is.
          *
@@ -737,9 +663,9 @@ error_t profile_get_tree_stats(
      * itself rather than falling into that label, which is what keeps that true
      * structurally: nothing reaches this write except the path that earned it. */
     *out = (profile_stats_t){
-        .file_count = data.file_count,
+        .file_count = walk.file_count,
         .directory_count = directory_count,
-        .total_size = data.total_size,
+        .total_size = walk.total_size,
     };
 
     return NULL;

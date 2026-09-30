@@ -321,9 +321,9 @@ typedef struct {
  * stands, as every reader of that field does (core/metadata.h metadata_item_t)
  * — so the agreement is pinned by a scenario instead (tests/test-encrypt.sh).
  *
- * Complete or an error on both sides: an entry whose path no mount can place
- * fails the count rather than being skipped past, and a sheet that will not load
- * fails it rather than reading as a branch with no claims (core/metadata.h
+ * Complete or an error on both sides: an entry whose name the storage grammar
+ * refuses fails the count rather than being skipped past, and a sheet that will
+ * not load fails it rather than reading as a branch with no claims (core/metadata.h
  * metadata_load_from_tree). A caller that would rather print than refuse decides
  * that on its own screen, as the listings do.
  *
@@ -481,16 +481,17 @@ error_t profile_holds(
 /**
  * List deployable files in a Git tree
  *
- * Walks the tree, filters metadata paths, and returns storage paths. This is
+ * Walks the tree past the branch's machinery (infra/label.h label_prefixes, the
+ * content gate), and returns the storage paths of its content blobs. This is
  * the lightweight primitive for "files in a branch" — takes a pre-loaded tree
  * and returns storage paths. For callers that already hold the tree, so one branch
  * read serves the walk and whatever else the caller does with it.
  *
- * Complete or an error: an entry whose path no mount can place is corruption
- * and fails the walk rather than being skipped, since a listing short by a path
- * the caller cannot place would still read as complete. A branch this machine
- * authored holds no such entry; one that arrived by clone, sync or foreign push
- * can.
+ * Complete or an error: an entry whose name the storage grammar refuses is
+ * corruption and fails the walk rather than being skipped, since a listing short
+ * by a name would still read as complete. A branch this machine authored holds
+ * no such entry; one that arrived by clone, sync or foreign push can. A name is
+ * never refused for its length: Git's only bound on one is memory.
  *
  * @param tree Git tree to walk (must not be NULL)
  * @param arena Arena the listing lives in (must not be NULL)

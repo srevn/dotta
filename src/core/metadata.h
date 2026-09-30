@@ -192,9 +192,9 @@ typedef struct state_record state_record_t;
  * answers "was it sealed when it was written" — a screen's question, or a
  * schedule's. Readers: cmds/show.c print_blob_content (the annotation), cmds/list.c
  * list_files (the mark, and the framing taken off the size beside it),
- * core/profiles.c stats_walk_callback (the same framing, in the fold that row's
- * total must agree with), cmds/export.c collect_tree_callback and collect_storage
- * (which blobs phase 1 reads) and, through the projection onto the view's rows
+ * core/profiles.c profile_count_entry (the same framing, in the fold that row's
+ * total must agree with), cmds/export.c collect_entry and collect_storage (which
+ * blobs phase 1 reads) and, through the projection onto the view's rows
  * (core/manifest.h manifest_row_t.encrypted), cmds/export.c entry_from_row,
  * core/workspace.c workspace_analyze_file and cmds/key.c key_status.
  *

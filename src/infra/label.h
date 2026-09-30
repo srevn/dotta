@@ -152,24 +152,18 @@ label_split_t label_split(const char *s);
  * needs to: a branch may hold what it likes next to the labels, and no walk of
  * content sees it.
  *
- * The question reads no further than the name's first component, which is what
- * lets a walk holding no joined name ask it of the walk's root where there is
- * one and of the entry's own name where there is not, and get the joined name's
- * answer: a libgit2 walk root is "" or ends in '/', so a non-empty one carries
- * the whole answer. Where the joined name is the site's own product the gate is
- * asked of the name (core/manifest.c manifest_claim_blob, cmds/export.c
- * collect_tree_callback); where building one is the only thing the gate would
- * pay for, it is asked of the two (core/profiles.c tree_entry_content_path,
- * cmds/completion.c refspec_emit_cb). One reader was always handed the whole
- * name and is the shape the others now take (cmds/diff.c select_delta).
+ * The question reads no further than the name's first component, so a tree and
+ * every name beneath it answer alike: a walk asks it of each entry's whole name,
+ * a tree's included — the walk joins it (sys/gitops.h gitops_tree_walk) — and
+ * skips a tree it refuses with everything beneath.
  *
  * And it is the shape dispatch on an argument, which reads a storage shape before
  * the filesystem shapes.
  *
  * Readers: the view's claim routine (core/manifest.c manifest_claim_blob), the
- * file listing and the branch statistics (core/profiles.c tree_entry_content_path),
- * the refspec completion (cmds/completion.c refspec_emit_cb), export's walk
- * (cmds/export.c collect_tree_callback), diff's delta selection (cmds/diff.c
+ * file listing and the branch statistics (core/profiles.c profile_list_entry,
+ * profile_count_entry), the refspec completion (cmds/completion.c refspec_emit),
+ * export's walk (cmds/export.c collect_entry), diff's delta selection (cmds/diff.c
  * select_delta), the rule compiler (infra/pathspec.c compile_rule), the resolver's
  * storage arm and the question its neighbour asks of a positional whose slot is
  * undecided (infra/path.c path_input_resolve, path_input_announces_path), the
@@ -257,12 +251,12 @@ const char *label_tail(const char *storage_path);
  *
  * Readers: the four boundaries a name arrives across — a branch's tree at the
  * view's claim routine (core/manifest.c manifest_claim_blob) and at the file
- * listing (core/profiles.c tree_entry_content_path), the sheet's keys
- * (core/metadata.c metadata_from_json), export's walk (cmds/export.c
- * collect_tree_callback) — and the resolver's storage arm, where the name is
- * one the user typed (infra/path.c path_input_resolve). The store holds a record's
- * name to the same checks in its own language (core/state.c STORAGE_SPELLING),
- * and tests/test-state.c drives one list of shapes through both.
+ * listing and the branch statistics (core/profiles.c profile_list_entry,
+ * profile_count_entry), the sheet's keys (core/metadata.c metadata_from_json),
+ * export's walk (cmds/export.c collect_entry) — and the resolver's storage arm,
+ * where the name is one the user typed (infra/path.c path_input_resolve). The
+ * store holds a record's name to the same checks in its own language (core/state.c
+ * STORAGE_SPELLING), and tests/test-state.c drives one list of shapes through both.
  *
  * @param storage_path Path to validate (must not be NULL)
  * @return Error or NULL when valid

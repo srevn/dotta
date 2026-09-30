@@ -368,12 +368,12 @@ static error_t list_files(
          * A branch that will not read says so. Silence would spell an unreadable
          * sheet exactly as it spells an empty branch, and the count exists to
          * tell those apart. The sheet is the whole of what can refuse here: the
-         * walk above and the count's own read one gate (core/profiles.c
-         * tree_entry_content_path), so a file list that came back empty is an
-         * empty one there too and no blob header is read. Which is why the refusal
-         * is rendered from its root — between it and here the chain names the
-         * profile twice more and nothing else, and this line names it a third
-         * time (base/error.h error_root). */
+         * walk above and the count's own read one gate, spelled alike in each
+         * (core/profiles.c profile_list_entry, profile_count_entry), so a file
+         * list that came back empty is an empty one there too and no blob header
+         * is read. Which is why the refusal is rendered from its root — between
+         * it and here the chain names the profile twice more and nothing else,
+         * and this line names it a third time (base/error.h error_root). */
         profile_stats_t stats = { 0 };
         err = profile_get_tree_stats(repo, tree, opts->profile, &stats);
         if (err) {

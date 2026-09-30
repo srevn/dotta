@@ -18,6 +18,7 @@
 
 #include "base/arena.h"
 #include "base/array.h"
+#include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
 #include "base/refspec.h"
@@ -662,16 +663,67 @@ error_t gitops_load_branch_tree(
     return NULL;
 }
 
+/* One walk of a tree: the visitor and its payload, the path each step joins,
+ * and what the visitor last answered. */
+typedef struct {
+    gitops_visit_fn visit;
+    void *payload;
+    buffer_t path;          /* the entry's path, joined per step, lent to the visitor */
+    error_t error;          /* the visitor's failure: the one that ended the walk */
+    gitops_walk_t next;     /* the visitor's last answer */
+} tree_walk_t;
+
+/*
+ * libgit2's callback, once per entry: the path joined and the visitor asked.
+ * libgit2 hands the entry apart from its root, which is "" at the top (util/str.c
+ * git_str__initstr, never NULL) and ends in '/' beneath it; an entry's name is
+ * never empty (tree.c git_tree__parse_raw refuses one), so neither is the path.
+ *
+ * What the visitor answered becomes libgit2's protocol here and nowhere else
+ * (tree.c tree_walk): 0 goes on, a positive return at a tree skips its entries
+ * and at a blob changes nothing, and a negative one ends the walk and comes back
+ * verbatim. So a failure and a stop end the walk alike, and the walk tells them
+ * apart by what this step kept.
+ */
+static int gitops_tree_step(
+    const char *root, const git_tree_entry *entry, void *payload
+) {
+    tree_walk_t *walk = payload;
+
+    buffer_clear(&walk->path);
+    buffer_append_string(&walk->path, root);
+    buffer_append_string(&walk->path, git_tree_entry_name(entry));
+
+    walk->next = GITOPS_WALK_CONTINUE;
+    walk->error = walk->visit(walk->path.data, entry, walk->payload, &walk->next);
+    if (walk->error) return -1;
+
+    switch (walk->next) {
+        case GITOPS_WALK_CONTINUE: return 0;
+        case GITOPS_WALK_SKIP:     return 1;
+        case GITOPS_WALK_STOP:     return -1;
+    }
+    CHECK_ARG(false, "a walk answer no enumerator names");
+}
+
 error_t gitops_tree_walk(
-    const git_tree *tree, git_treewalk_cb callback, void *payload
+    const git_tree *tree, gitops_visit_fn visit, void *payload
 ) {
     CHECK_NULL(tree);
-    CHECK_NULL(callback);
+    CHECK_NULL(visit);
 
-    int rc = git_tree_walk(tree, GIT_TREEWALK_PRE, callback, payload);
-    if (rc < 0) return error_from_git(rc);
+    tree_walk_t walk = { .visit = visit, .payload = payload };
+    int rc = git_tree_walk(tree, GIT_TREEWALK_PRE, gitops_tree_step, &walk);
+    buffer_deinit(&walk.path);
 
-    return NULL;
+    /* The visitor's word first: behind its failure and behind its stop libgit2
+     * answered an abort, and the sentence it holds may be one an earlier call
+     * left standing. A STOP left standing is the stop that ended the walk, since
+     * no step runs after one. */
+    if (walk.error || walk.next == GITOPS_WALK_STOP) return walk.error;
+
+    /* The walk's own: a subtree that will not load */
+    return rc < 0 ? error_from_git(rc) : NULL;
 }
 
 /**

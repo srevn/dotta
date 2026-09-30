@@ -122,7 +122,7 @@ struct manifest {
 };
 
 /**
- * Context for the blob-claim tree-walk callback
+ * The blob walk: what one walk of one tree carries to place its blobs
  *
  * Everything one walk of one tree needs to place that profile's blobs where they
  * stand: the contribution being filled, the table that places them, the sheet
@@ -136,7 +136,7 @@ struct manifest {
  *             arena-backed name (every row of this profile borrows the pointer)
  *             and its path index
  * - profile: the contribution's name, for rows and error messages
- * - mounts: borrowed, must not be NULL — keyed by ctx->profile to resolve custom/
+ * - mounts: borrowed, must not be NULL — keyed by walk->profile to resolve custom/
  *          entries; a missing binding (no path) contributes no row and is recorded
  *          on the view (manifest_note_unbound)
  * - metadata: borrowed from manifest_contribute, which loads the sheet of the
@@ -147,13 +147,12 @@ struct manifest {
  *             named. Both are spent when manifest_contribute returns.
  * - contradicted: borrowed, the third of them — the sheet's DIRECTORY keys this
  *             walk met a blob at, written here and read by the directory pass.
- *             Keyed by the arena name the walk joined, which outlives it.
+ *             Keyed by the visitor's arena copy of the name the walk lent, which
+ *             outlives it.
  * - arena: borrowed, must not be NULL; per-row strings are abandoned to it
- * - error: set by the callback on failure; borrowed, as every error is
- *          (base/error.h)
  */
-struct claim_ctx {
-    manifest_t *manifest;         /* Target view (modified by callback) */
+typedef struct {
+    manifest_t *manifest;         /* Target view (modified by the visitor) */
     contribution_t *contribution; /* The profile's own claims and their index */
     const char *profile;          /* Profile name for rows and error messages */
     const mount_table_t *mounts;  /* Mount table for storage→filesystem resolution */
@@ -162,8 +161,7 @@ struct claim_ctx {
     ptr_array_t *contenders;      /* The rows that met a path already named */
     hashmap_t *contradicted;      /* The sheet's names this tree holds a blob at */
     arena_t *arena;               /* Arena for allocations (must not be NULL) */
-    error_t error;                /* Error propagation (set on failure) */
-};
+} claim_walk_t;
 
 /**
  * Apply this profile's claim to a Git-built blob row.
@@ -689,12 +687,12 @@ static void manifest_settle(
 }
 
 /**
- * Tree-walk callback that places the tree's blobs into the contribution
+ * Walk visitor that places the tree's blobs into the contribution
  *
  * The blob half of the per-profile step, and the whole of it that Git drives:
  * one entry at a time, in one walk, a finished manifest_row_t or nothing. In
- * order — the name joined from the walk's root, the content gate on it (a name
- * in the grammar, and nothing else), the path it resolves to, the row, its
+ * order — the content gate on the name the walk joined (a name in the grammar,
+ * and nothing else), the kind, the shape, the path it resolves to, the row, its
  * identity, this profile's claim over it, and the within-profile placement rule
  * that says whether it stands or contends.
  *
@@ -702,37 +700,18 @@ static void manifest_settle(
  * entry here, at the one boundary where the entry is valid, so no row carries
  * an opaque handle and nothing is duplicated to outlive the walk.
  *
- * @param root Directory path within tree (empty string for root level)
- * @param entry Git tree entry (borrowed — valid for callback duration only)
- * @param payload Pointer to claim_ctx
- * @return 0 to continue walk, -1 to stop on error
+ * @param path The entry's path within the tree, joined by the walk (borrowed —
+ *             valid for the call only)
+ * @param entry Git tree entry (borrowed — valid for the call only)
+ * @param payload The blob walk (claim_walk_t)
+ * @param next Set to SKIP past machinery; left for everything else
+ * @return NULL, or the failure that ends the walk
  */
-static int manifest_claim_blob(
-    const char *root, const git_tree_entry *entry, void *payload
+static error_t manifest_claim_blob(
+    const char *path, const git_tree_entry *entry, void *payload,
+    gitops_walk_t *next
 ) {
-    struct claim_ctx *ctx = (struct claim_ctx *) payload;
-
-    /* Only process blobs (files), skip directories — and, in the same line, a
-     * gitlink, which is neither. dotta never writes one (sys/stage refuses the
-     * mode), but `dotta git` and a foreign push can, and the view's answer is
-     * that it claims nothing: no row, no path, nothing beneath it composed through
-     * it. Stated rather than incidental, because a selection of rows is what
-     * export copies (cmds/export.c collect_filesystem) and it copies around such
-     * an entry in silence. */
-    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-        return 0;
-    }
-
-    /* Build the full storage path from root + entry name, straight into the arena
-     * — the row keeps it, so the join is the allocation, and Git's only bound
-     * on a path's length is memory. A skipped entry abandons its string to the
-     * arena, the module's idiom. */
-    const char *name = git_tree_entry_name(entry);
-    size_t root_len = root ? strlen(root) : 0;
-    size_t name_len = strlen(name);
-    char *storage_path = arena_alloc(ctx->arena, root_len + name_len + 1);
-    if (root_len > 0) memcpy(storage_path, root, root_len);
-    memcpy(storage_path + root_len, name, name_len + 1);
+    claim_walk_t *walk = payload;
 
     /* The content gate, asked of the name the entry stands at (infra/label.h
      * label_prefixes): a managed path is a name in the grammar — beneath a label,
@@ -740,12 +719,24 @@ static int manifest_claim_blob(
      * a directory holds. Everything else the branch carries is machinery: dotta's
      * own files (.dottaignore, .bootstrap, .dotta/) and whatever else a hand or
      * a tool left beside them — a README, a LICENSE, a docs/ tree — and no walk
-     * of content sees it. Asked of the whole name because at the branch root
-     * the walk's root is "" and says nothing, and the name is all there is; beneath
-     * a label it is always passed. Skipped in silence, and before the shape rule,
+     * of content sees it. Asked of every entry's whole name, a tree's included,
+     * so a tree of machinery is skipped with everything beneath it; beneath a
+     * label it is always passed. Skipped in silence, and before the shape rule,
      * so machinery is never read as corruption. */
-    if (!label_prefixes(storage_path)) {
-        return 0;
+    if (!label_prefixes(path)) {
+        *next = GITOPS_WALK_SKIP;
+        return NULL;
+    }
+
+    /* Only blobs (files) place rows: a tree beneath a label is walked into —
+     * and, in the same line, a gitlink, which is neither, is passed. dotta never
+     * writes one (sys/stage refuses the mode), but `dotta git` and a foreign
+     * push can, and the view's answer is that it claims nothing: no row, no path,
+     * nothing beneath it composed through it. Stated rather than incidental,
+     * because a selection of rows is what export copies (cmds/export.c
+     * collect_filesystem) and it copies around such an entry in silence. */
+    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
+        return NULL;
     }
 
     /* The entry name is Git's, not this machine's. mount_resolve joins a label's
@@ -755,14 +746,17 @@ static int manifest_claim_blob(
      * to say not at all. A tree can name a subtree "..", so the shape has to be
      * checked where the tree is read, the same reason metadata's key loop checks
      * its own (core/metadata.c). Malformed here is corruption, not a lifecycle
-     * stage: it takes the err branch below rather than the unbound note. */
-    error_t err = label_validate_storage(storage_path);
+     * stage: it ends the walk rather than taking the unbound note. */
+    error_t err = label_validate_storage(path);
     if (err) {
-        ctx->error = error_wrap(
-            err, "Invalid path in profile '%s'", ctx->profile
-        );
-        return -1;
+        return error_wrap(err, "Invalid path in profile '%s'", walk->profile);
     }
+
+    /* The walk lends the path for this call alone; the row, the unbound note
+     * and the contradicted set keep it past the walk, so it is copied into the
+     * arena — once the gates above have admitted it, and Git's only bound on a
+     * path's length is memory. */
+    const char *storage_path = arena_strdup(walk->arena, path);
 
     /* This blob's claim, by the name the tree gave it — and, in the same answer,
      * the content authority. A path is a tree or a blob and the tree is the content
@@ -779,15 +773,15 @@ static int manifest_claim_blob(
      * comparison and prints [modified] on every load (core/workspace.c). The
      * contradiction is the branch's and that is where it gets fixed; the view
      * states it rather than repairs it. */
-    const metadata_item_t *claim = metadata_lookup(ctx->metadata, storage_path);
+    const metadata_item_t *claim = metadata_lookup(walk->metadata, storage_path);
     if (claim && claim->kind == PATH_KIND_DIRECTORY) {
-        hashmap_set(ctx->contradicted, storage_path, NULL);
+        hashmap_set(walk->contradicted, storage_path, NULL);
         claim = NULL;
     }
 
     /* Convert storage path to filesystem path against the mount table.
      *
-     * No path when storage_path is custom/... and ctx->profile has no target
+     * No path when storage_path is custom/... and walk->profile has no target
      * binding on this machine — a normal lifecycle stage in a shared repository
      * (a clone before the target is chosen, a sync that pulled another machine's
      * custom/ claims, a revert that recommitted one), not corruption: no local
@@ -799,13 +793,13 @@ static int manifest_claim_blob(
      * skipped claim and no orphan can be manufactured here. The shape was checked
      * above, so the label is one. */
     const char *filesystem_path = mount_resolve(
-        ctx->arena, ctx->mounts, ctx->profile, storage_path
+        walk->arena, walk->mounts, walk->profile, storage_path
     );
     if (!filesystem_path) {
         manifest_note_unbound(
-            ctx->manifest, ctx->profile, storage_path, PATH_KIND_FILE, ctx->arena
+            walk->manifest, walk->profile, storage_path, PATH_KIND_FILE, walk->arena
         );
-        return 0;
+        return NULL;
     }
 
     /* Place the row, then say whether it stands. During this pass every row of
@@ -814,13 +808,13 @@ static int manifest_claim_blob(
      * settle to decide. The sibling rule across profiles is manifest_layer's,
      * where an explicit claim takes a held path outright: that is the whole
      * difference between precedence and a profile naming one place twice. */
-    const manifest_row_t *held = hashmap_get(ctx->contribution->index, filesystem_path);
+    const manifest_row_t *held = hashmap_get(walk->contribution->index, filesystem_path);
 
-    manifest_row_t *row = manifest_place(ctx->placed, filesystem_path, ctx->arena);
+    manifest_row_t *row = manifest_place(walk->placed, filesystem_path, walk->arena);
 
-    /* The row borrows ctx->profile, the arena-backed name the step duplicated. */
+    /* The row borrows walk->profile, the arena-backed name the step duplicated. */
     row->storage_path = storage_path;
-    row->profile = ctx->profile;
+    row->profile = walk->profile;
 
     /* Extract identity from the borrowed tree entry (blob_oid, type, mode). */
     git_oid_cpy(&row->blob_oid, git_tree_entry_id(entry));
@@ -844,15 +838,15 @@ static int manifest_claim_blob(
      * set above are the floor; a claim may override mode and encrypted, and
      * contribute owner/group. A contender is a finished row and takes its own
      * claim like any other — the claim was read by the row's own name. */
-    manifest_apply_claim(row, claim, ctx->arena);
+    manifest_apply_claim(row, claim, walk->arena);
 
     if (!held || manifest_is_derived(held)) {
-        hashmap_set(ctx->contribution->index, filesystem_path, row);
+        hashmap_set(walk->contribution->index, filesystem_path, row);
     } else {
-        ptr_array_push(ctx->contenders, row);
+        ptr_array_push(walk->contenders, row);
     }
 
-    return 0;  /* Continue walk */
+    return NULL;
 }
 
 /**
@@ -930,8 +924,8 @@ static error_t manifest_contribute(
      * sheet its own tree agrees with. The two arrays are the build's arena's,
      * left there when the step returns: a pointer per row placed.
      *
-     * The third borrows its keys: each is the arena name the walk joined, which
-     * outlives the map by the whole view. */
+     * The third borrows its keys: each is the visitor's arena copy of the name
+     * the walk lent, which outlives the map by the whole view. */
     ptr_array_t placed;
     ptr_array_t contenders;
     ptr_array_init(&placed, arena);
@@ -940,10 +934,10 @@ static error_t manifest_contribute(
     hashmap_t *contradicted = hashmap_borrow(arena, 8);
 
     /* The blobs, in one walk (manifest_claim_blob). The table is the view's,
-     * and bindings are keyed by profile — which the callback feeds verbatim into
+     * and bindings are keyed by profile — which the visitor feeds verbatim into
      * mount_resolve, so a custom/ claim of this profile places under this profile's
      * target and no other's. */
-    struct claim_ctx ctx = {
+    claim_walk_t walk = {
         .manifest     = manifest,
         .contribution = c,
         .profile      = c->profile,
@@ -952,17 +946,10 @@ static error_t manifest_contribute(
         .placed       = &placed,
         .contenders   = &contenders,
         .contradicted = contradicted,
-        .arena        = arena,
-        .error        = NULL
+        .arena        = arena
     };
 
-    err = gitops_tree_walk(tree, manifest_claim_blob, &ctx);
-    if (ctx.error) {
-        /* The callback's error names the entry that failed; the walk's own is
-         * the abort libgit2 stamped in answer to it — an echo of this call's
-         * own decision, which names nothing and is dropped. */
-        err = ctx.error;
-    }
+    err = gitops_tree_walk(tree, manifest_claim_blob, &walk);
     if (err) {
         err = error_wrap(
             err, "Failed to build manifest for profile '%s'", c->profile

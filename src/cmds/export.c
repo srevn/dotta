@@ -348,50 +348,50 @@ static error_t dest_resolve(
 }
 
 /**
- * Phase-1 tree collection
+ * The phase-1 walk: a profile tree's entries, collected beneath the export's base
  */
-struct collect_ctx {
+typedef struct {
     const metadata_t *metadata;
     const char *profile;       /* Named by the refusal a malformed tree earns */
     const char *storage_base;  /* "" for whole profile, else target path */
     export_entry_list_t *list;
     arena_t *arena;
-    error_t error;
-};
+} collect_walk_t;
 
-static int collect_tree_callback(
-    const char *root,
+/**
+ * Walk visitor: one entry of the walked tree, collected as an export entry
+ *
+ * Every entry the gate admits, trees and blobs alike, is one entry of the list
+ * at the name it stands at beneath the base; the branch's machinery is pruned
+ * with its subtree; a name the storage grammar refuses, and an entry that is
+ * neither a tree nor a blob, are the walk's failure.
+ */
+static error_t collect_entry(
+    const char *path,
     const git_tree_entry *entry,
-    void *payload
+    void *payload,
+    gitops_walk_t *next
 ) {
-    struct collect_ctx *ctx = payload;
-    const char *name = git_tree_entry_name(entry);
+    collect_walk_t *walk = payload;
 
-    /* Build path relative to the walked tree (root carries its own trailing '/'
-     * at nested levels). */
-    char rel[1024];
-    int n = snprintf(rel, sizeof(rel), "%s%s", root, name);
-    if (n < 0 || (size_t) n >= sizeof(rel)) {
-        ctx->error = ERROR(
-            ERR_INTERNAL, "Path exceeds maximum length: %s%s", root, name
-        );
-        return -1;
-    }
-
+    /* The name the entry stands at is the walk's path beneath the base, and its
+     * path within the copy is that path itself: the join's tail, one arena copy
+     * for both, as append_claim_dirs takes its own. */
     export_entry_t e;
     memset(&e, 0, sizeof(e));
-    e.rel_path = arena_strdup(ctx->arena, rel);
-    e.storage_path = export_path_join(ctx->arena, ctx->storage_base, rel);
+    e.storage_path = export_path_join(walk->arena, walk->storage_base, path);
+    e.rel_path = e.storage_path + strlen(e.storage_path) - strlen(path);
 
     /* The content gate every walk over a branch asks (infra/label.h
      * label_prefixes), of trees as much as blobs: a name in the grammar is content,
      * and whatever else the branch root holds — dotta's own files, a README a
-     * hand left — is pruned with its subtree by the positive return. Beneath a
-     * label the gate is always passed, and so is every rung of a named export's
-     * walk, whose storage base already stands under one; it prunes at a
-     * whole-profile walk's top level and nowhere else. */
+     * hand left — is pruned with its subtree. Beneath a label the gate is always
+     * passed, and so is every rung of a named export's walk, whose storage base
+     * already stands under one; it prunes at a whole-profile walk's top level
+     * and nowhere else. */
     if (!label_prefixes(e.storage_path)) {
-        return 1;
+        *next = GITOPS_WALK_SKIP;
+        return NULL;
     }
 
     /* The name is Git's, not this machine's: a branch that arrived by clone,
@@ -403,16 +403,13 @@ static int collect_tree_callback(
      * manifest_claim_blob makes the same check in the same words). A link's target
      * is the link's own business, copied verbatim, and is not a path of this
      * copy. */
-    error_t shape = label_validate_storage(e.storage_path);
-    if (shape) {
-        ctx->error = error_wrap(
-            shape, "Invalid path in profile '%s'", ctx->profile
-        );
-        return -1;
+    error_t err = label_validate_storage(e.storage_path);
+    if (err) {
+        return error_wrap(err, "Invalid path in profile '%s'", walk->profile);
     }
 
     /* The claim standing at this name, read once for whichever arm wants it. */
-    const metadata_item_t *item = metadata_lookup(ctx->metadata, e.storage_path);
+    const metadata_item_t *item = metadata_lookup(walk->metadata, e.storage_path);
 
     switch (git_tree_entry_type(entry)) {
         case GIT_OBJECT_TREE: {
@@ -438,16 +435,15 @@ static int collect_tree_callback(
         }
 
         default:
-            ctx->error = ERROR(
+            return ERROR(
                 ERR_INVALID_ARG,
                 "Unsupported entry '%s' in profile tree (submodule?)",
                 e.storage_path
             );
-            return -1;
     }
 
-    entry_list_append(ctx->list, ctx->arena, &e);
-    return 0;
+    entry_list_append(walk->list, walk->arena, &e);
+    return NULL;
 }
 
 /**
@@ -557,20 +553,14 @@ static error_t collect_profile(
 
     append_root(list, arena, NULL, DIR_MODE_DEFAULT, false);
 
-    struct collect_ctx cctx = {
+    collect_walk_t walk = {
         .metadata     = metadata,
         .profile      = profile,
         .storage_base = "",
         .list         = list,
-        .arena        = arena,
-        .error        = NULL
+        .arena        = arena
     };
-    error_t err = gitops_tree_walk(tree, collect_tree_callback, &cctx);
-    if (cctx.error) {
-        /* The callback error is the cause; the walk's generic user-abort wrapper
-         * is noise. */
-        err = cctx.error;
-    }
+    error_t err = gitops_tree_walk(tree, collect_entry, &walk);
     if (err) goto cleanup;
 
     err = append_claim_dirs(list, arena, metadata, tree, NULL);
@@ -651,24 +641,20 @@ static error_t collect_storage(
             );
 
             if (held.filemode == GIT_FILEMODE_TREE) {
-                int git_ret = git_tree_lookup(&subtree, ctx->run.repo, &held.oid);
-                if (git_ret < 0) {
-                    err = error_from_git(git_ret);
+                int rc = git_tree_lookup(&subtree, ctx->run.repo, &held.oid);
+                if (rc < 0) {
+                    err = error_from_git(rc);
                     goto cleanup;
                 }
 
-                struct collect_ctx cctx = {
+                collect_walk_t walk = {
                     .metadata     = metadata,
                     .profile      = profile,
                     .storage_base = name,
                     .list         = list,
-                    .arena        = arena,
-                    .error        = NULL
+                    .arena        = arena
                 };
-                err = gitops_tree_walk(subtree, collect_tree_callback, &cctx);
-                if (cctx.error) {
-                    err = cctx.error;
-                }
+                err = gitops_tree_walk(subtree, collect_entry, &walk);
                 if (err) goto cleanup;
             }
 
@@ -1423,10 +1409,10 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
 
         /* The commit is in hand and its tree is one dereference away; the OID
          * helper beside this one would look the commit up a second time. */
-        int git_ret = git_commit_tree(&tree, commit);
-        if (git_ret < 0) {
+        int rc = git_commit_tree(&tree, commit);
+        if (rc < 0) {
             err = error_wrap(
-                error_from_git(git_ret),
+                error_from_git(rc),
                 "Failed to load tree from commit '%s'", opts->commit
             );
             goto cleanup;

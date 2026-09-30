@@ -138,12 +138,12 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * stamp instead (core/metadata.h metadata_item_t). Readers: `cmds/add.c cmd_add`
  * and `cmds/update.c update_capture` (policy priority 3, where a wrong answer
  * commits a secret in the clear), `cmds/revert.c cmd_revert` (the stamp it writes,
- * and existence for every filemode), `infra/epoch.c epoch_walk_cb` (which blobs
- * a rotation must not orphan, where a false absence outlives the run). Every
- * reader is outside this module, and that is the shape rather than an accident:
- * content's own doors judge bytes they already hold (content_classify_bytes on
- * a view, classify_entry inside a read), so none of them pays a load to ask. A
- * reader not on this list is a bug.
+ * and existence for every filemode), `infra/epoch.c epoch_present_blob` (which
+ * blobs a rotation must not orphan, where a false absence outlives the run).
+ * Every reader is outside this module, and that is the shape rather than an
+ * accident: content's own doors judge bytes they already hold
+ * (content_classify_bytes on a view, classify_entry inside a read), so none of
+ * them pays a load to ask. A reader not on this list is a bug.
  *
  * The price, measured rather than read off the docs: the blob is loaded whole
  * to reach six bytes, libgit2 offering no partial read of a packed object — and
@@ -193,7 +193,7 @@ error_t content_classify(
  * constant, but the screens that size a branch's content want the file's number,
  * not the framing's. Centralising the subtraction here keeps crypto/cipher.h
  * imports out of the layers that ask — `cmds/list.c list_files` (the row) and
- * `core/profiles.c stats_walk_callback` (the fold the row's total must agree
+ * `core/profiles.c profile_count_entry` (the fold the row's total must agree
  * with). A reader not on this list is a bug.
  *
  * Returns:

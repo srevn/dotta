@@ -1420,8 +1420,8 @@ static void apply_print_cleanup_skips(
          * (cleanup_skip_reason); this only names it — red where the file's own
          * content or type has moved away from what dotta deployed, yellow where
          * dotta simply cannot vouch for it or deliberately skips it. */
-        const char *glyph = "•";
-        const char *label = "skipped";
+        const char *glyph = NULL;
+        const char *label = NULL;
         output_color_t color = OUTPUT_COLOR_YELLOW;
 
         switch (cleanup_skip_reason(item)) {

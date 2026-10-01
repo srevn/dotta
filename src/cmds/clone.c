@@ -590,8 +590,9 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         }
     }
 
-    /* Execute bootstrap if requested: the scripts the section above listed, which
-     * the consent ran over (run_bootstrap is set only where one was found) */
+    /* Execute bootstrap if requested: the scripts the section above listed —
+     * the consent is asked only where one was found, so run_bootstrap implies
+     * one */
     if (run_bootstrap) {
         output_gap(out, OUTPUT_NORMAL);
         bootstrap_spec_t spec = {

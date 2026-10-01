@@ -52,7 +52,7 @@ typedef enum {
  * one blank line, before the first and after the last there is none. No block
  * knows whether another follows it, so no block writes that separator — it *owes*
  * one (output_gap), and the next line that lands pays it, on whatever stream
- * that line writes to (base/output.c `land`).
+ * that line writes to (base/output.c `output_land`).
  *
  * Three guarantees fall out of that, and none of them needs a call site to reason
  * about its neighbours. A debt nobody pays writes nothing, so a report cannot
@@ -68,8 +68,8 @@ typedef enum {
  * to separate from. Moving the report to another stream (output_set_stream) starts
  * it over, because the new stream holds none of it.
  *
- * Read in two places, both in base/output.c: `land` asks what is owed, and
- * output_gap asks whether anything stands to owe it.
+ * Read in two places, both in base/output.c: `output_land` asks what is owed,
+ * and output_gap asks whether anything stands to owe it.
  */
 typedef enum {
     OUTPUT_REPORT_START,  /* Nothing of the report stands on `stream` */

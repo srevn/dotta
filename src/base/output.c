@@ -146,12 +146,12 @@ typedef struct {
     const char *ansi;       /* ANSI escape sequence */
     uint8_t name_len;       /* strlen(name), computed at compile time */
     uint8_t ansi_len;       /* strlen(ansi), computed at compile time */
-} style_tag_t;
+} tag_t;
 
 #define STYLE_TAG(n, a) { n, a, sizeof(n) - 1, sizeof(a) - 1 }
 
 /* MUST remain sorted by name (ASCII order) for binary search */
-static const style_tag_t TAG_TABLE[] = {
+static const tag_t TAG_TABLE[] = {
     STYLE_TAG("blue",    ANSI_BLUE),
     STYLE_TAG("bold",    ANSI_BOLD),
     STYLE_TAG("cyan",    ANSI_CYAN),
@@ -172,13 +172,13 @@ static const style_tag_t TAG_TABLE[] = {
  * Lexicographic comparison against the sorted TAG_TABLE. Returns pointer to
  * matching entry, or NULL for unknown tags.
  */
-static const style_tag_t *resolve_tag(const char *name, size_t len) {
+static const tag_t *output_find_tag(const char *name, size_t len) {
     int lo = 0;
     int hi = (int) TAG_COUNT - 1;
 
     while (lo <= hi) {
         int mid = lo + (hi - lo) / 2;
-        const style_tag_t *entry = &TAG_TABLE[mid];
+        const tag_t *entry = &TAG_TABLE[mid];
 
         size_t cmp_len = len < entry->name_len ? len : entry->name_len;
         int cmp = memcmp(name, entry->name, cmp_len);
@@ -216,10 +216,10 @@ static const style_tag_t *resolve_tag(const char *name, size_t len) {
  * @param tag_len Length of tag content
  * @return true if tag was recognized, false to pass through literally
  */
-static bool expand_tag(
+static bool output_expand_tag(
     style_buf_t *sb, bool color_on, const char *tag, size_t tag_len
 ) {
-    const style_tag_t *resolved[8];
+    const tag_t *resolved[8];
     size_t count = 0;
     const char *p = tag;
     const char *end = tag + tag_len;
@@ -233,7 +233,7 @@ static bool expand_tag(
             if (count >= sizeof(resolved) / sizeof(resolved[0]))
                 return false;
 
-            const style_tag_t *entry = resolve_tag(p, part_len);
+            const tag_t *entry = output_find_tag(p, part_len);
             if (!entry) return false;
 
             resolved[count++] = entry;
@@ -301,7 +301,7 @@ static bool expand_format(bool color_on, const char *fmt, style_buf_t *sb) {
             continue;
         }
 
-        if (expand_tag(
+        if (output_expand_tag(
             sb, color_on, tag_start,
             (size_t) (tag_end - tag_start)
             )) {
@@ -364,28 +364,32 @@ static void styled_fputs(bool color_on, FILE *stream, const char *str) {
  * Terminal and Color Detection
  * ═══════════════════════════════════════════════════════════════════ */
 
-static bool fd_supports_color(int fd) {
-    if (!isatty(fd))
-        return false;
-
-    const char *no_color = getenv("NO_COLOR");
-    if (no_color && no_color[0] != '\0')
-        return false;
-
-    const char *term = getenv("TERM");
-    if (!term || strcmp(term, "dumb") == 0)
-        return false;
-
-    return true;
-}
-
-static bool should_enable_colors(output_color_mode_t mode, FILE *stream) {
+/**
+ * Are colours on for a stream, under a mode
+ *
+ * AUTO's is a terminal's yes: the stream a terminal, NO_COLOR unset or empty,
+ * and TERM set to anything but "dumb".
+ */
+static bool output_colors_on(output_color_mode_t mode, FILE *stream) {
     switch (mode) {
-        case OUTPUT_COLOR_ALWAYS:  return true;
-        case OUTPUT_COLOR_NEVER:   return false;
-        case OUTPUT_COLOR_AUTO:    return fd_supports_color(fileno(stream));
-        default:                   return false;
+        case OUTPUT_COLOR_ALWAYS:
+            return true;
+        case OUTPUT_COLOR_NEVER:
+            return false;
+        case OUTPUT_COLOR_AUTO: {
+            if (!isatty(fileno(stream))) return false;
+
+            const char *no_color = getenv("NO_COLOR");
+            if (no_color && no_color[0] != '\0') return false;
+
+            const char *term = getenv("TERM");
+            return term && strcmp(term, "dumb") != 0;
+        }
     }
+
+    /* A mode no enumerator names, which only a cast can make: no colour, the
+     * answer that writes nothing (base/error.h CHECK_ARG) */
+    return false;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -400,8 +404,8 @@ output_t *output_create(
     ctx->stream = stream ? stream : stdout;
     ctx->verbosity = verbosity;
     ctx->color_mode = color_mode;
-    ctx->color_enabled = should_enable_colors(color_mode, ctx->stream);
-    ctx->stderr_color_enabled = should_enable_colors(color_mode, stderr);
+    ctx->color_enabled = output_colors_on(color_mode, ctx->stream);
+    ctx->stderr_color_enabled = output_colors_on(color_mode, stderr);
 
     return ctx;
 }
@@ -422,7 +426,7 @@ void output_set_stream(output_t *ctx, FILE *stream) {
     if (!ctx || !stream) return;
 
     ctx->stream = stream;
-    ctx->color_enabled = should_enable_colors(ctx->color_mode, stream);
+    ctx->color_enabled = output_colors_on(ctx->color_mode, stream);
 
     /* The new stream holds none of the report, so a boundary owed on the old
      * one is dropped rather than paid where it does not belong. */
@@ -512,7 +516,7 @@ const char *output_color_code(const output_t *ctx, output_color_t color) {
  * to record, and a boundary asked mid-line is better left standing than spent
  * closing a line (output.h).
  */
-static void land(output_t *ctx, FILE *stream) {
+static void output_land(output_t *ctx, FILE *stream) {
     if (stream != ctx->stream) {
         fflush(ctx->stream);
     }
@@ -533,7 +537,7 @@ void output_print(
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    land(ctx, ctx->stream);
+    output_land(ctx, ctx->stream);
 
     va_list args;
     va_start(args, fmt);
@@ -548,7 +552,7 @@ void output_colored(
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    land(ctx, ctx->stream);
+    output_land(ctx, ctx->stream);
 
     bool apply_color = color != OUTPUT_COLOR_RESET
         && ctx->color_enabled && (unsigned) color < ANSI_CODE_COUNT;
@@ -566,7 +570,7 @@ void output_colored(
 void output_error(output_t *ctx, const char *fmt, ...) {
     if (!ctx || !fmt) return;
 
-    land(ctx, stderr);
+    output_land(ctx, stderr);
 
     styled_fputs(
         ctx->stderr_color_enabled, stderr,
@@ -587,7 +591,7 @@ void output_warning(
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    land(ctx, ctx->stream);
+    output_land(ctx, ctx->stream);
 
     styled_fputs(
         ctx->color_enabled, ctx->stream,
@@ -608,7 +612,7 @@ void output_success(
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    land(ctx, ctx->stream);
+    output_land(ctx, ctx->stream);
 
     styled_fputs(
         ctx->color_enabled, ctx->stream,
@@ -629,7 +633,7 @@ void output_info(
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    land(ctx, ctx->stream);
+    output_land(ctx, ctx->stream);
 
     va_list args;
     va_start(args, fmt);
@@ -645,7 +649,7 @@ void output_hint(
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    land(ctx, ctx->stream);
+    output_land(ctx, ctx->stream);
 
     /* Preserve leading whitespace (printed uncolored for indentation) */
     const char *p = fmt;
@@ -674,7 +678,7 @@ void output_hintline(
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    land(ctx, ctx->stream);
+    output_land(ctx, ctx->stream);
 
     if (ctx->color_enabled) fputs(ANSI_DIM, ctx->stream);
 
@@ -705,7 +709,7 @@ void output_section(
 
     /* A section is a block, and it owns the boundary above it */
     output_gap(ctx, min_level);
-    land(ctx, ctx->stream);
+    output_land(ctx, ctx->stream);
 
     const char *bold = output_color_code(ctx, OUTPUT_COLOR_BOLD);
     const char *reset = output_color_code(ctx, OUTPUT_COLOR_RESET);
@@ -743,7 +747,7 @@ void output_clear_line(output_t *ctx) {
  * NUL-terminated text and enters only on a line that has a first byte, so the
  * second is at worst the terminator.
  */
-static const char *diff_line_color(const char *line) {
+static const char *output_diff_color(const char *line) {
     if (line[0] == '+' && line[1] != '+') return ANSI_GREEN;
     if (line[0] == '-' && line[1] != '-') return ANSI_RED;
     if (line[0] == '@' && line[1] == '@') return ANSI_CYAN;
@@ -757,14 +761,14 @@ void output_print_diff(
     if (!ctx || !diff_text || !*diff_text) return;
     if (ctx->verbosity < min_level) return;
 
-    land(ctx, ctx->stream);
+    output_land(ctx, ctx->stream);
 
     const char *line = diff_text;
 
     /* A line and its newline are one step; the last line needs no newline. */
     while (*line) {
         size_t len = strcspn(line, "\n");
-        const char *color = ctx->color_enabled ? diff_line_color(line) : NULL;
+        const char *color = ctx->color_enabled ? output_diff_color(line) : NULL;
 
         if (color)
             fprintf(
@@ -850,20 +854,22 @@ void output_format_path(
  * User Confirmation Prompts
  * ═══════════════════════════════════════════════════════════════════ */
 
-static void clear_stdin_buffer(void) {
-    int c;
-    while ((c = getchar()) != '\n' && c != EOF) { }
-}
-
-static bool read_user_response(bool default_value) {
+/**
+ * The answer typed: y or Y is yes, an empty line the default, anything else no
+ */
+static bool output_read_answer(bool default_value) {
     char response[16];
 
     if (fgets(response, sizeof(response), stdin) == NULL)
         return default_value;
 
+    /* An answer longer than the buffer: the rest of its line is drained, so it
+     * never reaches the next question */
     size_t len = strlen(response);
-    if (len > 0 && response[len - 1] != '\n')
-        clear_stdin_buffer();
+    if (len > 0 && response[len - 1] != '\n') {
+        int c;
+        while ((c = getchar()) != '\n' && c != EOF) { }
+    }
 
     if (len == 0 || response[0] == '\n')
         return default_value;
@@ -879,12 +885,12 @@ static bool read_user_response(bool default_value) {
  * destructive prompt's warning and its question are one block, and asking twice
  * inside it would put a blank between them.
  */
-static bool confirm_ask(
+static bool output_ask(
     output_t *ctx, const char *message, bool default_value
 ) {
     /* The preview this asks about is the report above it, and the question must
      * not land inside the line it ends on. */
-    land(ctx, stderr);
+    output_land(ctx, stderr);
 
     const char *suffix = default_value ? " [Y/n] " : " [y/N] ";
 
@@ -894,7 +900,7 @@ static bool confirm_ask(
     fprintf(stderr, "%s%s%s%s", bold, message, reset, suffix);
     fflush(stderr);
 
-    return read_user_response(default_value);
+    return output_read_answer(default_value);
 }
 
 bool output_confirm(
@@ -905,7 +911,7 @@ bool output_confirm(
     /* A question is a block. Asked at QUIET because a prompt is not gated. */
     output_gap(ctx, OUTPUT_QUIET);
 
-    return confirm_ask(ctx, message, default_value);
+    return output_ask(ctx, message, default_value);
 }
 
 bool output_confirm_or_default(
@@ -920,7 +926,7 @@ bool output_confirm_or_default(
     output_gap(ctx, OUTPUT_QUIET);
 
     if (!isatty(STDIN_FILENO)) {
-        land(ctx, stderr);
+        output_land(ctx, stderr);
 
         if (non_interactive_default) {
             styled_fputs(
@@ -962,7 +968,7 @@ bool output_confirm_destructive(
     output_gap(ctx, OUTPUT_QUIET);
 
     if (!isatty(STDIN_FILENO)) {
-        land(ctx, stderr);
+        output_land(ctx, stderr);
         styled_fputs(
             ctx->stderr_color_enabled, stderr,
             "{bold;red}Error:{reset} "
@@ -975,13 +981,13 @@ bool output_confirm_destructive(
         return false;
     }
 
-    land(ctx, stderr);
+    output_land(ctx, stderr);
     styled_fputs(
         ctx->stderr_color_enabled, stderr,
         "{bold;yellow}Warning:{reset} This is a destructive operation!\n"
     );
 
-    return confirm_ask(ctx, message, false);
+    return output_ask(ctx, message, false);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -994,14 +1000,14 @@ typedef struct {
     output_color_t color;  /* Color for tags */
     const char *content;   /* Content string, the list's arena's */
     const char *metadata;  /* Metadata string, the list's arena's (nullable) */
-} list_item_t;
+} item_t;
 
 struct output_list {
     arena_t *arena;     /* The list's own: the struct, its strings and its items */
     output_t *ctx;      /* Borrowed reference (caller owns) */
     const char *title;  /* Section title */
     const char *hint;   /* Hint text (nullable) */
-    list_item_t *items; /* The items, grown in the arena */
+    item_t *items; /* The items, grown in the arena */
     size_t count;       /* Current item count */
     size_t capacity;    /* Allocated capacity */
 };
@@ -1055,8 +1061,8 @@ void output_list_add(
         arena, list->items, &list->capacity, list->count + 1, sizeof(*list->items)
     );
 
-    list_item_t *item = &list->items[list->count];
-    *item = (list_item_t){
+    item_t *item = &list->items[list->count];
+    *item = (item_t){
         .tag_count = tag_count,
         .color = color,
         .content = arena_strdup(arena, content ? content : ""),
@@ -1082,12 +1088,12 @@ void output_list_render(output_list_t *list) {
     /* A list is a block, and it owns the boundary above it. Its level is the
      * gate's: a list is a NORMAL block or it is nothing. */
     output_gap(ctx, OUTPUT_NORMAL);
-    land(ctx, ctx->stream);
+    output_land(ctx, ctx->stream);
 
     /* Pass 1: Calculate maximum tag width */
     size_t max_tag_width = 0;
     for (size_t i = 0; i < list->count; i++) {
-        list_item_t *item = &list->items[i];
+        item_t *item = &list->items[i];
         size_t tag_width = 0;
         for (size_t j = 0; j < item->tag_count; j++) {
             tag_width += strlen(item->tags[j]) + 2;
@@ -1114,7 +1120,7 @@ void output_list_render(output_list_t *list) {
 
     /* Pass 3: Render items with alignment */
     for (size_t i = 0; i < list->count; i++) {
-        list_item_t *item = &list->items[i];
+        item_t *item = &list->items[i];
 
         char tag_buf[256];
         format_tags_with_brackets(

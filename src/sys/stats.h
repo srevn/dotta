@@ -60,6 +60,21 @@ typedef struct {
 } file_history_t;
 
 /**
+ * A commit's info, its summary copied into `arena`
+ *
+ * The summary is the message's first line with its trailing whitespace trimmed,
+ * and empty for a commit with no message. The one producer of a commit_info_t:
+ * every commit the history walks keep, and each branch tip a verbose profile
+ * row prints (cmds/list.c list_profiles), so a row's commit and a file's read
+ * alike.
+ *
+ * @param arena Arena the summary lives in (required)
+ * @param commit The commit (required, borrowed)
+ * @return The info, its summary `arena`'s
+ */
+commit_info_t stats_commit_info(arena_t *arena, const git_commit *commit);
+
+/**
  * A blob's size, read efficiently
  *
  * Reads only object metadata using git_odb_read_header (no decompression). This
@@ -100,12 +115,14 @@ error_t stats_blob_size_with_odb(
 /**
  * Build file→commit mapping
  *
- * Walks commit history from newest to oldest, mapping each of `paths` to the
- * most recent commit that touched it. The names are the caller's: which of a
- * tree's blobs a screen reads is knowledge this layer does not have (the header),
- * so the reader hands in the listing it prints — the branch's content, never
- * its machinery (cmds/list.c list_files) — and the map holds those names and no
- * other.
+ * Walks the history from `tip_oid` back, newest to oldest, mapping each of `paths`
+ * to the most recent commit that touched it. The names are the caller's: which
+ * of a tree's blobs a screen reads is knowledge this layer does not have (the
+ * header), so the reader hands in the listing it prints — the branch's content,
+ * never its machinery (cmds/list.c list_files) — and the map holds those names
+ * and no other. So is the tip: the commit the names were listed at, read once
+ * by the caller, so the map and the listing are one snapshot's whatever the branch
+ * says by the time the map is built — no branch is read here.
  *
  * Stops early once every name is mapped, which makes a history whose listed files
  * all changed recently cheap however long it is. Each name is met first at its
@@ -118,15 +135,15 @@ error_t stats_blob_size_with_odb(
  * Note: This is expensive (history walk). Use only in verbose mode.
  *
  * @param repo Repository (required)
- * @param branch_name Branch name (required, e.g., "global")
- * @param paths The names to map: storage paths the branch's tip holds (required)
+ * @param tip_oid The tip the names were listed at (required)
+ * @param paths The names to map: storage paths that commit's tree holds (required)
  * @param arena Arena the map, its keys and its commits live in (required)
  * @param out File→commit map (required; left as it was on a failure)
  * @return Error or NULL on success
  */
 error_t stats_build_file_commit_map(
     git_repository *repo,
-    const char *branch_name,
+    const git_oid *tip_oid,
     const string_array_t *paths,
     arena_t *arena,
     file_commit_map_t **out
@@ -135,8 +152,9 @@ error_t stats_build_file_commit_map(
 /**
  * The commits that touched one file
  *
- * Returns all commits that modified the specified file, in reverse chronological
- * order (newest first).
+ * Returns every commit from `tip_oid` back that modified the specified file, in
+ * reverse chronological order (newest first). None is an answer — `out->count`
+ * 0 — whose words are the caller's (cmds/list.c list_file_history).
  *
  * Performance: O(total_commits) - walks entire branch history Memory:
  * O(matching_commits) - allocates array for all commits touching file
@@ -145,15 +163,16 @@ error_t stats_build_file_commit_map(
  *       (e.g., `dotta list -p <profile> <file>`).
  *
  * @param repo Repository (required)
- * @param branch_name Branch name (required)
+ * @param tip_oid The tip the history is read back from, read once by the caller
+ *                (required)
  * @param file_path File path within tree (required)
  * @param arena Arena the commits and their summaries live in (required)
  * @param out File history (required; left as it was on a failure)
- * @return Error or NULL on success; ERR_NOT_FOUND when no commit touched the file
+ * @return Error or NULL on success
  */
 error_t stats_file_history(
     git_repository *repo,
-    const char *branch_name,
+    const git_oid *tip_oid,
     const char *file_path,
     arena_t *arena,
     file_history_t *out

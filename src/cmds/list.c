@@ -86,18 +86,20 @@ static void print_upstream_state(
 }
 
 /**
- * One verbose profile line's measured facts
+ * One verbose profile line's facts
  *
- * Read from the branch before anything prints, because both fields set columns
- * measured across every branch, the way the name column already is. An empty
- * phrase is a branch whose statistics could not be read — its line still prints,
- * without them.
+ * Read off the branch's tip before anything prints: what it holds, whose two
+ * phrases set columns measured across every branch, the way the name column already
+ * is, and its last commit. One tip, read once, so the line is one snapshot's.
+ * An empty phrase is a branch whose statistics could not be read, a commit with
+ * no summary one whose tip could not — its line still prints, without them.
  *
  * Buffer sizes are the minimums output_format_counts and output_format_size state.
  */
 typedef struct {
     char counts[64];
     char size[32];
+    commit_info_t commit;    /* the tip's; no summary where it did not read */
 } profile_line_t;
 
 /**
@@ -167,11 +169,11 @@ static error_t list_profiles(
     /* Read what each branch holds, and measure the columns it needs. Both are
      * as wide as the branches make them — the counts phrase names only the kinds
      * a branch actually has, and a size runs from "0 B" to four digits and a
-     * unit — so neither is guessed. One profile_get_stats per branch, the expensive
-     * part of a verbose line, runs here rather than again at render time; a branch
-     * that cannot be read is warned about and left with an empty phrase, in the
-     * words the other screen of this file uses for the same producer's refusal:
-     * what failed is the count, however far down the read it failed. */
+     * unit — so neither is guessed. One count per branch, the expensive part of
+     * a verbose line, runs here rather than again at render time; a branch that
+     * cannot be read is warned about and left with an empty phrase, in the words
+     * the other screen of this file uses for the same producer's refusal: what
+     * failed is the count, however far down the read it failed. */
     profile_line_t *lines = NULL;
     size_t max_counts_len = 0;
     size_t max_size_len = 0;
@@ -181,11 +183,32 @@ static error_t list_profiles(
         for (size_t i = 0; i < branches.count; i++) {
             const char *bname = branches.entries[i];
 
-            profile_stats_t stats = { 0 };
-            err = profile_get_stats(repo, bname, &stats);
+            /* The branch read once, at its tip: what it holds and its last commit
+             * are that one commit's. A tip that will not read leaves the line
+             * neither, its error warned and dropped, one per such branch. */
+            git_commit *tip = NULL;
+            err = gitops_load_branch_commit(repo, bname, &tip);
             if (err) {
-                /* The count's error is warned and dropped, one per unreadable
-                 * branch */
+                output_warning(
+                    out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
+                    bname, error_message(error_root(err))
+                );
+                continue;
+            }
+
+            /* Its last commit, kept for the line's tail */
+            lines[i].commit = stats_commit_info(ctx->arena, tip);
+
+            /* What it holds, counted over the same commit's tree; a count that
+             * fails leaves the line its commit, its error warned and dropped */
+            git_tree *tree = NULL;
+            int rc = git_commit_tree(&tree, tip);
+            git_commit_free(tip);
+            profile_stats_t stats = { 0 };
+            err = rc < 0 ? error_from_git(rc)
+                         : profile_get_tree_stats(repo, tree, bname, &stats);
+            git_tree_free(tree);
+            if (err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
                     bname, error_message(error_root(err))
@@ -246,36 +269,23 @@ static error_t list_profiles(
             );
         }
 
-        /* Verbose: Add last commit info (uses branch name, not profile tree). A
-         * tip that will not read shows none: its error is dropped, one per such
-         * branch. */
-        if (verbose) {
-            git_commit *last_commit = NULL;
-            err = gitops_load_branch_commit(repo, profile, &last_commit);
+        /* Verbose: its last commit, read off the tip its counts were, printed
+         * as a file row prints its own */
+        if (lines && lines[i].commit.summary) {
+            const commit_info_t *last = &lines[i].commit;
+            char oid_str[LIST_SHORT_OID_BUF_SIZE];
+            git_oid_tostr(oid_str, sizeof(oid_str), &last->oid);
 
-            if (!err) {
-                const git_oid *oid = git_commit_id(last_commit);
-                char oid_str[LIST_SHORT_OID_BUF_SIZE];
-                git_oid_tostr(oid_str, sizeof(oid_str), oid);
+            char time_str[64];
+            timeutil_relative(last->time, time_str, sizeof(time_str));
 
-                const char *message = git_commit_message(last_commit);
-                const char *newline = strchr(message, '\n');
-                size_t msg_len = newline ? (size_t) (newline - message) : strlen(message);
-                if (msg_len > 40) {
-                    msg_len = 40;
-                }
+            size_t summary_len = strlen(last->summary);
+            if (summary_len > 40) summary_len = 40;
 
-                const git_signature *author = git_commit_author(last_commit);
-                char time_str[64];
-                timeutil_relative(author->when.time, time_str, sizeof(time_str));
-
-                output_styled(
-                    out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
-                    oid_str, (int) msg_len, message, time_str
-                );
-
-                git_commit_free(last_commit);
-            }
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
+                oid_str, (int) summary_len, last->summary, time_str
+            );
         }
 
         /* Remote: Add tracking state — none where the analysis fails, its error
@@ -333,17 +343,32 @@ static error_t list_files(
 
     bool verbose = output_is_verbose(out);
 
-    /* One branch read serves the whole listing: the file walk, the verbose
-     * per-entry lookups and commit map, and the statistics (what else the branch
-     * holds, when the file list is empty). */
+    /* One branch read serves the whole listing: its tip, read once, and every
+     * fact the listing prints taken off that commit — the file walk, the verbose
+     * per-entry lookups and the statistics (what else the branch holds, when
+     * the file list is empty) from its tree, the history behind each row from
+     * its id — so a branch another writer moves under the listing lends no row
+     * another snapshot's history. The id is kept and the commit let go: the tree
+     * and the id are all the listing reads of it. */
     error_t err = profile_require(repo, opts->profile);
     if (err) return err;
 
-    git_tree *tree = NULL;
-    err = gitops_load_branch_tree(repo, opts->profile, &tree);
+    git_commit *tip = NULL;
+    err = gitops_load_branch_commit(repo, opts->profile, &tip);
     if (err) {
         return error_wrap(
             err, "Failed to list files in profile '%s'", opts->profile
+        );
+    }
+
+    git_oid tip_oid;
+    git_oid_cpy(&tip_oid, git_commit_id(tip));
+    git_tree *tree = NULL;
+    int rc = git_commit_tree(&tree, tip);
+    git_commit_free(tip);
+    if (rc < 0) {
+        return error_wrap(
+            error_from_git(rc), "Failed to list files in profile '%s'", opts->profile
         );
     }
 
@@ -433,9 +458,10 @@ static error_t list_files(
             );
         }
 
-        /* The history behind each row, sought for the rows alone */
+        /* The history behind each row, sought for the rows alone, from the tip
+         * they were listed at */
         err = stats_build_file_commit_map(
-            repo, opts->profile, &files, ctx->arena, &commit_map
+            repo, &tip_oid, &files, ctx->arena, &commit_map
         );
         if (err) {
             /* Non-fatal: continue without commit info */
@@ -481,7 +507,7 @@ static error_t list_files(
         if (verbose) {
             /* Get file stats */
             git_tree_entry *entry = NULL;
-            int rc = git_tree_entry_bypath(&entry, tree, storage_path);
+            rc = git_tree_entry_bypath(&entry, tree, storage_path);
             if (rc == 0) {
                 /* The stamp the branch's own claim makes of this entry, read as
                  * the view projects it: never onto a link, whose bytes are its
@@ -628,7 +654,6 @@ static error_t list_file_history(
      * The file need not exist on disk. */
     const char *profile = opts->profile;
     const char *storage_path = NULL;
-    git_tree *tree = NULL;
     error_t err = NULL;
 
     /* The argument first, above the profile question and above anything read
@@ -641,30 +666,15 @@ static error_t list_file_history(
     if (err) return err;
 
     if (profile) {
-        /* The profile named must be here before anything is read under it; then
-         * its tip, which is both where the claim is looked for and what the
-         * pre-check below reads (core/profiles.h profile_claim_name). */
+        /* The profile named must be here before anything is read under it. Of
+         * the two keys, a name the user typed is Git's key already, so the
+         * pre-check below is what decides whether the profile holds it; a path
+         * is the branch's to name, at its tip (below). */
         err = profile_require(repo, profile);
         if (err) return err;
 
-        err = gitops_load_branch_tree(repo, profile, &tree);
-        if (err) {
-            return error_wrap(err, "Failed to load tree for profile '%s'", profile);
-        }
-
-        /* The two keys, and each names its own read. A name the user typed is
-         * Git's key already, so the pre-check below is what decides whether the
-         * profile holds it; a path is the branch's to name. */
         if (arg.key == PATH_KEY_STORAGE) {
             storage_path = arg.storage_path;
-        } else {
-            err = profile_claim_name(
-                repo, tree, mounts, profile, arg.filesystem_path, ctx->arena, &storage_path
-            );
-            if (err) {
-                git_tree_free(tree);
-                return err;
-            }
         }
     } else {
         /* The owner is the view's: the enabled set at HEAD, precedence resolved,
@@ -716,10 +726,38 @@ static error_t list_file_history(
          * up again in its branch. */
         profile = row->profile;
         storage_path = row->storage_path;
+    }
 
-        err = gitops_load_branch_tree(repo, profile, &tree);
+    /* The branch read once, at its tip: where a path is named, what the pre-check
+     * below reads and where the history behind the name starts are all that one
+     * commit's, so a branch another writer moves meanwhile lends the history no
+     * other snapshot. The id is kept and the commit let go. */
+    git_commit *tip = NULL;
+    err = gitops_load_branch_commit(repo, profile, &tip);
+    if (err) {
+        return error_wrap(err, "Failed to load tree for profile '%s'", profile);
+    }
+
+    git_oid tip_oid;
+    git_oid_cpy(&tip_oid, git_commit_id(tip));
+    git_tree *tree = NULL;
+    int rc = git_commit_tree(&tree, tip);
+    git_commit_free(tip);
+    if (rc < 0) {
+        return error_wrap(
+            error_from_git(rc), "Failed to load tree for profile '%s'", profile
+        );
+    }
+
+    /* A path under a named profile, named by the branch at that tip
+     * (core/profiles.h profile_claim_name) */
+    if (opts->profile && arg.key == PATH_KEY_FILESYSTEM) {
+        err = profile_claim_name(
+            repo, tree, mounts, profile, arg.filesystem_path, ctx->arena, &storage_path
+        );
         if (err) {
-            return error_wrap(err, "Failed to load tree for profile '%s'", profile);
+            git_tree_free(tree);
+            return err;
         }
     }
 
@@ -754,13 +792,21 @@ static error_t list_file_history(
             break;
     }
 
-    /* Get file history */
+    /* The history, from the tip the name was asked of. None is a name the tip
+     * does not hold that no commit touched either — the search announced above,
+     * which found nothing. */
     file_history_t history;
-    err = stats_file_history(repo, profile, storage_path, ctx->arena, &history);
+    err = stats_file_history(repo, &tip_oid, storage_path, ctx->arena, &history);
     if (err) {
         return error_wrap(
             err, "Failed to get history for '%s' in profile '%s'",
             storage_path, profile
+        );
+    }
+    if (history.count == 0) {
+        return ERROR(
+            ERR_NOT_FOUND, "No history found for '%s' in profile '%s'", storage_path,
+            profile
         );
     }
 

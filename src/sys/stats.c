@@ -16,7 +16,6 @@
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/hashmap.h"
-#include "sys/gitops.h"
 
 /**
  * File -> commit map (opaque type)
@@ -55,11 +54,8 @@ typedef struct {
 
 /**
  * A commit's info, its summary copied into `arena`
- *
- * The summary is the message's first line with its trailing whitespace trimmed,
- * and empty for a commit with no message.
  */
-static commit_info_t stats_commit_info(arena_t *arena, const git_commit *commit) {
+commit_info_t stats_commit_info(arena_t *arena, const git_commit *commit) {
     const char *message = git_commit_message(commit);
     if (!message) message = "";
 
@@ -87,26 +83,23 @@ static commit_info_t stats_commit_info(arena_t *arena, const git_commit *commit)
  */
 static error_t stats_walk(
     git_repository *repo,
-    const char *branch_name,
+    const git_oid *tip_oid,
     walk_t *walk
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(branch_name);
+    CHECK_NULL(tip_oid);
     CHECK_NULL(walk);
 
     git_revwalk *walker = NULL;
+    error_t err = NULL;
 
-    /* Resolve the branch head. The walk needs the OID, not the reference that
-     * carries it — git_revwalk_push copies what it is given. */
-    git_oid head_oid;
-    error_t err = gitops_resolve_branch_oid(repo, branch_name, &head_oid);
-    if (err) return err;
-
-    /* Create revwalker */
+    /* The history from the caller's commit, and no reference read here: the caller
+     * read its tip once, beside everything else it read off that commit.
+     * git_revwalk_push copies the id it is given. */
     int rc = git_revwalk_new(&walker, repo);
     if (rc < 0) return error_from_git(rc);
 
-    rc = git_revwalk_push(walker, &head_oid);
+    rc = git_revwalk_push(walker, tip_oid);
     if (rc < 0) {
         err = error_from_git(rc);
         goto cleanup;
@@ -307,13 +300,13 @@ error_t stats_blob_size_with_odb(
  */
 error_t stats_build_file_commit_map(
     git_repository *repo,
-    const char *branch_name,
+    const git_oid *tip_oid,
     const string_array_t *paths,
     arena_t *arena,
     file_commit_map_t **out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(branch_name);
+    CHECK_NULL(tip_oid);
     CHECK_NULL(paths);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -343,7 +336,7 @@ error_t stats_build_file_commit_map(
     };
 
     /* Walk commits to build map */
-    error_t err = stats_walk(repo, branch_name, &walk);
+    error_t err = stats_walk(repo, tip_oid, &walk);
     if (err) return err;
 
     file_commit_map_t *commit_map = arena_calloc(arena, 1, sizeof(*commit_map));
@@ -358,13 +351,13 @@ error_t stats_build_file_commit_map(
  */
 error_t stats_file_history(
     git_repository *repo,
-    const char *branch_name,
+    const git_oid *tip_oid,
     const char *file_path,
     arena_t *arena,
     file_history_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(branch_name);
+    CHECK_NULL(tip_oid);
     CHECK_NULL(file_path);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -383,17 +376,9 @@ error_t stats_file_history(
     };
 
     /* Walk commits to collect history: what a failed walk collected is the arena's
-     * bytes */
-    error_t err = stats_walk(repo, branch_name, &walk);
+     * bytes, and a walk that found none answers so — its words are the caller's */
+    error_t err = stats_walk(repo, tip_oid, &walk);
     if (err) return err;
-
-    /* Check if we found any commits */
-    if (walk.commits_count == 0) {
-        return ERROR(
-            ERR_NOT_FOUND, "No history found for file '%s' in branch '%s'",
-            file_path, branch_name
-        );
-    }
 
     *out = (file_history_t){ walk.commits, walk.commits_count };
     return NULL;

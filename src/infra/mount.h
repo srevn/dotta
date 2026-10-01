@@ -57,12 +57,12 @@
  * Every root's spelling is absolute and folded (base/string.h str_path_folded),
  * each established where it is made: the sentinel's is the literal "/", HOME's
  * is the identity's (sys/identity, normalized at identity_init), and a row's
- * target is normalized and validated where it is written (the binders,
- * mount_validate_target) over a column that holds no other shape (core/state.c:
- * a target no binder would write is refused where a hand makes the edit). So
- * the build meets only spellings that are keys, keeps each as it stands, and
- * refuses any other as a caller's bug (mount_table_build). A row bound nowhere
- * holds NULL, which contributes no mount; the repair is a re-bind.
+ * target is normalized and validated where it is written (the binders, through
+ * infra/path.h path_input_target) over a column that holds no other shape
+ * (core/state.c: a target no binder would write is refused where a hand makes
+ * the edit). So the build meets only spellings that are keys, keeps each as it
+ * stands, and refuses any other as a caller's bug (mount_table_build). A row
+ * bound nowhere holds NULL, which contributes no mount; the repair is a re-bind.
  *
  * So a root is a path wherever it is read — printed, compared to an argument,
  * measured against a rung. The root directory is the one root that *is* its own
@@ -107,10 +107,11 @@
  * encloses, so a reader that used to meet the namer's absence and ask that question
  * here has nothing to recover: it holds the name (core/manifest.h manifest_name).
  *
- * Traversal is refused at the boundary and trusted below it: a storage path where
- * a branch, a sheet or an argument is read (infra/label.h label_validate_storage),
- * a target where a binding is written (mount_validate_target). The verbs over
- * the table join a tail on that strength and validate nothing themselves.
+ * Traversal is refused or folded away at the boundary and trusted below it: a
+ * storage path refused where a branch, a sheet or an argument is read
+ * (infra/label.h label_validate_storage), a target folded where a binding is
+ * written (infra/path.h path_input_target). The verbs over the table join a tail
+ * on that strength and validate nothing themselves.
  */
 
 #ifndef DOTTA_MOUNT_H
@@ -123,26 +124,23 @@
 #include "infra/label.h"
 
 /**
- * Validate a deployment target (the `--target` argument) as the row will hold it.
+ * Validate a deployment target as the row will hold it: the place it names
  *
- * The two --target flags read the argument through the target's door (infra/path.h
- * path_input_target: tilde, the working directory, `.`, `..`, `//`, then these
- * rules), so what reaches here from them is the absolute path the row stores;
- * the shape rule holds for a caller that did not (the interactive save's validate,
- * on text a resolve refused).
+ * Its one caller is the target's door (infra/path.h path_input_target), which
+ * reads every typed target — the two --target flags' and the editor's — through
+ * the argument's door first (tilde, the working directory, `.`, `..`, `//`), so
+ * what reaches here is the absolute, folded path the row stores: the shape every
+ * key has (base/string.h str_path_folded), a contract the call checks and dies
+ * on, never a refusal no input can reach. A traversal is folded away by the door
+ * and never met here.
  *
- * Refuses, in order, one message each:
- *  - a spelling that is not absolute and folded (base/string.h str_path_folded)
- *    — the shape every key has
- *  - a path that does not stand (a link to nothing named as such), or that is
- *    not a directory — one stat, through a link standing at the spelling: a binding
- *    means the directory the link reaches, as mount_same_target reads it
- *
- * The shape before the disk, so a traversal is refused by what it is and never
- * by its absence. The filesystem root is a target like any other: a binding there
- * names the machine custom/ for that profile, and the next machine binds the
- * same profile where it likes (mount_table_build). Every target this admits is
- * absolute and folded, which is the build's precondition.
+ * Refuses, one message each, a path that does not stand (a link to nothing named
+ * as such), or that is not a directory — one stat, through a link standing at
+ * the spelling: a binding means the directory the link reaches, as
+ * mount_same_target reads it. The filesystem root is a target like any other: a
+ * binding there names the machine custom/ for that profile, and the next machine
+ * binds the same profile where it likes (mount_table_build). Every target this
+ * admits is absolute and folded, which is the build's precondition.
  *
  * Filesystem access is required for the existence + directory checks.
  *
@@ -224,15 +222,16 @@ typedef struct {
  * refused (ERR_INVALID_ARG): a binding is a profile's, and a root is a spelling
  * that is a key. Both invariants are established here so the readers need no
  * per-read check (mount_t above), and both hold of every input by construction
- * — the store's column for a row (core/state.c), mount_validate_target for a
- * command's own binding. A target of "/" is a root like any other and takes the
- * tie from the sentinel: every path of that profile outside a deeper root is
- * custom/. A NULL or empty target contributes nothing: the profile is bound
- * nowhere, which the view records (core/manifest.h manifest_unbound) and a re-bind
- * repairs. A store a hand still got a malformed row into — its constraints switched
- * off, or its marker bumped without the table — fails every command that builds
- * the view but one: `profile disable`, whose receipt's view is built tolerantly
- * on purpose (cmds/profile.c), which is the way out, then a re-bind.
+ * — the store's column for a row (core/state.c), the target's door for a command's
+ * own binding (infra/path.h path_input_target). A target of "/" is a root like
+ * any other and takes the tie from the sentinel: every path of that profile outside
+ * a deeper root is custom/. A NULL or empty target contributes nothing: the profile
+ * is bound nowhere, which the view records (core/manifest.h manifest_unbound)
+ * and a re-bind repairs. A store a hand still got a malformed row into — its
+ * constraints switched off, or its marker bumped without the table — fails every
+ * command that builds the view but one: `profile disable`, whose receipt's view
+ * is built tolerantly on purpose (cmds/profile.c), which is the way out, then a
+ * re-bind.
  *
  * One binding per profile is the input's shape and not a rule refused here: both
  * production readers hand in one — the state's rows are keyed by name

@@ -588,10 +588,10 @@ void state_free(state_t *state);
  * position (UPSERT). `target` binds the profile's custom/ tree here; NULL names
  * no target and keeps the one the row has — the only way a row loses its target
  * is state_disable_profile. The callers validate a target before it reaches this
- * write (mount_validate_target, at the binders), and the schema refuses what
- * they would not have written (the target_spelling constraint), an empty string
- * among them: NULL is the one spelling of no target. The name is one Git's branch
- * rule admitted — a branch the caller listed or asked for (sys/gitops.h
+ * write (infra/path.h path_input_target, at the binders), and the schema refuses
+ * what they would not have written (the target_spelling constraint), an empty
+ * string among them: NULL is the one spelling of no target. The name is one Git's
+ * branch rule admitted — a branch the caller listed or asked for (sys/gitops.h
  * gitops_branch_refname) — and the schema refuses the names no reader of the
  * row could read (the profile_spelling constraint), the empty one among them.
  *

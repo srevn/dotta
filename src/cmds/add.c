@@ -188,14 +188,14 @@ typedef struct {
  * inside and named for where it lands.
  *
  * Every prefix is folded before it is asked, because the target is folded — its
- * binder normalized it (mount_validate_target), and a row holds no other shape
- * (core/state.c), so `bound` is folded too — and `/a/..` is a spelling of nowhere.
- * The boundary is not always found before the first `..`, and does not need to
- * be: `/a/../<target>/x` meets one first, and the fold is per prefix, not per
- * argument. The root the walk starts from is asked like every other prefix, which
- * is what makes a target at "/" a prefix of every absolute argument; a `.` leaves
- * the prefix as it was and a `..` returns it to one the walk already stood on,
- * so neither can be the first answer.
+ * binder read it through its door (infra/path.h path_input_target), and a row
+ * holds no other shape (core/state.c), so `bound` is folded too — and `/a/..`
+ * is a spelling of nowhere. The boundary is not always found before the first
+ * `..`, and does not need to be: `/a/../<target>/x` meets one first, and the
+ * fold is per prefix, not per argument. The root the walk starts from is asked
+ * like every other prefix, which is what makes a target at "/" a prefix of every
+ * absolute argument; a `.` leaves the prefix as it was and a `..` returns it to
+ * one the walk already stood on, so neither can be the first answer.
  *
  * `input` is absolute: the caller's grammar decides who is asked at all, and a
  * bare relative path is the jail's without a question (add_spell). The scratch

@@ -53,7 +53,7 @@
 
 typedef struct {
     const char *name;      /* Profile name, the listing's */
-    const char *target;    /* Deployment target — the row's, or this session's; NULL when unset */
+    const char *target;    /* The store's spelling, or text this session typed */
     bool enabled;          /* Selected for save; toggled by space, persisted by view_save */
     bool needs_target;     /* A claim of the branch needs a binding (core/profiles.h) */
     bool unreadable;       /* The branch would not read: the seed absorbed it, the row says so */
@@ -279,7 +279,8 @@ static void plan_collect(view_t *view, plan_t *plan) {
     }
 }
 
-/* Phase: classify diff against the persisted set BEFORE any state mutation.
+/* Phase: classify diff against the persisted set BEFORE any state mutation, reading
+ * each target the session typed — a refusal ends the save there.
  *
  * state_profiles lends the row cache, which the first state_enable/disable call
  * replaces, so everything a row has to give is decided or copied here, while
@@ -287,8 +288,17 @@ static void plan_collect(view_t *view, plan_t *plan) {
  * names another directory), removal_names (arena-strdup'd so they outlive the
  * slice), and the spelling a retained binding keeps, copied onto the item that
  * offered another for it. All of it into the view's arena: the plan's, and the
- * item's, which lives there. */
-static void plan_classify(state_t *deploy_state, view_t *view, plan_t *plan) {
+ * item's, which lives there.
+ *
+ * A row's target is the store's own spelling or the text the session typed
+ * (handle_key_prompt), told apart by the question the save asks of it: does the
+ * store hold this binding as written? A NULL target is legitimate on every row:
+ * one that needs no target has nothing to place, and one that needs a target
+ * and is saved without it is a normal lifecycle stage the health channel names
+ * (core/manifest.h manifest_unbound) — the OFF→ON prompt asks for a target, a
+ * row already enabled without one keeps that, and nothing downstream refuses
+ * either. No second guard here. */
+static error_t plan_classify(state_t *deploy_state, view_t *view, plan_t *plan) {
     state_profiles_t persisted = state_profiles(deploy_state);
 
     if (plan->new_order.count > 0) {
@@ -311,8 +321,8 @@ static void plan_classify(state_t *deploy_state, view_t *view, plan_t *plan) {
         plan->removal_names[plan->removal_count++] = arena_strdup(view->arena, p_name);
     }
 
-    /* Walk new_order; flag rows that must be re-written via
-     * state_enable_profile. */
+    /* Walk new_order; read each target the session typed, and flag rows that
+     * must be re-written via state_enable_profile. */
     for (size_t i = 0; i < plan->new_order.count; i++) {
         item_t *it = plan->new_order_items[i];
         bool was_enabled = false;
@@ -324,6 +334,25 @@ static void plan_classify(state_t *deploy_state, view_t *view, plan_t *plan) {
                 break;
             }
         }
+
+        /* Every text but the row's own spelling is read now, through the binders'
+         * one door (infra/path.h path_input_target), at the moment the target
+         * is written: a refusal is the door's or the rules' in their own words,
+         * and the item takes the spelling it read, the one the store keeps. The
+         * row's own spelling is the binding the store holds and is not read again,
+         * so a save that touches no target stands over a directory gone since. */
+        if (it->target != NULL &&
+            (persisted_target == NULL || strcmp(it->target, persisted_target) != 0)) {
+            const char *target = NULL;
+            error_t err = path_input_target(it->target, view->arena, &target);
+            if (err) {
+                return error_wrap(
+                    err, "Invalid deployment target for profile '%s'", it->name
+                );
+            }
+            it->target = target;
+        }
+
         if (!was_enabled) {
             plan->needs_enable[i] = true;
             continue;
@@ -354,28 +383,6 @@ static void plan_classify(state_t *deploy_state, view_t *view, plan_t *plan) {
          * in the view's arena. */
         if (!plan->needs_enable[i] && strcmp(it->target, persisted_target) != 0) {
             it->target = arena_strdup(view->arena, persisted_target);
-        }
-    }
-}
-
-/* Phase: validate user-supplied targets at the boundary, mirroring the check
- * `cmd profile enable` runs. A NULL target is legitimate on every row: one that
- * needs no target has nothing to place, and one that needs a target and is saved
- * without it is a normal lifecycle stage the health channel names (core/manifest.h
- * manifest_unbound) — the OFF→ON prompt asks for a target, a row already enabled
- * without one keeps that, and nothing downstream refuses either. No second guard
- * here. */
-static error_t plan_validate(const plan_t *plan) {
-    for (size_t i = 0; i < plan->new_order.count; i++) {
-        if (!plan->needs_enable[i]) continue;
-        const item_t *it = plan->new_order_items[i];
-        if (!it->target) continue;
-
-        error_t err = mount_validate_target(it->target);
-        if (err) {
-            return error_wrap(
-                err, "Invalid deployment target for profile '%s'", it->name
-            );
         }
     }
     return NULL;
@@ -455,9 +462,7 @@ static error_t view_save(git_repository *repo, state_t *deploy_state, view_t *vi
     error_t err = state_begin(deploy_state);
     if (err) return err;
 
-    plan_classify(deploy_state, view, &plan);
-
-    err = plan_validate(&plan);
+    err = plan_classify(deploy_state, view, &plan);
     if (err) goto rollback;
 
     err = plan_apply(deploy_state, &plan);
@@ -637,20 +642,14 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
                 /* Empty Enter is a no-op; Esc is the cancel key. */
                 return INTERACTIVE_CONTINUE;
             }
-            /* The path as typed — absolute, tilde, or relative to the working
-             * directory, like a shell's — resolved to the absolute path the row
-             * stores. One that cannot be resolved is kept as typed, for
-             * plan_validate to refuse at save with the message, the way it refuses
-             * a bad path today; its error is dropped, one per such Enter. */
-            const char *captured = NULL;
-            error_t err = path_input_filesystem_path(p->buffer.data, view->arena, &captured);
-            if (err) {
-                captured = arena_strdup(view->arena, p->buffer.data);
-            }
-            /* Replace whatever target was on the item (NULL for capture, the
-             * prior string for edit, which the view's arena keeps: abandoned) */
+            /* The text as typed — absolute, tilde, or relative to the working
+             * directory, like a shell's — the row's until the save reads it
+             * (plan_classify): a target is read where it is written, so a refusal
+             * is said once, in its reader's words, and nothing is read here.
+             * The copy is the view's arena's, and the target it replaces — NULL
+             * for capture, the prior text for edit — is abandoned there. */
             item_t *it = &view->items[p->item_index];
-            it->target = captured;
+            it->target = arena_strdup(view->arena, p->buffer.data);
             if (p->enable) {
                 /* Capture path: the prompt was the gate guarding OFF→ON. */
                 it->enabled = true;

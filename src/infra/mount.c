@@ -1,8 +1,9 @@
 /**
  * mount.c - Where a label lands: the per-machine table of roots
  *
- * Traversal is refused at the boundary (infra/label.h label_validate_storage,
- * mount_validate_target) and trusted below it (infra/mount.h).
+ * Traversal is refused or folded away at the boundary (infra/label.h
+ * label_validate_storage, infra/path.h path_input_target) and trusted below it
+ * (infra/mount.h).
  */
 
 #include "infra/mount.h"
@@ -22,19 +23,15 @@
 error_t mount_validate_target(const char *target) {
     CHECK_NULL(target);
 
-    /* The shape: absolute and folded, as the argument's door spells every one
-     * (infra/path.h), so of the binders' input only the interactive save's raw
-     * text — kept as typed where a resolve refused it — can fail here; the sentence
-     * names the whole rule for it. "/" is included: a target at the root is a
-     * binding like any other, and the table keeps it as it stands
-     * (mount_table_build). */
-    if (!str_path_folded(target)) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Target must be an absolute path with no '.', '..', '//' or "
-            "trailing slash (got '%s')", target
-        );
-    }
+    /* The shape: absolute and folded, as the argument's door spells every one,
+     * and the door is the one way a typed target reaches here (infra/path.h
+     * path_input_target) — so an unfolded spelling is its caller's bug. "/" is
+     * included: a target at the root is a binding like any other, and the table
+     * keeps it as it stands (mount_table_build). */
+    CHECK_ARG(
+        str_path_folded(target),
+        "a target is read through its door first (infra/path.h path_input_target)"
+    );
 
     /* The place: it stands, and it is a directory — one stat, through a link
      * standing at the spelling, because a binding means the directory the link

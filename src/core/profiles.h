@@ -556,13 +556,13 @@ error_t profile_list_files(
  * `t`, live only on a row that can be bound. The rule these keep is "a profile
  * that needs a target is not enabled without one", and its scope is theirs alone,
  * not an invariant of the rows: the editor prompts and lets a row be saved unbound
- * (plan_validate says why), add's implicit enable authors no such row (a created
- * profile's custom/ claim requires --target, which the row takes), sync and a
- * re-bind can leave an enabled row needing one, and `profile validate` does not
- * ask — an enabled row with no binding is a lifecycle stage the health channel
- * names, not an inconsistency. add asks no producer: it holds a view over its
- * own opened tree under its own table and reads the slice on that (cmds/add.c
- * add_print_enable).
+ * (cmds/interactive.c plan_classify says why), add's implicit enable authors no
+ * such row (a created profile's custom/ claim requires --target, which the row
+ * takes), sync and a re-bind can leave an enabled row needing one, and `profile
+ * validate` does not ask — an enabled row with no binding is a lifecycle stage
+ * the health channel names, not an inconsistency. add asks no producer: it holds
+ * a view over its own opened tree under its own table and reads the slice on
+ * that (cmds/add.c add_print_enable).
  *
  * Cost: one tree walk and one sheet load, in an arena of the call's own — the
  * product is a bool and nothing outlives the call (include/runtime.h "Memory",

@@ -12,12 +12,13 @@
  *                           - that key alone, in the arena: filesystem path ->
  *                             absolute filesystem path, a relative one's working
  *                             directory spelled under HOME, for a caller whose
- *                             grammar has no storage arm to dispatch to (add,
- *                             the editor's target, ignore --test, the completion,
- *                             a glob's anchor)
+ *                             grammar has no storage arm to dispatch to (add, a
+ *                             target, ignore --test, the completion, a glob's
+ *                             anchor)
  *
  *   path_input_target       - that key, held to a target's rules (infra/mount.h
- *                             mount_validate_target): the binders' --target
+ *                             mount_validate_target), for the three binders:
+ *                             the --target flags and the editor's save
  *
  *   path_input_announces_path
  *                           - the grammars' question, asked of a positional whose

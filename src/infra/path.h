@@ -256,11 +256,10 @@ error_t path_input_resolve(const char *input, arena_t *arena, path_input_t *out)
  *   - add's argument grammar (cmds/add.c add_spell) and `ignore --test`'s
  *     filesystem arm (cmds/ignore.c): both dispatched on the storage shape
  *     themselves, and both read a bare name as a path where the resolver will not.
- *   - the binders' targets — the two --target flags, through path_input_target,
- *     and the target the editor captures (cmds/interactive.c handle_key_prompt)
- *     — and the root the completion offers beneath (cmds/completion.c): a target
- *     names a directory on this machine and has no storage vocabulary to dispatch
- *     on.
+ *   - the binders' targets, through path_input_target — the two --target flags
+ *     and the target the editor's save reads — and the root the completion offers
+ *     beneath (cmds/completion.c): a target names a directory on this machine
+ *     and has no storage vocabulary to dispatch on.
  *   - a glob's anchor (infra/pathspec.c compile_rule): the components before
  *     the first metacharacter, which that rule's own gate has already made a
  *     filesystem spelling.
@@ -286,8 +285,9 @@ error_t path_input_filesystem_path(const char *input, arena_t *arena, const char
  * nothing, not a directory). `*out` is the spelling on success and NULL after
  * an error.
  *
- * Readers: the two --target flags (cmds/add.c cmd_add, cmds/profile.c
- * profile_enable).
+ * Readers: the three binders — the two --target flags (cmds/add.c cmd_add,
+ * cmds/profile.c profile_enable) and the editor's save, which reads the text a
+ * session typed when the save writes it (cmds/interactive.c plan_classify).
  *
  * @param input User-provided target (must not be NULL; the empty string is refused)
  * @param arena Arena that owns the answer (must not be NULL)

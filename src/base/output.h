@@ -495,7 +495,8 @@ void output_format_counts(
  * absolute and does not come here. PATH_MAX bytes hold any path the table
  * validated.
  *
- * @param path Absolute path to spell (must not be NULL)
+ * @param path Path to spell, absolute or as a user typed it — only one beneath
+ *        `home` changes (must not be NULL)
  * @param home The directory `~` stands for (must not be NULL; no trailing slash)
  * @param buffer Output buffer for the spelling
  * @param buffer_size Size of output buffer

@@ -894,10 +894,12 @@ error_t gitops_create_reference(
  *
  * gitops_reference_find, read through a symbolic reference to the one it names:
  * the null id — all zeros, git_oid_is_zero, Git's own id for no object — only
- * where the absence is proven, and a symbolic reference that names nothing is a
- * failure, not an absence. For the readers that act on a reference's absence as
- * an answer: sys/upstream.c upstream_analyze_profile (no branch, no remote branch),
- * cmds/sync.c pull_branch_ff (nothing fetched to fast-forward to), infra/epoch.c
+ * where the absence is proven. A symbolic reference that names nothing is a
+ * failure, not an absence, and so is a reference that stands at the null id:
+ * git reads one as broken (lib/git/refs/files-backend.c), never as missing. For
+ * the readers that act on a reference's absence as an answer: sys/upstream.c
+ * upstream_analyze_profile (no branch, no remote branch), cmds/sync.c
+ * pull_branch_ff (nothing fetched to fast-forward to), infra/epoch.c
  * inspect_remote_epoch (no local epoch), and gitops_resolve_reference_oid, which
  * refuses it.
  *
@@ -916,8 +918,9 @@ error_t gitops_reference_oid(
  * Resolve reference name to OID
  *
  * gitops_reference_oid for a reader that needs the reference: its absence, proven,
- * is refused (ERR_NOT_FOUND, naming the reference), and so is a symbolic reference
- * that names nothing, in Git's words.
+ * is refused (ERR_NOT_FOUND, naming the reference), and every failure of the
+ * read is its own — a symbolic reference that names nothing, in Git's words;
+ * one at the null id, as broken.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (e.g., "refs/heads/main") (must not be NULL)

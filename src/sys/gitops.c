@@ -1477,18 +1477,33 @@ error_t gitops_reference_oid(
         return NULL;
     }
 
-    /* Through a symbolic reference to the one it names: one that names nothing
-     * stands, and resolves to no id. */
-    git_reference *direct = NULL;
-    int rc = git_reference_resolve(&direct, ref);
+    /* Through a symbolic reference to the one it names — one that names nothing
+     * stands, and resolves to no id — and a direct one's target as it was found:
+     * resolving it would look the name up a second time (refs.c
+     * git_reference_resolve). */
+    if (git_reference_type(ref) == GIT_REFERENCE_SYMBOLIC) {
+        git_reference *direct = NULL;
+        int rc = git_reference_resolve(&direct, ref);
+        git_reference_free(ref);
+        if (rc < 0) {
+            return error_wrap(
+                error_from_git(rc), "Failed to resolve reference '%s'", ref_name
+            );
+        }
+        ref = direct;
+    }
+
+    /* Git's null id is no object's, and a reference standing at it is broken,
+     * as git reads one (lib/git/refs/files-backend.c
+     * loose_fill_ref_dir_regular_file): never the absence this answer reserves
+     * it for. */
+    git_oid_cpy(out, git_reference_target(ref));
     git_reference_free(ref);
-    if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc), "Failed to resolve reference '%s'", ref_name
+    if (git_oid_is_zero(out)) {
+        return ERROR(
+            ERR_GIT, "Reference '%s' is broken: it names the null id", ref_name
         );
     }
-    git_oid_cpy(out, git_reference_target(direct));
-    git_reference_free(direct);
 
     return NULL;
 }

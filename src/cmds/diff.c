@@ -558,7 +558,7 @@ static error_t print_diff_stats(
 }
 
 /**
- * Print diff content (actual changes)
+ * Print one line of a patch (git_diff_print's GIT_DIFF_FORMAT_PATCH)
  */
 static int print_diff_line_cb(
     const git_diff_delta *delta,
@@ -1204,13 +1204,16 @@ static error_t diff_commits(
     }
 
     if (opts->name_only) {
-        /* Name-only: list changed file paths without diff content or stats */
-        rc = git_diff_print(
-            diff, GIT_DIFF_FORMAT_NAME_ONLY, print_diff_line_cb, out
-        );
-        if (rc < 0) {
-            err = error_from_git(rc);
-            goto cleanup;
+        /* Name-only: each changed path, cyan, as the patch's file header colours
+         * it — written here as the datum it is, never libgit2's name-only line,
+         * which is the path raw where git quotes it (lib/libgit2/src/libgit2/
+         * diff_print.c diff_print_one_name_only). Every delta is a change: a
+         * tree-to-tree diff drops an unmodified one unless INCLUDE_UNMODIFIED is
+         * asked (diff_generate.c diff_delta__from_two), and dotta never asks it. */
+        size_t count = git_diff_num_deltas(diff);
+        for (size_t i = 0; i < count; i++) {
+            const git_diff_delta *delta = git_diff_get_delta(diff, i);
+            output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_CYAN, "%s\n", delta->new_file.path);
         }
     } else {
         /* Full diff: statistics followed by patch */

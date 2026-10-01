@@ -355,8 +355,8 @@ error_t gitops_delete_branch(git_repository *repo, const char *name);
  *
  * The one way a reference becomes a tip. Readers: gitops_reference_tree, and
  * the readers of a tree through it (its header); gitops_load_reference_commit,
- * which refuses the absence; infra/epoch.c's census, at each branch it lists,
- * one gone since the listing holding nothing.
+ * which refuses the absence; infra/epoch.c epoch_walk, the census, at each branch
+ * it lists, one gone since the listing holding nothing.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (must not be NULL or empty)
@@ -1033,12 +1033,15 @@ error_t gitops_build_refname(
  * leading '-' and the word HEAD, valid references git itself will not make branches
  * of), then the join, sized to the buffer by gitops_build_refname, whose own
  * reference check the branch rule subsumes. Every lookup, creator and mover of
- * a branch builds its ref here, and every transfer its refspec's branch half,
- * so a name Git refuses is refused wherever it first touches Git — add's prepare,
- * enable's loop, a filter's refusal path — and no branch git cannot name is ever
- * made (before this, `add -- -x` and `add HEAD` made two). No verb refuses a
- * name ahead of it, and no command either: a user's empty `-p ""` and an empty
- * positional read this one refusal.
+ * a branch a user names builds its ref here, and every transfer its refspec's
+ * branch half, so a name Git refuses is refused wherever it first touches Git —
+ * add's prepare, enable's loop, a filter's refusal path — and no branch git cannot
+ * name is ever made (before this, `add -- -x` and `add HEAD` made two). No verb
+ * refuses a name ahead of it, and no command either: a user's empty `-p ""` and
+ * an empty positional read this one refusal. A branch a listing names is Git's
+ * already, and is read back under the reference rule it was listed by
+ * (infra/epoch.c epoch_walk): the branch rule refuses two shapes a reference
+ * can hold.
  *
  * @param buffer Output buffer for the reference name (must not be NULL)
  * @param buffer_size Size of output buffer: DOTTA_REFNAME_MAX

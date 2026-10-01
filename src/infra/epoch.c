@@ -688,42 +688,51 @@ static error_t epoch_present_blob(
  * closed like any error of its own, returned bare — sync prints the census's
  * cause as one line of its own (`epoch_reconcile`), and a wrap would stand where
  * the cause should. The revwalk speaks libgit2 directly the way sys/stats does.
- * The anchor is walked like any branch — one empty tree — until it goes; the
- * epoch ref lives outside refs/heads and is never walked.
+ * The epoch ref lives outside refs/heads and is never walked.
  */
 static error_t epoch_walk(
     git_repository *repo, epoch_ciphertext_fn fn, void *payload
 ) {
-    /* The branches and the bindings already seen, in a frame of the walk's own:
-     * each read inside the loop and dropped with it. The set owns its keys, so
-     * one spelled in the walk's buffer is copied into the frame only as it takes
-     * a slot. */
+    /* The branches, their names and the bindings already seen, in a frame of
+     * the walk's own: each read inside the loop and dropped with it. The set
+     * owns its keys, so one spelled in the walk's buffer is copied into the frame
+     * only as it takes a slot. */
     arena_t *frame = arena_create(0);
-    string_array_t branches = { 0 };
-    error_t err = gitops_list_branches(repo, frame, &branches);
-
-    hashmap_t *seen = hashmap_create(frame, 0);
-
     epoch_walk_t walk = {
-        .repo = repo, .seen = seen, .fn = fn, .payload = payload,
+        .repo = repo, .seen = hashmap_create(frame, 0), .fn = fn, .payload = payload,
     };
     git_revwalk *walker = NULL;
 
-    for (size_t i = 0; !err && i < branches.count && !walk.stopped; i++) {
-        const char *branch = branches.entries[i];
-        walk.branch = branch;
+    /* The branches, complete or an error (sys/gitops.h): a listing that refused
+     * proves no absence, and the walk ends with it. */
+    string_array_t branches;
+    error_t err = gitops_list_branches(repo, frame, &branches);
+    if (err) goto cleanup;
 
-        char refname[DOTTA_REFNAME_MAX];
-        err = gitops_branch_refname(refname, sizeof(refname), branch);
+    for (size_t i = 0; i < branches.count && !walk.stopped; i++) {
+        walk.branch = branches.entries[i];
+
+        /* Read back by the name the listing gave it, under the rule the listing
+         * read it by — the reference rule, never the branch rule, which refuses
+         * two shapes a reference can hold (HEAD, a leading '-'): the census walks
+         * what Git holds, and a ref it refused would refuse every unlock and
+         * every mint beside it. The name is spelled as long as Git made it, and
+         * its tip is read as every tip is (sys/gitops.h gitops_reference_commit);
+         * a branch gone since the listing holds nothing now. */
+        const char *refname = arena_str_format(frame, "refs/heads/%s", walk.branch);
+        git_commit *tip = NULL;
+        err = gitops_reference_commit(repo, refname, &tip);
         if (err) goto cleanup;
+        if (!tip) continue;
 
+        /* The history from that tip, in no order of its own: the push copies
+         * the tip's id, so the tip is freed once it is taken */
         int rc = git_revwalk_new(&walker, repo);
-        if (rc < 0) {
-            err = error_from_git(rc);
-            goto cleanup;
+        if (rc == 0) {
+            git_revwalk_sorting(walker, GIT_SORT_NONE);
+            rc = git_revwalk_push(walker, git_commit_id(tip));
         }
-        git_revwalk_sorting(walker, GIT_SORT_NONE);
-        rc = git_revwalk_push_ref(walker, refname);
+        git_commit_free(tip);
         if (rc < 0) {
             err = error_from_git(rc);
             goto cleanup;
@@ -772,15 +781,8 @@ static error_t epoch_walk(
         walker = NULL;
     }
 
-    /* Falling out of the loop is the walk finished, or the listing refused before
-     * it began: every assignment to `err` inside the loop goes straight to the
-     * label, so `err` is the listing's answer. A reader of a fail-closed walk
-     * should not have to re-derive that. */
-
 cleanup:
-    if (walker) {
-        git_revwalk_free(walker);
-    }
+    git_revwalk_free(walker);    /* NULL-safe: revwalk.c git_revwalk_free */
     buffer_deinit(&walk.key);
     arena_free(frame);
     return err;

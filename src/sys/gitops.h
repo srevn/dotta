@@ -927,7 +927,7 @@ error_t gitops_create_reference(
  * the readers that act on a reference's absence as an answer: sys/upstream.c
  * upstream_analyze_profile (no branch, no remote branch), cmds/sync.c
  * pull_branch_ff (nothing fetched to fast-forward to), infra/epoch.c
- * inspect_remote_epoch (no local epoch), gitops_reference_commit, which reads
+ * epoch_inspect_remote (no local epoch), gitops_reference_commit, which reads
  * the commit at the id, and gitops_resolve_reference_oid, which refuses it.
  *
  * @param repo Repository (must not be NULL)

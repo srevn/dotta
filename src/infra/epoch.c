@@ -12,8 +12,9 @@
  *   - epoch_find_ciphertext — the keymgr's witness source, over the census's walk
  *
  * Every entry point validates inputs, manages libgit2 object lifetimes via local
- * cleanup blocks, and translates libgit2 error codes through `error_from_git`.
- * The module never holds resources across return.
+ * cleanup blocks, and translates libgit2 error codes through `error_from_git`;
+ * a static trusts the entry point that called it and checks nothing again. The
+ * module never holds resources across return.
  *
  * The push/fetch primitives speak libgit2 directly rather than going through
  * `sys/gitops::gitops_*_branches` — those build branch-specific `refs/heads/...`
@@ -51,7 +52,7 @@
 
 /* The local-ciphertext census (defined with the reconcile machinery below);
  * epoch_init gates every fresh mint on it. */
-static error_t local_has_ciphertext(
+static error_t epoch_census(
     git_repository *repo, const uint8_t *local_fp, bool *out_found
 );
 
@@ -63,7 +64,7 @@ static error_t local_has_ciphertext(
  * not an uninitialized repository. `epoch_init` reads exactly that distinction
  * to decide whether there is a ref to delete before it mints.
  */
-static error_t read_epoch_blob(
+static error_t epoch_read_blob(
     git_repository *repo, git_tree *tree, const char *name,
     size_t size, uint8_t *out
 ) {
@@ -110,20 +111,20 @@ static error_t read_epoch_blob(
  * A failure can leave `*out` half-filled — the salt read before the params blob
  * refused. `epoch_load` zeroes it at its one exit, which is where its header
  * states the promise, so no caller proceeds with stale stack content under a
- * swallowed error code; `read_epoch_commit` makes no such promise and its caller
+ * swallowed error code; `epoch_read_commit` makes no such promise and its caller
  * discards a failed read whole. The pair is validated here — the boundary it
  * enters at — with `kdf_validate_params`.
  */
-static error_t read_epoch_tree(
+static error_t epoch_read_tree(
     git_repository *repo, git_tree *tree, kdf_epoch_t *out
 ) {
-    error_t err = read_epoch_blob(
+    error_t err = epoch_read_blob(
         repo, tree, EPOCH_SALT_BLOB, KDF_SALT_SIZE, out->salt
     );
     if (err) return err;
 
     uint8_t params[KDF_PARAMS_SIZE];
-    err = read_epoch_blob(
+    err = epoch_read_blob(
         repo, tree, EPOCH_PARAMS_BLOB, KDF_PARAMS_SIZE, params
     );
     if (err) return err;
@@ -147,7 +148,7 @@ static error_t read_epoch_tree(
  * holds whatever it held. An object that is not a commit, or a commit whose tree
  * or blobs the transfer did not carry, refuses here — before anything points at it.
  */
-static error_t read_epoch_commit(
+static error_t epoch_read_commit(
     git_repository *repo, const git_oid *oid, kdf_epoch_t *out
 ) {
     git_commit *commit = NULL;
@@ -167,7 +168,7 @@ static error_t read_epoch_commit(
         );
     }
 
-    error_t err = read_epoch_tree(repo, tree, out);
+    error_t err = epoch_read_tree(repo, tree, out);
     git_tree_free(tree);
 
     return err;
@@ -185,7 +186,7 @@ error_t epoch_load(git_repository *repo, kdf_epoch_t *out) {
     git_tree *tree = NULL;
     error_t err = gitops_reference_tree(repo, EPOCH_REF, &tree);
     if (!err) {
-        err = tree ? read_epoch_tree(repo, tree, out)
+        err = tree ? epoch_read_tree(repo, tree, out)
                    : ERROR(ERR_NOT_FOUND, "Epoch ref '%s' not found", EPOCH_REF);
         git_tree_free(tree);
     }
@@ -222,7 +223,7 @@ error_t epoch_init(
      * by what the ref held, and minting over it would orphan that ciphertext
      * permanently. One census answers both because it is one danger. */
     bool any_ciphertext = false;
-    error_t cerr = local_has_ciphertext(repo, NULL, &any_ciphertext);
+    error_t cerr = epoch_census(repo, NULL, &any_ciphertext);
     if (cerr) {
         /* No absence was proved, so the verdict is the found-ciphertext verdict
          * — do not mint — but the reason is not that reason, and the census's
@@ -392,7 +393,7 @@ error_t epoch_push(
  *
  * The advertised commit OID is the fact both callers came for, and it is copied
  * to `*out_oid` when — and only when — the ref is advertised, `*out_present`
- * being what says whether to read it. `inspect_remote_epoch` compares it against
+ * being what says whether to read it. `epoch_inspect_remote` compares it against
  * the local ref without transferring a blob; `epoch_fetch` downloads it and,
  * once proved, installs it.
  *
@@ -405,7 +406,7 @@ error_t epoch_push(
  * Returns NULL with `*out_present` set; never surfaces "ref missing" as an error
  * code (that is the load-bearing return value of this predicate).
  */
-static error_t probe_remote_epoch(
+static error_t epoch_probe_remote(
     git_remote *remote, transfer_context_t *xfer, bool *out_present,
     git_oid *out_oid
 ) {
@@ -461,7 +462,7 @@ error_t epoch_fetch(
      * for the one that was judged. */
     bool present = false;
     git_oid advertised;
-    error_t err = probe_remote_epoch(remote, xfer, &present, &advertised);
+    error_t err = epoch_probe_remote(remote, xfer, &present, &advertised);
     if (err) {
         git_remote_free(remote);
         return err;
@@ -506,7 +507,7 @@ error_t epoch_fetch(
      * never stood in refs/dotta/epoch for a later inspect to read as canonical
      * or a later load to surface as a deferred, cryptic decrypt failure. */
     kdf_epoch_t fetched;
-    err = read_epoch_commit(repo, &advertised, &fetched);
+    err = epoch_read_commit(repo, &advertised, &fetched);
     /* The epoch is public — no wipe. */
     if (err) {
         /* Normalize every validation failure (wrong size, missing blob, a pair
@@ -684,7 +685,7 @@ static error_t epoch_present_blob(
  * The anchor is walked like any branch — one empty tree — until it goes; the
  * epoch ref lives outside refs/heads and is never walked.
  */
-static error_t walk_ciphertext(
+static error_t epoch_walk(
     git_repository *repo, epoch_ciphertext_fn fn, void *payload
 ) {
     /* The branches and the bindings already seen, in a frame of the walk's own:
@@ -814,14 +815,11 @@ static bool epoch_census_cb(const epoch_ciphertext_t *ct, void *payload) {
  * can name the subject — and the `false` written on that path is a courtesy,
  * not an answer. Failing closed is their policy, not the walk's.
  */
-static error_t local_has_ciphertext(
+static error_t epoch_census(
     git_repository *repo, const uint8_t *local_fp, bool *out_found
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out_found);
-
     epoch_census_t census = { .local_fp = local_fp };
-    error_t err = walk_ciphertext(repo, epoch_census_cb, &census);
+    error_t err = epoch_walk(repo, epoch_census_cb, &census);
     *out_found = !err && census.found;
     return err;
 }
@@ -872,7 +870,7 @@ error_t epoch_find_ciphertext(
     epoch_find_t find = { .accept = accept, .self = self };
     kdf_epoch_fingerprint(epoch, find.fp);
 
-    error_t err = walk_ciphertext(repo, epoch_find_cb, &find);
+    error_t err = epoch_walk(repo, epoch_find_cb, &find);
     *out_accepted = !err && find.accepted;
     return err;
 }
@@ -903,7 +901,7 @@ error_t epoch_find_ciphertext(
  * The rationale for each row, and for the row that runs no census, is at
  * `epoch_resolve` in the header; it is the caller's contract, not an internal.
  */
-static error_t decide_divergence(
+static error_t epoch_decide(
     git_repository *repo, epoch_reconcile_t *out_decision
 ) {
     kdf_epoch_t local;
@@ -926,7 +924,7 @@ static error_t decide_divergence(
          * at all. Its own cause has nothing to add to either verdict: what the
          * blob is wrong about does not change whether something is sealed. */
         bool any = false;
-        error_t cerr = local_has_ciphertext(repo, NULL, &any);
+        error_t cerr = epoch_census(repo, NULL, &any);
         if (cerr) return cerr;
         *out_decision = any ? EPOCH_RECONCILE_DAMAGED : EPOCH_RECONCILE_ADOPT;
         return NULL;
@@ -937,7 +935,7 @@ static error_t decide_divergence(
     kdf_epoch_fingerprint(&local, fp);
 
     bool keyed = false;
-    error_t cerr = local_has_ciphertext(repo, fp, &keyed);
+    error_t cerr = epoch_census(repo, fp, &keyed);
     if (cerr) return cerr;
     *out_decision = keyed ? EPOCH_RECONCILE_CONFLICT : EPOCH_RECONCILE_ADOPT;
     return NULL;
@@ -953,7 +951,7 @@ typedef enum {
     EPOCH_REMOTE_ABSENT,     /* remote does not advertise refs/dotta/epoch */
     EPOCH_REMOTE_EQUAL,      /* advertised OID == local ref target */
     EPOCH_REMOTE_DIVERGENT,  /* advertised OID != local target (incl. local-absent) */
-} epoch_remote_status_t;
+} epoch_remote_t;
 
 /*
  * Inspect the remote epoch without transferring objects: connect + ls, then compare
@@ -962,22 +960,17 @@ typedef enum {
  * folds to UNREACHABLE); a remote that simply lacks the ref is ABSENT, never an
  * error.
  */
-static error_t inspect_remote_epoch(
+static error_t epoch_inspect_remote(
     git_repository *repo, const char *remote_name, transfer_context_t *xfer,
-    epoch_remote_status_t *out_status
+    epoch_remote_t *out_status
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(xfer);
-    CHECK_NULL(out_status);
-
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, remote_name);
     if (rc < 0) return error_from_git(rc);
 
     bool present = false;
     git_oid remote_oid;
-    error_t err = probe_remote_epoch(remote, xfer, &present, &remote_oid);
+    error_t err = epoch_probe_remote(remote, xfer, &present, &remote_oid);
     git_remote_free(remote);
     if (err) {
         /* Transport failure — propagate so the caller can skip epoch reconciliation
@@ -1017,8 +1010,8 @@ error_t epoch_resolve(
     CHECK_NULL(xfer);
     CHECK_NULL(out_decision);
 
-    epoch_remote_status_t status;
-    error_t err = inspect_remote_epoch(repo, remote_name, xfer, &status);
+    epoch_remote_t status;
+    error_t err = epoch_inspect_remote(repo, remote_name, xfer, &status);
     if (err) {
         /* Transport / lookup failure folds to UNREACHABLE: the caller skips epoch
          * reconciliation best-effort, and the fetch phase carries the authoritative
@@ -1048,9 +1041,9 @@ error_t epoch_resolve(
         case EPOCH_REMOTE_DIVERGENT:
             /* Five findings, and the fail-closed one is the return: a fetch arm
              * is reached only over bytes nothing here can depend on. */
-            return decide_divergence(repo, out_decision);
+            return epoch_decide(repo, out_decision);
     }
 
-    /* inspect_remote_epoch yields exactly one of three statuses */
+    /* epoch_inspect_remote yields exactly one of three statuses */
     CHECK_ARG(false, "a remote epoch status no enumerator names");
 }

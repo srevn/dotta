@@ -686,7 +686,7 @@ Validation is performed at the boundary where parameters enter the system:
 | SIV encrypt/decrypt + format | `src/crypto/cipher` | `cipher_encrypt`, `cipher_decrypt`, `cipher_read_header` |
 | Unlock proof & key manager | `src/crypto/keymgr` | `keymgr_create`, `keymgr_encrypt`, `keymgr_decrypt`, `keymgr_set`, `keymgr_clear`, `keymgr_cached`, `keymgr_epoch`, `keymgr_rekey`, `keymgr_witness`, `keymgr_free` |
 | On-disk epoch session cache | `src/crypto/session` | `session_save`, `session_load`, `session_clear` |
-| Repository epoch lifecycle & census | `src/infra/epoch` | `epoch_init`, `epoch_load`, `epoch_push`, `epoch_fetch`, `epoch_resolve`, `epoch_find_ciphertext`, `walk_ciphertext` |
+| Repository epoch lifecycle & census | `src/infra/epoch` | `epoch_init`, `epoch_load`, `epoch_push`, `epoch_fetch`, `epoch_resolve`, `epoch_find_ciphertext`, `epoch_walk` |
 | Content abstraction & cache | `src/infra/content` | `content_cache_*`, `content_classify*`, `content_capture_file`, `content_capture_link` |
 | Memory protection | `src/base/secure` | `secure_alloc`, `secure_free`, `secure_wipe` |
 | Passphrase acquisition | `src/sys/passphrase` | `passphrase_prompt`, `passphrase_from_env` |

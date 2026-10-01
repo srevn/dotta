@@ -585,7 +585,7 @@ typedef bool (*epoch_ciphertext_fn)(const epoch_ciphertext_t *ct, void *payload)
 /* The walk's own payload, shared across every branch. */
 typedef struct {
     git_repository *repo;      /* borrowed; for blob loads */
-    hashmap_t *seen;           /* borrowed; visited (object, branch, path) */
+    hashmap_t *seen;           /* borrowed; visited (object, mode, branch, path) */
     buffer_t key;              /* a binding's key, spelled per entry */
     epoch_ciphertext_fn fn;    /* the asker */
     void *payload;             /* the asker's, carried untouched */
@@ -613,24 +613,30 @@ static error_t epoch_present_blob(
         return NULL;
     }
 
-    /* The unit of the walk is the binding, not the object: one blob standing at
-     * two paths, or at one path under two branches, is two witnesses (the SIV
-     * binds the path, the pair the profile), and each must be presented. So the
-     * visited set keys by object, branch and path, and a binding met before is
-     * skipped — a tree only where the same tree stands at the same path of the
-     * same branch, where every binding beneath it recurs. History shares objects
-     * heavily between commits, and orphan profile branches share none, so this
-     * is still one visit per object in practice; a root tree two commits share
-     * costs one visit of each entry it holds. The key is spelled here and nowhere
-     * else, and no two bindings spell one: ':' stands in neither the id's hex
-     * nor a branch name (a refname refuses it), so the last field is the whole
-     * path, whatever it holds. */
+    /* The unit of the walk is a binding as it is judged, not the object. One
+     * blob at two paths, or at one path under two branches, is two witnesses —
+     * the SIV binds the path, the pair the profile — and each must be presented;
+     * one blob at one path under two modes is two judgments, a link's bytes being
+     * its target and never a ciphertext (infra/content.h content_classify). So
+     * the visited set keys by object, mode, branch and path — every input of
+     * the judgment — and a binding met before is skipped: a tree only where the
+     * same tree stands at the same path of the same branch, where every binding
+     * beneath it recurs, modes and all, a tree's id fixing its entries'. History
+     * shares objects heavily between commits, and orphan profile branches share
+     * none, so this is still one visit per object in practice; a root tree two
+     * commits share costs one visit of each entry it holds. The key is spelled
+     * here and nowhere else, and no two bindings spell one: ':' stands in none
+     * of the id's hex, the mode's octal or a branch name (a refname refuses it),
+     * so the last field is the whole path, whatever it holds. */
     const git_oid *oid = git_tree_entry_id(entry);
     char oid_hex[GIT_OID_SHA1_HEXSIZE + 1];
     git_oid_tostr(oid_hex, sizeof(oid_hex), oid);
 
     buffer_clear(&walk->key);
-    buffer_appendf(&walk->key, "%s:%s:%s", oid_hex, walk->branch, path);
+    buffer_appendf(
+        &walk->key, "%s:%06o:%s:%s", oid_hex, (unsigned) git_tree_entry_filemode(entry),
+        walk->branch, path
+    );
     if (!hashmap_add(walk->seen, walk->key.data, NULL)) {
         *next = GITOPS_NEXT_SKIP;
         return NULL;

@@ -286,21 +286,15 @@ static error_t sync_fetch_phase(
         output_endline(out, OUTPUT_NORMAL);
     }
 
+    /* The fetch's own error is the cause, and the wrap names the remote once.
+     * Whose refusal it was is read from the transfer's outcome rather than from
+     * libgit2's English, and read now: the next transfer_op_begin overwrites
+     * it. No hint: an outcome that is not the credentials' is any failure the
+     * fetch met, a ref write as well as a network, and the cause says which. */
     if (err) {
-        /* Classify authoritatively from the transfer outcome rather than matching
-         * libgit2's English error strings. Read immediately: the next
-         * transfer_op_begin would overwrite last_outcome. */
-        const char *err_msg = error_message(err);
-        if (transfer_last_outcome(xfer) == TRANSFER_OUTCOME_AUTH_FAILED) {
-            output_error(out, "Authentication failed: %s", err_msg);
-        } else {
-            output_error(out, "Fetch failed: %s", err_msg);
-        }
-
-        return ERROR(
-            ERR_GIT, "Failed to fetch profiles from remote\n"
-            "Hint: Check network connectivity and remote accessibility"
-        );
+        return transfer_last_outcome(xfer) == TRANSFER_OUTCOME_AUTH_FAILED
+            ? error_wrap(err, "Authentication failed for remote '%s'", remote_name)
+            : error_wrap(err, "Failed to fetch profiles from remote '%s'", remote_name);
     }
 
     return NULL;

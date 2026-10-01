@@ -22,9 +22,10 @@
  * The lexical half of the syntax below: what may stand after the last '@', and
  * — for the verbs whose positional slot could hold one — what a whole token may
  * be. It recognizes the spellings that name a commit with nothing looked up:
- * HEAD's (refspec_ancestry — `HEAD` where the word ends there or a modifier follows
- * it, `HEAD~1`, `HEAD^`, `HEAD~3^2`, `HEAD@{1}`, and `@`), a bare SHA of 7 to
- * 40 hex digits, and a SHA carrying a modifier (`a4f2c8e^`, `def4567~2`).
+ * HEAD's (refspec_ancestry — `HEAD` or `@` where the word ends there or a modifier
+ * follows it: `HEAD~1`, `HEAD^`, `HEAD~3^2`, `HEAD@{1}`, `@`, `@~1`, `@^2`), a
+ * bare SHA of 7 to 40 hex digits, and a SHA carrying a modifier (`a4f2c8e^`,
+ * `def4567~2`).
  *
  * A shape and never an existence: nothing is resolved and no store is read, so
  * a tag and a branch name are refused here whatever the repository holds — and
@@ -48,11 +49,12 @@ bool refspec_looks_like_commit(const char *token);
  * The steps a HEAD spelling takes back from a branch's tip
  *
  * dotta's HEAD is a branch's tip, whichever branch a verb reads (sys/gitops.h
- * gitops_revision_t), and `@` alone is HEAD, as git reads it. So `HEAD` and `@`
- * answer "", the tip itself, and HEAD with a modifier right after it answers
- * the modifier on: `HEAD~3^2` is "~3^2", `HEAD@{1}` is "@{1}". Every other spelling
- * answers NULL, a word that merely begins with the four letters among them —
- * `HEADER` is a profile name like any other.
+ * gitops_revision_t), and `@` is HEAD wherever it stands for it, as git reads
+ * it. So `HEAD` and `@` answer "", the tip itself, and either with a modifier
+ * right after it answers the modifier on: `HEAD~3^2` is "~3^2", `@~1` is "~1",
+ * `HEAD@{1}` is "@{1}" and `@{1}` is "{1}". Every other spelling answers NULL,
+ * a word that merely begins with the four letters among them — `HEADER` is a
+ * profile name like any other — and an `@` followed by a name: `@foo` is a path.
  *
  * The shape alone: which steps a branch can take is the resolver's to say, so a
  * modifier it refuses is still HEAD's here. Readers: refspec_looks_like_commit,
@@ -83,8 +85,11 @@ typedef struct {
  * Parse refspec: [profile:]<path>[@commit]
  *
  * Splits the input into profile, file path, and commit components. The ':'
- * separator for profile is optional (profile defaults to NULL). The '@' separator
- * is only recognized when followed by a valid git reference.
+ * separator for profile is optional (profile defaults to NULL). The commit is
+ * the shortest suffix after an '@' that has a commit's shape
+ * (refspec_looks_like_commit): an '@' that no commit follows is the name's own,
+ * and a commit that carries an '@' of its own — `@` alone, `HEAD@{1}` — is split
+ * before it.
  *
  * Output slices are bump-allocated in the provided arena and share its lifetime.
  * On error, *out is left unchanged; callers should only read *out after the
@@ -95,6 +100,7 @@ typedef struct {
  *   "global:home/.bashrc"           -> {"global",     "home/.bashrc", NULL}
  *   "home/.bashrc@a4f2c8e"          -> {NULL,         "home/.bashrc", "a4f2c8e"}
  *   "home/.bashrc@HEAD~1"           -> {NULL,         "home/.bashrc", "HEAD~1"}
+ *   "home/.bashrc@@"                -> {NULL,         "home/.bashrc", "@"}
  *   "global:home/.bashrc@a4f2c8e"   -> {"global",     "home/.bashrc", "a4f2c8e"}
  *   "darwin/work:home/.bashrc"      -> {"darwin/work","home/.bashrc", NULL}
  *   "foo@bar.txt"                   -> {NULL,         "foo@bar.txt",  NULL}  (not a git ref)

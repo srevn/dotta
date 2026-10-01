@@ -601,12 +601,13 @@ error_t gitops_load_branch_commit(
 /**
  * A revision a user named, read before any branch is chosen
  *
- * Two kinds of spelling name a commit. HEAD's — `HEAD`, `@`, and HEAD with its
- * steps back, `~N` and `^N` in any chain (base/refspec.h refspec_ancestry) —
- * names a commit of a branch, and only once the branch is chosen: its tip, and
- * the steps back from it. Every other spelling is git's revision syntax and names
- * one commit whichever branch is asked after — an id, a short id, a tag peeled
- * to its commit, `<id>~N` — so it is resolved once, when the revision is read.
+ * Two kinds of spelling name a commit. HEAD's — `HEAD` or `@`, alone or with
+ * its steps back, `~N` and `^N` in any chain (base/refspec.h refspec_ancestry)
+ * — names a commit of a branch, and only once the branch is chosen: its tip,
+ * and the steps back from it. Every other spelling is git's revision syntax and
+ * names one commit whichever branch is asked after — an id, a short id, a tag
+ * peeled to its commit, `<id>~N` — so it is resolved once, when the revision is
+ * read.
  *
  * Nothing is held but the spelling and one commit's id, so the value needs no
  * release and is copied freely; it is valid while the spelling is.
@@ -621,9 +622,9 @@ typedef struct {
  * Read a revision
  *
  * HEAD's steps are read whole, so one dotta does not walk — anything after HEAD
- * but `~N` and `^N`, `HEAD@{1}` and `HEAD^{commit}` among them — refuses here,
- * before any branch is. A count too large for any history is read as it is: the
- * walk answers that it reaches past the root.
+ * but `~N` and `^N`, `HEAD@{1}`, `@{1}` and `HEAD^{commit}` among them — refuses
+ * here, before any branch is. A count too large for any history is read as it
+ * is: the walk answers that it reaches past the root.
  *
  * Every other spelling is resolved now, and resolving it is required: one that
  * names no commit is the failure, in Git's words, whatever kept it from naming

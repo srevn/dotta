@@ -1,8 +1,9 @@
 /**
  * refspec.c - Refspec parsing utilities
  *
- * Splits "[profile:]<path>[@commit]" into three arena-backed slices in a single
- * pass, over the one rule that says what a commit looks like. See refspec.h for
+ * Splits "[profile:]<path>[@commit]" into three arena-backed slices, over the
+ * one rule that says what a commit looks like — asked of the suffix after each
+ * '@', from the last back, until one has a commit's shape. See refspec.h for
  * lifetime rules and for what that rule does and does not recognize.
  *
  * A partial parse that fails mid-way leaves a few unused bytes in the arena;
@@ -66,10 +67,16 @@ const char *refspec_ancestry(const char *spelling) {
         return NULL;
     }
 
-    /* `@` alone is HEAD, as git reads it: the tip itself, no steps — the empty
-     * string the spelling ends with */
-    if (strcmp(spelling, "@") == 0) {
-        return spelling + 1;
+    /* `@` is HEAD wherever it stands for it, as git reads it: alone the tip itself
+     * — the empty string the spelling ends with — or with a modifier right after
+     * it (@~1, @^, @~3^2, @{1}), the reflog's `{` in the place HEAD's `@{`
+     * takes. */
+    if (spelling[0] == '@') {
+        const char *steps = spelling + 1;
+        if (steps[0] == '\0' || steps[0] == '~' || steps[0] == '^' || steps[0] == '{') {
+            return steps;
+        }
+        return NULL;
     }
 
     /* HEAD alone, or a modifier standing right after it (HEAD~1, HEAD^, HEAD~3^2,
@@ -105,9 +112,20 @@ error_t refspec_parse(arena_t *arena, const char *input, refspec_t *out) {
         remainder = colon + 1;
     }
 
-    /* Step 2: last '@' separates commit, but only when the suffix is a git ref. */
-    const char *at = strrchr(remainder, '@');
-    if (at && at[1] != '\0' && refspec_looks_like_commit(at + 1)) {
+    /* Step 2: the commit is the shortest suffix after an '@' that has a commit's
+     * shape. The last '@' is not always the one: a commit may carry an '@' of
+     * its own — `@` alone, HEAD@{…} — so `x@@` is x at HEAD, and `x@HEAD@{1}`
+     * reaches the resolver's refusal of a step it does not take instead of reading
+     * as a file whose name holds it. */
+    const char *at = NULL;
+    for (const char *p = remainder + strlen(remainder); p > remainder; p--) {
+        if (p[-1] == '@' && refspec_looks_like_commit(p)) {
+            at = p - 1;
+            break;
+        }
+    }
+
+    if (at) {
         size_t file_len = (size_t) (at - remainder);
         if (file_len == 0) {
             return ERROR(ERR_INVALID_ARG, "Empty file path in refspec");
@@ -116,7 +134,7 @@ error_t refspec_parse(arena_t *arena, const char *input, refspec_t *out) {
         rs.file = arena_strndup(arena, remainder, file_len);
         rs.commit = arena_strdup(arena, at + 1);
     } else {
-        /* No '@', empty suffix, or suffix isn't a git ref: whole remainder is the file. */
+        /* No '@' with a commit after it: the whole remainder is the file. */
         rs.file = arena_strdup(arena, remainder);
     }
 

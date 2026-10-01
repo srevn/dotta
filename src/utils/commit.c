@@ -13,6 +13,7 @@
 #include "base/arena.h"
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/string.h"
 #include "sys/identity.h"
 
 /* Maximum length for hostname */
@@ -101,13 +102,35 @@ const char *commit_action_name_past(commit_action_t action) {
 }
 
 /**
+ * A name as display text, into the arena — or the name itself where nothing in
+ * it needs spelling
+ *
+ * Its bytes as a terminal may show them (base/string.h str_display): a spelling
+ * lengthens every byte it spells, so one as long as the name changed nothing.
+ */
+static const char *commit_spelled(arena_t *arena, const char *name) {
+    size_t len = strlen(name);
+    size_t shown = str_display(NULL, 0, name, len);
+    if (shown == len) return name;
+
+    char *spelled = arena_alloc(arena, shown + 1);
+    str_display(spelled, shown + 1, name, len);
+
+    return spelled;
+}
+
+/**
  * The path list as bullet points with truncation, appended to `text`
  *
  * Both kinds, as the caller handed them over (utils/commit.h): the list says
  * "paths" of what it truncates and of what it has none of, because a commit that
- * claimed a directory and no file has a path to name and no file.
+ * claimed a directory and no file has a path to name and no file. Each path is
+ * spelled where it enters the list (commit_spelled); the bullets and the newlines
+ * between them are the list's own.
  */
-static void commit_paths(buffer_t *text, const char *const *paths, size_t count) {
+static void commit_paths(
+    arena_t *arena, buffer_t *text, const char *const *paths, size_t count
+) {
     if (count == 0 || !paths) {
         buffer_append_string(text, "  (no paths)");
         return;
@@ -118,7 +141,7 @@ static void commit_paths(buffer_t *text, const char *const *paths, size_t count)
 
     for (size_t i = 0; i < show_count; i++) {
         buffer_append_string(text, "  - ");
-        buffer_append_string(text, paths[i]);
+        buffer_append_string(text, commit_spelled(arena, paths[i]));
         if (i < show_count - 1 || count > MAX_PATHS_DETAIL) {
             buffer_append_string(text, "\n");
         }
@@ -225,23 +248,25 @@ const char *commit_message(
     snprintf(count, sizeof(count), "%zu", ctx->path_count);
 
     buffer_t paths = BUFFER_INIT;
-    commit_paths(&paths, ctx->paths, ctx->path_count);
+    commit_paths(arena, &paths, ctx->paths, ctx->path_count);
 
     /* {user} is the invoker's (sys/identity): under sudo the user who typed the
      * command, not the root that $USER names there — "unknown" for a uid with
      * no passwd entry */
     const char *user = identity()->name;
 
+    /* The names the machine and the user gave are spelled where they enter
+     * (utils/commit.h); the rest are this function's own text */
     const template_t vars[] = {
-        { "host",          hostname                                     },
-        { "user",          user ? user : "unknown"                      },
-        { "profile",       ctx->profile                                 },
-        { "action",        commit_action_name(ctx->action)              },
-        { "action_past",   commit_action_name_past(ctx->action)         },
-        { "count",         count                                        },
-        { "date",          date                                         },
-        { "datetime",      datetime                                     },
-        { "paths",         paths.data                                   },
+        { "host",          commit_spelled(arena, hostname)                },
+        { "user",          commit_spelled(arena, user ? user : "unknown") },
+        { "profile",       commit_spelled(arena, ctx->profile)            },
+        { "action",        commit_action_name(ctx->action) },
+        { "action_past",   commit_action_name_past(ctx->action) },
+        { "count",         count },
+        { "date",          date },
+        { "datetime",      datetime },
+        { "paths",         paths.data },
         { "target_commit", ctx->target_commit ? ctx->target_commit : "" },
     };
     const size_t var_count = sizeof(vars) / sizeof(vars[0]);

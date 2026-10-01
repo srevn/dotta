@@ -232,7 +232,8 @@ const char *str_shell_quote(arena_t *arena, const char *word);
  * a whole character or a whole escape.
  *
  * Readers: base/output.c output_datum (every %s and %c a format carries) and
- * output_list_render (a row's tags, measured).
+ * output_list_render (a row's tags, measured); utils/commit.c commit_spelled
+ * (every name a commit message's template inserts).
  *
  * @param dst  Where the spelling goes (may be NULL when size is 0)
  * @param size dst's bytes, its terminator's among them

@@ -33,11 +33,12 @@ typedef enum {
  * `paths` is what this commit is about, in the caller's own order and both kinds:
  * the paths it took, and, for a verb that lets paths go, the ones it let go
  * (cmds/remove.c, cmds/update.c). A claim is named as the branch spells it —
- * the storage path, unadorned, so a name read out of a log is the key the tree
- * and the sheet hold and the key `remove` takes back — and a claim no verb named
- * is none of the commit's, an ancestor the derivation authored included.
- * `path_count` is the length of `paths` and the one number {count} renders: no
- * template can make the list and the count disagree. Both borrowed for the call.
+ * the storage path, so a name read out of a log is the key the tree and the sheet
+ * hold and the key `remove` takes back, but for a byte no terminal may be handed,
+ * which the message spells (commit_message) — and a claim no verb named is none
+ * of the commit's, an ancestor the derivation authored included. `path_count`
+ * is the length of `paths` and the one number {count} renders: no template can
+ * make the list and the count disagree. Both borrowed for the call.
  */
 typedef struct {
     commit_action_t action;     /* Action being performed */
@@ -68,6 +69,12 @@ typedef struct {
  *
  * A variable the table has no row for is left as the template spelled it, braces
  * and all, so a template is never silently emptied by a typo.
+ *
+ * Every name a value carries — a path, the profile, the host, the user — is display
+ * text the moment the template inserts it, read by every reader of the log: spelled
+ * as a terminal may show it (base/string.h str_display), so no name opens a line
+ * or sends a control in Git itself. The template's own text and a custom message
+ * are their writers', inserted as written.
  *
  * @param arena Arena the message lives in (must not be NULL)
  * @param config Configuration holding the two templates (must not be NULL)

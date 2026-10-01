@@ -39,15 +39,20 @@
 #include <types.h>
 
 /**
- * Common buffer size constants for Git operations
+ * The buffer a reference name is built in: as long as libgit2 reads one
  *
- * These constants define standard buffer sizes used throughout dotta. Git allows
- * up to 255 chars per reference component, but we use conservative limits for
- * safety and to catch truncation early.
+ * Git bounds a reference name by nothing but memory, a loose ref's path by the
+ * kernel; libgit2 normalizes every name it looks up or writes into git_refname_t,
+ * char[1024] (lib/libgit2/src/libgit2/refs.h GIT_REFNAME_MAX), and refuses one
+ * that does not fit ("the provided buffer is too short to hold the normalization").
+ * So a name this buffer cannot hold is one no lookup could read, and the bound
+ * is the library's, never one of dotta's own. A refspec joins two names, a ':'
+ * between them and the force's '+' before.
  */
-#define DOTTA_REFNAME_MAX 256    /* For git reference names (refs/heads/...) */
-#define DOTTA_REFSPEC_MAX 512    /* For git refspecs (refs/heads/foo:refs/remotes/origin/foo) */
-#define DOTTA_MESSAGE_MAX 512    /* For commit messages and prompts */
+#define DOTTA_REFNAME_MAX 1024                        /* a name, and its NUL */
+#define DOTTA_REFSPEC_MAX (2 * DOTTA_REFNAME_MAX + 1) /* [+]<name>:<name>, and NUL */
+
+#define DOTTA_MESSAGE_MAX 512                         /* For commit messages and prompts */
 
 /**
  * Initialize libgit2 for this process, and configure it
@@ -1000,17 +1005,17 @@ error_t gitops_resolve_remote_branch_oid(
 /**
  * Validate and build a Git reference name
  *
- * Builds a reference name using printf-style formatting and validates it fits
- * in the provided buffer without truncation.
- *
- * Git allows up to 255 chars per component, but we use conservative limits to
- * prevent silent failures with libgit2 operations.
+ * Builds a reference name — or a refspec, which holds two — using printf-style
+ * formatting, and refuses one its buffer cannot hold rather than truncate it
+ * into another name. The buffer is DOTTA_REFNAME_MAX, or DOTTA_REFSPEC_MAX for
+ * a refspec: libgit2's own bound (that constant's header), so a name refused
+ * here is longer than any libgit2 reads.
  *
  * A branch name goes through gitops_branch_refname, which carries Git's branch
  * rule; this is for the other shapes.
  *
  * @param buffer Output buffer for the reference name (must not be NULL)
- * @param buffer_size Size of output buffer (at least one byte)
+ * @param buffer_size Size of output buffer: DOTTA_REFNAME_MAX, DOTTA_REFSPEC_MAX
  * @param format Printf-style format string (must not be NULL)
  * @param ... Format arguments
  * @return Error or NULL on success
@@ -1036,7 +1041,7 @@ error_t gitops_build_refname(
  * positional read this one refusal.
  *
  * @param buffer Output buffer for the reference name (must not be NULL)
- * @param buffer_size Size of output buffer
+ * @param buffer_size Size of output buffer: DOTTA_REFNAME_MAX
  * @param name Branch name (must not be NULL)
  * @return NULL, or ERR_INVALID_ARG naming the name ("Branch name cannot be empty"
  *         for none); the builder's length refusal

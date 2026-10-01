@@ -1988,7 +1988,10 @@ error_t gitops_build_refname(
     CHECK_ARG(buffer_size > 0, "buffer_size holds at least the terminator");
 
     /* The format is its writer's, so one that cannot be formatted is a caller's
-     * bug; a name the buffer cannot hold is the user's, and refused. */
+     * bug; a name the buffer cannot hold is the user's, and refused, never
+     * truncated into another. The buffer is libgit2's own bound (sys/gitops.h
+     * DOTTA_REFNAME_MAX), so the name is one no lookup could read — and a refspec
+     * past its buffer holds such a name, one of its two being longer still. */
     va_list args;
     va_start(args, format);
     int written = vsnprintf(buffer, buffer_size, format, args);
@@ -1997,8 +2000,8 @@ error_t gitops_build_refname(
 
     if ((size_t) written >= buffer_size) {
         return ERROR(
-            ERR_INVALID_ARG, "Reference name too long (truncated): "
-            "needs %d bytes, buffer is %zu bytes", written + 1, buffer_size
+            ERR_INVALID_ARG, "Reference name '%.40s…' is %d bytes, longer than "
+            "libgit2 reads (at most %d)", buffer, written, DOTTA_REFNAME_MAX - 1
         );
     }
 

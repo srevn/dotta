@@ -322,8 +322,10 @@ typedef enum {
  *   LOCKED       ERR_LOCKED: the run holds no usable master — none in reach,
  *                none read, none that opens this repository — or the feature is
  *                off over a sealed blob. One key settles every such row at once.
- *   UNREADABLE   ERR_PERMISSION: the invoker cannot read the path. Permissions,
- *                or a run that holds root.
+ *   UNREADABLE   ERR_PERMISSION: the bits refused the read to the identity the
+ *                run held (EACCES) — the invoker, or root as well where the run
+ *                holds it and a policy denies root too (a MAC rule, an export
+ *                that squashes root). Root is offered, never promised.
  *   UNVERIFIED   anything else: a foreign epoch, a cipher version this build does
  *                not read, a Git object that would not load, an I/O error, a
  *                probe that could not answer. Dotta names no remedy for these,
@@ -353,7 +355,7 @@ typedef enum {
 typedef enum {
     WORKSPACE_FAULT_NONE = 0,     /* The look succeeded */
     WORKSPACE_FAULT_LOCKED,       /* No usable key this run — one key settles them all */
-    WORKSPACE_FAULT_UNREADABLE,   /* Refused by permissions — root would read it */
+    WORKSPACE_FAULT_UNREADABLE,   /* Refused by permissions — sudo may lift it */
     WORKSPACE_FAULT_UNVERIFIED    /* Anything else — no remedy dotta can name */
 } workspace_fault_t;
 

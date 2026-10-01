@@ -64,7 +64,7 @@
  * whatever the answer is about: a hook's mode, a claim's ids, a policy's verdict.
  * Every reader turns the code straight into a remedy only a refusal has — cmds/add
  * and cmds/update close with the sudo line, core/workspace classes the failed
- * look UNREADABLE and its readers name root, utils/repo offers to reclaim the
+ * look UNREADABLE and its readers offer root, utils/repo offers to reclaim the
  * repository — and none of them can see which producer it came from, which is
  * what makes the class load-bearing rather than descriptive.
  *

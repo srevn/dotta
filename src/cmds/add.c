@@ -1992,8 +1992,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * offered: a `!` at a rung that cannot be read re-opens it
              * (core/ignore.h ignore_verdict), which would admit what git may
              * exclude, and a repository that fails whole fails at every rung
-             * inside it. One line, since the sudo line wraps a refusal only root
-             * can lift (add_dispatch). */
+             * inside it. One line, since the sudo line wraps a refusal the run's
+             * identity met (add_dispatch). */
             err = error_wrap(
                 err, "Cannot tell whether '%s' is ignored by Git's ignore rules; turn "
                 "them off with respect_gitignore = false to add it anyway", file
@@ -2826,9 +2826,10 @@ static error_t add_dispatch(const void *ctx_v, void *opts_v) {
      * reads is a source. A run that holds no root has not asked as root, which
      * sys/filesystem's second try would — an EPERM codes ERR_FS and is offered
      * nothing, a flag, SIP, TCC or a sandbox refusing root as flatly. So the
-     * one thing left to say is sudo. */
+     * one thing left to say is sudo, as an offer: a policy may deny root the
+     * read as well, and the bits are the owner's to change besides. */
     if (error_code(err) == ERR_PERMISSION && !identity()->privileged) {
-        err = error_wrap(err, "Only root can read it; re-run under sudo");
+        err = error_wrap(err, "Re-run under sudo to read it");
     }
 
     return err;

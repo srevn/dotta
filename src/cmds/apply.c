@@ -64,24 +64,26 @@
  * widen a scope that can never plan it, a run that holds root is not told to
  * hold it, and an unreadable-only run is offered neither a flag that will not
  * lift it nor a by-hand fix for a path dotta could not even read: it closes with
- * its own line, because dotta never writes on a guess. The refusals root lifts
- * — a landing whose bits deny the invoker, a directory it does not own, a pair
- * it cannot set, and a look that met EACCES on the path itself — close by naming
- * sudo, and only for a run that holds none: identity()->privileged, the one process
- * fact this block asks. The key's refusal closes the same way, naming the verb
- * that lifts it; the two are told apart by the field the label above reads. Neither
- * line spells the command that would: the user typed one, the verb the other
- * names says the rest when it is run, and what sudo does to their environment
- * on the way is sudo's to document, not dotta's. The consent remedy teaches both
- * directions and names its cost the way cleanup's does: --force keeps Git's and
- * discards what stands there, and a CONTENT skip adds the disk-wins verb, 'dotta
- * update' — gated on CONTENT and not on the class, because update refuses a retyped
- * row (cmds/update.c update_partition's kind refusal). It stops there: the 'dotta
- * add --force' a Git-moved row needs is what update's own refusal says at the
- * moment the user meets it, and '-e' is how to ignore a skip, not how to remedy
- * one. The block sits between the deploy preview and cleanup's, so each engine
- * tells its story the same way — what it will do, then what it will not and why.
- * No total-count line: the exit error's message is the count's one home.
+ * its own line, because dotta never writes on a guess. The refusals the run's
+ * identity met — a landing whose bits deny the invoker, a directory it does not
+ * own, a pair it cannot set, and a look that met EACCES on the path itself —
+ * close by naming sudo, and only for a run that holds none: identity()->privileged,
+ * the one process fact this block asks. The line offers root and promises nothing:
+ * a policy may deny root a landing or a read as well. The key's refusal closes
+ * the same way, naming the verb that lifts it; the two are told apart by the
+ * field the label above reads. Neither line spells the command that would: the
+ * user typed one, the verb the other names says the rest when it is run, and
+ * what sudo does to their environment on the way is sudo's to document, not
+ * dotta's. The consent remedy teaches both directions and names its cost the
+ * way cleanup's does: --force keeps Git's and discards what stands there, and a
+ * CONTENT skip adds the disk-wins verb, 'dotta update' — gated on CONTENT and
+ * not on the class, because update refuses a retyped row (cmds/update.c
+ * update_partition's kind refusal). It stops there: the 'dotta add --force' a
+ * Git-moved row needs is what update's own refusal says at the moment the user
+ * meets it, and '-e' is how to ignore a skip, not how to remedy one. The block
+ * sits between the deploy preview and cleanup's, so each engine tells its story
+ * the same way — what it will do, then what it will not and why. No total-count
+ * line: the exit error's message is the count's one home.
  */
 static void apply_print_deploy_skips(
     output_t *out, const deploy_preflight_t *verdicts
@@ -1109,7 +1111,7 @@ static void apply_print_cleanup_receipt(
         }
 
         /* No reason here: the preview's skipped-files block named these files,
-         * their reasons and the --force override, its needing-root block the
+         * their reasons and the --force override, its refused-prunes block the
          * ones the parent refuses and the sudo line, and both always print —
          * including on the run that reports this line. */
         size_t skipped_files = verdicts->skipped_files.count + verdicts->refused_files.count;
@@ -1517,7 +1519,7 @@ static void apply_print_cleanup_skips(
 }
 
 /**
- * Print the cleanup refusals: what the run cannot prune, and what could
+ * Print the cleanup refusals: what the run cannot prune, and the way out offered
  *
  * Both kinds in one section — files, then the directories deepest first — each
  * row naming the parent whose bits deny the run, verbatim, in the words deploy's
@@ -1537,6 +1539,8 @@ static void apply_print_cleanup_skips(
  * run's rather than the item's (cleanup_preflight_t). Under a run that holds
  * root it holds only what the bits deny root as well (a MAC policy, an NFS export
  * that squashes root), and the closer, which names root, is withheld from it.
+ * So the header names the fate, the bucket's own word and the twin of the receipt's
+ * "Failed prunes", which is true whoever holds the run; root is the closer's alone.
  */
 static void apply_print_cleanup_refused(
     output_t *out,
@@ -1547,7 +1551,7 @@ static void apply_print_cleanup_refused(
 
     if (total == 0) return;
 
-    output_section(out, OUTPUT_NORMAL, "Orphaned paths needing root");
+    output_section(out, OUTPUT_NORMAL, "Refused prunes");
 
     size_t shown = 0;
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {

@@ -678,10 +678,11 @@ static void status_print_workspace(
 
             /* What the failed look was, then the way out of it: a key for the
              * locked rows, root for the unreadable ones and only where the run
-             * holds none. The residual class has no remedy to name — there is
-             * no one remedy for a foreign epoch, a cipher this build does not
-             * read and an I/O error — so its line names the verb that will print
-             * the cause instead. */
+             * holds none — offered, never promised, since a policy may deny root
+             * the read as well. The residual class has no remedy to name — there
+             * is no one remedy for a foreign epoch, a cipher this build does
+             * not read and an I/O error — so its line names the verb that will
+             * print the cause instead. */
             const char *hint = NULL;
 
             switch (item->fault) {
@@ -693,7 +694,7 @@ static void status_print_workspace(
                     hint = identity()->privileged
                         ? "permissions refused the read"
                         : "permissions refused the read; "
-                        "sudo would lift it";
+                        "sudo may lift it";
                     break;
                 case WORKSPACE_FAULT_NONE:
                 case WORKSPACE_FAULT_UNVERIFIED:
@@ -1530,9 +1531,9 @@ const args_command_t spec_status = {
         "scope covers both; --local and --remote restrict it.\n",
     .notes        =
         "Ownership:\n"
-        "  Ownership is compared like mode, without privileges. A path only\n"
-        "  root can read is reported as [unreadable]; run the command under\n"
-        "  sudo to verify it.\n"
+        "  Ownership is compared like mode, without privileges. A path whose\n"
+        "  permissions refuse the read is reported as [unreadable]; run the\n"
+        "  command under sudo to verify it.\n"
         "\n"
         "Remote State Indicators:\n"
         "  =    up-to-date with remote\n"

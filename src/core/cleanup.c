@@ -344,8 +344,8 @@ static bool cleanup_active_beneath(const workspace_t *ws, const char *dir) {
  * deploy climbs to: an orphan the verdict planned stood at the load's look, and
  * so did its parent — save a file --force planned past a look that failed, whose
  * parent is asked all the same and answers for the way there: a denial on the
- * way is the run's (ancestry that cannot be reached, root's to lift), a loop or
- * a name too long no identity's.
+ * way is the run's (ancestry that cannot be reached, sudo the remedy offered),
+ * a loop or a name too long no identity's.
  *
  * What the bits do not decide is no denial, and the removal meets it with its
  * cause: what refuses every identity — a read-only filesystem, an immutable flag

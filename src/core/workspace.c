@@ -311,10 +311,11 @@ static divergence_type_t workspace_compare_ownership(
  * Class a failed look by whose remedy it is
  *
  * The root's code, and nothing else (workspace.h, workspace_fault_t): ERR_LOCKED
- * is the run's key, ERR_PERMISSION is root's, and everything else is a refusal
- * dotta cannot name one remedy for. The root, not the top — the layers above it
- * added the subject the row already names, and the code the producer chose is
- * the root's (crypto/keymgr.h, "The codes").
+ * is the run's key, ERR_PERMISSION the run's identity — sudo the remedy offered,
+ * never promised — and everything else is a refusal dotta cannot name one remedy
+ * for. The root, not the top — the layers above it added the subject the row
+ * already names, and the code the producer chose is the root's (crypto/keymgr.h,
+ * "The codes").
  */
 static workspace_fault_t workspace_code_fault(error_code_t code) {
     switch (code) {

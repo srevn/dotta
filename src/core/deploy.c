@@ -769,11 +769,13 @@ static error_t resolve_deployment_ownership(
     /* Fatal under strict_ownership, a configuration or environment mismatch the
      * user asked to be stopped by */
     if (strict_ownership) {
-        return error_wrap(
+        error_t err = error_wrap(
             ERROR(ERR_NOT_FOUND, "%s '%s' does not exist on this system", half, name),
-            "Ownership resolution failed for '%s' (strict_ownership enabled)\n"
-            "Hint: Create the user/group on this system, or disable "
-            "strict_ownership", row->storage_path
+            "Ownership resolution failed for '%s' (strict_ownership enabled)",
+            row->storage_path
+        );
+        return error_hint(
+            err, "Create the user/group on this system, or disable strict_ownership"
         );
     }
 

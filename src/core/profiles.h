@@ -241,13 +241,10 @@ error_t profile_resolve_range(
  * when Git could not say — an unreadable or corrupt loose ref is an error, never
  * an absence (a bool that read it as "no" sent the user to fetch a profile that
  * was here, let --force delete nothing and call it done, and had validate --fix
- * offer to disable a healthy profile); otherwise ERR_NOT_FOUND with one message,
- * naming both ways out, because no verb can tell a typo from a profile not yet
- * fetched:
- *
- *     Profile '<name>' doesn't exist locally Hint: Run 'dotta profile list' for
- *     the local profiles, or 'dotta profile fetch <name>' to bring it from the
- *     remote
+ * offer to disable a healthy profile); otherwise ERR_NOT_FOUND, "Profile '<name>'
+ * doesn't exist locally", hinted with both ways out — 'dotta profile list' for
+ * the local profiles, 'dotta profile fetch <name>' to bring it from the remote
+ * — because no verb can tell a typo from a profile not yet fetched.
  *
  * Readers: ignore (--test, and the edit), bootstrap (the explicit names, and
  * --edit's template), show, export, list (a profile's files; an explicit profile's

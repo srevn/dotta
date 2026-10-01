@@ -1375,9 +1375,9 @@ error_t gitops_resolve_default_remote(
 
     if (remotes.count == 0) {
         git_strarray_dispose(&remotes);
-        return ERROR(
-            ERR_NOT_FOUND, "No remotes configured\n"
-            "Hint: Add a remote with 'dotta remote add <name> <url>'"
+        return error_hint(
+            ERROR(ERR_NOT_FOUND, "No remotes configured"),
+            "Add a remote with 'dotta remote add <name> <url>'"
         );
     }
 
@@ -1394,10 +1394,9 @@ error_t gitops_resolve_default_remote(
     }
     if (!selected) {
         git_strarray_dispose(&remotes);
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Multiple remotes configured, but no 'origin' found\n"
-            "Hint: Specify remote explicitly or rename preferred remote to 'origin'"
+        return error_hint(
+            ERROR(ERR_INVALID_ARG, "Multiple remotes configured, but no 'origin' found"),
+            "Specify remote explicitly or rename preferred remote to 'origin'"
         );
     }
 

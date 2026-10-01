@@ -1425,9 +1425,9 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (err) return err;
 
     if (scope_enabled(scope)->count == 0) {
-        return ERROR(
-            ERR_NOT_FOUND, "No enabled profiles found\n"
-            "Hint: Run 'dotta profile enable <name>' to enable profiles"
+        return error_hint(
+            ERROR(ERR_NOT_FOUND, "No enabled profiles found"),
+            "Run 'dotta profile enable <name>' to enable profiles"
         );
     }
 
@@ -1945,9 +1945,10 @@ static error_t update_dispatch(const void *ctx_v, void *opts_v) {
 
     /* A refusal the invoker met reading a source (add_dispatch has the list and
      * the argument) ends the update before its commit; a run that holds no root
-     * has not asked as root, so the one thing left to say is sudo, offered. */
+     * has not asked as root, so the one thing left to say is sudo, offered as a
+     * hint. */
     if (error_code(err) == ERR_PERMISSION && !identity()->privileged) {
-        err = error_wrap(err, "Re-run under sudo to read it");
+        err = error_hint(err, "Re-run under sudo to read it");
     }
 
     return err;

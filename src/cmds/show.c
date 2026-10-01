@@ -693,10 +693,9 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
     /* File at specific commit requires explicit profile for unambiguous resolution */
     if (opts->commit) {
-        err = ERROR(
-            ERR_INVALID_ARG,
-            "Showing a file at a specific commit requires a profile\n"
-            "Hint: Use 'dotta show -p <profile> <file> <commit>'"
+        err = error_hint(
+            ERROR(ERR_INVALID_ARG, "Showing a file at a specific commit requires a profile"),
+            "Use 'dotta show -p <profile> <file> <commit>'"
         );
         goto cleanup;
     }

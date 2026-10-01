@@ -715,10 +715,9 @@ static error_t list_file_history(
             }
         }
         if (!row) {
-            return ERROR(
-                ERR_NOT_FOUND, "File '%s' not found in enabled profiles\n"
-                "Hint: Use 'dotta list -p <profile> %s' to specify a profile",
-                opts->file_path, opts->file_path
+            return error_hint(
+                ERROR(ERR_NOT_FOUND, "File '%s' not found in enabled profiles", opts->file_path),
+                "Use 'dotta list -p <profile> %s' to specify a profile", opts->file_path
             );
         }
         /* The winner names both halves: whose claim stands there, and what it

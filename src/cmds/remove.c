@@ -473,9 +473,11 @@ static error_t remove_resolve(
         if (matches_found == 0) {
             if (!opts->force) {
                 err = ERROR(
-                    ERR_NOT_FOUND, "Path '%s' not found in profile '%s'\n"
-                    "Hint: Use 'dotta list --profile %s' to see tracked paths",
-                    input_paths[i], profile, profile
+                    ERR_NOT_FOUND, "Path '%s' not found in profile '%s'",
+                    input_paths[i], profile
+                );
+                err = error_hint(
+                    err, "Use 'dotta list --profile %s' to see tracked paths", profile
                 );
                 goto cleanup;
             }
@@ -1218,10 +1220,9 @@ static error_t remove_profile(
     if (err) goto cleanup;
     if (!exists) {
         if (!opts->force) {
-            err = ERROR(
-                ERR_NOT_FOUND, "Profile '%s' does not exist\n"
-                "Hint: Use 'dotta list' to see available profiles",
-                opts->profile
+            err = error_hint(
+                ERROR(ERR_NOT_FOUND, "Profile '%s' does not exist", opts->profile),
+                "Use 'dotta list' to see available profiles"
             );
             goto cleanup;
         }
@@ -1243,8 +1244,8 @@ static error_t remove_profile(
 
     if (all_profiles.count <= 1) {
         err = ERROR(
-            ERR_INVALID_ARG, "Cannot delete last remaining profile '%s'\n"
-            "Hint: A repository must have at least one profile", opts->profile
+            ERR_INVALID_ARG, "Cannot delete last remaining profile '%s'; a repository "
+            "keeps at least one", opts->profile
         );
         goto cleanup;
     }

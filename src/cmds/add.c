@@ -499,34 +499,35 @@ static error_t add_admit(
  * Git's rules off is the other way, and at what the user named, or at a root,
  * the one.
  *
- * One line, the remedy a clause: cmd_add wraps every refusal of the walk with
- * the argument it began at, and a second line would print outside that chain
- * (the depth bound's refusal is the same shape). The remedy rides the wrap until
- * error_hint lifts it (base/error.h, rr4n).
+ * The way past is the refusal's hint (base/error.h "Hints"), read beneath the
+ * whole chain: cmd_add wraps every refusal of the walk with the argument it began
+ * at, and the depth bound's refusal is the same shape.
  */
 static error_t add_refuse_unjudged(
     const walk_t *walk, arena_t *scratch, const char *directory, size_t depth,
     error_t failure
 ) {
+    /* The question the walk could not answer, over the source layer's failure
+     * that kept it from answering */
+    error_t err = error_wrap(
+        failure, "Cannot tell what Git's ignore rules exclude in '%s'", directory
+    );
+
     /* The frame's name, as the walk named it — its claim, else its composition,
      * else a root's word — and the rule leaving exactly it out: none for what
      * the user named, nor for a root, whose empty tail no pattern names. Both
-     * are the entry's scratch: the refusal copies what it prints. */
+     * are the entry's scratch: the hint copies what it prints. */
     const char *name = manifest_name(
         scratch, walk->view, walk->profile, directory, walk->listing
     );
     const char *leave = depth > 0 ? gitignore_literal(scratch, label_tail(name), true) : NULL;
     if (!leave) {
-        return error_wrap(
-            failure, "Cannot tell what Git's ignore rules exclude in '%s'; turn them off "
-            "with respect_gitignore = false to add it", directory
-        );
+        return error_hint(err, "Turn Git's rules off with respect_gitignore = false to add it");
     }
 
-    return error_wrap(
-        failure, "Cannot tell what Git's ignore rules exclude in '%s'; leave it out with "
-        "-e %s, or turn them off with respect_gitignore = false", directory,
-        str_shell_quote(scratch, leave)
+    return error_hint(
+        err, "Leave it out with -e %s, or turn Git's rules off with respect_gitignore "
+        "= false", str_shell_quote(scratch, leave)
     );
 }
 
@@ -589,12 +590,12 @@ static error_t add_collect(
      * they descend, so a deeper argument collected first does not make its parent's
      * walk fail when the parent arrives at the limit. */
     if (depth >= FS_WALK_MAX_DEPTH) {
-        return ERROR(
+        error_t err = ERROR(
             ERR_INVALID_ARG,
-            "Cannot walk '%s': it is %d directories below where this walk began; "
-            "name it as an argument of its own, or exclude it",
+            "Cannot walk '%s': it is %d directories below where this walk began",
             directory, FS_WALK_MAX_DEPTH
         );
+        return error_hint(err, "Name it as an argument of its own, or exclude it");
     }
 
     /* The frame's listing, in the walk's scratch (sys/filesystem.h fs_listing_t):
@@ -1982,15 +1983,17 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             /* Git's rules could not be read for the path, the four having excluded
              * nothing: never read as admitted, since what could not be read may
              * be what git excludes. The failure names what could not be read;
-             * the way past is the repository's to mend, or the switch. No -e is
-             * offered: a `!` at a rung that cannot be read re-opens it
-             * (core/ignore.h ignore_verdict), which would admit what git may
-             * exclude, and a repository that fails whole fails at every rung
-             * inside it. One line, since the sudo line wraps a refusal the run's
-             * identity met (add_dispatch). */
+             * the way past is the repository's to mend, or the switch, the
+             * refusal's hint — read before the sudo one add_dispatch attaches
+             * where the run's identity met the refusal. No -e is offered: a `!`
+             * at a rung that cannot be read re-opens it (core/ignore.h
+             * ignore_verdict), which would admit what git may exclude, and a
+             * repository that fails whole fails at every rung inside it. */
             err = error_wrap(
-                err, "Cannot tell whether '%s' is ignored by Git's ignore rules; turn "
-                "them off with respect_gitignore = false to add it anyway", file
+                err, "Cannot tell whether '%s' is ignored by Git's ignore rules", file
+            );
+            err = error_hint(
+                err, "Turn Git's rules off with respect_gitignore = false to add it anyway"
             );
             goto cleanup;
         }
@@ -2820,10 +2823,11 @@ static error_t add_dispatch(const void *ctx_v, void *opts_v) {
      * reads is a source. A run that holds no root has not asked as root, which
      * sys/filesystem's second try would — an EPERM codes ERR_FS and is offered
      * nothing, a flag, SIP, TCC or a sandbox refusing root as flatly. So the
-     * one thing left to say is sudo, as an offer: a policy may deny root the
-     * read as well, and the bits are the owner's to change besides. */
+     * one thing left to say is sudo, as an offer — a hint, the refusal standing
+     * as the fact: a policy may deny root the read as well, and the bits are
+     * the owner's to change besides. */
     if (error_code(err) == ERR_PERMISSION && !identity()->privileged) {
-        err = error_wrap(err, "Re-run under sudo to read it");
+        err = error_hint(err, "Re-run under sudo to read it");
     }
 
     return err;

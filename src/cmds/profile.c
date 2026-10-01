@@ -433,9 +433,9 @@ static error_t profile_fetch(
     } else {
         /* Fetch specific profiles */
         if (opts->profile_count == 0) {
-            err = ERROR(
-                ERR_INVALID_ARG, "No profiles specified\n"
-                "Hint: Use 'dotta profile fetch <name>' or '--all'"
+            err = error_hint(
+                ERROR(ERR_INVALID_ARG, "No profiles specified"),
+                "Use 'dotta profile fetch <name>' or '--all'"
             );
             goto cleanup;
         }
@@ -463,10 +463,13 @@ static error_t profile_fetch(
         }
         if (missing.count > 0) {
             err = ERROR(
-                ERR_NOT_FOUND, "%s '%s' %s not on remote '%s'\nHint: Remote '%s' holds %s",
+                ERR_NOT_FOUND, "%s '%s' %s not on remote '%s'",
                 missing.count == 1 ? "Profile" : "Profiles",
                 string_array_join(ctx->arena, &missing, "', '"),
-                missing.count == 1 ? "is" : "are", remote_name, remote_name,
+                missing.count == 1 ? "is" : "are", remote_name
+            );
+            err = error_hint(
+                err, "Remote '%s' holds %s", remote_name,
                 available_remote.count > 0
                     ? string_array_join(ctx->arena, &available_remote, ", ")
                     : "no profiles"
@@ -644,9 +647,9 @@ static error_t profile_enable(
     } else {
         /* Enable specified profiles */
         if (opts->profile_count == 0) {
-            return ERROR(
-                ERR_INVALID_ARG, "No profiles specified\n"
-                "Hint: Use 'dotta profile enable <name>' or '--all'"
+            return error_hint(
+                ERROR(ERR_INVALID_ARG, "No profiles specified"),
+                "Use 'dotta profile enable <name>' or '--all'"
             );
         }
 
@@ -661,9 +664,9 @@ static error_t profile_enable(
      * way out: the verb's own shape, never the user's command lines spelled
      * back. */
     if (opts->target && to_enable.count > 1) {
-        return ERROR(
-            ERR_INVALID_ARG, "Cannot use --target with multiple profiles\n"
-            "Hint: Enable each profile on its own, each with its --target"
+        return error_hint(
+            ERROR(ERR_INVALID_ARG, "Cannot use --target with multiple profiles"),
+            "Enable each profile on its own, each with its --target"
         );
     }
 
@@ -1025,9 +1028,9 @@ static error_t profile_disable(
     } else {
         /* Disable specified profiles */
         if (opts->profile_count == 0) {
-            return ERROR(
-                ERR_INVALID_ARG, "No profiles specified\n"
-                "Hint: Use 'dotta profile disable <name>' or '--all'"
+            return error_hint(
+                ERROR(ERR_INVALID_ARG, "No profiles specified"),
+                "Use 'dotta profile disable <name>' or '--all'"
             );
         }
 
@@ -1228,10 +1231,9 @@ static error_t profile_reorder(
 
     /* Validation: at least one profile specified */
     if (opts->profile_count == 0) {
-        return ERROR(
-            ERR_INVALID_ARG, "No profiles specified\n"
-            "Hint: Provide profiles in desired order: "
-            "dotta profile reorder <p1> <p2> ..."
+        return error_hint(
+            ERROR(ERR_INVALID_ARG, "No profiles specified"),
+            "Provide profiles in desired order: dotta profile reorder <p1> <p2> ..."
         );
     }
 
@@ -1241,9 +1243,9 @@ static error_t profile_reorder(
 
     /* Edge case: no enabled profiles */
     if (enabled_profiles.count == 0) {
-        return ERROR(
-            ERR_VALIDATION, "No enabled profiles to reorder\n"
-            "Hint: Run 'dotta profile enable <name>' first"
+        return error_hint(
+            ERROR(ERR_VALIDATION, "No enabled profiles to reorder"),
+            "Run 'dotta profile enable <name>' first"
         );
     }
 
@@ -1263,11 +1265,9 @@ static error_t profile_reorder(
     /* Validation 2: All provided profiles must be currently enabled */
     for (size_t i = 0; i < opts->profile_count; i++) {
         if (!state_enabled(state, opts->profiles[i])) {
-            return ERROR(
-                ERR_VALIDATION, "Profile '%s' is not enabled\n"
-                "Hint: Only enabled profiles can be reordered."
-                " Run 'dotta profile list' to see enabled profiles",
-                opts->profiles[i]
+            return error_hint(
+                ERROR(ERR_VALIDATION, "Profile '%s' is not enabled", opts->profiles[i]),
+                "Run 'dotta profile list' to see enabled profiles"
             );
         }
     }
@@ -1277,8 +1277,8 @@ static error_t profile_reorder(
      * to check for. */
     if (opts->profile_count != enabled_profiles.count) {
         return ERROR(
-            ERR_VALIDATION, "Profile count mismatch: %zu enabled, %zu provided\n"
-            "Hint: All enabled profiles must be included in reorder",
+            ERR_VALIDATION, "Profile count mismatch: %zu enabled, %zu provided; a "
+            "reorder names every enabled profile",
             enabled_profiles.count, opts->profile_count
         );
     }

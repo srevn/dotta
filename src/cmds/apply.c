@@ -672,8 +672,11 @@ static void apply_print_withheld(
  * here — one line per row that did not land, its cause beside it (the receipt's
  * failed bucket), at every verbosity and last, after what did land: a receipt
  * that omits what went wrong is not a receipt, and no run-level error will name
- * it (cleanup's receipt ends on its failures the same way). No total-count line:
- * the exit error's message is the count's one home, as for the skip block.
+ * it (cleanup's receipt ends on its failures the same way). So is a directory
+ * the run held at a working mode and could not narrow back (the receipt's held),
+ * after the failed rows: the mode it was left at, the one it owed, and the
+ * release's refusal. No total-count line: the exit error's message is the count's
+ * one home, as for the skip block.
  *
  * Adoption (ownership stamping for pre-existing matching files) is an apply-level
  * concern and its summary is printed by cmd_apply directly.
@@ -894,6 +897,30 @@ static void apply_print_deploy_receipt(
         if (receipt->failed.count > LIST_LIMIT) {
             output_print(
                 out, OUTPUT_NORMAL, "  ... and %zu more\n", receipt->failed.count - LIST_LIMIT
+            );
+        }
+    }
+
+    /* The directories the run held at a working mode and could not narrow back
+     * — each wider than the mode it owed, or out of reach: the mode it was left
+     * at, the one it owed, and the release's refusal, as the failed rows give
+     * theirs. At every verbosity and last: what the run widened and could not
+     * undo is not a receipt's to omit. The sections above still say what landed,
+     * and the run records it all the same. */
+    if (receipt->held.count > 0) {
+        output_section(out, OUTPUT_NORMAL, "Directories left wide");
+        for (size_t i = 0; i < receipt->held.count && i < LIST_LIMIT; i++) {
+            const deploy_hold_t *hold = &receipt->held.entries[i];
+
+            output_styled(
+                out, OUTPUT_NORMAL, "  {red}✗{reset} %s (mode %04o, not %04o: %s)\n",
+                hold->item->filesystem_path, deploy_working_mode(hold->mode), hold->mode,
+                error_message(error_root(hold->error))
+            );
+        }
+        if (receipt->held.count > LIST_LIMIT) {
+            output_print(
+                out, OUTPUT_NORMAL, "  ... and %zu more\n", receipt->held.count - LIST_LIMIT
             );
         }
     }
@@ -2705,27 +2732,13 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_print(out, OUTPUT_VERBOSE, "Executing deployment plan...\n");
 
             /* The content cache was populated with decrypted content during
-             * workspace divergence analysis; deploy's fetches hit it. */
-            error_t release_err = deploy_execute(
-                repo, ws, deploy_verdicts, content_cache, ctx->arena, &deploy_receipt
+             * workspace divergence analysis; deploy's fetches hit it. Every failure
+             * the run meets is an outcome on the receipt — a row's, a hold's —
+             * and the run goes on to record what landed. */
+            deploy_receipt = deploy_execute(
+                repo, ws, deploy_verdicts, content_cache, ctx->arena
             );
-
             apply_print_deploy_receipt(out, deploy_receipt);
-            if (release_err) {
-                /* Infrastructure, never a row — a row's own failure is in the
-                 * receipt's failed bucket, and the run goes on to record what
-                 * landed. Every row ran and only the release of held modes failed:
-                 * the directory stands at its working mode, wider by the owner's
-                 * own bits alone, and the next load reads the mode divergence
-                 * and converges it — while the writes that landed must still be
-                 * recorded, or the record loses them and a later scope exit
-                 * releases what it should prune. Warned: the exit fold reads
-                 * receipts, never errors. */
-                output_warning(
-                    out, OUTPUT_NORMAL, "%s; the next apply converges it",
-                    error_message(release_err)
-                );
-            }
         } else if (deploy_verdicts->skipped.count == 0) {
             output_print(out, OUTPUT_VERBOSE, "No deployment work in scope\n");
         }
@@ -2792,12 +2805,14 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * not deliver was promised, and the exit code says so — the incapacity skips,
      * and the rows the run could not land (the receipt's failed bucket) — as
      * does an orphan the run tried to prune and could not (failed_prunes, off
-     * cleanup's receipt). The execution halves are facts a dry run does not have,
-     * so `apply -n` predicts the preflight half alone. Every skip and failure
-     * was already rendered where it happened, so the error carries the one fact
-     * the receipt does not — that the run did not keep its promise. ERR_FS, not
-     * ERR_CONFLICT: the class is filesystem incapacity, and a conflict no longer
-     * ends the run. */
+     * cleanup's receipt), and a directory the run widened and could not narrow
+     * back (left_wide, the receipt's held: outside the promise, as the ancestors
+     * are, and a change the run made and could not undo). The execution halves
+     * are facts a dry run does not have, so `apply -n` predicts the preflight
+     * half alone. Every skip and failure was already rendered where it happened,
+     * so the error carries the one fact the receipt does not — that the run did
+     * not keep its promise. ERR_FS, not ERR_CONFLICT: the class is filesystem
+     * incapacity, and a conflict no longer ends the run. */
     size_t undelivered = deploy_receipt->failed.count;
 
     for (size_t i = 0; i < deploy_verdicts->skipped.count; i++) {
@@ -2806,32 +2821,39 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
+    size_t left_wide = deploy_receipt->held.count;
+
     /* Attempted and refused only — the skipped orphans stay out: cleanup's plan
      * is permission, not obligation (cleanup_receipt_t's exit contract, the table
      * both engines draw). */
     size_t failed_prunes = cleanup_receipt->failed.count;
 
-    if (undelivered > 0 && failed_prunes > 0) {
-        return ERROR(
-            ERR_FS, "%zu path%s could not be deployed, %zu orphan%s could not be pruned",
-            undelivered, undelivered == 1 ? "" : "s",
-            failed_prunes, failed_prunes == 1 ? "" : "s"
-        );
-    }
+    /* One clause per count that is not zero, in the receipt's order, ", " between
+     * them, as the prompt composes its parts; three clauses of at most 63 bytes
+     * fit the buffer with room to spare */
+    char why[192];
+    size_t off = 0;
+
     if (undelivered > 0) {
-        return ERROR(
-            ERR_FS, "%zu path%s could not be deployed",
+        off += (size_t) snprintf(
+            why + off, sizeof(why) - off, "%zu path%s could not be deployed",
             undelivered, undelivered == 1 ? "" : "s"
         );
     }
+    if (left_wide > 0) {
+        off += (size_t) snprintf(
+            why + off, sizeof(why) - off, "%s%zu director%s left wide",
+            off > 0 ? ", " : "", left_wide, left_wide == 1 ? "y" : "ies"
+        );
+    }
     if (failed_prunes > 0) {
-        return ERROR(
-            ERR_FS, "%zu orphan%s could not be pruned",
-            failed_prunes, failed_prunes == 1 ? "" : "s"
+        off += (size_t) snprintf(
+            why + off, sizeof(why) - off, "%s%zu orphan%s could not be pruned",
+            off > 0 ? ", " : "", failed_prunes, failed_prunes == 1 ? "" : "s"
         );
     }
 
-    return NULL;
+    return off > 0 ? ERROR(ERR_FS, "%s", why) : NULL;
 }
 
 /* ══════════════════════════════════════════════════════════════════

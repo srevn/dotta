@@ -30,19 +30,20 @@
  *   so there is no dry-run flag beneath the plan
  * - Removals are single-node: what stands at a planned path, never a tree
  * - Directories are materialized in two phases: held at a working mode (recorded
- *   mode, owner rwx on) while the run writes beneath them, then released to the
- *   exact recorded mode, deepest-first — the same way cmd_export materializes a
- *   profile. A directory the view claims therefore never refuses a path beneath
- *   it, and preflight predicts no modes
+ *   mode, owner rwx on: deploy_working_mode) while the run writes beneath them,
+ *   then released to the exact recorded mode, deepest-first — the same way
+ *   cmd_export materializes a profile. A directory the view claims therefore
+ *   never refuses a path beneath it, and preflight predicts no modes
  * - Metadata is reproduced, not negotiated: every write applies the row's mode
  *   and resolved ownership atomically through its own descriptor, so there is
  *   never a moment when a path stands with the wrong owner
  * - Silent: outcomes travel in the receipt — a row's failure among them, its
- *   cause on the outcome — verdicts and skips in the preflight, with the anomalies
- *   met while deciding (an identity that could not be resolved), which are the
- *   caller's to print; only the run's infrastructure travels in the returned
- *   error. This module emits no prose of its own; verbosity and tense are the
- *   caller's, the same convention as every other core module
+ *   cause on the outcome, and a hold the release could not let go — verdicts
+ *   and skips in the preflight, with the anomalies met while deciding (an identity
+ *   that could not be resolved), which are the caller's to print; the one error
+ *   this module returns is preflight's strict_ownership refusal, met before
+ *   anything changes. This module emits no prose of its own; verbosity and tense
+ *   are the caller's, the same convention as every other core module
  */
 
 #ifndef DOTTA_DEPLOY_H
@@ -512,20 +513,79 @@ typedef struct {
 } deploy_outcomes_t;
 
 /**
- * Deployment receipt — the run's: one outcome per verdict, in act order
+ * The mode a held directory carries while the run writes beneath it
  *
- * Four arrays: three mirroring the preflight's split for the rows that landed,
- * and `failed` for the rows that did not — landed or failed is the one split
- * execute itself takes, so execute buckets it; everything else the receipt restates
- * rather than re-decides. The verb inside a landed array is derived, never stored
- * twice — a directory's is its verdict's occupant (the mapping is
+ * The mode the release owes it with the owner triad forced on. Everything the
+ * run lands beneath a directory lands through the owner's own write and search
+ * bits — mkdir for a child directory, mkstemp and rename for a file, symlink
+ * for a link — so a recorded mode that lacks them (0555, 0500, a 0600 captured
+ * on a directory the walker could not enter) would refuse the very children it
+ * was captured with. Two phases instead: materialize at the working mode, write
+ * the subtree, then release each held directory to its exact mode, deepest-first
+ * (deploy_hold_t). Group and other bits are never widened — a 0700 directory is
+ * 0700 throughout — and the window is the owner's own, for the duration of the
+ * run. cmd_export materializes a profile the same way (export.c,
+ * materialize_entries); this is the same rule on the other materializer.
+ *
+ * One producer, read in two files: core/deploy.c — each hold's mode
+ * (materialize_directory, create_ancestor, open_landing_directory), and whether
+ * a directory needs a hold at all (hold_directory) — and cmds/apply.c
+ * apply_print_deploy_receipt, the mode a hold the release could not let go was
+ * left at. A reader not on this list is a bug.
+ */
+static inline mode_t deploy_working_mode(mode_t mode) {
+    return mode | S_IRWXU;
+}
+
+/**
+ * One directory the run holds at its working mode — and, on the receipt, one
+ * the release could not let go
+ *
+ * A hold carries a directory at deploy_working_mode while the run writes beneath
+ * it, and the release narrows it back to `mode` once the run is over, deepest
+ * first (deploy_execute). The run takes one for a directory it makes or converges
+ * — a planned row, or a claimed ancestor made on the way — owing its row's mode,
+ * and one for a claimed directory a write must land in whose bits deny the run,
+ * owing the mode it had; and only where the working mode would widen what is
+ * owed. Each is a directory row of the view, either class, so each has its item.
+ * In this module "hold" means only this.
+ *
+ * On the receipt (deploy_receipt_t's held) a hold is one the release could not
+ * let go: the directory stands at deploy_working_mode(mode), or the release could
+ * not reach it, and `error` is the release's refusal, verbatim. NULL on a hold
+ * the run is still carrying: the receipt is the tag, as the failed bucket is
+ * deploy_outcome_t's.
+ */
+typedef struct {
+    const workspace_item_t *item;   /* Borrowed (workspace lifetime): the directory's, never NULL */
+    mode_t mode;                    /* The exact mode the release owes it */
+    error_t error;                  /* On the receipt, the release's refusal; NULL before (borrowed) */
+} deploy_hold_t;
+
+/**
+ * A hold array with its count — the shape deploy_outcomes_t gives outcomes
+ */
+typedef struct {
+    deploy_hold_t *entries;
+    size_t count;
+} deploy_holds_t;
+
+/**
+ * Deployment receipt — the run's: one outcome per verdict, in act order, and
+ * the holds the release could not let go
+ *
+ * Four outcome arrays: three mirroring the preflight's split for the rows that
+ * landed, and `failed` for the rows that did not — landed or failed is the one
+ * split execute itself takes, so execute buckets it; everything else the receipt
+ * restates rather than re-decides. The verb inside a landed array is derived,
+ * never stored twice — a directory's is its verdict's occupant (the mapping is
  * deploy_convergence's), so the caller can still say "replaced" where a squatter
  * went and "fixed" where nothing was created. Work the run deliberately did not
  * do is the plan's to report, never the receipt's — the plan decided it, so only
  * the plan can report it before a run that ends up executing nothing. A failure
  * is a row's own outcome: it lands in `failed` with its cause, the run goes on,
- * and the caller's exit contract reads the count; the returned error is reserved
- * for the run's infrastructure (deploy_execute).
+ * and the caller's exit contract reads the count; nothing is returned beside
+ * the receipt (deploy_execute).
  *
  * With `failed` the receipt partitions the promise — execute's totality equation,
  * the mirror of preflight's:
@@ -553,15 +613,29 @@ typedef struct {
  * so the caller's summary keeps them apart from the created count. A parent no
  * row claims has no receipt and no record.
  *
- * A value of the arena its run was handed, as its four arrays are: nothing frees
- * one. Its outcomes borrow the verdicts, so a receipt lives in the arena they
- * were decided in, or in one they outlive.
+ * `held` is the release's: the holds it could not let go, in the order released
+ * — deepest first — each with its cause (deploy_hold_t). Every hold the run takes
+ * is released to its exact mode or is here, the release's own totality beside
+ * execute's above:
+ *
+ *   holds taken = released ∪ held
+ *
+ * A held directory's act stands where it landed — on converged, on ancestors,
+ * or on no array for a landing opened for a write beneath it — and only its exact
+ * mode did not. Outside the promise, as the ancestors are; the exit contract
+ * reads it all the same (cmds/apply.c cmd_apply): the run widened what it could
+ * not narrow back. Sized to the holds the run took, filled by the release.
+ *
+ * A value of the arena its run was handed, as its arrays are: nothing frees one.
+ * Its outcomes borrow the verdicts, so a receipt lives in the arena they were
+ * decided in, or in one they outlive.
  */
 typedef struct {
     deploy_outcomes_t deployed;      /* Files written or linked, each with its write's stat */
     deploy_outcomes_t converged;     /* Planned directories — the verb is the verdict's occupant */
     deploy_outcomes_t ancestors;     /* Claimed directories made on the way, each once */
     deploy_outcomes_t failed;        /* Rows that did not land — both kinds, each with its cause */
+    deploy_holds_t held;             /* Holds the release could not let go, each with its cause */
 } deploy_receipt_t;
 
 /**
@@ -806,7 +880,8 @@ error_t deploy_preflight(
  * widened. This is the one transient the run leaves during its life and none
  * afterwards; it is what lets a 0555 directory captured with children be redeployed
  * with them, and what makes the landing check a question about directories no
- * row claims.
+ * row claims. A hold the release cannot let go is the receipt's (deploy_receipt_t's
+ * held).
  *
  * Individual row failures are non-fatal: the row lands in the receipt's failed
  * bucket with its cause and the run goes on — except that a failed directory
@@ -817,10 +892,10 @@ error_t deploy_preflight(
  * nothing — the directory stands, and children land in it or fail on their own
  * merits.
  *
- * The returned error is the run's infrastructure alone: the release of held modes
- * failed, and *out holds the complete receipt beside it — every row ran, and
- * what landed is the record's to keep. The held directories are released on every
- * exit.
+ * Every failure is an outcome on the receipt — a row's in `failed`, the run going
+ * on; a hold's in `held` — so nothing is returned beside it, as cleanup_execute
+ * returns its own: the caller prints the receipt, records what landed and reads
+ * the counts for its exit.
  *
  * View rows are self-contained (blob_oid, type, storage path); the content cache
  * handles encryption transparently. The record (path_records, observations) is
@@ -832,19 +907,16 @@ error_t deploy_preflight(
  * @param verdicts The verdicts to carry out — deployable rows only, by
  *        construction: the skips never enter these arrays (must not be NULL)
  * @param cache Content cache for batch operations (must not be NULL)
- * @param arena Arena the receipt, its arrays and the run's held directories live
- *        in (must not be NULL; the verdicts' own, or one they outlive)
- * @param out The receipt, the arena's — set beside a release error too (must
- *        not be NULL)
- * @return Error or NULL on success
+ * @param arena Arena the receipt, its arrays and the run's holds live in (must
+ *        not be NULL; the verdicts' own, or one they outlive)
+ * @return The receipt, the arena's; never NULL
  */
-error_t deploy_execute(
+deploy_receipt_t *deploy_execute(
     git_repository *repo,
     const workspace_t *ws,
     const deploy_preflight_t *verdicts,
     content_cache_t *cache,
-    arena_t *arena,
-    deploy_receipt_t **out
+    arena_t *arena
 );
 
 #endif /* DOTTA_DEPLOY_H */

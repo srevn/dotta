@@ -359,11 +359,11 @@ error_t resolve_verify(
         );
     }
 
-    if (state == UPSTREAM_UNKNOWN) {
+    if (state == UPSTREAM_NO_LOCAL) {
         return ERROR(
             ERR_INTERNAL,
-            "Divergence resolution completed but could not determine state "
-            "of branch '%s'", ctx->branch_name
+            "Divergence resolution completed but local branch '%s' no longer "
+            "exists", ctx->branch_name
         );
     }
 

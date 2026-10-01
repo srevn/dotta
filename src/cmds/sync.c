@@ -1006,10 +1006,10 @@ static error_t sync_push_phase(
                 break;
             }
 
-            case UPSTREAM_UNKNOWN: {
+            case UPSTREAM_NO_LOCAL: {
                 output_colored(
                     out, OUTPUT_NORMAL, upstream_state_color(result->state),
-                    "  %s %s: state unknown\n",
+                    "  %s %s: no local branch\n",
                     upstream_state_symbol(result->state), result->profile
                 );
                 result->outcome = SYNC_OUTCOME_DIVERGED;
@@ -1084,10 +1084,10 @@ static void sync_render_dry_run(
                     glyph, r->profile
                 );
                 break;
-            case UPSTREAM_UNKNOWN:
+            case UPSTREAM_NO_LOCAL:
                 output_colored(
                     out, OUTPUT_NORMAL, color,
-                    "  %s %s: unknown state\n",
+                    "  %s %s: no local branch\n",
                     glyph, r->profile
                 );
                 break;
@@ -1150,7 +1150,7 @@ static void sync_render_summary(
                         needs_push++;
                         break;
                     case UPSTREAM_DIVERGED:
-                    case UPSTREAM_UNKNOWN:
+                    case UPSTREAM_NO_LOCAL:
                     case UPSTREAM_UP_TO_DATE:
                         diverged++;
                         break;

@@ -74,7 +74,7 @@ static void print_upstream_state(
             break;
         case UPSTREAM_UP_TO_DATE:
         case UPSTREAM_NO_REMOTE:
-        case UPSTREAM_UNKNOWN:
+        case UPSTREAM_NO_LOCAL:
             snprintf(
                 label, sizeof(label), "[%s]",
                 symbol

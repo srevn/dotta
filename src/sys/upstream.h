@@ -17,9 +17,11 @@
 /**
  * Sync state for a profile relative to remote
  *
- * UNKNOWN encodes "no local branch": the analysis could not start. NO_REMOTE
- * encodes "local branch exists but no remote tracking branch." The other four
- * states all imply both branches exist.
+ * Two answers say a side is absent, each proven (sys/gitops.h
+ * gitops_reference_oid): NO_LOCAL, no local branch, so there is nothing to compare;
+ * NO_REMOTE, a local branch and no remote tracking branch. The other four states
+ * imply both branches exist. A side that could not be read is no state: it is
+ * the analysis's error.
  */
 typedef enum {
     UPSTREAM_UP_TO_DATE,   /* Local and remote are identical */
@@ -27,14 +29,14 @@ typedef enum {
     UPSTREAM_REMOTE_AHEAD, /* Remote has commits not in local */
     UPSTREAM_DIVERGED,     /* Local and remote have diverged */
     UPSTREAM_NO_REMOTE,    /* No remote tracking branch exists */
-    UPSTREAM_UNKNOWN       /* State could not be determined */
+    UPSTREAM_NO_LOCAL      /* No local branch exists */
 } upstream_state_t;
 
 /**
  * Sync state plus commit counts.
  *
  * `ahead` and `behind` are meaningful only when state is one of LOCAL_AHEAD /
- * REMOTE_AHEAD / DIVERGED / UP_TO_DATE; for NO_REMOTE and UNKNOWN they are zero.
+ * REMOTE_AHEAD / DIVERGED / UP_TO_DATE; for NO_REMOTE and NO_LOCAL they are zero.
  */
 typedef struct {
     upstream_state_t state;
@@ -78,7 +80,7 @@ const char *upstream_state_symbol(upstream_state_t state);
  *   REMOTE_AHEAD → YELLOW   (remote has changes to pull)
  *   DIVERGED     → RED      (manual resolution required)
  *   NO_REMOTE    → CYAN     (informational, not an issue)
- *   UNKNOWN      → DIM      (state could not be determined)
+ *   NO_LOCAL     → DIM      (no local branch to compare)
  *
  * Centralizing the map keeps every display path in agreement on what each state
  * looks like.

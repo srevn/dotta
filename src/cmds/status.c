@@ -1179,17 +1179,26 @@ static error_t status_print_remote(
     size_t behind = 0;
     size_t diverged = 0;
     size_t no_remote = 0;
+    size_t no_local = 0;
+    size_t failed = 0;
 
     for (size_t i = 0; i < check->count; i++) {
         const char *profile = check->entries[i];
 
-        /* Analyze upstream state */
+        /* Analyze upstream state. A profile whose state could not be read is a
+         * row of the section like any other, on the report's stream, its cause
+         * the error's own line and the outcome glyph sync gives a failed analysis;
+         * the summary counts it, and the report goes on past it. At both levels:
+         * a failure has no commit for -v to show. The error is dropped, one per
+         * such profile. */
         upstream_info_t info;
         err = upstream_analyze_profile(repo, remote_name, profile, &info);
         if (err) {
-            /* Show error for this profile but continue: the error is dropped,
-             * one per such profile */
-            output_error(out, "  %s: %s", profile, error_message(err));
+            output_styled(
+                out, OUTPUT_NORMAL, "  {cyan}%s{reset}  {red}(✗ %s){reset}\n",
+                profile, error_message(err)
+            );
+            failed++;
             continue;
         }
 
@@ -1235,18 +1244,19 @@ static error_t status_print_remote(
                 );
                 no_remote++;
                 break;
-            case UPSTREAM_UNKNOWN:
+            case UPSTREAM_NO_LOCAL:
                 snprintf(
-                    status_str, sizeof(status_str), "%s unknown",
+                    status_str, sizeof(status_str), "%s no local branch",
                     symbol
                 );
+                no_local++;
                 break;
         }
 
         /* Display with colors */
-        if (verbose && info.state != UPSTREAM_NO_REMOTE && info.state != UPSTREAM_UNKNOWN) {
+        if (verbose && info.state != UPSTREAM_NO_REMOTE && info.state != UPSTREAM_NO_LOCAL) {
             /* Verbose mode: show detailed commit info. The enclosing branch has
-             * already filtered out NO_REMOTE/UNKNOWN, so both local and remote
+             * already filtered out NO_REMOTE/NO_LOCAL, so both local and remote
              * refs are guaranteed to exist on every state reaching this block. */
             output_gap(out, OUTPUT_VERBOSE);
             output_print(out, OUTPUT_VERBOSE, "Profile: %s\n", profile);
@@ -1332,6 +1342,12 @@ static error_t status_print_remote(
     }
     if (no_remote > 0) {
         output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote\n", no_remote);
+    }
+    if (no_local > 0) {
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no local branch\n", no_local);
+    }
+    if (failed > 0) {
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} failed\n", failed);
     }
 
     return NULL;
@@ -1535,7 +1551,8 @@ const args_command_t spec_status = {
         "  ↑ n  n commits ahead of remote (ready to push)\n"
         "  ↓ n  n commits behind remote (run '%s sync' to pull)\n"
         "  ↕    diverged from remote (needs resolution)\n"
-        "  •    no remote tracking branch\n",
+        "  •    no remote tracking branch\n"
+        "  ?    no local branch\n",
     .examples     =
         "  %s status                         # Local + remote\n"
         "  %s status --local                 # Filesystem only\n"

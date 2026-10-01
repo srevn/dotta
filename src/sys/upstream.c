@@ -27,7 +27,7 @@ error_t upstream_analyze_profile(
     CHECK_NULL(out);
 
     /* Defined-state on every path; callers must not read after error. */
-    *out = (upstream_info_t){ .state = UPSTREAM_UNKNOWN };
+    *out = (upstream_info_t){ 0 };
 
     /* Build reference names */
     char local_refname[DOTTA_REFNAME_MAX];
@@ -58,7 +58,8 @@ error_t upstream_analyze_profile(
     err = gitops_reference_oid(repo, local_refname, &local_oid);
     if (err) return err;
     if (git_oid_is_zero(&local_oid)) {
-        return NULL;                  /* no local branch: UNKNOWN, set above */
+        out->state = UPSTREAM_NO_LOCAL;
+        return NULL;
     }
 
     git_oid remote_oid;
@@ -108,7 +109,7 @@ const char *upstream_state_symbol(upstream_state_t state) {
         case UPSTREAM_REMOTE_AHEAD: return "↓";
         case UPSTREAM_DIVERGED:     return "↕";
         case UPSTREAM_NO_REMOTE:    return "•";
-        case UPSTREAM_UNKNOWN:      return "?";
+        case UPSTREAM_NO_LOCAL:     return "?";
     }
     CHECK_ARG(false, "an upstream state no enumerator names");
 }
@@ -123,7 +124,7 @@ output_color_t upstream_state_color(upstream_state_t state) {
         case UPSTREAM_REMOTE_AHEAD: return OUTPUT_COLOR_YELLOW;
         case UPSTREAM_DIVERGED:     return OUTPUT_COLOR_RED;
         case UPSTREAM_NO_REMOTE:    return OUTPUT_COLOR_CYAN;
-        case UPSTREAM_UNKNOWN:      return OUTPUT_COLOR_DIM;
+        case UPSTREAM_NO_LOCAL:     return OUTPUT_COLOR_DIM;
     }
     CHECK_ARG(false, "an upstream state no enumerator names");
 }

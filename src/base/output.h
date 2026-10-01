@@ -499,7 +499,9 @@ void output_format_path(
  * Prompt user for confirmation
  *
  * Displays a yes/no prompt and waits for user input. Handles input buffer clearing
- * to prevent pollution. Uses stderr for prompts (standard practice).
+ * to prevent pollution. Uses stderr for prompts (standard practice). The question
+ * is a format, written as every line's is (output_print): its literal text the
+ * author's, each argument a datum.
  *
  * A question is a block, so it opens with its own boundary — paid on stderr,
  * where the blank stands above the question on a terminal and never reaches a
@@ -507,15 +509,16 @@ void output_format_path(
  * no verbosity gate either.
  *
  * @param ctx Output context (for color/format settings)
- * @param message Confirmation message to display
  * @param default_value Default if user just presses Enter (true=Y, false=N)
+ * @param fmt The question's format (printf-style)
  * @return true if user confirms (y/Y), false otherwise
  */
 bool output_confirm(
     output_t *ctx,
-    const char *message,
-    bool default_value
-);
+    bool default_value,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 3, 4)));
 
 /**
  * Prompt for confirmation with TTY detection
@@ -524,22 +527,22 @@ bool output_confirm(
  * is not a TTY (e.g., piped input, CI/CD), uses the non_interactive_default value
  * and prints a warning or error.
  *
- * Both arms are the same block, so the boundary is asked once above the branch.
- * The interactive arm delegates to output_confirm, which asks again — and that
- * second ask is the idempotency clause earning its place: one debt, one blank.
+ * Both arms are the same block, so the boundary is asked once above the branch,
+ * and the question is the format either arm writes.
  *
  * @param ctx Output context
- * @param message Confirmation message
  * @param default_value Default for Enter key in interactive mode
  * @param non_interactive_default Return value when not a TTY
+ * @param fmt The question's format (printf-style)
  * @return true if confirmed or non_interactive_default if not a TTY
  */
 bool output_confirm_or_default(
     output_t *ctx,
-    const char *message,
     bool default_value,
-    bool non_interactive_default
-);
+    bool non_interactive_default,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 4, 5)));
 
 /**
  * Prompt for destructive operation
@@ -554,16 +557,17 @@ bool output_confirm_or_default(
  *
  * @param ctx Output context
  * @param confirm_destructive Whether to require confirmation (false = skip prompt)
- * @param message Confirmation message
  * @param force_flag If true, skip confirmation and return true
+ * @param fmt The question's format (printf-style)
  * @return true if should proceed, false if user declined
  */
 bool output_confirm_destructive(
     output_t *ctx,
     bool confirm_destructive,
-    const char *message,
-    bool force_flag
-);
+    bool force_flag,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 4, 5)));
 
 /**
  * List builder - opaque structure for building aligned lists

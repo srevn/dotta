@@ -461,7 +461,7 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
 
     /* Prompt for confirmation unless --yes or --dry-run */
     if (!opts->yes && !opts->dry_run) {
-        bool confirmed = output_confirm(out, "Execute bootstrap scripts?", false);
+        bool confirmed = output_confirm(out, false, "Execute bootstrap scripts?");
         if (!confirmed) {
             output_info(out, OUTPUT_NORMAL, "Bootstrap cancelled.");
             return NULL;

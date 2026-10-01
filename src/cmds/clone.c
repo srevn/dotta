@@ -583,9 +583,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                  * read off the flag, never the run's level, since a prompt is
                  * not output a level gates (base/output.h output_confirm) and a
                  * configured quiet never declined it. */
-                run_bootstrap = output_confirm(
-                    out, "Execute bootstrap scripts?", false
-                );
+                run_bootstrap = output_confirm(out, false, "Execute bootstrap scripts?");
             }
         }
     }

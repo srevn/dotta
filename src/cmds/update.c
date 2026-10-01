@@ -1707,7 +1707,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * to consent to */
     if (!opts->dry_run) {
         if (opts->interactive) {
-            if (!output_confirm(out, "Update these items?", false)) {
+            if (!output_confirm(out, false, "Update these items?")) {
                 output_info(out, OUTPUT_NORMAL, "Cancelled");
                 return NULL;
             }
@@ -1722,13 +1722,11 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         if (partition.new_files.count > 0 && config->confirm_new_files &&
             !opts->include_new && !opts->only_new) {
 
-            char confirm_msg[128];
-            snprintf(
-                confirm_msg, sizeof(confirm_msg), "Found %zu new file%s. Add %s to profiles?",
+            if (!output_confirm(
+                out, false, "Found %zu new file%s. Add %s to profiles?",
                 partition.new_files.count, partition.new_files.count == 1 ? "" : "s",
                 partition.new_files.count == 1 ? "it" : "them"
-            );
-            if (!output_confirm(out, confirm_msg, false)) {
+                )) {
                 /* The new files are the accepted items' suffix: the discoveries
                  * follow every other diverged item (core/workspace.h
                  * workspace_diverged), and the partition keeps the order it walks

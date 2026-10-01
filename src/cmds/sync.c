@@ -604,14 +604,11 @@ static void handle_diverged_ours(
 
     /* Get user confirmation for destructive operation */
     if (confirm_destructive) {
-        char prompt[DOTTA_MESSAGE_MAX];
-        snprintf(
-            prompt, sizeof(prompt),
+        if (!output_confirm_or_default(
+            out, false, false,
             "Warning: This will force push local '%s' and overwrite remote.\n"
-            "Remote commits will be permanently lost. Continue?",
-            result->profile
-        );
-        if (!output_confirm_or_default(out, prompt, false, false)) {
+            "Remote commits will be permanently lost. Continue?", result->profile
+            )) {
             output_info(out, OUTPUT_NORMAL, "    Operation cancelled by user");
             result->outcome = SYNC_OUTCOME_DIVERGED;
             return;
@@ -655,13 +652,11 @@ static void handle_diverged_theirs(
 
     /* Get user confirmation for destructive operation */
     if (confirm_destructive) {
-        char prompt[DOTTA_MESSAGE_MAX];
-        snprintf(
-            prompt, sizeof(prompt),
+        if (!output_confirm_or_default(
+            out, false, false,
             "Warning: This will reset '%s' to remote and discard local commits.\n"
             "Local changes will be lost. Continue?", result->profile
-        );
-        if (!output_confirm_or_default(out, prompt, false, false)) {
+            )) {
             output_info(
                 out, OUTPUT_NORMAL, "    Operation cancelled by user"
             );
@@ -1812,7 +1807,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
              * - Interactive: defaults to NO (user must explicitly type 'y')
              * - Non-interactive (CI/CD): refuses automatically
              */
-            if (!output_confirm_or_default(out, "Continue anyway?", false, false)) {
+            if (!output_confirm_or_default(out, false, false, "Continue anyway?")) {
                 output_gap(out, OUTPUT_NORMAL);
                 output_info(out, OUTPUT_NORMAL, "Sync cancelled");
                 if (conflict_count > 0) {

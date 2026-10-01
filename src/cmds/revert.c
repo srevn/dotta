@@ -1172,7 +1172,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* Step 19: Prompt for confirmation (unless --force or config disables) */
     if (!output_confirm_destructive(
-        out, config ? config->confirm_destructive : true, "Revert file?", opts->force
+        out, config ? config->confirm_destructive : true, opts->force, "Revert file?"
         )) {
         output_info(out, OUTPUT_NORMAL, "Aborted.");
         goto cleanup;  /* err is NULL here: an abort is not a failure */

@@ -755,22 +755,12 @@ static bool remove_confirm_paths(
     remove_format_counts(counts, sizeof(counts), files, dirs);
 
     /* Prompt user */
-    char prompt[512];
-    if (opts->delete_files) {
-        snprintf(
-            prompt, sizeof(prompt), "Remove %s from profile '%s'?\n"
-            "(Deployed files will be pruned on 'dotta apply')",
-            counts, opts->profile
-        );
-    } else {
-        snprintf(
-            prompt, sizeof(prompt), "Remove %s from profile '%s'?\n"
-            "(Deployed files will be released from management)",
-            counts, opts->profile
-        );
-    }
-
-    return output_confirm(out, prompt, false);
+    return output_confirm(
+        out, false, opts->delete_files
+        ? "Remove %s from profile '%s'?\n(Deployed files will be pruned on 'dotta apply')"
+        : "Remove %s from profile '%s'?\n(Deployed files will be released from management)",
+        counts, opts->profile
+    );
 }
 
 /**
@@ -806,7 +796,7 @@ static bool remove_confirm_profile(
         );
     }
     return output_confirm_destructive(
-        out, config->confirm_destructive, "Continue?", opts->force
+        out, config->confirm_destructive, opts->force, "Continue?"
     );
 }
 
@@ -920,12 +910,10 @@ static error_t remove_paths(
     if (opts->interactive) {
         size_t kept = 0;
         for (size_t i = 0; i < claim_count; i++) {
-            char prompt[PATH_MAX + 16];
-            snprintf(
-                prompt, sizeof(prompt), "Remove %s%s?",
+            if (!output_confirm(
+                out, false, "Remove %s%s?",
                 claims[i].storage_path, path_kind_suffix(claims[i].kind)
-            );
-            if (!output_confirm(out, prompt, false)) {
+                )) {
                 output_info(out, OUTPUT_VERBOSE, "Skipped: %s", claims[i].storage_path);
                 continue;
             }

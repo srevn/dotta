@@ -52,7 +52,7 @@
 #define DOTTA_REFNAME_MAX 1024                        /* a name, and its NUL */
 #define DOTTA_REFSPEC_MAX (2 * DOTTA_REFNAME_MAX + 1) /* [+]<name>:<name>, and NUL */
 
-#define DOTTA_MESSAGE_MAX 512                         /* For commit messages and prompts */
+#define DOTTA_MESSAGE_MAX 512                         /* For commit messages */
 
 /**
  * Initialize libgit2 for this process, and configure it

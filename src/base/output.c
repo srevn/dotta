@@ -1189,15 +1189,16 @@ static bool output_read_answer(bool default_value) {
  * inside it would put a blank between them.
  */
 static bool output_ask(
-    output_t *ctx, const char *message, bool default_value
+    output_t *ctx, bool default_value, const char *fmt, va_list *args
 ) {
     /* The preview this asks about is the report above it, and the question must
      * not land inside the line it ends on: the line lands first (output_start) */
     line_t line;
     output_start(&line, ctx, stderr);
-    output_appendf(
-        &line, "{bold}%s{reset}%s", message, default_value ? " [Y/n] " : " [y/N] "
-    );
+    output_style(&line, OUTPUT_COLOR_BOLD);
+    output_walk(&line, fmt, args);
+    output_style(&line, OUTPUT_COLOR_RESET);
+    output_appendf(&line, default_value ? " [Y/n] " : " [y/N] ");
     output_put(&line);
     fflush(stderr);
 
@@ -1205,53 +1206,59 @@ static bool output_ask(
 }
 
 bool output_confirm(
-    output_t *ctx, const char *message, bool default_value
+    output_t *ctx, bool default_value, const char *fmt, ...
 ) {
-    if (!ctx || !message) return false;
+    if (!ctx || !fmt) return false;
 
     /* A question is a block. Asked at QUIET because a prompt is not gated. */
     output_gap(ctx, OUTPUT_QUIET);
 
-    return output_ask(ctx, message, default_value);
+    va_list args;
+    va_start(args, fmt);
+    const bool confirmed = output_ask(ctx, default_value, fmt, &args);
+    va_end(args);
+
+    return confirmed;
 }
 
 bool output_confirm_or_default(
-    output_t *ctx, const char *message, bool default_value,
-    bool non_interactive_default
+    output_t *ctx, bool default_value, bool non_interactive_default,
+    const char *fmt, ...
 ) {
-    if (!ctx || !message) return false;
+    if (!ctx || !fmt) return false;
 
-    /* Both arms are the same block, so the boundary is asked once above the branch;
-     * the interactive arm asks again inside output_confirm, and one debt asked
-     * twice is one blank. */
+    /* Both arms are the same block, so the boundary is asked once above the
+     * branch */
     output_gap(ctx, OUTPUT_QUIET);
 
-    if (!isatty(STDIN_FILENO)) {
+    va_list args;
+    va_start(args, fmt);
+    bool confirmed = non_interactive_default;
+    if (isatty(STDIN_FILENO)) {
+        confirmed = output_ask(ctx, default_value, fmt, &args);
+    } else {
+        /* Off a terminal the question cannot be asked: the default is its answer,
+         * and the line says which, the question its subject */
         line_t line;
         output_start(&line, ctx, stderr);
-        if (non_interactive_default) {
-            output_appendf(
-                &line, "{bold;yellow}Warning:{reset} Running non-interactively, "
-                "auto-confirming: %s\n", message
-            );
-        } else {
-            output_appendf(
-                &line, "{bold;red}Error:{reset} Running non-interactively, refusing: %s\n",
-                message
-            );
-        }
+        output_appendf(
+            &line, non_interactive_default
+            ? "{bold;yellow}Warning:{reset} Running non-interactively, auto-confirming: "
+            : "{bold;red}Error:{reset} Running non-interactively, refusing: "
+        );
+        output_walk(&line, fmt, &args);
+        output_bytes(&line, "\n", 1);
         output_put(&line);
-        return non_interactive_default;
     }
+    va_end(args);
 
-    return output_confirm(ctx, message, default_value);
+    return confirmed;
 }
 
 bool output_confirm_destructive(
-    output_t *ctx, bool confirm_destructive, const char *message,
-    bool force_flag
+    output_t *ctx, bool confirm_destructive, bool force_flag, const char *fmt, ...
 ) {
-    if (!ctx || !message) return false;
+    if (!ctx || !fmt) return false;
     if (force_flag) return true;
     if (!confirm_destructive) return true;
 
@@ -1259,21 +1266,27 @@ bool output_confirm_destructive(
      * by whichever of them lands first. */
     output_gap(ctx, OUTPUT_QUIET);
 
+    va_list args;
+    va_start(args, fmt);
+    bool confirmed = false;
     line_t line;
     output_start(&line, ctx, stderr);
-    if (!isatty(STDIN_FILENO)) {
+    if (isatty(STDIN_FILENO)) {
+        output_appendf(&line, "{bold;yellow}Warning:{reset} This is a destructive operation!\n");
+        output_put(&line);
+        confirmed = output_ask(ctx, false, fmt, &args);
+    } else {
         output_appendf(
             &line, "{bold;red}Error:{reset} Running non-interactively, refusing "
-            "destructive operation: %s\n", message
+            "destructive operation: "
         );
+        output_walk(&line, fmt, &args);
+        output_bytes(&line, "\n", 1);
         output_put(&line);
-        return false;
     }
+    va_end(args);
 
-    output_appendf(&line, "{bold;yellow}Warning:{reset} This is a destructive operation!\n");
-    output_put(&line);
-
-    return output_ask(ctx, message, false);
+    return confirmed;
 }
 
 /* ═══════════════════════════════════════════════════════════════════

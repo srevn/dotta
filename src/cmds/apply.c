@@ -2725,7 +2725,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             snprintf(prompt + off, sizeof(prompt) - off, "?");
             prompt[0] = (char) toupper((unsigned char) prompt[0]);
 
-            if (!output_confirm(out, prompt, false)) {
+            if (!output_confirm(out, false, "%s", prompt)) {
                 output_gap(out, OUTPUT_NORMAL);
                 output_info(out, OUTPUT_NORMAL, "Cancelled");
                 return NULL;  /* Not an error - user cancelled */

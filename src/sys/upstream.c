@@ -7,6 +7,7 @@
 #include <git2.h>
 #include <stdlib.h>
 
+#include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "sys/gitops.h"
@@ -185,17 +186,21 @@ error_t upstream_ensure_tracking_branch(
      * remote cannot ship a colliding pair — Git forbids it there too — so the
      * blocker is always a local branch: a profile added on this machine and never
      * pushed, standing where a fetched one would go. Refused by name, ahead of
-     * the ref write whose own message names only one of the two. */
-    char blocker[DOTTA_REFNAME_MAX];
-    err = gitops_branch_blocker(repo, branch_name, blocker, sizeof(blocker));
-    if (err) return err;
-    if (blocker[0]) {
-        return ERROR(
+     * the ref write whose own message names only one of the two. The listing
+     * the blocker is read from is a frame of this call's own: what the call answers
+     * is no memory, and the refusal copies the name. */
+    arena_t *frame = arena_create(0);
+    const char *blocker = NULL;
+    err = gitops_branch_blocker(repo, branch_name, frame, &blocker);
+    if (!err && blocker) {
+        err = ERROR(
             ERR_CONFLICT,
             "Branch '%s' already exists, and Git cannot hold '%s' beside it: "
             "one is a name, the other a folder of names", blocker, branch_name
         );
     }
+    arena_free(frame);
+    if (err) return err;
 
     /* Get remote ref */
     git_oid target_oid;

@@ -273,14 +273,14 @@ error_t gitops_branch_exists(
 }
 
 error_t gitops_branch_blocker(
-    git_repository *repo, const char *name, char *blocker, size_t size
+    git_repository *repo, const char *name, arena_t *arena, const char **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
-    CHECK_NULL(blocker);
-    CHECK_ARG(size > 0, "blocker buffer cannot be empty");
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
 
-    blocker[0] = '\0';
+    *out = NULL;
 
     /* Only a name Git accepts stands anywhere to be blocked: one it refuses is
      * refused here, in the branch rule's words, and never scanned. */
@@ -288,14 +288,14 @@ error_t gitops_branch_blocker(
     error_t err = gitops_branch_refname(refname, sizeof(refname), name);
     if (err) return err;
 
-    /* The branches, in a frame of this call's own: the answer is copied out of
-     * it into the caller's buffer before it goes. */
-    arena_t *frame = arena_create(0);
+    /* The branches, in the answer's arena: the blocker is one of them, named as
+     * the listing holds it, however long Git made it. */
     string_array_t branches;
-    err = gitops_list_branches(repo, frame, &branches);
+    err = gitops_list_branches(repo, arena, &branches);
+    if (err) return err;
 
     size_t len = strlen(name);
-    for (size_t i = 0; !err && i < branches.count; i++) {
+    for (size_t i = 0; i < branches.count; i++) {
         const char *other = branches.entries[i];
         size_t other_len = strlen(other);
 
@@ -304,20 +304,14 @@ error_t gitops_branch_blocker(
          * are not nested, and the boundary test says so on its own: the shorter
          * length indexes the other name's terminator. */
         size_t shorter = other_len < len ? other_len : len;
-        bool nested = strncmp(other, name, shorter) == 0
-            && (other_len > len ? other[len] : name[other_len]) == '/';
-
-        if (nested) {
-            /* A listed branch is a ref name, which a caller's DOTTA_REFNAME_MAX
-             * buffer holds whole: a shorter buffer is the caller's bug. */
-            CHECK_ARG(other_len < size, "blocker buffer too small for a branch name");
-            memcpy(blocker, other, other_len + 1);
-            break;
+        if (strncmp(other, name, shorter) == 0
+            && (other_len > len ? other[len] : name[other_len]) == '/') {
+            *out = other;
+            return NULL;
         }
     }
 
-    arena_free(frame);
-    return err;
+    return NULL;
 }
 
 /* What a walk of the loose store holds constant: the repository the lookups ask,

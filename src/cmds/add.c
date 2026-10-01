@@ -1590,10 +1590,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (err) goto cleanup;
 
     if (!profile_exists) {
-        char blocker[DOTTA_REFNAME_MAX];
-        err = gitops_branch_blocker(repo, opts->profile, blocker, sizeof(blocker));
+        const char *blocker = NULL;
+        err = gitops_branch_blocker(repo, opts->profile, ctx->arena, &blocker);
         if (err) goto cleanup;
-        if (blocker[0]) {
+        if (blocker) {
             const char *base = strlen(blocker) < strlen(opts->profile)
                 ? blocker : opts->profile;
             err = ERROR(

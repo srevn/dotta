@@ -469,8 +469,8 @@ typedef struct dotta_run {
  *         a run's own lists (`utils/bootstrap.c` bootstrap_fire), a fetch's
  *         refspecs (`sys/gitops.c` gitops_fetch_branches), a diff's attribution
  *         index (`core/manifest.c` manifest_diff), a listing read to decide
- *         (`sys/filesystem.c` fs_remove_empty_dir, `sys/gitops.c`
- *         gitops_branch_blocker, `infra/epoch.c` walk_ciphertext), a printer's
+ *         (`sys/filesystem.c` fs_remove_empty_dir, `sys/upstream.c`
+ *         upstream_ensure_tracking_branch, `infra/epoch.c` epoch_walk), a printer's
  *         sections (`cmds/status.c` status_print_workspace), and a walk whose
  *         answer is an error (`sys/filesystem.c` fs_remove_dir).
  *

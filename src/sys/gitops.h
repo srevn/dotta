@@ -235,17 +235,17 @@ error_t gitops_branch_exists(git_repository *repo, const char *name, bool *exist
  * one. A name Git refuses is no candidate: the branch rule refuses it
  * (gitops_branch_refname) before any branch is read.
  *
- * The answer is a branch name, written to the caller's buffer — "" when nothing
- * blocks, which no ref name is; the listing it scans is a frame of the call's own.
+ * The answer is the listed branch's own name, as long as Git made it, or NULL
+ * when nothing blocks; it and the listing it is read from are `arena`'s.
  *
- * @param repo    Repository (must not be NULL)
- * @param name    Branch name to test (must not be NULL)
- * @param blocker Receives the blocking branch's name, or "" (must not be NULL)
- * @param size    The buffer's size: DOTTA_REFNAME_MAX holds any branch name
+ * @param repo  Repository (must not be NULL)
+ * @param name  Branch name to test (must not be NULL)
+ * @param arena Arena the listing and the answer live in (must not be NULL)
+ * @param out   The blocking branch's name, or NULL (must not be NULL)
  * @return Error or NULL on success
  */
 error_t gitops_branch_blocker(
-    git_repository *repo, const char *name, char *blocker, size_t size
+    git_repository *repo, const char *name, arena_t *arena, const char **out
 );
 
 /**

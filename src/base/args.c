@@ -203,6 +203,7 @@ static const args_subcommand_t *find_subcommand(
  * Error collector
  * ══════════════════════════════════════════════════════════════════ */
 
+__attribute__((format(printf, 5, 0)))
 static void record_error_v(
     args_errors_t *errors, arena_t *arena, int token_index,
     const args_opt_t *opt, const char *fmt, va_list ap
@@ -235,6 +236,7 @@ static void record_error_v(
     errors->count++;
 }
 
+__attribute__((format(printf, 5, 6)))
 static void record_error(
     args_errors_t *errors, arena_t *arena, int token_index,
     const args_opt_t *opt, const char *fmt, ...

@@ -1024,7 +1024,7 @@ error_t gitops_resolve_remote_branch_oid(
  */
 error_t gitops_build_refname(
     char *buffer, size_t buffer_size, const char *format, ...
-);
+) __attribute__((format(printf, 3, 4)));
 
 /**
  * A branch name to its reference, or Git's refusal

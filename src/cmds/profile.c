@@ -450,34 +450,26 @@ static error_t profile_fetch(
             goto cleanup;
         }
 
-        /* Validate requested profiles exist on remote */
-        bool has_missing = false;
+        /* Every name the remote does not hold, refused together before anything
+         * is fetched: a fetch of named branches is whole or nothing, as git's
+         * is. The names the remote does hold are in hand, so the way out lists
+         * them. */
+        string_array_t missing;
+        string_array_init(&missing, ctx->arena);
         for (size_t i = 0; i < opts->profile_count; i++) {
-            const char *profile = opts->profiles[i];
-
-            /* Check if profile exists on remote */
-            if (!string_array_contains(&available_remote, profile)) {
-                output_error(
-                    out, "Profile '%s' does not exist on remote '%s'",
-                    profile, remote_name
-                );
-                has_missing = true;
+            if (!string_array_contains(&available_remote, opts->profiles[i])) {
+                string_array_push(&missing, opts->profiles[i]);
             }
         }
-
-        /* If any profiles are missing, show available profiles and error */
-        if (has_missing) {
-            if (available_remote.count > 0) {
-                output_section(out, OUTPUT_NORMAL, "Available profiles on remote");
-                for (size_t i = 0; i < available_remote.count; i++) {
-                    output_print(
-                        out, OUTPUT_NORMAL, "  • %s\n",
-                        available_remote.entries[i]
-                    );
-                }
-            }
+        if (missing.count > 0) {
             err = ERROR(
-                ERR_NOT_FOUND, "One or more requested profiles not found on remote"
+                ERR_NOT_FOUND, "%s '%s' %s not on remote '%s'\nHint: Remote '%s' holds %s",
+                missing.count == 1 ? "Profile" : "Profiles",
+                string_array_join(ctx->arena, &missing, "', '"),
+                missing.count == 1 ? "is" : "are", remote_name, remote_name,
+                available_remote.count > 0
+                    ? string_array_join(ctx->arena, &available_remote, ", ")
+                    : "no profiles"
             );
             goto cleanup;
         }
@@ -665,18 +657,14 @@ static error_t profile_enable(
     }
 
     /* Fatal up-front: --target binds to a specific profile and cannot disambiguate
-     * among many. Caught here before any state mutation. */
+     * among many. Caught here before any state mutation, one refusal with its
+     * way out: the verb's own shape, never the user's command lines spelled
+     * back. */
     if (opts->target && to_enable.count > 1) {
-        output_error(out, "Cannot use --target with multiple profiles");
-        output_hint(out, OUTPUT_NORMAL, "Enable each profile separately:");
-
-        for (size_t i = 0; i < to_enable.count; i++) {
-            output_hint(
-                out, OUTPUT_NORMAL, "dotta profile enable %s --target <path>",
-                to_enable.entries[i]
-            );
-        }
-        return ERROR(ERR_INVALID_ARG, "Ambiguous --target usage");
+        return ERROR(
+            ERR_INVALID_ARG, "Cannot use --target with multiple profiles\n"
+            "Hint: Enable each profile on its own, each with its --target"
+        );
     }
 
     /* Fatal up-front: the target itself. A target is a filesystem-shaped argument

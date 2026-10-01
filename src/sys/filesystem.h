@@ -342,7 +342,8 @@ error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
  * - Use uid=-1 or gid=-1 to skip ownership change
  * - A directory this call made and could not attribute is unmade — the exclusive
  *   sibling's rule — so a refusal leaves the path as the call found it; one it
- *   opened stands as found, its attributes as they were
+ *   opened stands, its attributes as they were, save an owner the fchown set
+ *   before the fchmod refused
  * - The parent must exist: this primitive never invents attributes for ancestors
  *   — the caller decides those (core/deploy materializes them from their own
  *   claims, and invents nothing for the rest)
@@ -406,6 +407,33 @@ error_t fs_create_dir_exclusive(
     uid_t uid,
     gid_t gid
 );
+
+/**
+ * Set the mode of the directory that stands at a path — never made, never through
+ * a link
+ *
+ * Through the directory's own descriptor — opened O_DIRECTORY | O_NOFOLLOW, so
+ * a link at the path is refused rather than followed, then fchmod — the mode
+ * lands on the node that was opened, whatever the path names by then. Where no
+ * directory stands there is nothing to set, and absence is success, told apart
+ * at the syscall before any error is made, as a removal tells "already gone"
+ * (the header's "The word"): ENOENT and ENOTDIR — nothing there, something there
+ * that is no directory, or a component above that is no directory — the absence
+ * fs_lstat_occupant reads. Every other refusal is the call's failure, ELOOP among
+ * them: a loop above the path leaves a directory the call could not reach, never
+ * one that is not there.
+ *
+ * The converging sibling with the creation taken out: fs_create_dir_with_ownership
+ * creates or converges, fs_create_dir_exclusive creates, and this sets the mode
+ * of what stands and makes nothing. Readers: core/deploy.c open_landing_directory
+ * (a landing held at a working mode) and release_directories (each hold released
+ * to its exact mode).
+ *
+ * @param path Directory path (must not be NULL)
+ * @param mode Permission mode, at most 0777
+ * @return Error or NULL on success — where no directory stands, too
+ */
+error_t fs_set_dir_mode(const char *path, mode_t mode);
 
 /**
  * Remove a directory and its whole subtree

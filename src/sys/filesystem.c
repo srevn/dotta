@@ -754,7 +754,8 @@ apply_metadata:
      * did not create, and the next run meets the same absent path rather than a
      * directory of the wrong owner that no later run converges — empty by
      * construction, so the rmdir cannot fail on content). One it opened stands
-     * as it was found. */
+     * as it was found, save the owner a landed fchown gave it before the mode
+     * refused. */
     if (uid != (uid_t) -1 || gid != (gid_t) -1) {
         if (fs_fchown(dirfd, uid, gid) < 0) {
             int saved_errno = errno;
@@ -849,6 +850,32 @@ error_t fs_create_dir_exclusive(
 
     close(dirfd);
     return NULL;
+}
+
+error_t fs_set_dir_mode(const char *path, mode_t mode) {
+    CHECK_NULL(path);
+
+    /* A mode is at most 0777 by every producer's rule (the sheet's parse, the
+     * factories, a stat's permission bits): a caller that hands more is broken. */
+    CHECK_ARG(mode <= 0777, "a mode past 0777");
+
+    /* The directory that stands, or none: a link at the path is refused, never
+     * followed. ENOENT and ENOTDIR are no directory to set — the absence rule —
+     * and anything else is a directory this call could not reach. */
+    int dirfd = fs_open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
+    if (dirfd < 0) {
+        if (errno == ENOENT || errno == ENOTDIR) return NULL;
+        return error_from_errno(errno, "Failed to open directory '%s'", path);
+    }
+
+    /* The mode lands on the node opened, whatever the path names by now; the
+     * refusal is worded before the close can move errno */
+    error_t err = fs_fchmod(dirfd, mode) < 0
+        ? error_from_errno(errno, "Failed to set mode on '%s'", path)
+        : NULL;
+
+    close(dirfd);
+    return err;
 }
 
 /**

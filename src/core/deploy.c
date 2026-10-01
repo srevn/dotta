@@ -1273,18 +1273,17 @@ static void hold_directory(deploy_run_t *run, const char *path, mode_t mode) {
  *
  * Runs at the end of every deploy_execute: however the rows fared, every held
  * directory carries its recorded mode again, and the next run holds what it needs
- * afresh. Applied through fs_create_dir_with_ownership — the same fd-based fchmod
- * the converge arm uses, never a chmod(2) on a path that may have become a symlink
- * meanwhile. Every entry is attempted; the first failure is the one reported.
+ * afresh. Through the directory's own descriptor (fs_set_dir_mode), never a
+ * chmod(2) on a path that may have become a symlink meanwhile, and never a
+ * directory made anew: one the world took away has nothing left to release. Every
+ * entry is attempted; the first failure is the one reported.
  */
 static error_t release_directories(deploy_run_t *run) {
     error_t err = NULL;
 
     for (size_t i = run->held.count; i-- > 0;) {
         const held_directory_t *held = run->held.entries[i];
-        error_t release_err = fs_create_dir_with_ownership(
-            held->path, held->mode, (uid_t) -1, (gid_t) -1
-        );
+        error_t release_err = fs_set_dir_mode(held->path, held->mode);
 
         /* The first failure is the one reported; the rest are dropped, one per
          * held directory that would not release */
@@ -1409,11 +1408,13 @@ static error_t create_ancestor(deploy_run_t *run, const char *path) {
  * exactly as recorded denies the very child it was captured with. When it is
  * ours (holdable_directory) the run holds it at a working mode, built from its
  * current mode so that the release restores exactly what was there, recorded or
- * not (an excluded or out-of-scope row is not the plan's to converge). Anything
- * else is left alone and the write reports the refusal — so is what refuses every
- * identity (a read-only filesystem, an immutable flag), which denies the run
- * nothing: the hold's chmod lifts the bits and no more, and would meet the refusal
- * as flatly as the write.
+ * not (an excluded or out-of-scope row is not the plan's to converge) — set on
+ * the directory that stands and never made (fs_set_dir_mode): one the world took
+ * away since the climb leaves nothing to set, and the write beneath meets the
+ * absence as its row's outcome. Anything else is left alone and the write reports
+ * the refusal — so is what refuses every identity (a read-only filesystem, an
+ * immutable flag), which denies the run nothing: the hold's chmod lifts the bits
+ * and no more, and would meet the refusal as flatly as the write.
  *
  * The questions check_landing asked of the same ancestor, less the one time has
  * answered: a pending row has been converged by the directory pass before any
@@ -1442,9 +1443,7 @@ static error_t open_landing_directory(
     }
 
     mode_t current = st->st_mode & 0777;
-    error_t err = fs_create_dir_with_ownership(
-        dir->filesystem_path, working_mode(current), (uid_t) -1, (gid_t) -1
-    );
+    error_t err = fs_set_dir_mode(dir->filesystem_path, working_mode(current));
     if (err) {
         return error_wrap(
             err, "Failed to open directory '%s' for the run", ancestor

@@ -302,6 +302,21 @@ const bool *args_flag_value(
     return (const bool *) ((const char *) opts + opt->offset);
 }
 
+const int *args_flag_set_value(
+    const args_command_t *cmd, const void *opts, const char *flag
+) {
+    if (cmd == NULL || opts == NULL || flag == NULL) return NULL;
+
+    /* Matched as the token stream matches (args_flag_value), and any row of the
+     * group answers: each targets the one int. */
+    const size_t len = strlen(flag);
+    const args_opt_t *opt = len == 1 ? find_short(cmd->opts, flag[0])
+                                     : find_long(cmd->opts, flag, len);
+    if (opt == NULL || opt->kind != ARGS_KIND_FLAG_SET) return NULL;
+
+    return (const int *) ((const char *) opts + opt->offset);
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * Field-writer helpers
  *

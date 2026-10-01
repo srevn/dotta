@@ -29,7 +29,7 @@ typedef struct {
     size_t exclude_count;    /* Number of exclude patterns */
     bool force;              /* Overwrite existing files in profile */
     bool dry_run;            /* Preview without writing */
-    bool verbose;            /* Print verbose output */
+    int verbosity;           /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     int encrypt_mode;        /* encryption_request_t (int for ARGS_FLAG_SET) */
 
     /* Raw positional bucket (engine-populated; interpreted in post_parse). */

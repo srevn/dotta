@@ -38,7 +38,7 @@ typedef struct {
     list_mode_t mode;        /* What to list (auto-determined) */
     const char *profile;     /* Profile name (for LIST_FILES or LIST_FILE_HISTORY) */
     const char *file_path;   /* File path (for LIST_FILE_HISTORY) */
-    bool verbose;            /* Print detailed output */
+    int verbosity;           /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     bool remote;             /* Show remote tracking state */
 
     /* Raw positional bucket (engine-populated; interpreted in post_parse). */

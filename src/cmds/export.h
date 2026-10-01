@@ -24,7 +24,7 @@ typedef struct {
     const char *commit;      /* Commit reference (NULL = HEAD) */
     const char *output;      /* Destination path ('-' = single-file stdout) */
     bool dry_run;            /* Validate everything, write nothing */
-    bool verbose;            /* Per-entry progress lines */
+    int verbosity;           /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
 
     /* Raw positional bucket (engine-populated; interpreted in post_parse). */
     char **positional_args;

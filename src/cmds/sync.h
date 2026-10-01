@@ -22,7 +22,7 @@ typedef struct {
     bool dry_run;                /* Preview only */
     bool no_push;                /* Don't push (fetch and analyze only) */
     bool no_pull;                /* Don't pull remote changes (push-only) */
-    bool verbose;                /* Verbose output */
+    int verbosity;               /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     bool force;                  /* Force sync even with uncommitted changes */
     const char *diverged;        /* Divergence strategy override (CLI only) */
 } cmd_sync_options_t;

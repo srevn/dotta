@@ -276,12 +276,6 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     bool clone_landed = false;
     transfer_context_t *xfer = NULL;
 
-    if (opts->quiet) {
-        output_set_verbosity(out, OUTPUT_QUIET);
-    } else if (opts->verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
-
     /* Where the repository goes: the positional when one was given, this machine's
      * configured location otherwise — one answer, expanded, absolute and with
      * its parents made (utils/repo.h). Absolute matters twice over here: the
@@ -590,8 +584,11 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             if (opts->bootstrap_mode == CLONE_BOOTSTRAP_FORCE) {
                 /* --bootstrap flag set, run automatically */
                 run_bootstrap = true;
-            } else if (!opts->quiet) {
-                /* Prompt user */
+            } else if (opts->verbosity != DOTTA_VERBOSITY_QUIET) {
+                /* Prompt user. A clone told -q asks nothing and runs nothing:
+                 * read off the flag, never the run's level, since a prompt is
+                 * not output a level gates (base/output.h output_confirm) and a
+                 * configured quiet never declined it. */
                 run_bootstrap = output_confirm(
                     out, "Execute bootstrap scripts?", false
                 );
@@ -746,14 +743,14 @@ static const args_opt_t clone_opts[] = {
         cmd_clone_options_t,  bootstrap_mode, CLONE_BOOTSTRAP_SKIP,
         "Skip bootstrap scripts entirely"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "q quiet",
-        cmd_clone_options_t,  quiet,
+        cmd_clone_options_t,  verbosity,      DOTTA_VERBOSITY_QUIET,
         "Suppress output"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_clone_options_t,  verbose,
+        cmd_clone_options_t,  verbosity,      DOTTA_VERBOSITY_VERBOSE,
         "Verbose output"
     ),
     ARGS_POSITIONAL_ANY_ARG(

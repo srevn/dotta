@@ -28,7 +28,7 @@ typedef struct {
     const char *message;        /* Commit message (NULL = auto-generate) */
     bool force;                 /* Skip confirmation */
     bool dry_run;               /* Preview without making changes */
-    bool verbose;               /* Print verbose output */
+    int verbosity;              /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
 
     /* Raw positional bucket (engine-populated; interpreted in post_parse). */
     char **positional_args;

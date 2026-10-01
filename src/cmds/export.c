@@ -1158,8 +1158,7 @@ static error_t validate_content(
 static error_t materialize_entries(
     const dotta_ctx_t *ctx,
     const char *profile,
-    export_entry_list_t *list,
-    bool verbose
+    export_entry_list_t *list
 ) {
     git_repository *repo = ctx->run.repo;
     keymgr *keymgr = ctx->run.keymgr;
@@ -1184,9 +1183,9 @@ static error_t materialize_entries(
                         err, "Failed to create directory '%s'", e->dest_path
                     );
                 }
-                if (verbose && !is_root) {
+                if (!is_root) {
                     output_styled(
-                        out, OUTPUT_NORMAL, "  created {cyan}%s/{reset} (mode %04o)\n",
+                        out, OUTPUT_VERBOSE, "  created {cyan}%s/{reset} (mode %04o)\n",
                         e->rel_path, (unsigned) e->mode
                     );
                 }
@@ -1216,12 +1215,10 @@ static error_t materialize_entries(
                         err, "Failed to write '%s'", e->dest_path
                     );
                 }
-                if (verbose) {
-                    output_styled(
-                        out, OUTPUT_NORMAL, "  wrote {cyan}%s{reset} (mode %04o%s)\n",
-                        e->rel_path, (unsigned) e->mode, e->encrypted ? ", decrypted" : ""
-                    );
-                }
+                output_styled(
+                    out, OUTPUT_VERBOSE, "  wrote {cyan}%s{reset} (mode %04o%s)\n",
+                    e->rel_path, (unsigned) e->mode, e->encrypted ? ", decrypted" : ""
+                );
                 break;
             }
 
@@ -1248,12 +1245,10 @@ static error_t materialize_entries(
                         err, "Failed to create symlink '%s'", e->dest_path
                     );
                 }
-                if (verbose) {
-                    output_styled(
-                        out, OUTPUT_NORMAL, "  linked {cyan}%s{reset} -> %s\n",
-                        e->rel_path, (const char *) e->content.data
-                    );
-                }
+                output_styled(
+                    out, OUTPUT_VERBOSE, "  linked {cyan}%s{reset} -> %s\n",
+                    e->rel_path, (const char *) e->content.data
+                );
                 break;
         }
     }
@@ -1379,7 +1374,6 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     output_t *out = ctx->out;
     arena_t *arena = ctx->arena;
     bool to_stdout = strcmp(opts->output, "-") == 0;
-    bool verbose = opts->verbose || output_is_verbose(out);
 
     /* '-' dedicates stdout to the payload. Errors already live there. */
     if (to_stdout) output_set_stream(out, stderr);
@@ -1550,7 +1544,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         goto cleanup;
     }
 
-    err = materialize_entries(ctx, opts->profile, &list, verbose);
+    err = materialize_entries(ctx, opts->profile, &list);
     if (err) goto cleanup;
 
     output_styled(
@@ -1769,9 +1763,9 @@ static const args_opt_t export_opts[] = {
         cmd_export_options_t,dry_run,
         "Resolve and validate everything, write nothing; list the plan"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_export_options_t,verbose,
+        cmd_export_options_t,verbosity,       DOTTA_VERBOSITY_VERBOSE,
         "Per-entry progress lines"
     ),
     ARGS_POSITIONAL_RAW(

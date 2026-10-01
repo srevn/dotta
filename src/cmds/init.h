@@ -17,7 +17,7 @@
 typedef struct {
     const char *repo_path;   /* Repository path (NULL = the configured location) */
     const char *strength;    /* Preset the epoch is minted at (NULL = the default) */
-    bool quiet;              /* Suppress output */
+    int verbosity;           /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
 } cmd_init_options_t;
 
 /**

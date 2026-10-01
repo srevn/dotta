@@ -88,14 +88,9 @@ static bool validate_remote_url(const char *url) {
  */
 static error_t remote_list(
     git_repository *repo,
-    output_t *out,
-    bool verbose
+    output_t *out
 ) {
     CHECK_NULL(repo);
-
-    if (verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
 
     git_strarray remotes = { 0 };
     int rc = git_remote_list(&remotes, repo);
@@ -450,7 +445,7 @@ error_t cmd_remote(const dotta_ctx_t *ctx, const cmd_remote_options_t *opts) {
      * a line without them. */
     switch (opts->subcommand) {
         case REMOTE_LIST:
-            return remote_list(repo, out, opts->verbose);
+            return remote_list(repo, out);
 
         case REMOTE_ADD:
             return remote_add(repo, out, opts->name, opts->url);
@@ -510,9 +505,9 @@ static void remote_list_defaults(void *o) {
 
 static const args_opt_t remote_list_opts[] = {
     ARGS_GROUP("Options:"),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_remote_options_t,verbose,
+        cmd_remote_options_t,verbosity,  DOTTA_VERBOSITY_VERBOSE,
         "Show URLs"
     ),
     ARGS_END,

@@ -35,7 +35,7 @@ typedef struct {
     const char *name;        /* Remote name */
     const char *url;         /* Remote URL (for add/set-url) */
     const char *new_name;    /* New name (for rename) */
-    bool verbose;            /* Show URLs (for list) */
+    int verbosity;           /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
 } cmd_remote_options_t;
 
 /**

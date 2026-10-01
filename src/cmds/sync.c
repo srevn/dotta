@@ -1503,11 +1503,6 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
 
-    /* CLI flags override config */
-    if (opts->verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
-
     /* The divergence strategy: the config's, unless --diverged overrides it in
      * the same words. A word the vocabulary does not know is refused here, before
      * the sync reads or runs anything — the pre-sync hook included. */
@@ -2269,9 +2264,9 @@ static const args_opt_t sync_opts[] = {
         cmd_sync_options_t,diverged,
         "Diverged-branch strategy (see notes)"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_sync_options_t,verbose,
+        cmd_sync_options_t,verbosity,    DOTTA_VERBOSITY_VERBOSE,
         "Verbose output"
     ),
     /* Bare profile positionals funnel into the same APPEND field. */

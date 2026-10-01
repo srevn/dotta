@@ -831,13 +831,6 @@ static error_t remove_paths(
     metadata_t *metadata = NULL;        /* the branch's, from the resolver (owned) */
     overlaps_t overlaps = { 0 };        /* arena — the analysis's */
 
-    /* CLI flags override config */
-    if (opts->verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
-    } else if (opts->quiet) {
-        output_set_verbosity(out, OUTPUT_QUIET);
-    }
-
     /* The branch's stage: the tip everything below reads — the claims, the sheet,
      * the judge — and the parent the commit will have. The removal is pure tree
      * surgery, so the stage is the whole of its Git side. */
@@ -1163,29 +1156,26 @@ static error_t remove_paths(
     hook_fire_post(config, out, &hook_inv);
 
     /* Success */
-    if (!opts->quiet) {
-        char counts[64];
-        remove_format_counts(counts, sizeof(counts), removed_files, removed_dirs);
-        output_success(
-            out, OUTPUT_NORMAL, "Removed %s from profile '%s'",
-            counts, opts->profile
+    char counts[64];
+    remove_format_counts(counts, sizeof(counts), removed_files, removed_dirs);
+    output_success(
+        out, OUTPUT_NORMAL, "Removed %s from profile '%s'",
+        counts, opts->profile
+    );
+    /* The hint speaks only for records actually settled, and for the fate they
+     * took rather than the flag that was typed: an order is work waiting for
+     * apply, a release is already done. Nothing recorded — or a record phase
+     * that failed with its warning — leaves the success line to stand alone. */
+    if (settlement.ordered > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta apply' to remove paths from filesystem"
         );
-        /* The hint speaks only for records actually settled, and for the fate
-         * they took rather than the flag that was typed: an order is work waiting
-         * for apply, a release is already done. Nothing recorded — or a record
-         * phase that failed with its warning — leaves the success line to stand
-         * alone. */
-        if (settlement.ordered > 0) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Run 'dotta apply' to remove paths from filesystem"
-            );
-        } else if (settlement.released > 0) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Paths released from management (no apply needed)"
-            );
-        }
+    } else if (settlement.released > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Paths released from management (no apply needed)"
+        );
     }
 
 cleanup:
@@ -1220,13 +1210,6 @@ static error_t remove_profile(
     error_t err = NULL;
     const char *remote_name = NULL;
     const char *remote_url = NULL;
-
-    /* CLI flags override config */
-    if (opts->verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
-    } else if (opts->quiet) {
-        output_set_verbosity(out, OUTPUT_QUIET);
-    }
 
     /* Is the profile here? Git's answer or Git's error: an unreadable ref is
      * not an absence, and --force must not read one as "already gone". */
@@ -1630,24 +1613,22 @@ static error_t remove_profile(
 
     /* Success message: every exit before the deletion is behind us (dry run,
      * cancel, error) */
-    if (!opts->quiet) {
-        output_success(out, OUTPUT_NORMAL, "Profile '%s' deleted", opts->profile);
+    output_success(out, OUTPUT_NORMAL, "Profile '%s' deleted", opts->profile);
 
-        /* The hint speaks only for records actually settled, and for the fate
-         * they took rather than the flag that was typed: an order is work waiting
-         * for apply, a release is already done. Nothing recorded — or a settle
-         * that failed with its warning — leaves the success line to stand alone. */
-        if (settlement.ordered > 0) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Run 'dotta apply' to remove deployed paths from filesystem"
-            );
-        } else if (settlement.released > 0) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Paths released from management (no apply needed)"
-            );
-        }
+    /* The hint speaks only for records actually settled, and for the fate they
+     * took rather than the flag that was typed: an order is work waiting for
+     * apply, a release is already done. Nothing recorded — or a settle that failed
+     * with its warning — leaves the success line to stand alone. */
+    if (settlement.ordered > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta apply' to remove deployed paths from filesystem"
+        );
+    } else if (settlement.released > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Paths released from management (no apply needed)"
+        );
     }
 
 cleanup:
@@ -1811,14 +1792,14 @@ static const args_opt_t remove_opts[] = {
         cmd_remove_options_t,interactive,
         "Prompt for each file"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_remove_options_t,verbose,
+        cmd_remove_options_t,verbosity,       DOTTA_VERBOSITY_VERBOSE,
         "Verbose output"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "q quiet",
-        cmd_remove_options_t,quiet,
+        cmd_remove_options_t,verbosity,       DOTTA_VERBOSITY_QUIET,
         "Minimal output"
     ),
     /* <profile> [<path>...]. -p promotes positionals to all-paths. */

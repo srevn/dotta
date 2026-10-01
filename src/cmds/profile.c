@@ -1015,9 +1015,7 @@ static error_t profile_disable(
      * success). The historic ERR_NOT_FOUND here made the two paths inconsistent
      * for the same user intent. */
     if (opts->all_profiles && enabled_profiles.count == 0) {
-        if (!opts->quiet) {
-            output_info(out, OUTPUT_NORMAL, "No enabled profiles to disable");
-        }
+        output_info(out, OUTPUT_NORMAL, "No enabled profiles to disable");
         return NULL;
     }
 
@@ -1307,9 +1305,7 @@ static error_t profile_reorder(
     }
 
     if (!order_changed) {
-        if (!opts->quiet) {
-            output_info(out, OUTPUT_NORMAL, "Profiles already in requested order");
-        }
+        output_info(out, OUTPUT_NORMAL, "Profiles already in requested order");
         return NULL;  /* Success, but no-op */
     }
 
@@ -1356,19 +1352,13 @@ static error_t profile_reorder(
     }
 
     /* Success message */
-    if (!opts->quiet) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_success(
-            out, OUTPUT_NORMAL, "Reordered %zu profile%s",
-            opts->profile_count, opts->profile_count == 1 ? "" : "s"
-        );
-        output_info(
-            out, OUTPUT_NORMAL, "New precedence takes effect on the next run"
-        );
-        output_hint(
-            out, OUTPUT_NORMAL, "Run 'dotta status' to review changes"
-        );
-    }
+    output_gap(out, OUTPUT_NORMAL);
+    output_success(
+        out, OUTPUT_NORMAL, "Reordered %zu profile%s",
+        opts->profile_count, opts->profile_count == 1 ? "" : "s"
+    );
+    output_info(out, OUTPUT_NORMAL, "New precedence takes effect on the next run");
+    output_hint(out, OUTPUT_NORMAL, "Run 'dotta status' to review changes");
 
     return NULL;
 }
@@ -1581,16 +1571,6 @@ error_t cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
-    output_t *out = ctx->out;
-
-    /* Override verbosity from CLI */
-    if (opts->verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
-    if (opts->quiet) {
-        output_set_verbosity(out, OUTPUT_QUIET);
-    }
-
     /* Dispatch to subcommand */
     switch (opts->subcommand) {
         case PROFILE_LIST:     return profile_list(ctx, opts);
@@ -1670,16 +1650,17 @@ static args_want_t profile_fetch_complete(
 static const args_opt_t profile_fetch_opts[] = {
     ARGS_GROUP("Options:"),
     ARGS_FLAG(
-        "all",                cmd_profile_options_t,  fetch_all,
+        "all",                  cmd_profile_options_t,  fetch_all,
         "Fetch all remote profiles"
     ),
-    ARGS_FLAG(
-        "v verbose",          cmd_profile_options_t,  verbose,
+    ARGS_FLAG_SET(
+        "v verbose",            cmd_profile_options_t,  verbosity,
+        DOTTA_VERBOSITY_VERBOSE,
         "Show detailed progress"
     ),
     ARGS_POSITIONAL_ANY(
         cmd_profile_options_t,
-        profiles,             profile_count
+        profiles,               profile_count
     ),
     ARGS_END,
 };
@@ -1732,18 +1713,18 @@ static const args_opt_t profile_enable_opts[] = {
         cmd_profile_options_t,dry_run,
         "Show what would change without modifying state"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_profile_options_t,verbose,
+        cmd_profile_options_t,verbosity,    DOTTA_VERBOSITY_VERBOSE,
         "Show detailed progress"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "q quiet",
-        cmd_profile_options_t,quiet,
+        cmd_profile_options_t,verbosity,    DOTTA_VERBOSITY_QUIET,
         "Suppress non-error output"
     ),
     ARGS_POSITIONAL_ANY(
-        cmd_profile_options_t,profiles, profile_count
+        cmd_profile_options_t,profiles,     profile_count
     ),
     ARGS_END,
 };
@@ -1807,18 +1788,18 @@ static const args_opt_t profile_disable_opts[] = {
         cmd_profile_options_t,dry_run,
         "Show what would change without modifying state"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_profile_options_t,verbose,
+        cmd_profile_options_t,verbosity,    DOTTA_VERBOSITY_VERBOSE,
         "Show detailed progress"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "q quiet",
-        cmd_profile_options_t,quiet,
+        cmd_profile_options_t,verbosity,    DOTTA_VERBOSITY_QUIET,
         "Suppress non-error output"
     ),
     ARGS_POSITIONAL_ANY(
-        cmd_profile_options_t,profiles, profile_count
+        cmd_profile_options_t,profiles,     profile_count
     ),
     ARGS_END,
 };
@@ -1861,18 +1842,18 @@ static args_want_t profile_reorder_complete(
 
 static const args_opt_t profile_reorder_opts[] = {
     ARGS_GROUP("Options:"),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_profile_options_t,verbose,
+        cmd_profile_options_t,verbosity,  DOTTA_VERBOSITY_VERBOSE,
         "Show the profile order before and after the change"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "q quiet",
-        cmd_profile_options_t,quiet,
+        cmd_profile_options_t,verbosity,  DOTTA_VERBOSITY_QUIET,
         "Suppress non-error output"
     ),
     ARGS_POSITIONAL_ANY(
-        cmd_profile_options_t,profiles, profile_count
+        cmd_profile_options_t,profiles,   profile_count
     ),
     ARGS_END,
 };

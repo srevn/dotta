@@ -30,8 +30,7 @@ typedef enum {
 typedef struct {
     const char *url;          /* Remote URL (required) */
     const char *path;         /* Local path (NULL = the configured location) */
-    bool quiet;               /* Suppress output */
-    bool verbose;             /* Verbose output */
+    int verbosity;            /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     int bootstrap_mode;       /* clone_bootstrap_mode_t (int for ARGS_FLAG_SET) */
     bool fetch_all;           /* Fetch all remote profiles (hub mode) */
     char **profiles;          /* Explicit profiles to fetch (NULL = auto-detect) */

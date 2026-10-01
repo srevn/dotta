@@ -338,11 +338,6 @@ error_t cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
-    /* CLI flags override config */
-    if (opts->verbose) {
-        output_set_verbosity(ctx->out, OUTPUT_VERBOSE);
-    }
-
     /* Dispatch to appropriate action. Each handler reads the borrowed
      * ctx->run.keymgr (NULL when encryption is disabled — each handler
      * short-circuits on that via its own config->encryption_enabled check). */
@@ -378,9 +373,9 @@ static void key_set_defaults(void *o) {
 
 static const args_opt_t key_set_opts[] = {
     ARGS_GROUP("Options:"),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_key_options_t, verbose,
+        cmd_key_options_t, verbosity, DOTTA_VERBOSITY_VERBOSE,
         "Name the file the passphrase was verified against"
     ),
     ARGS_END,
@@ -415,9 +410,9 @@ static void key_clear_defaults(void *o) {
 
 static const args_opt_t key_clear_opts[] = {
     ARGS_GROUP("Options:"),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_key_options_t, verbose,
+        cmd_key_options_t, verbosity, DOTTA_VERBOSITY_VERBOSE,
         "Show where the session cache lives"
     ),
     ARGS_END,
@@ -445,9 +440,9 @@ static void key_status_defaults(void *o) {
 
 static const args_opt_t key_status_opts[] = {
     ARGS_GROUP("Options:"),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_key_options_t, verbose,
+        cmd_key_options_t, verbosity, DOTTA_VERBOSITY_VERBOSE,
         "Include the KDF parameters and the auto-encrypt patterns"
     ),
     ARGS_END,

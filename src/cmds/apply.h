@@ -22,7 +22,7 @@ typedef struct {
     bool force;                 /* Override deploy's conflicts and cleanup's skip reasons */
     bool dry_run;               /* Don't actually deploy */
     bool keep_orphans;          /* Don't remove orphaned files (opt-out from default cleanup) */
-    bool verbose;               /* Print verbose output */
+    int verbosity;              /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     bool skip_existing;         /* Leave occupied paths alone (plan filter) */
     char **exclude_patterns;    /* Exclude patterns (glob) - read-only */
     size_t exclude_count;       /* Number of exclude patterns */

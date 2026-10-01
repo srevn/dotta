@@ -752,11 +752,6 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     metadata_item_t *restored_claim = NULL;
     buffer_t rebound = BUFFER_INIT;
 
-    /* CLI flags override config */
-    if (opts->verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
-
     /* Step 2: the argument in the key the user named — a path or a storage path,
      * neither manufactured from the other (infra/path.h) — and the profile the
      * revert acts on. */
@@ -1411,9 +1406,9 @@ static const args_opt_t revert_opts[] = {
         cmd_revert_options_t,dry_run,
         "Preview without writing"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_revert_options_t,verbose,
+        cmd_revert_options_t,verbosity,       DOTTA_VERBOSITY_VERBOSE,
         "Verbose output"
     ),
     ARGS_POSITIONAL_RAW(

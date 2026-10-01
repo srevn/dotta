@@ -1570,11 +1570,6 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     string_array_t ancestry_retired;
     string_array_init(&ancestry_retired, ctx->arena);
 
-    /* CLI flags override config */
-    if (opts->verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
-
     /* The branch this add will write to: its stage is opened below when it is
      * there, an orphan's when it is not. Both answers are needed here, before
      * the command has any effect — a name Git's ref namespace cannot hold beside
@@ -2867,9 +2862,9 @@ static const args_opt_t add_opts[] = {
         cmd_add_options_t,           dry_run,
         "Preview without writing"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_add_options_t,           verbose,
+        cmd_add_options_t,           verbosity,        DOTTA_VERBOSITY_VERBOSE,
         "Verbose output"
     ),
     ARGS_FLAG_SET(

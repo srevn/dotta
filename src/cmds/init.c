@@ -132,11 +132,6 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     const char *path = NULL;
     const char *elsewhere = NULL;
 
-    /* Handle quiet flag */
-    if (opts->quiet) {
-        output_set_verbosity(out, OUTPUT_QUIET);
-    }
-
     /* The strength the epoch is minted at: a preset by name, the default when
      * none was given. Parsed before anything writes, so an unknown name refuses
      * with nothing on disk. */
@@ -316,9 +311,9 @@ static const args_opt_t init_opts[] = {
         cmd_init_options_t,strength,
         "Argon2id strength: fast, balanced or paranoid"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "q quiet",
-        cmd_init_options_t,quiet,
+        cmd_init_options_t,verbosity, DOTTA_VERBOSITY_QUIET,
         "Suppress output"
     ),
     ARGS_POSITIONAL_ANY_ARG(

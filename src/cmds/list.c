@@ -887,11 +887,6 @@ error_t cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
 
     output_t *out = ctx->out;
 
-    /* CLI flags override config */
-    if (opts->verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
-
     /* Warn about flags that don't apply to the current mode */
     if (opts->remote && opts->mode != LIST_PROFILES) {
         output_warning(out, OUTPUT_NORMAL, "--remote only applies when listing profiles");
@@ -1035,9 +1030,9 @@ static const args_opt_t list_opts[] = {
         cmd_list_options_t,remote,
         "Show remote tracking state (Level 1 only)"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_list_options_t,verbose,
+        cmd_list_options_t,verbosity,       DOTTA_VERBOSITY_VERBOSE,
         "Show detailed output"
     ),
     ARGS_POSITIONAL_RAW(

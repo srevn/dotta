@@ -1862,11 +1862,6 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    /* CLI flags override config */
-    if (opts->verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
-
     /* Build operation scope
      *
      *   scope_enabled  — the persistent enabled set, the CLI filter's bound. Empty
@@ -2967,9 +2962,9 @@ static const args_opt_t apply_opts[] = {
         cmd_apply_options_t,skip_existing,
         "Skip files whose path is already occupied"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_apply_options_t,verbose,
+        cmd_apply_options_t,verbosity,        DOTTA_VERBOSITY_VERBOSE,
         "Verbose output"
     ),
     /* Positionals: bare `<file>` tokens append to files[]; bare `<profile>` tokens

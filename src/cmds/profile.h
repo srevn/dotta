@@ -53,8 +53,7 @@ typedef struct {
     bool fix;               /* Auto-fix issues */
 
     /* Common options */
-    bool verbose;
-    bool quiet;
+    int verbosity;          /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
 } cmd_profile_options_t;
 
 /**

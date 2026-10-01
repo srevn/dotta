@@ -12,6 +12,7 @@
  * Contents:
  *   - `dotta_state_mode_t` — the shape a command opens state in;
  *   - `dotta_crypto_mode_t` — how far the keymgr may reach for a passphrase;
+ *   - `dotta_verbosity_t`  — what a spec's -v or -q asked of the run's level;
  *   - `dotta_needs_t`      — payload referenced by `args_command_t::payload`:
  *                            the run members a handler reads, declared in full,
  *                            without the base/args engine learning them;
@@ -164,6 +165,25 @@ typedef enum dotta_crypto_mode {
 } dotta_crypto_mode_t;
 
 /**
+ * What -v or -q asked of the run's verbosity
+ *
+ * A spec that takes either declares them as one ARGS_FLAG_SET group on an int
+ * named `verbosity` (base/args.h, "Tri-state flags"), so the pair is a
+ * contradiction the parse refuses as it refuses every other, and a spec that
+ * grows a -v gets the rule by growing it. The dispatcher reads the group off
+ * the spec's own rows before the run opens (main.c run_spec), as open_run reads
+ * --dry-run, and sets the output's level over the configuration's; no handler
+ * sets one. A handler reads the field only where the flag says more than a level:
+ * clone's -q declines its bootstrap prompt too (cmds/clone.c cmd_clone). The
+ * words are output_verbosity_t's (base/output.h), plus DEFAULT.
+ */
+typedef enum dotta_verbosity {
+    DOTTA_VERBOSITY_DEFAULT = 0,   /* Neither: the configuration's level stands */
+    DOTTA_VERBOSITY_QUIET,         /* -q */
+    DOTTA_VERBOSITY_VERBOSE        /* -v */
+} dotta_verbosity_t;
+
+/**
  * The needs — every run member a command's handler reads
  *
  * Pointed at by `args_command_t::payload`, in place on the spec:
@@ -173,11 +193,12 @@ typedef enum dotta_crypto_mode {
  *
  * a file-scope compound literal — static storage, its address an address constant
  * (C11 §6.5.2.5p5, §6.6p9). A spec without a payload opens nothing (init, clone,
- * completion). Additional fields (a verbosity override, …) land here as new members
- * without touching the engine — this is the extension point `main.c::open_run`
- * reads. Privilege is not one of them and never will be: the identity of the
- * run is a process fact (sys/identity), and what a run cannot do as the invoker
- * is each engine's preflight skip, not a need.
+ * completion). Additional fields land here as new members without touching the
+ * engine — this is the extension point `main.c::open_run` reads. Privilege is
+ * not one of them and never will be: the identity of the run is a process fact
+ * (sys/identity), and what a run cannot do as the invoker is each engine's
+ * preflight skip, not a need. Nor is what an invocation asks of the run, which
+ * the dispatcher reads off the spec's own rows (--dry-run, dotta_verbosity_t).
  *
  * The spec names the full set, not the deepest need on each chain: a reader learns
  * that `status` reads the state from `status`'s spec, not from a lattice. The

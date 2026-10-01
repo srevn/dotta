@@ -366,6 +366,23 @@ static int run_spec(
         }
     }
 
+    /* The level this invocation asked for, over the configuration's: -v and -q
+     * are one FLAG_SET group of the spec's own rows (runtime.h dotta_verbosity_t),
+     * so the parse refused the pair, and either row's name finds the one field
+     * — a spec carries -v, -q or both. Set before the run opens, so every line
+     * the run prints reads one level; a command that parsed no options asks
+     * none. */
+    if (opts != NULL) {
+        const int *asked = args_flag_set_value(resolved, opts, "verbose");
+        if (asked == NULL) asked = args_flag_set_value(resolved, opts, "quiet");
+
+        if (asked != NULL && *asked != DOTTA_VERBOSITY_DEFAULT) {
+            output_set_verbosity(
+                out, *asked == DOTTA_VERBOSITY_QUIET ? OUTPUT_QUIET : OUTPUT_VERBOSE
+            );
+        }
+    }
+
     /* The spec's needs — every run member its handler reads (runtime.h); a spec
      * without a payload opens nothing. The run starts zeroed: open_run populates
      * it in place, and what it opened is what close_run releases, on every path. */
@@ -557,8 +574,8 @@ int main(int argc, char **argv) {
      * that closes early). */
     signal(SIGPIPE, SIG_IGN);
 
-    /* Create output context once from config settings. All commands share this
-     * context and may override verbosity via CLI flags. */
+    /* Create output context once from config settings: the configuration's level,
+     * which a spec's -v or -q overrides for its run (run_spec). */
     output_t *out = output_create(stdout, config->verbosity, config->color);
 
     int status = run_spec(spec, argc, argv, prog, config, out);

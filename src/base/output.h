@@ -133,6 +133,9 @@ void output_free(output_t *ctx);
 
 /**
  * Set verbosity level
+ *
+ * The level a context was created with is the configuration's; its one setter
+ * is the dispatcher, for a spec's -v or -q (main.c run_spec).
  */
 void output_set_verbosity(output_t *ctx, output_verbosity_t verbosity);
 

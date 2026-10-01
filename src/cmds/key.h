@@ -29,7 +29,7 @@ typedef enum {
  */
 typedef struct {
     key_action_t action;
-    bool verbose;
+    int verbosity;           /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
 } cmd_key_options_t;
 
 /**

@@ -884,11 +884,6 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
 
-    /* CLI flags override config */
-    if (opts->verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
-
     /* The two modes that change no .dottaignore: the compiled defaults, printed
      * — a discoverability aid, the safety patterns read without grepping the
      * source or cloning the repo — and the ladder's verdict, which walks every
@@ -1071,9 +1066,9 @@ static const args_opt_t ignore_opts[] = {
         cmd_ignore_options_t,list_defaults,
         "Print compiled default patterns and exit"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_ignore_options_t,verbose,
+        cmd_ignore_options_t,verbosity,       DOTTA_VERBOSITY_VERBOSE,
         "Verbose output (test mode: show matches)"
     ),
     ARGS_POSITIONAL_ANY_ARG(

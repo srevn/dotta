@@ -1351,11 +1351,6 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    /* CLI flags override config */
-    if (opts->verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
-
     /* Build operation scope
      *
      *   scope_enabled  — the persistent enabled set, the CLI filter's bound.
@@ -1509,9 +1504,9 @@ static const args_opt_t status_opts[] = {
         cmd_status_options_t,full,
         "List every active path with its state"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "v verbose",
-        cmd_status_options_t,verbose,
+        cmd_status_options_t,verbosity,    DOTTA_VERBOSITY_VERBOSE,
         "Verbose output"
     ),
     /* Positional profile filters share the `profiles` APPEND field. */

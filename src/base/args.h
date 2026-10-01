@@ -699,7 +699,7 @@ error_t args_parse_long(const char *text, long min, long max, long *out);
  * The value is the effective one, which is what a caller reading it before dispatch
  * wants: `init_defaults` may have seeded the field ahead of the parse and
  * `post_parse` may have rewritten it after, so true does not certify that a token
- * was seen.
+ * was seen. A FLAG_SET group's int is its twin's to read (args_flag_set_value).
  *
  * @param cmd  Command whose table holds the row (must not be NULL)
  * @param opts The buffer `args_parse` filled for that command (must not be NULL)
@@ -707,6 +707,30 @@ error_t args_parse_long(const char *text, long min, long max, long *out);
  * @return Borrowed pointer to the bool, or NULL if no FLAG row carries the name
  */
 const bool *args_flag_value(
+    const args_command_t *cmd, const void *opts, const char *flag
+);
+
+/**
+ * The int a FLAG_SET group targets, in a parsed options buffer
+ *
+ * args_flag_value's twin for a group ("Tri-state flags" above): every row of
+ * the group targets the one int, so any row's name finds it, matched as the token
+ * stream matches one. NULL is the answer when no FLAG_SET row of this command
+ * carries the name — a FLAG row's included, whose field is a bool — so a caller
+ * that can refuse checks for it. Otherwise the pointer borrows the int at the
+ * row's offset for as long as `opts` lives: 0 where no row of the group was given,
+ * else the given row's value. The engine is the field's only writer
+ * (ARGS_FLAG_SET), so the value is the line's, never a default's.
+ *
+ * Reader: main.c run_spec, the run's verbosity (include/runtime.h
+ * dotta_verbosity_t).
+ *
+ * @param cmd  Command whose table holds the row (must not be NULL)
+ * @param opts The buffer `args_parse` filled for that command (must not be NULL)
+ * @param flag One of the group's row names, without dashes (must not be NULL)
+ * @return Borrowed pointer to the int, or NULL if no FLAG_SET row carries the name
+ */
+const int *args_flag_set_value(
     const args_command_t *cmd, const void *opts, const char *flag
 );
 

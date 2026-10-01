@@ -21,7 +21,7 @@
 typedef struct {
     char **profiles;            /* Profile names (NULL = use state/config) */
     size_t profile_count;       /* Number of profiles */
-    bool verbose;               /* Print verbose output */
+    int verbosity;              /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     bool no_fetch;              /* Skip fetch before remote status check */
     bool all_profiles;          /* Show all profiles, not just enabled ones */
     bool full;                  /* List the whole manifest: every active path with its state */

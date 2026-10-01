@@ -42,8 +42,7 @@ typedef struct {
     bool interactive;           /* Prompt for each file */
 
     /* Output flags */
-    bool verbose;               /* Print verbose output */
-    bool quiet;                 /* Minimal output */
+    int verbosity;              /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
 
     /* Git flags */
     const char *message;        /* Custom commit message (optional) */

@@ -33,7 +33,7 @@ typedef struct {
     ignore_mode_t mode;         /* What the run does, settled by ignore_post_parse */
     const char *profile;        /* Profile name (NULL for baseline or all profiles) */
     const char *test_path;      /* Path to test (IGNORE_MODE_TEST) */
-    bool verbose;               /* Print verbose output */
+    int verbosity;              /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     char **add_patterns;        /* Patterns to add (NULL for none) */
     size_t add_count;           /* Number of patterns to add */
     char **remove_patterns;     /* Patterns to remove (NULL for none) */

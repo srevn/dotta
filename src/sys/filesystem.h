@@ -317,7 +317,7 @@ error_t fs_create_dir(const char *path, bool parents);
  * @return Error or NULL on success
  *
  * Errors: a creation or a chmod the kernel refused, by its errno's code (the
- * header's "The word" — ERR_PERMISSION for a refusal, ERR_FS for the rest).
+ * header's "The word" — ERR_PERMISSION for a denial (EACCES), ERR_FS for the rest).
  */
 error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
 
@@ -355,7 +355,8 @@ error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
  * @return Error or NULL on success
  *
  * Errors: a creation, a chown or a chmod the kernel refused, by its errno's code
- * (the header's "The word" — ERR_PERMISSION for a refusal, ERR_FS for the rest).
+ * (the header's "The word" — ERR_PERMISSION for a denial (EACCES), ERR_FS for
+ * the rest).
  */
 error_t fs_create_dir_with_ownership(
     const char *path,

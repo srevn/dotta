@@ -404,7 +404,8 @@ error_t content_rebind(
  * - ERR_LOCKED / ERR_CRYPTO: no key in reach, a blob a held key refuses, a foreign
  *   epoch, or a version this build does not read
  * - ERR_NOT_FOUND / ERR_GIT: the blob could not be loaded
- * - ERR_IO / ERR_PERMISSION: the disk copy could not be read
+ * - ERR_NOT_FOUND / ERR_PERMISSION / ERR_FS: the disk copy could not be read,
+ *   by its errno (base/error.h error_code_from_errno)
  */
 error_t content_compare_blob_to_disk(
     content_cache_t *cache,
@@ -616,7 +617,8 @@ typedef struct {
  * @return Error or NULL on success
  *
  * Errors:
- * - ERR_IO: Failed to read source file
+ * - ERR_NOT_FOUND / ERR_PERMISSION / ERR_FS: The source could not be opened or
+ *   read, by its errno (base/error.h error_code_from_errno)
  * - ERR_VALIDATION: A plaintext capture whose bytes would classify as ciphertext
  * - ERR_LOCKED: Encryption requested with the feature off (no keymgr), or the
  *   keymgr obtained no usable master — under "Cannot encrypt '<path>'"

@@ -79,8 +79,12 @@ error_t error_from_git(int git_error_code) {
 
 error_code_t error_code_from_errno(int errno_val) {
     switch (errno_val) {
+        /* The bits, an ACL among them, refused the identity the call ran as:
+         * the one refusal another identity may not meet (sys/filesystem.h
+         * fs_denied). EPERM is a flag's, a policy's or an owner rule's, which
+         * nothing here can tell apart, and root meets the first two as flatly:
+         * it falls to the default. */
         case EACCES:
-        case EPERM:
             return ERR_PERMISSION;
         case ENOENT:
         case ENOTDIR:

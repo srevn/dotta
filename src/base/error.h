@@ -56,16 +56,17 @@
  * ERR_PERMISSION
  * --------------
  * The one code a consumer acts on rather than prints, so its meaning is fixed
- * here and not per producer: a refusal an identity met. The kernel's — EACCES
- * or EPERM, through error_from_errno below — and libgit2's owner check on the
- * repository, which spells its own because GIT_EOWNER carries no errno. An answer
- * dotta looked up is never one, whatever the answer is about: a hook's mode, a
- * claim's ids, a policy's verdict. Every reader turns the code straight into a
- * remedy only a refusal has — cmds/add and cmds/update close with the sudo line,
- * core/workspace classes the failed look UNREADABLE and its readers name root,
- * utils/repo offers to reclaim the repository — and none of them can see which
- * producer it came from, which is what makes the class load-bearing rather than
- * descriptive.
+ * here and not per producer: a refusal an identity met. The kernel's — EACCES,
+ * through error_from_errno below: the bits refused the identity the call ran
+ * as, where an EPERM may be a flag's or a policy's that root meets as flatly
+ * (ERR_FS) — and libgit2's owner check on the repository, which spells its own
+ * because GIT_EOWNER carries no errno. An answer dotta looked up is never one,
+ * whatever the answer is about: a hook's mode, a claim's ids, a policy's verdict.
+ * Every reader turns the code straight into a remedy only a refusal has — cmds/add
+ * and cmds/update close with the sudo line, core/workspace classes the failed
+ * look UNREADABLE and its readers name root, utils/repo offers to reclaim the
+ * repository — and none of them can see which producer it came from, which is
+ * what makes the class load-bearing rather than descriptive.
  *
  * sys/identity's drop is outside the rule and out of reach of it: its two refusals
  * say the run cannot *become* an identity, they are coded by subsystem because
@@ -131,8 +132,9 @@ error_t error_from_git(int git_error_code);
  * The error code an errno names
  *
  * One mapping, for every site that turns a kernel refusal into an error a caller
- * can act on: EACCES and EPERM are ERR_PERMISSION; ENOENT and ENOTDIR — nothing
- * can stand beneath a non-directory — are ERR_NOT_FOUND; anything else is ERR_FS.
+ * can act on: EACCES is ERR_PERMISSION; ENOENT and ENOTDIR — nothing can stand
+ * beneath a non-directory — are ERR_NOT_FOUND; anything else is ERR_FS, EPERM
+ * among it, a flag's or a policy's as often as an owner rule's.
  *
  * @param errno_val errno value
  * @return The code

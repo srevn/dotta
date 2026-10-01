@@ -2821,12 +2821,12 @@ static error_t add_dispatch(const void *ctx_v, void *opts_v) {
      * the open behind the capture (infra/content), the existence check — ends
      * the add before anything durable is written: the stage is in memory and
      * the commit is after the walk. The code is enough to say so without matching
-     * prose: ERR_PERMISSION is a refusal an identity met and never an answer
-     * dotta looked up (base/error.h), everything add reads is a source, and a
-     * read the kernel refuses is one a run that holds root reads through
-     * (sys/filesystem's second try) — EROFS and an immutable flag refuse writes,
-     * never reads, and code ERR_FS besides. So the one thing left to say is
-     * sudo. */
+     * prose: ERR_PERMISSION is the bits refusing the identity the run held (EACCES)
+     * and never an answer dotta looked up (base/error.h), and everything add
+     * reads is a source. A run that holds no root has not asked as root, which
+     * sys/filesystem's second try would — an EPERM codes ERR_FS and is offered
+     * nothing, a flag, SIP, TCC or a sandbox refusing root as flatly. So the
+     * one thing left to say is sudo. */
     if (error_code(err) == ERR_PERMISSION && !identity()->privileged) {
         err = error_wrap(err, "Only root can read it; re-run under sudo");
     }

@@ -29,7 +29,7 @@ error_t resolve_init(
 
     /* Get current branch OID for rollback */
     git_oid saved_oid;
-    error_t err = gitops_resolve_branch_head_oid(repo, branch_name, &saved_oid);
+    error_t err = gitops_resolve_branch_oid(repo, branch_name, &saved_oid);
     if (err) return err;
 
     /* Initialize context */

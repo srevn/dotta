@@ -167,13 +167,14 @@ void gitops_close_repository(git_repository *repo);
  *
  * One corner stays open: under `core.precomposeunicode` the lookup reads a name
  * in decomposed Unicode as its composed form and the listing does not, so in a
- * file whose order hides the composed name a decomposed spelling reads absent.
- * The branch rule (gitops_branch_refname) passes a decomposed name.
+ * file whose order hides the composed name a decomposed spelling reads absent —
+ * and a namespace spelled so lists none of the packed refs beneath it, in any
+ * file (gitops_list_refs). The branch rule (gitops_branch_refname) passes a
+ * decomposed name.
  *
  * Readers: gitops_reference_exists, and every presence question through it;
- * gitops_reference_oid, and the readers of an id through it (its header);
- * gitops_reference_tree, and the readers of a tree through it (its header);
- * infra/epoch.c resolve_epoch_tree.
+ * gitops_reference_oid, and every reader of what a reference names through it —
+ * its id, its commit, its tree (their headers).
  *
  * @param repo Repository (must not be NULL)
  * @param refname Full reference name (must not be NULL or empty)
@@ -336,13 +337,39 @@ error_t gitops_list_remote_tracking(
 error_t gitops_delete_branch(git_repository *repo, const char *name);
 
 /**
+ * The commit a reference names, or NULL where no reference stands
+ *
+ * gitops_reference_oid, and the object at that id, which must be a commit: a
+ * branch names a commit — Git writes nothing else to one (lib/git/refs.c
+ * ref_transaction_update refuses a "non-commit object") and dotta writes nothing
+ * else anywhere — so a reference that stands at a tree, a blob or a tag is refused,
+ * naming what it found. A tag is not peeled: the stage commits on a branch only
+ * from the target libgit2 reads there (commit.c validate_tree_and_parents), and
+ * a tip read through a tag is one no commit can be made on. NULL is the reference's
+ * absence, proven.
+ *
+ * The one way a reference becomes a tip. Readers: gitops_reference_tree, and
+ * the readers of a tree through it (its header); gitops_load_reference_commit,
+ * which refuses the absence; infra/epoch.c's census, at each branch it lists,
+ * one gone since the listing holding nothing.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param ref_name Full reference name (must not be NULL or empty)
+ * @param out The commit (caller frees with git_commit_free), or NULL: none stands
+ *            (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t gitops_reference_commit(
+    git_repository *repo, const char *ref_name, git_commit **out
+);
+
+/**
  * The tree a reference names, or NULL where no reference stands
  *
- * gitops_reference_find, peeled to a tree: a commit's for a commit-backed branch,
- * the tree itself for an orphan-tree one. NULL is the reference's absence, proven;
- * one that stands and names no tree is a failure. For the readers that act on
- * the absence as an answer, in one read where a presence question and a load
- * were two: core/ignore.c ignore_blob_read (no .dottaignore yet) and
+ * gitops_reference_commit, and its tree: NULL is the reference's absence, proven;
+ * one that stands and names no commit is refused there. For the readers that
+ * act on the absence as an answer, in one read where a presence question and a
+ * load were two: core/ignore.c ignore_blob_read (no .dottaignore yet) and
  * gitops_branch_tree.
  *
  * @param repo Repository (must not be NULL)
@@ -527,17 +554,18 @@ error_t gitops_read_blob_content(
 /**
  * Load the commit a reference names
  *
- * The reference read through a symbolic one to the object it names, and that
- * object read as a commit: a reference to anything else refuses at the read, in
- * Git's words.
+ * gitops_reference_commit for a reader that needs the reference: its absence,
+ * proven, is refused (ERR_NOT_FOUND, naming the reference). Readers: sys/stage.c
+ * stage_open (the parent-to-be), cmds/status.c status_print_remote (the
+ * remote-tracking branch's tip), and gitops_load_branch_commit.
  *
  * @param repo Repository (must not be NULL)
- * @param ref_name Full reference name (must not be NULL)
+ * @param ref_name Full reference name (must not be NULL or empty)
  * @param out Commit object (must not be NULL, caller must free with
  *            git_commit_free)
  * @return Error or NULL on success
  */
-error_t gitops_load_commit(
+error_t gitops_load_reference_commit(
     git_repository *repo,
     const char *ref_name,
     git_commit **out
@@ -546,13 +574,12 @@ error_t gitops_load_commit(
 /**
  * Load the commit at a branch's tip
  *
- * refs/heads/<branch> through the branch rule (gitops_branch_refname), read as
- * gitops_load_commit reads a reference — through a symbolic branch to the one
- * it names — and every failure names the branch. Readers: the revision's two
- * askers, gitops_resolve_commit_in_branch and core/profiles.c
- * profile_resolve_commit, which read a branch's tip once and ask it; list.c
- * list_files and status.c's upstream lines, which print it; completion.c
- * commits_walk, which walks back from it.
+ * gitops_load_reference_commit of refs/heads/<branch>, the name through the branch
+ * rule (gitops_branch_refname) on the way, and every failure names the reference.
+ * Readers: the revision's two askers, gitops_resolve_commit_in_branch and
+ * core/profiles.c profile_holder, which read a branch's tip once and ask it;
+ * cmds/list.c list_profiles and cmds/status.c status_print_remote, which print
+ * it; cmds/completion.c commits_walk, which walks back from it.
  *
  * @param repo Repository (must not be NULL)
  * @param branch Branch name (must not be NULL)
@@ -900,8 +927,8 @@ error_t gitops_create_reference(
  * the readers that act on a reference's absence as an answer: sys/upstream.c
  * upstream_analyze_profile (no branch, no remote branch), cmds/sync.c
  * pull_branch_ff (nothing fetched to fast-forward to), infra/epoch.c
- * inspect_remote_epoch (no local epoch), and gitops_resolve_reference_oid, which
- * refuses it.
+ * inspect_remote_epoch (no local epoch), gitops_reference_commit, which reads
+ * the commit at the id, and gitops_resolve_reference_oid, which refuses it.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (must not be NULL or empty)
@@ -934,17 +961,17 @@ error_t gitops_resolve_reference_oid(
 );
 
 /**
- * Resolve a branch's current HEAD OID
+ * Resolve a branch's tip to its id
  *
- * Convenience for `refs/heads/<branch_name>` resolution. Builds the full refname
- * and dispatches to gitops_resolve_reference_oid.
+ * gitops_resolve_reference_oid of `refs/heads/<branch_name>`, the name through
+ * the branch rule (gitops_branch_refname) on the way.
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name without refs/heads/ prefix (must not be NULL)
  * @param out Target OID (must not be NULL)
  * @return Error or NULL on success (ERR_NOT_FOUND if branch missing)
  */
-error_t gitops_resolve_branch_head_oid(
+error_t gitops_resolve_branch_oid(
     git_repository *repo,
     const char *branch_name,
     git_oid *out

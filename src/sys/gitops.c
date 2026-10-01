@@ -583,42 +583,18 @@ error_t gitops_reference_tree(
 
     *out = NULL;
 
-    /* The reference, or its absence proven (gitops_reference_find): a packed-refs
-     * that will not parse is a failure, never a tree that is not there. */
-    git_reference *ref = NULL;
-    error_t err = gitops_reference_find(repo, ref_name, &ref);
-    if (err || !ref) return err;
+    /* The tip, or its absence proven: a packed-refs that will not parse is a
+     * failure, never a tree that is not there, and so is a reference that names
+     * no commit (gitops_reference_commit) */
+    git_commit *tip = NULL;
+    error_t err = gitops_reference_commit(repo, ref_name, &tip);
+    if (err || !tip) return err;
 
-    /* Peel reference to get the underlying object */
-    git_object *obj = NULL;
-    int rc = git_reference_peel(&obj, ref, GIT_OBJECT_ANY);
-    git_reference_free(ref);
+    int rc = git_commit_tree(out, tip);
+    git_commit_free(tip);
     if (rc < 0) {
         return error_wrap(
-            error_from_git(rc), "Failed to peel reference '%s'",
-            ref_name
-        );
-    }
-
-    /* Handle different object types */
-    git_object_t obj_type = git_object_type(obj);
-
-    if (obj_type == GIT_OBJECT_COMMIT) {
-        /* Normal branch pointing to commit - get tree from commit
-         * SAFETY: We verified obj_type == GIT_OBJECT_COMMIT, so this cast is safe
-         */
-        git_commit *commit = (git_commit *) obj;
-        rc = git_commit_tree(out, commit);
-        git_object_free(obj);
-        if (rc < 0) return error_from_git(rc);
-    } else if (obj_type == GIT_OBJECT_TREE) {
-        *out = (git_tree *) obj;
-    } else {
-        /* Unexpected object type */
-        git_object_free(obj);
-        return ERROR(
-            ERR_GIT, "Reference '%s' points to unexpected object type: %d",
-            ref_name, obj_type
+            error_from_git(rc), "Cannot read the tree at '%s'", ref_name
         );
     }
 
@@ -729,31 +705,56 @@ error_t gitops_tree_walk(
 /**
  * Commit operations
  */
-error_t gitops_load_commit(
+error_t gitops_reference_commit(
     git_repository *repo, const char *ref_name, git_commit **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(ref_name);
     CHECK_NULL(out);
 
-    git_oid oid;
-    int rc = git_reference_name_to_id(&oid, repo, ref_name);
+    *out = NULL;
+
+    /* The id, or its absence proven: a symbolic reference read through, and one
+     * standing at the null id refused as broken (gitops_reference_oid) */
+    git_oid id;
+    error_t err = gitops_reference_oid(repo, ref_name, &id);
+    if (err || git_oid_is_zero(&id)) return err;
+
+    /* The object the reference names, which is a commit or nothing a tip can be
+     * (the header): a tag is refused as a tree is, never peeled to the commit
+     * it names, so no reader holds a tip the stage cannot commit on. */
+    git_object *object = NULL;
+    int rc = git_object_lookup(&object, repo, &id, GIT_OBJECT_ANY);
     if (rc < 0) {
         return error_wrap(
-            error_from_git(rc),
-            "Failed to resolve reference '%s'", ref_name
+            error_from_git(rc), "Cannot read the tip of '%s'", ref_name
         );
     }
 
-    rc = git_commit_lookup(out, repo, &oid);
-    if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc),
-            "Failed to lookup commit for reference '%s'", ref_name
+    git_object_t type = git_object_type(object);
+    if (type != GIT_OBJECT_COMMIT) {
+        git_object_free(object);
+        return ERROR(
+            ERR_GIT, "Reference '%s' names a %s, not a commit", ref_name,
+            git_object_type2string(type)
         );
     }
 
+    *out = (git_commit *) object;
     return NULL;
+}
+
+error_t gitops_load_reference_commit(
+    git_repository *repo, const char *ref_name, git_commit **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(ref_name);
+    CHECK_NULL(out);
+
+    error_t err = gitops_reference_commit(repo, ref_name, out);
+    if (err || *out) return err;
+
+    return ERROR(ERR_NOT_FOUND, "Reference '%s' not found", ref_name);
 }
 
 error_t gitops_load_branch_commit(
@@ -767,24 +768,8 @@ error_t gitops_load_branch_commit(
     error_t err = gitops_branch_refname(refname, sizeof(refname), branch);
     if (err) return err;
 
-    /* Through a symbolic branch to the one it names: `git symbolic-ref` makes
-     * one legally, and every other reader of a branch reads through it. */
-    git_oid tip;
-    int rc = git_reference_name_to_id(&tip, repo, refname);
-    if (rc < 0) {
-        return error_wrap(error_from_git(rc), "Cannot read branch '%s'", branch);
-    }
-
-    /* The tip is read as a commit, as the stage reads the parent it commits on
-     * (sys/stage.c): a branch naming a tag or a tree has no commit at its tip. */
-    rc = git_commit_lookup(out, repo, &tip);
-    if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc), "Cannot read the tip of branch '%s'", branch
-        );
-    }
-
-    return NULL;
+    /* Every failure names the reference, the branch's own spelling of it */
+    return gitops_load_reference_commit(repo, refname, out);
 }
 
 /*
@@ -1524,7 +1509,7 @@ error_t gitops_resolve_reference_oid(
     return NULL;
 }
 
-error_t gitops_resolve_branch_head_oid(
+error_t gitops_resolve_branch_oid(
     git_repository *repo, const char *branch_name, git_oid *out
 ) {
     CHECK_NULL(repo);

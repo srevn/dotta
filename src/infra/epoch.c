@@ -56,60 +56,12 @@ static error_t local_has_ciphertext(
 );
 
 /**
- * Resolve refs/dotta/epoch to a tree.
- *
- * Returns ERR_NOT_FOUND when the ref is missing — its absence proven, never a
- * lookup's word alone — the canonical "uninitialized" diagnostic. Caller is
- * responsible for freeing `*out_tree` via `git_tree_free` on success.
- */
-static error_t resolve_epoch_tree(
-    git_repository *repo, git_tree **out_tree
-) {
-    *out_tree = NULL;
-
-    /* The ref, or its absence proven (sys/gitops.h gitops_reference_find): a
-     * packed-refs that will not parse is a failure, and never the "no epoch"
-     * whose readers adopt without a census or mint over sealed files. */
-    git_reference *ref = NULL;
-    error_t err = gitops_reference_find(repo, EPOCH_REF, &ref);
-    if (err) return err;
-    if (!ref) {
-        return ERROR(ERR_NOT_FOUND, "Epoch ref '%s' not found", EPOCH_REF);
-    }
-
-    /* Peel through any annotated-tag layers down to the commit. The ref is created
-     * as a direct commit by epoch_init, but peeling defends against future shapes
-     * (signed-tag wrappers, symbolic refs) without changing the load semantics. */
-    git_object *commit_obj = NULL;
-    int rc = git_reference_peel(&commit_obj, ref, GIT_OBJECT_COMMIT);
-    git_reference_free(ref);
-    if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc),
-            "Failed to peel '%s' to a commit", EPOCH_REF
-        );
-    }
-
-    git_commit *commit = (git_commit *) commit_obj;
-    rc = git_commit_tree(out_tree, commit);
-    git_commit_free(commit);
-    if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc),
-            "Failed to load tree from '%s'", EPOCH_REF
-        );
-    }
-
-    return NULL;
-}
-
-/**
  * Read one fixed-size blob from the epoch tree by name.
  *
- * ERR_NOT_FOUND belongs to the ref alone (`resolve_epoch_tree`), so nothing here
- * returns it: a ref that resolves to a commit whose tree lacks a blob is a broken
- * shape, not an uninitialized repository. `epoch_init` reads exactly that
- * distinction to decide whether there is a ref to delete before it mints.
+ * ERR_NOT_FOUND belongs to the ref alone (`epoch_load`), so nothing here returns
+ * it: a ref that resolves to a commit whose tree lacks a blob is a broken shape,
+ * not an uninitialized repository. `epoch_init` reads exactly that distinction
+ * to decide whether there is a ref to delete before it mints.
  */
 static error_t read_epoch_blob(
     git_repository *repo, git_tree *tree, const char *name,
@@ -225,10 +177,16 @@ error_t epoch_load(git_repository *repo, kdf_epoch_t *out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
+    /* The ref's tree, or its absence proven (sys/gitops.h gitops_reference_find):
+     * a packed-refs that will not parse is a failure, and never the "no epoch"
+     * whose readers adopt without a census or mint over sealed files. The absence
+     * is the one ERR_NOT_FOUND this module says, the canonical "uninitialized"
+     * (the header). */
     git_tree *tree = NULL;
-    error_t err = resolve_epoch_tree(repo, &tree);
+    error_t err = gitops_reference_tree(repo, EPOCH_REF, &tree);
     if (!err) {
-        err = read_epoch_tree(repo, tree, out);
+        err = tree ? read_epoch_tree(repo, tree, out)
+                   : ERROR(ERR_NOT_FOUND, "Epoch ref '%s' not found", EPOCH_REF);
         git_tree_free(tree);
     }
     if (err) {

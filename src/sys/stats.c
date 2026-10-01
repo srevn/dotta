@@ -99,7 +99,7 @@ static error_t stats_walk(
     /* Resolve the branch head. The walk needs the OID, not the reference that
      * carries it — git_revwalk_push copies what it is given. */
     git_oid head_oid;
-    error_t err = gitops_resolve_branch_head_oid(repo, branch_name, &head_oid);
+    error_t err = gitops_resolve_branch_oid(repo, branch_name, &head_oid);
     if (err) return err;
 
     /* Create revwalker */

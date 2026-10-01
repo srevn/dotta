@@ -1222,11 +1222,11 @@ cleanup:
 /**
  * Load metadata from profile branch
  *
- * Composed: the branch's tree via gitops_load_branch_tree (which accepts both
- * commit-backed branches and orphan refs pointing directly at a tree), then
- * metadata_load_from_tree. A branch without a sheet loads as an empty one, as
- * the tree loader says; a missing branch is the tree loader's failure (ERR_GIT),
- * never a sheet with nothing in it.
+ * Composed: the branch's tree via gitops_load_branch_tree — its tip commit's, a
+ * branch that names anything else refused there — then metadata_load_from_tree.
+ * A branch without a sheet loads as an empty one, as the tree loader says; a
+ * missing branch is the tree loader's refusal (ERR_NOT_FOUND), never a sheet
+ * with nothing in it.
  */
 error_t metadata_load_from_branch(
     git_repository *repo,

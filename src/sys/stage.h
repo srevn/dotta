@@ -92,8 +92,9 @@ typedef struct stage stage_t;
  * parent-to-be
  *
  * A ref that is absent is refused (ERR_NOT_FOUND): the writer expected it there.
- * A ref that is not a commit (a hand-made ref to a tree), or one that cannot be
- * read, is an error in Git's words. `refname` is a full reference name
+ * A ref that names no commit — a tree or a tag a hand put there — or one that
+ * cannot be read is refused as every reader of a tip refuses it (sys/gitops.h
+ * gitops_reference_commit). `refname` is a full reference name
  * (refs/heads/<profile>, refs/dotta/epoch) and is copied.
  *
  * @param repo Repository (must not be NULL; borrowed for the stage's lifetime)

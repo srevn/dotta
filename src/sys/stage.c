@@ -1,8 +1,8 @@
 /**
  * stage.c - One ref's next tree, staged in memory: implementation
  *
- * See stage.h. The stage composes four primitives: the ref resolved once, its
- * absence proven (sys/gitops.h gitops_resolve_reference_oid,
+ * See stage.h. The stage composes four primitives: the ref read once to its tip,
+ * its absence proven (sys/gitops.h gitops_load_reference_commit,
  * gitops_reference_exists), an ownerless index seeded from the tip's tree
  * (git_index_new + git_index_read_tree — never git_repository_index, the
  * checked-out branch's staging area), the tree written straight to the ODB
@@ -40,30 +40,26 @@ struct stage_admission {
 };
 
 /**
- * The stage on `refname`, seeded: the tree at `tip` in a private index with the
- * tip as the parent-to-be, or — when `tip` is NULL, the orphan's stage — the
+ * The stage on `refname`, seeded: the tree of `parent` in a private index with
+ * it as the parent-to-be, or — when `parent` is NULL, the orphan's stage — the
  * empty tree and no parent
  *
- * The stage owns everything it makes from its first allocation on, so every failure
- * frees through stage_free and nothing is handed across this call half-built.
- * The two openers are its doors: each resolves the ref, refuses the state it
- * did not expect, and seeds here.
+ * The stage owns everything it makes from its first allocation on, and the parent
+ * from the call, so every failure frees through stage_free and nothing is handed
+ * across this call half-built. The two openers are its doors: each resolves the
+ * ref, refuses the state it did not expect, and seeds here.
  */
 static error_t stage_seed(
-    git_repository *repo, const char *refname, const git_oid *tip, stage_t **out
+    git_repository *repo, const char *refname, git_commit *parent, stage_t **out
 ) {
     stage_t *st = heap_calloc(1, sizeof(*st));
     st->repo = repo;
     st->refname = heap_strdup(refname);
+    st->parent = parent;
 
     int rc;
-    if (tip) {
-        /* The tip is the parent-to-be, so it must be a commit: a ref to any other
-         * object refuses at the lookup, in Git's words. */
-        rc = git_commit_lookup(&st->parent, repo, tip);
-        if (rc == 0) {
-            rc = git_commit_tree(&st->tree, st->parent);
-        }
+    if (parent) {
+        rc = git_commit_tree(&st->tree, parent);
         if (rc < 0) {
             stage_free(st);
             return error_wrap(
@@ -114,13 +110,17 @@ error_t stage_open(git_repository *repo, const char *refname, stage_t **out) {
     CHECK_NULL(out);
     *out = NULL;
 
-    /* The tip, or the ref's absence proven — a packed-refs that will not parse
-     * is its own failure, never "not found" (sys/gitops.h gitops_reference_find) */
-    git_oid tip;
-    error_t err = gitops_resolve_reference_oid(repo, refname, &tip);
+    /* The tip, the parent-to-be: the commit the ref names, read as every tip is
+     * (sys/gitops.h gitops_reference_commit) — the ref's absence proven and
+     * refused, a packed-refs that will not parse its own failure, and a ref at
+     * anything but a commit refused, a tag never peeled: libgit2 moves the ref
+     * only from the target it reads there (commit.c validate_tree_and_parents),
+     * so the parent must be that target. */
+    git_commit *parent = NULL;
+    error_t err = gitops_load_reference_commit(repo, refname, &parent);
     if (err) return err;
 
-    return stage_seed(repo, refname, &tip, out);
+    return stage_seed(repo, refname, parent, out);
 }
 
 error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out) {

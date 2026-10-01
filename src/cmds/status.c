@@ -1287,7 +1287,7 @@ static error_t status_print_remote(
                 remote_name, profile
             );
             git_commit *remote_commit = NULL;
-            if (!err) err = gitops_load_commit(repo, remote_ref, &remote_commit);
+            if (!err) err = gitops_load_reference_commit(repo, remote_ref, &remote_commit);
 
             if (!err) {
                 const git_oid *remote_oid = git_commit_id(remote_commit);

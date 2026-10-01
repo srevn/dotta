@@ -69,12 +69,11 @@ error_t error_wrap(error_t cause, const char *fmt, ...) {
 }
 
 error_t error_from_git(int git_error_code) {
-    const git_error *e = git_error_last();
-    const char *msg = e ? e->message : "Unknown git error";
-
+    /* libgit2 answers a sentence whatever stands: the one the failing call set,
+     * or a static one of its own where none does (util/errors.c git_error_last) */
     return error_create(
         ERR_GIT, "Git error (%d): %s",
-        git_error_code, msg
+        git_error_code, git_error_last()->message
     );
 }
 

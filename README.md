@@ -90,7 +90,7 @@ dotta apply
 
 ### Prerequisites
 
-- libgit2 1.5+
+- libgit2 1.9+
 - sqlite3 3.40+
 - C11 compiler (clang recommended)
 - POSIX system (macOS, Linux, FreeBSD)

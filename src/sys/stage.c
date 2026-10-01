@@ -70,11 +70,11 @@ static error_t stage_seed(
         /* The empty tree: Git's own "nothing", the tree every orphan's stage
          * opens on. Read, never written: its id is the hash of a tree with no
          * entries, and libgit2 — like git — serves that one object whether or
-         * not the database holds it (odb.c odb_read_hardcoded, present at the
-         * 1.5 floor). The index seeded from it answers for its tree from its
-         * own cache until a verb touches it (tree.c git_tree__write_index), so
-         * an orphan's stage committed untouched meets the rule every stage keeps
-         * — a tree equal to the opened one — and writes nothing there either. */
+         * not the database holds it (odb.c odb_read_hardcoded). The index seeded
+         * from it answers for its tree from its own cache until a verb touches
+         * it (tree.c git_tree__write_index), so an orphan's stage committed
+         * untouched meets the rule every stage keeps — a tree equal to the opened
+         * one — and writes nothing there either. */
         git_oid empty;
         rc = git_odb_hash(&empty, "", 0, GIT_OBJECT_TREE);
         if (rc == 0) {
@@ -279,7 +279,7 @@ static error_t put_entry(git_index *index, const git_index_entry *entry) {
     if (rc != GIT_ENOTFOUND) {
         /* Not tidiness: reading "no conflict" out of a failure to look admits a
          * blob the index would then make room for by dropping an entry. The linked
-         * libgit2 is whichever one pkg-config found at or above 1.5, and its
+         * libgit2 is whichever one pkg-config found at or above 1.9, and its
          * contract here is "0 or an error code". */
         return error_wrap(
             error_from_git(rc), "Failed to search the tree beneath '%s'", path
@@ -291,10 +291,9 @@ static error_t put_entry(git_index *index, const git_index_entry *entry) {
     if (rc == 0) return NULL;
 
     /* The index class is exact here: the mode is checked above and both collisions
-     * refused, so on this path it is raised by the path rule alone. The 1.5 floor
-     * may answer NULL. */
+     * refused, so on this path it is raised by the path rule alone. */
     const git_error *cause = git_error_last();
-    if (cause && cause->klass == GIT_ERROR_INDEX) {
+    if (cause->klass == GIT_ERROR_INDEX) {
         return ERROR(
             ERR_CONFLICT, "Cannot stage '%s': Git refuses the name (%s)", path,
             cause->message

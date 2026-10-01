@@ -1,5 +1,5 @@
 # Dotta - Dotfile Manager Makefile
-# C11, libgit2 1.5+
+# C11, libgit2 1.9+
 
 # Compiler and flags
 CC := clang
@@ -76,7 +76,7 @@ PKG_CONFIG ?= pkg-config
 HAVE_PKG_CONFIG := $(shell command -v $(PKG_CONFIG) 2>/dev/null)
 
 # Version floors
-LIBGIT2_MIN := 1.5
+LIBGIT2_MIN := 1.9
 SQLITE3_MIN := 3.40
 
 LIBGIT2_VERSION := $(shell $(PKG_CONFIG) --modversion libgit2 2>/dev/null)

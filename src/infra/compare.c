@@ -64,10 +64,8 @@ static error_t judge(
 
     git_oid computed;
     if (git_odb_hash(&computed, copy->data, copy->size, GIT_OBJECT_BLOB) != 0) {
-        const git_error *git_err = git_error_last();
         return ERROR(
-            ERR_GIT, "Failed to hash '%s': %s", disk_path,
-            git_err ? git_err->message : "unknown error"
+            ERR_GIT, "Failed to hash '%s': %s", disk_path, git_error_last()->message
         );
     }
 

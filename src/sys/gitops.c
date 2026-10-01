@@ -29,10 +29,11 @@
 error_t gitops_init(void) {
     /* The one git failure error_from_git cannot read: git_error_last answers
      * out of a thread-local the runtime sets up, and an init that failed leaves
-     * the count at zero, so libgit2's own reply is the static "you must call
-     * git_libgit2_init" — the call that just failed, offered to a user who cannot
-     * make it. The subject is the whole message, and it has to be, main() being
-     * the one caller that prints an error rather than wrapping it. */
+     * the count at zero, so libgit2's own reply is the static "library has not
+     * been initialized" (util/errors.c) — the call that just failed, reported
+     * to a user who cannot make it. The subject is the whole message, and it
+     * has to be, main() being the one caller that prints an error rather than
+     * wrapping it. */
     if (git_libgit2_init() < 0) {
         return ERROR(ERR_GIT, "Failed to initialize libgit2");
     }

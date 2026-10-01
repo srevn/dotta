@@ -477,24 +477,29 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
     };
 
     /* What the run did: every failure a script's, its cause on its row as the
-     * run went. A stop is this command's refusal, naming where it stopped and
-     * nothing the row said; a run that went on past its failures listed them as
-     * it closed (bootstrap_fire), and the closing line below reads them off the
-     * receipt. */
+     * run went, so a refusal here restates none. A stop names where it stopped.
+     * A run that went on past its failures has listed them as it closed
+     * (bootstrap_fire), and counts them: a script the run tried and could not
+     * finish is a broken promise whether or not the others ran — keeping going
+     * is what --continue-on-error asks, as make -k does, never that a failure
+     * is not one (cmds/profile.c profile_fetch keeps the same rule). */
     bootstrap_receipt_t receipt = bootstrap_fire(out, &spec);
     if (receipt.stopped) {
         return ERROR(
             ERR_INTERNAL, "Bootstrap stopped at profile '%s'", receipt.stopped
         );
     }
+    if (receipt.failures > 0) {
+        /* The plural agrees with the total, the noun it qualifies */
+        return ERROR(
+            ERR_INTERNAL, "%zu of %zu bootstrap script%s failed",
+            receipt.failures, found.count, found.count == 1 ? "" : "s"
+        );
+    }
 
     if (!opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
-        if (receipt.failures > 0) {
-            output_warning(out, OUTPUT_NORMAL, "Bootstrap completed with errors.");
-        } else {
-            output_success(out, OUTPUT_NORMAL, "Bootstrap complete!");
-        }
+        output_success(out, OUTPUT_NORMAL, "Bootstrap complete!");
         output_gap(out, OUTPUT_NORMAL);
         output_hintline(out, OUTPUT_NORMAL, "Next steps:");
         output_hintline(out, OUTPUT_NORMAL, "  Apply profiles:  dotta apply");

@@ -90,7 +90,8 @@ typedef struct {
  *   - spec->stop_on_error=true: the run stops at the first failure, the scripts
  *     after it never run, and the receipt names the profile it stopped at.
  *   - spec->stop_on_error=false: every script runs, and a run that met failures
- *     closes with a summary naming them (output_warning).
+ *     closes with a section naming them; the receipt counts them, the count the
+ *     caller's to say.
  *
  * Preconditions:
  *   - spec->repo, spec->repo_dir, spec->profiles are non-NULL.

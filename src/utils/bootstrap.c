@@ -254,16 +254,18 @@ bootstrap_receipt_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) 
     }
     receipt.failures = failed.count;
 
-    /* The summary, of a run that went on past its failures: a stop's one failure
-     * is its answer already, named where it stopped */
+    /* The summary, of a run that went on past its failures: the failed scripts
+     * named again in one place, since their rows stand among whatever the scripts
+     * wrote — the "Found" section's rows, failed. No count: its one home is the
+     * caller's refusal. A stop's one failure is its answer already, named where
+     * it stopped. */
     if (receipt.failures > 0 && receipt.stopped == NULL) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_warning(
-            out, OUTPUT_NORMAL, "%zu bootstrap script%s failed:",
-            failed.count, failed.count == 1 ? "" : "s"
-        );
+        output_section(out, OUTPUT_NORMAL, "Failed bootstrap scripts");
         for (size_t i = 0; i < failed.count; i++) {
-            output_print(out, OUTPUT_NORMAL, "  - %s\n", failed.entries[i]);
+            output_styled(
+                out, OUTPUT_NORMAL, "  {red}✗{reset} %s/%s\n",
+                failed.entries[i], BOOTSTRAP_SCRIPT_NAME
+            );
         }
     }
 

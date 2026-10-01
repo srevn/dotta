@@ -393,6 +393,10 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 "is fetched or 'dotta init' is run locally.",
                 error_message(err)
             );
+            /* Said: the error is dropped here, so the arms below meet a clone
+             * with no failure in hand rather than one the next assignment
+             * overwrites */
+            err = NULL;
         } else {
             err = error_wrap(err, "Failed to fetch repository epoch");
             goto cleanup;
@@ -417,21 +421,18 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         );
 
     } else if (opts->fetch_all) {
-        /* Hub mode - fetch all profiles */
+        /* Hub mode: every remote profile made local. A listing that fails ends
+         * the clone, and the all-or-nothing rule rolls the store back (cleanup):
+         * read as "fetched nothing", it handed the rest of the run an answer it
+         * never got. */
         err = land_all_profiles(repo, "origin", out, ctx->arena, &fetched_profiles);
+        if (err) goto cleanup;
 
-        if (err) {
-            output_error(
-                out, "Failed to fetch all profiles: %s",
-                error_message(err)
-            );
-        } else {
-            /* Every fetched profile, seeded in the convention's order: the remote's
-             * listing has none of its own, and initialize_state enables in the
-             * order this list has. Named profiles (-p) keep the order typed;
-             * detection sorts its own answer. */
-            profile_order(&fetched_profiles);
-        }
+        /* Every fetched profile, seeded in the convention's order: the remote's
+         * listing has none of its own, and initialize_state enables in the order
+         * this list has. Named profiles (-p) keep the order typed; detection
+         * sorts its own answer. */
+        profile_order(&fetched_profiles);
 
     } else {
         /* Default: auto-detect profiles for this machine */
@@ -439,20 +440,17 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             out, OUTPUT_NORMAL, "Auto-detecting profiles for this system"
         );
 
-        /* Every branch the one fetch brought, and the profiles detected among
-         * them: both empty where the listing failed */
-        string_array_t remote_branches = { 0 };
-        string_array_t detected_profiles = { 0 };
+        /* Every branch the one fetch brought: a listing that fails ends the clone,
+         * as hub mode's does, never read as "no profiles auto-detected" */
+        string_array_t remote_branches;
         err = gitops_list_remote_tracking(repo, "origin", ctx->arena, &remote_branches);
         if (err) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to list remote branches: %s",
-                error_message(err)
-            );
-        } else {
-            /* Name-based detection against remote branches */
-            detected_profiles = profile_detect(ctx->arena, &remote_branches);
+            err = error_wrap(err, "Failed to list remote branches");
+            goto cleanup;
         }
+
+        /* Name-based detection against remote branches */
+        string_array_t detected_profiles = profile_detect(ctx->arena, &remote_branches);
 
         if (detected_profiles.count > 0) {
             /* Show detected profiles */

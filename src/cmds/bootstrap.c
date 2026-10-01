@@ -308,13 +308,13 @@ static void bootstrap_list(
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->entries[i];
         if (bootstrap_exists(repo, profile)) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "  {green}✓{reset} %-15s %s/%s\n",
                 profile, profile, BOOTSTRAP_SCRIPT_NAME
             );
         } else {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "  {red}✗{reset} %-15s (no bootstrap script)\n",
                 profile
@@ -452,7 +452,7 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
     /* Display what will be executed */
     output_section(out, OUTPUT_NORMAL, "Found bootstrap scripts");
     for (size_t i = 0; i < found.count; i++) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "  {green}✓{reset} %s/%s\n",
             found.entries[i], BOOTSTRAP_SCRIPT_NAME
         );

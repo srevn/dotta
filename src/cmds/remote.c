@@ -123,11 +123,11 @@ static error_t remote_list(
                 push_url = fetch_url;
             }
 
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "{cyan}%-15s{reset} %s (fetch)\n",
                 remote_name, fetch_url
             );
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "{cyan}%-15s{reset} %s (push)\n",
                 remote_name, push_url
             );
@@ -135,7 +135,7 @@ static error_t remote_list(
             git_remote_free(remote);
         } else {
             /* Just show names */
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "{cyan}%s{reset}\n",
                 remote_name
             );
@@ -381,7 +381,7 @@ static error_t remote_show(
     }
 
     /* Show remote information */
-    output_styled(out, OUTPUT_NORMAL, "Remote: {cyan}%s{reset}\n", name);
+    output_print(out, OUTPUT_NORMAL, "Remote: {cyan}%s{reset}\n", name);
 
     const char *fetch_url = git_remote_url(remote);
     const char *push_url = git_remote_pushurl(remote);

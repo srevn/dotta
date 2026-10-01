@@ -1188,7 +1188,7 @@ static error_t materialize_entries(
                     );
                 }
                 if (!is_root) {
-                    output_styled(
+                    output_print(
                         out, OUTPUT_VERBOSE, "  created {cyan}%s/{reset} (mode %04o)\n",
                         e->rel_path, (unsigned) e->mode
                     );
@@ -1219,7 +1219,7 @@ static error_t materialize_entries(
                         err, "Failed to write '%s'", e->dest_path
                     );
                 }
-                output_styled(
+                output_print(
                     out, OUTPUT_VERBOSE, "  wrote {cyan}%s{reset} (mode %04o%s)\n",
                     e->rel_path, (unsigned) e->mode, e->encrypted ? ", decrypted" : ""
                 );
@@ -1249,7 +1249,7 @@ static error_t materialize_entries(
                         err, "Failed to create symlink '%s'", e->dest_path
                     );
                 }
-                output_styled(
+                output_print(
                     out, OUTPUT_VERBOSE, "  linked {cyan}%s{reset} -> %s\n",
                     e->rel_path, (const char *) e->content.data
                 );
@@ -1290,7 +1290,7 @@ static void print_dry_run(
     const char *profile,
     const char *commit_suffix
 ) {
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL,
         "Would export %s to {cyan}%s{reset} "
         "(from {magenta}%s{reset}%s):\n",
@@ -1551,7 +1551,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     err = materialize_entries(ctx, opts->profile, &list);
     if (err) goto cleanup;
 
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL,
         "Exported %s to {cyan}%s{reset} (from {magenta}%s{reset}%s)\n",
         counts, dest_display, opts->profile, commit_suffix

@@ -567,7 +567,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 out, OUTPUT_NORMAL, "Bootstrap scripts available"
             );
             for (size_t i = 0; i < bootstrap_found.count; i++) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  {green}✓{reset} %s/%s\n",
                     bootstrap_found.entries[i], BOOTSTRAP_SCRIPT_NAME
                 );

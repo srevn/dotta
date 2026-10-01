@@ -1153,13 +1153,13 @@ static error_t update_execute(
 
         if (!output_is_verbose(out)) {
             if (processed > 0) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %zu item%s\n",
                     processed, processed == 1 ? "" : "s"
                 );
             } else {
                 /* A derivation-only commit: no user item moved, the chains did */
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  {green}✓{reset} Re-derived the ancestry\n"
                 );
             }

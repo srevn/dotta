@@ -537,20 +537,6 @@ void output_print(
 
     va_list args;
     va_start(args, fmt);
-    vfprintf(ctx->stream, fmt, args);
-    va_end(args);
-}
-
-void output_styled(
-    output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
-) {
-    if (!ctx || !fmt) return;
-    if (ctx->verbosity < min_level) return;
-
-    land(ctx, ctx->stream);
-
-    va_list args;
-    va_start(args, fmt);
     styled_vfprintf(ctx->color_enabled, ctx->stream, fmt, args);
     va_end(args);
 }

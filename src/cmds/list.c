@@ -247,7 +247,7 @@ static error_t list_profiles(
 
         /* Simple mode: Just name with enabled indicator */
         if (!verbose && !show_remote) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  %s{cyan}%s{reset}\n",
                 indicator, profile
             );
@@ -255,7 +255,7 @@ static error_t list_profiles(
         }
 
         /* Start line with indicator and name */
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "  %s{cyan}%-*s{reset}",
             indicator, (int) max_name_len, profile
         );
@@ -282,7 +282,7 @@ static error_t list_profiles(
             size_t summary_len = strlen(last->summary);
             if (summary_len > 40) summary_len = 40;
 
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
                 oid_str, (int) summary_len, last->summary, time_str
             );
@@ -309,13 +309,13 @@ static error_t list_profiles(
             "Remote tracking (from %s):\n",
             remote_name
         );
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "  {green}[=]{reset} up-to-date  "
             "  {yellow}[↑n]{reset} ahead  "
             "  {yellow}[↓n]{reset} behind\n"
         );
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "  {red}[↕n+m]{reset} diverged  "
             " {cyan}[•]{reset}  no remote\n"
@@ -491,13 +491,13 @@ static error_t list_files(
         /* Print file path (with alignment in verbose mode) */
         if (verbose) {
             /* Verbose: Left-align with padding for column alignment */
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {cyan}%-*s{reset}",
                 (int) max_path_len, storage_path
             );
         } else {
             /* Simple: No alignment needed */
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {cyan}%s{reset}",
                 storage_path
             );
@@ -523,7 +523,7 @@ static error_t list_files(
                     && item && item->encrypted;
 
                 if (encrypted) {
-                    output_styled(out, OUTPUT_VERBOSE, "  {yellow}[E]{reset} ");
+                    output_print(out, OUTPUT_VERBOSE, "  {yellow}[E]{reset} ");
                 } else {
                     /* Space padding to maintain alignment */
                     output_print(out, OUTPUT_VERBOSE, "      ");
@@ -553,7 +553,7 @@ static error_t list_files(
                     output_print(out, OUTPUT_VERBOSE, " %8s", size_str);
                     total_size += display_size;
                 } else {
-                    output_styled(out, OUTPUT_VERBOSE, " {dim}%8s{reset}", "[?]");
+                    output_print(out, OUTPUT_VERBOSE, " {dim}%8s{reset}", "[?]");
                 }
 
                 /* Get last commit for this file */
@@ -571,7 +571,7 @@ static error_t list_files(
                         size_t summary_len = strlen(commit_info->summary);
                         if (summary_len > 40) summary_len = 40;
 
-                        output_styled(
+                        output_print(
                             out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
                             oid_str, (int) summary_len, commit_info->summary, time_str
                         );
@@ -580,7 +580,7 @@ static error_t list_files(
                 git_tree_entry_free(entry);
             } else {
                 /* Tree entry lookup failed unexpectedly */
-                output_styled(out, OUTPUT_VERBOSE, "  {dim}[?]{reset}");
+                output_print(out, OUTPUT_VERBOSE, "  {dim}[?]{reset}");
             }
         }
 
@@ -840,7 +840,7 @@ static error_t list_file_history(
             git_oid_tostr(oid_str, sizeof(oid_str), &commit->oid);
 
             output_gap(out, OUTPUT_VERBOSE);
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "{bold}commit {yellow}%s{reset}\n",
                 oid_str
             );
@@ -851,7 +851,7 @@ static error_t list_file_history(
                 char relative_str[64];
                 timeutil_relative(commit->time, relative_str, sizeof(relative_str));
 
-                output_styled(
+                output_print(
                     out, OUTPUT_VERBOSE, "Date:   %s {dim}(%s){reset}\n",
                     date_buf, relative_str
                 );
@@ -867,7 +867,7 @@ static error_t list_file_history(
             char time_str[64];
             timeutil_relative(commit->time, time_str, sizeof(time_str));
 
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {yellow}%s{reset}  %-*s {dim}(%s){reset}\n",
                 oid_str, (int) max_msg_len, commit->summary, time_str
             );

@@ -518,11 +518,11 @@ static error_t show_diff_preview(
     output_section(out, OUTPUT_NORMAL, "Changes preview");
 
     /* Show stats */
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "  File: {cyan}%s{reset}\n",
         standing_name
     );
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "  Changes: {green}+%zu{reset} / {red}-%zu{reset}\n",
         additions, deletions
     );
@@ -1078,11 +1078,11 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * where there are two, the commit's — which is how a name is marked wherever
      * one is printed beside other words (cmds/list.c's history header prints
      * two in one line). The commit line is an oid and a time and carries none. */
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "  Profile: {cyan}%s{reset}\n",
         profile
     );
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "  File: {cyan}%s{reset}\n",
         restored_name
     );
@@ -1094,7 +1094,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     /* The other name, said once and only where there is one: the write lands on
      * the claim the branch holds now, and this is where the bytes come from. */
     if (strcmp(target_name, restored_name) != 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "  Named at the commit: {cyan}%s{reset}\n",
             target_name
         );
@@ -1131,12 +1131,12 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * two of them. */
     if (!standing_entry) {
         output_gap(out, OUTPUT_NORMAL);
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "{green}Restoring a deleted file{reset}\n"
         );
     } else if (git_oid_equal(git_tree_entry_id(standing_entry), &restored_blob)) {
         output_gap(out, OUTPUT_NORMAL);
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "{green}Contents unchanged; restoring the recorded mode, ownership "
             "and stamp{reset}\n"

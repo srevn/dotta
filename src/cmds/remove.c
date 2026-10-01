@@ -646,15 +646,15 @@ static void remove_print_overlaps(
     for (size_t i = 0; i < overlaps->count; i++) {
         const overlap_t *overlap = &overlaps->entries[i];
 
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "  {yellow}%s{reset} also in:", overlap->filesystem_path
         );
         for (size_t j = 0; j < overlap->others->count; j++) {
             const profile_claim_t *other = &overlap->others->entries[j];
 
-            output_styled(out, OUTPUT_NORMAL, " {cyan}%s{reset}", other->profile);
+            output_print(out, OUTPUT_NORMAL, " {cyan}%s{reset}", other->profile);
             if (strcmp(other->storage_path, overlap->storage_path) != 0) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, " {dim}(as %s){reset}", other->storage_path
                 );
             }

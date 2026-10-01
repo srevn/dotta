@@ -227,14 +227,14 @@ bootstrap_receipt_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) 
             );
 
         if (!step_err) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {green}✓{reset} %s\n",
                 spec->dry_run ? "Would execute" : "Complete"
             );
             continue;
         }
 
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "  {red}✗{reset} %s: %s\n",
             spec->dry_run ? "Validation failed" : "Failed",
             error_message(step_err)
@@ -262,7 +262,7 @@ bootstrap_receipt_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) 
     if (receipt.failures > 0 && receipt.stopped == NULL) {
         output_section(out, OUTPUT_NORMAL, "Failed bootstrap scripts");
         for (size_t i = 0; i < failed.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s/%s\n",
                 failed.entries[i], BOOTSTRAP_SCRIPT_NAME
             );

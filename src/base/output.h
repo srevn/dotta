@@ -190,21 +190,12 @@ bool output_is_tty(const output_t *ctx);
 const char *output_color_code(const output_t *ctx, output_color_t color);
 
 /**
- * Print with verbosity check
- */
-void output_print(
-    output_t *ctx,
-    output_verbosity_t min_level,
-    const char *fmt,
-    ...
-) __attribute__((format(printf, 3, 4)));
-
-/**
  * Print with inline style tags and verbosity check
  *
- * Like output_print() but supports {tag} markup for inline coloring. Tags are
- * replaced with ANSI codes when colors are enabled, or removed when disabled.
- * Unknown tags pass through literally.
+ * The format as it is written — no prefix, and no newline of its own — with {tag}
+ * markup for inline coloring, as every formatted emitter here reads its format.
+ * Tags are replaced with ANSI codes when colors are enabled, or removed when
+ * disabled. Unknown tags pass through literally.
  *
  * Supported tags:
  *   {red}, {green}, {yellow}, {blue}, {magenta}, {cyan}, {white}
@@ -220,10 +211,10 @@ void output_print(
  * @param fmt Format string with optional {tag} markup
  *
  * Example:
- *   output_styled(out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n", path);
- *   output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset} → {cyan}%s{reset}\n", old, new);
+ *   output_print(out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n", path);
+ *   output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset} → {cyan}%s{reset}\n", old, new);
  */
-void output_styled(
+void output_print(
     output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
@@ -235,7 +226,7 @@ void output_styled(
  *
  * Applies `color` to the entire formatted output and auto-resets. Use when the
  * color is determined at runtime (variable output_color_t). For compile-time
- * colors, prefer output_styled() with {tags} instead.
+ * colors, prefer output_print() with {tags} instead.
  *
  * When color is OUTPUT_COLOR_RESET, no color wrapping is applied (content prints
  * plain). This allows using RESET as a "no color" sentinel.
@@ -346,9 +337,9 @@ void output_hintline(
 /**
  * End the line this code is building
  *
- * For a line assembled from several output_print / output_styled / output_colored
- * calls whose formats carry no trailing newline. Not a separator: output_gap is
- * the boundary between two blocks, and the two were one word until 0.148.7.
+ * For a line assembled from several output_print / output_colored calls whose
+ * formats carry no trailing newline. Not a separator: output_gap is the boundary
+ * between two blocks, and the two were one word until 0.148.7.
  *
  * Its level is the level of the line it ends, which is the level of that line's
  * first part — an endline below its opener writes a bare newline into a run where

@@ -273,11 +273,11 @@ static error_t show_file_diff_from_workspace(
     }
 
     /* Show file header */
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
         file->profile
     );
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
         file->storage_path
     );
@@ -305,7 +305,7 @@ static error_t show_file_diff_from_workspace(
     }
 
     /* Show status */
-    output_styled(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
+    output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
     output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
 
     /* For missing files, type changes and failed looks, no content diff to show:
@@ -364,7 +364,7 @@ static error_t show_file_diff_from_workspace(
      * own look found the copy matching after all — the one thing that can change
      * between the load and here — the status line above stands alone. */
     if (diff.diff_text) {
-        output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
+        output_print(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
         output_print_diff(out, OUTPUT_NORMAL, diff.diff_text);
     }
 
@@ -478,23 +478,23 @@ static void print_commit_header(
     timeutil_relative(commit_time, relative_buf, sizeof(relative_buf));
 
     /* Print header with colors */
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{yellow}commit %s{reset}",
         oid_str
     );
     if (profile) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, " {cyan}(%s){reset}",
             profile
         );
     }
     output_endline(out, OUTPUT_NORMAL);
 
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{bold}Author:{reset} %s <%s>\n",
         author->name, author->email
     );
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{bold}Date:{reset}   %s (%s)\n",
         time_buf, relative_buf
     );
@@ -537,14 +537,14 @@ static error_t print_diff_stats(
     );
 
     if (insertions > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, ", {green}%zu insertion%s(+){reset}",
             insertions, insertions == 1 ? "" : "s"
         );
     }
 
     if (deletions > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, ", {red}%zu deletion%s(-){reset}",
             deletions, deletions == 1 ? "" : "s"
         );
@@ -751,21 +751,21 @@ static error_t compare_tree_files_to_filesystem(
             output_gap(out, OUTPUT_NORMAL);
 
             /* Show file header */
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
                 profile
             );
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
                 storage_path
             );
 
-            output_styled(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
+            output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
             output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
 
             /* Only a content difference has bytes to render */
             if (diff.status == CMP_DIFFERENT) {
-                output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
+                output_print(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
                 output_print_diff(out, OUTPUT_NORMAL, diff.diff_text);
             }
 
@@ -959,7 +959,7 @@ static error_t diff_commit_to_workspace(
         output_gap(out, OUTPUT_NORMAL);
     }
 
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{bold}diff --dotta %s..workspace{reset}\n",
         oid_str
     );
@@ -1155,7 +1155,7 @@ static error_t diff_commits(
     git_oid_tostr(oid1_str, sizeof(oid1_str), git_commit_id(commit1));
     git_oid_tostr(oid2_str, sizeof(oid2_str), git_commit_id(commit2));
 
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{bold}diff --dotta %s..%s{reset}\n",
         oid1_str, oid2_str
     );

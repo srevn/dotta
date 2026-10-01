@@ -844,10 +844,10 @@ static error_t ignore_test(
              * read as no exclusion, since what could not be read may be what
              * git excludes. The asker could not tell, and the failure's one line
              * says why (sys/source.h) — answered again for each asker it fails. */
-            output_styled(out, OUTPUT_NORMAL, "{yellow}?{reset} %sCOULD NOT TELL\n", who);
+            output_print(out, OUTPUT_NORMAL, "{yellow}?{reset} %sCOULD NOT TELL\n", who);
             output_info(out, OUTPUT_NORMAL, "  Reason: %s", error_message(failure));
         } else if (verdict.origin != IGNORE_ORIGIN_NONE) {
-            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} %sIGNORED\n", who);
+            output_print(out, OUTPUT_NORMAL, "{red}✗{reset} %sIGNORED\n", who);
             output_info(
                 out, OUTPUT_NORMAL, "  Reason: %s", ignore_verdict_describe(ctx->arena, &verdict)
             );

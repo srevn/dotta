@@ -365,7 +365,7 @@ static error_t attempt_rollback(
 ) {
     error_t err = resolve_rollback(resolve);
     if (err) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} Critical: Rollback failed: %s\n",
             error_message(err)
@@ -427,7 +427,7 @@ static void handle_remote_ahead(
     bool pulled = false;
     error_t err = pull_branch_ff(repo, remote_name, result->profile, &pulled);
     if (err) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "  {red}✗{reset} {red}%s{reset}: pull failed - %s\n",
             result->profile, error_message(err)
@@ -453,7 +453,7 @@ static void handle_remote_ahead(
     /* Pull succeeded. What the pull did to the view is reported by cmd_sync's
      * manifest block, once, after every profile's Git work. */
     result->outcome = SYNC_OUTCOME_PULLED;
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL,
         "  {green}✓{reset} {green}%s{reset}: pulled %zu commit%s\n",
         result->profile, result->behind, result->behind == 1 ? "" : "s"
@@ -498,7 +498,7 @@ static error_t resolve_and_push_divergence(
         &resolve, repo, remote_name, result->profile, strategy
     );
     if (err) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} Failed to initialize divergence context: %s\n",
             error_message(err)
@@ -510,7 +510,7 @@ static error_t resolve_and_push_divergence(
     /* Perform in-memory resolution (never modifies HEAD) */
     err = resolve_execute(&resolve, NULL);
     if (err) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} %s failed: %s\n",
             cap_name, error_message(err)
@@ -523,7 +523,7 @@ static error_t resolve_and_push_divergence(
     size_t ahead = 0;
     err = resolve_verify(&resolve, &ahead, NULL);
     if (err) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} %s verification failed: %s\n",
             cap_name, error_message(err)
@@ -537,7 +537,7 @@ static error_t resolve_and_push_divergence(
         return attempt_rollback(&resolve, result->profile, reason, out);
     }
 
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL,
         "    {green}✓{reset} Successfully %s (%zu commit%s to push)\n",
         past_desc, ahead, ahead == 1 ? "" : "s"
@@ -549,7 +549,7 @@ static error_t resolve_and_push_divergence(
         /* Push resolved commits */
         err = gitops_push_branch(repo, remote_name, result->profile, xfer);
         if (err) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "    {red}✗{reset} Push after %s failed: %s\n",
                 strategy_name, error_message(err)
@@ -566,7 +566,7 @@ static error_t resolve_and_push_divergence(
             );
         }
 
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "    {green}✓{reset} Pushed %s\n",
             push_desc
@@ -621,7 +621,7 @@ static void handle_diverged_ours(
     /* Force push local to remote (local branch stays unchanged) */
     error_t err = gitops_force_push_branch(repo, remote_name, result->profile, xfer);
     if (err) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} Force push failed: %s\n",
             error_message(err)
@@ -630,7 +630,7 @@ static void handle_diverged_ours(
         return;
     }
 
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL,
         "    {green}✓{reset} Force pushed to remote (remote commits discarded)\n"
     );
@@ -676,7 +676,7 @@ static void handle_diverged_theirs(
         &resolve, repo, remote_name, result->profile, RESOLVE_STRATEGY_THEIRS
     );
     if (err) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} Failed to initialize divergence context: %s\n",
             error_message(err)
@@ -688,7 +688,7 @@ static void handle_diverged_theirs(
     /* Resolve divergence (resets local branch to remote) */
     err = resolve_execute(&resolve, NULL);
     if (err) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} Reset failed: %s\n",
             error_message(err)
@@ -704,12 +704,12 @@ static void handle_diverged_theirs(
      */
     err = resolve_verify(&resolve, NULL, NULL);
     if (err) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} Reset verification failed: %s\n",
             error_message(err)
         );
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "    {yellow}⚠{reset} Local branch was reset but verification failed\n"
         );
@@ -717,7 +717,7 @@ static void handle_diverged_theirs(
         return;
     }
 
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL,
         "    {green}✓{reset} Reset to remote (local commits discarded)\n"
     );
@@ -739,7 +739,7 @@ static error_t handle_diverged(
     bool confirm_destructive,
     bool no_push
 ) {
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL,
         "  {yellow}⚠{reset} {red}%s{reset}: diverged (%zu local, %zu remote commits)\n",
         result->profile, result->ahead, result->behind
@@ -833,7 +833,7 @@ static error_t sync_push_phase(
 
         /* Skip rows that already failed in analyze phase. */
         if (result->outcome == SYNC_OUTCOME_FAILED) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "  {red}✗{reset} {red}%s{reset}: %s\n",
                 result->profile, error_message(result->error)
@@ -888,14 +888,14 @@ static error_t sync_push_phase(
 
                 error_t err = gitops_push_branch(repo, remote_name, result->profile, xfer);
                 if (err) {
-                    output_styled(
+                    output_print(
                         out, OUTPUT_NORMAL,
                         "  {red}✗{reset} {red}%s{reset}: push failed - %s\n",
                         result->profile, error_message(err)
                     );
                     mark_result_failed(result, err);
                 } else {
-                    output_styled(
+                    output_print(
                         out, OUTPUT_NORMAL,
                         "  {green}✓{reset} {green}%s{reset}: pushed %zu commit%s\n",
                         result->profile, result->ahead, result->ahead == 1 ? "" : "s"
@@ -925,14 +925,14 @@ static error_t sync_push_phase(
 
                 error_t err = gitops_push_branch(repo, remote_name, result->profile, xfer);
                 if (err) {
-                    output_styled(
+                    output_print(
                         out, OUTPUT_NORMAL,
                         "  {red}✗{reset} {red}%s{reset}: failed to create remote branch - %s\n",
                         result->profile, error_message(err)
                     );
                     mark_result_failed(result, err);
                 } else {
-                    output_styled(
+                    output_print(
                         out, OUTPUT_NORMAL,
                         "  {green}✓{reset} {green}%s{reset}: created remote branch\n",
                         result->profile
@@ -952,7 +952,7 @@ static error_t sync_push_phase(
                         upstream_state_symbol(result->state),
                         result->profile, result->behind, result->behind == 1 ? "" : "s"
                     );
-                    output_styled(
+                    output_print(
                         out, OUTPUT_NORMAL,
                         "    {yellow}⚠{reset} Local is behind — "
                         "force push will overwrite newer remote commits\n"
@@ -974,7 +974,7 @@ static error_t sync_push_phase(
                 if (no_pull && diverged_strategy != SYNC_STRATEGY_WARN &&
                     diverged_strategy != SYNC_STRATEGY_OURS) {
 
-                    output_styled(
+                    output_print(
                         out, OUTPUT_NORMAL,
                         "  {yellow}⚠{reset} {red}%s{reset}: diverged "
                         "(%zu local, %zu remote commits)\n",
@@ -1031,7 +1031,7 @@ static void sync_render_dry_run(
         const profile_sync_result_t *r = &results->profiles[i];
 
         if (r->outcome == SYNC_OUTCOME_FAILED) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s: %s\n",
                 r->profile, error_message(r->error)
             );
@@ -1195,7 +1195,7 @@ static void sync_render_summary(
         );
     }
     if (failed > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "{red}✗{reset} {cyan}%zu{reset} profile%s failed\n",
             failed, failed == 1 ? "" : "s"
         );
@@ -2053,7 +2053,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         if (unbound.count > 0) {
             output_section(out, OUTPUT_NORMAL, "Paths with no target");
             for (size_t i = 0; i < unbound.count && i < LIST_LIMIT; i++) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL,
                     "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
                     unbound.entries[i].storage_path,
@@ -2085,7 +2085,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         if (unkept.count > 0) {
             output_section(out, OUTPUT_NORMAL, "Unused paths");
             for (size_t i = 0; i < unkept.count && i < LIST_LIMIT; i++) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL,
                     "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
                     unkept.entries[i].storage_path,

@@ -72,12 +72,12 @@ static void status_print_profiles(
         const char *profile = profiles->entries[i];
 
         /* Format profile name, and the binding when the row has one */
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
+        output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
         const char *target = state_target(state, profile);
         if (target) {
             char shown[PATH_MAX];
             output_format_path(target, identity()->home, shown, sizeof(shown));
-            output_styled(out, OUTPUT_NORMAL, " {dim}→ %s{reset}", shown);
+            output_print(out, OUTPUT_NORMAL, " {dim}→ %s{reset}", shown);
         }
 
         /* One walk of the view per profile: the latest of its own ownership events
@@ -127,14 +127,14 @@ static void status_print_profiles(
             );
 
             /* Display dimmed timestamp */
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {dim}(deployed %s){reset}",
                 relative_buf
             );
         }
 
         if (unplaced > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "  {yellow}(%zu custom/ path%s need%s a deployment target){reset}",
                 unplaced, unplaced == 1 ? "" : "s", unplaced == 1 ? "s" : ""
@@ -142,7 +142,7 @@ static void status_print_profiles(
         }
 
         if (unused > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {yellow}(%zu unused path%s){reset}",
                 unused, unused == 1 ? "" : "s"
             );
@@ -1063,7 +1063,7 @@ static void status_print_workspace(
 
     /* The diverged items the filter hides, counted */
     if (hidden > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "  {dim}(%zu item%s hidden){reset}\n",
             hidden, hidden == 1 ? "" : "s"
         );
@@ -1194,7 +1194,7 @@ static error_t status_print_remote(
         upstream_info_t info;
         err = upstream_analyze_profile(repo, remote_name, profile, &info);
         if (err) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {cyan}%s{reset}  {red}(✗ %s){reset}\n",
                 profile, error_message(err)
             );
@@ -1320,8 +1320,8 @@ static error_t status_print_remote(
             }
         } else {
             /* Compact mode: single line matching enabled profiles format */
-            output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
-            output_styled(out, OUTPUT_NORMAL, "  {dim}(%s){reset}\n", status_str);
+            output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
+            output_print(out, OUTPUT_NORMAL, "  {dim}(%s){reset}\n", status_str);
         }
     }
 
@@ -1329,25 +1329,25 @@ static error_t status_print_remote(
     output_section(out, OUTPUT_NORMAL, "Sync summary");
 
     if (up_to_date > 0) {
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} up-to-date\n", up_to_date);
+        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} up-to-date\n", up_to_date);
     }
     if (ahead > 0) {
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} ahead\n", ahead);
+        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} ahead\n", ahead);
     }
     if (behind > 0) {
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} behind\n", behind);
+        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} behind\n", behind);
     }
     if (diverged > 0) {
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} diverged\n", diverged);
+        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} diverged\n", diverged);
     }
     if (no_remote > 0) {
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote\n", no_remote);
+        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote\n", no_remote);
     }
     if (no_local > 0) {
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no local branch\n", no_local);
+        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no local branch\n", no_local);
     }
     if (failed > 0) {
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} failed\n", failed);
+        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} failed\n", failed);
     }
 
     return NULL;

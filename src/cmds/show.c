@@ -136,15 +136,15 @@ static error_t print_blob_content(
 
     /* Type — the tree's word — and, for a link, the target it stores */
     if (is_link) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "{dim}# Type:{reset}    symlink\n"
         );
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "{dim}# Target:{reset}  %.*s\n",
             (int) content.size, (const char *) content.data
         );
     } else {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "{dim}# Type:{reset}    %s",
             is_binary ? "binary file" : filemode_type_str(filemode)
         );
@@ -160,13 +160,13 @@ static error_t print_blob_content(
      * the owner being the invoker's and the group no change. */
     if (item) {
         if (!is_link && item->mode != MODE_UNCLAIMED) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "{dim}# Mode:{reset}    %04o\n",
                 (unsigned) item->mode
             );
         }
         if (item->owner || item->group) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "{dim}# Owner:{reset}   %s%s%s\n",
                 item->owner ? item->owner : "", item->group ? ":" : "",
                 item->group ? item->group : ""
@@ -178,7 +178,7 @@ static error_t print_blob_content(
     if (!is_link) {
         char size_buf[32];
         output_format_size(content.size, size_buf, sizeof(size_buf));
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "{dim}# Size:{reset}    %s\n",
             size_buf
         );
@@ -191,7 +191,7 @@ static error_t print_blob_content(
         return NULL;
     }
 
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{dim}---{reset}\n"
     );
 
@@ -280,15 +280,15 @@ static void show_provenance(output_t *out, const git_commit *commit) {
     char time_str[64];
     timeutil_relative(commit_time, time_str, sizeof(time_str));
 
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{dim}# Commit:{reset}  {yellow}%s{reset}\n",
         oid_str
     );
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{dim}# Date:{reset}    %s\n",
         time_str
     );
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{dim}# Author:{reset}  %s <%s>\n",
         author->name, author->email
     );
@@ -298,12 +298,12 @@ static void show_provenance(output_t *out, const git_commit *commit) {
     if (msg) {
         const char *newline = strchr(msg, '\n');
         if (newline) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "{dim}# Message:{reset} %.*s\n",
                 (int) (newline - msg), msg
             );
         } else {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "{dim}# Message:{reset} %s\n", msg
             );
         }
@@ -500,17 +500,17 @@ static error_t show_commit(
     char relative_buf[64];
     timeutil_relative(commit_time, relative_buf, sizeof(relative_buf));
 
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{yellow}commit %s{reset} {cyan}(%s){reset}\n",
         oid_str, profile
     );
 
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{bold}Author:{reset} %s <%s>\n",
         author->name, author->email
     );
 
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{bold}Date:{reset}   %s (%s)\n",
         time_buf, relative_buf
     );
@@ -541,13 +541,13 @@ static error_t show_commit(
         files_changed, files_changed == 1 ? "" : "s"
     );
     if (insertions > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, ", {green}%zu insertion%s(+){reset}",
             insertions, insertions == 1 ? "" : "s"
         );
     }
     if (deletions > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, ", {red}%zu deletion%s(-){reset}",
             deletions, deletions == 1 ? "" : "s"
         );
@@ -751,11 +751,11 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     profile = row->profile;
     storage_path = row->storage_path;
 
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
         profile
     );
-    output_styled(
+    output_print(
         out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
         storage_path
     );

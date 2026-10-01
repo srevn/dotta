@@ -99,12 +99,12 @@ static void apply_print_deploy_skips(
         switch (s->reason) {
             case DEPLOY_SKIP_PERMISSION: {
                 if (s->ancestor) {
-                    output_styled(
+                    output_print(
                         out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%.*s is not writable)\n",
                         path, (int) s->ancestor, path
                     );
                 } else {
-                    output_styled(
+                    output_print(
                         out, OUTPUT_NORMAL, "  {red}✗{reset} %s (ancestry cannot be reached)\n",
                         path
                     );
@@ -119,12 +119,12 @@ static void apply_print_deploy_skips(
                  * can. */
                 const struct passwd *pwd = getpwuid(s->item->st.st_uid);
                 if (pwd && pwd->pw_name) {
-                    output_styled(
+                    output_print(
                         out, OUTPUT_NORMAL, "  {red}✗{reset} %s (owned by %s)\n",
                         path, pwd->pw_name
                     );
                 } else {
-                    output_styled(
+                    output_print(
                         out, OUTPUT_NORMAL, "  {red}✗{reset} %s (owned by uid %u)\n",
                         path, (unsigned) s->item->st.st_uid
                     );
@@ -133,7 +133,7 @@ static void apply_print_deploy_skips(
             }
 
             case DEPLOY_SKIP_ANCESTOR: {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%.*s is not a directory)\n",
                     path, (int) s->ancestor, path
                 );
@@ -141,7 +141,7 @@ static void apply_print_deploy_skips(
             }
 
             case DEPLOY_SKIP_OCCUPIED: {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  {red}✗{reset} %s (non-empty directory in the way)\n",
                     path
                 );
@@ -159,7 +159,7 @@ static void apply_print_deploy_skips(
                 } else {
                     output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(wrong type from ");
                 }
-                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->item->profile);
+                output_print(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->item->profile);
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, ")\n");
                 break;
             }
@@ -173,7 +173,7 @@ static void apply_print_deploy_skips(
                     out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(%s from ",
                     conflict ? "changed in Git and on disk" : "modified locally"
                 );
-                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->item->profile);
+                output_print(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->item->profile);
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, ")\n");
                 break;
             }
@@ -200,7 +200,7 @@ static void apply_print_deploy_skips(
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "  ?");
                 output_print(out, OUTPUT_NORMAL, " %s ", path);
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "(%s from ", label);
-                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->item->profile);
+                output_print(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->item->profile);
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, ")\n");
                 break;
             }
@@ -210,7 +210,7 @@ static void apply_print_deploy_skips(
                 const char *owner = s->item->row->owner ? s->item->row->owner : "";
                 const char *group = s->item->row->group ? s->item->row->group : "";
 
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s%s%s needs root to set)\n",
                     path, owner, *group ? ":" : "", group
                 );
@@ -372,7 +372,7 @@ static void apply_print_deploy_preview(
     output_section(out, OUTPUT_NORMAL, "Deployment");
 
     if (files->count > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "  {green}%zu{reset} file%s will be deployed\n",
             files->count, files->count == 1 ? "" : "s"
         );
@@ -386,7 +386,7 @@ static void apply_print_deploy_preview(
             }
         }
         if (overwrites > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {yellow}%zu{reset} of them overwrite%s local changes\n",
                 overwrites, overwrites == 1 ? "s" : ""
             );
@@ -399,7 +399,7 @@ static void apply_print_deploy_preview(
                 deploy_occupant_present(files->entries[i].occupant) &&
                 deploy_content_conflicts(files->entries[i].item);
 
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE,
                 overwrite ? "    {yellow}•{reset} %s\n" : "    {cyan}•{reset} %s\n",
                 files->entries[i].item->filesystem_path
@@ -413,7 +413,7 @@ static void apply_print_deploy_preview(
     }
 
     if (created > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "  {green}%zu{reset} tracked director%s will be created\n",
             created, created == 1 ? "y" : "ies"
         );
@@ -426,7 +426,7 @@ static void apply_print_deploy_preview(
             }
 
             shown++;
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
                 dirs->entries[i].item->filesystem_path
             );
@@ -437,7 +437,7 @@ static void apply_print_deploy_preview(
     }
 
     if (fixed > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "  {green}%zu{reset} tracked director%s will be fixed\n",
             fixed, fixed == 1 ? "y" : "ies"
         );
@@ -450,7 +450,7 @@ static void apply_print_deploy_preview(
             }
 
             shown++;
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
                 dirs->entries[i].item->filesystem_path
             );
@@ -461,7 +461,7 @@ static void apply_print_deploy_preview(
     }
 
     if (replaced > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "  {yellow}%zu{reset} tracked director%s will be replaced\n",
             replaced, replaced == 1 ? "y" : "ies"
         );
@@ -474,7 +474,7 @@ static void apply_print_deploy_preview(
             }
 
             shown++;
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "    {yellow}•{reset} %s\n",
                 dirs->entries[i].item->filesystem_path
             );
@@ -527,7 +527,7 @@ static void apply_print_reassignments(
     for (size_t i = 0; i < count; i++) {
         const workspace_item_t *item = reassignments[i].item;
 
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "  {yellow}→{reset} %s%s: {cyan}%s{reset} → {cyan}%s{reset}\n",
             item->filesystem_path, path_kind_suffix(item->item_kind),
@@ -613,7 +613,7 @@ static void apply_print_withheld(
                 );
             }
         } else {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} path%s (--exclude)\n",
                 excluded, excluded == 1 ? "" : "s"
             );
@@ -624,7 +624,7 @@ static void apply_print_withheld(
      * says it at every verbosity. */
     size_t existing = deploy_plan->files.skipped_existing.count;
     if (existing > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "Skipped {cyan}%zu{reset} existing file%s (--skip-existing)\n",
             existing, existing == 1 ? "" : "s"
@@ -715,7 +715,7 @@ static void apply_print_deploy_receipt(
             const manifest_row_t *file = deployed.entries[i].verdict->item->row;
 
             if (file->type == PATH_TYPE_SYMLINK) {
-                output_styled(
+                output_print(
                     out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (symlink",
                     file->filesystem_path
                 );
@@ -730,7 +730,7 @@ static void apply_print_deploy_receipt(
                 continue;
             }
 
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
                 file->filesystem_path, file->mode
             );
@@ -753,7 +753,7 @@ static void apply_print_deploy_receipt(
             if (deploy_convergence(v->occupant) != DEPLOY_CONVERGE_CREATE) continue;
             const manifest_row_t *dir = v->item->row;
 
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
                 dir->filesystem_path, dir->mode
             );
@@ -776,7 +776,7 @@ static void apply_print_deploy_receipt(
             if (deploy_convergence(v->occupant) != DEPLOY_CONVERGE_FIX) continue;
             const manifest_row_t *dir = v->item->row;
 
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
                 dir->filesystem_path, dir->mode
             );
@@ -814,7 +814,7 @@ static void apply_print_deploy_receipt(
             if (deploy_convergence(v->occupant) != DEPLOY_CONVERGE_REPLACE) continue;
             const manifest_row_t *dir = v->item->row;
 
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
                 dir->filesystem_path, dir->mode
             );
@@ -834,7 +834,7 @@ static void apply_print_deploy_receipt(
         for (size_t i = 0; i < ancestors.count; i++) {
             const manifest_row_t *dir = ancestors.entries[i].verdict->item->row;
 
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
                 dir->filesystem_path, dir->mode
             );
@@ -852,28 +852,28 @@ static void apply_print_deploy_receipt(
     /* Non-verbose: summary counts only. */
     if (!output_is_verbose(out)) {
         if (deployed.count > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "Deployed {green}%zu{reset} file%s\n",
                 deployed.count, deployed.count == 1 ? "" : "s"
             );
         }
 
         if (created > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "Created {green}%zu{reset} tracked director%s\n",
                 created, created == 1 ? "y" : "ies"
             );
         }
 
         if (fixed > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "Fixed {green}%zu{reset} tracked director%s\n",
                 fixed, fixed == 1 ? "y" : "ies"
             );
         }
 
         if (replaced > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} tracked director%s\n",
                 replaced, replaced == 1 ? "y" : "ies"
             );
@@ -890,7 +890,7 @@ static void apply_print_deploy_receipt(
         for (size_t i = 0; i < receipt->failed.count && i < LIST_LIMIT; i++) {
             const deploy_outcome_t *o = &receipt->failed.entries[i];
 
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s)\n",
                 o->verdict->item->filesystem_path,
                 error_message(error_root(o->error))
@@ -914,7 +914,7 @@ static void apply_print_deploy_receipt(
         for (size_t i = 0; i < receipt->held.count && i < LIST_LIMIT; i++) {
             const deploy_hold_t *hold = &receipt->held.entries[i];
 
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s (mode %04o, not %04o: %s)\n",
                 hold->item->filesystem_path, deploy_working_mode(hold->mode), hold->mode,
                 error_message(error_root(hold->error))
@@ -965,7 +965,7 @@ static void apply_print_cleanup_receipt(
     if (receipt->pruned_files.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Pruned orphaned files");
         for (size_t i = 0; i < receipt->pruned_files.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {green}[pruned]{reset} %s\n",
                 receipt->pruned_files.entries[i].item->filesystem_path
             );
@@ -975,7 +975,7 @@ static void apply_print_cleanup_receipt(
     if (verdicts->released_files.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Released files");
         for (size_t i = 0; i < verdicts->released_files.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
                 verdicts->released_files.entries[i]->filesystem_path
             );
@@ -988,13 +988,13 @@ static void apply_print_cleanup_receipt(
     if (verdicts->skipped_files.count + verdicts->refused_files.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Skipped orphaned files");
         for (size_t i = 0; i < verdicts->skipped_files.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
                 verdicts->skipped_files.entries[i]->filesystem_path
             );
         }
         for (size_t i = 0; i < verdicts->refused_files.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
                 verdicts->refused_files.entries[i]->filesystem_path
             );
@@ -1004,13 +1004,13 @@ static void apply_print_cleanup_receipt(
     if (verdicts->absent_files.count + receipt->reclaimed_files.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned files");
         for (size_t i = 0; i < verdicts->absent_files.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
                 verdicts->absent_files.entries[i]->filesystem_path
             );
         }
         for (size_t i = 0; i < receipt->reclaimed_files.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
                 receipt->reclaimed_files.entries[i].item->filesystem_path
             );
@@ -1020,7 +1020,7 @@ static void apply_print_cleanup_receipt(
     if (receipt->pruned_dirs.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Pruned orphaned directories");
         for (size_t i = 0; i < receipt->pruned_dirs.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {green}[pruned]{reset} %s\n",
                 receipt->pruned_dirs.entries[i].item->filesystem_path
             );
@@ -1030,7 +1030,7 @@ static void apply_print_cleanup_receipt(
     if (verdicts->released_dirs.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Released directories");
         for (size_t i = 0; i < verdicts->released_dirs.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
                 verdicts->released_dirs.entries[i]->filesystem_path
             );
@@ -1041,19 +1041,19 @@ static void apply_print_cleanup_receipt(
         receipt->skipped_dirs.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Skipped orphaned directories");
         for (size_t i = 0; i < verdicts->skipped_dirs.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
                 verdicts->skipped_dirs.entries[i]->filesystem_path
             );
         }
         for (size_t i = 0; i < verdicts->refused_dirs.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
                 verdicts->refused_dirs.entries[i]->filesystem_path
             );
         }
         for (size_t i = 0; i < receipt->skipped_dirs.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
                 receipt->skipped_dirs.entries[i].item->filesystem_path
             );
@@ -1063,13 +1063,13 @@ static void apply_print_cleanup_receipt(
     if (verdicts->absent_dirs.count + receipt->reclaimed_dirs.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned directories");
         for (size_t i = 0; i < verdicts->absent_dirs.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
                 verdicts->absent_dirs.entries[i]->filesystem_path
             );
         }
         for (size_t i = 0; i < receipt->reclaimed_dirs.count; i++) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
                 receipt->reclaimed_dirs.entries[i].item->filesystem_path
             );
@@ -1079,7 +1079,7 @@ static void apply_print_cleanup_receipt(
     /* Non-verbose: summary counts only. */
     if (!output_is_verbose(out)) {
         if (receipt->pruned_files.count > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned file%s\n",
                 receipt->pruned_files.count,
                 receipt->pruned_files.count == 1 ? "" : "s"
@@ -1087,7 +1087,7 @@ static void apply_print_cleanup_receipt(
         }
 
         if (receipt->pruned_dirs.count > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned director%s\n",
                 receipt->pruned_dirs.count,
                 receipt->pruned_dirs.count == 1 ? "y" : "ies"
@@ -1095,7 +1095,7 @@ static void apply_print_cleanup_receipt(
         }
 
         if (verdicts->released_files.count > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} file%s from management\n",
                 verdicts->released_files.count,
                 verdicts->released_files.count == 1 ? "" : "s"
@@ -1103,7 +1103,7 @@ static void apply_print_cleanup_receipt(
         }
 
         if (verdicts->released_dirs.count > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} director%s from management\n",
                 verdicts->released_dirs.count,
                 verdicts->released_dirs.count == 1 ? "y" : "ies"
@@ -1149,7 +1149,7 @@ static void apply_print_cleanup_receipt(
             receipt->reclaimed_files.count + receipt->reclaimed_dirs.count;
 
         if (reclaimed > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "Reclaimed {cyan}%zu{reset} orphaned path%s (already gone)\n",
                 reclaimed, reclaimed == 1 ? "" : "s"
@@ -1167,7 +1167,7 @@ static void apply_print_cleanup_receipt(
         for (size_t i = 0; i < receipt->failed.count && i < LIST_LIMIT; i++) {
             const cleanup_outcome_t *o = &receipt->failed.entries[i];
 
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s)\n",
                 o->item->filesystem_path,
                 error_message(error_root(o->error))
@@ -1273,7 +1273,7 @@ static void apply_print_cleanup_preview(
         }
 
         if (verdicts->prunable_files.count - moved > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "  {yellow}%zu{reset} file%s will be pruned (no longer active)\n",
                 verdicts->prunable_files.count - moved,
@@ -1282,7 +1282,7 @@ static void apply_print_cleanup_preview(
         }
 
         if (moved > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "  {yellow}%zu{reset} file%s will be pruned "
                 "(relocated: the claim deploys at its new location)\n",
@@ -1299,7 +1299,7 @@ static void apply_print_cleanup_preview(
         apply_print_paths(out, verdicts->prunable_files, OUTPUT_COLOR_CYAN, "•");
 
         if (verdicts->released_files.count > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "  {cyan}%zu{reset} file%s will be released from management\n",
                 verdicts->released_files.count,
@@ -1308,7 +1308,7 @@ static void apply_print_cleanup_preview(
         }
 
         if (skipped_files > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "  {yellow}%zu{reset} file%s will be skipped\n",
                 skipped_files,
@@ -1322,7 +1322,7 @@ static void apply_print_cleanup_preview(
          * still has this to say. It breaks the block's future tense on purpose
          * — every other line promises an action, this one reports there is none. */
         if (verdicts->absent_files.count > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "  {cyan}%zu{reset} file%s already gone (nothing to remove)\n",
                 verdicts->absent_files.count,
@@ -1335,7 +1335,7 @@ static void apply_print_cleanup_preview(
         output_section(out, OUTPUT_NORMAL, "Orphaned directories");
 
         if (verdicts->prunable_dirs.count > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {cyan}%zu{reset} director%s will be pruned\n",
                 verdicts->prunable_dirs.count,
                 verdicts->prunable_dirs.count == 1 ? "y" : "ies"
@@ -1355,7 +1355,7 @@ static void apply_print_cleanup_preview(
          * under a parent that refuses the run (the needing-root block names it);
          * the slash says "left alone this run" for each. */
         if (verdicts->released_dirs.count > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "  {cyan}%zu{reset} director%s will be released from management\n",
                 verdicts->released_dirs.count,
@@ -1366,7 +1366,7 @@ static void apply_print_cleanup_preview(
         apply_print_paths(out, verdicts->released_dirs, OUTPUT_COLOR_CYAN, "→");
 
         if (skipped_dirs > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {yellow}%zu{reset} director%s will be skipped\n",
                 skipped_dirs, skipped_dirs == 1 ? "y" : "ies"
             );
@@ -1376,7 +1376,7 @@ static void apply_print_cleanup_preview(
         apply_print_paths(out, verdicts->refused_dirs, OUTPUT_COLOR_YELLOW, "⊘");
 
         if (verdicts->absent_dirs.count > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "  {cyan}%zu{reset} director%s already gone (nothing to remove)\n",
                 verdicts->absent_dirs.count,
@@ -1405,8 +1405,8 @@ static void apply_print_cleanup_preview(
         for (size_t i = 0; i < verdicts->released_files.count; i++) {
             const workspace_item_t *item = verdicts->released_files.entries[i];
 
-            output_styled(out, OUTPUT_NORMAL, "  {cyan}→{reset} %s", item->filesystem_path);
-            output_styled(out, OUTPUT_NORMAL, " {dim}(from %s){reset}\n", item->profile);
+            output_print(out, OUTPUT_NORMAL, "  {cyan}→{reset} %s", item->filesystem_path);
+            output_print(out, OUTPUT_NORMAL, " {dim}(from %s){reset}\n", item->profile);
         }
 
         output_info(
@@ -1508,7 +1508,7 @@ static void apply_print_cleanup_skips(
         output_colored(out, OUTPUT_NORMAL, color, "  %s", glyph);
         output_print(out, OUTPUT_NORMAL, " %s ", item->filesystem_path);
         output_colored(out, OUTPUT_NORMAL, color, "(%s from ", label);
-        output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", item->profile);
+        output_print(out, OUTPUT_NORMAL, "{cyan}%s{reset}", item->profile);
         output_colored(out, OUTPUT_NORMAL, color, ")\n");
     }
 
@@ -1560,12 +1560,12 @@ static void apply_print_cleanup_refused(
             const char *path = item->filesystem_path;
 
             if (item->occupant == FS_OCCUPANT_UNKNOWN) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  {red}✗{reset} %s (ancestry cannot be reached)\n",
                     path
                 );
             } else {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%.*s is not writable)\n",
                     path, (int) str_path_parent_len(path), path
                 );
@@ -1900,7 +1900,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         scope_profiles(scope)->count == 1 ? "" : "s"
     );
     for (size_t i = 0; i < scope_profiles(scope)->count; i++) {
-        output_styled(
+        output_print(
             out, OUTPUT_VERBOSE, "  {cyan}•{reset} %s\n",
             scope_profiles(scope)->entries[i]
         );
@@ -1986,7 +1986,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         if (unbound.count > 0) {
             output_section(out, OUTPUT_NORMAL, "Paths with no target");
             for (size_t i = 0; i < unbound.count && i < LIST_LIMIT; i++) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL,
                     "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
                     unbound.entries[i].storage_path,
@@ -2022,7 +2022,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         if (unkept.count > 0) {
             output_section(out, OUTPUT_NORMAL, "Unused paths");
             for (size_t i = 0; i < unkept.count && i < LIST_LIMIT; i++) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL,
                     "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
                     unkept.entries[i].storage_path,
@@ -2430,7 +2430,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     output_gap(out, OUTPUT_NORMAL);
 
     if (adopted_count > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             opts->dry_run ? "Would adopt {yellow}%zu{reset} file%s\n"
                           : "Adopted {yellow}%zu{reset} file%s (now tracked)\n",
@@ -2507,7 +2507,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 clean_reassignment_count, clean_reassignment_count == 1 ? "" : "s"
             );
         } else {
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL,
                 "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
                 clean_reassignment_count, clean_reassignment_count == 1 ? "" : "s"
@@ -2814,7 +2814,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             );
         }
     } else if (acknowledged_count > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
             acknowledged_count, acknowledged_count == 1 ? "" : "s"
         );

@@ -61,7 +61,7 @@ static void profile_print_enable_stats(
         );
 
         if (staged > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE,
                 "    - {yellow}%zu{reset} staged for deployment\n",
                 staged
@@ -110,7 +110,7 @@ static void profile_print_disable_stats(
         );
 
         if (stats->reassigned > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE,
                 "    - {green}%zu{reset} path%s with fallback (will reassign)\n",
                 stats->reassigned,
@@ -119,7 +119,7 @@ static void profile_print_disable_stats(
         }
 
         if (stats->orphans.owned > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE,
                 "    - {red}%zu{reset} path%s without fallback (will be pruned)\n",
                 stats->orphans.owned,
@@ -128,7 +128,7 @@ static void profile_print_disable_stats(
         }
 
         if (stats->orphans.observed > 0) {
-            output_styled(
+            output_print(
                 out, OUTPUT_VERBOSE,
                 "    - {cyan}%zu{reset} path%s never deployed here (left alone)\n",
                 stats->orphans.observed,
@@ -213,7 +213,7 @@ static error_t profile_list(
             /* Name what the branch holds where it reads, otherwise say so: the
              * row's error is dropped, one per unreadable branch */
             if (row_err) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (counts unavailable)",
                     i + 1, profile
                 );
@@ -222,7 +222,7 @@ static error_t profile_list(
                 output_format_counts(
                     stats.file_count, stats.directory_count, counts, sizeof(counts)
                 );
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (%s)",
                     i + 1, profile, counts
                 );
@@ -231,7 +231,7 @@ static error_t profile_list(
             if (entry->target) {
                 char shown[PATH_MAX];
                 output_format_path(entry->target, identity()->home, shown, sizeof(shown));
-                output_styled(out, OUTPUT_NORMAL, " {dim}→ %s{reset}", shown);
+                output_print(out, OUTPUT_NORMAL, " {dim}→ %s{reset}", shown);
             }
             output_endline(out, OUTPUT_NORMAL);
         }
@@ -258,7 +258,7 @@ static error_t profile_list(
             /* Name what the branch holds where it reads, otherwise say so: the
              * row's error is dropped, one per unreadable branch */
             if (row_err) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (counts unavailable)",
                     profile
                 );
@@ -267,11 +267,11 @@ static error_t profile_list(
                 output_format_counts(
                     stats.file_count, stats.directory_count, counts, sizeof(counts)
                 );
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%s)", profile, counts
                 );
                 if (needs_target) {
-                    output_styled(out, OUTPUT_NORMAL, " {dim}(needs a target){reset}");
+                    output_print(out, OUTPUT_NORMAL, " {dim}(needs a target){reset}");
                 }
             }
             output_endline(out, OUTPUT_NORMAL);
@@ -401,7 +401,7 @@ static error_t profile_fetch(
              * most one per branch */
             error_t fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, xfer);
             if (fetch_err) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  {red}✗{reset} Failed to fetch %s: %s\n",
                     branch_name, error_message(fetch_err)
                 );
@@ -416,7 +416,7 @@ static error_t profile_fetch(
                 repo, remote_name, branch_name
             );
             if (fetch_err) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL,
                     "  {red}✗{reset} Failed to create local branch %s: %s\n",
                     branch_name, error_message(fetch_err)
@@ -424,7 +424,7 @@ static error_t profile_fetch(
                 failed_count++;
             } else {
                 fetched_count++;
-                output_styled(
+                output_print(
                     out, OUTPUT_VERBOSE, "  {green}✓{reset} Fetched %s\n",
                     branch_name
                 );
@@ -484,7 +484,7 @@ static error_t profile_fetch(
              * most one per profile */
             error_t fetch_err = gitops_fetch_branch(repo, remote_name, profile, xfer);
             if (fetch_err) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL,
                     "  {red}✗{reset} Failed to fetch %s: %s\n",
                     profile, error_message(fetch_err)
@@ -500,7 +500,7 @@ static error_t profile_fetch(
                 repo, remote_name, profile
             );
             if (fetch_err) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL,
                     "  {red}✗{reset} Failed to create local branch %s: %s\n",
                     profile, error_message(fetch_err)
@@ -508,7 +508,7 @@ static error_t profile_fetch(
                 failed_count++;
             } else {
                 fetched_count++;
-                output_styled(
+                output_print(
                     out, OUTPUT_VERBOSE,
                     "  {green}✓{reset} Fetched %s\n",
                     profile
@@ -537,7 +537,7 @@ cleanup:
         );
     }
     if (failed_count > 0) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL,
             "{red}✗{reset} Failed to fetch %zu profile%s\n",
             failed_count, failed_count == 1 ? "" : "s"
@@ -882,12 +882,12 @@ static error_t profile_enable(
         for (size_t i = 0; i < to_enable_validated.count; i++) {
             const char *name = to_enable_validated.entries[i];
             if (retarget && strcmp(name, retarget) == 0) {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  {green}✓{reset} Updated target for %s\n",
                     name
                 );
             } else {
-                output_styled(
+                output_print(
                     out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n", name
                 );
             }
@@ -1166,7 +1166,7 @@ static error_t profile_disable(
 
         for (size_t i = 0; i < to_disable_validated.count; i++) {
             const char *name = to_disable_validated.entries[i];
-            output_styled(
+            output_print(
                 out, OUTPUT_NORMAL, "  {green}✓{reset} Disabled %s\n", name
             );
             profile_print_disable_stats(out, name, stats ? &stats[i] : NULL);

@@ -161,7 +161,7 @@ static void key_status(const dotta_ctx_t *ctx) {
     output_section(out, OUTPUT_NORMAL, "Encryption Configuration");
 
     if (config->encryption_enabled) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "  Status: {green}enabled{reset}\n"
         );
 
@@ -236,7 +236,7 @@ static void key_status(const dotta_ctx_t *ctx) {
             }
         }
     } else {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "  Status: {red}disabled{reset}\n"
         );
 
@@ -258,7 +258,7 @@ static void key_status(const dotta_ctx_t *ctx) {
     );
 
     if (key_cached) {
-        output_styled(
+        output_print(
             out, OUTPUT_NORMAL, "{green}yes{reset}"
         );
 
@@ -288,7 +288,7 @@ static void key_status(const dotta_ctx_t *ctx) {
 
         output_endline(out, OUTPUT_NORMAL);
     } else {
-        output_styled(out, OUTPUT_NORMAL, "{yellow}no{reset}\n");
+        output_print(out, OUTPUT_NORMAL, "{yellow}no{reset}\n");
 
         output_print(
             out, OUTPUT_VERBOSE,

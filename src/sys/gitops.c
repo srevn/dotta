@@ -670,7 +670,7 @@ typedef struct {
     void *payload;
     buffer_t path;          /* the entry's path, joined per step, lent to the visitor */
     error_t error;          /* the visitor's failure: the one that ended the walk */
-    gitops_walk_t next;     /* the visitor's last answer */
+    gitops_next_t next;     /* the visitor's last answer */
 } tree_walk_t;
 
 /*
@@ -694,14 +694,14 @@ static int gitops_tree_step(
     buffer_append_string(&walk->path, root);
     buffer_append_string(&walk->path, git_tree_entry_name(entry));
 
-    walk->next = GITOPS_WALK_CONTINUE;
+    walk->next = GITOPS_NEXT_CONTINUE;
     walk->error = walk->visit(walk->path.data, entry, walk->payload, &walk->next);
     if (walk->error) return -1;
 
     switch (walk->next) {
-        case GITOPS_WALK_CONTINUE: return 0;
-        case GITOPS_WALK_SKIP:     return 1;
-        case GITOPS_WALK_STOP:     return -1;
+        case GITOPS_NEXT_CONTINUE: return 0;
+        case GITOPS_NEXT_SKIP:     return 1;
+        case GITOPS_NEXT_STOP:     return -1;
     }
     CHECK_ARG(false, "a walk answer no enumerator names");
 }
@@ -720,7 +720,7 @@ error_t gitops_tree_walk(
      * answered an abort, and the sentence it holds may be one an earlier call
      * left standing. A STOP left standing is the stop that ended the walk, since
      * no step runs after one. */
-    if (walk.error || walk.next == GITOPS_WALK_STOP) return walk.error;
+    if (walk.error || walk.next == GITOPS_NEXT_STOP) return walk.error;
 
     /* The walk's own: a subtree that will not load */
     return rc < 0 ? error_from_git(rc) : NULL;

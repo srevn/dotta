@@ -407,7 +407,7 @@ static error_t profile_list_entry(
     const char *path,
     const git_tree_entry *entry,
     void *payload,
-    gitops_walk_t *next
+    gitops_next_t *next
 ) {
     string_array_t *paths = payload;
 
@@ -417,7 +417,7 @@ static error_t profile_list_entry(
      * (infra/label.h label_prefixes). Asked of every entry's whole name, a tree's
      * included, so a tree of machinery goes with everything beneath it. */
     if (!label_prefixes(path)) {
-        *next = GITOPS_WALK_SKIP;
+        *next = GITOPS_NEXT_SKIP;
         return NULL;
     }
 
@@ -513,7 +513,7 @@ static error_t profile_count_entry(
     const char *path,
     const git_tree_entry *entry,
     void *payload,
-    gitops_walk_t *next
+    gitops_next_t *next
 ) {
     count_walk_t *walk = payload;
 
@@ -521,7 +521,7 @@ static error_t profile_count_entry(
      * (profile_list_entry): this is the fold of the rows that listing prints,
      * so the two admit one set of names or the two screens disagree by a file. */
     if (!label_prefixes(path)) {
-        *next = GITOPS_WALK_SKIP;
+        *next = GITOPS_NEXT_SKIP;
         return NULL;
     }
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {

@@ -205,12 +205,12 @@ typedef struct {
  */
 static error_t refspec_emit(
     const char *path, const git_tree_entry *entry, void *payload,
-    gitops_walk_t *next
+    gitops_next_t *next
 ) {
     refspec_walk_t *walk = payload;
 
     if (!label_prefixes(path)) {                                  /* the content gate */
-        *next = GITOPS_WALK_SKIP;
+        *next = GITOPS_NEXT_SKIP;
         return NULL;
     }
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) return NULL;  /* descend trees */
@@ -222,7 +222,7 @@ static error_t refspec_emit(
     }
 
     if (++walk->emitted >= COMPLETE_REFSPEC_FILES_MAX) {
-        *next = GITOPS_WALK_STOP;
+        *next = GITOPS_NEXT_STOP;
     }
     return NULL;
 }

@@ -709,7 +709,7 @@ static void manifest_settle(
  */
 static error_t manifest_claim_blob(
     const char *path, const git_tree_entry *entry, void *payload,
-    gitops_walk_t *next
+    gitops_next_t *next
 ) {
     claim_walk_t *walk = payload;
 
@@ -724,7 +724,7 @@ static error_t manifest_claim_blob(
      * label it is always passed. Skipped in silence, and before the shape rule,
      * so machinery is never read as corruption. */
     if (!label_prefixes(path)) {
-        *next = GITOPS_WALK_SKIP;
+        *next = GITOPS_NEXT_SKIP;
         return NULL;
     }
 

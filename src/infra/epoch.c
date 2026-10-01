@@ -643,7 +643,7 @@ typedef struct {
  */
 static error_t epoch_present_blob(
     const char *path, const git_tree_entry *entry, void *payload,
-    gitops_walk_t *next
+    gitops_next_t *next
 ) {
     epoch_walk_t *walk = payload;
 
@@ -673,7 +673,7 @@ static error_t epoch_present_blob(
     buffer_clear(&walk->key);
     buffer_appendf(&walk->key, "%s:%s:%s", oid_hex, walk->branch, path);
     if (!hashmap_add(walk->seen, walk->key.data, NULL)) {
-        *next = GITOPS_WALK_SKIP;
+        *next = GITOPS_NEXT_SKIP;
         return NULL;
     }
 
@@ -708,7 +708,7 @@ static error_t epoch_present_blob(
     walk->stopped = walk->fn(&ct, walk->payload);
     gitops_blob_view_close(&view);
     if (walk->stopped) {
-        *next = GITOPS_WALK_STOP;
+        *next = GITOPS_NEXT_STOP;
     }
     return NULL;
 }

@@ -408,10 +408,10 @@ error_t gitops_load_branch_tree(
  * (infra/epoch.c epoch_present_blob).
  */
 typedef enum {
-    GITOPS_WALK_CONTINUE,   /* on to the next entry: a tree's own entries first */
-    GITOPS_WALK_SKIP,       /* past this entry, and at a tree everything beneath it */
-    GITOPS_WALK_STOP        /* the walk has its answer: end it, no failure */
-} gitops_walk_t;
+    GITOPS_NEXT_CONTINUE,   /* on to the next entry: a tree's own entries first */
+    GITOPS_NEXT_SKIP,       /* past this entry, and at a tree everything beneath it */
+    GITOPS_NEXT_STOP        /* the walk has its answer: end it, no failure */
+} gitops_next_t;
 
 /**
  * A tree walk's visitor
@@ -425,7 +425,7 @@ typedef error_t (*gitops_visit_fn)(
     const char *path,
     const git_tree_entry *entry,
     void *payload,
-    gitops_walk_t *next
+    gitops_next_t *next
 );
 
 /**

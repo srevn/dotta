@@ -370,7 +370,7 @@ static error_t collect_entry(
     const char *path,
     const git_tree_entry *entry,
     void *payload,
-    gitops_walk_t *next
+    gitops_next_t *next
 ) {
     collect_walk_t *walk = payload;
 
@@ -390,7 +390,7 @@ static error_t collect_entry(
      * already stands under one; it prunes at a whole-profile walk's top level
      * and nowhere else. */
     if (!label_prefixes(e.storage_path)) {
-        *next = GITOPS_WALK_SKIP;
+        *next = GITOPS_NEXT_SKIP;
         return NULL;
     }
 

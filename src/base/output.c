@@ -1,23 +1,26 @@
 /**
  * output.c - Output formatting and styling implementation
  *
- * Style engine with {tag} markup, verbosity control, and a list builder.
- *
- * Tag expansion uses a single-pass scanner with a stack-allocated buffer (heap
- * fallback on overflow). Tags are resolved via a sorted lookup table with binary
- * search. Compound tags ({bold;red}) are supported.
+ * Every line the layer writes is built whole and written once (the line): a format
+ * is walked by the layer's own printf (output_walk), its literal runs copied
+ * with their {tags} expanded and each conversion written as a datum or a number.
+ * Tags are resolved via a sorted lookup table with binary search; compound tags
+ * ({bold;red}) are supported.
  *
  * Tag syntax:
  *   {red}, {bold}, {dim}, ...  — apply style/color
  *   {bold;red}                 — compound (multiple styles)
  *   {reset}                    — explicit reset
  *
- * Tags expand to ANSI codes when colors enabled, empty strings when not. Auto-reset
- * appends ANSI_RESET when an unclosed color span is detected.
+ * Tags expand to ANSI codes when colors are enabled, to nothing when not. A style
+ * a line leaves open is closed where its text ends, before its own newlines
+ * (output_put).
  */
 
 #include "base/output.h"
 
+#include <ctype.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,106 +65,146 @@ static const char *ANSI_CODES[] = {
 
 #define ANSI_CODE_COUNT (sizeof(ANSI_CODES) / sizeof(ANSI_CODES[0]))
 
-/* Empty string returned when colors are disabled */
-static const char *const EMPTY = "";
-
 /* ═══════════════════════════════════════════════════════════════════
- * Style Buffer
+ * The Line
  *
- * Stack-primary, heap-fallback buffer for building expanded format strings. The
- * 512-byte stack covers the vast majority of format strings without heap
- * allocation. Overflow promotes to heap.
+ * One emitter call's bytes, built whole and written once (output_start,
+ * output_put). 512 bytes on the stack cover nearly every line; a longer one grows
+ * on the heap, and exhaustion is the run's death (base/heap.h). Written with
+ * one fwrite, a line on stderr — which stdio does not buffer — is one write(2):
+ * nothing another process writes lands inside it.
+ *
+ * A style a tag or a colour opens is tracked, and closed where the line's text
+ * ends, before its own trailing newlines, never after them: so no line hands
+ * the next one a colour, none opens on a reset, and a style a reset already closed
+ * is not closed again.
  * ═══════════════════════════════════════════════════════════════════ */
 
-#define STYLE_BUF_STACK_SIZE 512
+#define LINE_STACK_SIZE 512
 
 typedef struct {
-    char *data;                        /* Points to stack[] or heap */
-    size_t len;                        /* Current content length */
-    size_t cap;                        /* Total capacity */
-    char stack[STYLE_BUF_STACK_SIZE];  /* Inline storage */
-} style_buf_t;
+    FILE *stream;                 /* Where output_put writes it */
+    char *data;                   /* stack[] or the heap */
+    size_t len;                   /* The line's bytes so far */
+    size_t cap;                   /* data's room, the terminator's byte among it */
+    bool color;                   /* Styles are written; else every one is nothing */
+    bool styled;                  /* A style is open that no reset has closed */
+    char stack[LINE_STACK_SIZE];
+} line_t;
 
-static inline void style_buf_init(style_buf_t *sb) {
-    sb->data = sb->stack;
-    sb->len = 0;
-    sb->cap = STYLE_BUF_STACK_SIZE;
-}
+/**
+ * Room for `more` bytes, and for the terminator snprintf writes past them
+ *
+ * The stack's room first; past it the heap, doubled. A capacity whose doubling
+ * wraps is one no memory could hold: exhaustion (base/heap.h).
+ */
+static void output_reserve(line_t *line, size_t more) {
+    if (more < line->cap - line->len) return;
+    if (more > SIZE_MAX - line->len - 1) heap_die(SIZE_MAX);
 
-static inline void style_buf_free(style_buf_t *sb) {
-    if (sb->data != sb->stack)
-        free(sb->data);
+    size_t want = line->len + more + 1;
+    size_t cap = line->cap;
+    while (cap < want) {
+        if (cap > SIZE_MAX / 2) heap_die(SIZE_MAX);
+        cap *= 2;
+    }
+
+    if (line->data == line->stack) {
+        line->data = heap_alloc(cap);
+        memcpy(line->data, line->stack, line->len);
+    } else {
+        line->data = heap_realloc(line->data, cap);
+    }
+    line->cap = cap;
 }
 
 /**
- * Ensure buffer has room for `need` more bytes
- *
- * On first overflow, copies stack to a heap allocation. Subsequent overflows
- * realloc the heap buffer. Room cannot fail — exhaustion is the run's death
- * (base/heap.h) — so nothing put is ever dropped.
+ * Bytes onto the line, as they are
  */
-static void style_buf_grow(style_buf_t *sb, size_t need) {
-    size_t required = sb->len + need;
-    if (required < sb->cap)
-        return;
-
-    /* A capacity whose doubling wraps is one no memory could hold: exhaustion */
-    size_t new_cap = sb->cap;
-    while (new_cap <= required) {
-        if (new_cap > SIZE_MAX / 2)
-            heap_die(SIZE_MAX);
-        new_cap *= 2;
-    }
-
-    if (sb->data == sb->stack) {
-        sb->data = heap_alloc(new_cap);
-        memcpy(sb->data, sb->stack, sb->len);
-    } else {
-        sb->data = heap_realloc(sb->data, new_cap);
-    }
-
-    sb->cap = new_cap;
+static void output_bytes(line_t *line, const char *bytes, size_t len) {
+    output_reserve(line, len);
+    memcpy(line->data + line->len, bytes, len);
+    line->len += len;
 }
 
-static inline void style_buf_putc(style_buf_t *sb, char ch) {
-    style_buf_grow(sb, 1);
-    sb->data[sb->len++] = ch;
+/**
+ * Spaces onto the line: a datum's padding
+ */
+static void output_pad(line_t *line, size_t count) {
+    output_reserve(line, count);
+    memset(line->data + line->len, ' ', count);
+    line->len += count;
 }
 
-static inline void style_buf_puts(style_buf_t *sb, const char *s, size_t n) {
-    style_buf_grow(sb, n);
-    memcpy(sb->data + sb->len, s, n);
-    sb->len += n;
+/**
+ * A colour's code onto the line, where the line writes styles
+ *
+ * Any colour but OUTPUT_COLOR_RESET opens a style; the reset closes one that is
+ * open and writes nothing where none is. A colour no enumerator names, which
+ * only a cast can make, writes nothing: the answer that changes no byte.
+ */
+static void output_style(line_t *line, output_color_t color) {
+    if (!line->color || (unsigned) color >= ANSI_CODE_COUNT) return;
+    if (color == OUTPUT_COLOR_RESET && !line->styled) return;
+
+    line->styled = color != OUTPUT_COLOR_RESET;
+    output_bytes(line, ANSI_CODES[color], strlen(ANSI_CODES[color]));
+}
+
+/**
+ * One value onto the line, as printf writes it under `spec`
+ *
+ * Formatted into the room the line has; a number that needs more is formatted
+ * again once the room is made.
+ */
+__attribute__((format(printf, 2, 3)))
+static void output_snprintf(line_t *line, const char *spec, ...) {
+    va_list args;
+    va_start(args, spec);
+    va_list again;
+    va_copy(again, args);
+
+    size_t room = line->cap - line->len;
+    int len = vsnprintf(line->data + line->len, room, spec, args);
+    CHECK_ARG(len >= 0, "a number that cannot be formatted");
+    if ((size_t) len >= room) {
+        output_reserve(line, (size_t) len);
+        vsnprintf(line->data + line->len, (size_t) len + 1, spec, again);
+    }
+
+    va_end(again);
+    va_end(args);
+    line->len += (size_t) len;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
  * Tag Table
  *
- * Sorted alphabetically for binary search. The STYLE_TAG macro computes string
- * lengths at compile time — no runtime strlen.
+ * Sorted alphabetically for binary search; a tag names a colour, and its code
+ * is ANSI_CODES'. The STYLE_TAG macro computes a name's length at compile time
+ * — no runtime strlen.
  * ═══════════════════════════════════════════════════════════════════ */
 
 typedef struct {
     const char *name;       /* Tag name (e.g., "red", "bold") */
-    const char *ansi;       /* ANSI escape sequence */
+    output_color_t color;   /* The colour it names */
     uint8_t name_len;       /* strlen(name), computed at compile time */
-    uint8_t ansi_len;       /* strlen(ansi), computed at compile time */
 } tag_t;
 
-#define STYLE_TAG(n, a) { n, a, sizeof(n) - 1, sizeof(a) - 1 }
+#define STYLE_TAG(n, c) { n, c, sizeof(n) - 1 }
 
 /* MUST remain sorted by name (ASCII order) for binary search */
 static const tag_t TAG_TABLE[] = {
-    STYLE_TAG("blue",    ANSI_BLUE),
-    STYLE_TAG("bold",    ANSI_BOLD),
-    STYLE_TAG("cyan",    ANSI_CYAN),
-    STYLE_TAG("dim",     ANSI_DIM),
-    STYLE_TAG("green",   ANSI_GREEN),
-    STYLE_TAG("magenta", ANSI_MAGENTA),
-    STYLE_TAG("red",     ANSI_RED),
-    STYLE_TAG("reset",   ANSI_RESET),
-    STYLE_TAG("white",   ANSI_WHITE),
-    STYLE_TAG("yellow",  ANSI_YELLOW),
+    STYLE_TAG("blue",    OUTPUT_COLOR_BLUE),
+    STYLE_TAG("bold",    OUTPUT_COLOR_BOLD),
+    STYLE_TAG("cyan",    OUTPUT_COLOR_CYAN),
+    STYLE_TAG("dim",     OUTPUT_COLOR_DIM),
+    STYLE_TAG("green",   OUTPUT_COLOR_GREEN),
+    STYLE_TAG("magenta", OUTPUT_COLOR_MAGENTA),
+    STYLE_TAG("red",     OUTPUT_COLOR_RED),
+    STYLE_TAG("reset",   OUTPUT_COLOR_RESET),
+    STYLE_TAG("white",   OUTPUT_COLOR_WHITE),
+    STYLE_TAG("yellow",  OUTPUT_COLOR_YELLOW),
 };
 
 #define TAG_COUNT (sizeof(TAG_TABLE) / sizeof(TAG_TABLE[0]))
@@ -203,22 +246,20 @@ static const tag_t *output_find_tag(const char *name, size_t len) {
 }
 
 /**
- * Expand a (possibly compound) tag into ANSI codes
+ * Expand a (possibly compound) tag onto the line
  *
  * Handles simple tags ({red}) and compound tags ({bold;red}). Splits on ';',
  * resolves each part independently. If ANY part is unknown, the entire tag is
  * rejected (caller passes it through literally). Empty parts from
- * leading/trailing/double semicolons are silently skipped.
+ * leading/trailing/double semicolons are silently skipped. A recognised tag writes
+ * each part's code by the line's rule (output_style).
  *
- * @param sb Buffer to append ANSI codes to
- * @param color_on Whether to emit ANSI codes (false = strip tags)
+ * @param line Line to write the codes onto
  * @param tag Tag content (between '{' and '}')
  * @param tag_len Length of tag content
  * @return true if tag was recognized, false to pass through literally
  */
-static bool output_expand_tag(
-    style_buf_t *sb, bool color_on, const char *tag, size_t tag_len
-) {
+static bool output_expand_tag(line_t *line, const char *tag, size_t tag_len) {
     const tag_t *resolved[8];
     size_t count = 0;
     const char *p = tag;
@@ -244,11 +285,9 @@ static bool output_expand_tag(
 
     if (count == 0) return false;
 
-    /* Second pass: emit ANSI codes */
-    if (color_on) {
-        for (size_t i = 0; i < count; i++)
-            style_buf_puts(sb, resolved[i]->ansi, resolved[i]->ansi_len);
-    }
+    /* Second pass: each part's code */
+    for (size_t i = 0; i < count; i++)
+        output_style(line, resolved[i]->color);
 
     return true;
 }
@@ -257,107 +296,345 @@ static bool output_expand_tag(
 #define TAG_SCAN_LIMIT 16
 
 /**
- * Expand {tag} markup in a format string
+ * A literal run of a format onto the line, its {tags} expanded
  *
- * Single-pass scan: literal characters are copied directly, recognized {tag}
- * sequences are replaced with ANSI codes (or stripped when colors disabled).
- * Unknown tags and unclosed braces pass through literally.
- *
- * @param color_on  Whether to emit ANSI codes or strip tags
- * @param fmt       Format string with {tag} markup
- * @param sb        Destination buffer (must be initialized, gets NUL-terminated)
- * @return true if any tags were expanded (auto-reset may be needed)
+ * The run's bytes are its author's: copied as they are, but for a recognised
+ * tag — a brace, a known name or parts of one, and its closing brace within the
+ * scan's limit — which is expanded. An unknown or empty name and an unclosed
+ * brace pass through literally.
  */
-static bool expand_format(bool color_on, const char *fmt, style_buf_t *sb) {
-    bool has_tags = false;
-    const char *p = fmt;
+static void output_markup(line_t *line, const char *text, size_t len) {
+    const char *end = text + len;
 
-    while (*p) {
-        if (*p != '{') {
-            /* Fast path: bulk-copy runs of literal characters */
-            const char *run = p;
-            while (*p && *p != '{') p++;
-            style_buf_puts(sb, run, (size_t) (p - run));
-            continue;
-        }
+    for (const char *p = text; p < end;) {
+        /* The bytes up to the next brace, as they are */
+        const char *brace = memchr(p, '{', (size_t) (end - p));
+        output_bytes(line, p, (size_t) ((brace ? brace : end) - p));
+        if (!brace) return;
 
-        /* Found '{' — scan for closing '}' within limit */
-        const char *tag_start = p + 1;
-        const char *tag_end = NULL;
-
-        for (const char *q = tag_start;
-            *q && (size_t) (q - tag_start) < TAG_SCAN_LIMIT;
-            q++) {
-            if (*q == '}') {
-                tag_end = q;
-                break;
-            }
-        }
-
-        if (!tag_end || tag_end == tag_start) {
-            /* Unclosed or empty brace — pass through '{' literally */
-            style_buf_putc(sb, '{');
-            p++;
-            continue;
-        }
-
-        if (output_expand_tag(
-            sb, color_on, tag_start,
-            (size_t) (tag_end - tag_start)
-            )) {
-            has_tags = true;
-            p = tag_end + 1;  /* Advance past '}' */
+        /* The tag the brace opens, or the brace alone */
+        const char *name = brace + 1;
+        size_t scan = (size_t) (end - name) < TAG_SCAN_LIMIT
+            ? (size_t) (end - name) : TAG_SCAN_LIMIT;
+        const char *close = memchr(name, '}', scan);
+        if (close && close > name && output_expand_tag(line, name, (size_t) (close - name))) {
+            p = close + 1;
         } else {
-            /* Unknown tag — pass through '{' literally */
-            style_buf_putc(sb, '{');
+            output_bytes(line, "{", 1);
+            p = name;
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * The Walker
+ *
+ * The layer's own printf: a format's literal runs are its author's layout, and
+ * each conversion is a datum (%s, %c) or a number. The arguments are the emitter's
+ * own list, handed down by pointer, so every va_arg below moves the one list —
+ * a va_list handed by value to a function that reads from it leaves the caller's
+ * indeterminate (C11 7.16p3), and on arm64 a copy re-reads. Its va_arg types
+ * are the ones the emitter's format attribute checked at the call.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* A length modifier: the type a conversion's argument was passed as */
+typedef enum {
+    LENGTH_NONE,         /* int, unsigned, double, a pointer */
+    LENGTH_CHAR,         /* hh */
+    LENGTH_SHORT,        /* h */
+    LENGTH_LONG,         /* l */
+    LENGTH_LONG_LONG,    /* ll */
+    LENGTH_INTMAX,       /* j */
+    LENGTH_SIZE,         /* z */
+    LENGTH_PTRDIFF,      /* t */
+    LENGTH_LONG_DOUBLE   /* L */
+} length_t;
+
+/* As a spec spells it, indexed by length_t */
+static const char *const LENGTHS[] = { "", "hh", "h", "l", "ll", "j", "z", "t", "L" };
+
+/* One conversion of a format, its stars read */
+typedef struct {
+    char flags[8];       /* As written, '-' added for a negative star width */
+    int width;           /* -1: none */
+    int precision;       /* -1: none, a negative star's among them */
+    length_t length;
+    char verb;
+} conversion_t;
+
+/**
+ * The conversion a format spells past its '%'
+ *
+ * Its flags as written; its width and precision, a star's read from `args` in
+ * the order the format spells them — a negative width left-justifying, a negative
+ * precision none, a period with no digits zero; its length and its verb. A
+ * positional argument (%1$s) is no conversion the layer writes.
+ *
+ * @return The format past the verb
+ */
+static const char *output_conversion(
+    const char *spec, va_list *args, conversion_t *out
+) {
+    conversion_t c = { .width = -1, .precision = -1 };
+    const char *p = spec;
+
+    /* The flags: -Wformat refuses a repeated one, so five at most */
+    size_t flags = 0;
+    while (*p && strchr("-+ #0", *p)) {
+        CHECK_ARG(flags < sizeof(c.flags) - 2, "a conversion with more flags than printf has");
+        c.flags[flags++] = *p++;
+    }
+
+    /* The width: a star's value, or its digits */
+    if (*p == '*') {
+        int width = va_arg(*args, int);
+        CHECK_ARG(width > INT_MIN, "a width no line can hold");
+        if (width < 0) c.flags[flags++] = '-';
+        c.width = width < 0 ? -width : width;
+        p++;
+    } else if (isdigit((unsigned char) *p)) {
+        char *after;
+        long width = strtol(p, &after, 10);
+        CHECK_ARG(width <= INT_MAX, "a width no line can hold");
+        c.width = (int) width;
+        p = after;
+    }
+    CHECK_ARG(*p != '$', "a positional conversion the output layer does not write");
+
+    /* The precision: a star's value, its digits, or a period alone */
+    if (*p == '.') {
+        p++;
+        if (*p == '*') {
+            int precision = va_arg(*args, int);
+            c.precision = precision < 0 ? -1 : precision;
             p++;
+        } else if (isdigit((unsigned char) *p)) {
+            char *after;
+            long precision = strtol(p, &after, 10);
+            CHECK_ARG(precision <= INT_MAX, "a precision no line can hold");
+            c.precision = (int) precision;
+            p = after;
+        } else {
+            c.precision = 0;
         }
     }
 
-    /* NUL-terminate (not counted in sb->len) */
-    style_buf_putc(sb, '\0');
-    sb->len--;
+    /* The length */
+    switch (*p) {
+        case 'h':
+            c.length = p[1] == 'h' ? LENGTH_CHAR : LENGTH_SHORT;
+            p += p[1] == 'h' ? 2 : 1;
+            break;
+        case 'l':
+            c.length = p[1] == 'l' ? LENGTH_LONG_LONG : LENGTH_LONG;
+            p += p[1] == 'l' ? 2 : 1;
+            break;
+        case 'j': c.length = LENGTH_INTMAX; p++; break;
+        case 'z': c.length = LENGTH_SIZE; p++; break;
+        case 't': c.length = LENGTH_PTRDIFF; p++; break;
+        case 'L': c.length = LENGTH_LONG_DOUBLE; p++; break;
+        default: break;
+    }
 
-    return has_tags;
+    c.verb = *p;
+    CHECK_ARG(c.verb != '\0', "a format that ends inside a conversion");
+
+    *out = c;
+    return p + 1;
 }
 
 /**
- * Expand {tags} in fmt, then vfprintf with args
- *
- * Core output primitive — all styled variadic output routes through here.
+ * A string's or a character's bytes onto the line, padded to the width
  */
-static void styled_vfprintf(
-    bool color_on, FILE *stream, const char *fmt, va_list args
+static void output_datum(
+    line_t *line, const char *bytes, size_t len, const conversion_t *c
 ) {
-    style_buf_t sb;
-    style_buf_init(&sb);
+    size_t pad = c->width > 0 && (size_t) c->width > len ? (size_t) c->width - len : 0;
+    bool left = strchr(c->flags, '-') != NULL;
 
-    bool has_tags = expand_format(color_on, fmt, &sb);
-    vfprintf(stream, sb.data, args);
-
-    if (has_tags && color_on)
-        fputs(ANSI_RESET, stream);
-
-    style_buf_free(&sb);
+    if (!left) output_pad(line, pad);
+    output_bytes(line, bytes, len);
+    if (left) output_pad(line, pad);
 }
 
 /**
- * Expand {tags} in str, then fputs (no printf formatting)
+ * A number onto the line, as printf writes it
  *
- * Use for styled prefixes and labels. Avoids format-string risks since the expanded
- * string is never interpreted by printf.
+ * The conversion is spelled again with its stars read — its flags, its width
+ * and precision as digits, its length and its verb — and the one value is fetched
+ * by the type its length names after the default promotions (C11 7.21.6.1p7),
+ * so printf converts it as it would have.
  */
-static void styled_fputs(bool color_on, FILE *stream, const char *str) {
-    style_buf_t sb;
-    style_buf_init(&sb);
+static void output_number(line_t *line, const conversion_t *c, va_list *args) {
+    char spec[48];
+    int at = snprintf(spec, sizeof(spec), "%%%s", c->flags);
+    if (c->width >= 0) {
+        at += snprintf(spec + at, sizeof(spec) - (size_t) at, "%d", c->width);
+    }
+    if (c->precision >= 0) {
+        at += snprintf(spec + at, sizeof(spec) - (size_t) at, ".%d", c->precision);
+    }
+    snprintf(spec + at, sizeof(spec) - (size_t) at, "%s%c", LENGTHS[c->length], c->verb);
 
-    bool has_tags = expand_format(color_on, str, &sb);
-    fputs(sb.data, stream);
+    switch (c->verb) {
+        case 'd':
+        case 'i':
+            switch (c->length) {
+                case LENGTH_NONE:
+                case LENGTH_CHAR:
+                case LENGTH_SHORT:
+                    output_snprintf(line, spec, va_arg(*args, int));
+                    return;
+                case LENGTH_LONG:
+                    output_snprintf(line, spec, va_arg(*args, long));
+                    return;
+                case LENGTH_LONG_LONG:
+                    output_snprintf(line, spec, va_arg(*args, long long));
+                    return;
+                case LENGTH_INTMAX:
+                    output_snprintf(line, spec, va_arg(*args, intmax_t));
+                    return;
+                case LENGTH_SIZE:
+                    output_snprintf(line, spec, va_arg(*args, ssize_t));
+                    return;
+                case LENGTH_PTRDIFF:
+                    output_snprintf(line, spec, va_arg(*args, ptrdiff_t));
+                    return;
+                case LENGTH_LONG_DOUBLE:
+                    break;
+            }
+            break;
 
-    if (has_tags && color_on)
-        fputs(ANSI_RESET, stream);
+        case 'o':
+        case 'u':
+        case 'x':
+        case 'X':
+            switch (c->length) {
+                case LENGTH_NONE:
+                case LENGTH_CHAR:
+                case LENGTH_SHORT:
+                    output_snprintf(line, spec, va_arg(*args, unsigned int));
+                    return;
+                case LENGTH_LONG:
+                    output_snprintf(line, spec, va_arg(*args, unsigned long));
+                    return;
+                case LENGTH_LONG_LONG:
+                    output_snprintf(line, spec, va_arg(*args, unsigned long long));
+                    return;
+                case LENGTH_INTMAX:
+                    output_snprintf(line, spec, va_arg(*args, uintmax_t));
+                    return;
+                case LENGTH_SIZE:
+                    output_snprintf(line, spec, va_arg(*args, size_t));
+                    return;
+                case LENGTH_PTRDIFF:
+                    /* t "applies to a ptrdiff_t or the corresponding unsigned
+                     * integer type" (C11 7.21.6.1p7): the one type passed */
+                    output_snprintf(line, spec, va_arg(*args, ptrdiff_t));
+                    return;
+                case LENGTH_LONG_DOUBLE:
+                    break;
+            }
+            break;
 
-    style_buf_free(&sb);
+        case 'a':
+        case 'A':
+        case 'e':
+        case 'E':
+        case 'f':
+        case 'F':
+        case 'g':
+        case 'G':
+            if (c->length == LENGTH_NONE || c->length == LENGTH_LONG) {
+                output_snprintf(line, spec, va_arg(*args, double));
+                return;
+            }
+            if (c->length == LENGTH_LONG_DOUBLE) {
+                output_snprintf(line, spec, va_arg(*args, long double));
+                return;
+            }
+            break;
+
+        case 'p':
+            if (c->length == LENGTH_NONE) {
+                output_snprintf(line, spec, va_arg(*args, void *));
+                return;
+            }
+            break;
+
+        default:
+            break;
+    }
+
+    /* %n, a length printf does not pair with the verb, or a verb printf does
+     * not have: a conversion the compiler took and the layer does not write,
+     * which dies at the first run that asks */
+    CHECK_ARG(false, "a conversion the output layer does not write");
+}
+
+/**
+ * A format walked onto the line: each literal run its author's, each conversion
+ * a datum or a number
+ *
+ * A NULL %s writes "(null)", as libc does; a %% is the one byte, and anything
+ * written on it is no conversion the layer writes.
+ */
+static void output_walk(line_t *line, const char *fmt, va_list *args) {
+    for (const char *p = fmt; *p;) {
+        /* The author's layout up to the next conversion */
+        const char *percent = strchr(p, '%');
+        output_markup(line, p, percent ? (size_t) (percent - p) : strlen(p));
+        if (!percent) return;
+
+        /* The conversion, its stars read in their order */
+        conversion_t c;
+        p = output_conversion(percent + 1, args, &c);
+
+        switch (c.verb) {
+            case '%':
+                CHECK_ARG(
+                    c.flags[0] == '\0' && c.width < 0 && c.precision < 0
+                    && c.length == LENGTH_NONE,
+                    "a % written with more than its two bytes"
+                );
+                output_bytes(line, "%", 1);
+                break;
+
+            case 's': {
+                CHECK_ARG(c.length == LENGTH_NONE, "a wide string the output layer does not write");
+                const char *s = va_arg(*args, const char *);
+                if (!s) s = "(null)";
+                size_t len = c.precision >= 0 ? strnlen(s, (size_t) c.precision) : strlen(s);
+                output_datum(line, s, len, &c);
+                break;
+            }
+
+            case 'c': {
+                CHECK_ARG(
+                    c.length == LENGTH_NONE,
+                    "a wide character the output layer does not write"
+                );
+                const char ch = (char) va_arg(*args, int);
+                output_datum(line, &ch, 1, &c);
+                break;
+            }
+
+            default:
+                output_number(line, &c, args);
+                break;
+        }
+    }
+}
+
+/**
+ * A format walked onto the line, from its arguments as they are passed
+ */
+__attribute__((format(printf, 2, 3)))
+static void output_appendf(line_t *line, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    output_walk(line, fmt, &args);
+    va_end(args);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -486,16 +763,6 @@ bool output_is_tty(const output_t *ctx) {
     return isatty(fileno(ctx->stream));
 }
 
-const char *output_color_code(const output_t *ctx, output_color_t color) {
-    if (!ctx || !ctx->color_enabled)
-        return EMPTY;
-
-    if ((unsigned) color >= ANSI_CODE_COUNT)
-        return EMPTY;
-
-    return ANSI_CODES[color];
-}
-
 /* ═══════════════════════════════════════════════════════════════════
  * Formatted Output
  * ═══════════════════════════════════════════════════════════════════ */
@@ -503,7 +770,7 @@ const char *output_color_code(const output_t *ctx, output_color_t color) {
 /**
  * A line of the report is about to land on `stream`
  *
- * Every emitter's first act, past its gate. Three things happen here and nowhere
+ * Every line's first act (output_start). Three things happen here and nowhere
  * else: the report is flushed when this line crosses to another stream, so a
  * question or a failure arrives under the run it is about rather than inside
  * it; a boundary the report owes is paid, on the stream this line lands on; and
@@ -531,18 +798,60 @@ static void output_land(output_t *ctx, FILE *stream) {
     }
 }
 
+/**
+ * Start a line on `stream` — the report's own, or stderr
+ *
+ * The line lands first (output_land), so a boundary the report owes is paid above
+ * it; its colour is its stream's: the report's decision, or stderr's.
+ */
+static void output_start(line_t *line, output_t *ctx, FILE *stream) {
+    output_land(ctx, stream);
+
+    line->stream = stream;
+    line->data = line->stack;
+    line->len = 0;
+    line->cap = sizeof(line->stack);
+    line->color = stream == ctx->stream ? ctx->color_enabled : ctx->stderr_color_enabled;
+    line->styled = false;
+}
+
+/**
+ * Write the line, once, and give back what it grew
+ *
+ * A style left open is closed where the text ends: before the line's own trailing
+ * newlines, so the next line opens on nothing.
+ */
+static void output_put(line_t *line) {
+    if (line->styled) {
+        size_t end = line->len;
+        while (end > 0 && line->data[end - 1] == '\n') end--;
+
+        const size_t reset = sizeof(ANSI_RESET) - 1;
+        output_reserve(line, reset);
+        memmove(line->data + end + reset, line->data + end, line->len - end);
+        memcpy(line->data + end, ANSI_RESET, reset);
+        line->len += reset;
+    }
+
+    (void) fwrite(line->data, 1, line->len, line->stream);
+    if (line->data != line->stack) free(line->data);
+}
+
 void output_print(
     output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
 ) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    output_land(ctx, ctx->stream);
+    line_t line;
+    output_start(&line, ctx, ctx->stream);
 
     va_list args;
     va_start(args, fmt);
-    styled_vfprintf(ctx->color_enabled, ctx->stream, fmt, args);
+    output_walk(&line, fmt, &args);
     va_end(args);
+
+    output_put(&line);
 }
 
 void output_colored(
@@ -552,37 +861,35 @@ void output_colored(
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    output_land(ctx, ctx->stream);
+    line_t line;
+    output_start(&line, ctx, ctx->stream);
 
-    bool apply_color = color != OUTPUT_COLOR_RESET
-        && ctx->color_enabled && (unsigned) color < ANSI_CODE_COUNT;
-
-    if (apply_color) fputs(ANSI_CODES[color], ctx->stream);
+    /* The colour opens the line, and output_put closes it: RESET, the sentinel
+     * for none, writes nothing on a line that has nothing open */
+    output_style(&line, color);
 
     va_list args;
     va_start(args, fmt);
-    styled_vfprintf(ctx->color_enabled, ctx->stream, fmt, args);
+    output_walk(&line, fmt, &args);
     va_end(args);
 
-    if (apply_color) fputs(ANSI_RESET, ctx->stream);
+    output_put(&line);
 }
 
 void output_error(output_t *ctx, const char *fmt, ...) {
     if (!ctx || !fmt) return;
 
-    output_land(ctx, stderr);
-
-    styled_fputs(
-        ctx->stderr_color_enabled, stderr,
-        "{bold;red}Error:{reset} "
-    );
+    line_t line;
+    output_start(&line, ctx, stderr);
+    output_appendf(&line, "{bold;red}Error:{reset} ");
 
     va_list args;
     va_start(args, fmt);
-    styled_vfprintf(ctx->stderr_color_enabled, stderr, fmt, args);
+    output_walk(&line, fmt, &args);
     va_end(args);
 
-    fputc('\n', stderr);
+    output_bytes(&line, "\n", 1);
+    output_put(&line);
 }
 
 void output_warning(
@@ -591,19 +898,17 @@ void output_warning(
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    output_land(ctx, ctx->stream);
-
-    styled_fputs(
-        ctx->color_enabled, ctx->stream,
-        "{bold;yellow}Warning:{reset} "
-    );
+    line_t line;
+    output_start(&line, ctx, ctx->stream);
+    output_appendf(&line, "{bold;yellow}Warning:{reset} ");
 
     va_list args;
     va_start(args, fmt);
-    styled_vfprintf(ctx->color_enabled, ctx->stream, fmt, args);
+    output_walk(&line, fmt, &args);
     va_end(args);
 
-    fputc('\n', ctx->stream);
+    output_bytes(&line, "\n", 1);
+    output_put(&line);
 }
 
 void output_success(
@@ -612,19 +917,17 @@ void output_success(
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    output_land(ctx, ctx->stream);
-
-    styled_fputs(
-        ctx->color_enabled, ctx->stream,
-        "{green}\xe2\x9c\x93{reset} "
-    );
+    line_t line;
+    output_start(&line, ctx, ctx->stream);
+    output_appendf(&line, "{green}\xe2\x9c\x93{reset} ");
 
     va_list args;
     va_start(args, fmt);
-    styled_vfprintf(ctx->color_enabled, ctx->stream, fmt, args);
+    output_walk(&line, fmt, &args);
     va_end(args);
 
-    fputc('\n', ctx->stream);
+    output_bytes(&line, "\n", 1);
+    output_put(&line);
 }
 
 void output_info(
@@ -633,14 +936,16 @@ void output_info(
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    output_land(ctx, ctx->stream);
+    line_t line;
+    output_start(&line, ctx, ctx->stream);
 
     va_list args;
     va_start(args, fmt);
-    styled_vfprintf(ctx->color_enabled, ctx->stream, fmt, args);
+    output_walk(&line, fmt, &args);
     va_end(args);
 
-    fputc('\n', ctx->stream);
+    output_bytes(&line, "\n", 1);
+    output_put(&line);
 }
 
 void output_hint(
@@ -649,27 +954,25 @@ void output_hint(
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    output_land(ctx, ctx->stream);
+    line_t line;
+    output_start(&line, ctx, ctx->stream);
 
     /* Preserve leading whitespace (printed uncolored for indentation) */
     const char *p = fmt;
     while (*p == ' ' || *p == '\t') p++;
-    size_t leading_ws = (size_t) (p - fmt);
-
-    if (leading_ws > 0)
-        fprintf(ctx->stream, "%.*s", (int) leading_ws, fmt);
+    output_bytes(&line, fmt, (size_t) (p - fmt));
 
     /* Dim wraps the entire hint: prefix + body */
-    if (ctx->color_enabled) fputs(ANSI_DIM, ctx->stream);
-    fputs("Hint: ", ctx->stream);
+    output_style(&line, OUTPUT_COLOR_DIM);
+    output_bytes(&line, "Hint: ", 6);
 
     va_list args;
     va_start(args, fmt);
-    styled_vfprintf(ctx->color_enabled, ctx->stream, p, args);
+    output_walk(&line, p, &args);
     va_end(args);
 
-    if (ctx->color_enabled) fputs(ANSI_RESET, ctx->stream);
-    fputc('\n', ctx->stream);
+    output_bytes(&line, "\n", 1);
+    output_put(&line);
 }
 
 void output_hintline(
@@ -678,17 +981,17 @@ void output_hintline(
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    output_land(ctx, ctx->stream);
-
-    if (ctx->color_enabled) fputs(ANSI_DIM, ctx->stream);
+    line_t line;
+    output_start(&line, ctx, ctx->stream);
+    output_style(&line, OUTPUT_COLOR_DIM);
 
     va_list args;
     va_start(args, fmt);
-    styled_vfprintf(ctx->color_enabled, ctx->stream, fmt, args);
+    output_walk(&line, fmt, &args);
     va_end(args);
 
-    if (ctx->color_enabled) fputs(ANSI_RESET, ctx->stream);
-    fputc('\n', ctx->stream);
+    output_bytes(&line, "\n", 1);
+    output_put(&line);
 }
 
 void output_endline(output_t *ctx, output_verbosity_t min_level) {
@@ -709,18 +1012,18 @@ void output_section(
 
     /* A section is a block, and it owns the boundary above it */
     output_gap(ctx, min_level);
-    output_land(ctx, ctx->stream);
 
-    const char *bold = output_color_code(ctx, OUTPUT_COLOR_BOLD);
-    const char *reset = output_color_code(ctx, OUTPUT_COLOR_RESET);
+    line_t line;
+    output_start(&line, ctx, ctx->stream);
+    output_style(&line, OUTPUT_COLOR_BOLD);
 
-    fputs(bold, ctx->stream);
     va_list args;
     va_start(args, fmt);
-    styled_vfprintf(ctx->color_enabled, ctx->stream, fmt, args);
+    output_walk(&line, fmt, &args);
     va_end(args);
-    fputs(reset, ctx->stream);
-    fputc('\n', ctx->stream);
+
+    output_bytes(&line, "\n", 1);
+    output_put(&line);
 }
 
 void output_clear_line(output_t *ctx) {
@@ -889,15 +1192,13 @@ static bool output_ask(
     output_t *ctx, const char *message, bool default_value
 ) {
     /* The preview this asks about is the report above it, and the question must
-     * not land inside the line it ends on. */
-    output_land(ctx, stderr);
-
-    const char *suffix = default_value ? " [Y/n] " : " [y/N] ";
-
-    const char *bold = ctx->stderr_color_enabled ? ANSI_BOLD : "";
-    const char *reset = ctx->stderr_color_enabled ? ANSI_RESET : "";
-
-    fprintf(stderr, "%s%s%s%s", bold, message, reset, suffix);
+     * not land inside the line it ends on: the line lands first (output_start) */
+    line_t line;
+    output_start(&line, ctx, stderr);
+    output_appendf(
+        &line, "{bold}%s{reset}%s", message, default_value ? " [Y/n] " : " [y/N] "
+    );
+    output_put(&line);
     fflush(stderr);
 
     return output_read_answer(default_value);
@@ -926,29 +1227,20 @@ bool output_confirm_or_default(
     output_gap(ctx, OUTPUT_QUIET);
 
     if (!isatty(STDIN_FILENO)) {
-        output_land(ctx, stderr);
-
+        line_t line;
+        output_start(&line, ctx, stderr);
         if (non_interactive_default) {
-            styled_fputs(
-                ctx->stderr_color_enabled, stderr,
-                "{bold;yellow}Warning:{reset} "
-            );
-            fprintf(
-                stderr,
-                "Running non-interactively, auto-confirming: %s\n",
-                message
+            output_appendf(
+                &line, "{bold;yellow}Warning:{reset} Running non-interactively, "
+                "auto-confirming: %s\n", message
             );
         } else {
-            styled_fputs(
-                ctx->stderr_color_enabled, stderr,
-                "{bold;red}Error:{reset} "
-            );
-            fprintf(
-                stderr,
-                "Running non-interactively, refusing: %s\n",
+            output_appendf(
+                &line, "{bold;red}Error:{reset} Running non-interactively, refusing: %s\n",
                 message
             );
         }
+        output_put(&line);
         return non_interactive_default;
     }
 
@@ -967,25 +1259,19 @@ bool output_confirm_destructive(
      * by whichever of them lands first. */
     output_gap(ctx, OUTPUT_QUIET);
 
+    line_t line;
+    output_start(&line, ctx, stderr);
     if (!isatty(STDIN_FILENO)) {
-        output_land(ctx, stderr);
-        styled_fputs(
-            ctx->stderr_color_enabled, stderr,
-            "{bold;red}Error:{reset} "
+        output_appendf(
+            &line, "{bold;red}Error:{reset} Running non-interactively, refusing "
+            "destructive operation: %s\n", message
         );
-        fprintf(
-            stderr,
-            "Running non-interactively, refusing destructive operation: %s\n",
-            message
-        );
+        output_put(&line);
         return false;
     }
 
-    output_land(ctx, stderr);
-    styled_fputs(
-        ctx->stderr_color_enabled, stderr,
-        "{bold;yellow}Warning:{reset} This is a destructive operation!\n"
-    );
+    output_appendf(&line, "{bold;yellow}Warning:{reset} This is a destructive operation!\n");
+    output_put(&line);
 
     return output_ask(ctx, message, false);
 }
@@ -995,8 +1281,7 @@ bool output_confirm_destructive(
  * ═══════════════════════════════════════════════════════════════════ */
 
 typedef struct {
-    const char **tags;     /* Tag strings, the list's arena's */
-    size_t tag_count;      /* Number of tags */
+    const char *tags;      /* Bracketed and joined, "[a] [b]", the list's arena's */
     output_color_t color;  /* Color for tags */
     const char *content;   /* Content string, the list's arena's */
     const char *metadata;  /* Metadata string, the list's arena's (nullable) */
@@ -1007,29 +1292,10 @@ struct output_list {
     output_t *ctx;      /* Borrowed reference (caller owns) */
     const char *title;  /* Section title */
     const char *hint;   /* Hint text (nullable) */
-    item_t *items; /* The items, grown in the arena */
+    item_t *items;      /* The items, grown in the arena */
     size_t count;       /* Current item count */
     size_t capacity;    /* Allocated capacity */
 };
-
-static void format_tags_with_brackets(
-    const char *const *tags, size_t tag_count, char *buffer, size_t buffer_size
-) {
-    if (!tags || tag_count == 0 || !buffer || buffer_size == 0) {
-        if (buffer && buffer_size > 0) buffer[0] = '\0';
-        return;
-    }
-
-    size_t offset = 0;
-    for (size_t i = 0; i < tag_count && offset < buffer_size - 1; i++) {
-        if (i > 0 && offset < buffer_size - 1) {
-            offset += snprintf(buffer + offset, buffer_size - offset, " ");
-        }
-        offset += snprintf(
-            buffer + offset, buffer_size - offset, "[%s]", tags[i]
-        );
-    }
-}
 
 output_list_t *output_list_create(
     output_t *ctx, const char *title, const char *hint
@@ -1061,21 +1327,31 @@ void output_list_add(
         arena, list->items, &list->capacity, list->count + 1, sizeof(*list->items)
     );
 
-    item_t *item = &list->items[list->count];
-    *item = (item_t){
-        .tag_count = tag_count,
+    /* The tags as the row writes them, bracketed with a space between, joined
+     * once: a NULL tag is an empty one */
+    size_t len = 0;
+    for (size_t i = 0; i < tag_count; i++) {
+        len += (i > 0) + 1 + (tags[i] ? strlen(tags[i]) : 0) + 1;
+    }
+    char *joined = arena_alloc(arena, len + 1);
+    char *at = joined;
+    for (size_t i = 0; i < tag_count; i++) {
+        const char *tag = tags[i] ? tags[i] : "";
+        size_t n = strlen(tag);
+        if (i > 0) *at++ = ' ';
+        *at++ = '[';
+        memcpy(at, tag, n);
+        at += n;
+        *at++ = ']';
+    }
+    *at = '\0';
+
+    list->items[list->count++] = (item_t){
+        .tags = joined,
         .color = color,
         .content = arena_strdup(arena, content ? content : ""),
         .metadata = arena_strdup(arena, metadata),
     };
-
-    if (tag_count > 0) {
-        item->tags = arena_calloc(arena, tag_count, sizeof(*item->tags));
-        for (size_t i = 0; i < tag_count; i++)
-            item->tags[i] = arena_strdup(arena, tags[i] ? tags[i] : "");
-    }
-
-    list->count++;
 }
 
 void output_list_render(output_list_t *list) {
@@ -1088,60 +1364,40 @@ void output_list_render(output_list_t *list) {
     /* A list is a block, and it owns the boundary above it. Its level is the
      * gate's: a list is a NORMAL block or it is nothing. */
     output_gap(ctx, OUTPUT_NORMAL);
-    output_land(ctx, ctx->stream);
 
-    /* Pass 1: Calculate maximum tag width */
-    size_t max_tag_width = 0;
+    /* The widest row's tags: every row's are padded to them */
+    size_t width = 0;
     for (size_t i = 0; i < list->count; i++) {
-        item_t *item = &list->items[i];
-        size_t tag_width = 0;
-        for (size_t j = 0; j < item->tag_count; j++) {
-            tag_width += strlen(item->tags[j]) + 2;
-            if (j > 0) tag_width += 1;
-        }
-        if (tag_width > max_tag_width) max_tag_width = tag_width;
+        size_t tags = strlen(list->items[i].tags);
+        if (tags > width) width = tags;
     }
 
-    /* Pass 2: Render header */
-    const char *bold = output_color_code(ctx, OUTPUT_COLOR_BOLD);
-    const char *dim = output_color_code(ctx, OUTPUT_COLOR_DIM);
-    const char *reset = output_color_code(ctx, OUTPUT_COLOR_RESET);
-
-    fprintf(
-        ctx->stream, "%s%s (%zu item%s)%s",
-        bold, list->title, list->count,
-        list->count == 1 ? "" : "s", reset
+    /* The header — the title, the count and the hint — and the blank between it
+     * and the rows, which is the list's shape rather than a boundary */
+    line_t line;
+    output_start(&line, ctx, ctx->stream);
+    output_appendf(
+        &line, "{bold}%s (%zu item%s){reset}",
+        list->title, list->count, list->count == 1 ? "" : "s"
     );
+    if (list->hint) output_appendf(&line, " {dim}(%s){reset}", list->hint);
+    output_bytes(&line, "\n\n", 2);
+    output_put(&line);
 
-    if (list->hint)
-        fprintf(ctx->stream, " %s(%s)%s", dim, list->hint, reset);
-
-    fprintf(ctx->stream, "\n\n");
-
-    /* Pass 3: Render items with alignment */
+    /* The rows: the tags in the row's colour, padded, then the content and its
+     * metadata dimmed */
     for (size_t i = 0; i < list->count; i++) {
-        item_t *item = &list->items[i];
+        const item_t *item = &list->items[i];
 
-        char tag_buf[256];
-        format_tags_with_brackets(
-            item->tags, item->tag_count, tag_buf, sizeof(tag_buf)
-        );
-
-        const char *color = output_color_code(ctx, item->color);
-
-        fprintf(
-            ctx->stream, "  %s%-*s%s %s",
-            color, (int) max_tag_width, tag_buf,
-            reset, item->content
-        );
-
-        if (item->metadata)
-            fprintf(
-                ctx->stream, " %s(%s)%s",
-                dim, item->metadata, reset
-            );
-
-        fputc('\n', ctx->stream);
+        output_start(&line, ctx, ctx->stream);
+        output_bytes(&line, "  ", 2);
+        output_style(&line, item->color);
+        output_appendf(&line, "%-*s", (int) width, item->tags);
+        output_style(&line, OUTPUT_COLOR_RESET);
+        output_appendf(&line, " %s", item->content);
+        if (item->metadata) output_appendf(&line, " {dim}(%s){reset}", item->metadata);
+        output_bytes(&line, "\n", 1);
+        output_put(&line);
     }
 }
 

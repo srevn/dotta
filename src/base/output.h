@@ -185,11 +185,6 @@ bool output_colors_enabled(const output_t *ctx);
 bool output_is_tty(const output_t *ctx);
 
 /**
- * Get color code string
- */
-const char *output_color_code(const output_t *ctx, output_color_t color);
-
-/**
  * Print with inline style tags and verbosity check
  *
  * The format as it is written — no prefix, and no newline of its own — with {tag}
@@ -203,8 +198,9 @@ const char *output_color_code(const output_t *ctx, output_color_t color);
  *   {reset}
  *   {bold;red} (compound tags via semicolon)
  *
- * Auto-appends RESET if any color tag was used (prevents color bleed). Printf
- * format specifiers (%s, %d, %zu) work normally alongside tags.
+ * A style the line leaves open is closed where its text ends, before its own
+ * trailing newlines (prevents color bleed). Printf format specifiers (%s, %d,
+ * %zu) work normally alongside tags.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level

@@ -256,11 +256,11 @@ error_t path_input_resolve(const char *input, arena_t *arena, path_input_t *out)
  *   - add's argument grammar (cmds/add.c add_spell) and `ignore --test`'s
  *     filesystem arm (cmds/ignore.c): both dispatched on the storage shape
  *     themselves, and both read a bare name as a path where the resolver will not.
- *   - the three binders' targets — the two --target flags (cmds/add.c,
- *     cmds/profile.c) and the target the editor captures (cmds/interactive.c
- *     handle_key_prompt) — and the root the completion offers beneath
- *     (cmds/completion.c): a target names a directory on this machine and has
- *     no storage vocabulary to dispatch on.
+ *   - the binders' targets — the two --target flags, through path_input_target,
+ *     and the target the editor captures (cmds/interactive.c handle_key_prompt)
+ *     — and the root the completion offers beneath (cmds/completion.c): a target
+ *     names a directory on this machine and has no storage vocabulary to dispatch
+ *     on.
  *   - a glob's anchor (infra/pathspec.c compile_rule): the components before
  *     the first metacharacter, which that rule's own gate has already made a
  *     filesystem spelling.
@@ -273,5 +273,28 @@ error_t path_input_resolve(const char *input, arena_t *arena, path_input_t *out)
  * @return Error or NULL on success
  */
 error_t path_input_filesystem_path(const char *input, arena_t *arena, const char **out);
+
+/**
+ * The target a typed argument binds: the door's spelling, held to the target's
+ * rules
+ *
+ * The one reading of a target for the binders that read one: the spelling
+ * path_input_filesystem_path makes of it — absolute, folded, the key the row
+ * stores — then the directory infra/mount.h mount_validate_target says it must
+ * be. A refusal is the step's own, in its own words: the door's (an empty path,
+ * a user this system does not know) or the rules' (nothing there, a link to
+ * nothing, not a directory). `*out` is the spelling on success and NULL after
+ * an error.
+ *
+ * Readers: the two --target flags (cmds/add.c cmd_add, cmds/profile.c
+ * profile_enable).
+ *
+ * @param input User-provided target (must not be NULL; the empty string is refused)
+ * @param arena Arena that owns the answer (must not be NULL)
+ * @param out   The target: absolute, folded, a directory that stands, the arena's
+ *              (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t path_input_target(const char *input, arena_t *arena, const char **out);
 
 #endif /* DOTTA_PATH_H */

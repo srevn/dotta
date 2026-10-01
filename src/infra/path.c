@@ -13,8 +13,11 @@
  *                             absolute filesystem path, a relative one's working
  *                             directory spelled under HOME, for a caller whose
  *                             grammar has no storage arm to dispatch to (add,
- *                             the binders' --target, the editor's target, ignore
- *                             --test, the completion, a glob's anchor)
+ *                             the editor's target, ignore --test, the completion,
+ *                             a glob's anchor)
+ *
+ *   path_input_target       - that key, held to a target's rules (infra/mount.h
+ *                             mount_validate_target): the binders' --target
  *
  *   path_input_announces_path
  *                           - the grammars' question, asked of a positional whose
@@ -28,7 +31,9 @@
  * fs_working_directory), the path's algebra (base/string.h: str_path_join,
  * str_path_fold) and HOME's two spellings (sys/identity) are delegated to the
  * layers below. The table of roots is not among them: no root's spelling is read
- * here and no root's noun, so this file names no place (infra/path.h).
+ * here and no root's noun, so this file names no place (infra/path.h). A target's
+ * rules are mount's (the place a binding means), asked of the door's answer and
+ * of nothing the table holds.
  */
 
 #include "infra/path.h"
@@ -39,6 +44,7 @@
 #include "base/error.h"
 #include "base/string.h"
 #include "infra/label.h"
+#include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
 
@@ -199,5 +205,23 @@ error_t path_input_filesystem_path(const char *input, arena_t *arena, const char
 
     *out = str_path_fold(arena, path, NULL);
 
+    return NULL;
+}
+
+error_t path_input_target(const char *input, arena_t *arena, const char **out) {
+    CHECK_NULL(input);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    /* The spelling the row stores, then the place it names: each refusal is its
+     * step's own, in its own words */
+    const char *target = NULL;
+    error_t err = path_input_filesystem_path(input, arena, &target);
+    if (!err) err = mount_validate_target(target);
+    if (err) return err;
+
+    *out = target;
     return NULL;
 }

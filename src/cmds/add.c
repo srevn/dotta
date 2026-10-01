@@ -1611,12 +1611,11 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const char *bound = arena_strdup(ctx->arena, state_target(state, opts->profile));
 
     /* The target, when the run brought one: a filesystem-shaped argument —
-     * absolute, tilde, or relative to the working directory — resolved to the
-     * absolute path the row stores, then held to the target's rules. */
+     * absolute, tilde, or relative to the working directory — read through the
+     * target's door (infra/path.h path_input_target): the absolute path the row
+     * stores, held to the target's rules. */
     if (opts->target) {
-        err = path_input_filesystem_path(opts->target, ctx->arena, &target);
-        if (err) goto cleanup;
-        err = mount_validate_target(target);
+        err = path_input_target(opts->target, ctx->arena, &target);
         if (err) goto cleanup;
 
         /* Refuse a silent move, before the commit it would have shaped. A branch

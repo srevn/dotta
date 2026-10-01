@@ -681,14 +681,14 @@ static error_t profile_enable(
 
     /* Fatal up-front: the target itself. A target is a filesystem-shaped argument
      * — absolute, tilde, or relative to the working directory, the spelling
-     * completion offers — resolved to the absolute path the row stores and then
-     * held to the target's rules. Validating inside the per-profile loop used
-     * to categorize a bad target as not_found, which mislabels a CLI input problem
-     * as a missing profile. With the --target-requires-single-profile rule above,
-     * a single validation here covers every path that can reach Phase 2. */
+     * completion offers — read through the target's door (infra/path.h
+     * path_input_target): the absolute path the row stores, held to the target's
+     * rules. Validating inside the per-profile loop used to categorize a bad
+     * target as not_found, which mislabels a CLI input problem as a missing
+     * profile. With the --target-requires-single-profile rule above, a single
+     * validation here covers every path that can reach Phase 2. */
     if (opts->target) {
-        err = path_input_filesystem_path(opts->target, ctx->arena, &target);
-        if (!err) err = mount_validate_target(target);
+        err = path_input_target(opts->target, ctx->arena, &target);
         if (err) return error_wrap(err, "Invalid --target value");
     }
 

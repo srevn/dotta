@@ -125,10 +125,11 @@
 /**
  * Validate a deployment target (the `--target` argument) as the row will hold it.
  *
- * The binders read the argument first (infra/path.h path_input_filesystem_path:
- * tilde, the working directory, `.`, `..`, `//`), so what reaches here is the
- * absolute path the row stores; the shape rule holds for a caller that did not
- * (the interactive save's validate, on text a resolve refused).
+ * The two --target flags read the argument through the target's door (infra/path.h
+ * path_input_target: tilde, the working directory, `.`, `..`, `//`, then these
+ * rules), so what reaches here from them is the absolute path the row stores;
+ * the shape rule holds for a caller that did not (the interactive save's validate,
+ * on text a resolve refused).
  *
  * Refuses, in order, one message each:
  *  - a spelling that is not absolute and folded (base/string.h str_path_folded)

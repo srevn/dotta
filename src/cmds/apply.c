@@ -1717,6 +1717,10 @@ static error_t apply_write_record(
      *                             own test
      *   ancestors                 claimed parents made on the way, either
      *                             class — dotta made them too, an ownership event
+     *   held                      the holds the release could not let go, after
+     *                             the writes above: the record learns the mode
+     *                             the directory was left at, wherever it says
+     *                             the mode the hold owed (below)
      * Every other active directory present on disk was present at load too, and
      * has its record from the flush by the same argument; the load established
      * presence at the boundary, and nothing here walks the disk to establish it
@@ -1796,6 +1800,30 @@ static error_t apply_write_record(
         err = workspace_anchor(
             ws, ancestors.entries[i].verdict->item, STATE_STAT_UNSET, now
         );
+        if (err) goto cleanup;
+    }
+
+    /* The holds the release could not let go (core/deploy.h deploy_hold_t): each
+     * directory stands at the working mode its hold set, not the mode it owed.
+     * The record is the base a difference is read from — disk off it the user's,
+     * the row off it Git's to bring (core/state.h) — so a record that says the
+     * owed mode would read dotta's widening as the user's [mode], update's to
+     * commit. It learns the mode that stands, and the next load reads the row's
+     * as Git's still to bring ([stale], apply's). After the writes above, a
+     * directory the run made, fixed or made on the way holds the record they
+     * wrote, which says its row's mode — the mode its hold owed — so the test
+     * is a landing's alone: one whose record stood on another mode had diverged
+     * before the run and keeps its record, its route as the run found it, while
+     * the receipt names the mode the hold owed. One the load could not look at
+     * holds no record to correct. */
+    deploy_holds_t held = deploy_receipt->held;
+    for (size_t i = 0; i < held.count; i++) {
+        const deploy_hold_t *hold = &held.entries[i];
+        const state_record_t *record = hold->item->record;
+
+        if (!record || record->mode != hold->mode) continue;
+
+        err = workspace_learn_mode(ws, hold->item, deploy_working_mode(hold->mode));
         if (err) goto cleanup;
     }
 

@@ -529,9 +529,10 @@ typedef struct {
  *
  * One producer, read in two files: core/deploy.c — each hold's mode
  * (materialize_directory, create_ancestor, open_landing_directory), and whether
- * a directory needs a hold at all (hold_directory) — and cmds/apply.c
- * apply_print_deploy_receipt, the mode a hold the release could not let go was
- * left at. A reader not on this list is a bug.
+ * a directory needs a hold at all (hold_directory) — and cmds/apply.c, for a
+ * hold the release could not let go: the mode it was left at
+ * (apply_print_deploy_receipt) and the mode its record learns (apply_write_record).
+ * A reader not on this list is a bug.
  */
 static inline mode_t deploy_working_mode(mode_t mode) {
     return mode | S_IRWXU;

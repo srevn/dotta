@@ -13,13 +13,13 @@
  * deployed or observed there, when, with what stat) is loaded beside the view
  * and paired with it by path. It is dotta's own and nothing repairs it either:
  * the analyses read it as the base of every three-way question, and its writers
- * here (the flush, workspace_anchor, workspace_learn) write it only on disk's
- * word — a live look there, or the run's own write — all but the flush's void,
- * which clears an order on the view's word: the path is back in the view. Each
- * writes a record whole and publishes it: the item at the path holds the record
- * the store holds, and the one it held before is never written. A record whose
- * path the view lacks is an orphan, and the orphan analysis asks Git — the only
- * authority that knows — why it is one.
+ * here (the flush, workspace_anchor, workspace_learn, workspace_learn_mode) write
+ * it only on disk's word — a live look there, or the run's own write — all but
+ * the flush's void, which clears an order on the view's word: the path is back
+ * in the view. Each writes a record whole and publishes it: the item at the path
+ * holds the record the store holds, and the one it held before is never written.
+ * A record whose path the view lacks is an orphan, and the orphan analysis asks
+ * Git — the only authority that knows — why it is one.
  *
  * Each path the join holds is an item (core/workspace.h workspace_item_t): one
  * per active path and one per record the view lacks, made at the partition with
@@ -113,9 +113,9 @@ struct workspace {
 
     /* The record's handle: the store's database, borrowed from the caller
      * (workspace_load). Read once at the partition — the record, which the items
-     * hold — then written through by the three writers (the flush,
-     * workspace_anchor, workspace_learn), each publishing the record the store
-     * then holds. */
+     * hold — then written through by the four writers (the flush, workspace_anchor,
+     * workspace_learn, workspace_learn_mode), each publishing the record the
+     * store then holds. */
     state_t *state;                              /* The record's handle (borrowed from caller) */
 
     /* Content cache for encrypted blob reads during divergence analysis */
@@ -3774,9 +3774,10 @@ bool workspace_item_tags(
  * base already names. A file row's blob is Git's and never zero, so a learning
  * of the content always confirms one.
  *
- * Two callers, the load's learning and a fix's, which would otherwise drift apart:
- * workspace_flush, over what the analyses noted, and workspace_learn, over the
- * claims apply's fix set.
+ * Three callers, which would otherwise drift apart: workspace_flush, over what
+ * the analyses noted; workspace_learn, over the claims apply's fix set; and
+ * workspace_learn_mode, over none — the base whole, its order void — before it
+ * sets the mode a run left.
  */
 static state_record_t workspace_learning(
     state_record_t base,
@@ -3858,6 +3859,36 @@ error_t workspace_learn(
     /* The record the learning writes, built before the statement */
     state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
     *record = workspace_learning(*item->record, item, axes);
+
+    error_t err = state_write(ws->state, record);
+    if (err) return err;
+
+    /* The item holds the record the statement wrote — cast here, where its pointer
+     * moves (workspace_item_t) */
+    ((workspace_item_t *) item)->record = record;
+    return NULL;
+}
+
+/**
+ * Learn the mode a run left standing where it could not land the one it owed
+ *
+ * The rule is the header's. Here: one allocation, the record built from the item's,
+ * the write, and the item pointed at what it wrote.
+ */
+error_t workspace_learn_mode(
+    workspace_t *ws,
+    const workspace_item_t *item,
+    mode_t mode
+) {
+    CHECK_NULL(ws);
+    CHECK_NULL(item);
+    CHECK_NULL(item->record);
+
+    /* The record the learning writes, built before the statement: the item's
+     * own, its order void as every learning's, and the mode the run left on it */
+    state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
+    *record = workspace_learning(*item->record, item, DIVERGENCE_NONE);
+    record->mode = mode;
 
     error_t err = state_write(ws->state, record);
     if (err) return err;

@@ -218,15 +218,20 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     confirmed-disk record is that it was observed (a directory has no content
  *     confirmation, schema-enforced), or a file observed but never confirmed.
  *   - the claim (mode, owner, group): the claim dotta last reconciled the path
- *     against — the row's at the first observation and at apply's ownership events,
- *     the one a capture authored at add's and update's (the claim its commit
- *     carried, core/metadata.h metadata_item_claim), and on each axis a look
- *     found disk standing on, or a fix made it stand on, the row's since (a
- *     learning of the claim). It is the base a claim Git moved is measured from
- *     (core/workspace.h workspace_claims_moved), and an orphan's reference on
- *     disk. A link claims no mode: its column is NULL, and every other node's
- *     is permission bits, 0000–0777; an owner and a group are names, whole and
- *     never empty, NULL where the claim names none (each schema-enforced).
+ *     against, and so the base a difference on a claim axis is read from — disk
+ *     off it the user's move, the row off it Git's claim still to bring
+ *     (core/workspace.h workspace_claims_moved). The row's at the first observation
+ *     and at apply's ownership events, the one a capture authored at add's and
+ *     update's (the claim its commit carried, core/metadata.h metadata_item_claim),
+ *     and on each axis a look found disk standing on, or a fix made it stand
+ *     on, the row's since (a learning of the claim) — and on the mode, where a
+ *     run left a directory at the working mode it could not narrow, that mode,
+ *     which no claim made (core/deploy.h deploy_hold_t), so the row's reads as
+ *     Git's still to bring. It is a file orphan's reference on disk too; a
+ *     directory orphan is judged by its emptiness, never its claim. A link claims
+ *     no mode: its column is NULL, and every other node's is permission bits,
+ *     0000–0777; an owner and a group are names, whole and never empty, NULL
+ *     where the claim names none (each schema-enforced).
  *   - the lifecycle (deployed_at, ordered_at): the two acts the record remembers,
  *     each a moment or 0 (schema-enforced). deployed_at advances to now on every
  *     ownership event and a learning keeps it, 0 = dotta never put this here.
@@ -264,12 +269,12 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     (workspace_flush).
  *
  * The binding and the claim are what an orphan (a record whose path the view
- * lacks) is measured against — the claim is its reference on disk, and the binding
- * names the branch asked whether it still holds the path — and an owned record
- * whose profile ≠ the profile of the row at its path is a reassignment apply
- * has not acknowledged: on a file row and on a directory the profile tracks,
- * never on a derived ancestor claim nobody made, and across kinds only while a
- * look finds the record's own node still standing (core/workspace.h
+ * lacks) is measured against — the claim is a file orphan's reference on disk,
+ * and the binding names the branch asked whether it still holds the path — and
+ * an owned record whose profile ≠ the profile of the row at its path is a
+ * reassignment apply has not acknowledged: on a file row and on a directory the
+ * profile tracks, never on a derived ancestor claim nobody made, and across kinds
+ * only while a look finds the record's own node still standing (core/workspace.h
  * workspace_reassigned).
  */
 typedef struct state_record {
@@ -849,9 +854,9 @@ const state_record_t *state_find_record(
  * ROUTING INVARIANT — this is load-bearing:
  *   - Where a workspace live for this transaction is read after the write, its
  *     writes go through the workspace's writers — the flush, workspace_anchor,
- *     workspace_learn (core/workspace.h) — each of which points the path's item
- *     at the record this wrote. Called directly there, the item goes on holding
- *     what the load read.
+ *     workspace_learn, workspace_learn_mode (core/workspace.h) — each of which
+ *     points the path's item at the record this wrote. Called directly there,
+ *     the item goes on holding what the load read.
  *   - Where no workspace is read after the write — add's record phase, which
  *     loads none, and update's, whose workspace nothing reads after it
  *     (core/workspace.h's exception) — this is the legitimate direct caller.

@@ -21,16 +21,16 @@
  *   path (workspace_active, workspace_directories, workspace_files), and the
  *   item at a path (workspace_find) — rather than building a view or calling
  *   state_records themselves. The view has no writer: it is current by construction
- *   and nothing invalidates it. The record has three writers while a workspace
- *   is live — the flush (workspace_flush), workspace_anchor and workspace_learn
- *   — and each writes a record whole, built before its statement (core/state.h
- *   state_write), and points the path's item at it once the store holds it: the
- *   flush after its own commit, or at its end in the caller's transaction; the
- *   other two at once, in the run's. The record an item held before is never
- *   written, so a reader that took it earlier reads what the load read, whenever
- *   it reads. Retirements (state_retire, from apply's record phase and the verbs)
- *   go to the database directly — no later reader in the run consults a retired
- *   path.
+ *   and nothing invalidates it. The record has four writers while a workspace
+ *   is live — the flush (workspace_flush), workspace_anchor, workspace_learn
+ *   and workspace_learn_mode — and each writes a record whole, built before its
+ *   statement (core/state.h state_write), and points the path's item at it once
+ *   the store holds it: the flush after its own commit, or at its end in the
+ *   caller's transaction; the other three at once, in the run's. The record an
+ *   item held before is never written, so a reader that took it earlier reads
+ *   what the load read, whenever it reads. Retirements (state_retire, from apply's
+ *   record phase and the verbs) go to the database directly — no later reader
+ *   in the run consults a retired path.
  *
  *   Exception: the verbs — add, remove, and update after its commit — write the
  *   record through state.h directly, against the post-commit view they build
@@ -136,17 +136,19 @@ typedef enum {
  * that disk left what dotta last confirmed there (any difference, where nothing
  * was), STALE that Git moved past it — both, a conflict. On a claim axis the
  * axis bit says what differs, and CLAIM_MOVED beside it that the claim is Git's
- * to bring: Git moved it past the one the record last reconciled
- * (workspace_claims_moved), or it names an owner this host cannot resolve, which
- * no move of disk's can satisfy (core/workspace.c workspace_compare_ownership);
- * without it the difference is the user's. Only Git's side is asked of a claim:
- * apply converges every claim whoever moved it (core/deploy.h
- * deploy_content_conflicts), so the user's side would name a state no verb treats
- * apart. One bit for both claim axes, since no reader tells them apart, and set
- * only beside an axis bit it attributes — by workspace_analyze_claim, and by
- * workspace_compare_ownership in the one return it makes of both — so no screen
- * shows it alone. Its readers: workspace_item_route (the CONFLICT and STALE arms),
- * workspace_item_tags ([stale]), cmds/apply.c cmd_apply (the count of what Git
+ * to bring: the record last reconciled another (workspace_claims_moved) — Git
+ * moved it since, or a run left the path short of it, the record saying the mode
+ * the run left (workspace_learn_mode) — or it names an owner this host cannot
+ * resolve, which no move of disk's can satisfy (core/workspace.c
+ * workspace_compare_ownership); without it the difference is the user's. Only
+ * Git's side is asked of a claim: apply converges every claim whoever moved it
+ * (core/deploy.h deploy_content_conflicts), so the user's side would name a state
+ * no verb treats apart. One bit for both claim axes, since no reader tells them
+ * apart, and set only beside an axis bit it attributes — by
+ * workspace_analyze_claim, and by workspace_compare_ownership in the one return
+ * it makes of both — so no screen shows it alone. Its readers: workspace_item_route
+ * (the CONFLICT and STALE arms), workspace_item_tags ([stale]), cmds/apply.c
+ * cmd_apply (the count of what Git
  * moved) and core/cleanup.c cleanup_skip_reason (a known flag no orphan carries);
  * every other surface reads the route. A reader not on this list is a bug.
  *
@@ -159,7 +161,10 @@ typedef enum {
  * ownership", never "permissions", which is one word for two axes. STALE and
  * CLAIM_MOVED are one word: [stale] on a tag, and "changed in Git" in a sentence
  * — update's census, apply's count, diff's status line — "changed in Git and on
- * disk" where CONTENT stands beside them (the route's CONFLICT).
+ * disk" where CONTENT stands beside them (the route's CONFLICT). The words are
+ * the three-way frame's, true whatever moved the base: the record is what dotta
+ * last left at the path, and Git's side is the side that differs from it — a
+ * claim a run could not land among it.
  *
  * A path bit names its axis — CONTENT the bytes, MODE the mode, OWNERSHIP the
  * owner and group — so a mask of them can name axes where no difference is meant:
@@ -176,7 +181,7 @@ typedef enum {
     DIVERGENCE_TYPE        = 1 << 4,  /* Type changed (file/symlink/dir) */
     DIVERGENCE_UNVERIFIED  = 1 << 5,  /* The look failed; (workspace_fault_t) */
     DIVERGENCE_STALE       = 1 << 6,  /* Git moved past the pair dotta last confirmed */
-    DIVERGENCE_CLAIM_MOVED = 1 << 7   /* A claim Git's to bring: moved past the record's, or unresolvable here */
+    DIVERGENCE_CLAIM_MOVED = 1 << 7   /* A claim Git's to bring: not the record's, or unresolvable here */
 } divergence_type_t;
 
 /**
@@ -374,7 +379,8 @@ typedef enum {
  * The fields are grouped by their writer:
  *   the sources, the identity   the partition, once; the writers point `record`
  *                               at each record they write (workspace_flush,
- *                               workspace_anchor, workspace_learn)
+ *                               workspace_anchor, workspace_learn,
+ *                               workspace_learn_mode)
  *   the look                    workspace.c workspace_look, once per item a looker
  *                               reaches — and one retraction: the file analysis
  *                               sets the occupant to absence when its read met
@@ -447,10 +453,11 @@ typedef enum {
  * makes before the statement, and points the item at it once the store holds it
  * (the header's writers). It is const so a reader holding the item cannot write
  * the record, and no writer casts one: the item alone is cast, where a writer
- * lent it const moves its pointer (workspace_anchor, workspace_learn), which is
- * defined because no item is an object defined const — every item is the arena's.
- * So a pointer a reader took before a write keeps the load's values, and a record's
- * strings are never freed before the arena (apply's reassignment_t, its from).
+ * lent it const moves its pointer (workspace_anchor, workspace_learn,
+ * workspace_learn_mode), which is defined because no item is an object defined
+ * const — every item is the arena's. So a pointer a reader took before a write
+ * keeps the load's values, and a record's strings are never freed before the
+ * arena (apply's reassignment_t, its from).
  */
 typedef struct {
     /* The join's sources — borrowed for the workspace's lifetime */
@@ -689,9 +696,9 @@ static inline bool workspace_stale(const manifest_row_t *row, const state_record
  * DIVERGENCE_MODE where the modes differ, DIVERGENCE_OWNERSHIP where the owner
  * or the group does. The record's claim is the one dotta last reconciled the
  * path against (core/state.h state_record_t), so an axis answered here is one
- * Git moved since; whether disk followed is the look's to say. The words, never
- * their reading on this host: a claim is what Git holds, and two spellings of
- * one owner are two claims.
+ * Git moved since, or one a run left the path short of; whether disk followed
+ * is the look's to say. The words, never their reading on this host: a claim is
+ * what Git holds, and two spellings of one owner are two claims.
  *
  * A link claims no mode, and is never asked for one: a link row's 0 is a
  * don't-care, and so is a link record's (its column NULL, core/state.h
@@ -1425,7 +1432,8 @@ static inline state_record_t workspace_observation(const manifest_row_t *row) {
  *     whose owned record names another row, which follows the row as a clean
  *     one's does)
  * Learnings are not ownership events and do not come through here: they are the
- * flush's, and workspace_learn's for a directory apply fixed.
+ * flush's, workspace_learn's for a directory apply fixed, and
+ * workspace_learn_mode's for one a run left at its working mode.
  *
  * @param ws Workspace (must not be NULL, state must be open)
  * @param item The active item whose path is anchored (must not be NULL; a row's,
@@ -1485,6 +1493,40 @@ error_t workspace_learn(
     workspace_t *ws,
     const workspace_item_t *item,
     divergence_type_t axes
+);
+
+/**
+ * Learn the mode a run left standing where it could not land the one it owed:
+ * the path's record written as a fresh one the item holds once the statement lands
+ *
+ * The record the item holds, with `mode` on the mode axis and its own on every
+ * other — the binding, the content, the rest of the claim, the stamp: what the
+ * record learns where a run widened a directory to its working mode and could
+ * not narrow it back (core/deploy.h deploy_hold_t). The record is the base a
+ * difference is read from (core/state.h state_record_t), so the next load reads
+ * the row's mode as Git's still to bring (workspace_claims_moved) — apply's —
+ * and never as the user's, for update to commit. Built before the statement,
+ * written whole over the record it replaces (core/state.h state_write), and pointed
+ * at by the item once the statement landed; the record the item held before is
+ * never written.
+ *
+ * Never an ownership event: the binding and the stamp are the record's own, as
+ * a learning's are.
+ *
+ * One caller, holding the item: cmds/apply.c apply_write_record, apply's record
+ * phase, for each hold its release could not let go whose record says the mode
+ * the hold owed.
+ *
+ * @param ws Workspace (must not be NULL, state must be open)
+ * @param item The active item the run left at `mode` (must not be NULL; a row's,
+ *             whose record stands)
+ * @param mode The mode the run left standing, at most 0777
+ * @return The write's failure, naming the path, or NULL on success
+ */
+error_t workspace_learn_mode(
+    workspace_t *ws,
+    const workspace_item_t *item,
+    mode_t mode
 );
 
 /**

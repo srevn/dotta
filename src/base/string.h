@@ -213,6 +213,36 @@ char *str_join(
 const char *str_shell_quote(arena_t *arena, const char *word);
 
 /**
+ * Bytes as a terminal may show them, into a buffer
+ *
+ * What a datum carries is shown, never sent: every control — C0 but TAB, DEL,
+ * and C1 (U+0080–U+009F) — and every byte no well-formed UTF-8 sequence holds
+ * is spelled as Git spells a byte it quotes (lib/libgit2/src/util/str.c
+ * git_str_quote): \a \b \n \v \f \r by letter, \ooo for every other byte, each
+ * byte of a C1 its own (U+009B is \302\233). Everything else is itself: printable
+ * ASCII, TAB, a backslash, every well-formed sequence above U+009F. So nothing
+ * a datum holds starts a line, moves the cursor or sets a colour, and no two
+ * data written side by side join into one control: every byte kept above 0x7f
+ * stands inside a whole sequence of its own datum. Not reversible — an authored
+ * "\n" and an escaped LF read alike — and idempotent.
+ *
+ * snprintf's contract: at most `size` bytes, NUL-terminated where size > 0, and
+ * the answer is the length the whole spelling needs, so a caller measures with
+ * (NULL, 0). A unit that would not fit whole is not begun: a cut answer ends on
+ * a whole character or a whole escape.
+ *
+ * Readers: base/output.c output_datum (every %s and %c a format carries) and
+ * output_list_render (a row's tags, measured).
+ *
+ * @param dst  Where the spelling goes (may be NULL when size is 0)
+ * @param size dst's bytes, its terminator's among them
+ * @param src  The bytes (may be NULL when len is 0)
+ * @param len  How many
+ * @return The whole spelling's length, its terminator not counted
+ */
+size_t str_display(char *dst, size_t size, const char *src, size_t len);
+
+/**
  * RAII cleanup for strings
  */
 static inline void cleanup_string(char **str) {

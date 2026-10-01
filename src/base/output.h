@@ -3,6 +3,15 @@
  *
  * Provides centralized output formatting with color support, verbosity levels,
  * and different output formats.
+ *
+ * Layout and data
+ * ---------------
+ * A format is its author's layout: its literal bytes and {tags} reach the stream
+ * as written, newlines included. Every conversion is a datum: a string's or a
+ * character's bytes as a terminal may show them (base/string.h str_display), a
+ * number as printf writes it. A string handed to output any other way — a list's
+ * title, tags and rows — is a datum whole. The one door for bytes as they are
+ * is output_write: a payload the user asked to see verbatim.
  */
 
 #ifndef DOTTA_OUTPUT_H
@@ -238,6 +247,29 @@ void output_colored(
 ) __attribute__((format(printf, 4, 5)));
 
 /**
+ * Write a payload, as it is
+ *
+ * Bytes the user asked to see verbatim — a child's output, a file's text, a patch's
+ * lines — are not dotta's to spell, so nothing in them is escaped: they land
+ * like a line (the owed boundary paid), in `color` where one is given
+ * (OUTPUT_COLOR_RESET for none, output_colored's sentinel), closed before the
+ * payload's own trailing newlines. Its newlines are its own; nothing is added.
+ *
+ * @param ctx Output context (NULL-safe, no-op)
+ * @param min_level Minimum verbosity level
+ * @param color The payload's colour, or OUTPUT_COLOR_RESET for none
+ * @param bytes The payload (NULL: no-op)
+ * @param len Its length
+ */
+void output_write(
+    output_t *ctx,
+    output_verbosity_t min_level,
+    output_color_t color,
+    const char *bytes,
+    size_t len
+);
+
+/**
  * Print error message
  *
  * The terminal failure: stderr, no verbosity gate, and the report is flushed
@@ -414,8 +446,9 @@ void output_clear_line(output_t *ctx);
  * Print a patch, one line at a time
  *
  * Each line is written once and ended once: a patch that already ends in a newline
- * leaves no blank line behind it, and an empty one writes nothing. The colour a
- * line carries is read off its origin character — green for an addition, red
+ * leaves no blank line behind it, and an empty one writes nothing. A patch is a
+ * payload: each line's bytes are written as they are (output_write). The colour
+ * a line carries is read off its origin character — green for an addition, red
  * for a deletion, cyan for a hunk header, none for a `---` or `+++` file header,
  * whose second byte repeats its first. It changes a line's bytes and never their
  * number: the patch a pipe reads and the one a terminal reads have the same shape.

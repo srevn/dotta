@@ -215,6 +215,122 @@ char *str_join(
     return joined;
 }
 
+/* The length of the well-formed UTF-8 sequence that starts at `s`, or 0 where
+ * none does: Unicode's Table 3-7, so no overlong form, no surrogate and nothing
+ * past U+10FFFF is one */
+static size_t str_utf8_sequence(const unsigned char *s, size_t n) {
+    const unsigned char b = s[0];
+    if (b < 0x80) return 1;
+
+    /* The sequence's length by its lead, and the range its second byte keeps */
+    size_t need;
+    unsigned char lo = 0x80, hi = 0xBF;
+    if (b >= 0xC2 && b <= 0xDF) {
+        need = 2;
+    } else if (b == 0xE0) {
+        need = 3;
+        lo = 0xA0;
+    } else if (b == 0xED) {
+        need = 3;
+        hi = 0x9F;
+    } else if (b >= 0xE1 && b <= 0xEF) {
+        need = 3;
+    } else if (b == 0xF0) {
+        need = 4;
+        lo = 0x90;
+    } else if (b == 0xF4) {
+        need = 4;
+        hi = 0x8F;
+    } else if (b >= 0xF1 && b <= 0xF3) {
+        need = 4;
+    } else {
+        return 0;
+    }
+
+    /* Then every byte the lead promised, each a continuation */
+    if (n < need || s[1] < lo || s[1] > hi) return 0;
+    for (size_t i = 2; i < need; i++) {
+        if (s[i] < 0x80 || s[i] > 0xBF) return 0;
+    }
+
+    return need;
+}
+
+/* One byte as Git spells a byte it quotes, into `out`: a letter for the controls
+ * that have one, three octal digits for every other. Answers how many bytes it
+ * wrote — 2 or 4. */
+static size_t str_escape(char *out, unsigned char b) {
+    static const char letters[] = "abtnvfr";   /* 0x07 through 0x0d */
+
+    out[0] = '\\';
+    if (b >= 0x07 && b <= 0x0d) {
+        out[1] = letters[b - 0x07];
+        return 2;
+    }
+
+    out[1] = (char) ('0' + (b >> 6));
+    out[2] = (char) ('0' + ((b >> 3) & 7));
+    out[3] = (char) ('0' + (b & 7));
+    return 4;
+}
+
+size_t str_display(char *dst, size_t size, const char *src, size_t len) {
+    const unsigned char *s = (const unsigned char *) src;
+    const size_t room = size > 0 ? size - 1 : 0;
+    size_t need = 0;      /* the whole spelling's length */
+    size_t written = 0;   /* what dst holds: whole units, never part of one */
+
+    for (size_t i = 0; i < len;) {
+        /* A run of bytes shown as they are — printable ASCII and TAB, nearly
+         * all of any datum — is taken whole: each of its bytes a unit, so a cut
+         * may end inside it */
+        size_t run = 0;
+        while (i + run < len && (s[i + run] == '\t' || (s[i + run] >= 0x20 && s[i + run] < 0x7F))) {
+            run++;
+        }
+        if (run > 0) {
+            size_t fit = written == need ? room - written : 0;
+            if (fit > run) fit = run;
+            if (fit > 0) {
+                memcpy(dst + written, s + i, fit);
+                written += fit;
+            }
+            need += run;
+            i += run;
+            continue;
+        }
+
+        /* A unit: one character shown as it is, or each byte it spans spelled —
+         * a C1's two, a control's one, a byte no well-formed sequence holds */
+        const size_t sequence = str_utf8_sequence(s + i, len - i);
+        const bool c1 = sequence == 2 && s[i] == 0xC2 && s[i + 1] <= 0x9F;
+        const bool shown = sequence > 1
+            ? !c1 : sequence == 1 && (s[i] == '\t' || (s[i] >= 0x20 && s[i] < 0x7F));
+        const size_t take = sequence > 0 ? sequence : 1;
+
+        char unit[8];     /* four bytes shown, or two spelled */
+        size_t unit_len = 0;
+        if (shown) {
+            memcpy(unit, s + i, take);
+            unit_len = take;
+        } else {
+            for (size_t k = 0; k < take; k++) unit_len += str_escape(unit + unit_len, s[i + k]);
+        }
+
+        /* Written only while every unit before it was, so a cut answer ends on
+         * a whole one, never after a gap a larger one left */
+        if (written == need && need + unit_len <= room) {
+            memcpy(dst + written, unit, unit_len);
+            written += unit_len;
+        }
+        need += unit_len;
+        i += take;
+    }
+
+    if (size > 0) dst[written] = '\0';
+    return need;
+}
+
 /* The bytes every shell reads as themselves, wherever they stand in a word */
 #define SHELL_PLAIN \
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./,:@+-"

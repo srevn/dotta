@@ -413,21 +413,15 @@ static int print_diff_line_cb(
             break;
     }
 
-    /* Print line origin character for change lines */
+    /* A patch line is a payload, its bytes the file's own and libgit2's quoted
+     * headers, written as they are: a change line's origin first, each in the
+     * line's colour */
     if (line->origin == GIT_DIFF_LINE_ADDITION ||
         line->origin == GIT_DIFF_LINE_DELETION ||
         line->origin == GIT_DIFF_LINE_CONTEXT) {
-        output_colored(
-            out, OUTPUT_NORMAL, line_color, "%c%.*s",
-            line->origin, (int) line->content_len, line->content
-        );
-    } else {
-        /* File/hunk headers - print as-is */
-        output_colored(
-            out, OUTPUT_NORMAL, line_color, "%.*s",
-            (int) line->content_len, line->content
-        );
+        output_write(out, OUTPUT_NORMAL, line_color, &line->origin, 1);
     }
+    output_write(out, OUTPUT_NORMAL, line_color, line->content, line->content_len);
 
     /* Add newline if not present */
     if (line->content_len == 0 ||

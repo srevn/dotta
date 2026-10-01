@@ -889,9 +889,11 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
      * source or cloning the repo — and the ladder's verdict, which walks every
      * enabled profile by itself. */
     switch (opts->mode) {
-        case IGNORE_MODE_DEFAULTS:
-            output_print(out, OUTPUT_NORMAL, "%s", ignore_baseline_defaults());
+        case IGNORE_MODE_DEFAULTS: {
+            const char *defaults = ignore_baseline_defaults();
+            output_write(out, OUTPUT_NORMAL, OUTPUT_COLOR_RESET, defaults, strlen(defaults));
             return NULL;
+        }
 
         case IGNORE_MODE_TEST:
             return ignore_test(ctx, opts->test_path, opts->profile);

@@ -29,6 +29,7 @@
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/heap.h"
+#include "base/string.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * ANSI Escape Codes
@@ -444,16 +445,23 @@ static const char *output_conversion(
 }
 
 /**
- * A string's or a character's bytes onto the line, padded to the width
+ * A string's or a character's bytes onto the line, as a terminal may show them
+ *
+ * Spelled by str_display (base/string.h), so nothing a datum holds starts a line,
+ * moves the cursor or sets a colour; padded to the width by what it shows, measured
+ * before it is written.
  */
 static void output_datum(
     line_t *line, const char *bytes, size_t len, const conversion_t *c
 ) {
-    size_t pad = c->width > 0 && (size_t) c->width > len ? (size_t) c->width - len : 0;
+    const size_t shown = str_display(NULL, 0, bytes, len);
+    size_t pad = c->width > 0 && (size_t) c->width > shown ? (size_t) c->width - shown : 0;
     bool left = strchr(c->flags, '-') != NULL;
 
     if (!left) output_pad(line, pad);
-    output_bytes(line, bytes, len);
+    output_reserve(line, shown);
+    str_display(line->data + line->len, shown + 1, bytes, len);
+    line->len += shown;
     if (left) output_pad(line, pad);
 }
 
@@ -876,6 +884,22 @@ void output_colored(
     output_put(&line);
 }
 
+void output_write(
+    output_t *ctx, output_verbosity_t min_level, output_color_t color,
+    const char *bytes, size_t len
+) {
+    if (!ctx || !bytes) return;
+    if (ctx->verbosity < min_level) return;
+
+    /* The payload's bytes as they are, never walked: in its colour, which the
+     * line closes before the payload's own trailing newlines */
+    line_t line;
+    output_start(&line, ctx, ctx->stream);
+    output_style(&line, color);
+    output_bytes(&line, bytes, len);
+    output_put(&line);
+}
+
 void output_error(output_t *ctx, const char *fmt, ...) {
     if (!ctx || !fmt) return;
 
@@ -1042,7 +1066,7 @@ void output_clear_line(output_t *ctx) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 /**
- * The colour a patch line carries, or NULL for one that carries none
+ * The colour a patch line carries, or OUTPUT_COLOR_RESET for one that carries none
  *
  * The origin character is the whole rule, and the second byte is what tells a
  * change from a file header: `+++` and `---` repeat their first byte where `+x`
@@ -1050,12 +1074,12 @@ void output_clear_line(output_t *ctx) {
  * NUL-terminated text and enters only on a line that has a first byte, so the
  * second is at worst the terminator.
  */
-static const char *output_diff_color(const char *line) {
-    if (line[0] == '+' && line[1] != '+') return ANSI_GREEN;
-    if (line[0] == '-' && line[1] != '-') return ANSI_RED;
-    if (line[0] == '@' && line[1] == '@') return ANSI_CYAN;
+static output_color_t output_diff_color(const char *line) {
+    if (line[0] == '+' && line[1] != '+') return OUTPUT_COLOR_GREEN;
+    if (line[0] == '-' && line[1] != '-') return OUTPUT_COLOR_RED;
+    if (line[0] == '@' && line[1] == '@') return OUTPUT_COLOR_CYAN;
 
-    return NULL;
+    return OUTPUT_COLOR_RESET;
 }
 
 void output_print_diff(
@@ -1064,23 +1088,12 @@ void output_print_diff(
     if (!ctx || !diff_text || !*diff_text) return;
     if (ctx->verbosity < min_level) return;
 
-    output_land(ctx, ctx->stream);
-
-    const char *line = diff_text;
-
-    /* A line and its newline are one step; the last line needs no newline. */
-    while (*line) {
+    /* A line and its newline are one step; the last line needs no newline. A
+     * patch is a payload, each of its lines written as it is. */
+    for (const char *line = diff_text; *line;) {
         size_t len = strcspn(line, "\n");
-        const char *color = ctx->color_enabled ? output_diff_color(line) : NULL;
-
-        if (color)
-            fprintf(
-                ctx->stream, "%s%.*s" ANSI_RESET "\n",
-                color, (int) len, line
-            );
-        else
-            fprintf(ctx->stream, "%.*s\n", (int) len, line);
-
+        output_write(ctx, min_level, output_diff_color(line), line, len);
+        output_endline(ctx, min_level);
         line += len + (line[len] == '\n');
     }
 }
@@ -1378,11 +1391,13 @@ void output_list_render(output_list_t *list) {
      * gate's: a list is a NORMAL block or it is nothing. */
     output_gap(ctx, OUTPUT_NORMAL);
 
-    /* The widest row's tags: every row's are padded to them */
+    /* The widest row's tags, as they show: every row's are padded to them by
+     * the walker's own measure (output_datum) */
     size_t width = 0;
     for (size_t i = 0; i < list->count; i++) {
-        size_t tags = strlen(list->items[i].tags);
-        if (tags > width) width = tags;
+        const char *tags = list->items[i].tags;
+        size_t shown = str_display(NULL, 0, tags, strlen(tags));
+        if (shown > width) width = shown;
     }
 
     /* The header — the title, the count and the hint — and the blank between it

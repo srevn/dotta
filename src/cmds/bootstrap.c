@@ -277,11 +277,11 @@ static error_t bootstrap_show(
         return error_wrap(err, "Failed to read bootstrap script");
     }
 
-    /* Display content */
+    /* Display content: a payload, the script's bytes as they are */
     if (content.size > 0) {
-        output_print(
-            out, OUTPUT_NORMAL, "%.*s",
-            (int) content.size, (const char *) content.data
+        output_write(
+            out, OUTPUT_NORMAL, OUTPUT_COLOR_RESET, (const char *) content.data,
+            content.size
         );
     }
 

@@ -298,10 +298,14 @@ static hook_type_t post_type_for(hook_cmd_t cmd) {
 static void print_hook_output(
     output_t *out, const process_result_t *result
 ) {
-    if (result && result->output && result->output[0]) {
-        output_print(
-            out, OUTPUT_NORMAL, "Hook output:\n%s\n", result->output
+    if (result && result->output && result->output_len > 0) {
+        /* The hook's bytes are a payload, written as they are — its colours among
+         * them, as git passes a hook's output on (base/output.h output_write) */
+        output_print(out, OUTPUT_NORMAL, "Hook output:\n");
+        output_write(
+            out, OUTPUT_NORMAL, OUTPUT_COLOR_RESET, result->output, result->output_len
         );
+        output_endline(out, OUTPUT_NORMAL);
         /* The capture kept the hook's first bytes (sys/process.h): what it dropped
          * is counted, never shown. */
         if (result->output_dropped > 0) {

@@ -233,7 +233,8 @@ const char *str_shell_quote(arena_t *arena, const char *word);
  *
  * Readers: base/output.c output_datum (every %s and %c a format carries) and
  * output_list_render (a row's tags, measured); utils/commit.c commit_spelled
- * (every name a commit message's template inserts).
+ * (every name a commit message's template inserts); cmds/interactive.c
+ * interactive_datum (the editor's rows).
  *
  * @param dst  Where the spelling goes (may be NULL when size is 0)
  * @param size dst's bytes, its terminator's among them

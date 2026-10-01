@@ -20,7 +20,9 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/heap.h"
 #include "base/output.h"
+#include "base/string.h"
 #include "base/terminal.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -497,6 +499,20 @@ rollback:
 
 /* --- Render --- */
 
+/* A datum onto the row, as a terminal may show it: a profile's name, a target,
+ * the text typed at the prompt — each spelled by str_display (base/string.h),
+ * whole, so no byte one holds moves the cursor or sets a colour in the editor's
+ * screen. Measured, then spelled into the heap: a row is redrawn per key, and a
+ * datum has no bound a row can promise. */
+static void interactive_datum(const char *datum) {
+    size_t len = strlen(datum);
+    size_t shown = str_display(NULL, 0, datum, len);
+    char *spelled = heap_alloc(shown + 1);
+    str_display(spelled, shown + 1, datum, len);
+    fputs(spelled, stdout);
+    free(spelled);
+}
+
 /* Four row shapes, all the same line count:
  *   1. Prompt-active   "  ▶   Target: <buffer>_"
  *   2. Bound           "  ▶ ✓ name → <target>"
@@ -504,9 +520,9 @@ rollback:
  *   4. Unreadable      "    name (unreadable)"
  *
  * Trailing '_' is the visible caret; hardware cursor stays hidden for the whole
- * session. Annotations print from their own fprintf so the unbounded target string
- * sidesteps the "how big a buffer" question; stdout is line-buffered and
- * view_render emits a single fflush. */
+ * session. Every datum prints through interactive_datum, the row's layout through
+ * its own fprintf; stdout is line-buffered and view_render emits a single
+ * fflush. */
 static void row_render(const view_t *view, size_t i) {
     const item_t *it = &view->items[i];
     bool is_cursor = (i == view->cursor);
@@ -518,10 +534,9 @@ static void row_render(const view_t *view, size_t i) {
         /* The cursor is always on the prompt row by construction (prompt_open_*
          * anchors item_index to view->cursor and navigation keys are shadowed
          * while active). */
-        fprintf(
-            stdout, "  " UI_CURSOR "   " UI_BOLD "Target:" UI_RESET " %s_\r\n",
-            view->prompt.buffer.data
-        );
+        fputs("  " UI_CURSOR "   " UI_BOLD "Target:" UI_RESET " ", stdout);
+        interactive_datum(view->prompt.buffer.data);
+        fputs("_\r\n", stdout);
         return;
     }
 
@@ -531,10 +546,9 @@ static void row_render(const view_t *view, size_t i) {
     const char *name_open = dim_name ? UI_DIM : "";
     const char *name_close = dim_name ? UI_RESET : "";
 
-    fprintf(
-        stdout, "  %s %s %s%s%s",
-        cursor_glyph, checkbox, name_open, it->name, name_close
-    );
+    fprintf(stdout, "  %s %s %s", cursor_glyph, checkbox, name_open);
+    interactive_datum(it->name);
+    fputs(name_close, stdout);
 
     /* Three questions, in order. Does the row hold a binding — the store's, or
      * this session's? Shown wherever one is held: on a home-only row bound on
@@ -546,7 +560,9 @@ static void row_render(const view_t *view, size_t i) {
     if (it->target) {
         char shown[PATH_MAX];
         output_format_path(it->target, identity()->home, shown, sizeof(shown));
-        fprintf(stdout, " " UI_DIM "→ %s" UI_RESET, shown);
+        fputs(" " UI_DIM "→ ", stdout);
+        interactive_datum(shown);
+        fputs(UI_RESET, stdout);
     } else if (it->unreadable) {
         fprintf(stdout, " " UI_DIM "(unreadable)" UI_RESET);
     } else if (it->needs_target) {

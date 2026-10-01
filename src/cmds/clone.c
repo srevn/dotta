@@ -548,13 +548,11 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      *
      * Single-pass filter: walk fetched_profiles once, collect those with a
      * .bootstrap script into `bootstrap_found`, then display, prompt, and
-     * (conditionally) fire. bootstrap_available is a simple derived flag used
-     * by the final "Next steps" hint. */
+     * (conditionally) fire; what the run did is its receipt. */
     string_array_t bootstrap_found;
     string_array_init(&bootstrap_found, ctx->arena);
     bool run_bootstrap = false;
-    bool bootstrap_available = false;
-    bool bootstrap_failed = false;
+    bootstrap_receipt_t bootstrap = { 0 };
 
     /* Check bootstrap scripts in all fetched profiles */
     if (opts->bootstrap_mode != CLONE_BOOTSTRAP_SKIP &&
@@ -566,9 +564,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             string_array_push(&bootstrap_found, profile);
         }
 
-        bootstrap_available = (bootstrap_found.count > 0);
-
-        if (bootstrap_available) {
+        if (bootstrap_found.count > 0) {
             output_section(
                 out, OUTPUT_NORMAL, "Bootstrap scripts available"
             );
@@ -596,8 +592,9 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         }
     }
 
-    /* Execute bootstrap if requested */
-    if (run_bootstrap && bootstrap_found.count > 0) {
+    /* Execute bootstrap if requested: the scripts the section above listed, which
+     * the consent ran over (run_bootstrap is set only where one was found) */
+    if (run_bootstrap) {
         output_gap(out, OUTPUT_NORMAL);
         bootstrap_spec_t spec = {
             .repo          = repo,
@@ -606,25 +603,22 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             .dry_run       = false,
             .stop_on_error = true,
         };
-        err = bootstrap_fire(out, &spec);
-        if (err) {
-            output_error(out, "Bootstrap failed: %s", error_message(err));
-            err = NULL;
-            /* Non-fatal — the clone itself succeeded, and the exit code is the
-             * clone's. What the clone may not claim is that the bootstrap finished:
-             * the closing line reads off this flag — cmd_bootstrap's reads off
-             * the error itself, which here is the clone's to return. */
-            bootstrap_failed = true;
-        }
+        bootstrap = bootstrap_fire(out, &spec);
     }
 
     /* Success - print messages before cleanup */
     output_gap(out, OUTPUT_NORMAL);
     output_success(out, OUTPUT_NORMAL, "Dotta repository cloned successfully!");
 
+    /* Non-fatal — the clone itself succeeded, and the exit code is the clone's.
+     * What the clone may not claim is that the bootstrap finished: a script that
+     * failed stopped the run on its row, and the closing line names where, in
+     * the words cmd_bootstrap's refusal says it in. */
     if (run_bootstrap) {
-        if (bootstrap_failed) {
-            output_warning(out, OUTPUT_NORMAL, "Bootstrap completed with errors.");
+        if (bootstrap.stopped) {
+            output_warning(
+                out, OUTPUT_NORMAL, "Bootstrap stopped at profile '%s'", bootstrap.stopped
+            );
         } else {
             output_success(out, OUTPUT_NORMAL, "Bootstrap complete!");
         }
@@ -647,7 +641,9 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     output_gap(out, OUTPUT_NORMAL);
     output_hintline(out, OUTPUT_NORMAL, "Next steps:");
-    if (!run_bootstrap && bootstrap_available) {
+    /* The scripts a run did not finish: declined, or stopped at a failure, which
+     * `dotta bootstrap` runs again once its reason is fixed (cmds/clone.h) */
+    if (bootstrap_found.count > 0 && (!run_bootstrap || bootstrap.stopped)) {
         output_hintline(out, OUTPUT_NORMAL, "  Run bootstrap:  dotta bootstrap");
     }
     output_hintline(out, OUTPUT_NORMAL, "  List profiles:  dotta profile list");

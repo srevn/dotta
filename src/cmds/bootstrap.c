@@ -476,17 +476,21 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
         .stop_on_error = !opts->continue_on_error,
     };
 
-    /* A failure under --continue-on-error is partial — per-profile details already
-     * on screen and the failed list was printed by bootstrap_fire — and the closing
-     * line below reads off it. */
-    err = bootstrap_fire(out, &spec);
-    if (err && !opts->continue_on_error) {
-        return error_wrap(err, "Bootstrap failed");
+    /* What the run did: every failure a script's, its cause on its row as the
+     * run went. A stop is this command's refusal, naming where it stopped and
+     * nothing the row said; a run that went on past its failures listed them as
+     * it closed (bootstrap_fire), and the closing line below reads them off the
+     * receipt. */
+    bootstrap_receipt_t receipt = bootstrap_fire(out, &spec);
+    if (receipt.stopped) {
+        return ERROR(
+            ERR_INTERNAL, "Bootstrap stopped at profile '%s'", receipt.stopped
+        );
     }
 
     if (!opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
-        if (err) {
+        if (receipt.failures > 0) {
             output_warning(out, OUTPUT_NORMAL, "Bootstrap completed with errors.");
         } else {
             output_success(out, OUTPUT_NORMAL, "Bootstrap complete!");

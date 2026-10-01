@@ -4,11 +4,11 @@
  * See utils/bootstrap.h for the contract. Structured in three bands:
  *   1. Environment construction (DOTTA_* + filtered parent env).
  *   2. Single-profile execution (extract + exec OR in-memory validate).
- *   3. Public orchestrator (iterate, aggregate).
+ *   3. Public orchestrator (iterate, account in the receipt).
  *
  * This file owns every command-scoped concern of bootstrap: env, timeout, working
- * directory, process-group policy, progress output, and failure aggregation.
- * The sys/bootstrap primitives know none of this and cannot reach back up across
+ * directory, process-group policy, progress output, and the receipt. The
+ * sys/bootstrap primitives know none of this and cannot reach back up across
  * the layer boundary.
  */
 
@@ -178,7 +178,7 @@ static error_t run_dry(git_repository *repo, const char *profile) {
     return err;
 }
 
-error_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
+bootstrap_receipt_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
     CHECK_NULL(out);
     CHECK_NULL(spec);
     CHECK_NULL(spec->repo);
@@ -205,7 +205,7 @@ error_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
     const char *all_profiles = string_array_join(frame, profiles, " ");
     string_array_t failed;
     string_array_init(&failed, frame);
-    error_t err = NULL;
+    bootstrap_receipt_t receipt = { 0 };
 
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->entries[i];
@@ -240,19 +240,23 @@ error_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
             error_message(step_err)
         );
 
+        /* The failure, named for the receipt and the summary. The step's error
+         * is dropped, its details already on the row — one per failed script. */
+        string_array_push(&failed, profile);
+
+        /* A stop ends the run here, and the receipt says where: the cause is
+         * the row's, so nothing restates it. The name is the caller's own
+         * string. */
         if (spec->stop_on_error) {
-            err = error_wrap(step_err, "Bootstrap failed for profile '%s'", profile);
+            receipt.stopped = profile;
             break;
         }
-
-        /* Continue-on-error: remember for the summary. The step's error is dropped,
-         * its details already on screen — one per failed script. */
-        string_array_push(&failed, profile);
     }
+    receipt.failures = failed.count;
 
-    /* The summary, of a run that went on past its failures: a stop pushed none,
-     * and its one failure is the answer already */
-    if (failed.count > 0) {
+    /* The summary, of a run that went on past its failures: a stop's one failure
+     * is its answer already, named where it stopped */
+    if (receipt.failures > 0 && receipt.stopped == NULL) {
         output_gap(out, OUTPUT_NORMAL);
         output_warning(
             out, OUTPUT_NORMAL, "%zu bootstrap script%s failed:",
@@ -261,13 +265,8 @@ error_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
         for (size_t i = 0; i < failed.count; i++) {
             output_print(out, OUTPUT_NORMAL, "  - %s\n", failed.entries[i]);
         }
-
-        err = ERROR(
-            ERR_INTERNAL, "%zu of %zu bootstrap script%s failed",
-            failed.count, profiles->count, failed.count == 1 ? "" : "s"
-        );
     }
 
     arena_free(frame);
-    return err;
+    return receipt;
 }

@@ -2,12 +2,13 @@
  * bootstrap.h - Profile bootstrap orchestration
  *
  * Runs per-profile .bootstrap scripts in order, with progress reporting, dry-run
- * validation, and aggregated failure handling.
+ * validation, and a receipt of what the run did.
  *
  * This is the command-scoped orchestrator sitting on top of the content primitives
  * in sys/bootstrap.h and the unified subprocess primitive in sys/process.h. Its
- * public surface is a single function — bootstrap_fire — plus the value type
- * used to describe one invocation. Mirrors the shape of utils/hooks.h.
+ * public surface is a single function — bootstrap_fire — plus the two value types
+ * it reads and answers: one invocation, and its receipt. Mirrors the shape of
+ * utils/hooks.h.
  */
 
 #ifndef DOTTA_UTILS_BOOTSTRAP_H
@@ -37,9 +38,9 @@
  *   dry_run        True: validate each script's shebang in memory
  *                  and report "would execute". No /tmp write, no process spawn,
  *                  no side effects.
- *   stop_on_error  True: abort on the first failure with a wrapped
- *                  error naming the profile. False: continue through the remaining
- *                  profiles; at the end, return an aggregated error if any failed.
+ *   stop_on_error  True: stop at the first failure, the receipt naming the
+ *                  profile it stopped at. False: continue through the remaining
+ *                  profiles, the receipt counting the failures.
  */
 typedef struct {
     git_repository *repo;
@@ -48,6 +49,19 @@ typedef struct {
     bool dry_run;
     bool stop_on_error;
 } bootstrap_spec_t;
+
+/**
+ * What a run of the scripts did
+ *
+ * A value, complete: every way a run fails is one script's, said on its row with
+ * its cause as the run goes, so bootstrap_fire has no failure of its own and
+ * its callers read their fate off this (cmds/bootstrap.c cmd_bootstrap,
+ * cmds/clone.c cmd_clone).
+ */
+typedef struct {
+    size_t failures;        /* Scripts that failed — their validation, under dry_run */
+    const char *stopped;    /* The profile a stop ended the run at (spec's); NULL: none */
+} bootstrap_receipt_t;
 
 /**
  * Run the .bootstrap script of each profile in spec->profiles, in order.
@@ -70,14 +84,13 @@ typedef struct {
  *         child, which is the correct behavior for interactive bootstrap work.
  *       - Timeout: 600 seconds per script.
  *
- * Returns:
- *   - NULL if every script succeeded (or validated, for dry-run).
- *   - On spec->stop_on_error=true: the first failure is returned, wrapped with
- *     the failing profile name.
- *   - On spec->stop_on_error=false: after iterating every profile, an ERR_INTERNAL
- *     summary error is returned with the failure count. The list of failed profiles
- *     is printed via output_warning before return, so the caller can swallow
- *     the error without losing user-visible context.
+ * Returns the receipt, and never an error: a script that fails — its exec, its
+ * exit, its timeout, its extraction, its validation under dry_run — is said on
+ * its row with its cause, and counted.
+ *   - spec->stop_on_error=true: the run stops at the first failure, the scripts
+ *     after it never run, and the receipt names the profile it stopped at.
+ *   - spec->stop_on_error=false: every script runs, and a run that met failures
+ *     closes with a summary naming them (output_warning).
  *
  * Preconditions:
  *   - spec->repo, spec->repo_dir, spec->profiles are non-NULL.
@@ -86,7 +99,7 @@ typedef struct {
  *     STDOUT_FILENO, so interleaving is correct only when `out` also routes to
  *     stdout.
  */
-error_t bootstrap_fire(
+bootstrap_receipt_t bootstrap_fire(
     output_t *out,
     const bootstrap_spec_t *spec
 );

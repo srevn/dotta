@@ -11,8 +11,8 @@
  * - content and type: the tree's (a blob, a link, an executable) — never restated
  *   here, and the tree's word wins over a stale item's kind (read for one name
  *   by core/profiles.h profile_holds and, for the claim an orphan's record
- *   remembers, by core/workspace.c compute_orphan_authority; for the whole branch
- *   by core/manifest.c manifest_contribute)
+ *   remembers, by core/workspace.c workspace_orphan_authority; for the whole
+ *   branch by core/manifest.c manifest_contribute)
  * - permission bits: the sheet's ("mode") — Git's filemode holds one bit of them
  *   (owner-execute), the sheet holds them all
  * - ownership: the sheet's ("owner"/"group"), two names either of which may be
@@ -710,7 +710,7 @@ error_t metadata_load_from_branch(
  * read anyway (cmds/show.c show_file — the mode, the ownership and the annotation
  * alike), the file listing's verbose marks (cmds/list.c list_files, warned; the
  * listing is the tree's and stands, the marks are the sheet's and do not), the
- * orphan authority's third answer (core/workspace.c compute_orphan_authority,
+ * orphan authority's third answer (core/workspace.c workspace_orphan_authority,
  * which folds to UNVERIFIED and never to "no claims") and the completion's offer
  * (cmds/completion.c completion_directories). One reader folds without deciding
  * to: the deletion's hook universe (cmds/remove.c remove_profile) drops every

@@ -439,7 +439,7 @@ typedef struct {
  * tip at the name it writes (cmds/revert.c cmd_revert, step 11) asks Git's
  * one-entry rule, which the sheet must not answer — a directory claim there is
  * retired by the write, not refused; the orphan probe (core/workspace.c
- * compute_orphan_authority) asks whether the branch holds the claim a record
+ * workspace_orphan_authority) asks whether the branch holds the claim a record
  * remembers, which a subtree and a gitlink stand at a name without making — the
  * tree first, as here, and the sheet only for a directory the tree holds no blob
  * for — and folds every failure to UNVERIFIED; the count's staleness probe

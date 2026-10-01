@@ -361,7 +361,7 @@ error_t gitops_reference_tree(
  * gitops_reference_tree of refs/heads/<name>, the name through the branch rule
  * (gitops_branch_refname) on the way. Readers: core/manifest.c manifest_build
  * (a profile whose branch is gone contributes nothing), core/workspace.c
- * compute_orphan_authority (an orphan whose branch is gone is lost),
+ * workspace_orphan_authority (an orphan whose branch is gone is lost),
  * sys/bootstrap.c bootstrap_exists, and gitops_load_branch_tree, which refuses
  * the absence.
  *

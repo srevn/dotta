@@ -232,11 +232,8 @@ error_t epoch_init(
          * the thing that broke the census is, and this refusal is the one blocking
          * it. */
         return error_wrap(
-            cerr,
-            "Cannot tell whether this repository holds encrypted files sealed "
-            "under the epoch at '%s', so minting a new one is refused\n\n"
-            "Repair the repository and run 'dotta init' again.",
-            EPOCH_REF
+            cerr, "Cannot tell whether this repository holds encrypted files sealed "
+            "under the epoch at '%s', so minting a new one is refused", EPOCH_REF
         );
     }
 
@@ -249,14 +246,9 @@ error_t epoch_init(
          * a repair happened. */
         if (any_ciphertext) {
             return error_wrap(
-                probe_err,
-                "Repository epoch '%s' cannot be read and encrypted files may "
-                "be sealed under it\n\n"
-                "Minting a new one would seal them away permanently. Restore "
-                "the ref instead:\n"
-                "  dotta git fetch origin '" EPOCH_RESTORE_REFSPEC "'\n"
-                "or copy it from a machine that still has this repository.",
-                EPOCH_REF
+                probe_err, "Repository epoch '%s' cannot be read and encrypted files "
+                "may be sealed under it; a fetch of '" EPOCH_RESTORE_REFSPEC "' from "
+                "a remote that holds this repository's epoch restores it", EPOCH_REF
             );
         }
 
@@ -277,14 +269,9 @@ error_t epoch_init(
          * the ref used to key. */
         if (any_ciphertext) {
             return ERROR(
-                ERR_CRYPTO,
-                "Repository epoch '%s' is missing and encrypted files may be "
-                "sealed under it\n\n"
-                "Minting a new one would seal them away permanently. Restore "
-                "the ref instead:\n"
-                "  dotta git fetch origin '" EPOCH_RESTORE_REFSPEC "'\n"
-                "or copy it from a machine that still has this repository.",
-                EPOCH_REF
+                ERR_CRYPTO, "Repository epoch '%s' is missing and encrypted files may be "
+                "sealed under it; a fetch of '" EPOCH_RESTORE_REFSPEC "' from a remote "
+                "that holds this repository's epoch restores it", EPOCH_REF
             );
         }
     }

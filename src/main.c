@@ -194,21 +194,18 @@ static error_t open_run(
             if (err) {
                 /* Restoration leads, and it leads for both faults: a ref that
                  * is gone and one that stands and yields no epoch differ in one
-                 * word and in nothing else (epoch.h). Minting a fresh epoch is
-                 * safe only on a repository that holds no encrypted files, and
-                 * `dotta init` is what decides that — so the user never has to
-                 * answer it before acting. The fetch is the epoch's own restore
-                 * refspec (epoch.h), forced and naming the one ref. */
+                 * word and in nothing else (epoch.h). The fetch is the epoch's
+                 * own restore refspec (epoch.h), forced and naming the one ref,
+                 * from a remote this refusal cannot name; the other way is the
+                 * feature off. Minting a fresh one is init's to decide, which
+                 * refuses where an encrypted file would be orphaned and says
+                 * why. */
                 err = error_wrap(
                     err,
-                    "Encryption is enabled but this repository's epoch (%s) %s; "
-                    "every encrypted file is sealed under it\n"
-                    "  - Restore it: dotta git fetch origin "
-                    "'" EPOCH_RESTORE_REFSPEC "'\n"
-                    "  - Or mint a fresh one with 'dotta init', which refuses "
-                    "if any encrypted file would be orphaned\n"
-                    "  - Or set encryption.enabled = false to work without "
-                    "encryption for now",
+                    "Encryption is enabled but this repository's epoch (%s) %s, and "
+                    "every encrypted file is sealed under it; a fetch of '"
+                    EPOCH_RESTORE_REFSPEC "' from a remote that holds it restores it, "
+                    "or encryption.enabled = false works without it",
                     EPOCH_REF,
                     error_code(err) == ERR_NOT_FOUND ? "is missing" : "cannot be read"
                 );

@@ -81,9 +81,13 @@
  * unreadable a plain fetch is rejected as non-fast-forward and restores nothing.
  * Naming the one ref and not its namespace: a restore is of the epoch, and
  * refs/dotta holds this machine's baseline beside it (core/ignore.h), which a
- * glob would replace with a remote's. The four refusals that name the restore
- * print it — main.c's dispatch, epoch_init's two arms, sync's epoch_emit_damaged
- * — as `dotta git fetch origin '<refspec>'`. */
+ * glob would replace with a remote's. A restore only from a remote that holds
+ * this repository's own epoch: from a foreign one it installs that remote's,
+ * and the local salt is gone for good — which no reader of a missing or unreadable
+ * ref can tell apart, so each that names the restore names that condition with
+ * it. The three refusals (main.c's dispatch, epoch_init's two arms) name the
+ * refspec and no remote, which they cannot know; sync's epoch_emit_damaged has
+ * its remote in hand and names the whole command. */
 #define EPOCH_RESTORE_REFSPEC "+" EPOCH_REF ":" EPOCH_REF
 
 /** Tree-entry names for the two blobs. */
@@ -148,9 +152,9 @@ error_t epoch_init(
  * Returns ERR_NOT_FOUND when — and only when — the ref itself is missing, the
  * canonical diagnostic for "this dotta repo has not been initialized" or "this
  * clone fetched from a remote that does not host the epoch ref". The dispatcher
- * wraps it with an actionable hint; `epoch_init` reads it as "there is no ref
- * to delete before minting", which is why the code stops at the ref and never
- * speaks for the payload.
+ * wraps it with the restore; `epoch_init` reads it as "there is no ref to delete
+ * before minting", which is why the code stops at the ref and never speaks for
+ * the payload.
  *
  * Returns ERR_CRYPTO when the ref exists but yields no epoch — the tree lacks a
  * blob, an entry is not a blob, a blob is the wrong size, or the pair is out of

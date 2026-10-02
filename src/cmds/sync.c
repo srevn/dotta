@@ -1280,9 +1280,10 @@ static void epoch_emit_conflict(output_t *out) {
  * hints fit a ref that is merely unreadable, where the salt blob is often intact
  * and one fetch away from whole. This is `epoch_init`'s refusal over the identical
  * state, said by the other verb. The fetch is the epoch's own restore refspec
- * (epoch.h), forced and naming the one ref.
+ * (epoch.h), forced and naming the one ref, from the remote this sync reached,
+ * on the condition the refspec's comment states.
  */
-static void epoch_emit_damaged(output_t *out) {
+static void epoch_emit_damaged(output_t *out, const char *remote_name) {
     output_warning(
         out, OUTPUT_NORMAL,
         "Repository epoch left alone: '%s' cannot be read and this repository "
@@ -1291,8 +1292,9 @@ static void epoch_emit_damaged(output_t *out) {
     );
     output_hint(
         out, OUTPUT_NORMAL,
-        "Restore the ref rather than replacing it: dotta git fetch origin "
-        "'" EPOCH_RESTORE_REFSPEC "'"
+        "If '%s' holds this repository's epoch, restore the ref rather than "
+        "replacing it: dotta git fetch %s '" EPOCH_RESTORE_REFSPEC "'",
+        remote_name, remote_name
     );
 }
 
@@ -1404,7 +1406,7 @@ static void epoch_reconcile(
             return;  /* warn-and-continue; no git op */
 
         case EPOCH_RECONCILE_DAMAGED:
-            epoch_emit_damaged(out);
+            epoch_emit_damaged(out, remote_name);
             return;  /* warn-and-continue; no git op */
 
         case EPOCH_RECONCILE_ADOPT: {

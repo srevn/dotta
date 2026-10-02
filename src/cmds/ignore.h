@@ -57,7 +57,8 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts);
 /**
  * Spec-engine command specification for `dotta ignore`.
  *
- * Registered in cmds/registry.c. Defined in ignore.c beside the dispatch wrapper.
+ * Registered in main.c's static `dotta_commands[]`; defined in ignore.c beside
+ * the dispatch wrapper.
  */
 extern const args_command_t spec_ignore;
 

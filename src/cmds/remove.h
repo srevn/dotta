@@ -76,8 +76,8 @@ error_t cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts);
 /**
  * Spec-engine command specification for `dotta remove`.
  *
- * Registered in cmds/registry.c. Defined in remove.c beside the post_parse and
- * dispatch wrappers.
+ * Registered in main.c's static `dotta_commands[]`; defined in remove.c beside
+ * the post_parse and dispatch wrappers.
  */
 extern const args_command_t spec_remove;
 

@@ -45,7 +45,8 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts);
  * the model holding: an opening pass-through would answer that remedy with the
  * very error the remedy is for.
  *
- * Registered in cmds/registry.c; defined in git.c beside the dispatch wrapper.
+ * Registered in main.c's static `dotta_commands[]`; defined in git.c beside the
+ * dispatch wrapper.
  */
 extern const args_command_t spec_git;
 

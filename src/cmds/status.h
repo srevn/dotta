@@ -52,8 +52,8 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts);
 /**
  * Spec-engine command specification for `dotta status`.
  *
- * Registered in cmds/registry.c. Defined in status.c beside the post_parse and
- * dispatch wrappers.
+ * Registered in main.c's static `dotta_commands[]`; defined in status.c beside
+ * the post_parse and dispatch wrappers.
  */
 extern const args_command_t spec_status;
 

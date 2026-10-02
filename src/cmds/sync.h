@@ -48,7 +48,8 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts);
 /**
  * Spec-engine command specification for `dotta sync`.
  *
- * Registered in cmds/registry.c. Defined in sync.c beside the dispatch wrapper.
+ * Registered in main.c's static `dotta_commands[]`; defined in sync.c beside
+ * the dispatch wrapper.
  */
 extern const args_command_t spec_sync;
 

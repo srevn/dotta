@@ -79,8 +79,8 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts);
 /**
  * Spec-engine command specification for `dotta diff`.
  *
- * Registered in cmds/registry.c. Defined in diff.c beside the classifier,
- * post_parse, and dispatch wrappers.
+ * Registered in main.c's static `dotta_commands[]`; defined in diff.c beside
+ * the classifier, post_parse, and dispatch wrappers.
  */
 extern const args_command_t spec_diff;
 

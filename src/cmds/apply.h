@@ -53,7 +53,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts);
 /**
  * Spec-engine command specification for `dotta apply`.
  *
- * Registered in cmds/registry.c. Defined in apply.c beside the dispatch wrapper.
+ * Registered in main.c's static `dotta_commands[]`; defined in apply.c beside
+ * the dispatch wrapper.
  */
 extern const args_command_t spec_apply;
 

@@ -100,8 +100,8 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts);
 /**
  * Spec-engine command specification for `dotta revert`.
  *
- * Registered in cmds/registry.c. Defined in revert.c beside the post_parse and
- * dispatch wrappers.
+ * Registered in main.c's static `dotta_commands[]`; defined in revert.c beside
+ * the post_parse and dispatch wrappers.
  */
 extern const args_command_t spec_revert;
 

@@ -38,7 +38,8 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts);
 /**
  * Spec-engine command specification for `dotta init`.
  *
- * Registered in cmds/registry.c. Defined in init.c beside the dispatch wrapper.
+ * Registered in main.c's static `dotta_commands[]`; defined in init.c beside
+ * the dispatch wrapper.
  */
 extern const args_command_t spec_init;
 

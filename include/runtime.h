@@ -528,8 +528,9 @@ typedef struct dotta_run {
  * Pass-through commands (e.g. `dotta git`) run an external tool whose *exact*
  * exit status is the contract users rely on (`git diff --exit-code` returns 1
  * on diffs, 128+n on signals, etc.). They assign `*ctx->exit_code` to the value
- * they want dotta to exit with and return `NULL` from dispatch. Main honors that
- * value when no error is reported; otherwise the error path wins.
+ * they want dotta to exit with. An error is told either way, and the run exits
+ * with the value the dispatch set, or 1 where it set none: a passthrough that
+ * could not run its tool returns the refusal beside a shell's status for it.
  *
  * The runner owns the int: `run_spec` allocates it on its frame, initializes it
  * to 0, and points `exit_code` at it. This keeps `ctx` const-honest — the struct's
@@ -544,7 +545,7 @@ typedef struct dotta_ctx {
     output_t *out;
     int argc;                           /* Original process argc */
     char **argv;                        /* Original process argv */
-    int *exit_code;                     /* Non-NULL; *exit_code overrides exit when err==NULL */
+    int *exit_code;                     /* Non-NULL; the status the run exits with, where the dispatch sets one */
 } dotta_ctx_t;
 
 /**

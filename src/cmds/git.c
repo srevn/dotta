@@ -7,9 +7,7 @@
 #include <config.h>
 #include <errno.h>
 #include <signal.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "base/args.h"
 #include "base/error.h"
@@ -17,40 +15,24 @@
 #include "sys/process.h"
 
 /**
- * Execute git command with passthrough
+ * Run git on the store, as asked
  *
- * Runs git in the foreground (sys/process.h process_foreground) for a secure,
- * full-featured passthrough:
- * - No shell injection vulnerabilities
- * - Preserves all stdio streams (including interactive mode)
- * - Returns git's actual exit code, and dies of the keyboard signal git died of
- * - Works with pipes and redirects
+ * No shell between: execvp's argv, so the line reaches git as typed, and every
+ * stdio stream — a terminal, a pipe, a redirect — is git's own.
  */
-int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
-    CHECK_NULL(repo_path);
+error_t cmd_git(const dotta_ctx_t *ctx, const cmd_git_options_t *opts) {
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
-    if (!opts->args || opts->arg_count == 0) {
-        fprintf(stderr, "Error: No git command specified\n\n");
-        fprintf(stderr, "Usage: dotta git <git-command> [args...]\n\n");
-        fprintf(stderr, "Examples:\n");
-        fprintf(stderr, "  dotta git log global --oneline\n");
-        fprintf(stderr, "  dotta git show global:home/.bashrc\n");
-        fprintf(stderr, "  dotta git reflog global\n");
-        fprintf(stderr, "  dotta git remote -v\n");
-        fprintf(stderr, "\n");
-        fprintf(stderr, "The git command will be executed in the dotta repository,\n");
-        fprintf(stderr, "a bare one: name a profile where git would read HEAD.\n");
-        return 1;
-    }
-
-    /* Build argv for execvp Format: "git" "-C" "<repo-path>" <user-args...> NULL */
+    /* The line for execvp: "git" "-C" "<the store>" <the line as typed> NULL.
+     * No command at all is git's to answer as well (its usage, status 1), so
+     * the line is handed over whatever it holds. */
     int total_args = 3 + opts->arg_count + 1;  /* git + -C + path + args + NULL */
     char **argv = heap_calloc((size_t) total_args, sizeof(char *));
 
     argv[0] = "git";
     argv[1] = "-C";
-    argv[2] = (char *) repo_path;  /* Cast away const for execvp */
+    argv[2] = (char *) ctx->config->repo_dir;  /* Cast away const for execvp */
 
     for (int i = 0; i < opts->arg_count; i++) {
         argv[3 + i] = opts->args[i];
@@ -64,17 +46,14 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
     process_result_t result;
     error_t err = process_foreground(argv, &result);
     free(argv);
-    if (err) {
-        fprintf(stderr, "Error: %s\n", error_message(err));
-        return 1;
-    }
+    if (err) return err;
 
-    /* A git that could not be run: its errno, and the status a shell gives a
+    /* A git that could not be run: its errno, beside the status a shell gives a
      * command it could not run — 127 for one no PATH entry holds, 126 for one
      * it found and could not run. */
     if (result.exec_failed) {
-        fprintf(stderr, "Error: Cannot run git: %s\n", strerror(result.exec_errno));
-        return result.exec_errno == ENOENT ? 127 : 126;
+        *ctx->exit_code = result.exec_errno == ENOENT ? 127 : 126;
+        return error_from_errno(result.exec_errno, "Cannot run git");
     }
 
     /* Dead of the keyboard's signal: the terminal sent it to dotta too, which
@@ -85,12 +64,15 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
         raise(result.signal_num);
     }
 
-    /* Killed by anything else: said, and the standard convention's status. */
-    if (result.signal_num) {
-        fprintf(stderr, "git terminated by signal %d\n", result.signal_num);
+    /* The status git ended with, as a shell reads it — 128 and the signal for a
+     * death. A broken pipe is that status alone: a pager or a `| head` closed
+     * it, and git says nothing of its own child's (lib/git/run-command.c
+     * wait_or_whine). Any other death is said in git's words for one. */
+    *ctx->exit_code = result.exit_code;
+    if (result.signal_num != 0 && result.signal_num != SIGPIPE) {
+        return ERROR(ERR_GIT, "git died of signal %d", result.signal_num);
     }
-
-    return result.exit_code;
+    return NULL;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -100,43 +82,24 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
 /**
  * Passthrough dispatch: the engine hands us the full argv untouched.
  *
- * Exit-code preservation: `cmd_git` returns git's own status (0, 1, 2, 128+n).
- * That status IS the user-visible contract — `git diff --exit-code`, merge-base
- * probes, CI scripts all branch on it. We can't funnel it through `error_t` (which
- * collapses to 0 or 1), so we write through `*ctx->exit_code`; `run_spec` honors
- * that when dispatch returns NULL — the channel include/runtime.h "Exit-code
- * override" states.
+ * The line after `git` is the passthrough's options, and git's own status is
+ * the run's: `git diff --exit-code`, merge-base probes and CI scripts branch on
+ * it, so it is written through `*ctx->exit_code`, and an error rides beside it
+ * (include/runtime.h "Exit-code override").
  */
 static error_t git_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     (void) opts_v;
-    cmd_git_options_t opts = {
+    const cmd_git_options_t opts = {
         .args      = &ctx->argv[2],
         .arg_count = ctx->argc - 2,
     };
-    *ctx->exit_code = cmd_git(ctx->config->repo_dir, &opts);
-    return NULL;
+    return cmd_git(ctx, &opts);
 }
 
 const args_command_t spec_git = {
     .name        = "git",
     .summary     = "Execute git commands within repository",
-    .usage       = "%s git <git-command> [args...]",
-    .description =
-        "Pure passthrough to git, scoped to the dotta repository.\n"
-        "No interception or modification — all standard git commands and\n"
-        "options are supported. Git's exit status is preserved verbatim\n"
-        "so scripts depending on codes like 1 (diffs found) or 128\n"
-        "(fatal) continue to work under `dotta git`.\n"
-        "\n"
-        "The repository is bare: nothing is checked out, and HEAD names\n"
-        "no profile. Name the profile where git would read HEAD. To look\n"
-        "at one with your own tools: `%s git worktree add <dir> <profile>`.\n",
-    .examples    =
-        "  %s git log global --oneline\n"
-        "  %s git show global:home/.bashrc\n"
-        "  %s git reflog global\n"
-        "  %s git remote -v\n",
     .dispatch    = git_dispatch,
     .passthrough = true,
 };

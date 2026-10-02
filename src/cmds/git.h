@@ -19,16 +19,28 @@ typedef struct {
 } cmd_git_options_t;
 
 /**
- * Git command implementation
+ * Run git on the store, as asked
  *
- * Executes git commands directly on the dotta repository. Pure passthrough - no
- * interception or modification.
+ * A passthrough: git -C <the store's directory> and the line as typed, in the
+ * foreground (sys/process.h process_foreground). What the line holds is git's
+ * to answer — no command at all included: git's usage, status 1 (lib/git/git.c
+ * cmd_main). The run's status is git's own (*ctx->exit_code), as a shell reads
+ * it, and so is its death: by the keyboard's signal dotta dies too, and by a
+ * broken pipe — a pager or a `| head` closed early — the status alone, as git
+ * says nothing of its own children's (lib/git/run-command.c wait_or_whine).
  *
- * @param repo_path The store's directory (must not be NULL)
- * @param opts Command options (must not be NULL)
- * @return Exit code from git (0 = success, non-zero = error)
+ * A refusal is returned beside the status the run ends with: a process that could
+ * not be started; a git that could not be run, 127 where no PATH entry holds
+ * one and 126 where one was found and not run (a shell's statuses); a git that
+ * died of another signal, 128 and the signal (include/runtime.h "Exit-code
+ * override").
+ *
+ * @param ctx The run: the store's directory (ctx->config) and the status
+ *            (ctx->exit_code) (must not be NULL)
+ * @param opts The line after `git` (must not be NULL)
+ * @return Error or NULL on success
  */
-int cmd_git(const char *repo_path, const cmd_git_options_t *opts);
+error_t cmd_git(const dotta_ctx_t *ctx, const cmd_git_options_t *opts);
 
 /**
  * Spec-engine command specification for `dotta git`.

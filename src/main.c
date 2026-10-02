@@ -399,14 +399,15 @@ static int run_spec(
     close_run(&ctx.run);
     arena_free(arena);
 
-    /* One teller for every failure — an open that refused and a handler that
-     * did, under the same flag (base/output.h output_error). */
+    /* Passthrough dispatch writes via *ctx->exit_code to propagate the child's
+     * exact status (0, 1, 2, 128+n); native commands leave it at 0. One teller
+     * for every failure — an open that refused and a handler that did, under
+     * the same flag (base/output.h output_error) — and the status the dispatch
+     * set beside it, where it set one (runtime.h "Exit-code override"). */
     if (err != NULL) {
         if (!resolved->silent_failure) output_error(out, err);
-        return 1;
+        return exit_override != 0 ? exit_override : 1;
     }
-    /* Passthrough dispatch writes via *ctx->exit_code to propagate the child's
-     * exact status (0, 1, 2, 128+n). Native commands leave it at 0. */
     return exit_override;
 }
 

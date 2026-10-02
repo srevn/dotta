@@ -573,12 +573,12 @@ int main(int argc, char **argv) {
 
     /* Create output context once from config settings: the configuration's level,
      * which a spec's -v or -q overrides for its run (run_spec). */
-    output_t *out = output_create(stdout, config->verbosity, config->color);
+    output_t out;
+    output_init(&out, stdout, config->verbosity, config->color);
 
-    int status = run_spec(spec, argc, argv, prog, config, out);
+    int status = run_spec(spec, argc, argv, prog, config, &out);
 
     gitops_shutdown();
-    output_free(out);
     arena_free(process);
 
     return status;

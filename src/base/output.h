@@ -125,20 +125,23 @@ error_t output_parse_verbosity(const char *word, output_verbosity_t *out);
 error_t output_parse_color_mode(const char *word, output_color_mode_t *out);
 
 /**
- * Create output context
+ * Make an output context in place
  *
- * @return Output context; never NULL
+ * A value its holder keeps — main's, for the process — so nothing frees it: the
+ * report starts with nothing standing, and both colour decisions are made for
+ * the mode, the report's stream's and stderr's.
+ *
+ * @param ctx The context (must not be NULL)
+ * @param stream Where the report goes (NULL: stdout)
+ * @param verbosity The level the run speaks at
+ * @param color_mode When colours are written
  */
-output_t *output_create(
+void output_init(
+    output_t *ctx,
     FILE *stream,
     output_verbosity_t verbosity,
     output_color_mode_t color_mode
 );
-
-/**
- * Free output context
- */
-void output_free(output_t *ctx);
 
 /**
  * Set verbosity level

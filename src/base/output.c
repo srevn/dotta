@@ -681,24 +681,20 @@ static bool output_colors_on(output_color_mode_t mode, FILE *stream) {
  * Context Management
  * ═══════════════════════════════════════════════════════════════════ */
 
-output_t *output_create(
-    FILE *stream, output_verbosity_t verbosity, output_color_mode_t color_mode
+void output_init(
+    output_t *ctx, FILE *stream, output_verbosity_t verbosity, output_color_mode_t color_mode
 ) {
-    output_t *ctx = heap_calloc(1, sizeof(output_t));
+    CHECK_NULL(ctx);
 
-    ctx->stream = stream ? stream : stdout;
-    ctx->verbosity = verbosity;
-    ctx->color_mode = color_mode;
+    /* Nothing of the report stands yet, and the colours are the mode's: for the
+     * report's stream, and for stderr, where failures and questions land */
+    *ctx = (output_t){
+        .stream = stream ? stream : stdout,
+        .verbosity = verbosity,
+        .color_mode = color_mode,
+    };
     ctx->color_enabled = output_colors_on(color_mode, ctx->stream);
     ctx->stderr_color_enabled = output_colors_on(color_mode, stderr);
-
-    return ctx;
-}
-
-void output_free(output_t *ctx) {
-    if (ctx) {
-        free(ctx);
-    }
 }
 
 void output_set_verbosity(output_t *ctx, output_verbosity_t verbosity) {

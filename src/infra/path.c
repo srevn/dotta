@@ -108,13 +108,9 @@ error_t path_input_resolve(
      * completion). */
     if (input[0] != '/' && input[0] != '~' && input[0] != '.' &&
         !strchr(input, '/')) {
-        error_t err = ERROR(
-            ERR_INVALID_ARG,
-            "Path '%s' is neither a valid filesystem path nor storage path", input
-        );
-        return error_hint(
-            err, "Use absolute (/path), tilde (~/.file), relative (./path), or storage "
-            "format (home/..., root/..., custom/...)"
+        return ERROR(
+            ERR_INVALID_ARG, "Path '%s' is neither a filesystem path (/x, ~/x, ./x) nor "
+            "a storage path (home/..., root/..., custom/...)", input
         );
     }
 

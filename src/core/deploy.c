@@ -767,15 +767,12 @@ static error_t resolve_deployment_ownership(
     }
 
     /* Fatal under strict_ownership, a configuration or environment mismatch the
-     * user asked to be stopped by */
+     * user asked to be stopped by: one fact, the row, the key and the name, as
+     * the warning below says it */
     if (strict_ownership) {
-        error_t err = error_wrap(
-            ERROR(ERR_NOT_FOUND, "%s '%s' does not exist on this system", half, name),
-            "Ownership resolution failed for '%s' (strict_ownership enabled)",
-            row->storage_path
-        );
-        return error_hint(
-            err, "Create the user/group on this system, or disable strict_ownership"
+        return ERROR(
+            ERR_NOT_FOUND, "Cannot deploy '%s' under strict_ownership: %s '%s' does not "
+            "exist on this system", row->storage_path, half, name
         );
     }
 

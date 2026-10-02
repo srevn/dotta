@@ -58,9 +58,9 @@
  *             No special handling needed.
  *   diff    — empty is user error with exit 0 ("nothing to diff"). Caller
  *             inspects scope_enabled(s)->count and emits its hint.
- *   sync    — empty is user error with exit 1. Each caller emits its own
- *   update    hint inline — the wording differs (sync mentions
- *             --remote), so no shared helper is provided.
+ *   sync    — empty is user error with exit 1. Each caller refuses in its
+ *   update    own words ("No enabled profiles to sync", "… found"), so no
+ *             shared helper is provided.
  */
 
 #ifndef DOTTA_SCOPE_H
@@ -110,9 +110,9 @@ typedef struct scope_inputs {
  *   1. Resolve the enabled profile names from state, which may be none (see
  *      "Empty-enabled policy" above).
  *   2. If in->profile_count > 0, check every CLI filter name against the enabled
- *      set: one not in it is refused, whether it is a disabled profile (the hint
- *      names `profile enable`) or no profile here at all (the hint names the
- *      listing and the fetch). A filter never narrows in silence.
+ *      set: one not in it is refused, whether it is a disabled profile ("is not
+ *      enabled") or no profile here at all (profile_require's refusal). A filter
+ *      never narrows in silence.
  *   3. If in->file_count > 0, compile the positional arguments into the path
  *      filter (infra/pathspec): one matcher over the two keys a managed path
  *      has, each input read in the key its own shape names.

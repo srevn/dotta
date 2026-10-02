@@ -38,11 +38,7 @@ error_t profile_require(git_repository *repo, const char *name) {
     error_t err = gitops_branch_exists(repo, name, &exists);
     if (err) return err;
     if (!exists) {
-        return error_hint(
-            ERROR(ERR_NOT_FOUND, "Profile '%s' doesn't exist locally", name),
-            "Run 'dotta profile list' for the local profiles, or "
-            "'dotta profile fetch %s' to bring it from the remote", name
-        );
+        return ERROR(ERR_NOT_FOUND, "Profile '%s' doesn't exist locally", name);
     }
 
     return NULL;

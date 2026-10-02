@@ -364,12 +364,10 @@ static error_t profile_fetch(
     size_t fetched_count = 0;
     size_t failed_count = 0;
 
-    /* Detect remote (name + URL — URL feeds the credential helper). */
+    /* Detect remote (name + URL — URL feeds the credential helper). Its refusal
+     * says which absence it met, none or several, and stands alone. */
     err = gitops_resolve_default_remote(repo, ctx->arena, &remote_name, &remote_url);
-    if (err) {
-        err = error_wrap(err, "No remote configured");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Create transfer context for progress reporting and credentials */
     transfer_options_t xfer_opts = {
@@ -394,7 +392,8 @@ static error_t profile_fetch(
 
     /* Every name the remote does not hold, refused together before anything is
      * fetched: a fetch of named branches is whole or nothing, as git's is. The
-     * names the remote does hold are in hand, so the way out lists them. */
+     * names the remote does hold are in hand, and the refusal says them: what
+     * the remote holds is the rest of the fact. */
     if (!opts->all_profiles) {
         string_array_t missing;
         string_array_init(&missing, ctx->arena);
@@ -405,13 +404,10 @@ static error_t profile_fetch(
         }
         if (missing.count > 0) {
             err = ERROR(
-                ERR_NOT_FOUND, "%s '%s' %s not on remote '%s'",
+                ERR_NOT_FOUND, "%s '%s' %s not on remote '%s', which holds %s",
                 missing.count == 1 ? "Profile" : "Profiles",
                 string_array_join(ctx->arena, &missing, "', '"),
-                missing.count == 1 ? "is" : "are", remote_name
-            );
-            err = error_hint(
-                err, "Remote '%s' holds %s", remote_name,
+                missing.count == 1 ? "is" : "are", remote_name,
                 remote_branches.count > 0
                     ? string_array_join(ctx->arena, &remote_branches, ", ")
                     : "no profiles"
@@ -1156,19 +1152,13 @@ static error_t profile_reorder(
 
     /* Edge case: no enabled profiles */
     if (enabled_profiles.count == 0) {
-        return error_hint(
-            ERROR(ERR_VALIDATION, "No enabled profiles to reorder"),
-            "Run 'dotta profile enable <name>' first"
-        );
+        return ERROR(ERR_VALIDATION, "No enabled profiles to reorder");
     }
 
     /* Validation 1: All provided profiles must be currently enabled */
     for (size_t i = 0; i < opts->profile_count; i++) {
         if (!state_enabled(state, opts->profiles[i])) {
-            return error_hint(
-                ERROR(ERR_VALIDATION, "Profile '%s' is not enabled", opts->profiles[i]),
-                "Run 'dotta profile list' to see enabled profiles"
-            );
+            return ERROR(ERR_VALIDATION, "Profile '%s' is not enabled", opts->profiles[i]);
         }
     }
 

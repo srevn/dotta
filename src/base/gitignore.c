@@ -348,38 +348,36 @@ static void parse_line(
  * the pattern, past a `!`. A shell reads that as home and the grammar as a
  * directory named `~`, so a pattern spelled from home — quoted to keep its glob
  * from the shell, or written in a file no shell reads — matches nothing its writer
- * named. The refusal's hint spells both readings: the anchor, which starts the
- * pattern at the top of the rules' own directory — `/` alone being no pattern,
+ * named. The refusal's clause spells both readings: the anchor, which starts
+ * the pattern at the top of the rules' own directory — `/` alone being no pattern,
  * nothing is offered for `~/` alone — and the escape. A lone `~` is a name like
- * any other. */
+ * any other. Every caller names its door around the refusal, so the refusal names
+ * no module of its own. */
 static error_t validate_pattern(const char *pattern, size_t len) {
     if (memchr(pattern, '\n', len))
-        return ERROR(ERR_VALIDATION, "gitignore: a pattern is one line");
+        return ERROR(ERR_VALIDATION, "A pattern is one line");
     if (rule_span(pattern, len) == 0) {
         if (*pattern == '#')
-            return error_hint(
-                ERROR(ERR_VALIDATION, "gitignore: '%s' is a comment, not a pattern", pattern),
-                "Escape the '#' to match it: '\\%s'", pattern
+            return ERROR(
+                ERR_VALIDATION, "'%s' is a comment, not a pattern; '\\%s' matches it",
+                pattern, pattern
             );
-        return ERROR(ERR_VALIDATION, "gitignore: '%s' names no pattern", pattern);
+        return ERROR(ERR_VALIDATION, "'%s' names no pattern", pattern);
     }
 
     int bang = *pattern == '!';
     if (pattern[bang] != '~' || pattern[bang + 1] != '/')
         return NULL;
 
-    error_t err = ERROR(
-        ERR_VALIDATION, "gitignore: '%s' names a directory called '~', not home", pattern
-    );
     if (pattern[bang + 2] == '\0')
-        return error_hint(
-            err, "Escape the '~' to match that directory: '%.*s\\%s'",
-            bang, pattern, pattern + bang
+        return ERROR(
+            ERR_VALIDATION, "'%s' names a directory called '~', not home; '%.*s\\%s' "
+            "matches that directory", pattern, bang, pattern, pattern + bang
         );
-    return error_hint(
-        err, "Anchor it at the top instead: '%.*s%s' — or escape the '~' to match "
-        "that directory: '%.*s\\%s'",
-        bang, pattern, pattern + bang + 1, bang, pattern, pattern + bang
+    return ERROR(
+        ERR_VALIDATION, "'%s' names a directory called '~', not home; '%.*s%s' anchors "
+        "it at the top, and '%.*s\\%s' matches that directory",
+        pattern, bang, pattern, pattern + bang + 1, bang, pattern, pattern + bang
     );
 }
 

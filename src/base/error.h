@@ -11,8 +11,8 @@
  * the command's arena is gone, or made before that arena exists (identity_init,
  * gitops_init, config_load) — and the process is the one scope that encloses
  * them all. So every error lives in one arena of this module's own, made at the
- * first error; a wrap or a hint holds its cause, two of them over one cause share
- * it, and no reader can reach back into one.
+ * first error; a wrap holds its cause, two of them over one cause share it, and
+ * no reader can reach back into one.
  *
  * The handle is const, so nothing a reader holds can edit one, and must-check
  * (include/types.h): an error dropped on purpose is `(void) f()`, and one dropped
@@ -53,19 +53,20 @@
  * A failure in hand is `err`, and an int a call answers is `rc`: a second failure
  * held in one body is a second job.
  *
- * Hints
- * -----
- * A hint is a way out, attached above the error it is about (error_hint): a node
- * of the chain as a wrap is, so attaching one copies and edits nothing — two
- * callers hinting one shared refusal each make their own chain, and the refusal
- * reads as it did. A hint is no fact. Every reader of facts — error_message,
- * error_cause, error_root, error_code — reads a hinted error as the error it
- * hints, and the hints are read apart, oldest first (error_hint_text): the order
- * a block of them is written in, the producer's above its caller's. A hint is
- * one line, and a way out true for every caller of the site that attaches it;
- * one false for a caller is the producer's to drop, never the caller's to carry.
- * A re-mint — a new error spelled from another's error_message — keeps one fact's
- * words, never its causes or its hints.
+ * Messages
+ * --------
+ * A message is one line, and a fact: what could not be done, or what is so, about
+ * what — and why, where the cause beneath does not already say it. The renderer
+ * owns every break (error_print), and a datum goes into a message as the bytes
+ * it is, never escaped by its writer. A way out is a clause of the fact, after
+ * ';', and only where the fact does not imply it: the flag, key or spelling the
+ * user could not guess, and what it does (base/gitignore.c validate_pattern's
+ * escape), true for every caller of the site — a template the user must fill in
+ * is none. A wrap says where its cause stands — a file, a key, a profile or a
+ * role the cause cannot name — or it is not written. A re-mint — a new error
+ * spelled from another's error_message — keeps one fact's words, never its causes.
+ * A message opening on a word opens capitalised; none closes with a period; a
+ * datum is quoted '%s'.
  *
  * ERR_PERMISSION
  * --------------
@@ -76,13 +77,12 @@
  * (ERR_FS) — and libgit2's owner check on the repository, which spells its own
  * because GIT_EOWNER carries no errno. An answer dotta looked up is never one,
  * whatever the answer is about: a hook's mode, a claim's ids, a policy's verdict.
- * Every reader turns the code straight into a remedy only a refusal has — cmds/add
- * and cmds/update hint the sudo line, core/workspace classes the failed look
- * UNREADABLE and its readers offer root, utils/repo offers to reclaim the
- * repository — and none of them can see which producer it came from, which is
- * what makes the class load-bearing rather than descriptive. The code is the
- * leaf's, the one the kernel's refusal was made with (error_code), whatever wraps
- * and hints stand above it.
+ * Every reader turns the code straight into a remedy only a refusal has —
+ * core/workspace classes the failed look UNREADABLE and its readers offer root,
+ * utils/repo offers to reclaim the repository — and none of them can see which
+ * producer it came from, which is what makes the class load-bearing rather than
+ * descriptive. The code is the leaf's, the one the kernel's refusal was made
+ * with (error_code), whatever wraps stand above it.
  *
  * sys/identity's drop is outside the rule and out of reach of it: its two refusals
  * say the run cannot *become* an identity, they are coded by subsystem because
@@ -90,13 +90,12 @@
  * there is a command to read them.
  *
  * A refusal met where no second try spans the call is outside it too, and is
- * coded by its subsystem: no identity a run can take reads through it, and an
- * ERR_PERMISSION would send add's and update's tails to offer a sudo that changes
- * nothing. core/state's — SQLite opens the store's database as the invoker on
- * every run (sys/filesystem) — are ERR_STATE_INVALID, a broken installation to
- * report; sys/source's reads of a source repository — its layout raw, its
- * configuration through libgit2, both as the invoker under every identity
- * (sys/source.h) — are ERR_GIT, the repository's failure, as git's own is.
+ * coded by its subsystem: no identity a run can take reads through it. core/state's
+ * — SQLite opens the store's database as the invoker on every run (sys/filesystem)
+ * — are ERR_STATE_INVALID, a broken installation to report; sys/source's reads
+ * of a source repository — its layout raw, its configuration through libgit2,
+ * both as the invoker under every identity (sys/source.h) — are ERR_GIT, the
+ * repository's failure, as git's own is.
  */
 
 #ifndef DOTTA_ERROR_H
@@ -134,21 +133,6 @@ __attribute__((format(printf, 2, 3)));
  * @return New error wrapping the original, or NULL for a NULL cause
  */
 error_t error_wrap(error_t cause, const char *fmt, ...)
-__attribute__((format(printf, 2, 3)));
-
-/**
- * Hint an error: a way out, one line, attached above it
- *
- * A node of its own whose cause is `err` (the header's "Hints"): nothing is copied
- * or edited, and every reader of facts reads the result as `err`. The hint's
- * text is the process's, as a message is.
- *
- * @param err The error the hint is about (NULL hints nothing)
- * @param fmt The hint's format, one line (printf-style)
- * @param ... Format arguments
- * @return The hinted error, or NULL for a NULL err
- */
-error_t error_hint(error_t err, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
@@ -196,7 +180,7 @@ __attribute__((format(printf, 2, 3)));
 /**
  * Get error message
  *
- * The outermost fact's: a hint above it is read past.
+ * The outermost fact's.
  *
  * @param err Error
  * @return Error message, or NULL for NULL
@@ -206,8 +190,8 @@ const char *error_message(error_t err);
 /**
  * Get error code
  *
- * The leaf's — the code its root was made with — whatever wraps and hints stand
- * above it, so a reader that acts on the code acts on the mechanism's refusal.
+ * The leaf's — the code its root was made with — whatever wraps stand above it,
+ * so a reader that acts on the code acts on the mechanism's refusal.
  *
  * @param err Error
  * @return Error code, or OK for NULL
@@ -218,8 +202,7 @@ error_code_t error_code(error_t err);
  * Get the cause — the fact this one wraps
  *
  * One link down the chain, for a reader that walks it: error_root is the walk
- * taken to its end, error_print the walk rendered. A hint between two facts is
- * read past, so a walk from any error visits facts alone.
+ * taken to its end, error_print the walk rendered.
  *
  * @param err Error
  * @return The wrapped fact, or NULL at the root and for NULL
@@ -233,8 +216,7 @@ error_t error_cause(error_t err);
  * whatever context the layers above wrapped around it. A consumer that already
  * names its subject (a receipt line built around the path) renders the root's
  * message, where the refusal speaks for itself; error_print renders the whole
- * chain instead. Always a fact: a hint has a cause, so the deepest node is the
- * leaf one was made over.
+ * chain instead.
  *
  * @param err Error
  * @return The deepest cause — err itself when nothing is wrapped
@@ -242,22 +224,9 @@ error_t error_cause(error_t err);
 error_t error_root(error_t err);
 
 /**
- * The nth hint on a chain, oldest first
- *
- * The order a block of them is written in (the header's "Hints"): a loop asks
- * from 0 until the answer is NULL.
- *
- * @param err Error
- * @param n Which hint, 0 the oldest
- * @return The hint's text, or NULL past the last and for NULL
- */
-const char *error_hint_text(error_t err, size_t n);
-
-/**
  * Print error to stream
  *
- * Prints the error's message and every cause in its chain, then its hints, oldest
- * first.
+ * Prints the error's message and every cause in its chain, one line each.
  *
  * @param err Error
  * @param stream Output stream (e.g., stderr)

@@ -1375,10 +1375,7 @@ error_t gitops_resolve_default_remote(
 
     if (remotes.count == 0) {
         git_strarray_dispose(&remotes);
-        return error_hint(
-            ERROR(ERR_NOT_FOUND, "No remotes configured"),
-            "Add a remote with 'dotta remote add <name> <url>'"
-        );
+        return ERROR(ERR_NOT_FOUND, "No remotes configured");
     }
 
     /* Select: "origin" wins; otherwise sole remote; otherwise ambiguous. */
@@ -1394,10 +1391,7 @@ error_t gitops_resolve_default_remote(
     }
     if (!selected) {
         git_strarray_dispose(&remotes);
-        return error_hint(
-            ERROR(ERR_INVALID_ARG, "Multiple remotes configured, but no 'origin' found"),
-            "Specify remote explicitly or rename preferred remote to 'origin'"
-        );
+        return ERROR(ERR_INVALID_ARG, "Multiple remotes configured, but no 'origin' found");
     }
 
     const char *name = arena_strdup(arena, selected);

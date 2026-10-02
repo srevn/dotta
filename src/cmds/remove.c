@@ -476,9 +476,6 @@ static error_t remove_resolve(
                     ERR_NOT_FOUND, "Path '%s' not found in profile '%s'",
                     input_paths[i], profile
                 );
-                err = error_hint(
-                    err, "Use 'dotta list --profile %s' to see tracked paths", profile
-                );
                 goto cleanup;
             }
             /* With --force, warn and skip */
@@ -1208,10 +1205,7 @@ static error_t remove_profile(
     if (err) goto cleanup;
     if (!exists) {
         if (!opts->force) {
-            err = error_hint(
-                ERROR(ERR_NOT_FOUND, "Profile '%s' does not exist", opts->profile),
-                "Use 'dotta list' to see available profiles"
-            );
+            err = ERROR(ERR_NOT_FOUND, "Profile '%s' does not exist", opts->profile);
             goto cleanup;
         }
         /* With --force, just warn and exit */

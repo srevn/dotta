@@ -13,15 +13,14 @@
 #include "base/arena.h"
 #include "base/terminal.h"
 
-/* The node, this file's alone: a reader asks for its code, its message, its cause,
- * its root or its hints, and never reads a field. Made whole and never edited:
- * a wrap or a hint holds its cause, and never copies or edits it. A leaf carries
- * the code; a wrap and a hint carry none, error_code reading the leaf's. */
+/* The node, this file's alone: a reader asks for its code, its message, its cause
+ * or its root, and never reads a field. Made whole and never edited: a wrap holds
+ * its cause, and never copies or edits it. A leaf carries the code; a wrap carries
+ * none, error_code reading the leaf's. */
 struct error {
-    error_code_t code;    /* A leaf's; OK on a wrap and a hint */
-    bool hint;            /* A way out, which no reader of facts reads */
-    const char *message;  /* The fact's words, or the hint's */
-    error_t cause;        /* The node beneath; NULL at the leaf, never on a hint */
+    error_code_t code;    /* A leaf's; OK on a wrap */
+    const char *message;  /* The fact's words, one line */
+    error_t cause;        /* The fact beneath; NULL at the leaf */
 };
 
 /**
@@ -48,15 +47,6 @@ static error_t error_node(struct error value) {
     return node;
 }
 
-/**
- * The outermost fact at or beneath a node: a hint is read past
- */
-static error_t error_fact(error_t err) {
-    while (err && err->hint) err = err->cause;
-
-    return err;
-}
-
 error_t error_create(error_code_t code, const char *fmt, ...) {
     /* The format is its writer's: one that cannot be formatted is a caller's
      * bug, and dies in the arena's formatter, never an error to report. */
@@ -78,19 +68,6 @@ error_t error_wrap(error_t cause, const char *fmt, ...) {
 
     /* No code: the leaf beneath carries it (error_code) */
     return error_node((struct error){ .message = message, .cause = cause });
-}
-
-error_t error_hint(error_t err, const char *fmt, ...) {
-    if (!err) return NULL;
-
-    va_list args;
-    va_start(args, fmt);
-    const char *text = arena_str_vformat(error_arena(), fmt, args);
-    va_end(args);
-
-    /* A node over the error, as a wrap is, and no fact: the readers of facts
-     * read past it to `err` */
-    return error_node((struct error){ .hint = true, .message = text, .cause = err });
 }
 
 error_t error_from_git(int git_error_code) {
@@ -147,7 +124,6 @@ error_t error_from_errno(int errno_val, const char *fmt, ...) {
 }
 
 const char *error_message(error_t err) {
-    err = error_fact(err);
     return err ? err->message : NULL;
 }
 
@@ -157,9 +133,7 @@ error_code_t error_code(error_t err) {
 }
 
 error_t error_cause(error_t err) {
-    /* The fact beneath the outermost one, past any hint between the two */
-    err = error_fact(err);
-    return err ? error_fact(err->cause) : NULL;
+    return err ? err->cause : NULL;
 }
 
 error_t error_root(error_t err) {
@@ -168,23 +142,6 @@ error_t error_root(error_t err) {
         err = err->cause;
     }
     return err;
-}
-
-const char *error_hint_text(error_t err, size_t n) {
-    /* The chain runs newest first and the hints are read oldest first, so the
-     * one asked for has n hints beneath it: the hints are counted first */
-    size_t count = 0;
-    for (error_t e = err; e; e = e->cause) count += e->hint;
-    if (n >= count) return NULL;
-
-    /* Then met walking down, the ones above it passed. The walk ends at the return:
-     * the count says the hint stands in the chain. */
-    size_t above = count - 1 - n;
-    for (error_t e = err;; e = e->cause) {
-        if (!e->hint) continue;
-        if (above == 0) return e->message;
-        above--;
-    }
 }
 
 void error_print(error_t err, FILE *stream) {
@@ -201,13 +158,6 @@ void error_print(error_t err, FILE *stream) {
             stream, "  Caused by: %s\n",
             error_message(cause)
         );
-    }
-
-    /* The ways out, after every fact and oldest first: a producer's before its
-     * caller's */
-    const char *hint;
-    for (size_t i = 0; (hint = error_hint_text(err, i)) != NULL; i++) {
-        fprintf(stream, "Hint: %s\n", hint);
     }
 }
 

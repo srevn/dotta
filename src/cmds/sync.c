@@ -207,10 +207,7 @@ static error_t sync_fetch_phase(
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, remote_name);
     if (rc == GIT_ENOTFOUND) {
-        return error_hint(
-            ERROR(ERR_NOT_FOUND, "No remote '%s' configured", remote_name),
-            "Run 'dotta remote add %s <url>' to add a remote", remote_name
-        );
+        return ERROR(ERR_NOT_FOUND, "No remote '%s' configured", remote_name);
     } else if (rc < 0) {
         return error_from_git(rc);
     }
@@ -1512,8 +1509,6 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     if (scope_enabled(scope)->count == 0) {
         err = ERROR(ERR_NOT_FOUND, "No enabled profiles to sync");
-        err = error_hint(err, "Run 'dotta profile enable <name>' to enable profiles");
-        err = error_hint(err, "Run 'dotta profile list --all' to see available profiles");
         goto cleanup;
     }
 

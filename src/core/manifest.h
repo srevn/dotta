@@ -594,14 +594,15 @@ error_t manifest_mount_table(
 /**
  * One claim the build could not place: its profile has no deployment target on
  * this machine. Recorded, never dropped in silence — the health consumers (status,
- * apply, sync) surface these; export reads the count alone, for a hint, and so
- * does add's enable hint over its own opened tree (cmds/add.c); and the count
- * under a table that binds nothing is the answer to whether a branch needs a
- * target at all (core/profiles.h profile_needs_target). The repair is one command
- * (`profile enable <p> --target /path`), the untracking another (`remove`). The
- * screen says **no target** or **needs a target**, never "unbound": the header's
- * word is what the build could not do, the screen's is what the user must give.
- * Strings are the build arena's, same lifetime as the rows.
+ * apply, sync) surface these; export reads the count alone, for the reason its
+ * refusal gives, and so does add's enable hint over its own opened tree
+ * (cmds/add.c); and the count under a table that binds nothing is the answer to
+ * whether a branch needs a target at all (core/profiles.h profile_needs_target).
+ * The repair is one command (`profile enable <p> --target /path`), the untracking
+ * another (`remove`). The screen says **no target** or **needs a target**, never
+ * "unbound": the header's word is what the build could not do, the screen's is
+ * what the user must give. Strings are the build arena's, same lifetime as the
+ * rows.
  */
 typedef struct {
     const char *profile;

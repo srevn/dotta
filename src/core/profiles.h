@@ -242,16 +242,15 @@ error_t profile_resolve_range(
  * an absence (a bool that read it as "no" sent the user to fetch a profile that
  * was here, let --force delete nothing and call it done, and had validate --fix
  * offer to disable a healthy profile); otherwise ERR_NOT_FOUND, "Profile '<name>'
- * doesn't exist locally", hinted with both ways out — 'dotta profile list' for
- * the local profiles, 'dotta profile fetch <name>' to bring it from the remote
- * — because no verb can tell a typo from a profile not yet fetched.
+ * doesn't exist locally" — "locally" leaving both readings open, because no verb
+ * can tell a typo from a profile not yet fetched.
  *
- * Readers: ignore (--test, and the edit), bootstrap (the explicit names, and
- * --edit's template), show, export, list (a profile's files; an explicit profile's
- * history), revert (the -p arm), and scope's filter on its refusal path. A verb
- * that acts on both answers — add (checkout or create), enable's skip, remove's
- * --force arm, validate's probe, the view's build — asks gitops_branch_exists
- * itself and reads the bool.
+ * Readers: ignore (--test, and the edit), bootstrap (the names its selection
+ * reads, --edit's and --show's among them), show, export, list (a profile's files;
+ * an explicit profile's history), revert (the -p arm), and scope's filter on
+ * its refusal path. A verb that acts on both answers — add (checkout or create),
+ * enable's skip, remove's --force arm, validate's probe, the view's build — asks
+ * gitops_branch_exists itself and reads the bool.
  *
  * @param repo Repository (must not be NULL)
  * @param name Profile name (must not be NULL)

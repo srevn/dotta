@@ -71,10 +71,7 @@ error_t scope_build(
             if (!string_array_contains(&s->enabled, name)) {
                 err = profile_require(repo, name);
                 if (err) return err;
-                return error_hint(
-                    ERROR(ERR_INVALID_ARG, "Profile '%s' is not enabled", name),
-                    "Run 'dotta profile enable %s' first", name
-                );
+                return ERROR(ERR_INVALID_ARG, "Profile '%s' is not enabled", name);
             }
             string_array_push(&s->filter, name);
         }

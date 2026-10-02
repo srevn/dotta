@@ -103,10 +103,7 @@ static error_t remote_add(
     if (rc == 0) {
         /* Remote exists */
         git_remote_free(existing);
-        return error_hint(
-            ERROR(ERR_EXISTS, "Remote '%s' already exists", name),
-            "Use 'dotta remote set-url %s <url>' to change the URL", name
-        );
+        return ERROR(ERR_EXISTS, "Remote '%s' already exists", name);
     } else if (rc != GIT_ENOTFOUND) {
         /* Unexpected error */
         return error_from_git(rc);

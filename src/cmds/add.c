@@ -499,35 +499,34 @@ static error_t add_admit(
  * Git's rules off is the other way, and at what the user named, or at a root,
  * the one.
  *
- * The way past is the refusal's hint (base/error.h "Hints"), read beneath the
- * whole chain: cmd_add wraps every refusal of the walk with the argument it began
- * at, and the depth bound's refusal is the same shape.
+ * The way past is a clause of the wrap that says where (base/error.h "Messages"),
+ * the question the walk could not answer over the source layer's failure that
+ * kept it from answering. cmd_add wraps every refusal of the walk with the argument
+ * it began at, and the depth bound's refusal is the same shape.
  */
 static error_t add_refuse_unjudged(
     const walk_t *walk, arena_t *scratch, const char *directory, size_t depth,
     error_t failure
 ) {
-    /* The question the walk could not answer, over the source layer's failure
-     * that kept it from answering */
-    error_t err = error_wrap(
-        failure, "Cannot tell what Git's ignore rules exclude in '%s'", directory
-    );
-
     /* The frame's name, as the walk named it — its claim, else its composition,
      * else a root's word — and the rule leaving exactly it out: none for what
      * the user named, nor for a root, whose empty tail no pattern names. Both
-     * are the entry's scratch: the hint copies what it prints. */
+     * are the entry's scratch: the refusal copies what it says. */
     const char *name = manifest_name(
         scratch, walk->view, walk->profile, directory, walk->listing
     );
     const char *leave = depth > 0 ? gitignore_literal(scratch, label_tail(name), true) : NULL;
-    if (!leave) {
-        return error_hint(err, "Turn Git's rules off with respect_gitignore = false to add it");
-    }
 
-    return error_hint(
-        err, "Leave it out with -e %s, or turn Git's rules off with respect_gitignore "
-        "= false", str_shell_quote(scratch, leave)
+    if (leave) {
+        return error_wrap(
+            failure, "Cannot tell what Git's ignore rules exclude in '%s'; -e %s "
+            "leaves it out, or respect_gitignore = false turns Git's rules off",
+            directory, str_shell_quote(scratch, leave)
+        );
+    }
+    return error_wrap(
+        failure, "Cannot tell what Git's ignore rules exclude in '%s'; "
+        "respect_gitignore = false turns Git's rules off", directory
     );
 }
 
@@ -590,12 +589,11 @@ static error_t add_collect(
      * they descend, so a deeper argument collected first does not make its parent's
      * walk fail when the parent arrives at the limit. */
     if (depth >= FS_WALK_MAX_DEPTH) {
-        error_t err = ERROR(
-            ERR_INVALID_ARG,
-            "Cannot walk '%s': it is %d directories below where this walk began",
-            directory, FS_WALK_MAX_DEPTH
+        return ERROR(
+            ERR_INVALID_ARG, "Cannot walk '%s': it is %d directories below the argument "
+            "it was reached from; an argument of its own walks it", directory,
+            FS_WALK_MAX_DEPTH
         );
-        return error_hint(err, "Name it as an argument of its own, or exclude it");
     }
 
     /* The frame's listing, in the walk's scratch (sys/filesystem.h fs_listing_t):
@@ -751,21 +749,20 @@ static error_t add_collect(
  * Refuse a path named on the command line that a rule excludes
  *
  * The refusal names the rule — the layer, and for Git's rules the file and line
- * it was read at (core/ignore.h ignore_verdict_describe) — and offers the -e
- * that re-opens exactly the rung it closed (ignore_verdict_negation): clearing
- * it can uncover the next rung, which the next refusal names. The operation's
- * own -e is named and offered nothing, since this command said it. Where no -e
- * reaches the rung, the refusal says so and names what does: respect_gitignore
- * for Git's rules, the rule itself for the four's. A directory the profile only
- * passes through holds claims beneath it, which update re-captures without making
- * the directory one, and the refusal names that too.
+ * it was read at (core/ignore.h ignore_verdict_describe) — and, as a clause,
+ * the -e that re-opens exactly the rung it closed (ignore_verdict_negation):
+ * clearing it can uncover the next rung, which the next refusal names. The
+ * operation's own -e is named and offered nothing, since this command said it.
+ * Where no -e reaches the rung, the refusal says so, and for Git's rules names
+ * the switch that turns them off; the four's rule is named in the fact, its own
+ * way past.
  *
- * The argument is echoed as typed, and every command line it offers is quoted
- * for the shell the user types it back into (base/string.h str_shell_quote).
+ * The argument is echoed as typed, and every -e it offers is quoted for the shell
+ * the user types it back into (base/string.h str_shell_quote).
  */
 static error_t add_refuse_excluded(
     const walk_t *walk, const char *file, const char *storage_path, path_kind_t kind,
-    const manifest_row_t *held, const ignore_verdict_t *verdict
+    const ignore_verdict_t *verdict
 ) {
     arena_t *arena = walk->ctx->arena;
     const char *rule = ignore_verdict_describe(arena, verdict);
@@ -775,44 +772,32 @@ static error_t add_refuse_excluded(
         return ERROR(ERR_INVALID_ARG, "'%s' is ignored by %s", file, rule);
     }
 
-    /* A directory the profile only passes through: naming it makes a claim, and
-     * what the profile already holds beneath it is update's to re-capture,
-     * whichever way past the rule is taken. */
-    const char *beneath = manifest_is_derived(held)
-        ? arena_str_format(
-        arena, "\nProfile '%s' holds paths beneath it: dotta update -p %s %s "
-        "re-captures them", walk->profile, walk->profile, str_shell_quote(arena, file)
-        ) : "";
-
     /* The -e re-opening the rung, where a pattern reaches it: beside the switch
      * for Git's rules, which dotta does not write, and alone for the four's. */
     const char *negation = ignore_verdict_negation(arena, verdict, storage_path, kind);
     if (negation && verdict->origin == IGNORE_ORIGIN_SOURCE) {
         return ERROR(
-            ERR_INVALID_ARG, "'%s' is ignored by %s\n"
-            "Add it anyway with -e %s, or turn Git's rules off with respect_gitignore = "
-            "false%s", file, rule, str_shell_quote(arena, negation), beneath
+            ERR_INVALID_ARG, "'%s' is ignored by %s; -e %s re-opens it, or "
+            "respect_gitignore = false turns Git's rules off", file, rule,
+            str_shell_quote(arena, negation)
         );
     }
     if (negation) {
         return ERROR(
-            ERR_INVALID_ARG, "'%s' is ignored by %s\nAdd it anyway with -e %s%s", file,
-            rule, str_shell_quote(arena, negation), beneath
+            ERR_INVALID_ARG, "'%s' is ignored by %s; -e %s re-opens it", file, rule,
+            str_shell_quote(arena, negation)
         );
     }
 
-    /* No pattern reaches the rung, and the layer's own way past is the one left. */
+    /* No pattern reaches the rung: the switch is Git's rules' way past, and the
+     * four's is the rule the fact names. */
     if (verdict->origin == IGNORE_ORIGIN_SOURCE) {
         return ERROR(
-            ERR_INVALID_ARG, "'%s' is ignored by %s\n"
-            "No -e can re-open it; turn Git's rules off with respect_gitignore = false "
-            "to add it%s", file, rule, beneath
+            ERR_INVALID_ARG, "'%s' is ignored by %s, which no -e re-opens; "
+            "respect_gitignore = false turns Git's rules off", file, rule
         );
     }
-    return ERROR(
-        ERR_INVALID_ARG, "'%s' is ignored by %s\n"
-        "No -e can re-open it; change that rule to add it%s", file, rule, beneath
-    );
+    return ERROR(ERR_INVALID_ARG, "'%s' is ignored by %s, which no -e re-opens", file, rule);
 }
 
 /**
@@ -1984,21 +1969,18 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * nothing: never read as admitted, since what could not be read may
              * be what git excludes. The failure names what could not be read;
              * the way past is the repository's to mend, or the switch, the
-             * refusal's hint — read before the sudo one add_dispatch attaches
-             * where the run's identity met the refusal. No -e is offered: a `!`
-             * at a rung that cannot be read re-opens it (core/ignore.h
-             * ignore_verdict), which would admit what git may exclude, and a
-             * repository that fails whole fails at every rung inside it. */
+             * refusal's clause. No -e is offered: a `!` at a rung that cannot
+             * be read re-opens it (core/ignore.h ignore_verdict), which would
+             * admit what git may exclude, and a repository that fails whole fails
+             * at every rung inside it. */
             err = error_wrap(
-                err, "Cannot tell whether '%s' is ignored by Git's ignore rules", file
-            );
-            err = error_hint(
-                err, "Turn Git's rules off with respect_gitignore = false to add it anyway"
+                err, "Cannot tell whether '%s' is ignored by Git's ignore rules; "
+                "respect_gitignore = false turns Git's rules off", file
             );
             goto cleanup;
         }
         if (verdict.origin != IGNORE_ORIGIN_NONE) {
-            err = add_refuse_excluded(&walk, file, storage_path, kind, held, &verdict);
+            err = add_refuse_excluded(&walk, file, storage_path, kind, &verdict);
             goto cleanup;
         }
 
@@ -2812,25 +2794,7 @@ static args_want_t add_complete(
 
 static error_t add_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
-    error_t err = cmd_add(ctx, (const cmd_add_options_t *) opts_v);
-
-    /* A refusal the invoker met reading a source — the walk's listing and lstat,
-     * the open behind the capture (infra/content), the existence check — ends
-     * the add before anything durable is written: the stage is in memory and
-     * the commit is after the walk. The code is enough to say so without matching
-     * prose: ERR_PERMISSION is the bits refusing the identity the run held (EACCES)
-     * and never an answer dotta looked up (base/error.h), and everything add
-     * reads is a source. A run that holds no root has not asked as root, which
-     * sys/filesystem's second try would — an EPERM codes ERR_FS and is offered
-     * nothing, a flag, SIP, TCC or a sandbox refusing root as flatly. So the
-     * one thing left to say is sudo, as an offer — a hint, the refusal standing
-     * as the fact: a policy may deny root the read as well, and the bits are
-     * the owner's to change besides. */
-    if (error_code(err) == ERR_PERMISSION && !identity()->privileged) {
-        err = error_hint(err, "Re-run under sudo to read it");
-    }
-
-    return err;
+    return cmd_add(ctx, (const cmd_add_options_t *) opts_v);
 }
 
 static const args_opt_t add_opts[] = {

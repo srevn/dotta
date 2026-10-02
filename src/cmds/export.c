@@ -806,21 +806,21 @@ static error_t collect_filesystem(
     }
 
     if (!at && beneath.count == 0) {
-        err = ERROR(
+        /* A claim this machine cannot place stands nowhere and is no row — the
+         * likely cause when a profile answers nothing at all, export's own case
+         * being the profile this machine does not deploy: the reason the fact
+         * then completes, its storage path the one key that names such a claim. */
+        if (manifest_unbound(view).count > 0) {
+            return ERROR(
+                ERR_NOT_FOUND, "Profile '%s'%s places nothing at '%s'; some of its "
+                "paths have no target on this machine, and only their storage paths "
+                "name them", profile, commit_suffix, filesystem_path
+            );
+        }
+        return ERROR(
             ERR_NOT_FOUND, "Profile '%s'%s places nothing at '%s'",
             profile, commit_suffix, filesystem_path
         );
-
-        /* A claim this machine cannot place stands nowhere and is no row — the
-         * likely cause when a profile answers nothing at all, export's own case
-         * being the profile this machine does not deploy. */
-        if (manifest_unbound(view).count > 0) {
-            err = error_hint(
-                err, "Some of this profile's paths have no deployment target on "
-                "this machine and stand nowhere; export them by name (custom/...)"
-            );
-        }
-        return err;
     }
 
     if (at && at->type != PATH_TYPE_DIRECTORY) {

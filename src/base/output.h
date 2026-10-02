@@ -22,9 +22,13 @@
 
 /**
  * Verbosity levels
+ *
+ * Quiet keeps what the exit counts: a refusal that counts failures is read with
+ * them, so every row it counts prints at OUTPUT_QUIET and names its own subject,
+ * since the line above it is the report's and does not print.
  */
 typedef enum {
-    OUTPUT_QUIET   = 0,   /* Suppress all output except errors */
+    OUTPUT_QUIET   = 0,   /* Errors alone: the refusal, and every row its exit counts */
     OUTPUT_NORMAL  = 1,   /* Normal output */
     OUTPUT_VERBOSE = 2    /* Verbose output */
 } output_verbosity_t;

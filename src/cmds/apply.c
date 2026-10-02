@@ -90,22 +90,37 @@ static void apply_print_deploy_skips(
 ) {
     if (verdicts->skipped.count == 0) return;
 
-    output_section(out, OUTPUT_NORMAL, "Skipped paths");
+    /* The block opens at the level of its lowest row: a row the run could not
+     * deliver is one the exit counts (core/deploy.h deploy_skip_needs_force),
+     * told at every level, and a row --force would take is the report's */
+    output_verbosity_t header_level = OUTPUT_NORMAL;
+    for (size_t i = 0; i < verdicts->skipped.count; i++) {
+        if (!deploy_skip_needs_force(verdicts->skipped.entries[i].reason)) {
+            header_level = OUTPUT_QUIET;
+            break;
+        }
+    }
+    output_section(out, header_level, "Skipped paths");
 
     for (size_t i = 0; i < verdicts->skipped.count && i < LIST_LIMIT; i++) {
         const deploy_skip_t *s = &verdicts->skipped.entries[i];
         const char *path = s->item->filesystem_path;
 
+        /* The row's level, by the split the exit reads: one it counts names its
+         * own path and cause, at every level */
+        const output_verbosity_t row_level = deploy_skip_needs_force(s->reason)
+            ? OUTPUT_NORMAL : OUTPUT_QUIET;
+
         switch (s->reason) {
             case DEPLOY_SKIP_PERMISSION: {
                 if (s->ancestor) {
                     output_print(
-                        out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%.*s is not writable)\n",
+                        out, row_level, "  {red}✗{reset} %s (%.*s is not writable)\n",
                         path, (int) s->ancestor, path
                     );
                 } else {
                     output_print(
-                        out, OUTPUT_NORMAL, "  {red}✗{reset} %s (ancestry cannot be reached)\n",
+                        out, row_level, "  {red}✗{reset} %s (ancestry cannot be reached)\n",
                         path
                     );
                 }
@@ -120,12 +135,12 @@ static void apply_print_deploy_skips(
                 const struct passwd *pwd = getpwuid(s->item->st.st_uid);
                 if (pwd && pwd->pw_name) {
                     output_print(
-                        out, OUTPUT_NORMAL, "  {red}✗{reset} %s (owned by %s)\n",
+                        out, row_level, "  {red}✗{reset} %s (owned by %s)\n",
                         path, pwd->pw_name
                     );
                 } else {
                     output_print(
-                        out, OUTPUT_NORMAL, "  {red}✗{reset} %s (owned by uid %u)\n",
+                        out, row_level, "  {red}✗{reset} %s (owned by uid %u)\n",
                         path, (unsigned) s->item->st.st_uid
                     );
                 }
@@ -134,7 +149,7 @@ static void apply_print_deploy_skips(
 
             case DEPLOY_SKIP_ANCESTOR: {
                 output_print(
-                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%.*s is not a directory)\n",
+                    out, row_level, "  {red}✗{reset} %s (%.*s is not a directory)\n",
                     path, (int) s->ancestor, path
                 );
                 break;
@@ -142,39 +157,39 @@ static void apply_print_deploy_skips(
 
             case DEPLOY_SKIP_OCCUPIED: {
                 output_print(
-                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s (non-empty directory in the way)\n",
+                    out, row_level, "  {red}✗{reset} %s (non-empty directory in the way)\n",
                     path
                 );
                 break;
             }
 
             case DEPLOY_SKIP_TYPE: {
-                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "  ⚠");
-                output_print(out, OUTPUT_NORMAL, " %s ", path);
+                output_colored(out, row_level, OUTPUT_COLOR_RED, "  ⚠");
+                output_print(out, row_level, " %s ", path);
                 if (s->ancestor) {
                     output_colored(
-                        out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(wrong type at %.*s from ",
+                        out, row_level, OUTPUT_COLOR_RED, "(wrong type at %.*s from ",
                         (int) s->ancestor, path
                     );
                 } else {
-                    output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(wrong type from ");
+                    output_colored(out, row_level, OUTPUT_COLOR_RED, "(wrong type from ");
                 }
-                output_print(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->item->profile);
-                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, ")\n");
+                output_print(out, row_level, "{cyan}%s{reset}", s->item->profile);
+                output_colored(out, row_level, OUTPUT_COLOR_RED, ")\n");
                 break;
             }
 
             case DEPLOY_SKIP_CONTENT: {
                 bool conflict = workspace_item_route(s->item) == WORKSPACE_ROUTE_CONFLICT;
 
-                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "  ✗");
-                output_print(out, OUTPUT_NORMAL, " %s ", path);
+                output_colored(out, row_level, OUTPUT_COLOR_RED, "  ✗");
+                output_print(out, row_level, " %s ", path);
                 output_colored(
-                    out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(%s from ",
+                    out, row_level, OUTPUT_COLOR_RED, "(%s from ",
                     conflict ? "changed in Git and on disk" : "modified locally"
                 );
-                output_print(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->item->profile);
-                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, ")\n");
+                output_print(out, row_level, "{cyan}%s{reset}", s->item->profile);
+                output_colored(out, row_level, OUTPUT_COLOR_RED, ")\n");
                 break;
             }
 
@@ -197,11 +212,11 @@ static void apply_print_deploy_skips(
                         break;
                 }
 
-                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "  ?");
-                output_print(out, OUTPUT_NORMAL, " %s ", path);
-                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "(%s from ", label);
-                output_print(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->item->profile);
-                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, ")\n");
+                output_colored(out, row_level, OUTPUT_COLOR_YELLOW, "  ?");
+                output_print(out, row_level, " %s ", path);
+                output_colored(out, row_level, OUTPUT_COLOR_YELLOW, "(%s from ", label);
+                output_print(out, row_level, "{cyan}%s{reset}", s->item->profile);
+                output_colored(out, row_level, OUTPUT_COLOR_YELLOW, ")\n");
                 break;
             }
 
@@ -211,7 +226,7 @@ static void apply_print_deploy_skips(
                 const char *group = s->item->row->group ? s->item->row->group : "";
 
                 output_print(
-                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s%s%s needs root to set)\n",
+                    out, row_level, "  {red}✗{reset} %s (%s%s%s needs root to set)\n",
                     path, owner, *group ? ":" : "", group
                 );
                 break;
@@ -225,7 +240,7 @@ static void apply_print_deploy_skips(
 
     if (verdicts->skipped.count > LIST_LIMIT) {
         output_print(
-            out, OUTPUT_NORMAL, "  ... and %zu more\n", verdicts->skipped.count - LIST_LIMIT
+            out, header_level, "  ... and %zu more\n", verdicts->skipped.count - LIST_LIMIT
         );
     }
 
@@ -886,19 +901,19 @@ static void apply_print_deploy_receipt(
      * the refusal speaks verbatim — EISDIR, ENOSPC, a blob that would not load;
      * the wraps above it restate the row the line already names. */
     if (receipt->failed.count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Failed deployments");
+        output_section(out, OUTPUT_QUIET, "Failed deployments");
         for (size_t i = 0; i < receipt->failed.count && i < LIST_LIMIT; i++) {
             const deploy_outcome_t *o = &receipt->failed.entries[i];
 
             output_print(
-                out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s)\n",
+                out, OUTPUT_QUIET, "  {red}✗{reset} %s (%s)\n",
                 o->verdict->item->filesystem_path,
                 error_message(error_root(o->error))
             );
         }
         if (receipt->failed.count > LIST_LIMIT) {
             output_print(
-                out, OUTPUT_NORMAL, "  ... and %zu more\n", receipt->failed.count - LIST_LIMIT
+                out, OUTPUT_QUIET, "  ... and %zu more\n", receipt->failed.count - LIST_LIMIT
             );
         }
     }
@@ -910,19 +925,19 @@ static void apply_print_deploy_receipt(
      * undo is not a receipt's to omit. The sections above still say what landed,
      * and the run records it all the same. */
     if (receipt->held.count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Directories left wide");
+        output_section(out, OUTPUT_QUIET, "Directories left wide");
         for (size_t i = 0; i < receipt->held.count && i < LIST_LIMIT; i++) {
             const deploy_hold_t *hold = &receipt->held.entries[i];
 
             output_print(
-                out, OUTPUT_NORMAL, "  {red}✗{reset} %s (mode %04o, not %04o: %s)\n",
+                out, OUTPUT_QUIET, "  {red}✗{reset} %s (mode %04o, not %04o: %s)\n",
                 hold->item->filesystem_path, deploy_working_mode(hold->mode), hold->mode,
                 error_message(error_root(hold->error))
             );
         }
         if (receipt->held.count > LIST_LIMIT) {
             output_print(
-                out, OUTPUT_NORMAL, "  ... and %zu more\n", receipt->held.count - LIST_LIMIT
+                out, OUTPUT_QUIET, "  ... and %zu more\n", receipt->held.count - LIST_LIMIT
             );
         }
     }
@@ -1163,19 +1178,19 @@ static void apply_print_cleanup_receipt(
      * chain's root, where the refusal speaks verbatim — EROFS, an immutable flag's
      * EPERM, EBUSY; the wraps above it restate the path the line already names. */
     if (receipt->failed.count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Failed prunes");
+        output_section(out, OUTPUT_QUIET, "Failed prunes");
         for (size_t i = 0; i < receipt->failed.count && i < LIST_LIMIT; i++) {
             const cleanup_outcome_t *o = &receipt->failed.entries[i];
 
             output_print(
-                out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s)\n",
+                out, OUTPUT_QUIET, "  {red}✗{reset} %s (%s)\n",
                 o->item->filesystem_path,
                 error_message(error_root(o->error))
             );
         }
         if (receipt->failed.count > LIST_LIMIT) {
             output_print(
-                out, OUTPUT_NORMAL, "  ... and %zu more\n", receipt->failed.count - LIST_LIMIT
+                out, OUTPUT_QUIET, "  ... and %zu more\n", receipt->failed.count - LIST_LIMIT
             );
         }
     }

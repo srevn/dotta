@@ -243,7 +243,7 @@ static error_t hook_execute(
 
     /* Transfer ownership to caller if requested. Move the whole struct so the
      * caller observes captured output even on failure (printed via
-     * print_hook_output). The local `result` is disposed afterwards; with output
+     * hook_print_output). The local `result` is disposed afterwards; with output
      * set NULL, dispose is a no-op on the buffer. */
     if (result_out) {
         *result_out = result;
@@ -294,24 +294,24 @@ static hook_type_t post_type_for(hook_cmd_t cmd) {
     CHECK_ARG(false, "a hook command no enumerator names");
 }
 
-static void print_hook_output(
-    output_t *out, const process_result_t *result
+/**
+ * A failed hook's captured output, at the level its caller's register asks: a
+ * refusing pre-hook's is the refusal's reason, read at every level, and a failed
+ * post-hook's goes with its warning
+ */
+static void hook_print_output(
+    output_t *out, output_verbosity_t level, const process_result_t *result
 ) {
     if (result && result->output && result->output_len > 0) {
         /* The hook's bytes are a payload, written as they are — its colours among
          * them, as git passes a hook's output on (base/output.h output_write) */
-        output_print(out, OUTPUT_NORMAL, "Hook output:\n");
-        output_write(
-            out, OUTPUT_NORMAL, OUTPUT_COLOR_RESET, result->output, result->output_len
-        );
-        output_endline(out, OUTPUT_NORMAL);
+        output_print(out, level, "Hook output:\n");
+        output_write(out, level, OUTPUT_COLOR_RESET, result->output, result->output_len);
+        output_endline(out, level);
         /* The capture kept the hook's first bytes (sys/process.h): what it dropped
          * is counted, never shown. */
         if (result->output_dropped > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "... and %zu more bytes\n",
-                result->output_dropped
-            );
+            output_print(out, level, "... and %zu more bytes\n", result->output_dropped);
         }
     }
 }
@@ -352,7 +352,7 @@ error_t hook_fire_pre(
     error_t err = hook_fire(config, inv, pre_type_for(inv->cmd), &result);
 
     if (err) {
-        print_hook_output(out, &result);
+        hook_print_output(out, OUTPUT_QUIET, &result);
         process_result_deinit(&result);
         return error_wrap(err, "Pre-%s hook failed", cmd_name(inv->cmd));
     }
@@ -378,7 +378,7 @@ void hook_fire_post(
             out, OUTPUT_NORMAL, "Post-%s hook failed: %s",
             cmd_name(inv->cmd), error_line(err)
         );
-        print_hook_output(out, &result);
+        hook_print_output(out, OUTPUT_NORMAL, &result);
     }
     process_result_deinit(&result);
 }

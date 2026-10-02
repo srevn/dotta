@@ -234,10 +234,12 @@ bootstrap_receipt_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) 
             continue;
         }
 
+        /* The failure names its script: a row the caller's refusal counts prints
+         * at every level, where the progress line above it is the report's
+         * (base/output.h OUTPUT_QUIET) */
         output_print(
-            out, OUTPUT_NORMAL, "  {red}✗{reset} %s: %s\n",
-            spec->dry_run ? "Validation failed" : "Failed",
-            error_line(step_err)
+            out, OUTPUT_QUIET, "  {red}✗{reset} %s/%s: %s\n",
+            profile, BOOTSTRAP_SCRIPT_NAME, error_line(step_err)
         );
 
         /* The failure, named for the receipt and the summary. The step's error

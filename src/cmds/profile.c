@@ -425,11 +425,12 @@ static error_t profile_fetch(
         const char *profile = selection[i];
 
         /* A profile that fails is named and counted, its error dropped — at most
-         * one per profile */
+         * one per profile. The row is one the run's refusal counts, so it prints
+         * at every level, naming its profile (base/output.h OUTPUT_QUIET). */
         error_t fetch_err = gitops_fetch_branch(repo, remote_name, profile, xfer);
         if (fetch_err) {
             output_print(
-                out, OUTPUT_NORMAL,
+                out, OUTPUT_QUIET,
                 "  {red}✗{reset} Failed to fetch %s: %s\n",
                 profile, error_line(fetch_err)
             );
@@ -443,7 +444,7 @@ static error_t profile_fetch(
         fetch_err = upstream_ensure_tracking_branch(repo, remote_name, profile);
         if (fetch_err) {
             output_print(
-                out, OUTPUT_NORMAL,
+                out, OUTPUT_QUIET,
                 "  {red}✗{reset} Failed to create local branch %s: %s\n",
                 profile, error_line(fetch_err)
             );

@@ -686,8 +686,9 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
      * resolved, asked in the key the argument names. A path is one row, the winner
      * standing there whatever its name. A name keys within one profile, so the
      * view may hold it once (home/, root/, or one binding), or once per binding
-     * under custom/ — and then no profile is the answer, and each holder is named
-     * with the path that tells them apart. */
+     * under custom/ — and then no profile is the answer, and the view's refusal
+     * names each holder with the path that tells them apart (core/manifest.h
+     * manifest_holder). */
     manifest_t *manifest = NULL;
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
@@ -696,28 +697,8 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     if (arg.key == PATH_KEY_FILESYSTEM) {
         row = manifest_lookup(manifest, arg.filesystem_path);
     } else {
-        size_t holders = manifest_holders(manifest, arg.storage_path, &row);
-        if (holders > 1) {
-            output_print(
-                out, OUTPUT_NORMAL, "'%s' is held by %zu profiles:\n",
-                arg.storage_path, holders
-            );
-            manifest_rows_t rows = manifest_rows(manifest);
-            for (size_t i = 0; i < rows.count; i++) {
-                const manifest_row_t *held = rows.entries[i];
-                if (strcmp(held->storage_path, arg.storage_path) != 0) continue;
-                output_print(
-                    out, OUTPUT_NORMAL, "  • %s  (%s)\n", held->profile,
-                    held->filesystem_path
-                );
-            }
-            output_hint(out, OUTPUT_NORMAL, "Specify -p <profile> to disambiguate:");
-            output_hintline(
-                out, OUTPUT_NORMAL, "  dotta show -p <profile> %s", arg.storage_path
-            );
-            err = ERROR(ERR_INVALID_ARG, "Ambiguous path '%s'", arg.storage_path);
-            goto cleanup;
-        }
+        err = manifest_holder(manifest, arg.storage_path, &row);
+        if (err) goto cleanup;
     }
     if (!row) {
         err = ERROR(

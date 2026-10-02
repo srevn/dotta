@@ -45,6 +45,7 @@
 
 #include "base/arena.h"
 #include "base/array.h"
+#include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
@@ -1528,26 +1529,50 @@ const manifest_row_t *manifest_lookup_storage(
 }
 
 /**
- * How many rows hold this name, and the row when one does
+ * The one row holding this name, or a refusal naming every holder
  */
-size_t manifest_holders(
+error_t manifest_holder(
     const manifest_t *manifest,
     const char *storage_path,
     const manifest_row_t **out_row
 ) {
-    *out_row = NULL;
-    if (!manifest || !storage_path) return 0;
+    CHECK_NULL(manifest);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out_row);
 
-    size_t count = 0;
+    /* The holders counted, the last one kept: one is the answer, and none is an
+     * answer too. */
+    size_t holders = 0;
     const manifest_row_t *held = NULL;
     for (size_t i = 0; i < manifest->count; i++) {
         if (strcmp(manifest->rows[i]->storage_path, storage_path) == 0) {
             held = manifest->rows[i];
-            count++;
+            holders++;
         }
     }
-    if (count == 1) *out_row = held;
-    return count;
+    *out_row = holders == 1 ? held : NULL;
+    if (holders < 2) return NULL;
+
+    /* Several: each named with the path that tells it apart, in the spine's order,
+     * which is precedence order — manifest_layer cuts it contribution by
+     * contribution. The list is this call's, done with once the refusal holds
+     * its words. */
+    buffer_t named = BUFFER_INIT;
+    for (size_t i = 0; i < manifest->count; i++) {
+        const manifest_row_t *row = manifest->rows[i];
+        if (strcmp(row->storage_path, storage_path) != 0) continue;
+        buffer_appendf(
+            &named, "%s%s (%s)", named.size > 0 ? ", " : "", row->profile,
+            row->filesystem_path
+        );
+    }
+    error_t err = ERROR(
+        ERR_INVALID_ARG, "'%s' is held by %zu profiles: %s", storage_path, holders,
+        named.data
+    );
+    buffer_deinit(&named);
+
+    return err;
 }
 
 /**

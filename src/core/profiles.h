@@ -698,7 +698,7 @@ typedef struct {
  *
  * Reader: revert without a profile, whose question is every local branch and
  * not the enabled set. A caller that wants the owning profile among the enabled
- * set asks the view instead (manifest_lookup, manifest_holders — list, show).
+ * set asks the view instead (manifest_lookup, manifest_holder — list, show).
  *
  * The key is the input here, where its sibling takes a filesystem path outright
  * (profile_claim_name): both keys run this one search — the same enumeration,

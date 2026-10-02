@@ -23,11 +23,10 @@
  * claim taking a held path and a derived one only filling an empty one.
  *
  * Everything that asks *who wins* reads the index — manifest_lookup, manifest_rows,
- * manifest_lookup_storage, manifest_holders, manifest_diff: deployment, the
- * record's join, the workspace, every screen. Everything that asks *what does
- * this profile call this path* reads that profile's own contribution —
- * manifest_lookup_claim, manifest_name: a path P lost to a higher profile is
- * still named by what P holds.
+ * manifest_lookup_storage, manifest_holder, manifest_diff: deployment, the record's
+ * join, the workspace, every screen. Everything that asks *what does this profile
+ * call this path* reads that profile's own contribution — manifest_lookup_claim,
+ * manifest_name: a path P lost to a higher profile is still named by what P holds.
  *
  * Within one profile, at one path: an explicit claim (a blob of any type, a
  * `tracked` directory item) outranks a derived one whichever arrives first, and
@@ -77,11 +76,11 @@
  *     manifest_profiles (the profiles the rows came from, in precedence order),
  *     manifest_mounts (the table the rows were placed by, lent), manifest_lookup
  *     (by filesystem path, O(1)), manifest_lookup_storage (by claim — a storage
- *     path under one profile, linear), manifest_holders (how many rows hold a
- *     name, and the one when one does), manifest_lookup_claim, manifest_name
- *     and manifest_holds_name (one profile's own contribution, whoever won the
- *     path); and manifest_diff, the per-profile delta between two views that
- *     the scope-changing verbs and sync print their receipts from.
+ *     path under one profile, linear), manifest_holder (the one row holding a
+ *     name, or a refusal naming each), manifest_lookup_claim, manifest_name and
+ *     manifest_holds_name (one profile's own contribution, whoever won the path);
+ *     and manifest_diff, the per-profile delta between two views that the
+ *     scope-changing verbs and sync print their receipts from.
  *
  * Core Principles:
  *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
@@ -720,7 +719,7 @@ const manifest_row_t *manifest_lookup(
  * per name, and under custom/ one profile has one target — so the lookup is exact.
  * `profile` is required; a NULL profile names no row, the API's own return
  * convention, since a pointer-returning lookup has no CHECK_NULL to refuse with.
- * A caller with no profile in hand asks manifest_holders: the first of several
+ * A caller with no profile in hand asks manifest_holder: the first of several
  * rows holding a name was never an answer.
  *
  * The winners, like every reader of the index: this asks whether a claim *wins*
@@ -747,29 +746,28 @@ const manifest_row_t *manifest_lookup_storage(
 );
 
 /**
- * How many rows hold this name, and the row when one does
+ * The one row holding this name, or a refusal naming every holder
  *
  * A name keys within one profile (infra/mount.h): under custom/ two profiles at
  * two targets hold one name for two files, and under home/ or root/ precedence
- * leaves one. The count is the caller's admission question — none, one, more —
- * and `*out_row` is the row iff exactly one holds the name: the claim a caller
- * without a profile may act on. It is NULL when none does and NULL when more
- * than one does — the first of several was the arbitrary answer this replaces
- * (show and list without -p read it, and answered one profile's file for
- * another's), and it has no reader; a caller that must name each holder walks
- * manifest_rows. Readers: show and list without a profile.
+ * leaves one. One holder is the claim a caller without a profile may act on,
+ * and none answers NULL. Several is no answer — the first of several answered
+ * one profile's file for another's — so the refusal names each holder with the
+ * path that tells it apart, in precedence order, and `*out_row` is NULL beside it.
  *
  * The winners, like manifest_lookup_storage beside it: a name that wins nowhere
  * is held by nobody here.
  *
- * Linear scan, once per command.
+ * Linear scan, once per command. Readers: cmds/show.c cmd_show and cmds/list.c
+ * list_file_history, each without a profile.
  *
- * @param manifest Manifest (NULL yields 0)
- * @param storage_path Storage path, e.g. "custom/etc/foo" (NULL yields 0)
- * @param out_row Receives the one holder, or NULL (must not be NULL)
- * @return How many rows hold the name
+ * @param manifest Manifest (must not be NULL)
+ * @param storage_path Storage path, e.g. "custom/etc/foo" (must not be NULL)
+ * @param out_row The one holder, or NULL for none and for several (must not be
+ *                NULL)
+ * @return The refusal when several rows hold the name, NULL otherwise
  */
-size_t manifest_holders(
+error_t manifest_holder(
     const manifest_t *manifest,
     const char *storage_path,
     const manifest_row_t **out_row

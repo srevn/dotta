@@ -681,9 +681,9 @@ static error_t list_file_history(
          * asked in the key the argument names. A path is one row, the winner
          * standing there whatever its name. A name keys within one profile, so
          * the view may hold it once (home/, root/, or one binding), or once per
-         * binding under custom/ — and then no profile is the answer, and each
-         * holder is named with the path that tells them apart. The view is the
-         * arena's. */
+         * binding under custom/ — and then no profile is the answer, and the
+         * view's refusal names each holder with the path that tells them apart
+         * (core/manifest.h manifest_holder). The view is the arena's. */
         manifest_t *manifest = NULL;
         err = manifest_build(repo, state, ctx->arena, &manifest);
         if (err) return err;
@@ -692,27 +692,8 @@ static error_t list_file_history(
         if (arg.key == PATH_KEY_FILESYSTEM) {
             row = manifest_lookup(manifest, arg.filesystem_path);
         } else {
-            size_t holders = manifest_holders(manifest, arg.storage_path, &row);
-            if (holders > 1) {
-                output_print(
-                    out, OUTPUT_NORMAL, "'%s' is held by %zu profiles:\n",
-                    arg.storage_path, holders
-                );
-                manifest_rows_t rows = manifest_rows(manifest);
-                for (size_t i = 0; i < rows.count; i++) {
-                    const manifest_row_t *held = rows.entries[i];
-                    if (strcmp(held->storage_path, arg.storage_path) != 0) continue;
-                    output_print(
-                        out, OUTPUT_NORMAL, "  • %s  (%s)\n", held->profile,
-                        held->filesystem_path
-                    );
-                }
-                output_hint(out, OUTPUT_NORMAL, "Specify -p <profile> to disambiguate:");
-                output_hintline(
-                    out, OUTPUT_NORMAL, "  dotta list -p <profile> %s", arg.storage_path
-                );
-                return ERROR(ERR_INVALID_ARG, "Ambiguous path '%s'", arg.storage_path);
-            }
+            err = manifest_holder(manifest, arg.storage_path, &row);
+            if (err) return err;
         }
         if (!row) {
             return ERROR(

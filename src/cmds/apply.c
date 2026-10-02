@@ -2787,7 +2787,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to update the record: %s",
-                error_message(record_err)
+                error_line(record_err)
             );
 
             /* Nothing the phase wrote stands: the first refused statement ended

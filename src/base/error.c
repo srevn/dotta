@@ -14,14 +14,16 @@
 #include "base/arena.h"
 #include "base/terminal.h"
 
-/* The node, this file's alone: a reader asks for its code, its message, its cause
- * or its root, and never reads a field. Made whole and never edited: a wrap holds
- * its cause, and never copies or edits it. A leaf carries the code; a wrap carries
- * none, error_code reading the leaf's. */
+/* The node, this file's alone: a reader asks for its code, its message, its line,
+ * its cause or its root, and never reads a field. Made whole and never edited:
+ * a wrap holds its cause and edits nothing of it, its line made once from its
+ * own message and the cause's line. A root carries the code; a wrap carries none,
+ * error_code reading the root's. */
 struct error {
-    error_code_t code;    /* A leaf's; OK on a wrap */
+    error_code_t code;    /* A root's; OK on a wrap */
     const char *message;  /* The fact's words, one line */
-    error_t cause;        /* The fact beneath; NULL at the leaf */
+    const char *line;     /* The facts from here down, joined by ": "; the message at a root */
+    error_t cause;        /* The fact beneath; NULL at the root */
 };
 
 /**
@@ -40,10 +42,14 @@ static arena_t *error_arena(void) {
 
 /**
  * The node, made whole in the arena from its value, its message already there
+ *
+ * A root's line is its message, the one string: only a wrap arrives with a line
+ * of its own (error_wrap).
  */
 static error_t error_node(struct error value) {
     struct error *node = arena_alloc(error_arena(), sizeof(*node));
     *node = value;
+    if (!node->line) node->line = node->message;
 
     return node;
 }
@@ -67,8 +73,12 @@ error_t error_wrap(error_t cause, const char *fmt, ...) {
     const char *message = arena_str_vformat(error_arena(), fmt, args);
     va_end(args);
 
-    /* No code: the leaf beneath carries it (error_code) */
-    return error_node((struct error){ .message = message, .cause = cause });
+    /* The line the facts make from here down, made once with the node: every
+     * reader that carries the failure in a line of its own borrows it */
+    const char *line = arena_str_format(error_arena(), "%s: %s", message, cause->line);
+
+    /* No code: the root beneath carries it (error_code) */
+    return error_node((struct error){ .message = message, .line = line, .cause = cause });
 }
 
 error_t error_from_git(int git_error_code) {
@@ -126,6 +136,10 @@ error_t error_from_errno(int errno_val, const char *fmt, ...) {
 
 const char *error_message(error_t err) {
     return err ? err->message : NULL;
+}
+
+const char *error_line(error_t err) {
+    return err ? err->line : NULL;
 }
 
 error_code_t error_code(error_t err) {

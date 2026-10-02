@@ -286,7 +286,7 @@ static error_t profile_list(
         if (remote_err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Could not detect remote: %s",
-                error_message(remote_err)
+                error_line(remote_err)
             );
         } else {
             /* Create transfer context for credentials */
@@ -308,7 +308,7 @@ static error_t profile_list(
             if (remote_err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Could not query remote: %s",
-                    error_message(remote_err)
+                    error_line(remote_err)
                 );
             } else if (remote_branches.count > 0) {
                 /* Filter out branches that already exist locally */
@@ -431,7 +431,7 @@ static error_t profile_fetch(
             output_print(
                 out, OUTPUT_NORMAL,
                 "  {red}✗{reset} Failed to fetch %s: %s\n",
-                profile, error_message(fetch_err)
+                profile, error_line(fetch_err)
             );
             failed_count++;
             continue;
@@ -445,7 +445,7 @@ static error_t profile_fetch(
             output_print(
                 out, OUTPUT_NORMAL,
                 "  {red}✗{reset} Failed to create local branch %s: %s\n",
-                profile, error_message(fetch_err)
+                profile, error_line(fetch_err)
             );
             failed_count++;
         } else {
@@ -1036,7 +1036,7 @@ static error_t profile_disable(
         err = manifest_build(repo, state, ctx->arena, &before);
         if (err) {
             output_warning(
-                out, OUTPUT_NORMAL, "Manifest build failed: %s", error_message(err)
+                out, OUTPUT_NORMAL, "Manifest build failed: %s", error_line(err)
             );
         }
 

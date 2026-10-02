@@ -428,7 +428,7 @@ static void handle_remote_ahead(
         output_print(
             out, OUTPUT_NORMAL,
             "  {red}✗{reset} {red}%s{reset}: pull failed - %s\n",
-            result->profile, error_message(err)
+            result->profile, error_line(err)
         );
         mark_result_failed(result, err);
         return;
@@ -499,7 +499,7 @@ static error_t resolve_and_push_divergence(
         output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} Failed to initialize divergence context: %s\n",
-            error_message(err)
+            error_line(err)
         );
         mark_result_failed(result, err);
         return NULL;
@@ -511,7 +511,7 @@ static error_t resolve_and_push_divergence(
         output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} %s failed: %s\n",
-            cap_name, error_message(err)
+            cap_name, error_line(err)
         );
         mark_result_failed(result, err);
         return NULL;
@@ -524,7 +524,7 @@ static error_t resolve_and_push_divergence(
         output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} %s verification failed: %s\n",
-            cap_name, error_message(err)
+            cap_name, error_line(err)
         );
         mark_result_failed(result, err);
 
@@ -550,7 +550,7 @@ static error_t resolve_and_push_divergence(
             output_print(
                 out, OUTPUT_NORMAL,
                 "    {red}✗{reset} Push after %s failed: %s\n",
-                strategy_name, error_message(err)
+                strategy_name, error_line(err)
             );
             mark_result_failed(result, err);
 
@@ -619,7 +619,7 @@ static void handle_diverged_ours(
         output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} Force push failed: %s\n",
-            error_message(err)
+            error_line(err)
         );
         mark_result_failed(result, err);
         return;
@@ -672,7 +672,7 @@ static void handle_diverged_theirs(
         output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} Failed to initialize divergence context: %s\n",
-            error_message(err)
+            error_line(err)
         );
         mark_result_failed(result, err);
         return;
@@ -684,7 +684,7 @@ static void handle_diverged_theirs(
         output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} Reset failed: %s\n",
-            error_message(err)
+            error_line(err)
         );
         mark_result_failed(result, err);
         return;
@@ -700,7 +700,7 @@ static void handle_diverged_theirs(
         output_print(
             out, OUTPUT_NORMAL,
             "    {red}✗{reset} Reset verification failed: %s\n",
-            error_message(err)
+            error_line(err)
         );
         output_print(
             out, OUTPUT_NORMAL,
@@ -829,7 +829,7 @@ static error_t sync_push_phase(
             output_print(
                 out, OUTPUT_NORMAL,
                 "  {red}✗{reset} {red}%s{reset}: %s\n",
-                result->profile, error_message(result->error)
+                result->profile, error_line(result->error)
             );
             continue;
         }
@@ -884,7 +884,7 @@ static error_t sync_push_phase(
                     output_print(
                         out, OUTPUT_NORMAL,
                         "  {red}✗{reset} {red}%s{reset}: push failed - %s\n",
-                        result->profile, error_message(err)
+                        result->profile, error_line(err)
                     );
                     mark_result_failed(result, err);
                 } else {
@@ -921,7 +921,7 @@ static error_t sync_push_phase(
                     output_print(
                         out, OUTPUT_NORMAL,
                         "  {red}✗{reset} {red}%s{reset}: failed to create remote branch - %s\n",
-                        result->profile, error_message(err)
+                        result->profile, error_line(err)
                     );
                     mark_result_failed(result, err);
                 } else {
@@ -1026,7 +1026,7 @@ static void sync_render_dry_run(
         if (r->outcome == SYNC_OUTCOME_FAILED) {
             output_print(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s: %s\n",
-                r->profile, error_message(r->error)
+                r->profile, error_line(r->error)
             );
             continue;
         }
@@ -1339,12 +1339,8 @@ static void epoch_reconcile(
         output_warning(
             out, OUTPUT_NORMAL,
             "Repository epoch left alone: whether any encrypted file here is "
-            "sealed under the local epoch could not be determined"
+            "sealed under the local epoch could not be determined: %s", error_line(err)
         );
-        /* The cause, not a hint: it is the mechanism's own words and the only
-         * lead there is, so it is printed the way a continuation line is rather
-         * than dressed up as advice. */
-        output_hintline(out, OUTPUT_NORMAL, "  %s", error_message(err));
         return;
     }
 
@@ -1391,7 +1387,7 @@ static void epoch_reconcile(
                 output_warning(
                     out, OUTPUT_NORMAL,
                     "Failed to establish repository epoch on remote: %s",
-                    error_message(err)
+                    error_line(err)
                 );
                 return;  /* best-effort; retried next sync */
             }
@@ -1445,7 +1441,7 @@ static void epoch_reconcile(
                 output_warning(
                     out, OUTPUT_NORMAL, error_code(err) == ERR_CRYPTO ? "%s"
                     : "Failed to adopt repository epoch from remote: %s",
-                    error_message(err)
+                    error_line(err)
                 );
                 return;  /* best-effort */
             }
@@ -1978,7 +1974,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     err = manifest_build(repo, state, ctx->arena, &after);
     if (err) {
         output_warning(
-            out, OUTPUT_NORMAL, "Manifest build failed: %s", error_message(err)
+            out, OUTPUT_NORMAL, "Manifest build failed: %s", error_line(err)
         );
     } else {
         state_record_t *records = NULL;

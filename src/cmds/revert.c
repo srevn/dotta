@@ -1140,7 +1140,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
              * Show warning and continue to confirmation — user decides. */
             output_warning(
                 out, OUTPUT_NORMAL, "Could not show diff preview: %s",
-                error_message(err)
+                error_line(err)
             );
             err = NULL;
         }

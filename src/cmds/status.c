@@ -1163,7 +1163,7 @@ static error_t status_print_remote(
             /* Non-fatal: warn and continue with status display */
             output_warning(
                 out, OUTPUT_VERBOSE, "Failed to fetch branches: %s",
-                error_message(err)
+                error_line(err)
             );
         }
 
@@ -1196,7 +1196,7 @@ static error_t status_print_remote(
         if (err) {
             output_print(
                 out, OUTPUT_NORMAL, "  {cyan}%s{reset}  {red}(✗ %s){reset}\n",
-                profile, error_message(err)
+                profile, error_line(err)
             );
             failed++;
             continue;

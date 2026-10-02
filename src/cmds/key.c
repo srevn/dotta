@@ -297,13 +297,10 @@ static void key_status(const dotta_ctx_t *ctx) {
     manifest_t *manifest = NULL;
     error_t err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) {
-        /* Non-fatal error - concise at normal, detail at verbose */
+        /* Non-fatal: the section says it could not count, and why, in one line
+         * (base/error.h error_line) */
         output_print(
-            out, OUTPUT_NORMAL, "  Unable to count encrypted files\n"
-        );
-        output_print(
-            out, OUTPUT_VERBOSE, "  %s\n",
-            error_message(err)
+            out, OUTPUT_NORMAL, "  Unable to count encrypted files: %s\n", error_line(err)
         );
     } else {
         size_t encrypted_count = 0;

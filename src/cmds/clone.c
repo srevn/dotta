@@ -77,7 +77,7 @@ static void land_profiles(
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to create local branch '%s': %s",
-                profile, error_message(err)
+                profile, error_line(err)
             );
             continue;
         }
@@ -248,7 +248,7 @@ static void rollback_clone_dir(
     if (err) {
         output_warning(
             ctx->out, OUTPUT_NORMAL, "Failed to remove partial clone at %s: %s",
-            path, error_message(err)
+            path, error_line(err)
         );
         output_hint(ctx->out, OUTPUT_NORMAL, "Remove it manually before retrying");
         return;
@@ -383,7 +383,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 out, OUTPUT_NORMAL,
                 "%s. Encryption operations will fail until a valid epoch "
                 "is fetched or 'dotta init' is run locally.",
-                error_message(err)
+                error_line(err)
             );
             /* Said: the error is dropped here, so the arms below meet a clone
              * with no failure in hand rather than one the next assignment

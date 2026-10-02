@@ -427,7 +427,7 @@ static error_t remove_resolve(
              * argument */
             output_warning(
                 out, OUTPUT_VERBOSE, "Skipping invalid path '%s': %s",
-                input_paths[i], error_message(err)
+                input_paths[i], error_line(err)
             );
             err = NULL;
             continue;
@@ -848,7 +848,7 @@ static error_t remove_paths(
     if (err) {
         output_warning(
             out, OUTPUT_NORMAL, "Could not read the other profiles' claims: %s",
-            error_message(err)
+            error_line(err)
         );
         err = NULL;
     }
@@ -1077,14 +1077,14 @@ static error_t remove_paths(
     if (record_err) {
         output_warning(
             out, OUTPUT_NORMAL, "Record update failed: %s",
-            error_message(record_err)
+            error_line(record_err)
         );
     } else if (candidate_count > 0 || state_enabled(state, opts->profile)) {
         record_err = state_begin(state);
         if (record_err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to open transaction for record update: %s",
-                error_message(record_err)
+                error_line(record_err)
             );
         } else {
             /* What the settle acts on, read again under the lock: the read above
@@ -1104,7 +1104,7 @@ static error_t remove_paths(
             if (record_err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Record update failed: %s",
-                    error_message(record_err)
+                    error_line(record_err)
                 );
                 state_rollback(state);
                 settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
@@ -1114,7 +1114,7 @@ static error_t remove_paths(
                 if (commit_err) {
                     output_warning(
                         out, OUTPUT_NORMAL, "Failed to save record updates: %s",
-                        error_message(commit_err)
+                        error_line(commit_err)
                     );
                     state_rollback(state);
                     settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
@@ -1337,7 +1337,7 @@ static error_t remove_profile(
         if (read_err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to read the record: %s",
-                error_message(read_err)
+                error_line(read_err)
             );
         }
     }
@@ -1520,7 +1520,7 @@ static error_t remove_profile(
             if (delete_err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to update state after branch deletion: %s",
-                    error_message(delete_err)
+                    error_line(delete_err)
                 );
                 state_rollback(state);
                 settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
@@ -1547,7 +1547,7 @@ static error_t remove_profile(
              * releases these records conservatively */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to begin transaction for post-deletion update: %s",
-                error_message(delete_err)
+                error_line(delete_err)
             );
         }
     }
@@ -1571,7 +1571,7 @@ static error_t remove_profile(
              * the sync's half alone — warned, and the operation stands. */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to push deletion to remote: %s",
-                error_message(err)
+                error_line(err)
             );
             output_info(
                 out, OUTPUT_NORMAL,

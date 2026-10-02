@@ -311,7 +311,7 @@ static metadata_t *load_sheet(
     output_warning(
         ctx->out, OUTPUT_NORMAL,
         "Metadata unreadable for profile '%s' (%s); falling back to git filemodes",
-        profile, error_message(err)
+        profile, error_line(err)
     );
 
     return metadata_create_empty();

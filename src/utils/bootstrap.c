@@ -237,7 +237,7 @@ bootstrap_receipt_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) 
         output_print(
             out, OUTPUT_NORMAL, "  {red}✗{reset} %s: %s\n",
             spec->dry_run ? "Validation failed" : "Failed",
-            error_message(step_err)
+            error_line(step_err)
         );
 
         /* The failure, named for the receipt and the summary. The step's error

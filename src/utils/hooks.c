@@ -376,7 +376,7 @@ void hook_fire_post(
     if (err) {
         output_warning(
             out, OUTPUT_NORMAL, "Post-%s hook failed: %s",
-            cmd_name(inv->cmd), error_message(err)
+            cmd_name(inv->cmd), error_line(err)
         );
         print_hook_output(out, &result);
     }

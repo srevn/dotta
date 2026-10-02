@@ -845,7 +845,7 @@ static error_t ignore_test(
              * git excludes. The asker could not tell, and the failure's one line
              * says why (sys/source.h) — answered again for each asker it fails. */
             output_print(out, OUTPUT_NORMAL, "{yellow}?{reset} %sCOULD NOT TELL\n", who);
-            output_info(out, OUTPUT_NORMAL, "  Reason: %s", error_message(failure));
+            output_info(out, OUTPUT_NORMAL, "  Reason: %s", error_line(failure));
         } else if (verdict.origin != IGNORE_ORIGIN_NONE) {
             output_print(out, OUTPUT_NORMAL, "{red}✗{reset} %sIGNORED\n", who);
             output_info(

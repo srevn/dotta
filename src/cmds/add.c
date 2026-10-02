@@ -728,7 +728,7 @@ static error_t add_collect(
             if (error_code(err) != ERR_CONFLICT) return err;
             output_warning(
                 out, OUTPUT_NORMAL, "Skipping '%s': %s", child_fs,
-                error_message(err)
+                error_line(err)
             );
             continue;
         }
@@ -2590,7 +2590,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (record_err) {
         output_warning(
             out, OUTPUT_NORMAL, "Failed to update the record: %s",
-            error_message(record_err)
+            error_line(record_err)
         );
 
         /* Nothing this phase wrote stands: the first refused statement ended

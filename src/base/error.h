@@ -81,8 +81,8 @@
  * core/workspace classes the failed look UNREADABLE and its readers offer root,
  * utils/repo offers to reclaim the repository — and none of them can see which
  * producer it came from, which is what makes the class load-bearing rather than
- * descriptive. The code is the leaf's, the one the kernel's refusal was made
- * with (error_code), whatever wraps stand above it.
+ * descriptive. The code is the one the kernel's refusal was made with (error_code),
+ * whatever wraps stand above it.
  *
  * sys/identity's drop is outside the rule and out of reach of it: its two refusals
  * say the run cannot *become* an identity, they are coded by subsystem because
@@ -124,7 +124,7 @@ __attribute__((format(printf, 2, 3)));
  * Wrap an existing error with additional context
  *
  * The new node holds its cause; two wraps of one cause share it, and neither
- * edits it. Its code is its leaf's (error_code).
+ * edits it. Its code is its root's (error_code).
  *
  * @param cause Original error (NULL wraps nothing)
  * @param fmt Context message format
@@ -187,10 +187,24 @@ __attribute__((format(printf, 2, 3)));
 const char *error_message(error_t err);
 
 /**
+ * The facts of a failure as one line
+ *
+ * Each message, the outermost first, joined by ": " — for a line that carries a
+ * failure inside it (a warning, a failed row), where base/output.h output_error's
+ * block would break the line. A root's line is its message; a wrap's is its
+ * message, ": " and its cause's line, made with the node. Borrowed by every reader,
+ * as the message is ("Lifetime" above).
+ *
+ * @param err The failure
+ * @return The line, the process's; NULL for NULL
+ */
+const char *error_line(error_t err);
+
+/**
  * Get error code
  *
- * The leaf's — the code its root was made with — whatever wraps stand above it,
- * so a reader that acts on the code acts on the mechanism's refusal.
+ * The root's (error_root), whatever wraps stand above it, so a reader that acts
+ * on the code acts on the mechanism's refusal.
  *
  * @param err Error
  * @return Error code, or OK for NULL
@@ -215,7 +229,7 @@ error_t error_cause(error_t err);
  * whatever context the layers above wrapped around it. A consumer that already
  * names its subject (a receipt line built around the path) renders the root's
  * message, where the refusal speaks for itself; base/output.h output_error renders
- * the whole chain instead.
+ * the whole chain as a block instead, and error_line as one line.
  *
  * @param err Error
  * @return The deepest cause — err itself when nothing is wrapped

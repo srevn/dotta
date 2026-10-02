@@ -636,7 +636,7 @@ static error_t update_profile(
                      * name (core/metadata.h). */
                     output_warning(
                         out, OUTPUT_NORMAL, "Skipping directory '%s': %s",
-                        item->filesystem_path, error_message(err)
+                        item->filesystem_path, error_line(err)
                     );
                     err = NULL;
                     continue;
@@ -1781,7 +1781,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
              * committed, and this line must not claim more. */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to update the record: %s",
-                error_message(record_err)
+                error_line(record_err)
             );
             output_info(
                 out, OUTPUT_NORMAL,

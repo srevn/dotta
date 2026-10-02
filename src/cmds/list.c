@@ -141,7 +141,7 @@ static error_t list_profiles(
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Could not detect remote: %s",
-                error_message(err)
+                error_line(err)
             );
         } else {
             show_remote = true;
@@ -467,7 +467,7 @@ static error_t list_files(
             /* Non-fatal: continue without commit info */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to load commit history: %s",
-                error_message(err)
+                error_line(err)
             );
         }
 

@@ -228,7 +228,7 @@ static void transfer_commit_credential_decision(transfer_context_t *ctx) {
         output_print(
             ctx->output, OUTPUT_VERBOSE,
             "credential helper: skipping commit — %s\n",
-            error_message(err)
+            error_line(err)
         );
         return;
     }
@@ -241,7 +241,7 @@ static void transfer_commit_credential_decision(transfer_context_t *ctx) {
         output_warning(
             ctx->output, OUTPUT_NORMAL,
             "credential helper: %s",
-            error_message(err)
+            error_line(err)
         );
     }
 
@@ -504,7 +504,7 @@ int transfer_credentials_callback(
         if (err) {
             output_print(
                 ctx->output, OUTPUT_VERBOSE,
-                "credential URL parse: %s\n", error_message(err)
+                "credential URL parse: %s\n", error_line(err)
             );
         } else {
             err = credential_helper_fill(
@@ -517,7 +517,7 @@ int transfer_credentials_callback(
                  * user so they can diagnose helper issues. */
                 output_warning(
                     ctx->output, OUTPUT_NORMAL,
-                    "credential helper: %s", error_message(err)
+                    "credential helper: %s", error_line(err)
                 );
             }
         }

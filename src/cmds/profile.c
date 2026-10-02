@@ -246,7 +246,7 @@ static error_t profile_list(
      * the branch alone (core/profiles.h profile_needs_target). Two reads of one
      * branch, one failure arm: both open the same tree first, and a row that
      * would not count says so rather than marking nothing in silence. */
-    if (available.count > 0 && opts->show_available) {
+    if (available.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Available (disabled)");
         for (size_t i = 0; i < available.count; i++) {
             const char *profile = available.entries[i];
@@ -1558,9 +1558,7 @@ static error_t profile_post_parse(
 /* --- list --- */
 
 static void profile_list_defaults(void *o) {
-    cmd_profile_options_t *opts = o;
-    opts->subcommand = PROFILE_LIST;
-    opts->show_available = true;
+    ((cmd_profile_options_t *) o)->subcommand = PROFILE_LIST;
 }
 
 static const args_opt_t profile_list_opts[] = {

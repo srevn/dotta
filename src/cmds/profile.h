@@ -40,7 +40,6 @@ typedef struct {
 
     /* List options */
     bool show_remote;       /* Show remote profiles */
-    bool show_available;    /* Show available (non-enabled) profiles */
 
     /* Fetch/enable/disable options */
     bool all_profiles;      /* --all: every profile the subcommand reads */

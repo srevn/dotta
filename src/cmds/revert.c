@@ -47,8 +47,8 @@
  * (profile_discover_claims — enabled or not, revert's question), and an argument
  * two profiles hold is ambiguous, listed with each branch's own name for it and
  * refused. A branch the search cannot read stops it whichever branch it is, since
- * a list short by one is a falsely unique answer; the refusal spells the command
- * that reads one branch instead of all of them.
+ * a list short by one is a falsely unique answer; the refusal's clause names
+ * the flag that reads one branch instead of all of them.
  */
 static error_t select_profile(
     const dotta_ctx_t *ctx,
@@ -73,11 +73,8 @@ static error_t select_profile(
         return NULL;
     }
 
-    /* The argument in the key it named — one of two. The hints spell the command
-     * with what the user typed, so they paste back, and they spell it in the
-     * three-positional form: that is the one arm of revert_post_parse that assigns
-     * without asking refspec_looks_like_commit whether the second word is a commit,
-     * so a tag or a branch name pastes back as readily as an oid does. */
+    /* The argument in the key it named — one of two — which every refusal below
+     * names it by. */
     const char *subject = arg->key == PATH_KEY_FILESYSTEM ? arg->filesystem_path
                                                           : arg->storage_path;
 
@@ -92,20 +89,19 @@ static error_t select_profile(
              * an object the store lost. Whatever the cause, the way through is
              * the same one: name the profile and one branch is read instead of
              * all of them. Said here rather than at the search, which knows the
-             * branch that failed and not the words the user typed. */
+             * branch that failed and not the flag that names one. */
             return error_wrap(
-                err,
-                "Cannot search every profile for '%s' — name one with "
-                "'dotta revert <profile> %s %s'",
-                subject, opts->file_path, opts->commit
+                err, "Cannot search every profile for '%s'; -p reads one instead",
+                subject
             );
         }
+
+        /* Held at no tip: a file deleted from its profile is the case a revert
+         * exists for, and naming the profile is what reaches it — a profile named
+         * is not asked what its tip holds (the -p arm above). */
         return ERROR(
-            ERR_NOT_FOUND, "'%s' is not held by any profile\n\n"
-            "If you are trying to revert a deleted file, specify the profile:\n"
-            "  dotta revert <profile> %s %s\n\n"
-            "Use 'dotta list' to see all profiles.",
-            subject, opts->file_path, opts->commit
+            ERR_NOT_FOUND, "'%s' is not held by any profile; -p restores it into a "
+            "profile that deleted it", subject
         );
     }
 

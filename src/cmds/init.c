@@ -56,13 +56,8 @@ static error_t ensure_repository_adoptable(
 
     if (!git_repository_is_bare(repo)) {
         return ERROR(
-            ERR_CONFLICT,
-            "'%s' is a Git repository with a working tree; dotta's store is "
-            "bare\n\n"
-            "Move it aside first, or point dotta elsewhere:\n"
-            "  DOTTA_REPO_DIR=<path> dotta init\n"
-            "  or set repo_dir under [core] in the config file",
-            path
+            ERR_CONFLICT, "'%s' is a Git repository with a working tree, and dotta's "
+            "store is bare", path
         );
     }
 
@@ -85,14 +80,7 @@ static error_t ensure_repository_adoptable(
     }
     if (refs.count == 0) return NULL;
 
-    return ERROR(
-        ERR_CONFLICT,
-        "'%s' is a Git repository that dotta did not create\n\n"
-        "Move the existing repository aside first, or point dotta elsewhere:\n"
-        "  DOTTA_REPO_DIR=<path> dotta init\n"
-        "  or set repo_dir under [core] in the config file",
-        path
-    );
+    return ERROR(ERR_CONFLICT, "'%s' is a Git repository dotta did not create", path);
 }
 
 /**
@@ -231,8 +219,8 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
 
     /* A repository outside the configured location is one no later command will
      * find: every one of them resolves that location and stops there, so the
-     * next `dotta status` would answer "No dotta repository found... Run 'dotta
-     * init'" about the repository this run just made. */
+     * next `dotta status` would answer "No dotta repository found at" the
+     * configured location, the repository this run just made standing elsewhere. */
     if (elsewhere) {
         output_warning(
             out, OUTPUT_NORMAL, "dotta looks for its repository at %s", elsewhere

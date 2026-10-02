@@ -354,30 +354,22 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     err = epoch_fetch(repo, "origin", xfer, NULL);
     if (err) {
         if (error_code(err) == ERR_NOT_FOUND) {
-            /* Split the diagnostic: an empty remote is a publish-first problem,
-             * a ref-bearing one is simply not dotta's. On a listing failure fall
-             * through to the foreign diagnostic. */
+            /* Split the diagnostic: an empty remote holds nothing to clone, and
+             * a ref-bearing one is not dotta's until a machine that holds the
+             * repository syncs to it — the one way to the ref the fact cannot
+             * imply. On a listing failure fall through to the foreign
+             * diagnostic. */
             string_array_t remote_refs;
             error_t list_err = gitops_list_remote_tracking(
                 repo, "origin", ctx->arena, &remote_refs
             );
             if (!list_err && remote_refs.count == 0) {
-                err = ERROR(
-                    ERR_NOT_FOUND,
-                    "Remote is empty - nothing to clone\n\n"
-                    "To publish a new dotta repository:\n"
-                    "  dotta init\n"
-                    "  dotta remote add origin <url>\n"
-                    "  dotta sync"
-                );
+                err = ERROR(ERR_NOT_FOUND, "Remote is empty: nothing to clone");
             } else {
                 err = ERROR(
-                    ERR_NOT_FOUND,
-                    "Remote is not a dotta repository ('%s' not advertised)\n\n"
-                    "Check the URL. If this remote should be one, run "
-                    "'dotta sync' from a machine that has the repository "
-                    "to establish the ref.",
-                    EPOCH_REF
+                    ERR_NOT_FOUND, "Remote is not a dotta repository: it does not "
+                    "advertise '%s'; a sync from a machine that holds the repository "
+                    "establishes it", EPOCH_REF
                 );
             }
             goto cleanup;

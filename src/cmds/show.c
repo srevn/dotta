@@ -615,13 +615,8 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             }
             if (profiles.count == 0) {
                 err = ERROR(
-                    ERR_NOT_FOUND,
-                    "No enabled profiles found\n\n"
-                    "To search a specific profile:\n"
-                    "  dotta show -p <profile> %s\n\n"
-                    "To enable profiles:\n"
-                    "  dotta profile enable <name>",
-                    opts->commit
+                    ERR_NOT_FOUND, "No enabled profiles to search for '%s'; -p searches "
+                    "one", opts->commit
                 );
                 goto cleanup;
             }

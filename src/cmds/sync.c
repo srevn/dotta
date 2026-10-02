@@ -65,8 +65,10 @@ typedef struct {
 } sync_results_t;
 
 /**
- * Single funnel for SYNC_OUTCOME_FAILED. Keeps err, borrowed as every error is
- * (base/error.h). Caller must print any output_error messages before calling.
+ * Single funnel for SYNC_OUTCOME_FAILED: the outcome and its cause, borrowed as
+ * every error is (base/error.h). A row says the cause — where the failure is
+ * met, or, for the analyze phase's, where the push phase and the dry run read
+ * it back — and sync_failure counts it.
  */
 static void mark_result_failed(
     profile_sync_result_t *result,
@@ -349,12 +351,13 @@ static sync_results_t sync_analyze_phase(
 }
 
 /**
- * Attempt divergence rollback after resolution failure
+ * Roll a resolution back to the tip the branch stood at before it
  *
- * Returns critical error if rollback itself fails (caller must propagate). Returns
- * NULL and prints informational message on successful rollback.
+ * A rollback that succeeds is the profile's row. One that fails leaves the branch
+ * where the resolution put it and ends the run, its error told once, by the run's
+ * renderer.
  */
-static error_t attempt_rollback(
+static error_t sync_rollback(
     resolve_context_t *resolve,
     const char *profile,
     const char *failure_reason,
@@ -362,16 +365,14 @@ static error_t attempt_rollback(
 ) {
     error_t err = resolve_rollback(resolve);
     if (err) {
-        output_print(
-            out, OUTPUT_NORMAL,
-            "    {red}✗{reset} Critical: Rollback failed: %s\n",
-            error_message(err)
-        );
+        /* The error names the tip, the one fact a repair starts from: whole, as
+         * git's own ref refusals spell an id (lib/git/refs/packed-backend.c,
+         * oid_to_hex), where an abbreviation could name two commits. */
+        char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
+        git_oid_tostr(oid_str, sizeof(oid_str), &resolve->saved_oid);
         return error_wrap(
-            err, "Failed to rollback branch '%s' after %s.\n"
-            "Repository may be in an inconsistent state.\n"
-            "Manual intervention required: git reset --hard origin/%s",
-            profile, failure_reason, profile
+            err, "Failed to roll back branch '%s' to %s, its tip before the sync, "
+            "after the %s", profile, oid_str, failure_reason
         );
     }
 
@@ -531,7 +532,7 @@ static error_t resolve_and_push_divergence(
         snprintf(
             reason, sizeof(reason), "%s verification failure", strategy_name
         );
-        return attempt_rollback(&resolve, result->profile, reason, out);
+        return sync_rollback(&resolve, result->profile, reason, out);
     }
 
     output_print(
@@ -558,7 +559,7 @@ static error_t resolve_and_push_divergence(
                 "    ↺ Rolling back %s (push failed)...",
                 strategy_name
             );
-            return attempt_rollback(
+            return sync_rollback(
                 &resolve, result->profile, "push failure", out
             );
         }

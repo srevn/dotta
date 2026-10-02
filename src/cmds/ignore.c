@@ -939,16 +939,15 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         };
     } else {
         /* Seeded by `dotta init` and `dotta clone`; absent only by hand, and
-         * init is what puts it back. */
+         * init is what puts it back — on a repository that stands, which no fact
+         * implies, so the clause says so. */
         bool seeded = false;
         err = gitops_reference_exists(repo, BASELINE_REF, &seeded);
         if (err) return err;
         if (!seeded) {
             return ERROR(
-                ERR_NOT_FOUND,
-                "No baseline .dottaignore: '%s' does not exist\n"
-                "Run 'dotta init' to seed it with the default patterns",
-                BASELINE_REF
+                ERR_NOT_FOUND, "No baseline .dottaignore: '%s' does not exist; dotta "
+                "init seeds it with the default patterns", BASELINE_REF
             );
         }
         dottaignore = (dottaignore_t){

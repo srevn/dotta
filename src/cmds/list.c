@@ -692,7 +692,7 @@ static error_t list_file_history(
         if (arg.key == PATH_KEY_FILESYSTEM) {
             row = manifest_lookup(manifest, arg.filesystem_path);
         } else {
-            err = manifest_holder(manifest, arg.storage_path, &row);
+            err = manifest_holder(ctx->arena, manifest, arg.storage_path, &row);
             if (err) return err;
         }
         if (!row) {

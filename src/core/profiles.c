@@ -13,7 +13,6 @@
 
 #include "base/arena.h"
 #include "base/array.h"
-#include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
@@ -238,23 +237,13 @@ static error_t profile_unheld(const char *commit_ref, const string_array_t *filt
             commit_ref
         );
     }
-    if (filter->count == 1) {
-        return ERROR(
-            ERR_NOT_FOUND, "Commit '%s' not found in profile '%s'", commit_ref,
-            filter->entries[0]
-        );
-    }
 
-    buffer_t searched = BUFFER_INIT;
-    for (size_t i = 0; i < filter->count; i++) {
-        buffer_appendf(&searched, "%s'%s'", i > 0 ? ", " : "", filter->entries[i]);
-    }
-    error_t err = ERROR(
-        ERR_NOT_FOUND, "Commit '%s' not found in profiles %s", commit_ref,
-        searched.data
+    /* The names -p gave, joined in the arena the filter keeps them in: an array
+     * remembers its arena (base/array.h) */
+    return ERROR(
+        ERR_NOT_FOUND, "Commit '%s' not found in profile%s '%s'", commit_ref,
+        filter->count == 1 ? "" : "s", string_array_join(filter->arena, filter, "', '")
     );
-    buffer_deinit(&searched);
-    return err;
 }
 
 /* The ends one search is asked for: a commit's one, a range's two */

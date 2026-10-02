@@ -45,7 +45,6 @@
 
 #include "base/arena.h"
 #include "base/array.h"
-#include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
@@ -1532,10 +1531,12 @@ const manifest_row_t *manifest_lookup_storage(
  * The one row holding this name, or a refusal naming every holder
  */
 error_t manifest_holder(
+    arena_t *arena,
     const manifest_t *manifest,
     const char *storage_path,
     const manifest_row_t **out_row
 ) {
+    CHECK_NULL(arena);
     CHECK_NULL(manifest);
     CHECK_NULL(storage_path);
     CHECK_NULL(out_row);
@@ -1555,24 +1556,20 @@ error_t manifest_holder(
 
     /* Several: each named with the path that tells it apart, in the spine's order,
      * which is precedence order — manifest_layer cuts it contribution by
-     * contribution. The list is this call's, done with once the refusal holds
-     * its words. */
-    buffer_t named = BUFFER_INIT;
+     * contribution — and joined in the caller's arena, where nothing is owed a
+     * release. */
+    string_array_t named;
+    string_array_init_cap(&named, arena, holders);
     for (size_t i = 0; i < manifest->count; i++) {
         const manifest_row_t *row = manifest->rows[i];
         if (strcmp(row->storage_path, storage_path) != 0) continue;
-        buffer_appendf(
-            &named, "%s%s (%s)", named.size > 0 ? ", " : "", row->profile,
-            row->filesystem_path
-        );
+        string_array_pushf(&named, "%s (%s)", row->profile, row->filesystem_path);
     }
-    error_t err = ERROR(
-        ERR_INVALID_ARG, "'%s' is held by %zu profiles: %s", storage_path, holders,
-        named.data
-    );
-    buffer_deinit(&named);
 
-    return err;
+    return ERROR(
+        ERR_INVALID_ARG, "'%s' is held by %zu profiles: %s", storage_path, holders,
+        string_array_join(arena, &named, ", ")
+    );
 }
 
 /**

@@ -761,6 +761,7 @@ const manifest_row_t *manifest_lookup_storage(
  * Linear scan, once per command. Readers: cmds/show.c cmd_show and cmds/list.c
  * list_file_history, each without a profile.
  *
+ * @param arena Arena the refusal's holders are joined in (must not be NULL)
  * @param manifest Manifest (must not be NULL)
  * @param storage_path Storage path, e.g. "custom/etc/foo" (must not be NULL)
  * @param out_row The one holder, or NULL for none and for several (must not be
@@ -768,6 +769,7 @@ const manifest_row_t *manifest_lookup_storage(
  * @return The refusal when several rows hold the name, NULL otherwise
  */
 error_t manifest_holder(
+    arena_t *arena,
     const manifest_t *manifest,
     const char *storage_path,
     const manifest_row_t **out_row

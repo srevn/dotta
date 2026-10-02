@@ -381,75 +381,25 @@ static error_t profile_fetch(
 
     output_section(out, OUTPUT_NORMAL, "Fetching profiles");
 
-    if (opts->all_profiles) {
-        /* Query remote server for all available branches */
-        string_array_t remote_branches;
-        err = gitops_list_remote_branches(
-            repo, remote_name, xfer, ctx->arena, &remote_branches
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to query remote branches");
-            goto cleanup;
-        }
+    /* What the remote holds, asked once: every profile --all fetches, and the
+     * pre-flight the names the line gives are held to */
+    string_array_t remote_branches;
+    err = gitops_list_remote_branches(
+        repo, remote_name, xfer, ctx->arena, &remote_branches
+    );
+    if (err) {
+        err = error_wrap(err, "Failed to query remote branches");
+        goto cleanup;
+    }
 
-        for (size_t i = 0; i < remote_branches.count; i++) {
-            const char *branch_name = remote_branches.entries[i];
-
-            output_info(out, OUTPUT_VERBOSE, "  Fetching %s...", branch_name);
-
-            /* A branch that fails is named and counted, its error dropped — at
-             * most one per branch */
-            error_t fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, xfer);
-            if (fetch_err) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  {red}✗{reset} Failed to fetch %s: %s\n",
-                    branch_name, error_message(fetch_err)
-                );
-                failed_count++;
-                continue;
-            }
-
-            /* The local branch: created at the remote's commit, or already
-             * here and left where it stands (the fetch moved the remote ref;
-             * sync moves the branch) */
-            fetch_err = upstream_ensure_tracking_branch(
-                repo, remote_name, branch_name
-            );
-            if (fetch_err) {
-                output_print(
-                    out, OUTPUT_NORMAL,
-                    "  {red}✗{reset} Failed to create local branch %s: %s\n",
-                    branch_name, error_message(fetch_err)
-                );
-                failed_count++;
-            } else {
-                fetched_count++;
-                output_print(
-                    out, OUTPUT_VERBOSE, "  {green}✓{reset} Fetched %s\n",
-                    branch_name
-                );
-            }
-        }
-    } else {
-        /* Fetch the profiles the line names, one at least (profile_post_parse),
-         * validated first against what the remote holds */
-        string_array_t available_remote;
-        err = gitops_list_remote_branches(
-            repo, remote_name, xfer, ctx->arena, &available_remote
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to query remote branches");
-            goto cleanup;
-        }
-
-        /* Every name the remote does not hold, refused together before anything
-         * is fetched: a fetch of named branches is whole or nothing, as git's
-         * is. The names the remote does hold are in hand, so the way out lists
-         * them. */
+    /* Every name the remote does not hold, refused together before anything is
+     * fetched: a fetch of named branches is whole or nothing, as git's is. The
+     * names the remote does hold are in hand, so the way out lists them. */
+    if (!opts->all_profiles) {
         string_array_t missing;
         string_array_init(&missing, ctx->arena);
         for (size_t i = 0; i < opts->profile_count; i++) {
-            if (!string_array_contains(&available_remote, opts->profiles[i])) {
+            if (!string_array_contains(&remote_branches, opts->profiles[i])) {
                 string_array_push(&missing, opts->profiles[i]);
             }
         }
@@ -462,50 +412,51 @@ static error_t profile_fetch(
             );
             err = error_hint(
                 err, "Remote '%s' holds %s", remote_name,
-                available_remote.count > 0
-                    ? string_array_join(ctx->arena, &available_remote, ", ")
+                remote_branches.count > 0
+                    ? string_array_join(ctx->arena, &remote_branches, ", ")
                     : "no profiles"
             );
             goto cleanup;
         }
+    }
 
-        for (size_t i = 0; i < opts->profile_count; i++) {
-            const char *profile = opts->profiles[i];
+    /* The selection, one loop: every profile the remote holds under --all, else
+     * the ones the line names (profile_post_parse) */
+    char **selection = opts->all_profiles ? remote_branches.entries : opts->profiles;
+    size_t selection_count = opts->all_profiles
+        ? remote_branches.count : opts->profile_count;
+    for (size_t i = 0; i < selection_count; i++) {
+        const char *profile = selection[i];
 
-            /* A profile that fails is named and counted, its error dropped — at
-             * most one per profile */
-            error_t fetch_err = gitops_fetch_branch(repo, remote_name, profile, xfer);
-            if (fetch_err) {
-                output_print(
-                    out, OUTPUT_NORMAL,
-                    "  {red}✗{reset} Failed to fetch %s: %s\n",
-                    profile, error_message(fetch_err)
-                );
-                failed_count++;
-                continue;
-            }
-
-            /* The local branch: created at the remote's commit, or already
-             * here and left where it stands (the fetch moved the remote ref;
-             * sync moves the branch) */
-            fetch_err = upstream_ensure_tracking_branch(
-                repo, remote_name, profile
+        /* A profile that fails is named and counted, its error dropped — at most
+         * one per profile */
+        error_t fetch_err = gitops_fetch_branch(repo, remote_name, profile, xfer);
+        if (fetch_err) {
+            output_print(
+                out, OUTPUT_NORMAL,
+                "  {red}✗{reset} Failed to fetch %s: %s\n",
+                profile, error_message(fetch_err)
             );
-            if (fetch_err) {
-                output_print(
-                    out, OUTPUT_NORMAL,
-                    "  {red}✗{reset} Failed to create local branch %s: %s\n",
-                    profile, error_message(fetch_err)
-                );
-                failed_count++;
-            } else {
-                fetched_count++;
-                output_print(
-                    out, OUTPUT_VERBOSE,
-                    "  {green}✓{reset} Fetched %s\n",
-                    profile
-                );
-            }
+            failed_count++;
+            continue;
+        }
+
+        /* The local branch: created at the remote's commit, or already here and
+         * left where it stands (the fetch moved the remote ref; sync moves the
+         * branch) */
+        fetch_err = upstream_ensure_tracking_branch(repo, remote_name, profile);
+        if (fetch_err) {
+            output_print(
+                out, OUTPUT_NORMAL,
+                "  {red}✗{reset} Failed to create local branch %s: %s\n",
+                profile, error_message(fetch_err)
+            );
+            failed_count++;
+        } else {
+            fetched_count++;
+            output_print(
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} Fetched %s\n", profile
+            );
         }
     }
 

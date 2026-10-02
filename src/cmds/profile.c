@@ -1490,7 +1490,8 @@ static error_t profile_dispatch(const void *ctx_v, void *opts_v) {
 /**
  * The selection fetch, enable and disable share: the profiles the line names,
  * or --all for every one, and exactly one of the two. clone_post_parse refuses
- * the same pair for clone's -p.
+ * the same pair for clone's -p, and bootstrap_post_parse for bootstrap's, where
+ * naming none has a meaning of its own.
  */
 static error_t profile_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd

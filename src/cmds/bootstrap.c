@@ -72,8 +72,8 @@ static const char *const BOOTSTRAP_TEMPLATE =
  * Create bootstrap script from template.
  *
  * Commits the default template directly into the profile's Git tree (no
- * working-tree write). Fails if the profile is missing or if a bootstrap script
- * already exists for it.
+ * working-tree write). The profile is here — cmd_bootstrap's selection required
+ * it — and the call fails if a bootstrap script already exists for it.
  */
 static error_t bootstrap_create_template(
     git_repository *repo,
@@ -81,9 +81,6 @@ static error_t bootstrap_create_template(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
-
-    error_t err = profile_require(repo, profile);
-    if (err) return err;
 
     /* Check if script already exists in Git */
     if (bootstrap_exists(repo, profile)) {
@@ -95,7 +92,7 @@ static error_t bootstrap_create_template(
 
     /* The profile's stage: the script goes on it, executable, in one commit */
     char refname[DOTTA_REFNAME_MAX];
-    err = gitops_branch_refname(refname, sizeof(refname), profile);
+    error_t err = gitops_branch_refname(refname, sizeof(refname), profile);
     if (err) return err;
 
     stage_t *stage = NULL;
@@ -170,7 +167,7 @@ static error_t bootstrap_edit(
 
     /* The user's editor: DOTTA_EDITOR, VISUAL, EDITOR, then vi (sys/editor.h) */
     err = editor_launch_with_env(temp_path);
-    if (err) goto cleanup;   /* the editor's refusal names itself; the caller frames it */
+    if (err) goto cleanup;   /* the editor's refusal names itself */
 
     /* Read edited content back from temp file */
     err = fs_read_file(temp_path, &content_buf);
@@ -328,120 +325,44 @@ static void bootstrap_list(
 }
 
 /**
- * Execute bootstrap command
+ * Run the selection's scripts: the ones that stand, confirmed unless --yes or
+ * --dry-run, fired in the selection's order (utils/bootstrap.h bootstrap_fire)
  */
-error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opts) {
+static error_t bootstrap_run(
+    const dotta_ctx_t *ctx,
+    const cmd_bootstrap_options_t *opts,
+    const string_array_t *profiles
+) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
+    CHECK_NULL(profiles);
 
     git_repository *repo = ctx->run.repo;
-    state_t *state = ctx->run.state;
     output_t *out = ctx->out;
-
-    error_t err = NULL;
-
-    /* Handle --edit flag */
-    if (opts->edit) {
-        /* Check profile count */
-        if (opts->profile_count > 1) {
-            return ERROR(
-                ERR_INVALID_ARG, "Can only edit one profile at a time"
-            );
-        }
-
-        /* Default to 'global' profile if none specified */
-        const char *profile_to_edit = (opts->profile_count == 0)
-                                    ? "global" : opts->profiles[0];
-
-        /* Edit the bootstrap script */
-        err = bootstrap_edit(repo, profile_to_edit, out);
-        if (err) {
-            return error_wrap(err, "Failed to edit bootstrap script");
-        }
-        return NULL;
-    }
-
-    /* Resolve profile names — all branches produce string_array_t (name-only).
-     * Bootstrap only needs profile names, not Git trees. */
-    string_array_t profiles;
-    if (opts->profile_count > 0) {
-        /* Explicit profiles: each must be here — a script asked for by a name
-         * that is not a profile is a typo, not a skip */
-        string_array_init_cap(&profiles, ctx->arena, opts->profile_count);
-        for (size_t i = 0; i < opts->profile_count; i++) {
-            err = profile_require(repo, opts->profiles[i]);
-            if (err) return err;
-            string_array_push(&profiles, opts->profiles[i]);
-        }
-    } else if (opts->all_profiles) {
-        /* Every profile here, run in the convention's order: a set the machine
-         * enumerated has no other, and a base's script belongs before its
-         * variants'. Named profiles run in the order given; the enabled set below
-         * runs in the machine's. */
-        err = gitops_list_branches(repo, ctx->arena, &profiles);
-        if (err) {
-            return error_wrap(err, "Failed to list all profiles");
-        }
-        profile_order(&profiles);
-    } else {
-        /* Use enabled profiles from state */
-        err = profile_resolve_enabled(repo, state, ctx->arena, &profiles);
-        if (err) return err;
-
-        /* No profiles enabled — expected case, show guidance */
-        if (profiles.count == 0) {
-            output_info(out, OUTPUT_NORMAL, "No enabled profiles found.");
-            output_hint(out, OUTPUT_NORMAL, "Enable profiles first:");
-            output_hintline(out, OUTPUT_NORMAL, "  dotta profile enable <name>");
-            return NULL;
-        }
-    }
-
-    /* Handle --list flag */
-    if (opts->list) {
-        bootstrap_list(repo, &profiles, out);
-        return NULL;
-    }
-
-    /* Handle --show flag */
-    if (opts->show) {
-        /* Check profile count */
-        if (opts->profile_count > 1) {
-            return ERROR(
-                ERR_INVALID_ARG, "Can only show one profile at a time"
-            );
-        }
-
-        /* Default to 'global' profile if none specified */
-        const char *profile_to_show = (opts->profile_count == 0)
-                                    ? "global" : opts->profiles[0];
-
-        /* Show the bootstrap script */
-        err = bootstrap_show(repo, profile_to_show, out);
-        if (err) {
-            return error_wrap(err, "Failed to show bootstrap script");
-        }
-        return NULL;
-    }
 
     /* Single-pass filter: collect profiles that actually have a script. Display
      * list and pass straight into bootstrap_fire — no double tree-walk. */
     string_array_t found;
     string_array_init(&found, ctx->arena);
-    for (size_t i = 0; i < profiles.count; i++) {
-        if (bootstrap_exists(repo, profiles.entries[i])) {
-            string_array_push(&found, profiles.entries[i]);
+    for (size_t i = 0; i < profiles->count; i++) {
+        if (bootstrap_exists(repo, profiles->entries[i])) {
+            string_array_push(&found, profiles->entries[i]);
         }
     }
 
     if (found.count == 0) {
+        /* The set searched, as the line selected it */
         output_info(
-            out, OUTPUT_NORMAL, "No bootstrap scripts found in enabled profiles."
+            out, OUTPUT_NORMAL, opts->profile_count > 0
+                ? "No bootstrap scripts found in the named profiles."
+                : opts->all_profiles
+                ? "No bootstrap scripts found in any profile."
+                : "No bootstrap scripts found in enabled profiles."
         );
         output_section(out, OUTPUT_NORMAL, "Profiles checked");
 
-        for (size_t i = 0; i < profiles.count; i++) {
-            output_print(out, OUTPUT_NORMAL, "  - %s\n", profiles.entries[i]);
+        for (size_t i = 0; i < profiles->count; i++) {
+            output_print(out, OUTPUT_NORMAL, "  - %s\n", profiles->entries[i]);
         }
         output_gap(out, OUTPUT_NORMAL);
         output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
@@ -509,6 +430,75 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
     return NULL;
 }
 
+/**
+ * Execute bootstrap command
+ */
+error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(opts);
+
+    git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;
+    output_t *out = ctx->out;
+
+    error_t err = NULL;
+
+    /* The selection, its shape settled by the line (bootstrap_post_parse) and
+     * read by name alone — a script is asked of a profile's name, never of its
+     * tree. */
+    string_array_t profiles;
+    if (opts->profile_count > 0) {
+        /* Explicit profiles: each must be here — a script asked for by a name
+         * that is not a profile is a typo, not a skip */
+        string_array_init_cap(&profiles, ctx->arena, opts->profile_count);
+        for (size_t i = 0; i < opts->profile_count; i++) {
+            err = profile_require(repo, opts->profiles[i]);
+            if (err) return err;
+            string_array_push(&profiles, opts->profiles[i]);
+        }
+    } else if (opts->all_profiles) {
+        /* Every profile here, run in the convention's order: a set the machine
+         * enumerated has no other, and a base's script belongs before its
+         * variants'. Named profiles run in the order given; the enabled set below
+         * runs in the machine's. */
+        err = gitops_list_branches(repo, ctx->arena, &profiles);
+        if (err) {
+            return error_wrap(err, "Failed to list all profiles");
+        }
+        profile_order(&profiles);
+    } else {
+        /* Use enabled profiles from state */
+        err = profile_resolve_enabled(repo, state, ctx->arena, &profiles);
+        if (err) return err;
+
+        /* No profiles enabled — expected case, show guidance */
+        if (profiles.count == 0) {
+            output_info(out, OUTPUT_NORMAL, "No enabled profiles found.");
+            output_hint(out, OUTPUT_NORMAL, "Enable profiles first:");
+            output_hintline(out, OUTPUT_NORMAL, "  dotta profile enable <name>");
+            return NULL;
+        }
+    }
+
+    /* The mode the line gave, one at most: a script edited or shown — the one
+     * profile the line names — the selection's scripts listed, or run. The field
+     * is an int for the engine's FLAG_SET, read as its enum so -Wswitch holds
+     * every value named. */
+    switch ((bootstrap_mode_t) opts->mode) {
+        case BOOTSTRAP_MODE_EDIT:
+            return bootstrap_edit(repo, profiles.entries[0], out);
+        case BOOTSTRAP_MODE_SHOW:
+            return bootstrap_show(repo, profiles.entries[0], out);
+        case BOOTSTRAP_MODE_LIST:
+            bootstrap_list(repo, &profiles, out);
+            return NULL;
+        case BOOTSTRAP_MODE_RUN:
+            return bootstrap_run(ctx, opts, &profiles);
+    }
+
+    CHECK_ARG(false, "a bootstrap mode no enumerator names");
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
@@ -528,6 +518,31 @@ static args_want_t bootstrap_complete(
     return ARGS_WANT_NONE;
 }
 
+/**
+ * The selection and the mode the line gives, settled before the store opens:
+ * the profiles named or --all, never both, and a script edited or shown is one
+ * named profile's. A second mode is the engine's to refuse: the three are one
+ * FLAG_SET group. profile_post_parse refuses the same pair for profile's selection,
+ * where naming none is refused too; here it is the enabled set.
+ */
+static error_t bootstrap_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    const cmd_bootstrap_options_t *o = opts_v;
+
+    if (o->all_profiles && o->profile_count > 0) {
+        return ERROR(ERR_INVALID_ARG, "--all and profile names are mutually exclusive");
+    }
+    if (o->mode == BOOTSTRAP_MODE_EDIT && o->profile_count != 1) {
+        return ERROR(ERR_INVALID_ARG, "--edit edits exactly one named profile's script");
+    }
+    return o->mode == BOOTSTRAP_MODE_SHOW && o->profile_count != 1
+        ? ERROR(ERR_INVALID_ARG, "--show prints exactly one named profile's script")
+        : NULL;
+}
+
 static error_t bootstrap_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_bootstrap(ctx, (const cmd_bootstrap_options_t *) opts_v);
@@ -545,20 +560,20 @@ static const args_opt_t bootstrap_opts[] = {
         cmd_bootstrap_options_t,all_profiles,
         "Run every available bootstrap script"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "e edit",
-        cmd_bootstrap_options_t,edit,
-        "Edit the script (requires --profile)"
+        cmd_bootstrap_options_t,mode,              BOOTSTRAP_MODE_EDIT,
+        "Edit one named profile's script"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "show",
-        cmd_bootstrap_options_t,show,
-        "Print the script (requires --profile)"
+        cmd_bootstrap_options_t,mode,              BOOTSTRAP_MODE_SHOW,
+        "Print one named profile's script"
     ),
-    ARGS_FLAG(
+    ARGS_FLAG_SET(
         "l list",
-        cmd_bootstrap_options_t,list,
-        "List all bootstrap scripts"
+        cmd_bootstrap_options_t,mode,              BOOTSTRAP_MODE_LIST,
+        "List the selected profiles' scripts"
     ),
     ARGS_FLAG(
         "n dry-run",
@@ -585,7 +600,11 @@ static const args_opt_t bootstrap_opts[] = {
 const args_command_t spec_bootstrap = {
     .name        = "bootstrap",
     .summary     = "Execute profile bootstrap scripts",
-    .usage       = "%s bootstrap [options] [profile]...",
+    .usage       =
+        "%s bootstrap [options] [<name>...]\n"
+        "   or: %s bootstrap [options] --all\n"
+        "   or: %s bootstrap --edit <name>\n"
+        "   or: %s bootstrap --show <name>",
     .description =
         "Environment Variables:\n"
         "  DOTTA_REPO_DIR    Path to the dotta repository.\n"
@@ -601,7 +620,7 @@ const args_command_t spec_bootstrap = {
         "Editor Selection (--edit):\n"
         "  $DOTTA_EDITOR, then $VISUAL, then $EDITOR, then vi.\n",
     .examples    =
-        "  %s bootstrap                          # Auto-detected profiles\n"
+        "  %s bootstrap                          # The enabled profiles\n"
         "  %s bootstrap darwin                   # Single profile\n"
         "  %s bootstrap darwin global            # Multiple profiles\n"
         "  %s bootstrap darwin --edit            # Edit darwin/.bootstrap\n"
@@ -614,6 +633,7 @@ const args_command_t spec_bootstrap = {
         "  %s apply                          # Deploy files after bootstrap\n",
     .opts_size   = sizeof(cmd_bootstrap_options_t),
     .opts        = bootstrap_opts,
+    .post_parse  = bootstrap_post_parse,
     .complete    = bootstrap_complete,
     .payload     = &(const dotta_needs_t){
         .repo    = DOTTA_REPO_OPEN,

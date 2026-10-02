@@ -127,6 +127,11 @@ struct manifest {
     manifest_unkept_claim_t *unkept;             /* Arena; grouped by profile, in build order */
     size_t unkept_count;
     size_t unkept_capacity;
+
+    /* The enabled profiles the build found no branch for (manifest_missing) */
+    const char **missing;                        /* Arena; in the enabled set's order */
+    size_t missing_count;
+    size_t missing_capacity;
 };
 
 /**
@@ -333,6 +338,33 @@ static void manifest_note_unkept(
         .kept = kept,
         .filesystem_path = row->filesystem_path,
     };
+}
+
+/**
+ * Record one enabled profile the build found no branch for
+ *
+ * The health primitive the build spends a missing branch through, the profile
+ * contributing nothing. No dedup, and none needed — the enabled set names each
+ * profile once.
+ *
+ * The slice grows in the arena, as the other two do. The name must be arena-backed
+ * by the caller; the entry borrows it for the view's lifetime.
+ *
+ * @param manifest Target view (must not be NULL)
+ * @param profile Arena-backed profile name (must not be NULL)
+ * @param arena Arena for the array growth (must not be NULL)
+ */
+static void manifest_note_missing(
+    manifest_t *manifest,
+    const char *profile,
+    arena_t *arena
+) {
+    manifest->missing = arena_grow(
+        arena, manifest->missing, &manifest->missing_capacity,
+        manifest->missing_count + 1, sizeof(*manifest->missing)
+    );
+
+    manifest->missing[manifest->missing_count++] = profile;
 }
 
 /**
@@ -1241,10 +1273,10 @@ error_t manifest_build(
         const char *profile = profiles.entries[i].name;
 
         /* The profile's tree, scoped to the iteration, or none where its branch
-         * is gone — and "gone" is not "broken": gone is an observation — the
-         * profile contributes nothing, is not listed among the view's profiles,
-         * and the workspace reads its records as orphans — broken is an error
-         * that must propagate. */
+         * is gone — and "missing" is not "broken": missing is an observation —
+         * the profile contributes nothing, is listed among the missing
+         * (manifest_missing) and not among the view's profiles, and the workspace
+         * reads its records as orphans — broken is an error that must propagate. */
         git_tree *tree = NULL;
         err = gitops_branch_tree(repo, profile, &tree);
         if (err) {
@@ -1252,7 +1284,10 @@ error_t manifest_build(
                 err, "Failed to load tree for profile '%s'", profile
             );
         }
-        if (!tree) continue;
+        if (!tree) {
+            manifest_note_missing(manifest, arena_strdup(arena, profile), arena);
+            continue;
+        }
 
         /* The profile's claims: its own sheet, read by the step from the tree
          * just opened, and its blobs. One view, many sheets — each read under
@@ -1395,6 +1430,17 @@ manifest_unkept_t manifest_unkept(const manifest_t *manifest) {
     return (manifest_unkept_t){
         .entries = manifest->unkept,
         .count = manifest->unkept_count,
+    };
+}
+
+/**
+ * The enabled profiles the build found no branch for
+ */
+manifest_missing_t manifest_missing(const manifest_t *manifest) {
+    if (!manifest) return (manifest_missing_t){ 0 };
+    return (manifest_missing_t){
+        .entries = manifest->missing,
+        .count = manifest->missing_count,
     };
 }
 

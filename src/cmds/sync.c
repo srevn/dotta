@@ -1955,9 +1955,10 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * enabled_profiles, but where its flush takes the lock it reads them again,
      * so a profile change another process commits in between reaches the view
      * after alone and reads as the pull's — a residue, accepted; a missing branch
-     * contributes nothing to either and was warned about at scope_build time).
-     * A path p lost to q is p's reassignment and q's claim; a path that moved
-     * between two pulled profiles is one reassignment, never a transient release.
+     * contributes nothing to either, said by status's and apply's health off
+     * the view, core/manifest.h manifest_missing). A path p lost to q is p's
+     * reassignment and q's claim; a path that moved between two pulled profiles
+     * is one reassignment, never a transient release.
      *
      * Sync does not deploy. Apply's divergence analysis does that, which is what
      * the summary's hint points at.

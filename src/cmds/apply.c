@@ -2063,6 +2063,38 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
+    /* The third: an enabled profile the build found no branch for contributes
+     * nothing, so what it deployed is an orphan no branch backs, which cleanup
+     * releases — named here, where a release would otherwise read as having no
+     * cause. A row is the profile, so the repairs name it as generically as the
+     * two above. */
+    {
+        manifest_missing_t missing = manifest_missing(manifest);
+        if (missing.count > 0) {
+            output_section(out, OUTPUT_NORMAL, "Profiles with no branch");
+            for (size_t i = 0; i < missing.count && i < LIST_LIMIT; i++) {
+                output_print(
+                    out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s\n", missing.entries[i]
+                );
+            }
+            if (missing.count > LIST_LIMIT) {
+                output_print(
+                    out, OUTPUT_NORMAL, "  ... and %zu more\n",
+                    missing.count - LIST_LIMIT
+                );
+            }
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  Enabled, but Git holds no branch for them, so they contribute nothing."
+            );
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  Drop one with 'dotta profile disable <profile>', or bring its branch "
+                "back with 'dotta profile fetch <profile>'"
+            );
+        }
+    }
+
     /* PLAN: decide once what deploy will do, from (workspace, scope).
      *
      * Every later consumer — preview, adoption, preflight, the prompt, execution

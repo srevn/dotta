@@ -184,41 +184,19 @@ error_t profile_resolve_enabled(
      * (core/state.h state_profiles) */
     state_profiles_t enabled_profiles = state_profiles(state);
 
-    /* Both lists are the answer's arena's: the missing ones only for the warning
-     * below */
+    /* The answer, the arena's: each profile whose branch is here. One that is
+     * gone is dropped unsaid — the health commands say it, off the view
+     * (core/manifest.h manifest_missing). */
     string_array_t valid_profiles;
-    string_array_t missing_profiles;
     string_array_init(&valid_profiles, arena);
-    string_array_init(&missing_profiles, arena);
 
-    /* Validate: check which profiles still exist as local branches — one that
-     * does not is warned about below and filtered out */
     for (size_t i = 0; i < enabled_profiles.count; i++) {
         const char *profile = enabled_profiles.entries[i].name;
 
         bool exists = false;
         error_t err = gitops_branch_exists(repo, profile, &exists);
         if (err) return error_wrap(err, "Failed to validate state profiles");
-        string_array_push(exists ? &valid_profiles : &missing_profiles, profile);
-    }
-
-    /* Warn about missing profiles (diagnostic message)
-     *
-     * Note: We use fprintf(stderr) here because this is a low-level core module
-     * without access to an output_t. This is consistent with other core modules
-     * (deploy.c, workspace.c) that also write diagnostic warnings to stderr.
-     */
-    if (missing_profiles.count > 0) {
-        fprintf(
-            stderr, "Warning: State references non-existent profiles:\n"
-        );
-        for (size_t i = 0; i < missing_profiles.count; i++) {
-            fprintf(stderr, "  • %s\n", missing_profiles.entries[i]);
-        }
-        fprintf(
-            stderr, "\nHint: Run 'dotta profile validate' to fix state,\n"
-            "      or 'dotta profile enable <name>' to enable profiles\n\n"
-        );
+        if (exists) string_array_push(&valid_profiles, profile);
     }
 
     *out = valid_profiles;

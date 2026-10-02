@@ -454,12 +454,13 @@ int main(int argc, char **argv) {
     /* Line-buffer the report
      *
      * dotta writes one document to stdout and, from several layers, diagnostics
-     * to stderr: the terminal failure and the prompts from base/output, and the
-     * raw state-corruption notes that core/ emits where it has no output context.
-     * stderr is never fully buffered (POSIX), while stdout is block-buffered
-     * the moment it is not a terminal — so a redirected run reads back with every
-     * diagnostic hoisted above the report it annotates, and the heading of a
-     * block separated from its list.
+     * to stderr: the terminal failure and the prompts from base/output, a refused
+     * line's errors and usage from base/args, the passphrase prompt from
+     * sys/passphrase and the one mlock warning from base/secure. stderr is never
+     * fully buffered (POSIX), while stdout is block-buffered the moment it is
+     * not a terminal — so a redirected run reads back with every diagnostic hoisted
+     * above the report it annotates, and the heading of a block separated from
+     * its list.
      *
      * Flush granularity is what differs, so flush granularity is what is fixed:
      * one line, matching stderr's, makes the order the reader sees the order

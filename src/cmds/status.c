@@ -33,26 +33,35 @@
  * @param out Output context (must not be NULL)
  * @param state The enabled rows: the binding printed beside a bound profile's
  *              name, the thing never printed without the where
- * @param profiles Enabled profile names (must not be NULL)
+ * @param scope The profiles the block lists — the filter's under -p, else the
+ *              enabled set's (must not be NULL)
  * @param ws Workspace the view and the record come from: the per-profile
  *           last-deployed timestamp and the verbose per-profile counts are folded
  *           from its items (NULL when no workspace was loaded — it lends none
  *           then, and the header is names alone)
- * @param unbound The view's health slice: the claims the build could not place,
- *                annotated onto their profile's line (a count, the paths under
- *                -v), the repair a legend line under the block
- * @param unkept Its sibling: the names a profile holds for a path it also names
- *               otherwise, annotated and listed the same way. Both say a profile
- *               carries more than it projects, for two different reasons
+ * @param view The view whose health the block annotates (must not be NULL)
  */
 static void status_print_profiles(
     output_t *out,
     const state_t *state,
-    const string_array_t *profiles,
+    const scope_t *scope,
     const workspace_t *ws,
-    manifest_unbound_t unbound,
-    manifest_unkept_t unkept
+    const manifest_t *view
 ) {
+    const string_array_t *profiles = scope_profiles(scope);
+
+    /* The view's health, annotated onto the block. The claims the build could
+     * not place, onto their profile's line (a count, the paths under -v), the
+     * repair a legend line under the block; and its sibling, the names a profile
+     * holds for a path it also names otherwise, annotated and listed the same
+     * way — both say a profile carries more than it projects, for two different
+     * reasons. And the enabled profiles the build found no branch for, a line
+     * each beneath the rest: a profile the state enables is not left out of the
+     * block that lists the enabled. */
+    manifest_unbound_t unbound = manifest_unbound(view);
+    manifest_unkept_t unkept = manifest_unkept(view);
+    manifest_missing_t missing = manifest_missing(view);
+
     /* Show enabled profiles */
     output_section(out, OUTPUT_NORMAL, "Enabled profiles");
 
@@ -60,13 +69,13 @@ static void status_print_profiles(
      * kinds — each item's own kind says which, and its record when it deployed */
     workspace_items_t active = workspace_active(ws);
 
-    /* Whether either repair has a line to stand under. The question is about
-     * the profiles this run *displays*, not the slices: -p filters the scope's
-     * profiles while the view is always the whole enabled one, so a legend keyed
-     * off a slice's own count would explain an annotation no line above it
-     * carries. */
+    /* Whether each repair has a line to stand under. The question is about the
+     * profiles this run *displays*, not the slices: -p filters the scope's profiles
+     * while the view is always the whole enabled one, so a legend keyed off a
+     * slice's own count would explain an annotation no line above it carries. */
     bool unbound_shown = false;
     bool unused_shown = false;
+    bool missing_shown = false;
 
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->entries[i];
@@ -192,6 +201,24 @@ static void status_print_profiles(
         output_endline(out, OUTPUT_NORMAL);
     }
 
+    /* The enabled profiles the build found no branch for, beneath the ones the
+     * view read, each one this run displays: -p names only a profile whose branch
+     * is here (core/scope.h scope_build), so a filtered block lists none */
+    for (size_t i = 0; i < missing.count; i++) {
+        const char *profile = missing.entries[i];
+        if (!scope_accepts_profile(scope, profile)) continue;
+
+        output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
+        const char *target = state_target(state, profile);
+        if (target) {
+            char shown[PATH_MAX];
+            output_format_path(target, identity()->home, shown, sizeof(shown));
+            output_print(out, OUTPUT_NORMAL, " {dim}→ %s{reset}", shown);
+        }
+        output_print(out, OUTPUT_NORMAL, "  {yellow}(no branch){reset}\n");
+        missing_shown = true;
+    }
+
     /* The repairs, in the shape this screen spells a repair: a dimmed key and a
      * sentence under the block it belongs to, keys aligned — what the Issues
      * and Unverifiable lists do for their tags, with the yellow annotation above
@@ -204,9 +231,10 @@ static void status_print_profiles(
      * is read rather than pasted into a command it would break. `--dry-run` is
      * the whole of the unused-path safety: dropping a directory name takes every
      * claim beneath it, and the preview shows that rather than asserting it.
-     * Both are worth a line at all because nothing else offers them — neither
-     * claim has a row, so no completion source reaches one. */
-    if (unbound_shown || unused_shown) {
+     * The claims' two are worth a line at all because nothing else offers them
+     * — neither claim has a row, so no completion source reaches one — and the
+     * missing profile's because nothing else on this screen names it. */
+    if (unbound_shown || unused_shown || missing_shown) {
         output_gap(out, OUTPUT_NORMAL);
         if (unbound_shown) {
             output_hintline(
@@ -221,6 +249,13 @@ static void status_print_profiles(
                 out, OUTPUT_NORMAL,
                 "  unused paths  - 'dotta remove --dry-run <profile> <path>' shows "
                 "what dropping one takes"
+            );
+        }
+        if (missing_shown) {
+            output_hintline(
+                out, OUTPUT_NORMAL,
+                "  no branch     - 'dotta profile disable <profile>' drops it; "
+                "'dotta profile fetch <profile>' brings its branch back"
             );
         }
     }
@@ -1410,10 +1445,7 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     }
 
     /* The enabled profiles and the last deployment of each */
-    status_print_profiles(
-        out, state, scope_profiles(scope), ws, manifest_unbound(manifest),
-        manifest_unkept(manifest)
-    );
+    status_print_profiles(out, state, scope, ws, manifest);
 
     /* The whole view, on request — before the status line and the sections that
      * name only what diverged from it */

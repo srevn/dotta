@@ -53,7 +53,10 @@
  * directly serve it as readily as any other name — `dotta list -p P` lists it,
  * `dotta show -p P` prints its bytes — and none of them says it is unused, which
  * is what the health channel is for; `remove`, which reads the branch too, is
- * the one verb that takes it away.
+ * the one verb that takes it away. And one thing a profile can fail to be: here.
+ * An enabled profile Git holds no branch for is **missing** and contributes
+ * nothing: manifest_missing, the channel's third slice, the repair a disable,
+ * or a fetch that brings the branch back.
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_tree walks one Git tree
@@ -695,6 +698,40 @@ typedef struct {
  * @return Borrowed slice over the recorded names, valid for the arena's lifetime
  */
 manifest_unkept_t manifest_unkept(const manifest_t *manifest);
+
+/**
+ * Bound carrier for the view's third health slice, the manifest_rows_t idiom:
+ * the missing profiles' names, the build arena's.
+ */
+typedef struct {
+    const char *const *entries;
+    size_t count;
+} manifest_missing_t;
+
+/**
+ * The enabled profiles the build found no branch for, in the enabled set's order
+ *
+ * A profile the state enables and Git no longer holds contributes nothing: it
+ * is not among manifest_profiles, and every record it left is an orphan no branch
+ * backs, which the workspace reads as released (core/workspace.c
+ * workspace_orphan_authority). Missing is an observation, never an error
+ * (manifest_build): the health channel's fact about a profile, where
+ * manifest_unbound and manifest_unkept are its facts about claims. Only Git
+ * surgery, or a state write that failed after `remove` deleted the branch, leaves
+ * one. Empty on every build whose enabled profiles all have their branches, and
+ * on a tree view.
+ *
+ * The screen says **no branch**: the header's word is what the build found of
+ * the profile, the screen's is what it lacks — the branch a fetch brings back,
+ * or the profile a disable lets go of.
+ *
+ * Readers: the health channel's listing (cmds/status.c status_print_profiles)
+ * and apply's (cmds/apply.c cmd_apply).
+ *
+ * @param manifest Manifest (NULL returns an empty slice)
+ * @return Borrowed slice over the profiles' names, valid for the arena's lifetime
+ */
+manifest_missing_t manifest_missing(const manifest_t *manifest);
 
 /**
  * Look up a row by filesystem path

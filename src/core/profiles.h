@@ -110,9 +110,10 @@ void profile_order(string_array_t *names);
  *
  * Lightweight name-only resolution: reads the enabled rows the handle holds
  * (core/state.h state_profiles), keeps each whose branch is here, and returns
- * their names in the rows' order. Warns on stderr about profiles referenced in
- * state that no longer exist. None enabled, or none of them here, is an empty
- * answer and not an error: every reader decides what an empty set means to it.
+ * their names in the rows' order. One whose branch is gone is dropped unsaid:
+ * the health commands say it, off the view (core/manifest.h manifest_missing).
+ * None enabled, or none of them here, is an empty answer and not an error: every
+ * reader decides what an empty set means to it.
  *
  * Does NOT resolve Git references or load profile trees.
  *

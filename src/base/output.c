@@ -1167,21 +1167,21 @@ void output_format_path(
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- * User Confirmation Prompts
+ * Questions
  * ═══════════════════════════════════════════════════════════════════ */
 
 /**
  * The answer typed: "y" or "yes" in any case is yes, an empty line the default,
- * anything else no
+ * anything else no — and none at all where the input ended before a line
  *
  * The line is judged whole, its surrounding blanks aside: a word that only starts
  * with y — a line a pipe carried for something else — consents to nothing.
  */
-static bool output_read_answer(bool default_value) {
+static output_answer_t output_read_answer(bool default_value) {
     char response[16];
 
     if (fgets(response, sizeof(response), stdin) == NULL)
-        return default_value;
+        return OUTPUT_ANSWER_NONE;
 
     /* A line the buffer could not hold: the rest of it is drained, so it never
      * reaches the next question, and no word that long is yes. A shorter line
@@ -1190,7 +1190,7 @@ static bool output_read_answer(bool default_value) {
     if (len == sizeof(response) - 1 && response[len - 1] != '\n') {
         int c;
         while ((c = getchar()) != '\n' && c != EOF) { }
-        return false;
+        return OUTPUT_ANSWER_NO;
     }
 
     /* The line's word, its surrounding blanks and its newline aside */
@@ -1201,20 +1201,21 @@ static bool output_read_answer(bool default_value) {
     word[len] = '\0';
 
     if (len == 0)
-        return default_value;
+        return default_value ? OUTPUT_ANSWER_YES : OUTPUT_ANSWER_NO;
 
-    return strcasecmp(word, "y") == 0 || strcasecmp(word, "yes") == 0;
+    return strcasecmp(word, "y") == 0 || strcasecmp(word, "yes") == 0
+        ? OUTPUT_ANSWER_YES : OUTPUT_ANSWER_NO;
 }
 
 /**
- * Put the question and read the answer
+ * Put the question, read its answer, and close its line
  *
  * The question alone, with no boundary of its own: the block it closes is the
  * caller's, and only the caller knows how much of it has already printed — a
- * destructive prompt's warning and its question are one block, and asking twice
+ * destructive question's warning and the question are one block, and asking twice
  * inside it would put a blank between them.
  */
-static bool output_ask(
+static output_answer_t output_question(
     output_t *ctx, bool default_value, const char *fmt, va_list *args
 ) {
     /* The preview this asks about is the report above it, and the question must
@@ -1228,91 +1229,55 @@ static bool output_ask(
     output_put(&line);
     fflush(stderr);
 
-    return output_read_answer(default_value);
+    const output_answer_t answer = output_read_answer(default_value);
+
+    /* The echo closes the line only where a person typed at the terminal that
+     * shows it: a line a pipe carried, none at all, or a stderr led away from
+     * the terminal leaves the question's line open, and it is closed here */
+    if (answer == OUTPUT_ANSWER_NONE || !isatty(STDIN_FILENO) || !isatty(STDERR_FILENO)) {
+        fputc('\n', stderr);
+    }
+    return answer;
 }
 
-bool output_confirm(
+output_answer_t output_ask(
     output_t *ctx, bool default_value, const char *fmt, ...
 ) {
-    if (!ctx || !fmt) return false;
+    if (!ctx || !fmt) return OUTPUT_ANSWER_NONE;
 
-    /* A question is a block. Asked at QUIET because a prompt is not gated. */
+    /* A question is a block. Asked at QUIET because a question is not gated. */
     output_gap(ctx, OUTPUT_QUIET);
 
     va_list args;
     va_start(args, fmt);
-    const bool confirmed = output_ask(ctx, default_value, fmt, &args);
+    const output_answer_t answer = output_question(ctx, default_value, fmt, &args);
     va_end(args);
 
-    return confirmed;
+    return answer;
 }
 
-bool output_confirm_or_default(
-    output_t *ctx, bool default_value, bool non_interactive_default,
-    const char *fmt, ...
-) {
-    if (!ctx || !fmt) return false;
+output_answer_t output_ask_destructive(output_t *ctx, const char *fmt, ...) {
+    if (!ctx || !fmt) return OUTPUT_ANSWER_NONE;
 
-    /* Both arms are the same block, so the boundary is asked once above the
-     * branch */
-    output_gap(ctx, OUTPUT_QUIET);
-
-    va_list args;
-    va_start(args, fmt);
-    bool confirmed = non_interactive_default;
-    if (isatty(STDIN_FILENO)) {
-        confirmed = output_ask(ctx, default_value, fmt, &args);
-    } else {
-        /* Off a terminal the question cannot be asked: the default is its answer,
-         * and the line says which, the question its subject */
-        line_t line;
-        output_start(&line, ctx, stderr);
-        output_appendf(
-            &line, non_interactive_default
-            ? "{bold;yellow}Warning:{reset} Running non-interactively, auto-confirming: "
-            : "{bold;red}Error:{reset} Running non-interactively, refusing: "
-        );
-        output_walk(&line, fmt, &args);
-        output_bytes(&line, "\n", 1);
-        output_put(&line);
-    }
-    va_end(args);
-
-    return confirmed;
-}
-
-bool output_confirm_destructive(
-    output_t *ctx, bool confirm_destructive, bool force_flag, const char *fmt, ...
-) {
-    if (!ctx || !fmt) return false;
-    if (force_flag) return true;
-    if (!confirm_destructive) return true;
+    /* Only a person at a terminal answers a destructive question: off one nothing
+     * is asked, and the caller says what the run does instead */
+    if (!isatty(STDIN_FILENO)) return OUTPUT_ANSWER_NONE;
 
     /* The warning and the question are one block: one boundary, above both, paid
-     * by whichever of them lands first. */
+     * by the warning */
     output_gap(ctx, OUTPUT_QUIET);
+
+    line_t line;
+    output_start(&line, ctx, stderr);
+    output_appendf(&line, "{bold;yellow}Warning:{reset} This is a destructive operation!\n");
+    output_put(&line);
 
     va_list args;
     va_start(args, fmt);
-    bool confirmed = false;
-    line_t line;
-    output_start(&line, ctx, stderr);
-    if (isatty(STDIN_FILENO)) {
-        output_appendf(&line, "{bold;yellow}Warning:{reset} This is a destructive operation!\n");
-        output_put(&line);
-        confirmed = output_ask(ctx, false, fmt, &args);
-    } else {
-        output_appendf(
-            &line, "{bold;red}Error:{reset} Running non-interactively, refusing "
-            "destructive operation: "
-        );
-        output_walk(&line, fmt, &args);
-        output_bytes(&line, "\n", 1);
-        output_put(&line);
-    }
+    const output_answer_t answer = output_question(ctx, false, fmt, &args);
     va_end(args);
 
-    return confirmed;
+    return answer;
 }
 
 /* ═══════════════════════════════════════════════════════════════════

@@ -423,7 +423,7 @@ void output_endline(output_t *ctx, output_verbosity_t min_level);
  * itself against what actually printed rather than against what would have.
  *
  * Every block opens with its boundary and no block closes with one. output_section,
- * output_list_render and the three prompts ask theirs inside, so a call site
+ * output_list_render and the two questions ask theirs inside, so a call site
  * places one only above a block the layer does not recognise as one — a verdict
  * line, a warning, a hint, a row of its own.
  *
@@ -556,24 +556,40 @@ void output_format_path(
 );
 
 /**
- * Prompt user for confirmation
+ * What a question came to
  *
- * Displays a yes/no prompt and waits for user input. Handles input buffer clearing
- * to prevent pollution. Uses stderr for prompts (standard practice). The question
- * is a format, written as every line's is (output_print): its literal text the
- * author's, each argument a datum.
+ * NONE where nothing answered: stdin at its end before a line, or not a terminal
+ * where only a person at one may answer (output_ask_destructive). A question
+ * refuses nothing and says nothing of an answer it did not get: its caller decides
+ * what the run does without one, and says it.
+ */
+typedef enum {
+    OUTPUT_ANSWER_NONE,   /* Nothing answered */
+    OUTPUT_ANSWER_NO,     /* Declined, or the default no */
+    OUTPUT_ANSWER_YES     /* Confirmed, or the default yes */
+} output_answer_t;
+
+/**
+ * Ask a question, answered by the next line of stdin — a terminal's, or a pipe's
+ *
+ * The question is a format, written as every line's is (output_print): its literal
+ * text the author's, each argument a datum. The answer is the line judged whole:
+ * y or yes in any case is yes, an empty line the default, anything else no —
+ * and the end of input before a line is no answer (OUTPUT_ANSWER_NONE). A
+ * question's line no echo closed — an answer a pipe carried, none at all — is
+ * closed here, so whatever follows opens a line of its own.
  *
  * A question is a block, so it opens with its own boundary — paid on stderr,
  * where the blank stands above the question on a terminal and never reaches a
- * redirected report. The boundary is asked at OUTPUT_QUIET because a prompt has
- * no verbosity gate either.
+ * redirected report. The boundary is asked at OUTPUT_QUIET because a question
+ * has no verbosity gate either.
  *
- * @param ctx Output context (for color/format settings)
- * @param default_value Default if user just presses Enter (true=Y, false=N)
+ * @param ctx Output context (NULL: nothing asked, OUTPUT_ANSWER_NONE)
+ * @param default_value What an empty line answers (true: yes)
  * @param fmt The question's format (printf-style)
- * @return true if user confirms (y/Y), false otherwise
+ * @return The answer
  */
-bool output_confirm(
+output_answer_t output_ask(
     output_t *ctx,
     bool default_value,
     const char *fmt,
@@ -581,53 +597,23 @@ bool output_confirm(
 ) __attribute__((format(printf, 3, 4)));
 
 /**
- * Prompt for confirmation with TTY detection
+ * Ask a destructive question: only a person at a terminal answers one
  *
- * Like output_confirm() but handles non-interactive mode gracefully. When stdin
- * is not a TTY (e.g., piped input, CI/CD), uses the non_interactive_default value
- * and prints a warning or error.
- *
- * Both arms are the same block, so the boundary is asked once above the branch,
- * and the question is the format either arm writes.
- *
- * @param ctx Output context
- * @param default_value Default for Enter key in interactive mode
- * @param non_interactive_default Return value when not a TTY
- * @param fmt The question's format (printf-style)
- * @return true if confirmed or non_interactive_default if not a TTY
- */
-bool output_confirm_or_default(
-    output_t *ctx,
-    bool default_value,
-    bool non_interactive_default,
-    const char *fmt,
-    ...
-) __attribute__((format(printf, 4, 5)));
-
-/**
- * Prompt for destructive operation
- *
- * Specialized confirmation for destructive operations. Shows warning before
- * prompting. Always defaults to NO for safety.
+ * A pipe may carry a line meant for something else — a loop's input — and a closed
+ * stdin carries none, so off a terminal nothing is asked and nothing answered
+ * (OUTPUT_ANSWER_NONE). At one, a warning stands above the question, whose default
+ * is no. Whether to ask at all — a --force, confirm_destructive = false — is
+ * the caller's.
  *
  * The warning and the question are one block, so the boundary is asked once above
- * both and paid by whichever lands first — the warning on the interactive path,
- * the refusal on the other. Only the code here knows they are one block, which
- * is why the question it asks goes through no boundary of its own.
+ * both and paid by the warning; the question goes through no boundary of its own.
  *
- * @param ctx Output context
- * @param confirm_destructive Whether to require confirmation (false = skip prompt)
- * @param force_flag If true, skip confirmation and return true
+ * @param ctx Output context (NULL: nothing asked, OUTPUT_ANSWER_NONE)
  * @param fmt The question's format (printf-style)
- * @return true if should proceed, false if user declined
+ * @return The answer
  */
-bool output_confirm_destructive(
-    output_t *ctx,
-    bool confirm_destructive,
-    bool force_flag,
-    const char *fmt,
-    ...
-) __attribute__((format(printf, 4, 5)));
+output_answer_t output_ask_destructive(output_t *ctx, const char *fmt, ...)
+__attribute__((format(printf, 2, 3)));
 
 /**
  * List builder - opaque structure for building aligned lists

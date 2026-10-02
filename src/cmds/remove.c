@@ -719,9 +719,10 @@ static void remove_format_counts(
 }
 
 /**
- * Confirm the removal of the claims the arguments took
+ * Ask whether to remove the claims the arguments took — or answer yes where no
+ * question is owed: --force, a dry run, a removal below the threshold
  */
-static bool remove_confirm_paths(
+static output_answer_t remove_ask_paths(
     const claim_t *claims,
     size_t claim_count,
     const cmd_remove_options_t *opts,
@@ -729,10 +730,10 @@ static bool remove_confirm_paths(
     output_t *out
 ) {
     /* Skip confirmation if --force */
-    if (opts->force) return true;
+    if (opts->force) return OUTPUT_ANSWER_YES;
 
     /* Skip confirmation for dry run */
-    if (opts->dry_run) return true;
+    if (opts->dry_run) return OUTPUT_ANSWER_YES;
 
     /* Check config threshold */
     size_t threshold = 5; /* Default threshold */
@@ -741,7 +742,7 @@ static bool remove_confirm_paths(
     }
 
     /* No confirmation needed for small operations below threshold */
-    if (claim_count < threshold) return true;
+    if (claim_count < threshold) return OUTPUT_ANSWER_YES;
 
     size_t files = 0, dirs = 0;
     for (size_t i = 0; i < claim_count; i++) {
@@ -752,7 +753,7 @@ static bool remove_confirm_paths(
     remove_format_counts(counts, sizeof(counts), files, dirs);
 
     /* Prompt user */
-    return output_confirm(
+    return output_ask(
         out, false, opts->delete_files
         ? "Remove %s from profile '%s'?\n(Deployed files will be pruned on 'dotta apply')"
         : "Remove %s from profile '%s'?\n(Deployed files will be released from management)",
@@ -761,12 +762,13 @@ static bool remove_confirm_paths(
 }
 
 /**
- * Confirm a profile's deletion
+ * Ask whether to delete a profile — or answer yes where --force gave the answer
  *
  * `counts` is the branch-holdings phrase from the count family
- * (output_format_counts, or its "counts unavailable" stand-in).
+ * (output_format_counts, or its "counts unavailable" stand-in). The warning says
+ * what the deletion takes whether or not the configuration asks.
  */
-static bool remove_confirm_profile(
+static output_answer_t remove_ask_profile(
     const char *profile,
     const char *counts,
     const cmd_remove_options_t *opts,
@@ -774,7 +776,7 @@ static bool remove_confirm_profile(
     output_t *out
 ) {
     /* Skip confirmation if --force */
-    if (opts->force) return true;
+    if (opts->force) return OUTPUT_ANSWER_YES;
 
     output_gap(out, OUTPUT_NORMAL);
     output_warning(
@@ -792,9 +794,8 @@ static bool remove_confirm_profile(
             "         Deployed paths will be released from management."
         );
     }
-    return output_confirm_destructive(
-        out, config->confirm_destructive, opts->force, "Continue?"
-    );
+    if (!config->confirm_destructive) return OUTPUT_ANSWER_YES;
+    return output_ask_destructive(out, "Continue?");
 }
 
 /**
@@ -894,27 +895,48 @@ static error_t remove_paths(
         goto cleanup;  /* err is NULL, will return success */
     }
 
-    /* Confirm operation */
-    if (!remove_confirm_paths(claims, claim_count, opts, config, out)) {
-        output_print(out, OUTPUT_NORMAL, "Cancelled\n");
-        goto cleanup;  /* err is NULL, will return success */
+    /* Confirm operation. Declined is the user's word, and no failure; unanswered
+     * — the input ended before a line — nobody declined, and the run did not do
+     * what it was asked: its refusal, naming the flag that answers in advance. */
+    switch (remove_ask_paths(claims, claim_count, opts, config, out)) {
+        case OUTPUT_ANSWER_YES:
+            break;
+        case OUTPUT_ANSWER_NO:
+            output_print(out, OUTPUT_NORMAL, "Cancelled\n");
+            goto cleanup;  /* err is NULL, will return success */
+        case OUTPUT_ANSWER_NONE:
+            err = ERROR(
+                ERR_VALIDATION, "Cannot remove from profile '%s' without a confirmation, "
+                "and none was read; --force removes without asking", opts->profile
+            );
+            goto cleanup;
     }
 
     /* Selection: the accepted claims, before anything fires. In interactive mode
      * each claim is confirmed here, so the hooks and the plan below see exactly
      * what will happen — a declined claim is out before the pre-hook names the
-     * set. */
+     * set, and a claim no answer came for refuses the run: -i asked of each,
+     * and a selection with one unanswered is no selection. */
     if (opts->interactive) {
         size_t kept = 0;
         for (size_t i = 0; i < claim_count; i++) {
-            if (!output_confirm(
+            switch (output_ask(
                 out, false, "Remove %s%s?",
                 claims[i].storage_path, path_kind_suffix(claims[i].kind)
                 )) {
-                output_info(out, OUTPUT_VERBOSE, "Skipped: %s", claims[i].storage_path);
-                continue;
+                case OUTPUT_ANSWER_YES:
+                    claims[kept++] = claims[i];
+                    break;
+                case OUTPUT_ANSWER_NO:
+                    output_info(out, OUTPUT_VERBOSE, "Skipped: %s", claims[i].storage_path);
+                    break;
+                case OUTPUT_ANSWER_NONE:
+                    err = ERROR(
+                        ERR_VALIDATION, "Cannot choose what to remove: -i asks of each "
+                        "path, and no answer was read for '%s'", claims[i].storage_path
+                    );
+                    goto cleanup;
             }
-            claims[kept++] = claims[i];
         }
         claim_count = kept;
     }
@@ -1392,13 +1414,23 @@ static error_t remove_profile(
         }
     }
 
-    /* Confirm deletion */
-    if (!remove_confirm_profile(
-        opts->profile, counts, opts, config, out
-        )) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_print(out, OUTPUT_NORMAL, "Cancelled\n");
-        goto cleanup;  /* err is NULL, will return success */
+    /* Confirm deletion. Declined is the user's word, and no failure; unanswered
+     * — off a terminal, where a destructive question is never asked — nobody
+     * declined: the run's refusal, naming the flag that answers in advance. */
+    switch (remove_ask_profile(opts->profile, counts, opts, config, out)) {
+        case OUTPUT_ANSWER_YES:
+            break;
+        case OUTPUT_ANSWER_NO:
+            output_gap(out, OUTPUT_NORMAL);
+            output_print(out, OUTPUT_NORMAL, "Cancelled\n");
+            goto cleanup;  /* err is NULL, will return success */
+        case OUTPUT_ANSWER_NONE:
+            err = ERROR(
+                ERR_VALIDATION, "Cannot delete profile '%s' without a confirmation, "
+                "which only a terminal gives; --force deletes it without asking",
+                opts->profile
+            );
+            goto cleanup;
     }
 
     /* The hook universe: the tree's blobs, then the branch metadata's directory

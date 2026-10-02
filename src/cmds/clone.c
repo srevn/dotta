@@ -572,10 +572,24 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 run_bootstrap = true;
             } else if (opts->verbosity != DOTTA_VERBOSITY_QUIET) {
                 /* Prompt user. A clone told -q asks nothing and runs nothing:
-                 * read off the flag, never the run's level, since a prompt is
-                 * not output a level gates (base/output.h output_confirm) and a
-                 * configured quiet never declined it. */
-                run_bootstrap = output_confirm(out, false, "Execute bootstrap scripts?");
+                 * read off the flag, never the run's level, since a question is
+                 * not output a level gates (base/output.h output_ask) and a
+                 * configured quiet never declined it. The scripts are an extra
+                 * the clone stands without, so no answer leaves them unrun as a
+                 * decline does, and says so. */
+                switch (output_ask(out, false, "Execute bootstrap scripts?")) {
+                    case OUTPUT_ANSWER_YES:
+                        run_bootstrap = true;
+                        break;
+                    case OUTPUT_ANSWER_NO:
+                        break;
+                    case OUTPUT_ANSWER_NONE:
+                        output_info(
+                            out, OUTPUT_NORMAL, "Bootstrap scripts not run: no answer "
+                            "was read; 'dotta bootstrap' runs them"
+                        );
+                        break;
+                }
             }
         }
     }

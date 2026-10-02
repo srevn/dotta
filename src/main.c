@@ -454,7 +454,7 @@ int main(int argc, char **argv) {
     /* Line-buffer the report
      *
      * dotta writes one document to stdout and, from several layers, diagnostics
-     * to stderr: the terminal failure and the prompts from base/output, a refused
+     * to stderr: the terminal failure and the questions from base/output, a refused
      * line's errors and usage from base/args, the passphrase prompt from
      * sys/passphrase and the one mlock warning from base/secure. stderr is never
      * fully buffered (POSIX), while stdout is block-buffered the moment it is

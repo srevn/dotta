@@ -117,11 +117,14 @@ static error_t select_profile(
     string_array_init(&holders, ctx->arena);
     for (size_t i = 0; i < claims.count; i++) {
         string_array_pushf(
-            &holders, "%s (%s)", claims.entries[i].profile, claims.entries[i].storage_path
+            &holders, "%s (%s)",
+            claims.entries[i].profile,
+            claims.entries[i].storage_path
         );
     }
     return ERROR(
-        ERR_INVALID_ARG, "'%s' is held by %zu profiles: %s; -p names one", subject,
+        ERR_INVALID_ARG,
+        "'%s' is held by %zu profiles: %s; -p names one", subject,
         claims.count, string_array_join(ctx->arena, &holders, ", ")
     );
 }
@@ -1153,12 +1156,25 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
-    /* Step 19: Prompt for confirmation (unless --force or config disables) */
-    if (!output_confirm_destructive(
-        out, config ? config->confirm_destructive : true, opts->force, "Revert file?"
-        )) {
-        output_info(out, OUTPUT_NORMAL, "Aborted.");
-        goto cleanup;  /* err is NULL here: an abort is not a failure */
+    /* Step 19: the confirmation, unless --force or the configuration gives it.
+     * Declined is the user's word, and no failure; unanswered — off a terminal,
+     * where a destructive question is never asked — nobody declined, and the
+     * run did not do what it was asked: its refusal, naming the flag that answers
+     * in advance. */
+    if (!opts->force && config->confirm_destructive) {
+        switch (output_ask_destructive(out, "Revert file?")) {
+            case OUTPUT_ANSWER_YES:
+                break;
+            case OUTPUT_ANSWER_NO:
+                output_info(out, OUTPUT_NORMAL, "Aborted.");
+                goto cleanup;  /* err is NULL here: an abort is not a failure */
+            case OUTPUT_ANSWER_NONE:
+                err = ERROR(
+                    ERR_VALIDATION, "Cannot revert '%s' without a confirmation, which "
+                    "only a terminal gives; --force reverts without asking", restored_name
+                );
+                goto cleanup;
+        }
     }
 
     output_gap(out, OUTPUT_VERBOSE);

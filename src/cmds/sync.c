@@ -600,16 +600,31 @@ static void handle_diverged_ours(
         return;
     }
 
-    /* Get user confirmation for destructive operation */
+    /* The user's confirmation for a destructive operation, where the configuration
+     * asks for one. Declined leaves the divergence standing, said once; unanswered
+     * — off a terminal, where a destructive question is never asked — is this
+     * profile's failure, its row naming the key that answers in advance, and
+     * nobody declined. */
     if (confirm_destructive) {
-        if (!output_confirm_or_default(
-            out, false, false,
-            "Warning: This will force push local '%s' and overwrite remote.\n"
-            "Remote commits will be permanently lost. Continue?", result->profile
+        switch (output_ask_destructive(
+            out, "Force push '%s' over the remote's commits?", result->profile
             )) {
-            output_info(out, OUTPUT_NORMAL, "    Operation cancelled by user");
-            result->outcome = SYNC_OUTCOME_DIVERGED;
-            return;
+            case OUTPUT_ANSWER_YES:
+                break;
+            case OUTPUT_ANSWER_NO:
+                output_info(out, OUTPUT_NORMAL, "    Operation cancelled by user");
+                result->outcome = SYNC_OUTCOME_DIVERGED;
+                return;
+            case OUTPUT_ANSWER_NONE: {
+                error_t err = ERROR(
+                    ERR_VALIDATION, "Cannot force push '%s' without a confirmation, which "
+                    "only a terminal gives; confirm_destructive = false pushes without "
+                    "asking", result->profile
+                );
+                output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
+                mark_result_failed(result, err);
+                return;
+            }
         }
     }
 
@@ -648,18 +663,27 @@ static void handle_diverged_theirs(
         config_strategies[SYNC_STRATEGY_THEIRS].name
     );
 
-    /* Get user confirmation for destructive operation */
+    /* The user's confirmation, as the force push asks it (handle_diverged_ours) */
     if (confirm_destructive) {
-        if (!output_confirm_or_default(
-            out, false, false,
-            "Warning: This will reset '%s' to remote and discard local commits.\n"
-            "Local changes will be lost. Continue?", result->profile
+        switch (output_ask_destructive(
+            out, "Reset '%s' to the remote, discarding its local commits?", result->profile
             )) {
-            output_info(
-                out, OUTPUT_NORMAL, "    Operation cancelled by user"
-            );
-            result->outcome = SYNC_OUTCOME_DIVERGED;
-            return;
+            case OUTPUT_ANSWER_YES:
+                break;
+            case OUTPUT_ANSWER_NO:
+                output_info(out, OUTPUT_NORMAL, "    Operation cancelled by user");
+                result->outcome = SYNC_OUTCOME_DIVERGED;
+                return;
+            case OUTPUT_ANSWER_NONE: {
+                error_t err = ERROR(
+                    ERR_VALIDATION, "Cannot reset '%s' to the remote without a "
+                    "confirmation, which only a terminal gives; confirm_destructive = false "
+                    "resets without asking", result->profile
+                );
+                output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
+                mark_result_failed(result, err);
+                return;
+            }
         }
     }
 
@@ -1791,13 +1815,18 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
             output_info(out, OUTPUT_NORMAL, "Syncing before 'update' may lead to conflicts.");
 
-            /* Confirmation with safe defaults:
-             * - Interactive: defaults to NO (user must explicitly type 'y')
-             * - Non-interactive (CI/CD): refuses automatically
-             */
-            if (!output_confirm_or_default(out, false, false, "Continue anyway?")) {
+            /* The user's consent, defaulting to no: a terminal's answer or a
+             * pipe's — the question discards nothing, so any stdin answers it.
+             * Declined or unanswered, the run stops before the Git phase and
+             * says what to do first: declined is the user's word, a cancel and
+             * no failure; no answer, nobody declined, and the run is refused as
+             * strict mode refuses it, naming the flag that syncs anyway. */
+            const output_answer_t answer = output_ask(out, false, "Continue anyway?");
+            if (answer != OUTPUT_ANSWER_YES) {
                 output_gap(out, OUTPUT_NORMAL);
-                output_info(out, OUTPUT_NORMAL, "Sync cancelled");
+                if (answer == OUTPUT_ANSWER_NO) {
+                    output_info(out, OUTPUT_NORMAL, "Sync cancelled");
+                }
                 if (conflict_count > 0) {
                     output_hint(
                         out, OUTPUT_NORMAL,
@@ -1811,8 +1840,14 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                         "Run 'dotta update' first to commit local changes"
                     );
                 }
-                err = NULL;  /* User cancelled - clean exit, not an error */
-                goto cleanup;
+                if (answer == OUTPUT_ANSWER_NONE) {
+                    err = ERROR(
+                        ERR_VALIDATION, "Cannot sync with %zu uncommitted item%s without a "
+                        "confirmation, and none was read; --force syncs anyway",
+                        blocking_count, blocking_count == 1 ? "" : "s"
+                    );
+                }
+                goto cleanup;  /* err is NULL for a decline: a cancel, not an error */
             }
 
             /* User confirmed - proceed with sync */

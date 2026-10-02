@@ -2772,10 +2772,23 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             snprintf(prompt + off, sizeof(prompt) - off, "?");
             prompt[0] = (char) toupper((unsigned char) prompt[0]);
 
-            if (!output_confirm(out, false, "%s", prompt)) {
-                output_gap(out, OUTPUT_NORMAL);
-                output_info(out, OUTPUT_NORMAL, "Cancelled");
-                return NULL;  /* Not an error - user cancelled */
+            /* Declined is the user's word, and no failure; unanswered — the input
+             * ended before a line, a cron job's closed stdin — nobody declined,
+             * and the run did not do what it was asked: its refusal, naming the
+             * key that answers in advance (--force would too, and overwrites
+             * besides) */
+            switch (output_ask(out, false, "%s", prompt)) {
+                case OUTPUT_ANSWER_YES:
+                    break;
+                case OUTPUT_ANSWER_NO:
+                    output_gap(out, OUTPUT_NORMAL);
+                    output_info(out, OUTPUT_NORMAL, "Cancelled");
+                    return NULL;  /* Not an error - user cancelled */
+                case OUTPUT_ANSWER_NONE:
+                    return ERROR(
+                        ERR_VALIDATION, "Cannot apply without a confirmation, and none was "
+                        "read; confirm_destructive = false applies without asking"
+                    );
             }
         }
     }

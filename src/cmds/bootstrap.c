@@ -380,12 +380,21 @@ static error_t bootstrap_run(
     }
     output_gap(out, OUTPUT_NORMAL);
 
-    /* Prompt for confirmation unless --yes or --dry-run */
+    /* Prompt for confirmation unless --yes or --dry-run. Declined is the user's
+     * word, and no failure; unanswered, nobody declined, and the run did not do
+     * what it was asked: its refusal, naming the flag that answers in advance. */
     if (!opts->yes && !opts->dry_run) {
-        bool confirmed = output_confirm(out, false, "Execute bootstrap scripts?");
-        if (!confirmed) {
-            output_info(out, OUTPUT_NORMAL, "Bootstrap cancelled.");
-            return NULL;
+        switch (output_ask(out, false, "Execute bootstrap scripts?")) {
+            case OUTPUT_ANSWER_YES:
+                break;
+            case OUTPUT_ANSWER_NO:
+                output_info(out, OUTPUT_NORMAL, "Bootstrap cancelled.");
+                return NULL;
+            case OUTPUT_ANSWER_NONE:
+                return ERROR(
+                    ERR_VALIDATION, "Cannot run bootstrap scripts without a confirmation, "
+                    "and none was read; --yes runs them without asking"
+                );
         }
     }
 

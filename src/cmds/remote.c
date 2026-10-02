@@ -4,7 +4,6 @@
 
 #include "cmds/remote.h"
 
-#include <ctype.h>
 #include <git2.h>
 #include <stdio.h>
 #include <string.h>
@@ -13,75 +12,6 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "cmds/completion.h"
-
-/**
- * Validate remote name
- *
- * Remote names must be alphanumeric with hyphens and underscores only.
- */
-static bool validate_remote_name(const char *name) {
-    if (!name || name[0] == '\0') return false;
-
-    for (const char *p = name; *p; p++) {
-        if (!isalnum(*p) && *p != '-' && *p != '_') {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-/**
- * Validate remote URL structure
- *
- * Accepts:
- * - URL-style: https://, http://, ssh://, git://, file:// schemes
- * - SSH SCP-style: user@host:path (e.g., git@github.com:user/repo.git)
- * - Local paths: absolute (/path) or relative (./path, ../path)
- */
-static bool validate_remote_url(const char *url) {
-    if (!url || !*url) return false;
-
-    /* Reject whitespace */
-    for (const char *p = url; *p; p++) {
-        if (isspace((unsigned char) *p)) return false;
-    }
-
-    /* URL-style: scheme://... */
-    const char *scheme_end = strstr(url, "://");
-    if (scheme_end) {
-        size_t scheme_len = (size_t) (scheme_end - url);
-        if ((scheme_len == 5 && strncmp(url, "https", 5) == 0) ||
-            (scheme_len == 4 && strncmp(url, "http", 4) == 0) ||
-            (scheme_len == 3 && strncmp(url, "ssh", 3) == 0) ||
-            (scheme_len == 3 && strncmp(url, "git", 3) == 0) ||
-            (scheme_len == 4 && strncmp(url, "file", 4) == 0)) {
-            /* Must have something after scheme:// */
-            return *(scheme_end + 3) != '\0';
-        }
-        return false;
-    }
-
-    /* SSH SCP-style: user@host:path */
-    const char *at = strchr(url, '@');
-    if (at && at > url) {
-        const char *colon = strchr(at + 1, ':');
-        if (colon && colon > at + 1 && *(colon + 1) != '\0') {
-            return true;
-        }
-    }
-
-    /* Local path: absolute or explicitly relative */
-    if (url[0] == '/') {
-        return true;
-    }
-    if (url[0] == '.' && (url[1] == '/' ||
-        (url[1] == '.' && url[2] == '/'))) {
-        return true;
-    }
-
-    return false;
-}
 
 /**
  * List remotes
@@ -149,6 +79,13 @@ static error_t remote_list(
 
 /**
  * Add remote
+ *
+ * Whether the name can be a remote's is Git's rule, applied by libgit2 where
+ * the name first reaches it — every lookup, create, rename and set-url checks
+ * it (lib/libgit2/src/libgit2/remote.c ensure_remote_name_is_valid) — and a URL
+ * is any string but the empty one, what it reaches being the transport's to say
+ * at the first fetch. dotta spells neither rule, as it spells no branch rule
+ * (sys/gitops.h gitops_branch_refname), and clone takes the same URLs.
  */
 static error_t remote_add(
     git_repository *repo,
@@ -159,24 +96,6 @@ static error_t remote_add(
     CHECK_NULL(repo);
     CHECK_NULL(name);
     CHECK_NULL(url);
-
-    /* Validate remote name */
-    if (!validate_remote_name(name)) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid remote name '%s'\n"
-            "Only letters, numbers, hyphens, and underscores allowed",
-            name
-        );
-    }
-
-    /* Validate URL */
-    if (!validate_remote_url(url)) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid remote URL '%s'\n"
-            "Expected: https://..., git@host:path, ssh://..., or /local/path",
-            url
-        );
-    }
 
     /* Check if remote already exists */
     git_remote *existing = NULL;
@@ -244,7 +163,7 @@ static error_t remote_remove(
 }
 
 /**
- * Set remote URL
+ * Set remote URL — the name and the URL Git's to judge, as remote_add's are
  */
 static error_t remote_set_url(
     git_repository *repo,
@@ -255,15 +174,6 @@ static error_t remote_set_url(
     CHECK_NULL(repo);
     CHECK_NULL(name);
     CHECK_NULL(new_url);
-
-    /* Validate URL */
-    if (!validate_remote_url(new_url)) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid remote URL '%s'\n"
-            "Expected: https://..., git@host:path, ssh://..., or /local/path",
-            new_url
-        );
-    }
 
     /* Check if remote exists */
     git_remote *remote = NULL;
@@ -289,7 +199,7 @@ static error_t remote_set_url(
 }
 
 /**
- * Rename remote
+ * Rename remote — both names Git's to judge, as remote_add's is
  */
 static error_t remote_rename(
     git_repository *repo,
@@ -300,15 +210,6 @@ static error_t remote_rename(
     CHECK_NULL(repo);
     CHECK_NULL(old_name);
     CHECK_NULL(new_name);
-
-    /* Validate new name */
-    if (!validate_remote_name(new_name)) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid remote name '%s'\n"
-            "Only letters, numbers, hyphens, and underscores allowed",
-            new_name
-        );
-    }
 
     /* Check if old remote exists */
     git_remote *remote = NULL;

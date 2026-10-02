@@ -331,11 +331,11 @@ source_filter_t *ignore_source(ignore_rules_t *rules);
  * the source layer nothing, so no failure of its reaches it.
  *
  * A failure is never read as no exclusion — what could not be read may be what
- * git excludes — and each reader says it in its own voice: cmds/add.c refuses
+ * git excludes — and each reader decides what it does about it: cmds/add.c refuses
  * the path, named or walked, collection preceding capture so the refusal costs
  * nothing; core/workspace.c workspace_scan withholds what it could not judge, a
- * directory not entered, and says each cause once; cmds/ignore.c ignore_test
- * says the asker could not tell, and why.
+ * directory not entered, and says nothing, its look a best effort; cmds/ignore.c
+ * ignore_test says the asker could not tell, and why.
  *
  * Readers: cmds/add.c add_verdict (a claim with the -e layer alone, anything
  * else with every layer), core/workspace.c workspace_scan, cmds/ignore.c

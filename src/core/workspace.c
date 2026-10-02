@@ -49,7 +49,6 @@
 #include <time.h>
 
 #include "base/arena.h"
-#include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/heap.h"
@@ -2288,9 +2287,7 @@ static scan_root_t *workspace_find_root(
  * depth 0 of its own. Nothing here is written by a frame; the struct is one value
  * the recursion passes down, the roots are read through it and never written,
  * and the strings a frame makes live in the walk's scratch, handed down beside
- * it (workspace_scan). One list is written through it: the source layer's failures
- * the scan has said, one array the driver makes for every root's walk, so each
- * cause is said once whichever walk meets it.
+ * it (workspace_scan).
  */
 typedef struct {
     workspace_t *ws;                   /* The view, the record, the arena offers live in */
@@ -2299,7 +2296,6 @@ typedef struct {
     const char *profile;               /* The owner of the root this walk began at */
     const gitignore_ruleset_t *rules;  /* That profile's layered ruleset */
     source_filter_t *source;           /* The source layer, the builder's; NULL: turned off */
-    ptr_array_t *failures;             /* The source layer's failures said: one line a cause */
 } scan_t;
 
 /**
@@ -2367,11 +2363,12 @@ typedef struct {
  * child by the view's own word, and the directory is the winner's to enumerate,
  * under the winner's name, from a depth 0 of its own.
  *
- * Cannot fail: what the filesystem refuses is said where it happens and the
- * siblings go on, and absence is silent. What Git's ignore rules could not judge
- * is withheld — a file not offered, a directory not entered — and the siblings
- * go on, its cause said once for the whole scan (scan_t). The lines go to stderr,
- * as the driver's do — core has no output handle.
+ * Cannot fail, and says nothing: what it could not read — a directory past the
+ * bound or one that will not list, an entry that will not stat — is skipped where
+ * it happens, as absence is, and what Git's ignore rules could not judge is
+ * withheld — a file not offered, a directory not entered — and either way the
+ * siblings go on. The look lists what it can read; what it could not is neither
+ * listed nor said.
  *
  * @param scan      What the walk runs under (must not be NULL)
  * @param scratch   The walk's: every frame's listing and every entry's strings
@@ -2390,42 +2387,22 @@ static void workspace_scan(
 
     /* The bound is the walk's own: `depth` counts frames beneath the tracked
      * directory the driver started at, so a tracked directory 200 deep on disk
-     * is still scanned from its own 0 (sys/filesystem.h FS_WALK_MAX_DEPTH). Said,
-     * not an error — the siblings of a deep subtree are still this profile's,
-     * where add refuses the argument whole. */
-    if (depth >= FS_WALK_MAX_DEPTH) {
-        fprintf(
-            stderr,
-            "warning: '%s' is %d directories inside the tracked directory it "
-            "stands in; new files beneath it are not listed\n",
-            directory, FS_WALK_MAX_DEPTH
-        );
-        return;
-    }
+     * is still scanned from its own 0 (sys/filesystem.h FS_WALK_MAX_DEPTH). Not
+     * an error — the siblings of a deep subtree are still this profile's, where
+     * add refuses the argument whole — and nothing beneath it is listed. */
+    if (depth >= FS_WALK_MAX_DEPTH) return;
 
     /* The frame's listing, in the walk's scratch (sys/filesystem.h fs_listing_t):
      * the whole of it, and the stream closed with it — one open at a time down
      * the recursion rather than one per frame. The frames hold entry names where
      * they would hold directory streams — a deep walk holds no descriptor per
-     * level, and pays for the names instead. */
+     * level, and pays for the names instead. A directory that left between the
+     * look that found it and this listing, and one that will not open or read,
+     * list nothing alike: the listing's error is dropped, one per directory the
+     * walk could not list. */
     fs_listing_t listing;
     error_t err = fs_listing_init(&listing, scratch, directory);
-    if (err) {
-        switch (error_code(err)) {
-            case ERR_NOT_FOUND:  /* it left between the look that found it and this listing */
-                break;
-
-            default:             /* it would not open, or the read failed */
-                fprintf(
-                    stderr, "warning: %s; new files beneath it are not listed\n",
-                    error_message(err)
-                );
-                break;
-        }
-        /* The listing's error is dropped, one per directory the walk could not
-         * list */
-        return;
-    }
+    if (err) return;
 
     /* Each child is a key joined onto a key (infra/mount.h), and its strings —
      * the path, the namer's copy and its answer — go at the next entry, the frames
@@ -2451,28 +2428,19 @@ static void workspace_scan(
 
         /* One lstat names what stands there — its kind, and for a directory its
          * identity: a symlink is never a directory here. Absence is a skip —
-         * the listing and this look are two moments. A look that failed is said,
-         * its errno read in the line itself (sys/filesystem.h: it is lstat's
-         * until something else runs): nothing downstream can name a path it could
-         * not see, and a claim that settles the child was skipped above, so what
-         * reaches that line is an unclaimed child or a rung the walk only passes
-         * through. What no branch can hold — a device, a socket, a FIFO — is
-         * not a new file; offered, the capture refuses it by its noun and takes
-         * the whole profile's update with it (cmds/add.c reads it the same way). */
+         * the listing and this look are two moments — and so is a look that failed:
+         * nothing downstream can name a path it could not see, and a claim that
+         * settles the child was skipped above, so what a failed look skips is
+         * an unclaimed child or a rung the walk only passes through. What no
+         * branch can hold — a device, a socket, a FIFO — is not a new file;
+         * offered, the capture refuses it by its noun and takes the whole profile's
+         * update with it (cmds/add.c reads it the same way). */
         struct stat st;
         path_kind_t kind = PATH_KIND_FILE;
         fs_occupant_t occupant = fs_lstat_occupant(child, &st);
         switch (occupant) {
             case FS_OCCUPANT_NONE:
-                continue;
-
             case FS_OCCUPANT_UNKNOWN:
-                fprintf(
-                    stderr, "warning: Failed to stat '%s': %s; it is not listed\n",
-                    child, strerror(errno)
-                );
-                continue;
-
             case FS_OCCUPANT_OTHER:
                 continue;
 
@@ -2540,22 +2508,12 @@ static void workspace_scan(
          * is the answer the directory would get under any other name. */
         ignore_verdict_t verdict;
         error_t failure = ignore_verdict(scan->rules, scan->source, name, child, kind, &verdict);
-        if (failure) {
-            /* What Git's rules could not judge may be what git excludes, so it
-             * is withheld — a directory not entered — and the siblings go on.
-             * One failure answers every entry that reaches its cause
-             * (sys/source.h), so the error is the cause, and it is said the first
-             * time the scan meets it: causes are few, and the list of those said
-             * is asked whole. */
-            if (!ptr_array_contains(scan->failures, failure)) {
-                fprintf(
-                    stderr, "warning: %s; new files Git's ignore rules could not judge "
-                    "are not listed\n", error_message(failure)
-                );
-                ptr_array_push(scan->failures, failure);
-            }
-            continue;
-        }
+
+        /* What Git's rules could not judge may be what git excludes, so it is
+         * withheld — a directory not entered — and the siblings go on; the failure
+         * is dropped, the source layer's answer to every entry its cause reaches
+         * (sys/source.h). */
+        if (failure) continue;
         if (verdict.origin != IGNORE_ORIGIN_NONE) continue;
 
         /* Settled: a directory is descended, and anything else offered. */
@@ -2577,10 +2535,10 @@ static void workspace_scan(
  * give it (core/manifest.h manifest_name), minus what that profile's ignore layers
  * and the source tree exclude — and nothing at all beneath a path the view holds
  * a blob at, a tracked root of its own included (workspace_blob_above). A
- * best-effort look, said once per directory it could not list, once per path it
- * could not look at, and once per cause Git's ignore rules could not be read
- * for, whatever they could not judge withheld: not a snapshot, and not an admission
- * — what the commit can hold at that name is update's question at its capture
+ * best-effort look, which lists what it can read and says nothing of the rest —
+ * a directory it could not list, a path it could not look at, what Git's ignore
+ * rules could not judge, withheld: not a snapshot, and not an admission — what
+ * the commit can hold at that name is update's question at its capture
  * (cmds/update.c).
  *
  * The driver enumerates the view's tracked directories, one scan each, and the
@@ -2657,11 +2615,6 @@ static error_t workspace_analyze_untracked(
     error_t err = ignore_rules_create(ws->repo, config, NULL, ws->arena, &ignore_rules);
     if (err) return err;
 
-    /* The source layer's failures said, one list for every root's walk: a cause
-     * that fails the entries of two tracked directories is said once. */
-    ptr_array_t failures;
-    ptr_array_init(&failures, ws->arena);
-
     for (size_t r = 0; r < root_count; r++) {
         const scan_root_t *root = &roots[r];
 
@@ -2700,7 +2653,6 @@ static error_t workspace_analyze_untracked(
             .profile    = root->profile,
             .rules      = rules,
             .source     = ignore_source(ignore_rules),
-            .failures   = &failures,
         };
 
         /* The walk's one scratch, freed whatever the walk met: every frame's

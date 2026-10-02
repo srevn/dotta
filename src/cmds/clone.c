@@ -420,7 +420,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             fetched_profiles.count, opts->profile_count, opts->profile_count == 1 ? "" : "s"
         );
 
-    } else if (opts->fetch_all) {
+    } else if (opts->all_profiles) {
         /* Hub mode: every remote profile made local. A listing that fails ends
          * the clone, and the all-or-nothing rule rolls the store back (cleanup):
          * read as "fetched nothing", it handed the rest of the run an answer it
@@ -682,7 +682,7 @@ static error_t clone_post_parse(
     (void) cmd;
     const cmd_clone_options_t *o = opts_v;
 
-    if (o->fetch_all && o->profile_count > 0) {
+    if (o->all_profiles && o->profile_count > 0) {
         return ERROR(
             ERR_INVALID_ARG,
             "--all and --profile are mutually exclusive"
@@ -722,7 +722,7 @@ static const args_opt_t clone_opts[] = {
     ),
     ARGS_FLAG(
         "all",
-        cmd_clone_options_t,  fetch_all,
+        cmd_clone_options_t,  all_profiles,
         "Fetch every remote profile (hub/backup workflow)"
     ),
     ARGS_FLAG_SET(

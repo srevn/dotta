@@ -381,7 +381,7 @@ static error_t profile_fetch(
 
     output_section(out, OUTPUT_NORMAL, "Fetching profiles");
 
-    if (opts->fetch_all) {
+    if (opts->all_profiles) {
         /* Query remote server for all available branches */
         string_array_t remote_branches;
         err = gitops_list_remote_branches(
@@ -431,16 +431,8 @@ static error_t profile_fetch(
             }
         }
     } else {
-        /* Fetch specific profiles */
-        if (opts->profile_count == 0) {
-            err = error_hint(
-                ERROR(ERR_INVALID_ARG, "No profiles specified"),
-                "Use 'dotta profile fetch <name>' or '--all'"
-            );
-            goto cleanup;
-        }
-
-        /* Pre-flight validation: query remote for available branches */
+        /* Fetch the profiles the line names, one at least (profile_post_parse),
+         * validated first against what the remote holds */
         string_array_t available_remote;
         err = gitops_list_remote_branches(
             repo, remote_name, xfer, ctx->arena, &available_remote
@@ -580,8 +572,8 @@ cleanup:
  *      enabled nothing is an error. Emits per-profile warnings; produces
  *      to_enable_validated. An already-enabled profile named with a --target
  *      that differs from its row's is not a skip: it re-enters the validated
- *      set as a retarget, and `retarget` remembers which one (at most one — the
- *      --target-single-profile rule above).
+ *      set as a retarget, and `retarget` remembers which one (at most one: a
+ *      target binds the one profile the line names, profile_enable_post_parse).
  *   2. Write scope to state — state_enable_profile per target. The one call serves
  *      both kinds: a fresh enable inserts the row, a retarget runs the UPSERT
  *      arm state.h documents (the target moves, the position stays).
@@ -614,7 +606,8 @@ static error_t profile_enable(
 
     /* Phase 1 observations — tallied during the validation loop. retarget names
      * the one already-enabled profile whose binding this run updates (borrowed
-     * from to_enable; at most one, by the --target-single-profile rule). */
+     * from to_enable; at most one, the line naming one with a target —
+     * profile_enable_post_parse). */
     const char *retarget = NULL;
     size_t already_enabled = 0;
     size_t not_found = 0;
@@ -645,29 +638,11 @@ static error_t profile_enable(
         if (err) return error_wrap(err, "Failed to list branches");
         profile_order(&to_enable);
     } else {
-        /* Enable specified profiles */
-        if (opts->profile_count == 0) {
-            return error_hint(
-                ERROR(ERR_INVALID_ARG, "No profiles specified"),
-                "Use 'dotta profile enable <name>' or '--all'"
-            );
-        }
-
+        /* Enable the profiles the line names, one at least (profile_post_parse) */
         string_array_init_cap(&to_enable, ctx->arena, opts->profile_count);
         for (size_t i = 0; i < opts->profile_count; i++) {
             string_array_push(&to_enable, opts->profiles[i]);
         }
-    }
-
-    /* Fatal up-front: --target binds to a specific profile and cannot disambiguate
-     * among many. Caught here before any state mutation, one refusal with its
-     * way out: the verb's own shape, never the user's command lines spelled
-     * back. */
-    if (opts->target && to_enable.count > 1) {
-        return error_hint(
-            ERROR(ERR_INVALID_ARG, "Cannot use --target with multiple profiles"),
-            "Enable each profile on its own, each with its --target"
-        );
     }
 
     /* Fatal up-front: the target itself. A target is a filesystem-shaped argument
@@ -676,8 +651,9 @@ static error_t profile_enable(
      * path_input_target): the absolute path the row stores, held to the target's
      * rules. Validating inside the per-profile loop used to categorize a bad
      * target as not_found, which mislabels a CLI input problem as a missing
-     * profile. With the --target-requires-single-profile rule above, a single
-     * validation here covers every path that can reach Phase 2. */
+     * profile. A target binds the one profile the line names, never --all
+     * (profile_enable_post_parse), so a single validation here covers every path
+     * that can reach Phase 2. */
     if (opts->target) {
         err = path_input_target(opts->target, ctx->arena, &target);
         if (err) return error_wrap(err, "Invalid --target value");
@@ -1026,14 +1002,7 @@ static error_t profile_disable(
             string_array_push(&to_disable_validated, enabled_profiles.entries[i].name);
         }
     } else {
-        /* Disable specified profiles */
-        if (opts->profile_count == 0) {
-            return error_hint(
-                ERROR(ERR_INVALID_ARG, "No profiles specified"),
-                "Use 'dotta profile disable <name>' or '--all'"
-            );
-        }
-
+        /* Disable the profiles the line names, one at least (profile_post_parse) */
         for (size_t i = 0; i < opts->profile_count; i++) {
             const char *profile = opts->profiles[i];
 
@@ -1185,9 +1154,9 @@ static error_t profile_disable(
      *   - count > 0: actual work performed.
      *   - count == 0 && not_enabled > 0: idempotent (user asked to disable profiles
      *     that weren't enabled).
-     *   - count == 0 && not_enabled == 0 is unreachable: the explicit-args path
-     *     requires opts->profile_count > 0 (caught earlier), and the --all-on-empty
-     *     case is caught by the early exit. */
+     *   - count == 0 && not_enabled == 0 is unreachable: the line names one profile
+     *     at least or --all (profile_post_parse), and the --all-on-empty case
+     *     is caught by the early exit. */
     output_gap(out, OUTPUT_NORMAL);
 
     if (to_disable_validated.count > 0) {
@@ -1215,9 +1184,10 @@ static error_t profile_disable(
  * Profile reorder subcommand
  *
  * Rewrites this machine's order, which is the precedence: the user names every
- * enabled profile once, in the order wanted. Three checks make the list the enabled
- * set permuted — no name twice, every name enabled, the counts equal — and the
- * state's own boundary refuses the same (state_reorder_profiles).
+ * enabled profile once, in the order wanted. The line names each once, one at
+ * least (profile_reorder_post_parse); two checks of the state's make the list
+ * the enabled set permuted — every name enabled, the counts equal — and the state's
+ * own boundary refuses the same (state_reorder_profiles).
  */
 static error_t profile_reorder(
     const dotta_ctx_t *ctx,
@@ -1228,14 +1198,6 @@ static error_t profile_reorder(
 
     state_t *state = ctx->run.state;
     output_t *out = ctx->out;
-
-    /* Validation: at least one profile specified */
-    if (opts->profile_count == 0) {
-        return error_hint(
-            ERROR(ERR_INVALID_ARG, "No profiles specified"),
-            "Provide profiles in desired order: dotta profile reorder <p1> <p2> ..."
-        );
-    }
 
     /* The enabled rows, where the handle holds them, read up to the rewrite below,
      * which replaces them (core/state.h state_profiles) */
@@ -1249,20 +1211,7 @@ static error_t profile_reorder(
         );
     }
 
-    /* Validation 1: Check for duplicates in new order */
-    for (size_t i = 0; i < opts->profile_count; i++) {
-        for (size_t j = i + 1; j < opts->profile_count; j++) {
-            if (strcmp(opts->profiles[i], opts->profiles[j]) == 0) {
-                return ERROR(
-                    ERR_VALIDATION,
-                    "Profile '%s' appears multiple times in reorder list",
-                    opts->profiles[i]
-                );
-            }
-        }
-    }
-
-    /* Validation 2: All provided profiles must be currently enabled */
+    /* Validation 1: All provided profiles must be currently enabled */
     for (size_t i = 0; i < opts->profile_count; i++) {
         if (!state_enabled(state, opts->profiles[i])) {
             return error_hint(
@@ -1272,9 +1221,9 @@ static error_t profile_reorder(
         }
     }
 
-    /* Validation 3: Profile count must match. With no name twice and every name
-     * enabled, equal counts make the named set the enabled set — nothing is left
-     * to check for. */
+    /* Validation 2: Profile count must match. With no name twice — the line's
+     * own (profile_reorder_post_parse) — and every name enabled, equal counts
+     * make the named set the enabled set: nothing is left to check for. */
     if (opts->profile_count != enabled_profiles.count) {
         return ERROR(
             ERR_VALIDATION, "Profile count mismatch: %zu enabled, %zu provided; a "
@@ -1587,6 +1536,25 @@ static error_t profile_dispatch(const void *ctx_v, void *opts_v) {
     return cmd_profile(ctx, (const cmd_profile_options_t *) opts_v);
 }
 
+/**
+ * The selection fetch, enable and disable share: the profiles the line names,
+ * or --all for every one, and exactly one of the two. clone_post_parse refuses
+ * the same pair for clone's -p.
+ */
+static error_t profile_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    const cmd_profile_options_t *o = opts_v;
+
+    if (o->all_profiles && o->profile_count > 0) {
+        return ERROR(ERR_INVALID_ARG, "--all and profile names are mutually exclusive");
+    }
+    return o->all_profiles || o->profile_count > 0
+        ? NULL : ERROR(ERR_INVALID_ARG, "No profiles specified");
+}
+
 /* --- list --- */
 
 static void profile_list_defaults(void *o) {
@@ -1638,7 +1606,7 @@ static args_want_t profile_fetch_complete(
 static const args_opt_t profile_fetch_opts[] = {
     ARGS_GROUP("Options:"),
     ARGS_FLAG(
-        "all",                  cmd_profile_options_t,  fetch_all,
+        "all",                  cmd_profile_options_t,  all_profiles,
         "Fetch all remote profiles"
     ),
     ARGS_FLAG_SET(
@@ -1656,10 +1624,13 @@ static const args_opt_t profile_fetch_opts[] = {
 static const args_command_t spec_profile_fetch = {
     .name          = "profile fetch",
     .summary       = "Download profiles from a remote without enabling them",
-    .usage         = "%s profile fetch [--all] [-v] [<name>...]",
+    .usage         =
+        "%s profile fetch [-v] <name>...\n"
+        "   or: %s profile fetch [-v] --all",
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_fetch_opts,
     .init_defaults = profile_fetch_defaults,
+    .post_parse    = profile_post_parse,
     .complete      = profile_fetch_complete,
     .payload       = &(const dotta_needs_t){ .repo = DOTTA_REPO_OPEN },
     .dispatch      = profile_dispatch,
@@ -1682,6 +1653,23 @@ static args_want_t profile_enable_complete(
     }
     completion_profiles(ctx_v, out, COMPLETION_LOCAL);
     return ARGS_WANT_NONE;
+}
+
+/**
+ * Enable's selection (profile_post_parse), and a target that binds one profile:
+ * the one the line names — --all names none, and two names are two profiles.
+ */
+static error_t profile_enable_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    const cmd_profile_options_t *o = opts_v;
+
+    error_t err = profile_post_parse(opts_v, arena, cmd);
+    if (err) return err;
+
+    return o->target && o->profile_count != 1
+        ? ERROR(ERR_INVALID_ARG, "--target binds exactly one named profile")
+        : NULL;
 }
 
 static const args_opt_t profile_enable_opts[] = {
@@ -1720,7 +1708,9 @@ static const args_opt_t profile_enable_opts[] = {
 static const args_command_t spec_profile_enable = {
     .name          = "profile enable",
     .summary       = "Enable profiles for deployment",
-    .usage         = "%s profile enable [options] [<name>...]",
+    .usage         =
+        "%s profile enable [options] <name>...\n"
+        "   or: %s profile enable [options] --all",
     .description   =
         "Enables one or more profiles so that 'dotta apply' deploys their files.\n"
         "\n"
@@ -1739,6 +1729,7 @@ static const args_command_t spec_profile_enable = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_enable_opts,
     .init_defaults = profile_enable_defaults,
+    .post_parse    = profile_enable_post_parse,
     .complete      = profile_enable_complete,
     .payload       = &(const dotta_needs_t){
         .repo      = DOTTA_REPO_OPEN,
@@ -1795,7 +1786,9 @@ static const args_opt_t profile_disable_opts[] = {
 static const args_command_t spec_profile_disable = {
     .name          = "profile disable",
     .summary       = "Disable profiles, mark for removal on next apply",
-    .usage         = "%s profile disable [options] [<name>...]",
+    .usage         =
+        "%s profile disable [options] <name>...\n"
+        "   or: %s profile disable [options] --all",
     .description   =
         "Disables one or more profiles; the next 'dotta apply' removes what they\n"
         "deployed. A disabled profile's target goes with its row — nothing\n"
@@ -1804,6 +1797,7 @@ static const args_command_t spec_profile_disable = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_disable_opts,
     .init_defaults = profile_disable_defaults,
+    .post_parse    = profile_post_parse,
     .complete      = profile_disable_complete,
     .payload       = &(const dotta_needs_t){
         .repo      = DOTTA_REPO_OPEN,
@@ -1828,6 +1822,39 @@ static args_want_t profile_reorder_complete(
     return ARGS_WANT_NONE;
 }
 
+/**
+ * A reorder names every enabled profile once, in its new order. The names are
+ * the line's to check — one at least, none twice; whether they are the enabled
+ * set is the handler's, which reads the state.
+ */
+static error_t profile_reorder_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    const cmd_profile_options_t *o = opts_v;
+
+    if (o->profile_count == 0) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "No profiles specified; a reorder names every enabled profile, in its "
+            "new order"
+        );
+    }
+    for (size_t i = 0; i < o->profile_count; i++) {
+        for (size_t j = i + 1; j < o->profile_count; j++) {
+            if (strcmp(o->profiles[i], o->profiles[j]) == 0) {
+                return ERROR(
+                    ERR_INVALID_ARG,
+                    "Profile '%s' appears multiple times in reorder list",
+                    o->profiles[i]
+                );
+            }
+        }
+    }
+    return NULL;
+}
+
 static const args_opt_t profile_reorder_opts[] = {
     ARGS_GROUP("Options:"),
     ARGS_FLAG_SET(
@@ -1849,13 +1876,14 @@ static const args_opt_t profile_reorder_opts[] = {
 static const args_command_t spec_profile_reorder = {
     .name          = "profile reorder",
     .summary       = "Change the layering order of enabled profiles",
-    .usage         = "%s profile reorder [options] [<name>...]",
+    .usage         = "%s profile reorder [options] <name>...",
     .description   =
         "Provide every enabled profile in the desired order. Later profiles\n"
         "override earlier ones during layering.\n",
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_reorder_opts,
     .init_defaults = profile_reorder_defaults,
+    .post_parse    = profile_reorder_post_parse,
     .complete      = profile_reorder_complete,
     .payload       = &(const dotta_needs_t){
         .repo      = DOTTA_REPO_OPEN,

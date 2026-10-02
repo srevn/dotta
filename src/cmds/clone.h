@@ -32,7 +32,7 @@ typedef struct {
     const char *path;         /* Local path (NULL = the configured location) */
     int verbosity;            /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     int bootstrap_mode;       /* clone_bootstrap_mode_t (int for ARGS_FLAG_SET) */
-    bool fetch_all;           /* Fetch all remote profiles (hub mode) */
+    bool all_profiles;        /* --all: every remote profile (hub mode) */
     char **profiles;          /* Explicit profiles to fetch (NULL = auto-detect) */
     size_t profile_count;     /* Number of explicit profiles */
 } cmd_clone_options_t;

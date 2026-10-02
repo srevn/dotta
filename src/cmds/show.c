@@ -266,7 +266,7 @@ static error_t show_source(
  * The commit's own header lines, from the handle show_source kept. A caption
  * stands over what it captions, so this is said only once the verb has an answer:
  * an argument the branch refuses by its own noun — a label, a root with no claim
- * on it — leaves nothing of the commit on screen, and the hint under a refusal
+ * on it — leaves nothing of the commit on screen, and the usage under a refusal
  * that asks for a profile cannot be followed into a second refusal under a header.
  * Past that point the header is what says which tree the bytes, or the absence
  * of them, were read from.
@@ -683,16 +683,9 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    /* No profile specified - resolve owning profile via manifest */
-
-    /* File at specific commit requires explicit profile for unambiguous resolution */
-    if (opts->commit) {
-        err = error_hint(
-            ERROR(ERR_INVALID_ARG, "Showing a file at a specific commit requires a profile"),
-            "Use 'dotta show -p <profile> <file> <commit>'"
-        );
-        goto cleanup;
-    }
+    /* No profile specified - resolve owning profile via manifest, at the tips:
+     * a file at a commit names its profile (show_post_parse) */
+    CHECK_ARG(opts->commit == NULL, "a file at a commit names its profile");
 
     /* The owning profile is the view's: the enabled set at HEAD with precedence
      * resolved, asked in the key the argument names. A path is one row, the winner
@@ -774,7 +767,7 @@ cleanup:
 
 /**
  * Interpret the 0-3 raw positionals into `profile`, `file_path`, `commit`, and
- * `mode`.
+ * `mode`, and refuse a file at a commit that names no profile.
  *
  * Allocation model: all refspec strings are allocated in `arena`. Pure positional
  * pointers borrow argv. cmd_show does not free any of these pointers — the engine's
@@ -798,61 +791,59 @@ static error_t show_post_parse(
     if (o->positional_count == 1) {
         const char *arg = args[0];
 
-        /* Pure commit ref: git ref without path separators. */
         if (refspec_looks_like_commit(arg) && !strchr(arg, '/') &&
             !strchr(arg, '.')) {
+            /* Pure commit ref: git ref without path separators. */
             o->mode = SHOW_COMMIT;
             o->commit = arg;
-            return NULL;
+        } else {
+            /* File mode: parse [profile:]file[@commit] into arena. */
+            o->mode = SHOW_FILE;
+            refspec_t rs = { 0 };
+            error_t err = refspec_parse(arena, arg, &rs);
+            if (err != NULL) {
+                return error_wrap(err, "Failed to parse file specification");
+            }
+            /* A refspec-supplied profile overrides any -p/--profile flag. */
+            if (rs.profile != NULL) o->profile = rs.profile;
+            o->file_path = rs.file;
+            if (rs.commit != NULL) o->commit = rs.commit;
         }
-
-        /* File mode: parse [profile:]file[@commit] into arena. */
-        o->mode = SHOW_FILE;
-        refspec_t rs = { 0 };
-        error_t err = refspec_parse(arena, arg, &rs);
-        if (err != NULL) {
-            return error_wrap(err, "Failed to parse file specification");
-        }
-        /* A refspec-supplied profile overrides any -p/--profile flag. */
-        if (rs.profile != NULL) o->profile = rs.profile;
-        o->file_path = rs.file;
-        if (rs.commit != NULL) o->commit = rs.commit;
-        return NULL;
-    }
-
-    if (o->positional_count == 2) {
+    } else if (o->positional_count == 2) {
         o->mode = SHOW_FILE;
 
         if (refspec_looks_like_commit(args[1])) {
             /* <file> <commit> */
             o->file_path = args[0];
             o->commit = args[1];
-            return NULL;
+        } else {
+            /* <profile> <file[@commit]> — refspec profile wins if present. */
+            o->profile = args[0];
+            refspec_t rs = { 0 };
+            error_t err = refspec_parse(arena, args[1], &rs);
+            if (err != NULL) {
+                return error_wrap(err, "Failed to parse file specification");
+            }
+            if (rs.profile != NULL) o->profile = rs.profile;
+            o->file_path = rs.file;
+            if (rs.commit != NULL) o->commit = rs.commit;
         }
-
-        /* <profile> <file[@commit]> — refspec profile wins if present. */
-        o->profile = args[0];
-        refspec_t rs = { 0 };
-        error_t err = refspec_parse(arena, args[1], &rs);
-        if (err != NULL) {
-            return error_wrap(err, "Failed to parse file specification");
-        }
-        if (rs.profile != NULL) o->profile = rs.profile;
-        o->file_path = rs.file;
-        if (rs.commit != NULL) o->commit = rs.commit;
-        return NULL;
-    }
-
-    if (o->positional_count == 3) {
+    } else if (o->positional_count == 3) {
         o->mode = SHOW_FILE;
         o->profile = args[0];
         o->file_path = args[1];
         o->commit = args[2];
-        return NULL;
+    } else {
+        /* Max=3 is enforced by POSITIONAL_RAW; this branch is unreachable. */
+        CHECK_ARG(false, "POSITIONAL_RAW bounds show's positionals at three");
     }
 
-    /* Max=3 is enforced by POSITIONAL_RAW; this branch is unreachable. */
-    CHECK_ARG(false, "POSITIONAL_RAW bounds show's positionals at three");
+    /* A file at a commit is read from one profile's history: the view that would
+     * find a file's owner is the tips' alone (cmd_show), so the profile is the
+     * line's to name. A commit alone is searched across the enabled set. */
+    return o->mode == SHOW_FILE && o->commit && !o->profile
+        ? ERROR(ERR_INVALID_ARG, "Showing a file at a specific commit requires a profile")
+        : NULL;
 }
 
 /**
@@ -922,7 +913,7 @@ const args_command_t spec_show = {
     .usage       =
         "%s show [options] <target>\n"
         "   or: %s show [options] <commit>\n"
-        "   or: %s show [options] <file> <commit>\n"
+        "   or: %s show -p <profile> <file> <commit>\n"
         "   or: %s show [options] <profile>:<file>@<commit>\n"
         "   or: %s show [options] <profile> <file> <commit>",
     .description =
@@ -951,8 +942,7 @@ const args_command_t spec_show = {
         "  %s show -p global home/.bashrc           # File at HEAD, specific profile\n"
         "  %s show global:home/.bashrc              # File at HEAD via refspec\n"
         "  %s show darwin home/.bashrc a4f2c8e      # File at commit, positional\n"
-        "  %s show home/.bashrc@a4f2c8e             # File at commit via refspec\n"
-        "  %s show global:home/.bashrc@a4f2c8e      # File at commit, full refspec\n",
+        "  %s show global:home/.bashrc@a4f2c8e      # File at commit via refspec\n",
     .epilogue    =
         "See also:\n"
         "  %s list <profile> <file>   # Commit history for a file\n"

@@ -1595,19 +1595,18 @@ static error_t export_post_parse(
     cmd_export_options_t *o = opts_v;
     char **args = o->positional_args;
 
-    /* A path in the profile slot is the one predictable misuse — catch it with
-     * a usage hint instead of a branch-lookup error. Alone, a name in the grammar
-     * — beneath a label or the label's word itself — is content and never a branch;
-     * with a second positional the first word is the profile, whatever it looks
-     * like. */
+    /* A path in the profile slot is the one predictable misuse — refused here,
+     * the usage the engine prints beneath naming the form, instead of as a
+     * branch-lookup error. Alone, a name in the grammar — beneath a label or
+     * the label's word itself — is content and never a branch; with a second
+     * positional the first word is the profile, whatever it looks like. */
     const char *first = args[0];
     if (first[0] == '~' || first[0] == '/' ||
         (o->positional_count == 1 && label_prefixes(first))) {
         return ERROR(
             ERR_INVALID_ARG,
-            "'%s' looks like a path — export requires an explicit "
-            "profile\nUsage: dotta export <profile> %s -o <dest>",
-            first, first
+            "'%s' looks like a path — export requires an explicit profile",
+            first
         );
     }
 
@@ -1655,8 +1654,7 @@ static error_t export_post_parse(
         if (o->positional_count > 2) {
             return ERROR(
                 ERR_INVALID_ARG,
-                "Too many arguments for the refspec form\n"
-                "Usage: dotta export <profile>:<path>[@commit] <dest>"
+                "Too many arguments for the refspec form"
             );
         }
         if (o->output != NULL) {

@@ -1672,10 +1672,10 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
         if (blocking_count > 0) {
             if (config->strict_mode) {
-                /* Strict mode: Block with full diagnostic output. The lines carry
-                 * status's section vocabulary — one item, one line — and the
-                 * unverifiable count rides along as an advisory so the paths
-                 * the analysis could not settle are never silent. */
+                /* Strict mode: the report says what blocks, and the refusal why.
+                 * The lines carry status's section vocabulary — one item, one
+                 * line — and the unverifiable count rides along as an advisory
+                 * so the paths the analysis could not settle are never silent. */
                 output_section(out, OUTPUT_NORMAL, "Workspace has uncommitted changes");
                 output_gap(out, OUTPUT_NORMAL);
 
@@ -1723,8 +1723,6 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 }
 
                 output_gap(out, OUTPUT_NORMAL);
-                output_info(out, OUTPUT_NORMAL, "Sync requires a clean workspace.");
-                output_gap(out, OUTPUT_NORMAL);
                 output_hintline(out, OUTPUT_NORMAL, "Next steps:");
                 if (conflict_count > 0) {
                     output_hintline(
@@ -1742,12 +1740,14 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                     );
                 }
                 output_hintline(out, OUTPUT_NORMAL, "  Synchronize:    dotta sync");
-                output_hintline(out, OUTPUT_NORMAL, "  Or bypass with: dotta sync --force");
 
+                /* The refusal whole, on stderr, whatever the level: how much
+                 * blocks, the key that makes it block, and the flag past it —
+                 * which no step above names, the steps being the report's. */
                 err = ERROR(
-                    ERR_VALIDATION,
-                    "Cannot sync with uncommitted changes (found %zu uncommitted item%s)",
-                    blocking_count, blocking_count == 1 ? "" : "s"
+                    ERR_VALIDATION, "Cannot sync with %zu uncommitted item%s under "
+                    "strict_mode; --force syncs anyway", blocking_count,
+                    blocking_count == 1 ? "" : "s"
                 );
                 goto cleanup;
             }

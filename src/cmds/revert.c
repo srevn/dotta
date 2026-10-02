@@ -13,6 +13,7 @@
 
 #include "base/arena.h"
 #include "base/args.h"
+#include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/output.h"
@@ -62,7 +63,6 @@ static error_t select_profile(
     CHECK_NULL(out_profile);
 
     git_repository *repo = ctx->run.repo;
-    output_t *out = ctx->out;
 
     *out_profile = NULL;
 
@@ -110,23 +110,20 @@ static error_t select_profile(
         return NULL;
     }
 
-    output_print(
-        out, OUTPUT_NORMAL, "'%s' is held by %zu profiles:\n", subject,
-        claims.count
-    );
+    /* Several: each branch named beside its own name for the argument. The way
+     * through is the clause, because no key tells them apart here — a path asks
+     * every branch again, and each answers as before. */
+    string_array_t holders;
+    string_array_init(&holders, ctx->arena);
     for (size_t i = 0; i < claims.count; i++) {
-        output_print(
-            out, OUTPUT_NORMAL, "  • %s  (%s)\n", claims.entries[i].profile,
-            claims.entries[i].storage_path
+        string_array_pushf(
+            &holders, "%s (%s)", claims.entries[i].profile, claims.entries[i].storage_path
         );
     }
-    output_hint(out, OUTPUT_NORMAL, "Name the profile to disambiguate:");
-    output_hintline(
-        out, OUTPUT_NORMAL, "  dotta revert <profile> %s %s",
-        opts->file_path, opts->commit
+    return ERROR(
+        ERR_INVALID_ARG, "'%s' is held by %zu profiles: %s; -p names one", subject,
+        claims.count, string_array_join(ctx->arena, &holders, ", ")
     );
-
-    return ERROR(ERR_INVALID_ARG, "Ambiguous path '%s'", subject);
 }
 
 /**

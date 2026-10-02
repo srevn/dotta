@@ -9,18 +9,18 @@
  *   2. Path filter        — CLI positional file arguments (optional)
  *   3. Exclude patterns   — CLI -e <patterns>            (optional)
  *
- * Plus the persistent enabled set resolved from state. Constructed once per command
+ * Plus the persistent enabled set, read off the view. Constructed once per command
  * via scope_build; consulted many times via predicates that replace the
  * per-iteration triplet of `continue` guards at filter sites.
  *
  * Vocabulary
  * ----------
- *   enabled  — persistent enabled profile names, always non-NULL, may be empty.
- *              The same set the dispatcher built the view over (ctx->run.manifest),
- *              validated against the branches — the set the CLI filter is checked
- *              against, and the one the receipts attribute to (sync). The workspace
- *              does not read it: its profile set is the view's own
- *              (manifest_profiles), the same names by construction.
+ *   enabled  — persistent enabled profile names, always non-NULL, may be empty:
+ *              the view's profiles (manifest_profiles), the enabled rows whose
+ *              branch the build found, so the scope and the view answer one
+ *              instant's question once — the set the CLI filter is checked against,
+ *              and the one the receipts attribute to (sync). The workspace reads
+ *              the same names off the view itself.
  *   profiles — display/hook face of the scope. Equal to the CLI filter names
  *              when one was given, else equal to enabled. "What the user asked
  *              for, not the underlying world."
@@ -72,10 +72,10 @@
 
 #include "infra/pathspec.h"
 
-/* Forward decl: state_t's full API lives in core/state.h. scope only passes the
- * pointer through to profile_resolve_enabled, so the header stays free of the
- * state dependency. C11 §6.7p3 permits typedef-name redeclaration. */
-typedef struct state state_t;
+/* Forward decl: manifest_t's full API lives in core/manifest.h. scope reads the
+ * view's profiles alone, so the header stays free of the manifest dependency.
+ * C11 §6.7p3 permits typedef-name redeclaration. */
+typedef struct manifest manifest_t;
 
 /**
  * Opaque scope handle.
@@ -104,23 +104,26 @@ typedef struct scope_inputs {
 } scope_inputs_t;
 
 /**
- * Build a scope from resolved repo+state and raw CLI inputs.
+ * Build a scope from the view and raw CLI inputs.
  *
  * Steps performed (in order):
- *   1. Resolve the enabled profile names from state, which may be none (see
- *      "Empty-enabled policy" above).
+ *   1. Read the enabled profile names off the view — the enabled rows whose branch
+ *      the build found (core/manifest.h manifest_profiles) — which may be none
+ *      (see "Empty-enabled policy" above).
  *   2. If in->profile_count > 0, check every CLI filter name against the enabled
  *      set: one not in it is refused, whether it is a disabled profile ("is not
  *      enabled") or no profile here at all (profile_require's refusal). A filter
  *      never narrows in silence.
- *   3. If in->file_count > 0, compile the positional arguments into the path
- *      filter (infra/pathspec): one matcher over the two keys a managed path
- *      has, each input read in the key its own shape names.
+ *   3. Compile the positional arguments into the path filter (infra/pathspec):
+ *      one matcher over the two keys a managed path has, each input read in the
+ *      key its own shape names — none, every path in, where none was given.
  *   4. Compile the -e layer into `arena` (ignore_excludes_compile): a pattern
  *      the grammar refuses refuses the build, under the flag's name.
  *
- * @param repo   Repository (must not be NULL)
- * @param state  State handle (must not be NULL, borrowed for the call)
+ * @param repo   Repository: a -p name that is not enabled is asked of it, to tell
+ *               a disabled profile from none here (must not be NULL)
+ * @param view   The view the command reads, ctx->run.manifest or one it built
+ *               (must not be NULL, borrowed for the call)
  * @param in     Inputs (must not be NULL)
  * @param arena  Arena the scope lives in, and everything it holds (must not be
  *               NULL)
@@ -129,7 +132,7 @@ typedef struct scope_inputs {
  */
 error_t scope_build(
     git_repository *repo,
-    const state_t *state,
+    const manifest_t *view,
     const scope_inputs_t *in,
     arena_t *arena,
     scope_t **out

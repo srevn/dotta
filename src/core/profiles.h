@@ -115,6 +115,11 @@ void profile_order(string_array_t *names);
  * None enabled, or none of them here, is an empty answer and not an error: every
  * reader decides what an empty set means to it.
  *
+ * Readers: the commands that search the enabled set and hold no view — cmds/show.c
+ * cmd_show, cmds/ignore.c ignore_test and cmds/bootstrap.c cmd_bootstrap. A command
+ * that holds the view reads the same set off it (core/manifest.h manifest_profiles,
+ * through core/scope.h scope_build).
+ *
  * Does NOT resolve Git references or load profile trees.
  *
  * @param repo Repository (must not be NULL)

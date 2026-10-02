@@ -9,8 +9,8 @@
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "core/ignore.h"
+#include "core/manifest.h"
 #include "core/profiles.h"
-#include "core/state.h"
 #include "infra/label.h"
 #include "infra/pathspec.h"
 
@@ -37,11 +37,11 @@ struct scope {
 /* -------------------------------------------------------------------- */
 
 error_t scope_build(
-    git_repository *repo, const state_t *state, const scope_inputs_t *in,
+    git_repository *repo, const manifest_t *view, const scope_inputs_t *in,
     arena_t *arena, scope_t **out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(state);
+    CHECK_NULL(view);
     CHECK_NULL(in);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -50,26 +50,32 @@ error_t scope_build(
      * a refusal below leaves only the arena's bytes behind */
     scope_t *s = arena_calloc(arena, 1, sizeof(*s));
 
-    /* 1. The enabled set, which may be empty: an empty scope is not an error
-     *    ("Empty-enabled policy", scope.h). */
-    error_t err = profile_resolve_enabled(repo, state, arena, &s->enabled);
-    if (err) return error_wrap(err, "Failed to resolve enabled profiles");
+    /* 1. The enabled set: the view's profiles — the enabled rows whose branch
+     *    the build found (core/manifest.h manifest_profiles) — so the scope and
+     *    the view answer one instant's question once. May be empty: an empty
+     *    scope is not an error ("Empty-enabled policy", scope.h). */
+    size_t count = 0;
+    const char *const *names = manifest_profiles(view, &count);
+    string_array_init_cap(&s->enabled, arena, count);
+    for (size_t i = 0; i < count; i++) {
+        string_array_push(&s->enabled, names[i]);
+    }
     s->profiles = &s->enabled;
 
     /* 2. The CLI filter: every name must be enabled here. That is the one question
-     *    — the enabled set was checked against the branches on the way in, so a
-     *    name in it is a branch, and a name not in it is refused whether it is
-     *    a disabled profile or a typo: a filter that narrowed to nothing would
-     *    touch nothing and say nothing. The refusal tells the two apart by asking
-     *    the refusing verb, one lookup paid only here: when it does not refuse,
-     *    the branch is here and the fact is that it is not enabled. */
+     *    — the view read the branches on the way in, so a name in the enabled
+     *    set is a branch, and a name not in it is refused whether it is a disabled
+     *    profile or a typo: a filter that narrowed to nothing would touch nothing
+     *    and say nothing. The refusal tells the two apart by asking the refusing
+     *    verb, one lookup paid only here: when it does not refuse, the branch
+     *    is here and the fact is that it is not enabled. */
     if (in->profile_count > 0) {
         string_array_init_cap(&s->filter, arena, in->profile_count);
 
         for (size_t i = 0; i < in->profile_count; i++) {
             const char *name = in->profiles[i];
             if (!string_array_contains(&s->enabled, name)) {
-                err = profile_require(repo, name);
+                error_t err = profile_require(repo, name);
                 if (err) return err;
                 return ERROR(ERR_INVALID_ARG, "Profile '%s' is not enabled", name);
             }
@@ -82,11 +88,10 @@ error_t scope_build(
     }
 
     /* 4. The path filter: one matcher over both keys a managed path has, each
-     *    input read in the key its own shape names (infra/pathspec). */
-    if (in->file_count > 0) {
-        err = pathspec_create(in->files, in->file_count, arena, &s->paths);
-        if (err) return error_wrap(err, "Failed to build path filter");
-    }
+     *    input read in the key its own shape names (infra/pathspec) — and none,
+     *    every path in, where no positional was given. */
+    error_t err = pathspec_create(in->files, in->file_count, arena, &s->paths);
+    if (err) return error_wrap(err, "Failed to build path filter");
 
     /* 5. The -e layer, compiled once (core/ignore): a pattern the grammar refuses
      *    refuses the scope, under the flag's name. */

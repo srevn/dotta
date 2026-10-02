@@ -1393,7 +1393,7 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
-    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
+    const manifest_t *manifest = ctx->run.manifest; /* The view at dispatch */
     output_t *out = ctx->out;
 
     scope_t *scope = NULL;
@@ -1417,7 +1417,7 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         .files         = opts->files,
         .file_count    = opts->file_count,
     };
-    error_t err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
+    error_t err = scope_build(repo, manifest, &scope_inputs, ctx->arena, &scope);
     if (err) return err;
 
     if (scope_enabled(scope)->count == 0) {

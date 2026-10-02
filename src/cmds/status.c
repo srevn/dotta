@@ -1416,7 +1416,7 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         .profile_count = opts->profile_count,
     };
     scope_t *scope = NULL;
-    error_t err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
+    error_t err = scope_build(repo, manifest, &scope_inputs, ctx->arena, &scope);
     if (err) return err;
 
     /* Load workspace for divergence analysis (only needed for local status)

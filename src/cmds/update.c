@@ -1421,7 +1421,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .exclude_count    = opts->exclude_count,
     };
     scope_t *scope = NULL;
-    error_t err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
+    error_t err = scope_build(repo, manifest, &scope_inputs, ctx->arena, &scope);
     if (err) return err;
 
     if (scope_enabled(scope)->count == 0) {

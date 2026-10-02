@@ -131,9 +131,10 @@ error_t repo_is_store(git_repository *repo, bool *out);
  * and reads its declaration (repo_is_store): a repository that does not carry
  * one is somebody's — a project with a working tree, a mirror, the checked-out
  * store an older dotta kept — and refused with ERR_NOT_FOUND naming the path,
- * `dotta init` and DOTTA_REPO_DIR. This is the standard way to open the store
- * for dotta commands — the pass-through (`dotta git`) is the one that deliberately
- * does not, forking git over the settled directory itself (cmds/git.h).
+ * and DOTTA_REPO_DIR where the path came from it. This is the standard way to
+ * open the store for dotta commands — the pass-through (`dotta git`) is the one
+ * that deliberately does not, forking git over the settled directory itself
+ * (cmds/git.h).
  *
  * THE OPEN IS THE PRESENCE TEST: there is no separate "is a repository here"
  * question — asking it means opening, and a predicate that opens and throws the
@@ -144,16 +145,16 @@ error_t repo_is_store(git_repository *repo, bool *out);
  * - ERR_NOT_FOUND — the path holds no repository: nothing there, an empty
  *   directory, a directory of other things, a store a hand stripped of its HEAD
  *   (which `dotta init` recreates with refs, epoch and record intact). Names
- *   the path, the hint to run 'dotta init', and DOTTA_REPO_DIR when the path
- *   came from it. The same code, its own words, for a repository that opened
- *   and is not declared the store.
+ *   the path, and DOTTA_REPO_DIR when the path came from it. The same code, its
+ *   own words, for a repository that opened and is not declared the store.
  * - ERR_GIT — a repository is there and libgit2 could not read it (the same
  *   GIT_ENOTFOUND, told apart by the filesystem: the store is the directory,
  *   and its HEAD present or unstattable is a store dotta cannot look into), or
  *   the open failed for its own reason — a config file that will not parse, a
  *   damaged object database — in which case libgit2's message is wrapped, not
  *   replaced.
- * - ERR_PERMISSION — the repository is owned by another user.
+ * - ERR_PERMISSION — the repository is owned by another user, its owner check's
+ *   own words beneath the path.
  *
  * OWNERSHIP:
  * - Caller must free repository with git_repository_free()

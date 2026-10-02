@@ -112,14 +112,6 @@ error_t repo_is_store(git_repository *repo, bool *out) {
     return NULL;
 }
 
-/* The one-time remedy for a repository an older dotta left root-owned. It does
- * not happen again — the run drops to the invoker at main() (sys/identity) —
- * and what was left from before is the user's to take back once. Two arms below
- * name it, for the two faces a root-owned repository has. */
-#define REPO_RECLAIM_HINT \
-    "An older dotta run under sudo could leave it root-owned; take it back " \
-    "once:\n  sudo chown -R \"$(id -u):$(id -g)\" %s"
-
 /**
  * Open dotta's store
  */
@@ -131,13 +123,10 @@ error_t repo_open(const config_t *config, git_repository **repo_out) {
     const char *repo_path = config->repo_dir;
     git_repository *repo = NULL;
 
-    /* Where the path came from, when it did not come from the default — for the
-     * refusals below that send the user to 'dotta init' or to DOTTA_REPO_DIR.
-     * The reader config_load's override has, so the note cannot name an origin
-     * the load did not use. */
-    const char *env_repo = config_repo_dir_from_env();
-    const char *env_note = env_repo ? "\nDOTTA_REPO_DIR is set to: " : "";
-    const char *env_value = env_repo ? env_repo : "";
+    /* Where the path came from, when the environment named it: the one source
+     * of the path its reader cannot see in the path. The reader config_load's
+     * override has, so the clause cannot name an origin the load did not use. */
+    const char *origin = config_repo_dir_from_env() ? " (DOTTA_REPO_DIR)" : "";
 
     /*
      * Open the repository, and let the open be the answer to whether one is there.
@@ -169,38 +158,27 @@ error_t repo_open(const config_t *config, git_repository **repo_out) {
             if (n >= 0 && (size_t) n < sizeof(head) &&
                 fs_lstat_occupant(head, NULL) == FS_OCCUPANT_NONE) {
                 return ERROR(
-                    ERR_NOT_FOUND, "No dotta repository found at: %s\n\n"
-                    "Run 'dotta init' to create a new repository%s%s",
-                    repo_path, env_note, env_value
+                    ERR_NOT_FOUND, "No dotta repository found at %s%s", repo_path,
+                    origin
                 );
             }
             return ERROR(
-                ERR_GIT, "Cannot read the repository at: %s\n\n"
-                "Check its ownership and permissions. " REPO_RECLAIM_HINT
-                "%s%s", repo_path, repo_path, env_note, env_value
+                ERR_GIT, "Cannot read the repository at %s%s", repo_path, origin
             );
         }
-        if (error_code(err) == ERR_PERMISSION) {
-            /* libgit2's owner check (CVE-2022-24765): the repository is another
-             * user's — any other user's, which is why the hint says "could" —
-             * and root is the one owner an older dotta could have made of it,
-             * since the repository is per-user by design. After the drop, root's
-             * own is one too. */
-            return error_wrap(
-                err, "Cannot open the repository at: %s\n" REPO_RECLAIM_HINT,
-                repo_path, repo_path
-            );
-        }
+        /* Every other failure is its own words beneath the path — libgit2's owner
+         * check (CVE-2022-24765) among them, another user's repository, which
+         * its leaf names */
         return error_wrap(err, "Failed to open repository at: %s", repo_path);
     }
 
     /*
      * Opened; is it dotta's? The store's own declaration (repo_is_store): a
      * repository without one is somebody's — a project, a mirror, the store an
-     * older dotta kept checked out — and dotta writes into none of them. The
-     * remedy named is 'dotta init', which is the verb that decides: it takes a
-     * bare repository with no refs at all and refuses one with a working tree
-     * or a history, naming the true thing.
+     * older dotta kept checked out — and dotta writes into none of them. Which
+     * one it is, the refusal does not guess: 'dotta init' takes a bare repository
+     * with no refs at all and refuses one with a working tree or a history, naming
+     * the true thing.
      */
     bool declared = false;
     err = repo_is_store(repo, &declared);
@@ -211,9 +189,8 @@ error_t repo_open(const config_t *config, git_repository **repo_out) {
     if (!declared) {
         git_repository_free(repo);
         return ERROR(
-            ERR_NOT_FOUND, "The repository at %s is not a dotta store\n\n"
-            "Run 'dotta init' to make it one, or point DOTTA_REPO_DIR at your "
-            "store%s%s", repo_path, env_note, env_value
+            ERR_NOT_FOUND, "The repository at %s is not a dotta store%s", repo_path,
+            origin
         );
     }
 

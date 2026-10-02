@@ -246,8 +246,7 @@ static inline bool manifest_is_claim(
  * nothing (cmds/add.c cmd_add, cmds/revert.c refuse_second_name); add's rule
  * question, where it claims nothing either and so is a discovery, meeting every
  * rule (cmds/add.c add_verdict); and the walk that enters such a directory for
- * the claims beneath it, and the refusal that names the update re-capturing them
- * (cmds/add.c add_collect, add_refuse_excluded). Every other `tracked` read in
+ * the claims beneath it (cmds/add.c add_collect). Every other `tracked` read in
  * the tree stands where the kind is already settled and asks the field's own
  * meaning, not this predicate.
  */

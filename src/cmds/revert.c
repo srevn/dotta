@@ -212,7 +212,6 @@ static error_t claim_standing(
  * @param profile Whose claims these are (must not be NULL)
  * @param filesystem_path Where the typed name resolves (must not be NULL)
  * @param name The typed name (must not be NULL)
- * @param commit Abbreviated target commit oid, for the remedy (must not be NULL)
  * @return The refusal, or NULL when the name may be authored
  */
 static error_t refuse_second_name(
@@ -220,15 +219,13 @@ static error_t refuse_second_name(
     const git_tree *tip,
     const char *profile,
     const char *filesystem_path,
-    const char *name,
-    const char *commit
+    const char *name
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(tip);
     CHECK_NULL(profile);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(name);
-    CHECK_NULL(commit);
 
     manifest_t *view = NULL;
     error_t err = manifest_build_tree(
@@ -243,24 +240,17 @@ static error_t refuse_second_name(
          * one path here the user never typed — so it is spelled the way the shell
          * spells it, as the screen that reports the pair this refuses already
          * spells it (cmds/status.c's unused-path listing, base/output.h
-         * output_format_path). The remedy stays runnable: a tilde is what the
-         * shell expands back. */
+         * output_format_path). */
         char shown[PATH_MAX];
         output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));
 
-        /* Both remedies are spelled to run: the revert in the three-positional
-         * form, which assigns its words by position and never asks
-         * refspec_looks_like_commit whether the second one is a commit — the
-         * two-positional form reads a tag or a branch name as a profile and refuses
-         * the command it was offered as. */
+        /* No clause: the way through is in the fact. The name the profile has
+         * reverts the file as its path does — a name the commit did not hold
+         * falls through to the path (entry_to_restore) — and giving that name
+         * up is remove's, the verb the fact implies. */
         return ERROR(
-            ERR_INVALID_ARG,
-            "Profile '%s' names '%s' as '%s'\n\n"
-            "'%s' would be a second name for it, and a profile names a path once.\n"
-            "  dotta revert %s %s %s   restores those bytes into it\n"
-            "  dotta remove %s %s   gives that name up first",
-            profile, shown, row->storage_path, name,
-            profile, shown, commit, profile, row->storage_path
+            ERR_INVALID_ARG, "Profile '%s' names '%s' as '%s', and '%s' would be a "
+            "second name for it", profile, shown, row->storage_path, name
         );
     }
 
@@ -945,7 +935,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * the typed one's alone. */
     if (arg.key == PATH_KEY_STORAGE && !standing_entry && filesystem_path) {
         err = refuse_second_name(
-            ctx, stage_tree(stage), profile, filesystem_path, restored_name, opts->commit
+            ctx, stage_tree(stage), profile, filesystem_path, restored_name
         );
         if (err) goto cleanup;
     }

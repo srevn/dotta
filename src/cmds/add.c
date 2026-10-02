@@ -338,10 +338,9 @@ static error_t add_spell(
     if (target && input[0] != '~' && strcmp(spelled, target) != 0 &&
         !str_path_beneath(spelled, target, target[1] ? strlen(target) : 0)) {
         return ERROR(
-            ERR_INVALID_ARG,
-            "Path '%s' resolves outside target root '%s'.\n"
-            "A path spelled from here, or one walking out with '..', cannot "
-            "escape the target.", spelled, target
+            ERR_INVALID_ARG, "Path '%s' resolves outside target root '%s', and a path "
+            "spelled from here or walking out with '..' cannot escape the target",
+            spelled, target
         );
     }
 
@@ -823,9 +822,12 @@ static error_t add_refuse_excluded(
  * names three times appears twice and is asked twice — the question is pure,
  * and a set to spend on that repetition would cost more than it saves.
  *
- * The name to give up is the one this command would move *to*: with it gone the
- * path is named once, the pre-command winner stands, and nothing moves. Giving
- * up the kept name performs the move instead of preventing it.
+ * The way out the refusal names is a removal, of the name this command would
+ * move *to*: with it gone the path is named once, the pre-command winner stands,
+ * and nothing moves. Giving up the kept name performs the move instead of
+ * preventing it, and a capture under the other name, by a command of its own,
+ * leaves this one refused as it was — the names still move, which is the whole
+ * question.
  *
  * Not liftable by --force: --force overwrites bytes under a name the profile
  * holds, which is not what abandoning a name is.
@@ -856,12 +858,10 @@ static error_t add_refuse_moves(const walk_t *walk) {
         output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));
 
         return ERROR(
-            ERR_INVALID_ARG, "Profile '%s' names '%s' as '%s'\n\n"
-            "This command's directory claims would name it '%s', which it does "
-            "not capture — a directory must be named before the paths beneath it.\n"
-            "  dotta add %s --force %s   captures those bytes under that name\n"
-            "  dotta remove %s %s   gives that name up instead",
-            walk->profile, shown, kept, next, walk->profile, next, walk->profile, next
+            ERR_INVALID_ARG, "Profile '%s' names '%s' as '%s', and this command's "
+            "directory claims would name it '%s', which it does not capture; dotta "
+            "remove %s %s gives that name up", walk->profile, shown, kept, next,
+            walk->profile, next
         );
     }
 
@@ -1578,9 +1578,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             const char *base = strlen(blocker) < strlen(opts->profile)
                 ? blocker : opts->profile;
             err = ERROR(
-                ERR_INVALID_ARG, "Profile '%s' cannot exist beside profile '%s'\n\n"
-                "Git stores each profile as a branch, and '%s' cannot be both "
-                "a branch and a folder of branches.\n", opts->profile, blocker, base
+                ERR_INVALID_ARG, "Profile '%s' cannot exist beside profile '%s': '%s' "
+                "cannot be both a branch and a folder of branches", opts->profile,
+                blocker, base
             );
             goto cleanup;
         }
@@ -1605,24 +1605,21 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         if (err) goto cleanup;
 
         /* Refuse a silent move, before the commit it would have shaped. A branch
-         * has one custom/ namespace, so a profile holds one relocatable tree:
-         * enable is the verb that moves it, in place, and a second tree is a
-         * second profile. Both ways out are named — the first for the user who
-         * moved the tree, the second for the one who has two. Binding a row that
-         * has no target is fine, and so is naming the row's own directory, under
-         * its spelling or another (mount_same_target): the row's is the binding
-         * — the table below, the UPSERT after the commit and the record's join
-         * through the view all spell it the row's way — so the flag takes the
-         * row's spelling here, and the arguments re-root under it. */
+         * has one custom/ namespace, so a profile holds one relocatable tree,
+         * and a second tree is a second profile — the fact's one target says
+         * so. Enable is the verb that moves the tree, in place, which no fact
+         * implies: the clause names it, at the directory the flag resolved to.
+         * Binding a row that has no target is fine, and so is naming the row's
+         * own directory, under its spelling or another (mount_same_target): the
+         * row's is the binding — the table below, the UPSERT after the commit
+         * and the record's join through the view all spell it the row's way —
+         * so the flag takes the row's spelling here, and the arguments re-root
+         * under it. */
         if (bound && !mount_same_target(bound, target)) {
             err = ERROR(
-                ERR_INVALID_ARG,
-                "Profile '%s' is bound at %s, and a profile has one target\n"
-                "  dotta profile enable %s --target %s    moves it; "
-                "the next apply relocates its paths\n"
-                "  dotta add <profile> --target %s <path>    "
-                "a second tree is a second profile",
-                opts->profile, bound, opts->profile, opts->target, opts->target
+                ERR_INVALID_ARG, "Profile '%s' is bound at %s, and a profile has one "
+                "target; dotta profile enable %s --target %s moves it", opts->profile,
+                bound, opts->profile, target
             );
             goto cleanup;
         }
@@ -1773,7 +1770,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * own listing, the name, the rules, the claim the profile holds at the path,
      * the branch's shape, and the listing itself. `typed` is the whole of what
      * the user's choice of shape means, and it discriminates at exactly four
-     * places: the absent path's hint, the three sentences the dedup gate owes,
+     * places: the absent path's clause, the three sentences the dedup gate owes,
      * the choice of name, and the membership gate that is the one place a second
      * name for one path can be born. */
     for (size_t i = 0; i < opts->file_count; i++) {
@@ -1816,10 +1813,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             filesystem_path = mount_resolve(ctx->arena, mounts, opts->profile, typed);
             if (!filesystem_path) {
                 err = ERROR(
-                    ERR_INVALID_ARG,
-                    "'%s' has no filesystem path for '%s' on this machine\n"
-                    "  dotta add %s --target /path %s", file, opts->profile,
-                    opts->profile, file
+                    ERR_INVALID_ARG, "'%s' has no filesystem path for '%s' on this "
+                    "machine; --target gives the profile one", file, opts->profile
                 );
                 goto cleanup;
             }
@@ -1854,8 +1849,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                  * first, so each arm leaves on its own. */
                 if (typed) {
                     err = ERROR(
-                        ERR_NOT_FOUND, "Path not found: %s (storage path '%s')\n"
-                        "For a relative path, write ./%s", filesystem_path, file, file
+                        ERR_NOT_FOUND, "Path not found: %s (storage path '%s'); ./%s "
+                        "reads it relative to here", filesystem_path, file, file
                     );
                     goto cleanup;
                 }
@@ -1864,16 +1859,15 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                  * once more, on the argument itself, because the sentence owed
                  * turns on the answer and a guess about `..` would be worse than
                  * none. Only here, where the path ends the command. Nothing is
-                 * re-rooted under a target that is not there. */
+                 * re-rooted under a target that is not there. The argument stands
+                 * beside the target it was re-rooted beneath, which is the way
+                 * out: one spelled as the target is spelled, or relative to it,
+                 * is read inside it as typed. */
                 if (target && file[0] == '/') {
                     if (!add_inside(file, target, ctx->arena)) {
                         err = ERROR(
-                            ERR_NOT_FOUND, "Path not found: %s\n"
-                            "  --target is bound at %s, and an absolute path is "
-                            "read inside it, so '%s' was re-rooted beneath it.\n"
-                            "  Spell the argument the way the target is spelled, "
-                            "or give it relative to the target.",
-                            filesystem_path, target, file
+                            ERR_NOT_FOUND, "Path not found: %s ('%s' re-rooted beneath "
+                            "the target at %s)", filesystem_path, file, target
                         );
                         goto cleanup;
                     }
@@ -1987,21 +1981,17 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         /* A kind the claim contradicts: what stands there now is not what the
          * profile holds there. The removal is name-shaped: it takes that claim
          * and everything beneath it, under every topology, where a
-         * filesystem-shaped one addresses another key at a binder's own
-         * spelling. */
+         * filesystem-shaped one addresses another key at a binder's own spelling
+         * — so the clause spells it, a way out the fact cannot imply. */
         if (held && path_type_kind(held->type) != kind) {
             char shown[PATH_MAX];
             output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));
             err = ERROR(
-                ERR_INVALID_ARG,
-                "Profile '%s' holds '%s' as the %s '%s', and a %s stands "
-                "there now\n\n"
-                "  dotta remove %s %s   gives that claim up, and everything "
-                "beneath it",
-                opts->profile, shown,
+                ERR_INVALID_ARG, "Profile '%s' holds '%s' as the %s '%s', and a %s "
+                "stands there now; dotta remove %s %s gives that claim up, and "
+                "everything beneath it", opts->profile, shown,
                 held->type == PATH_TYPE_DIRECTORY ? "directory" : "file",
-                held->storage_path, fs_stat_noun(&st),
-                opts->profile, held->storage_path
+                held->storage_path, fs_stat_noun(&st), opts->profile, held->storage_path
             );
             goto cleanup;
         }
@@ -2011,23 +2001,20 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * a second name for one path can be born; a name the profile already
          * holds is a re-capture, gated by --force at the pre-flight, and a derived
          * claim names nothing and blocks nothing (core/manifest.h
-         * manifest_is_derived). revert.c refuse_second_name is the same condition
-         * for the same rule, with its own verb's remedies. */
+         * manifest_is_derived). The clause spells the re-capture under the name
+         * the profile has, because --force on the name typed is refused here as
+         * well: a refusal is not a confirmation. revert.c refuse_second_name is
+         * the same condition for the same rule, said with no clause — its verb
+         * takes the name the profile has as it takes the path. */
         if (typed && held && !manifest_is_derived(held) &&
             !manifest_holds_name(view, opts->profile, filesystem_path, typed)) {
             char shown[PATH_MAX];
             output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));
             err = ERROR(
-                ERR_INVALID_ARG,
-                "Profile '%s' names '%s' as '%s'\n\n"
-                "'%s' would be a second name for it, and a profile names a "
-                "path once.\n"
-                "  dotta add %s --force %s   re-captures it under the name "
-                "it has\n"
-                "  dotta remove %s %s   gives that name up first",
-                opts->profile, shown, held->storage_path, typed,
-                opts->profile, held->storage_path,
-                opts->profile, held->storage_path
+                ERR_INVALID_ARG, "Profile '%s' names '%s' as '%s', and '%s' would be a "
+                "second name for it; dotta add %s --force %s re-captures it",
+                opts->profile, shown, held->storage_path, typed, opts->profile,
+                held->storage_path
             );
             goto cleanup;
         }
@@ -2173,8 +2160,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 continue;
             }
             err = ERROR(
-                ERR_EXISTS, "File '%s' (as '%s') already exists in profile '%s'. "
-                "Use --force to overwrite.", path->filesystem_path,
+                ERR_EXISTS, "File '%s' (as '%s') already exists in profile '%s'; "
+                "--force overwrites it", path->filesystem_path,
                 path->claim.storage_path, opts->profile
             );
             goto cleanup;

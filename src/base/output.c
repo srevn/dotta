@@ -24,6 +24,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
 #include "base/arena.h"
@@ -1170,7 +1171,11 @@ void output_format_path(
  * ═══════════════════════════════════════════════════════════════════ */
 
 /**
- * The answer typed: y or Y is yes, an empty line the default, anything else no
+ * The answer typed: "y" or "yes" in any case is yes, an empty line the default,
+ * anything else no
+ *
+ * The line is judged whole, its surrounding blanks aside: a word that only starts
+ * with y — a line a pipe carried for something else — consents to nothing.
  */
 static bool output_read_answer(bool default_value) {
     char response[16];
@@ -1178,18 +1183,27 @@ static bool output_read_answer(bool default_value) {
     if (fgets(response, sizeof(response), stdin) == NULL)
         return default_value;
 
-    /* An answer longer than the buffer: the rest of its line is drained, so it
-     * never reaches the next question */
+    /* A line the buffer could not hold: the rest of it is drained, so it never
+     * reaches the next question, and no word that long is yes. A shorter line
+     * with no newline is the input's last, ended by its end. */
     size_t len = strlen(response);
-    if (len > 0 && response[len - 1] != '\n') {
+    if (len == sizeof(response) - 1 && response[len - 1] != '\n') {
         int c;
         while ((c = getchar()) != '\n' && c != EOF) { }
+        return false;
     }
 
-    if (len == 0 || response[0] == '\n')
+    /* The line's word, its surrounding blanks and its newline aside */
+    char *word = response;
+    while (*word && isspace((unsigned char) *word)) word++;
+    len = strlen(word);
+    while (len > 0 && isspace((unsigned char) word[len - 1])) len--;
+    word[len] = '\0';
+
+    if (len == 0)
         return default_value;
 
-    return (response[0] == 'y' || response[0] == 'Y');
+    return strcasecmp(word, "y") == 0 || strcasecmp(word, "yes") == 0;
 }
 
 /**

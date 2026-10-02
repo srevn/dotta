@@ -95,28 +95,36 @@ typedef struct {
  * its index points at; there is no growth and no reallocation, and manifest_rows
  * hands the view's out as the public slice.
  *
- * profiles[i] names contributions[i]: one array is the public projection of the
- * other, kept beside it because manifest_profiles owes a contiguous array of names.
+ * The health channel's slices — what the build could not make a row of — are
+ * flat arena arrays grown by arena_grow where each entry is noted, lent whole,
+ * and empty on the common build: no allocation until the first note.
  */
 struct manifest {
-    contribution_t *contributions; /* One per profile, in precedence order (arena) */
-    const char **profiles;         /* Their names, the public projection (arena) */
-    size_t profile_count;          /* Both arrays' count */
+    /* The contributions, one per profile the build walks, in precedence order,
+     * and their names beside them: profiles[i] names contributions[i], one array
+     * the public projection of the other, kept because manifest_profiles owes a
+     * contiguous array of names. */
+    contribution_t *contributions;               /* Arena; one per profile */
+    const char **profiles;                       /* Arena; their names, the rows' own pointers */
+    size_t profile_count;                        /* Both arrays' count */
 
-    manifest_row_t **rows;         /* The winners, cut once at layering (arena, exact) */
-    size_t count;                  /* Rows in the spine */
-    hashmap_t *index;              /* path → the winning row (arena) */
+    /* Precedence over the settled contributions: the index, one winning row per
+     * path, and the spine cut once from it at layering (manifest_layer). */
+    manifest_row_t **rows;                       /* Arena, exact; the winners */
+    size_t count;                                /* Rows in the spine */
+    hashmap_t *index;                            /* Arena; path → the winning row */
 
-    const mount_table_t *mounts;   /* The table the rows were placed by: the build's own, or a tree view's caller's */
+    /* The table the rows were placed by, lent back by manifest_mounts: the build's
+     * own, derived from the rows it read, or a tree view's caller's. */
+    const mount_table_t *mounts;                 /* The build's, or the caller's */
 
-    /* The two health slices: claims the build could not place (no target binding)
-     * and names a profile did not keep (it names the path otherwise), both grouped
-     * by profile in build order. Flat arena arrays, grown by arena_grow; empty
-     * on the common build (no allocation until the first note). */
-    manifest_unbound_claim_t *unbound;
+    /* The claims the build could not place: no target binding here (manifest_unbound) */
+    manifest_unbound_claim_t *unbound;           /* Arena; grouped by profile, in build order */
     size_t unbound_count;
     size_t unbound_capacity;
-    manifest_unkept_claim_t *unkept;
+
+    /* The names the settle did not keep: another stands at the path (manifest_unkept) */
+    manifest_unkept_claim_t *unkept;             /* Arena; grouped by profile, in build order */
     size_t unkept_count;
     size_t unkept_capacity;
 };

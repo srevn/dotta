@@ -35,11 +35,11 @@ error_t mount_validate_target(const char *target) {
 
     /* The place: it stands, and it is a directory — one stat, through a link
      * standing at the spelling, because a binding means the directory the link
-     * reaches, which is what mount_same_target reads of it too. Absence has a
-     * remedy only when nothing is there: a link standing at the spelling reaches
-     * nothing, and a mkdir would meet the link rather than make the directory.
-     * Every other reason is the kernel's own words — a component that is a file
-     * reads "Not a directory", where a mkdir -p would fail too. */
+     * reaches, which is what mount_same_target reads of it too. An absence is
+     * nothing there, or a link standing at the spelling and reaching nothing,
+     * which is named as the link it is: something stands there. Every other reason
+     * is the kernel's own words — a component that is a file reads "Not a
+     * directory". */
     struct stat st;
     if (fs_stat(target, &st) != 0) {
         if (errno != ENOENT) {
@@ -50,10 +50,7 @@ error_t mount_validate_target(const char *target) {
                 ERR_INVALID_ARG, "Target '%s' is a link to nothing", target
             );
         }
-        return ERROR(
-            ERR_INVALID_ARG, "Target directory does not exist: '%s'\n"
-            "Create it first: mkdir -p '%s'", target, target
-        );
+        return ERROR(ERR_INVALID_ARG, "Target directory does not exist: '%s'", target);
     }
     if (!S_ISDIR(st.st_mode)) {
         return ERROR(

@@ -141,14 +141,8 @@ error_t encryption_policy_should_encrypt(
     if (is_protected_meta_file(storage_path)) {
         if (request == ENCRYPTION_REQUEST_ENCRYPT) {
             return ERROR(
-                ERR_VALIDATION,
-                "Cannot encrypt system file '%s': this file must remain plaintext "
-                "for dotta to function correctly.\n\n"
-                "System files that cannot be encrypted:\n"
-                "  - .bootstrap (must be executable)\n"
-                "  - .dottaignore (must be readable for ignore patterns)\n"
-                "  - .dotta/metadata.json (must be readable for file tracking)",
-                storage_path
+                ERR_VALIDATION, "Cannot encrypt system file '%s': dotta reads it as "
+                "plaintext", storage_path
             );
         }
 
@@ -181,13 +175,10 @@ error_t encryption_policy_should_encrypt(
     if (request == ENCRYPTION_REQUEST_PLAINTEXT) {
         if (previously_encrypted) {
             return ERROR(
-                ERR_VALIDATION,
-                "Cannot store '%s' as plaintext: its committed content is encrypted.\n\n"
-                "--no-encrypt keeps a path out of the auto-encrypt patterns; it "
-                "does not decrypt content that is already stored encrypted.\n\n"
-                "To store it as plaintext from here on, remove the path from the "
-                "profile and add it again with --no-encrypt: a path with no prior "
-                "blob has no prior state to maintain.", storage_path
+                ERR_VALIDATION, "Cannot store '%s' as plaintext: its committed content "
+                "is encrypted, and --no-encrypt does not decrypt content; a path "
+                "removed from the profile and added again with --no-encrypt is "
+                "stored plaintext", storage_path
             );
         }
 

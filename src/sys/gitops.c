@@ -1842,10 +1842,7 @@ error_t gitops_rebase_inmemory_safe(
              * GIT_EUNMERGED (-10) indicate conflicts
              */
             if (rc == GIT_EMERGECONFLICT || rc == GIT_EUNMERGED) {
-                return ERROR(
-                    ERR_CONFLICT, "Rebase resulted in conflicts. "
-                    "Resolve manually using 'git rebase' or try merge strategy instead."
-                );
+                return ERROR(ERR_CONFLICT, "Rebase met conflicts");
             }
 
             err = error_from_git(rc);

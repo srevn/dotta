@@ -453,10 +453,8 @@ error_t stage_commit(stage_t *st, const char *message, bool *out_committed) {
 
     if (rc == GIT_EMODIFIED || rc == GIT_EEXISTS) {
         return ERROR(
-            ERR_CONFLICT,
-            "Reference '%s' was changed by another writer since this command "
-            "read it; nothing was committed\n"
-            "Run the command again", st->refname
+            ERR_CONFLICT, "Reference '%s' was changed by another writer since this "
+            "command read it; nothing was committed", st->refname
         );
     }
     if (rc < 0) {

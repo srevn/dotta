@@ -118,11 +118,12 @@ static error_t resolve_merge_trees(
     );
     if (err) {
         if (error_code(err) == ERR_NOT_FOUND) {
+            /* Only a strategy that takes one side whole needs no common commit;
+             * the strategies are this module's words, whichever spelling — the
+             * flag, the configuration — named the one that met this */
             return ERROR(
-                ERR_NOT_FOUND,
-                "No common history for branch '%s' - branches may have been "
-                "created independently. Use 'ours' or 'theirs' strategy instead",
-                ctx->branch_name
+                ERR_NOT_FOUND, "Branch '%s' and its remote share no history; the ours "
+                "and theirs strategies take one side whole", ctx->branch_name
             );
         }
         return error_wrap(
@@ -144,8 +145,8 @@ static error_t resolve_merge_trees(
     if (git_index_has_conflicts(merged_index)) {
         git_index_free(merged_index);
         return ERROR(
-            ERR_CONFLICT, "Merge resulted in conflicts for branch '%s'. "
-            "Please resolve manually using 'git merge'.", ctx->branch_name
+            ERR_CONFLICT, "Merging branch '%s' with its remote met conflicts",
+            ctx->branch_name
         );
     }
 

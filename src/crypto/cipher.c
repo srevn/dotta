@@ -199,11 +199,7 @@ error_t cipher_encrypt(
      * crypto entry point enforces the rule for every caller. */
     if (plaintext_len > CIPHER_MAX_CONTENT) {
         err = ERROR(
-            ERR_INVALID_ARG,
-            "Content too large: %zu bytes (max %zu bytes).\n\n"
-            "Rationale: dotfiles should be small configuration files.\n"
-            "If you need to manage files larger than 100MB, consider whether\n"
-            "they belong in a dotfile manager or should use a different tool.",
+            ERR_INVALID_ARG, "Content too large: %zu bytes (max %zu bytes)",
             plaintext_len, CIPHER_MAX_CONTENT
         );
         goto cleanup;
@@ -373,11 +369,7 @@ error_t cipher_decrypt(
      * the addition cannot wrap. */
     if (ciphertext_len > CIPHER_MAX_CONTENT + (size_t) CIPHER_OVERHEAD) {
         err = ERROR(
-            ERR_INVALID_ARG,
-            "Ciphertext too large: %zu bytes (max %zu bytes).\n\n"
-            "Rationale: dotfiles should be small configuration files.\n"
-            "If you need to manage files larger than 100MB, consider whether\n"
-            "they belong in a dotfile manager or should use a different tool.",
+            ERR_INVALID_ARG, "Ciphertext too large: %zu bytes (max %zu bytes)",
             ciphertext_len, CIPHER_MAX_CONTENT + (size_t) CIPHER_OVERHEAD
         );
         goto cleanup;

@@ -6,6 +6,7 @@
 
 #include <ctype.h>
 #include <git2.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/utsname.h>

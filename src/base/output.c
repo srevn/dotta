@@ -686,21 +686,26 @@ void output_init(
 ) {
     CHECK_NULL(ctx);
 
-    /* Nothing of the report stands yet, and the colours are the mode's: for the
-     * report's stream, and for stderr, where failures and questions land */
-    *ctx = (output_t){
-        .stream = stream ? stream : stdout,
-        .verbosity = verbosity,
-        .color_mode = color_mode,
-    };
-    ctx->color_enabled = output_colors_on(color_mode, ctx->stream);
-    ctx->stderr_color_enabled = output_colors_on(color_mode, stderr);
+    /* Nothing of the report stands yet, and the colours are the mode's
+     * (output_set_color_mode) */
+    *ctx = (output_t){ .stream = stream ? stream : stdout, .verbosity = verbosity };
+    output_set_color_mode(ctx, color_mode);
 }
 
 void output_set_verbosity(output_t *ctx, output_verbosity_t verbosity) {
     if (ctx) {
         ctx->verbosity = verbosity;
     }
+}
+
+void output_set_color_mode(output_t *ctx, output_color_mode_t color_mode) {
+    if (!ctx) return;
+
+    /* Both decisions, one mode: for the report's stream, and for stderr, where
+     * failures and questions land */
+    ctx->color_mode = color_mode;
+    ctx->color_enabled = output_colors_on(color_mode, ctx->stream);
+    ctx->stderr_color_enabled = output_colors_on(color_mode, stderr);
 }
 
 void output_set_stream(output_t *ctx, FILE *stream) {
@@ -896,19 +901,17 @@ void output_write(
     output_put(&line);
 }
 
-void output_error(output_t *ctx, const char *fmt, ...) {
-    if (!ctx || !fmt) return;
+void output_error(output_t *ctx, error_t err) {
+    if (!ctx || !err) return;
 
+    /* One block, written once: the facts, the outermost first, each a datum on
+     * a line of its own */
     line_t line;
     output_start(&line, ctx, stderr);
-    output_appendf(&line, "{bold;red}Error:{reset} ");
-
-    va_list args;
-    va_start(args, fmt);
-    output_walk(&line, fmt, &args);
-    va_end(args);
-
-    output_bytes(&line, "\n", 1);
+    output_appendf(&line, "{bold;red}Error:{reset} %s\n", error_message(err));
+    for (error_t cause = error_cause(err); cause; cause = error_cause(cause)) {
+        output_appendf(&line, "  Caused by: %s\n", error_message(cause));
+    }
     output_put(&line);
 }
 

@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <git2/errors.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -142,23 +143,6 @@ error_t error_root(error_t err) {
         err = err->cause;
     }
     return err;
-}
-
-void error_print(error_t err, FILE *stream) {
-    if (!err) return;
-
-    fprintf(
-        stream, "Error: %s\n",
-        error_message(err)
-    );
-
-    /* Print cause chain */
-    for (error_t cause = error_cause(err); cause; cause = error_cause(cause)) {
-        fprintf(
-            stream, "  Caused by: %s\n",
-            error_message(cause)
-        );
-    }
 }
 
 _Noreturn void error_die(const char *fmt, ...) {

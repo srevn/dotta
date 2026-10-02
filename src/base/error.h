@@ -57,16 +57,16 @@
  * --------
  * A message is one line, and a fact: what could not be done, or what is so, about
  * what — and why, where the cause beneath does not already say it. The renderer
- * owns every break (error_print), and a datum goes into a message as the bytes
- * it is, never escaped by its writer. A way out is a clause of the fact, after
- * ';', and only where the fact does not imply it: the flag, key or spelling the
- * user could not guess, and what it does (base/gitignore.c validate_pattern's
- * escape), true for every caller of the site — a template the user must fill in
- * is none. A wrap says where its cause stands — a file, a key, a profile or a
- * role the cause cannot name — or it is not written. A re-mint — a new error
- * spelled from another's error_message — keeps one fact's words, never its causes.
- * A message opening on a word opens capitalised; none closes with a period; a
- * datum is quoted '%s'.
+ * owns every break (base/output.h output_error), and a datum goes into a message
+ * as the bytes it is, never escaped by its writer. A way out is a clause of the
+ * fact, after ';', and only where the fact does not imply it: the flag, key or
+ * spelling the user could not guess, and what it does (base/gitignore.c
+ * validate_pattern's escape), true for every caller of the site — a template
+ * the user must fill in is none. A wrap says where its cause stands — a file, a
+ * key, a profile or a role the cause cannot name — or it is not written. A re-mint
+ * — a new error spelled from another's error_message — keeps one fact's words,
+ * never its causes. A message opening on a word opens capitalised; none closes
+ * with a period; a datum is quoted '%s'.
  *
  * ERR_PERMISSION
  * --------------
@@ -102,7 +102,6 @@
 #define DOTTA_ERROR_H
 
 #include <stdarg.h>
-#include <stdio.h>
 #include <types.h>
 
 /**
@@ -202,7 +201,7 @@ error_code_t error_code(error_t err);
  * Get the cause — the fact this one wraps
  *
  * One link down the chain, for a reader that walks it: error_root is the walk
- * taken to its end, error_print the walk rendered.
+ * taken to its end, base/output.h output_error the walk rendered.
  *
  * @param err Error
  * @return The wrapped fact, or NULL at the root and for NULL
@@ -215,23 +214,13 @@ error_t error_cause(error_t err);
  * The error that started it: the mechanism's own refusal, verbatim, beneath
  * whatever context the layers above wrapped around it. A consumer that already
  * names its subject (a receipt line built around the path) renders the root's
- * message, where the refusal speaks for itself; error_print renders the whole
- * chain instead.
+ * message, where the refusal speaks for itself; base/output.h output_error renders
+ * the whole chain instead.
  *
  * @param err Error
  * @return The deepest cause — err itself when nothing is wrapped
  */
 error_t error_root(error_t err);
-
-/**
- * Print error to stream
- *
- * Prints the error's message and every cause in its chain, one line each.
- *
- * @param err Error
- * @param stream Output stream (e.g., stderr)
- */
-void error_print(error_t err, FILE *stream);
 
 /**
  * End the run: the report flushed, the terminal given back, one line, abort(3)

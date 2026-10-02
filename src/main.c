@@ -399,10 +399,10 @@ static int run_spec(
     close_run(&ctx.run);
     arena_free(arena);
 
-    /* One line renders every failure — an open that refused and a handler that
-     * did, under the same flag. */
+    /* One teller for every failure — an open that refused and a handler that
+     * did, under the same flag (base/output.h output_error). */
     if (err != NULL) {
-        if (!resolved->silent_failure) error_print(err, stderr);
+        if (!resolved->silent_failure) output_error(out, err);
         return 1;
     }
     /* Passthrough dispatch writes via *ctx->exit_code to propagate the child's
@@ -471,11 +471,25 @@ int main(int argc, char **argv) {
      */
     setvbuf(stdout, NULL, _IOLBF, 0);
 
+    /* Ignore SIGPIPE so writes to broken pipes return EPIPE instead of killing
+     * dotta — from the first line on, so a refusal told to a stderr nobody reads
+     * still ends the run with the run's own status. Required for any code path
+     * that streams output to a caller-controlled fd (e.g., bootstrap scripts
+     * whose stdout the user may pipe to a head/grep that closes early). */
+    signal(SIGPIPE, SIG_IGN);
+
     const char *prog = program_name(argc > 0 ? argv[0] : NULL);
 
+    /* The output, before anything that can fail: every failure from here on is
+     * told through it (base/output.h output_error) — a word the root does not
+     * know, the prologue's refusal, the run's — at the defaults until the
+     * configuration is read. main's, as the process is. */
+    output_t out;
+    output_init(&out, stdout, OUTPUT_NORMAL, OUTPUT_COLOR_AUTO);
+
     /* Root-level dispatch resolution — pure data projection of the registry. No
-     * identity, libgit2, config or output is needed for help/version/usage, so
-     * resolve first and let those branches exit before anything is established. */
+     * identity, libgit2 or config is needed for help/version/usage, so resolve
+     * first and let those branches exit before anything is established. */
     const args_command_t *spec = NULL;
     switch (args_resolve_root(dotta_commands, argc, argv, &spec)) {
         case ARGS_ROOT_NONE:
@@ -488,7 +502,14 @@ int main(int argc, char **argv) {
             version_print(stdout);
             return 0;
         case ARGS_ROOT_UNKNOWN:
-            fprintf(stderr, "Error: Unknown command '%s'\n", argv[1]);
+            /* What the root does not know, said as the engine says it one level
+             * down: a token spelled as a flag is an option, a word a command.
+             * The token is a datum (base/output.h). */
+            if (argv[1][0] == '-') {
+                output_error(&out, ERROR(ERR_INVALID_ARG, "Unknown option '%s'", argv[1]));
+            } else {
+                output_error(&out, ERROR(ERR_INVALID_ARG, "Unknown command '%s'", argv[1]));
+            }
             args_render_root_usage(stderr, dotta_commands, prog);
             return 1;
         case ARGS_ROOT_COMMAND:
@@ -532,9 +553,17 @@ int main(int argc, char **argv) {
     config_t *config = NULL;
     error_t err = identity_init(process);
     if (!err) err = config_load(process, &config);
-    if (!err) err = gitops_init();
+    if (!err) {
+        /* The configuration's level and colours, over the defaults the output
+         * was made at: libgit2's refusal below is told in the colours chosen */
+        output_set_verbosity(&out, config->verbosity);
+        output_set_color_mode(&out, config->color);
+        err = gitops_init();
+    }
     if (err) {
-        error_print(err, stderr);
+        /* Told under the spec's own silence, as the run's refusal is (run_spec):
+         * a shell's completion reads nothing it did not ask for */
+        if (!spec->silent_failure) output_error(&out, err);
         arena_free(process);
         return 1;
     }
@@ -564,17 +593,6 @@ int main(int argc, char **argv) {
         }
         (void) sigaction(terminating[i], &handler, NULL);
     }
-
-    /* Ignore SIGPIPE so writes to broken pipes return EPIPE instead of killing
-     * dotta. Required for any code path that streams output to a caller-controlled
-     * fd (e.g., bootstrap scripts whose stdout the user may pipe to a head/grep
-     * that closes early). */
-    signal(SIGPIPE, SIG_IGN);
-
-    /* Create output context once from config settings: the configuration's level,
-     * which a spec's -v or -q overrides for its run (run_spec). */
-    output_t out;
-    output_init(&out, stdout, config->verbosity, config->color);
 
     int status = run_spec(spec, argc, argv, prog, config, &out);
 

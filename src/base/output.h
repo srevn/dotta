@@ -146,10 +146,21 @@ void output_init(
 /**
  * Set verbosity level
  *
- * The level a context was created with is the configuration's; its one setter
- * is the dispatcher, for a spec's -v or -q (main.c run_spec).
+ * The context is made at OUTPUT_NORMAL, before the configuration is read: main
+ * sets the configuration's level once it is, and the dispatcher a spec's -v or
+ * -q over it (main.c run_spec).
  */
 void output_set_verbosity(output_t *ctx, output_verbosity_t verbosity);
+
+/**
+ * Set the colour mode: both decisions made again, the report's stream's and
+ * stderr's, as output_init makes them
+ *
+ * The context is made before the configuration is read, so a failure before it
+ * is told in AUTO's colours; main sets the configuration's mode once it is (main.c
+ * main).
+ */
+void output_set_color_mode(output_t *ctx, output_color_mode_t color_mode);
 
 /**
  * Move all subsequent output to another stream
@@ -273,15 +284,24 @@ void output_write(
 );
 
 /**
- * Print error message
+ * Tell a failure
  *
- * The terminal failure: stderr, no verbosity gate, and the report is flushed
- * first so it lands after the partial run it ends. A boundary the report owes
- * is paid here rather than left standing, but an error asks none of its own:
- * one that follows a complete block prints directly under it.
+ * The run's refusal, on stderr, ungated, one block written once: "Error: " and
+ * the outermost fact, then "  Caused by: " and each fact beneath it (base/error.h
+ * error_cause). Every message is a datum, spelled as every %s is ("Layout and
+ * data" above), so what one holds is shown on its line and moves nothing. The
+ * block lands as every line does — the report flushed, a boundary it owes paid
+ * above the block — so a failure is read beneath the partial run it ends; it
+ * asks none of its own, and one that follows a complete block prints directly
+ * under it.
+ *
+ * Its callers are main.c's: run_spec for the run's refusal, and main for the
+ * prologue's and for a word the root does not know.
+ *
+ * @param ctx Output context (NULL: nothing)
+ * @param err The failure (NULL: nothing)
  */
-void output_error(output_t *ctx, const char *fmt, ...)
-__attribute__((format(printf, 2, 3)));
+void output_error(output_t *ctx, error_t err);
 
 /**
  * Print warning message

@@ -123,6 +123,7 @@ static error_t init_state(git_repository *repo) {
 error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
+    CHECK_NULL(opts->preset);   /* init_post_parse judged the strength */
 
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
@@ -131,23 +132,6 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     error_t err = NULL;
     const char *path = NULL;
     const char *elsewhere = NULL;
-
-    /* The strength the epoch is minted at: a preset by name, the default when
-     * none was given. Parsed before anything writes, so an unknown name refuses
-     * with nothing on disk. */
-    const kdf_preset_t *preset = NULL;
-    const char *strength = opts->strength ? opts->strength : KDF_PRESET_DEFAULT;
-    for (size_t i = 0; i < KDF_PRESET_COUNT; i++) {
-        if (strcmp(kdf_presets[i].name, strength) == 0) {
-            preset = &kdf_presets[i];
-        }
-    }
-    if (!preset) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Unknown strength '%s' (valid: fast, balanced, paranoid)", strength
-        );
-    }
 
     /* Where the repository goes: the positional when one was given, this machine's
      * configured location otherwise — one answer, expanded, absolute and with
@@ -199,7 +183,7 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     kdf_epoch_t epoch;
     bool epoch_repaired = false;
     err = epoch_init(
-        repo, preset->memory_mib, preset->passes, &epoch, &epoch_repaired
+        repo, opts->preset->memory_mib, opts->preset->passes, &epoch, &epoch_repaired
     );
     if (err) {
         /* ERR_CRYPTO is the refusal to mint over reachable ciphertext. It already
@@ -221,8 +205,8 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
      * told: a strength given by name that it does not match is refused — a change
      * of strength is a new epoch, never a note — and one that matches, or none
      * given, is the no-op it reads as. */
-    if (opts->strength &&
-        (epoch.memory_mib != preset->memory_mib || epoch.passes != preset->passes)) {
+    if (opts->strength && (epoch.memory_mib != opts->preset->memory_mib ||
+        epoch.passes != opts->preset->passes)) {
         err = ERROR(
             ERR_CONFLICT,
             "The repository's epoch is already minted at %u MiB, %u passes; "
@@ -274,6 +258,30 @@ cleanup:
 /* ══════════════════════════════════════════════════════════════════
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * The strength the line names, or the default's, judged against the presets
+ * (crypto/kdf.h kdf_presets): a name no preset carries refuses the line before
+ * anything is made.
+ */
+static error_t init_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    cmd_init_options_t *o = opts_v;
+
+    const char *name = o->strength ? o->strength : KDF_PRESET_DEFAULT;
+    for (size_t i = 0; i < KDF_PRESET_COUNT; i++) {
+        if (strcmp(kdf_presets[i].name, name) == 0) o->preset = &kdf_presets[i];
+    }
+    return o->preset
+        ? NULL
+        : ERROR(
+        ERR_INVALID_ARG, "Unknown strength '%s' (valid: fast, balanced, paranoid)",
+        name
+        );
+}
 
 /**
  * What can stand at the cursor: a preset's name after --strength; otherwise the
@@ -359,6 +367,7 @@ const args_command_t spec_init = {
         "  %s apply                   # Deploy enabled profiles\n",
     .opts_size   = sizeof(cmd_init_options_t),
     .opts        = init_opts,
+    .post_parse  = init_post_parse,
     .complete    = init_complete,
     .dispatch    = init_dispatch,
 };

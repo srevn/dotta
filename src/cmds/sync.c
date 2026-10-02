@@ -1492,16 +1492,10 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     transfer_context_t *xfer = NULL;
 
     /* The divergence strategy: the config's, unless --diverged overrides it in
-     * the same words. A word the vocabulary does not know is refused here, before
-     * the sync reads or runs anything — the pre-sync hook included. */
-    sync_strategy_t diverged_strategy = config->diverged_strategy;
-    if (opts->diverged) {
-        err = config_parse_strategy(opts->diverged, &diverged_strategy);
-        if (err) {
-            err = error_wrap(err, "Invalid --diverged strategy");
-            goto cleanup;
-        }
-    }
+     * the same words — judged by the parse, before the store opened and the
+     * pre-sync hook with it (sync_post_parse). */
+    sync_strategy_t diverged_strategy = opts->diverged
+        ? opts->diverged_strategy : config->diverged_strategy;
 
     /* Build operation scope
      *
@@ -2190,6 +2184,23 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
+ * The divergence strategy the line names, judged and converted in the
+ * configuration's words (utils/config.h config_parse_strategy): a word the
+ * vocabulary does not know refuses the line before the store opens. The refusal
+ * is the vocabulary's own, unwrapped — --diverged is the one place a strategy
+ * word stands on the line, and the word is quoted in it.
+ */
+static error_t sync_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    cmd_sync_options_t *o = opts_v;
+
+    return o->diverged ? config_parse_strategy(o->diverged, &o->diverged_strategy) : NULL;
+}
+
+/**
  * What can stand at the cursor: an enabled profile, by -p or bare; for --diverged,
  * a strategy.
  */
@@ -2296,6 +2307,7 @@ const args_command_t spec_sync = {
         "  %s status --remote # Inspect remote state before syncing\n",
     .opts_size    = sizeof(cmd_sync_options_t),
     .opts         = sync_opts,
+    .post_parse   = sync_post_parse,
     .complete     = sync_complete,
     .payload      = &(const dotta_needs_t){
         .repo     = DOTTA_REPO_OPEN,

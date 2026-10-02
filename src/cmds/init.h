@@ -11,13 +11,16 @@
 #include <runtime.h>
 #include <types.h>
 
+#include "crypto/kdf.h"
+
 /**
  * Command options
  */
 typedef struct {
-    const char *repo_path;   /* Repository path (NULL = the configured location) */
-    const char *strength;    /* Preset the epoch is minted at (NULL = the default) */
-    int verbosity;           /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
+    const char *repo_path;        /* Repository path (NULL = the configured location) */
+    const char *strength;         /* --strength's word (NULL = none given) */
+    const kdf_preset_t *preset;   /* Its preset, or the default's (init_post_parse) */
+    int verbosity;                /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
 } cmd_init_options_t;
 
 /**

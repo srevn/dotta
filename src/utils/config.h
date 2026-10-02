@@ -102,9 +102,11 @@ extern const config_strategy_t config_strategies[CONFIG_STRATEGY_COUNT];
  * The strategy a word names
  *
  * The vocabulary's one parse, for both of its sources: the config's [sync]
- * diverged_strategy, read at load, and `sync --diverged`. An unknown word is
- * refused (ERR_INVALID_ARG) with the words it could be; the caller names its
- * source around the refusal and repeats none of it.
+ * diverged_strategy, read at load, and `sync --diverged`, judged by the parse
+ * (cmds/sync.c sync_post_parse). An unknown word is refused (ERR_INVALID_ARG)
+ * with the words it could be. The config's read names the file and the key around
+ * the refusal, where its reader is not looking; the flag's needs no wrap, the
+ * word it quotes being the one its reader just typed.
  *
  * @param word The word (must not be NULL)
  * @param out  The strategy (must not be NULL)

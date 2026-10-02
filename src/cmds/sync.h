@@ -9,6 +9,7 @@
 #ifndef DOTTA_CMD_SYNC_H
 #define DOTTA_CMD_SYNC_H
 
+#include <config.h>
 #include <git2.h>
 #include <runtime.h>
 #include <types.h>
@@ -24,7 +25,8 @@ typedef struct {
     bool no_pull;                /* Don't pull remote changes (push-only) */
     int verbosity;               /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     bool force;                  /* Force sync even with uncommitted changes */
-    const char *diverged;        /* Divergence strategy override (CLI only) */
+    const char *diverged;        /* --diverged's word (NULL: the config's strategy) */
+    sync_strategy_t diverged_strategy; /* Its strategy, iff diverged (sync_post_parse) */
 } cmd_sync_options_t;
 
 /**

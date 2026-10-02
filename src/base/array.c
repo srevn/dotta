@@ -38,7 +38,11 @@ void string_array_init_cap(string_array_t *arr, arena_t *arena, size_t cap) {
  * made the string, before the string was made there. */
 static void string_array_append(string_array_t *arr, char *str) {
     arr->entries = arena_grow(
-        arr->arena, arr->entries, &arr->capacity, arr->count + 2, sizeof(*arr->entries)
+        arr->arena,
+        arr->entries,
+        &arr->capacity,
+        arr->count + 2,
+        sizeof(*arr->entries)
     );
     arr->entries[arr->count++] = str;
     arr->entries[arr->count] = NULL;
@@ -47,14 +51,20 @@ static void string_array_append(string_array_t *arr, char *str) {
 void string_array_push(string_array_t *arr, const char *str) {
     CHECK_NULL(arr);
     CHECK_NULL(str);
-    CHECK_ARG(arr->arena != NULL, "a string array was pushed before it was given an arena");
+    CHECK_ARG(
+        arr->arena != NULL,
+        "a string array was pushed before it was given an arena"
+    );
 
     string_array_append(arr, arena_strdup(arr->arena, str));
 }
 
 void string_array_pushf(string_array_t *arr, const char *fmt, ...) {
     CHECK_NULL(arr);
-    CHECK_ARG(arr->arena != NULL, "a string array was pushed before it was given an arena");
+    CHECK_ARG(
+        arr->arena != NULL,
+        "a string array was pushed before it was given an arena"
+    );
 
     va_list args;
     va_start(args, fmt);
@@ -66,7 +76,10 @@ void string_array_pushf(string_array_t *arr, const char *fmt, ...) {
 
 void string_array_reserve(string_array_t *arr, size_t cap) {
     CHECK_NULL(arr);
-    CHECK_ARG(arr->arena != NULL, "a string array was reserved before it was given an arena");
+    CHECK_ARG(
+        arr->arena != NULL,
+        "a string array was reserved before it was given an arena"
+    );
 
     /* Nothing to hold makes no spine; a count whose terminator's slot wraps is
      * one no memory could hold */
@@ -74,17 +87,25 @@ void string_array_reserve(string_array_t *arr, size_t cap) {
     if (cap == SIZE_MAX) heap_die(SIZE_MAX);
 
     arr->entries = arena_grow(
-        arr->arena, arr->entries, &arr->capacity, cap + 1, sizeof(*arr->entries)
+        arr->arena,
+        arr->entries,
+        &arr->capacity,
+        cap + 1,
+        sizeof(*arr->entries)
     );
     arr->entries[arr->count] = NULL;   /* a spine a reserve made is an argv too */
 }
 
-void string_array_clone(const string_array_t *src, arena_t *arena, string_array_t *dst) {
+void string_array_clone(
+    const string_array_t *src, arena_t *arena, string_array_t *dst
+) {
     CHECK_NULL(src);
     CHECK_NULL(dst);
 
     string_array_init_cap(dst, arena, src->count);
-    for (size_t i = 0; i < src->count; i++) string_array_push(dst, src->entries[i]);
+    for (size_t i = 0; i < src->count; i++) {
+        string_array_push(dst, src->entries[i]);
+    }
 }
 
 void string_array_remove(string_array_t *arr, size_t index) {
@@ -141,10 +162,18 @@ static int string_array_order(const void *a, const void *b) {
 
 void string_array_sort(string_array_t *arr) {
     if (!arr || arr->count < 2) return;
-    qsort(arr->entries, arr->count, sizeof(*arr->entries), string_array_order);
+
+    qsort(
+        arr->entries,
+        arr->count,
+        sizeof(*arr->entries),
+        string_array_order
+    );
 }
 
-char *string_array_join(arena_t *arena, const string_array_t *arr, const char *delimiter) {
+char *string_array_join(
+    arena_t *arena, const string_array_t *arr, const char *delimiter
+) {
     if (!arr) return str_join(arena, NULL, 0, delimiter);
 
     return str_join(arena, arr->entries, arr->count, delimiter);
@@ -166,11 +195,18 @@ void ptr_array_init_cap(ptr_array_t *arr, arena_t *arena, size_t cap) {
 
 void ptr_array_push(ptr_array_t *arr, const void *p) {
     CHECK_NULL(arr);
-    CHECK_ARG(arr->arena != NULL, "a pointer array was pushed before it was given an arena");
+    CHECK_ARG(
+        arr->arena != NULL,
+        "a pointer array was pushed before it was given an arena"
+    );
 
     /* Room for one more, in the arena the array remembers */
     arr->entries = arena_grow(
-        arr->arena, arr->entries, &arr->capacity, arr->count + 1, sizeof(*arr->entries)
+        arr->arena,
+        arr->entries,
+        &arr->capacity,
+        arr->count + 1,
+        sizeof(*arr->entries)
     );
 
     /* The slot is a void *, so a const the pointer carried is dropped here, and
@@ -181,10 +217,17 @@ void ptr_array_push(ptr_array_t *arr, const void *p) {
 
 void ptr_array_reserve(ptr_array_t *arr, size_t cap) {
     CHECK_NULL(arr);
-    CHECK_ARG(arr->arena != NULL, "a pointer array was reserved before it was given an arena");
+    CHECK_ARG(
+        arr->arena != NULL,
+        "a pointer array was reserved before it was given an arena"
+    );
 
     arr->entries = arena_grow(
-        arr->arena, arr->entries, &arr->capacity, cap, sizeof(*arr->entries)
+        arr->arena,
+        arr->entries,
+        &arr->capacity,
+        cap,
+        sizeof(*arr->entries)
     );
 }
 

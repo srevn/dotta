@@ -813,8 +813,22 @@ static error_t show_post_parse(
         o->mode = SHOW_FILE;
 
         if (refspec_looks_like_commit(args[1])) {
-            /* <file> <commit> */
-            o->file_path = args[0];
+            /* [profile:]<file> <commit> — the file token read as the lone one
+             * is, its profile winning over -p; the commit is the second's, so
+             * one inside the token too is a commit given twice. */
+            refspec_t rs = { 0 };
+            error_t err = refspec_parse(arena, args[0], &rs);
+            if (err != NULL) {
+                return error_wrap(err, "Failed to parse file specification");
+            }
+            if (rs.commit != NULL) {
+                return ERROR(
+                    ERR_INVALID_ARG, "Commit given twice: '%s' and '%s'", rs.commit,
+                    args[1]
+                );
+            }
+            if (rs.profile != NULL) o->profile = rs.profile;
+            o->file_path = rs.file;
             o->commit = args[1];
         } else {
             /* <profile> <file[@commit]> — refspec profile wins if present. */

@@ -440,25 +440,28 @@ typedef struct dotta_run {
  *     base/hashmap.h). A function whose answer is memory takes the arena its
  *     answer lives in, first; a callee that fills a caller's container takes none.
  *
- *       - The process's. `main`'s, made before identity_init and freed after
- *         everything, on every exit: the identity of the run (sys/identity.h)
- *         and the configuration — the struct, every value read into it and its
- *         two compiled pattern rulesets, read-only once config_load returns.
- *         The errors are a second instance of it, not another lifetime:
- *         `base/error.c`'s own arena, made at the first error and never freed,
- *         because an error is made before the command's arena exists and rendered
- *         after it is gone, and base sees no composition root to be handed main's.
- *         A loop that goes on past a failure mints it once per cause and answers
- *         it again, so what the errors keep is counted by their causes
- *         (base/error.h "Lifetime").
+ *       - The process's. `main`'s, made before the command's line is parsed and
+ *         freed after everything, on every exit: the line as parsed — the options
+ *         struct and what the parse allocated for it, read-only once the parse
+ *         returns — the identity of the run (sys/identity.h) and the configuration
+ *         — the struct, every value read into it and its two compiled pattern
+ *         rulesets, read-only once config_load returns. The line is the process's
+ *         because it is parsed before anything is established (main.c main),
+ *         the command's arena among it, and its options borrow argv's tokens,
+ *         which are the process's too. The errors are a second instance of it,
+ *         not another lifetime: `base/error.c`'s own arena, made at the first
+ *         error and never freed, because an error is made before the command's
+ *         arena exists and rendered after it is gone, and base sees no composition
+ *         root to be handed main's. A loop that goes on past a failure mints it
+ *         once per cause and answers it again, so what the errors keep is counted
+ *         by their causes (base/error.h "Lifetime").
  *
  *       - The command's. `ctx->arena`, made and freed by `run_spec`: every value
  *         a command builds — names, rows, items, records, plans, verdicts,
- *         receipts, messages — and every container that holds them, the parser's
- *         outputs, and the run's derived members (the mount table, the view's
- *         rows). Borrowed by every layer beneath and freed by none, and never
- *         marked: its containers remember it, and a return to a mark would drop
- *         what they grew.
+ *         receipts, messages — and every container that holds them, and the run's
+ *         derived members (the mount table, the view's rows). Borrowed by every
+ *         layer beneath and freed by none, and never marked: its containers
+ *         remember it, and a return to a mark would drop what they grew.
  *
  *       - A frame's. An arena a function makes and frees itself, for one of two
  *         reasons.
@@ -540,7 +543,7 @@ typedef struct dotta_run {
  */
 typedef struct dotta_ctx {
     dotta_run_t run;                    /* By value: opened and closed in place by run_spec */
-    arena_t *arena;                     /* Command-scoped; created before the parse, freed after the close */
+    arena_t *arena;                     /* Command-scoped; created before the open, freed after the close */
     const config_t *config;             /* Process-scoped, borrowed */
     output_t *out;
     int argc;                           /* Original process argc */

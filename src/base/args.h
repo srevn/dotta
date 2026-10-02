@@ -221,6 +221,11 @@ typedef void (*args_defaults)(void *opts);
  * (mutually exclusive flags, a value one mode requires and another forbids).
  * Allocations may use `arena`. Returning a non-NULL error aborts dispatch; the
  * error's message is copied into the error collector.
+ *
+ * A hook decides from the line alone — the options struct and the command, nothing
+ * of the process around them: no file, no environment, no state of its caller's
+ * — so a caller may parse before it establishes anything, and what a hook refuses
+ * is the line's to refuse.
  */
 typedef error_t (*args_postparse)(
     void *opts, arena_t *arena,

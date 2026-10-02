@@ -309,59 +309,25 @@ static const char *program_name(const char *argv0) {
 }
 
 /**
- * Parse, dispatch, and cleanup for one spec-engine command.
+ * Open, dispatch, and close the run of one spec-engine command, over the line
+ * main parsed for it.
  *
  * Owns a command-scoped arena (freed before return) and the run that is opened
- * into it. Follows the parse → open → dispatch → close sequence. Never calls
- * exit(); the caller's cleanup chain is preserved unchanged.
+ * into it. Follows the open → dispatch → close sequence. Never calls exit();
+ * the caller's cleanup chain is preserved unchanged.
  */
 static int run_spec(
-    const args_command_t *cmd,
-    int argc, char **argv, const char *prog,
+    const args_command_t *spec,
+    void *opts,
+    int argc, char **argv,
     const config_t *config,
     output_t *out
 ) {
-    /* Command-scoped arena. Sized for the median command — parsing needs ~few
-     * KB, but workspace/scope/manifest paths fit ~140 KB worst case in one or
-     * two blocks at this initial size. Borrowed by handlers via ctx->arena and
-     * by every derived member of the run; freed below. */
+    /* Command-scoped arena. Sized for the median command — workspace/scope/manifest
+     * paths fit ~140 KB worst case in one or two blocks at this initial size.
+     * Borrowed by handlers via ctx->arena and by every derived member of the
+     * run; freed below. */
     arena_t *arena = arena_create(32UL * 1024);
-
-    /* `resolved` tracks the leaf command after subcommand resolution. For a flat
-     * command this stays equal to `cmd`; for a tree it is the matched child (so
-     * help and errors render against the actual subcommand the user typed, and
-     * dispatch goes to its handler). */
-    const args_command_t *resolved = cmd;
-
-    /* Passthrough commands (e.g. `git`) skip parsing but still open their run. */
-    void *opts = NULL;
-    if (!cmd->passthrough) {
-        if (cmd->opts_size > 0) {
-            opts = arena_calloc(arena, 1, cmd->opts_size);
-        }
-
-        /* Parse. The engine resets `errors` in-place, so the uninitialized stack
-         * declaration is intentional. */
-        args_errors_t errors;
-        args_outcome_t outcome = args_parse(
-            cmd, argc, argv, 2, arena, opts, &errors, &resolved
-        );
-
-        switch (outcome) {
-            case ARGS_HELP_REQUESTED:
-                args_render_help(stdout, resolved, prog);
-                arena_free(arena);
-                return 0;
-            case ARGS_FAILED:
-                if (!resolved->silent_failure) {
-                    args_render_errors(stderr, &errors, resolved, prog);
-                }
-                arena_free(arena);
-                return 1;
-            case ARGS_OK:
-                break;
-        }
-    }
 
     /* The level this invocation asked for, over the configuration's: -v and -q
      * are one FLAG_SET group of the spec's own rows (runtime.h dotta_verbosity_t),
@@ -370,8 +336,8 @@ static int run_spec(
      * the run prints reads one level; a command that parsed no options asks
      * none. */
     if (opts != NULL) {
-        const int *asked = args_flag_set_value(resolved, opts, "verbose");
-        if (asked == NULL) asked = args_flag_set_value(resolved, opts, "quiet");
+        const int *asked = args_flag_set_value(spec, opts, "verbose");
+        if (asked == NULL) asked = args_flag_set_value(spec, opts, "quiet");
 
         if (asked != NULL && *asked != DOTTA_VERBOSITY_DEFAULT) {
             output_set_verbosity(
@@ -393,8 +359,8 @@ static int run_spec(
         .exit_code = &exit_override,
     };
 
-    error_t err = open_run(&ctx.run, resolved, opts, config, arena);
-    if (err == NULL) err = resolved->dispatch(&ctx, opts);
+    error_t err = open_run(&ctx.run, spec, opts, config, arena);
+    if (err == NULL) err = spec->dispatch(&ctx, opts);
 
     close_run(&ctx.run);
     arena_free(arena);
@@ -405,7 +371,7 @@ static int run_spec(
      * the same flag (base/output.h output_error) — and the status the dispatch
      * set beside it, where it set one (runtime.h "Exit-code override"). */
     if (err != NULL) {
-        if (!resolved->silent_failure) output_error(out, err);
+        if (!spec->silent_failure) output_error(out, err);
         return exit_override != 0 ? exit_override : 1;
     }
     return exit_override;
@@ -524,18 +490,52 @@ int main(int argc, char **argv) {
      * one, and core/metadata.c metadata_to_json checks no node it builds. libgit2
      * and SQLite are linked, name their exhaustion in their own error class,
      * and keep their allocators. Under a hook cJSON has no realloc, so a print
-     * grows by copying, geometrically; a sheet is small. Installed before the
-     * first parse: config_load below, the sheets under dispatch. */
+     * grows by copying, geometrically; a sheet is small. Installed before either
+     * library parses: config_load below, the sheets under dispatch. */
     cJSON_InitHooks(&(cJSON_Hooks){ .malloc_fn = heap_alloc, .free_fn = free });
     toml_option_t toml_option = toml_default_option();
     toml_option.mem_realloc = heap_realloc;
     toml_option.mem_free = free;
     toml_set_option(toml_option);
 
-    /* The process's own arena: the identity of the run and the configuration,
-     * made before identity_init and freed after everything, on every exit — the
-     * command arena's parent, as main is run_spec's (include/runtime.h). */
+    /* The process's own arena: the command's line as parsed, the identity of
+     * the run and the configuration, made before the parse and freed after
+     * everything, on every exit — the command arena's parent, as main is run_spec's
+     * (include/runtime.h). */
     arena_t *process = arena_create(0);
+
+    /* The command's own tokens, as its word was: a projection of the spec that
+     * reads nothing the prologue below establishes (base/args.h args_postparse),
+     * so the help the line asks for and the refusal it earns are answered before
+     * any of it, at the defaults, as the root's are. `resolved` is the leaf the
+     * line reaches — the command itself, or the subcommand a tree resolves to —
+     * whose help, usage and handler the line is for. A passthrough hands its
+     * argv to dispatch unread. */
+    const args_command_t *resolved = spec;
+    void *opts = NULL;
+    if (!spec->passthrough) {
+        if (spec->opts_size > 0) {
+            opts = arena_calloc(process, 1, spec->opts_size);
+        }
+
+        /* The engine resets `errors` in-place, so the uninitialized stack
+         * declaration is intentional. */
+        args_errors_t errors;
+        switch (args_parse(spec, argc, argv, 2, process, opts, &errors, &resolved)) {
+            case ARGS_HELP_REQUESTED:
+                args_render_help(stdout, resolved, prog);
+                arena_free(process);
+                return 0;
+            case ARGS_FAILED:
+                if (!resolved->silent_failure) {
+                    args_render_errors(stderr, &errors, resolved, prog);
+                }
+                arena_free(process);
+                return 1;
+            case ARGS_OK:
+                break;
+        }
+    }
 
     /* The identity of the run, before anything reads HOME: libgit2 guesses its
      * global config path from $HOME at init, and the config path below is resolved
@@ -565,7 +565,7 @@ int main(int argc, char **argv) {
     if (err) {
         /* Told under the spec's own silence, as the run's refusal is (run_spec):
          * a shell's completion reads nothing it did not ask for */
-        if (!spec->silent_failure) output_error(&out, err);
+        if (!resolved->silent_failure) output_error(&out, err);
         arena_free(process);
         return 1;
     }
@@ -596,7 +596,7 @@ int main(int argc, char **argv) {
         (void) sigaction(terminating[i], &handler, NULL);
     }
 
-    int status = run_spec(spec, argc, argv, prog, config, &out);
+    int status = run_spec(resolved, opts, argc, argv, config, &out);
 
     gitops_shutdown();
     arena_free(process);

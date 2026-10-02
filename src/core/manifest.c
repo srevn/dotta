@@ -1585,9 +1585,7 @@ const manifest_row_t *manifest_lookup_storage(
  * The one row holding this name, or a refusal naming every holder
  */
 error_t manifest_holder(
-    arena_t *arena,
-    const manifest_t *manifest,
-    const char *storage_path,
+    arena_t *arena, const manifest_t *manifest, const char *storage_path,
     const manifest_row_t **out_row
 ) {
     CHECK_NULL(arena);
@@ -1621,8 +1619,8 @@ error_t manifest_holder(
     }
 
     return ERROR(
-        ERR_INVALID_ARG, "'%s' is held by %zu profiles: %s", storage_path, holders,
-        string_array_join(arena, &named, ", ")
+        ERR_INVALID_ARG, "'%s' is held by %zu profiles: %s",
+        storage_path, holders, string_array_join(arena, &named, ", ")
     );
 }
 

@@ -71,8 +71,7 @@ typedef struct {
  * Every way a hook fails is ERR_INTERNAL — a mode that will not exec, an exec
  * that failed, a timeout, a signal, a non-zero exit — and nothing branches on
  * the code. Never ERR_PERMISSION, however permission-shaped the cause: that code
- * is a refusal an identity met (base/error.h), and the commands that fire this
- * close an escaping one with the sudo line.
+ * is a refusal an identity met (base/error.h), and a hook that did not run is none.
  *
  * The hook's DOTTA_REPO_DIR is the store's directory the configuration settled
  * (`config->repo_dir`), and its path the configured hooks directory's.

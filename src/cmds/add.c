@@ -1840,9 +1840,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * is as likely a relative path whose first component happens to be a
          * label — `root/x` typed from `/` — so the message says where it looked
          * and how to say the other; a path the invoker cannot reach names its
-         * reason, and the dispatch tail names the command that could. A special
-         * file is refused by its noun here, before a name is asked for and long
-         * before a capture would refuse it in the same breath as its siblings. */
+         * reason, the kernel's. A special file is refused by its noun here, before
+         * a name is asked for and long before a capture would refuse it in the
+         * same breath as its siblings. */
         struct stat st;
         path_kind_t kind = PATH_KIND_FILE;
         const fs_occupant_t occupant = fs_lstat_occupant(filesystem_path, &st);

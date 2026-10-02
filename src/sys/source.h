@@ -43,11 +43,11 @@
  * — is read as the invoker: libgit2 reads the configuration by path, as the
  * invoker, and a repository only root could find would be one whose configuration
  * dotta cannot read. So a refusal on the repository is its failure under every
- * identity, ERR_GIT — never the ERR_PERMISSION a sudo line answers (base/error.h).
- * The rule files are read through sys/filesystem's funnel, whose reach a walk
- * enters a directory with: a directory a sudo'd walk could list is one whose
- * rules it can read, and a refusal on one is a reach, which a run that holds
- * root reads through.
+ * identity, ERR_GIT — never ERR_PERMISSION, a refusal another identity may not
+ * meet (base/error.h). The rule files are read through sys/filesystem's funnel,
+ * whose reach a walk enters a directory with: a directory a sudo'd walk could
+ * list is one whose rules it can read, and a refusal on one is a reach, which a
+ * run that holds root reads through.
  *
  * What it does not read, stated. A conditional include (`includeIf`) is not
  * evaluated: libgit2 evaluates one only for a repository it has opened, and this

@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <git2.h>
 #include <git2/sys/repository.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
@@ -115,7 +116,38 @@ error_t gitops_open_repository(git_repository **out, const char *path) {
 
     int rc = git_repository_open(out, path);
     if (rc == GIT_ENOTFOUND) {
-        return error_create(ERR_NOT_FOUND, "No git repository at: %s", path);
+        /* libgit2 answers not found for a repository it could not read as well
+         * as for none: a .git or a HEAD its stat could not reach reads as missing
+         * (repository.c find_repo_traverse, is_valid_repository_path), and the
+         * open searches no further than the path. So its two places are looked
+         * at here, raw and as the invoker, as libgit2 read them (sys/filesystem.h,
+         * libgit2's files): where neither a working tree's .git nor a bare store's
+         * HEAD stands, nothing is there; where either does, a repository stands
+         * that libgit2 would not open; and a look that could not answer is the
+         * repository's failure, as sys/source words one. lstat, so a .git that
+         * is a link to nothing, or a FIFO, is something standing. */
+        static const char *const places[] = { ".git", "HEAD" };
+        for (size_t i = 0; i < sizeof(places) / sizeof(places[0]); i++) {
+            char at[PATH_MAX];
+            struct stat st;
+            if ((size_t) snprintf(at, sizeof(at), "%s/%s", path, places[i]) >= sizeof(at)) {
+                return error_create(
+                    ERR_GIT, "Cannot look into '%s': %s", path, strerror(ENAMETOOLONG)
+                );
+            }
+            if (lstat(at, &st) == 0) {
+                return error_create(
+                    ERR_GIT, "The repository at '%s' would not open, and its %s stands",
+                    path, places[i]
+                );
+            }
+            if (errno != ENOENT && errno != ENOTDIR) {
+                return error_create(
+                    ERR_GIT, "Cannot look into '%s': %s", path, strerror(errno)
+                );
+            }
+        }
+        return error_create(ERR_NOT_FOUND, "No git repository at '%s'", path);
     }
     if (rc == GIT_EOWNER) {
         return error_create(

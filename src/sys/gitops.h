@@ -103,15 +103,19 @@ error_t gitops_get_signature(git_signature **out, git_repository *repo);
  * failure turns every unreadable repository into an absent one.
  *
  * The failure is classified so a caller can tell the cases apart:
- *   ERR_NOT_FOUND  — libgit2 found no repository here. It reports an
- *                    unreadable .git the same way and words both the same, so a
- *                    caller that needs the distinction asks the filesystem. Read
- *                    by utils/repo.c repo_open, which asks it, and by cmds/init.c
- *                    cmd_init, which makes a repository wherever it reads the code.
+ *   ERR_NOT_FOUND  — nothing stands at the path's two places, a working tree's
+ *                    .git and a bare store's HEAD: looked at, and absent. libgit2
+ *                    answers not found for a repository it could not read as
+ *                    well, so the open asks both itself before it says so. Read
+ *                    by utils/repo.c repo_open, as no store there, and by
+ *                    cmds/init.c cmd_init, which makes a repository where it
+ *                    reads the code.
  *   ERR_PERMISSION — the repository is owned by another user.
- *   ERR_GIT        — everything else, carrying libgit2's own message: a
- *                    config file that will not parse (the user's ~/.gitconfig
- *                    is loaded on open), a damaged object database.
+ *   ERR_GIT        — everything else, carrying libgit2's own message — a config
+ *                    file that will not parse (the user's ~/.gitconfig is loaded
+ *                    on open), a damaged object database — or the open's own: a
+ *                    repository libgit2 would not open whose .git or HEAD stands,
+ *                    and a look at either that could not answer.
  *
  * @param out Repository handle (must not be NULL)
  * @param path Repository path (must not be NULL)

@@ -128,11 +128,13 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     if (err) goto cleanup;
 
     /* The store: opened where a repository stands, made where nothing does. Only
-     * an absence is created over — a repository that would not open for another
-     * reason (another user's, a config that will not parse) is not one to write
+     * an absence is created over, and the open proves one before it answers it
+     * (sys/gitops.h gitops_open_repository): a repository that would not open —
+     * a project's .git this run cannot read, a store whose HEAD stands over missing
+     * objects, another user's, a config that will not parse — is not one to write
      * into, and its own refusal says why. A store a hand stripped of its HEAD
-     * reads as an absence and is made whole by the init, refs and all
-     * (gitops_init_repository). */
+     * is the absence of the one file that makes a store, and is made whole by
+     * the init, refs and all (gitops_init_repository). */
     err = gitops_open_repository(&repo, path);
     if (error_code(err) == ERR_NOT_FOUND) {
         err = gitops_init_repository(&repo, path);
@@ -332,7 +334,8 @@ const args_command_t spec_init = {
     .notes       =
         "Existing Directories:\n"
         "  The store is a bare Git repository. A directory holding one with a\n"
-        "  working tree, or one whose history dotta did not write, is refused.\n"
+        "  working tree, one whose history dotta did not write, or one that\n"
+        "  will not open, is refused.\n"
         "  An empty bare repository, or no repository at all, is initialized\n"
         "  in place; dotta's own is repaired in place, and a baseline\n"
         "  .dottaignore already at its ref is kept.\n"

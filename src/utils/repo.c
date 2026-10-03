@@ -4,8 +4,6 @@
 
 #include "utils/repo.h"
 
-#include <limits.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "base/error.h"
@@ -130,46 +128,26 @@ error_t repo_open(const config_t *config, git_repository **repo_out) {
 
     /*
      * Open the repository, and let the open be the answer to whether one is there.
-     * Only ERR_NOT_FOUND is dotta's to reword, and only after the filesystem
-     * has been asked which of the two cases libgit2 folds into it: a path that
-     * is not a repository, and a repository that could not be read. Every other
-     * failure is already the truth — a config file that will not parse, an object
-     * database that will not open — and is wrapped, not replaced. Telling a user
-     * with a broken ~/.gitconfig to run 'dotta init' costs them the repository
-     * they still have.
+     * Only ERR_NOT_FOUND is dotta's to reword: the open has looked at the path's
+     * places itself before it says so (sys/gitops.h gitops_open_repository), so
+     * it is the absence it reads as — nothing there, a directory of other things,
+     * a store a hand stripped of its HEAD, which 'dotta init' recreates with
+     * refs, epoch and record intact. Every other failure is already the truth —
+     * a repository that would not open whose HEAD stands, a directory that cannot
+     * be looked into, a config file that will not parse — and is wrapped, not
+     * replaced. Telling a user with a broken ~/.gitconfig to run 'dotta init'
+     * costs them the repository they still have.
      */
     error_t err = gitops_open_repository(&repo, repo_path);
+    if (error_code(err) == ERR_NOT_FOUND) {
+        return error_create(
+            ERR_NOT_FOUND, "No dotta repository found at '%s'%s", repo_path, origin
+        );
+    }
     if (err) {
-        if (error_code(err) == ERR_NOT_FOUND) {
-            /* Which of the two it is. libgit2 words them identically — "could
-             * not find repository at X" for an empty directory, for a store it
-             * cannot read, and for a path that is not there — so the filesystem
-             * is the one that can tell them apart. The store is the directory,
-             * and HEAD is the file whose absence is what makes libgit2 say so:
-             * gone, the directory holds no repository (nothing there, a directory
-             * of other things, a store a hand stripped of its HEAD, which 'dotta
-             * init' recreates with refs, epoch and record intact); present, or
-             * unstattable because the directory cannot be looked into — or a
-             * spelling past PATH_MAX, which no lstat could answer — there is a
-             * repository here that could not be read, and the answer to an absence
-             * is the one answer that must not be offered for it. */
-            char head[PATH_MAX];
-            int n = snprintf(head, sizeof(head), "%s/HEAD", repo_path);
-            if (n >= 0 && (size_t) n < sizeof(head) &&
-                fs_lstat_occupant(head, NULL) == FS_OCCUPANT_NONE) {
-                return error_create(
-                    ERR_NOT_FOUND, "No dotta repository found at %s%s", repo_path,
-                    origin
-                );
-            }
-            return error_create(
-                ERR_GIT, "Cannot read the repository at %s%s", repo_path, origin
-            );
-        }
-        /* Every other failure is its own words beneath the path — libgit2's owner
-         * check (CVE-2022-24765) among them, another user's repository, which
-         * its leaf names */
-        return error_wrap(err, "Failed to open repository at: %s", repo_path);
+        /* Its own words beneath the path — libgit2's owner check (CVE-2022-24765)
+         * among them, another user's repository, which its leaf names */
+        return error_wrap(err, "Cannot open the repository at '%s'%s", repo_path, origin);
     }
 
     /*
@@ -184,12 +162,12 @@ error_t repo_open(const config_t *config, git_repository **repo_out) {
     err = repo_is_store(repo, &declared);
     if (err) {
         git_repository_free(repo);
-        return error_wrap(err, "Cannot open the repository at: %s", repo_path);
+        return error_wrap(err, "Cannot open the repository at '%s'%s", repo_path, origin);
     }
     if (!declared) {
         git_repository_free(repo);
         return error_create(
-            ERR_NOT_FOUND, "The repository at %s is not a dotta store%s", repo_path,
+            ERR_NOT_FOUND, "The repository at '%s' is not a dotta store%s", repo_path,
             origin
         );
     }

@@ -586,12 +586,15 @@ error_t fs_list_dir(const char *path, arena_t *arena, string_array_t *out);
  * The listing lives in a scratch the walk owns, whole — the stream closed with
  * it, so a walk holds one descriptor however deep it goes — and each entry's
  * path is joined there as it is read (base/string.h str_path_join: the root joins
- * as every directory does). Reading an entry first returns the scratch to where
- * the entry before it began, so that entry's path goes with everything the walk
- * made in the scratch for it since, a child's whole frame included; past the
- * last entry the listing gives the scratch back as it found it. The scratch holds
- * the listings from the walk's root down to the frame reading one, and one entry's
- * strings — never the tree's.
+ * as every directory does). How deep it goes is the kernel's to say: a path past
+ * PATH_MAX fails the look at it (ENAMETOOLONG), which each walk answers as it
+ * answers any look that failed — and a frame costs a few hundred bytes of stack,
+ * so the deepest path the kernel resolves is well inside the run's. Reading an
+ * entry first returns the scratch to where the entry before it began, so that
+ * entry's path goes with everything the walk made in the scratch for it since,
+ * a child's whole frame included; past the last entry the listing gives the scratch
+ * back as it found it. The scratch holds the listings from the walk's root down
+ * to the frame reading one, and one entry's strings — never the tree's.
  *
  * So what outlives an entry is copied out of the scratch by the walk, and no
  * container grows in it: a return to a mark drops a growth after it (base/arena.h
@@ -638,22 +641,6 @@ error_t fs_listing_init(fs_listing_t *listing, arena_t *scratch, const char *dir
  * @return The entry's path, the scratch's until the next call; NULL past the last
  */
 const char *fs_listing_next(fs_listing_t *listing);
-
-/* The depth a recursive walk of this filesystem is bounded to. The directory a
- * walk starts at is depth 0, frames 0 through 127 enumerate, and a frame at depth
- * 128 opens nothing: a file listed inside frame 127 is taken, a directory found
- * there is not entered. What each reader does at the bound is its own — add refuses
- * the argument whole, the untracked scan lists nothing beneath it and goes on
- * with the siblings — and one shared value is what makes the pair coherent: add's
- * frame 0 is the argument and the scan's is a tracked directory row, which add
- * itself authors one frame below its own or deeper, so nothing captured lies
- * below the depth status can reach. It bounds recursion and the per-frame resources
- * a walk holds while it enumerates; it is not a path-length limit and not a total
- * memory bound.
- *
- * Read by cmds/add.c add_collect and core/workspace.c workspace_scan, which is
- * where the arithmetic comes from. */
-#define FS_WALK_MAX_DEPTH 128
 
 /**
  * Ensure parent directories exist

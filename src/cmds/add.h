@@ -47,9 +47,10 @@ typedef struct {
  * What the walk lists: every regular file and symlink it finds, and every directory
  * it enters. A special file — a FIFO, a socket, a device — is no entry a branch
  * can hold, so a walked one is skipped and a named one refused by its noun. A
- * directory below FS_WALK_MAX_DEPTH frames from where its walk began refuses
- * the command, since collection precedes capture and a subtree silently omitted
- * is one the untracked scan cannot offer back (sys/filesystem.h).
+ * path the walk cannot look at — a directory that will not list, an entry past
+ * the kernel's PATH_MAX — refuses the command, since collection precedes capture
+ * and a subtree silently omitted is one the profile never says it lacks. The
+ * walk has no depth of its own to stop at (sys/filesystem.h fs_listing_t).
  *
  * **The name a capture lands under** is never composed here. A storage-shaped
  * argument is the user's own choice of contract and is written as typed; every

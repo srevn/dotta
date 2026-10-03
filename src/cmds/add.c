@@ -502,7 +502,7 @@ static error_t add_admit(
  * The way past is a clause of the wrap that says where (base/error.h "Messages"),
  * the question the walk could not answer over the source layer's failure that
  * kept it from answering. cmd_add wraps every refusal of the walk with the argument
- * it began at, and the depth bound's refusal is the same shape.
+ * it began at.
  */
 static error_t add_refuse_unjudged(
     const walk_t *walk, arena_t *scratch, const char *directory, size_t depth,
@@ -559,11 +559,13 @@ static error_t add_refuse_unjudged(
  * kind the profile's own claim at the path contradicts, and a name the commit
  * has no room for, or one Git will not hold (add_admit). Neither may fail the
  * command — a stale claim deep inside $HOME must not fail `dotta add p ~`, and
- * the capture that would have refused it arrives too late to skip anything. `depth`
- * bounds the recursion at FS_WALK_MAX_DEPTH, and that is the one walked verdict
- * that refuses rather than skips — collection precedes capture, so a refusal
- * there costs nothing, where a skip would leave the profile permanently short
- * of a subtree that can in fact be captured.
+ * the capture that would have refused it arrives too late to skip anything. What
+ * the walk could not look at refuses rather than skips — a directory that will
+ * not list, an entry that will not stat, a path past the kernel's PATH_MAX among
+ * them, what Git's rules could not judge — since collection precedes capture,
+ * so a refusal there costs nothing, where a skip would leave the profile short
+ * of a subtree it never said it missed. Depth is no limit of the walk's own: it
+ * goes as deep as the kernel resolves a path (sys/filesystem.h fs_listing_t).
  *
  * On error the lists keep what was collected, in the command arena, and the scratch
  * is left as it stands, for the walk's driver to free.
@@ -573,7 +575,8 @@ static error_t add_refuse_unjudged(
  *                  (must not be NULL)
  * @param directory The key this frame enumerates, already settled (must not be
  *                  NULL)
- * @param depth     Frames beneath the argument the walk began at
+ * @param depth     Frames beneath the argument the walk began at: 0 is the argument
+ *                  itself, which add_refuse_unjudged offers no -e for
  * @return Error or NULL on success
  */
 static error_t add_collect(
@@ -583,18 +586,6 @@ static error_t add_collect(
     CHECK_NULL(directory);
 
     output_t *out = walk->ctx->out;
-
-    /* The bound is the frame's own, tested before it enumerates. A directory
-     * already settled never reaches here: the callers test the listing before
-     * they descend, so a deeper argument collected first does not make its parent's
-     * walk fail when the parent arrives at the limit. */
-    if (depth >= FS_WALK_MAX_DEPTH) {
-        return error_create(
-            ERR_INVALID_ARG, "Cannot walk '%s': it is %d directories below the argument "
-            "it was reached from; an argument of its own walks it", directory,
-            FS_WALK_MAX_DEPTH
-        );
-    }
 
     /* The frame's listing, in the walk's scratch (sys/filesystem.h fs_listing_t):
      * the whole of it, and the stream closed with it — one open at a time down

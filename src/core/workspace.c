@@ -2255,9 +2255,9 @@ static const manifest_row_t *workspace_blob_above(
  * its frame joined. Two keys at one directory are two paths to the view and one
  * walk to the scan. One entry per directory, so the array is both the boundaries
  * — a walk stops at any of them it meets, by whichever string (workspace_find_root)
- * — and the walks: the driver enumerates each once, from a depth 0 of its own.
- * Where several rows stand at one directory the later-enabled profile's is the
- * one kept, owner and spelling together, the index's rule for a contested path
+ * — and the walks: the driver enumerates each once, in a walk of its own. Where
+ * several rows stand at one directory the later-enabled profile's is the one
+ * kept, owner and spelling together, the index's rule for a contested path
  * (core/manifest.c manifest_layer) applied where the keys differ; among one
  * profile's, the later in path order. The consequence: where two tracked rows
  * stand at one directory under two spellings, the later-enabled profile's walk
@@ -2307,11 +2307,11 @@ static scan_root_t *workspace_find_root(
  * offer composes under), its ignore layers decide what is offered, and every
  * offer is attributed to it. A walk that meets a directory another scan root
  * stands at — by identity, whatever spelling the frame joined — has reached that
- * root and does not enter it: the driver reaches every root directly, from a
- * depth 0 of its own. Nothing here is written by a frame; the struct is one value
- * the recursion passes down, the roots are read through it and never written,
- * and the strings a frame makes live in the walk's scratch, handed down beside
- * it (workspace_scan).
+ * root and does not enter it: the driver reaches every root directly, in a walk
+ * of its own. Nothing here is written by a frame; the struct is one value the
+ * recursion passes down, the roots are read through it and never written, and
+ * the strings a frame makes live in the walk's scratch, handed down beside it
+ * (workspace_scan).
  */
 typedef struct {
     workspace_t *ws;                   /* The view, the record, the arena offers live in */
@@ -2385,36 +2385,26 @@ typedef struct {
  * at, the index answers with the directory row. That row is necessarily tracked
  * — a derived row never takes a held path — so the question above settles the
  * child by the view's own word, and the directory is the winner's to enumerate,
- * under the winner's name, from a depth 0 of its own.
+ * under the winner's name, in a walk of its own.
  *
- * Cannot fail, and says nothing: what it could not read — a directory past the
- * bound or one that will not list, an entry that will not stat — is skipped where
- * it happens, as absence is, and what Git's ignore rules could not judge is
- * withheld — a file not offered, a directory not entered — and either way the
- * siblings go on. The look lists what it can read; what it could not is neither
- * listed nor said.
+ * Cannot fail, and says nothing: what it could not read — a directory that will
+ * not list, an entry that will not stat, a path past the kernel's PATH_MAX among
+ * them — is skipped where it happens, as absence is, and what Git's ignore rules
+ * could not judge is withheld — a file not offered, a directory not entered —
+ * and either way the siblings go on. The look lists what it can read; what it
+ * could not is neither listed nor said.
  *
  * @param scan      What the walk runs under (must not be NULL)
  * @param scratch   The walk's: every frame's listing and every entry's strings
  *                  (must not be NULL)
  * @param directory The path this frame enumerates: a key the view holds no blob
  *                  at or over (must not be NULL)
- * @param depth     Frames beneath the tracked directory the driver started at
  */
-static void workspace_scan(
-    const scan_t *scan, arena_t *scratch, const char *directory, size_t depth
-) {
+static void workspace_scan(const scan_t *scan, arena_t *scratch, const char *directory) {
     CHECK_NULL(scan);
     CHECK_NULL(directory);
 
     workspace_t *ws = scan->ws;
-
-    /* The bound is the walk's own: `depth` counts frames beneath the tracked
-     * directory the driver started at, so a tracked directory 200 deep on disk
-     * is still scanned from its own 0 (sys/filesystem.h FS_WALK_MAX_DEPTH). Not
-     * an error — the siblings of a deep subtree are still this profile's, where
-     * add refuses the argument whole — and nothing beneath it is listed. */
-    if (depth >= FS_WALK_MAX_DEPTH) return;
 
     /* The frame's listing, in the walk's scratch (sys/filesystem.h fs_listing_t):
      * the whole of it, and the stream closed with it — one open at a time down
@@ -2438,15 +2428,15 @@ static void workspace_scan(
         /* The view's word at the child's own key, before any look. A claim that
          * names its own path settles the child whatever stands there: a blob
          * bounds the walk (the induction above), and a tracked directory is the
-         * driver's to enumerate, from a depth 0 of its own, or the [type] the
-         * directory analysis already said. Either way the load holds one verdict
-         * for the path and says it on its own screen, where the remedies are —
-         * the join is every load's (core/workspace.h workspace_options_t), so a
-         * path this walk leaves unsaid is one the load has said already. An
-         * ancestor claim is the one row that names neither itself nor what lies
-         * beneath it (core/manifest.h manifest_is_derived): the walk passes through
-         * it as through any unclaimed directory, and a look is paid there, and
-         * for what no claim names at all. */
+         * driver's to enumerate, in a walk of its own, or the [type] the directory
+         * analysis already said. Either way the load holds one verdict for the
+         * path and says it on its own screen, where the remedies are — the join
+         * is every load's (core/workspace.h workspace_options_t), so a path this
+         * walk leaves unsaid is one the load has said already. An ancestor claim
+         * is the one row that names neither itself nor what lies beneath it
+         * (core/manifest.h manifest_is_derived): the walk passes through it as
+         * through any unclaimed directory, and a look is paid there, and for
+         * what no claim names at all. */
         const manifest_row_t *claim = manifest_lookup(ws->manifest, child);
         if (claim && !manifest_is_derived(claim)) continue;
 
@@ -2479,13 +2469,12 @@ static void workspace_scan(
 
         if (kind == PATH_KIND_DIRECTORY) {
             /* Another scan root's directory — by identity, whatever this frame
-             * joined — is that root's to enumerate, from a depth 0 of its own
-             * and under its owner's names and rules. Asked of the identity, the
-             * one thing the key above could not answer: a root is reached by
-             * whatever spelling a frame joins, and the view holds a row at one
-             * of them. Asked before the name and before any rule: an owner's
-             * exclusion is the owner's, and a walk from outside inherits none
-             * of it. */
+             * joined — is that root's to enumerate, in a walk of its own and
+             * under its owner's names and rules. Asked of the identity, the one
+             * thing the key above could not answer: a root is reached by whatever
+             * spelling a frame joins, and the view holds a row at one of them.
+             * Asked before the name and before any rule: an owner's exclusion
+             * is the owner's, and a walk from outside inherits none of it. */
             if (workspace_find_root(scan->roots, scan->root_count, st.st_dev, st.st_ino)) {
                 continue;
             }
@@ -2545,7 +2534,7 @@ static void workspace_scan(
             workspace_add_untracked(ws, child, name, scan->profile, occupant, &st);
             continue;
         }
-        workspace_scan(scan, scratch, child, depth + 1);
+        workspace_scan(scan, scratch, child);
     }
 }
 
@@ -2682,7 +2671,7 @@ static error_t workspace_analyze_untracked(
         /* The walk's one scratch, freed whatever the walk met: every frame's
          * listing and every entry's strings, none of which outlives it. */
         arena_t *scratch = arena_create(0);
-        workspace_scan(&scan, scratch, root->directory, 0);
+        workspace_scan(&scan, scratch, root->directory);
         arena_free(scratch);
     }
 

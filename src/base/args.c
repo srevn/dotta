@@ -343,6 +343,36 @@ static bool opt_takes_value(const args_opt_t *o) {
 }
 
 /**
+ * True if this row is a positional of any flavor
+ *
+ * The one place a kind is told positional or not, so a new kind says which where
+ * -Wswitch stops it, and every reader of the question asks here: the token's
+ * row selection (apply_positional), the help's Arguments and Options sections
+ * (render_arguments, args_render_help) and the fish exporter (emit_complete_line).
+ */
+static bool is_positional_kind(args_kind_t k) {
+    switch (k) {
+        case ARGS_KIND_POSITIONAL:
+        case ARGS_KIND_POSITIONAL_ARG:
+        case ARGS_KIND_POSITIONAL_RAW:
+            return true;
+        case ARGS_KIND_END:
+        case ARGS_KIND_GROUP:
+        case ARGS_KIND_FLAG:
+        case ARGS_KIND_FLAG_SET:
+        case ARGS_KIND_STRING:
+        case ARGS_KIND_APPEND:
+        case ARGS_KIND_INT:
+            return false;
+    }
+
+    /* A kind no enumerator names, which only a cast can make. False is no answer
+     * that does nothing here: the help would list the row as an option and the
+     * exporter emit it as a flag (base/error.h CHECK_ARG) */
+    CHECK_ARG(false, "an option kind no enumerator names");
+}
+
+/**
  * Apply a value-taking opt (STRING / APPEND / INT).
  *
  * `inline_value` is non-NULL iff the user wrote `--name=value`; else the value
@@ -537,12 +567,11 @@ static error_t apply_positional(
 
     if (cmd->opts != NULL) {
         for (const args_opt_t *o = cmd->opts; o->kind != ARGS_KIND_END; o++) {
+            if (!is_positional_kind(o->kind)) continue;
             if (o->kind == ARGS_KIND_POSITIONAL_RAW) {
                 if (raw == NULL) raw = o;
                 continue;
             }
-            if (o->kind != ARGS_KIND_POSITIONAL &&
-                o->kind != ARGS_KIND_POSITIONAL_ARG) continue;
             if (o->class_accept != cls) continue;
             if (o->kind == ARGS_KIND_POSITIONAL_ARG &&
                 *string_field(opts, o) != NULL) continue;
@@ -1212,15 +1241,6 @@ void args_render_usage(
 }
 
 /**
- * True if this row is a positional of any flavor.
- */
-static bool is_positional_kind(args_kind_t k) {
-    return k == ARGS_KIND_POSITIONAL ||
-           k == ARGS_KIND_POSITIONAL_ARG ||
-           k == ARGS_KIND_POSITIONAL_RAW;
-}
-
-/**
  * Render an "Arguments:" section from positional rows that carry a value_label
  * + help. Opt-in: rows without a label stay invisible (commands that prefer
  * prose-in-description keep working unchanged).
@@ -1532,10 +1552,10 @@ static void emit_complete_line(
     const args_opt_t *opt
 ) {
     if (opt->hidden) return;
-    if (opt->kind == ARGS_KIND_END || opt->kind == ARGS_KIND_GROUP ||
-        opt->kind == ARGS_KIND_POSITIONAL ||
-        opt->kind == ARGS_KIND_POSITIONAL_ARG ||
-        opt->kind == ARGS_KIND_POSITIONAL_RAW) return;
+
+    /* An option is a row a flag names: never a group's title, nor a positional
+     * (the callers stop at END) */
+    if (opt->kind == ARGS_KIND_GROUP || is_positional_kind(opt->kind)) return;
 
     fprintf(out, "complete -c %s", prog);
     emit_guard(out, prog, guard);

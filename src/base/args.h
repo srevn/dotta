@@ -467,7 +467,8 @@ args_root_outcome_t args_resolve_root(
  * Pre-conditions:
  *   - command != NULL;
  *   - arena != NULL (used for error messages and positional arrays);
- *   - opts_out != NULL, zero-initialized, of size `command->opts_size`;
+ *   - opts_out: zero-initialized, of size `command->opts_size` — NULL where that
+ *     is 0, for a spec no row and no hook writes;
  *   - errors_out != NULL (will be initialized; stack-declared is fine).
  *
  * Behavior:
@@ -495,12 +496,12 @@ args_root_outcome_t args_resolve_root(
  * @param arena        Arena for error messages / positional arrays.
  * @param opts_out     Zero-initialized options struct; populated in place.
  * @param errors_out   Caller-provided; populated with parse errors.
- * @param resolved_out If non-NULL, set to the leaf command actually reached after
- *                     subcommand resolution. The caller uses this to render
- *                     help/errors against the correct command and to invoke the
- *                     leaf's dispatch. For a non-tree command this is just
- *                     `command`. NULL is allowed for callers that do not care
- *                     (test fixtures, etc.).
+ * @param resolved_out If non-NULL, set on every outcome to the leaf command
+ *                     actually reached after subcommand resolution. The caller
+ *                     uses this to render help/errors against the correct command
+ *                     and to invoke the leaf's dispatch. For a non-tree command
+ *                     this is just `command`. NULL is allowed for callers that
+ *                     do not care (test fixtures, etc.).
  * @return Outcome enum (`-v`/`--version` is handled at root, not here).
  */
 args_outcome_t args_parse(

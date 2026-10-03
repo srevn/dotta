@@ -509,32 +509,26 @@ int main(int argc, char **argv) {
      * so the help the line asks for and the refusal it earns are answered before
      * any of it, at the defaults, as the root's are. `resolved` is the leaf the
      * line reaches — the command itself, or the subcommand a tree resolves to —
-     * whose help, usage and handler the line is for. A passthrough hands its
-     * argv to dispatch unread. */
-    const args_command_t *resolved = spec;
-    void *opts = NULL;
-    if (!spec->passthrough) {
-        if (spec->opts_size > 0) {
-            opts = arena_calloc(process, 1, spec->opts_size);
-        }
+     * whose help, usage and handler the line is for. */
+    void *opts = spec->opts_size > 0 ? arena_calloc(process, 1, spec->opts_size) : NULL;
 
-        /* The engine resets `errors` in-place, so the uninitialized stack
-         * declaration is intentional. */
-        args_errors_t errors;
-        switch (args_parse(spec, argc, argv, 2, process, opts, &errors, &resolved)) {
-            case ARGS_HELP_REQUESTED:
-                args_render_help(stdout, resolved, prog);
-                arena_free(process);
-                return 0;
-            case ARGS_FAILED:
-                if (!resolved->silent_failure) {
-                    args_render_errors(stderr, &errors, resolved, prog);
-                }
-                arena_free(process);
-                return 1;
-            case ARGS_OK:
-                break;
-        }
+    /* The engine answers `resolved` and resets `errors` on every path, so the
+     * uninitialized stack declarations are intentional. */
+    const args_command_t *resolved;
+    args_errors_t errors;
+    switch (args_parse(spec, argc, argv, 2, process, opts, &errors, &resolved)) {
+        case ARGS_HELP_REQUESTED:
+            args_render_help(stdout, resolved, prog);
+            arena_free(process);
+            return 0;
+        case ARGS_FAILED:
+            if (!resolved->silent_failure) {
+                args_render_errors(stderr, &errors, resolved, prog);
+            }
+            arena_free(process);
+            return 1;
+        case ARGS_OK:
+            break;
     }
 
     /* The identity of the run, before anything reads HOME: libgit2 guesses its

@@ -277,7 +277,10 @@ error_t profile_resolve_range(
  * was here, let --force delete nothing and call it done, and had validate --fix
  * offer to disable a healthy profile); otherwise ERR_NOT_FOUND, "Profile '<name>'
  * doesn't exist locally" — "locally" leaving both readings open, because no verb
- * can tell a typo from a profile not yet fetched.
+ * can tell a typo from a profile not yet fetched — then the verb that brings
+ * one, which the fact does not imply: "'dotta profile fetch <name>' brings it
+ * from a remote that holds it", true of both readings (the natural guess, sync,
+ * fetches the enabled profiles alone).
  *
  * Readers: ignore (--test, and the edit), bootstrap (the names its selection
  * reads, --edit's and --show's among them), show, export, list (a profile's files;

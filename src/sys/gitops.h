@@ -365,7 +365,8 @@ error_t gitops_delete_branch(git_repository *repo, const char *name);
  * The one way a reference becomes a tip. Readers: gitops_reference_tree, and
  * the readers of a tree through it (its header); gitops_load_reference_commit,
  * which refuses the absence; infra/epoch.c epoch_walk, the census, at each branch
- * it lists, one gone since the listing holding nothing.
+ * it lists, one gone since the listing holding nothing, one that will not read
+ * passed over.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (must not be NULL or empty)
@@ -445,8 +446,8 @@ error_t gitops_load_branch_tree(
  * label_prefixes) — core/manifest.c manifest_claim_blob, core/profiles.c
  * profile_list_entry and profile_count_entry, cmds/export.c collect_entry, and
  * cmds/completion.c refspec_emit, which also STOPs at its cap; and the ciphertext
- * census, which SKIPs a binding it has met and STOPs where its asker has an answer
- * (infra/epoch.c epoch_present_blob).
+ * census, which SKIPs a binding it has met and a subtree it cannot load, and
+ * STOPs where its asker has an answer (infra/epoch.c epoch_present_blob).
  */
 typedef enum {
     GITOPS_NEXT_CONTINUE,   /* on to the next entry: a tree's own entries first */

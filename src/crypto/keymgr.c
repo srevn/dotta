@@ -306,10 +306,13 @@ static bool witness_exists(void *self, const keymgr_witness_t *witness) {
  * and refuses the run, worded by how much there was to open — against a lone
  * ciphertext a miss decides nothing, against several it is the passphrase's.
  * That refusal is ERR_LOCKED, which prompt_and_verify reads as a passphrase a
- * terminal asks for again; a derivation or a walk that failed on its own keeps
- * its own code. With nothing to open at all the master is taken as given: the
- * caller confirmed it, or the environment asserted it. `subject` is what the
- * refusal is about: "The passphrase" or "DOTTA_ENCRYPTION_PASSPHRASE".
+ * terminal asks for again; a derivation that failed on its own keeps its own
+ * code, and so does a walk that could not read everything and opened nothing,
+ * worded by what the master was shown — a no it could not finish is not the
+ * passphrase's. With nothing to open at all, and nothing left unread, the master
+ * is taken as given: the caller confirmed it, or the environment asserted it.
+ * `subject` is what the refusal is about: "The passphrase" or
+ * "DOTTA_ENCRYPTION_PASSPHRASE".
  *
  * Three returns and one refusal: each success is taken where its condition is
  * decided, and every failure — the derivation's own included — leaves through
@@ -337,10 +340,16 @@ static error_t derive_and_check(
         }
     }
 
+    /* The source passes over what it cannot read, so a witness it accepted stands
+     * whatever it passed over (crypto/keymgr.h keymgr_witness_source_fn). A walk
+     * that showed the master nothing and could not read something proved no
+     * absence, and an absence it could not prove is no licence to take a master
+     * as given: its failure stands as it is. One that showed the master something
+     * is worded below by what it showed. */
     if (km->source) {
         bool accepted = false;
         err = km->source(km->repo, &km->epoch, trial_opens, &trial, &accepted);
-        if (err) goto fail;
+        if (err && trial.tried == 0) goto fail;
         if (accepted) return NULL;
     }
 
@@ -362,12 +371,31 @@ static error_t derive_and_check(
      * name one of its rows; the caller's own wrap names the row that asked
      * (infra/content). What does vary is how much there was to open, and against
      * a single ciphertext a miss is undecidable: a wrong passphrase and a damaged
-     * file are the same "no". */
-    if (trial.tried == 1) {
+     * file are the same "no".
+     *
+     * A walk that could not read everything — the source's failure in hand —
+     * makes the no its own failure, in the same words and said unfinished: what
+     * it could not read may be the witness that opens, so the no is not the
+     * passphrase's and no key is promised — a terminal is not asked again
+     * (prompt_and_verify), and a row reads the fault of what could not be read,
+     * never [locked]. */
+    if (trial.tried == 1 && err) {
+        err = error_wrap(
+            err, "%s does not open the one encrypted file it was tried against, "
+            "which may itself be damaged, and not everything this repository holds "
+            "could be read", subject
+        );
+    } else if (trial.tried == 1) {
         err = error_create(
             ERR_LOCKED,
             "%s does not open the one encrypted file it was tried against, "
             "which may itself be damaged", subject
+        );
+    } else if (err) {
+        err = error_wrap(
+            err, "%s opens none of the %zu encrypted files it was tried against, "
+            "and not everything this repository holds could be read", subject,
+            trial.tried
         );
     } else {
         err = error_create(
@@ -436,8 +464,8 @@ static error_t prompt_and_verify(
         secure_free(passphrase, passphrase_len + 1);
         if (!err) return NULL;
         /* A wrong passphrase — derive_and_check's ERR_LOCKED — is re-asked at a
-         * terminal; a derivation or a walk that failed on its own is refused at
-         * once. */
+         * terminal; a derivation that failed on its own, or a walk that could
+         * not read everything, is refused at once. */
         if (!tty || error_code(err) != ERR_LOCKED || attempt == KEYMGR_ATTEMPTS) {
             return refuse(km, err);
         }

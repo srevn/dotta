@@ -73,10 +73,11 @@
  * fact for every row of the run, and a key is what settles it. ERR_CRYPTO is
  * the cipher's word under a held master — a blob it does not open is that blob's
  * fault — and the refusals no master can ever lift here: a foreign epoch, a version
- * this build does not read, a malformed header. A witness walk or a derivation
- * that fails on its own keeps its own code. The workspace reads the code to name
- * a failed look's fault (core/workspace.h), so the boundary is a contract, not
- * a habit.
+ * this build does not read, a malformed header. A derivation that fails on its
+ * own keeps its own code, and so does a witness walk that could not read everything
+ * and opened nothing: what it could not read may be the witness that opens, so
+ * its no is not the passphrase's. The workspace reads the code to name a failed
+ * look's fault (core/workspace.h), so the boundary is a contract, not a habit.
  *
  * The layer computes, the verbs report: nothing here writes to a stream but the
  * prompt's own text, and that only at a terminal (sys/passphrase). Every refusal
@@ -164,8 +165,9 @@ typedef struct keymgr_witness {
  * A predicate, and total: every witness has an answer, the cipher's
  * (crypto/cipher.h cipher_opens). One no key could open — truncated, damaged,
  * bound under another path — is a "no" like a wrong master's, and the walk goes
- * on to the next, so one bad blob in the history never stands between a right
- * passphrase and the witness that proves it.
+ * on to the next; one the walk cannot read is never presented, and it goes on
+ * past that too (keymgr_witness_source_fn). So one bad object in the history
+ * never stands between a right passphrase and the witness that proves it.
  *
  * `self` is what the keymgr handed the source beside the predicate; the source
  * passes it back untouched and never reads it.
@@ -180,10 +182,12 @@ typedef bool (*keymgr_opens_fn)(void *self, const keymgr_witness_t *witness);
  * one path under two branches, is presented under each binding, since only one
  * of them can be the one it was sealed under — to `accept` until one is accepted,
  * and reports whether one was. A ciphertext of another epoch or of a version
- * this build does not read is never presented. The walk's own failure (an object
- * that will not load) is returned and stands as that attempt's refusal, and
- * `*out_accepted` is false. The one implementation is
- * `infra/epoch::epoch_find_ciphertext`, over the ciphertext census's walk of
+ * this build does not read is never presented. What the walk cannot read it passes
+ * over, so a witness accepted beyond it stands; where none is accepted, the first
+ * thing it could not read is returned, `*out_accepted` false — an absence it
+ * could not prove, which no master is taken as given over and no miss turns into
+ * the passphrase's (crypto/keymgr.c derive_and_check). The one implementation
+ * is `infra/epoch::epoch_find_ciphertext`, over the ciphertext census's walk of
  * every local branch and its history; the unit suites bring their own.
  *
  * That reach — every local branch, its whole history — is load-bearing, not

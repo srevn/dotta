@@ -227,7 +227,7 @@ error_t epoch_init(
     if (cerr) {
         /* No absence was proved, so the verdict is the found-ciphertext verdict
          * — do not mint — but the reason is not that reason, and the census's
-         * own message names the listing or the object that stopped it. Carry
+         * own message names the first thing it could not read, and where. Carry
          * it. The probe goes: what is wrong with the ref is not actionable until
          * the thing that broke the census is, and this refusal is the one blocking
          * it. */
@@ -558,6 +558,13 @@ error_t epoch_fetch(
  * answering one question — what ciphertext of this epoch does the repository
  * hold — get one walker, so neither can skip a branch or forget an object the
  * other remembers.
+ *
+ * One rule serves both, since a yes needs one look and a no needs every look:
+ * an answer the asker stops on stands, whatever the walk could not read on the
+ * way; a walk that ends without one fails on the first thing it could not read.
+ * So the walk passes over what will not read — a branch's tip, a history, a tree,
+ * a blob — keeps the first of them, and goes on: the census still fails closed,
+ * its absence unproven, and a witness beyond a broken object still opens.
  */
 
 /* One ciphertext the walk met: the binding it stands under, what its header says,
@@ -585,14 +592,18 @@ typedef struct {
     void *payload;             /* the asker's, carried untouched */
     const char *branch;        /* the branch under walk */
     bool stopped;              /* the asker answered: every loop of the walk ends */
+    error_t failure;           /* the first thing passed over, unread; the answer
+                                * where the asker never stops the walk */
 } epoch_walk_t;
 
 /*
  * Walk visitor (pre-order): a binding met before is skipped, a tree with every
- * binding beneath it; a blob is judged by its header, and a ciphertext presented
- * to the asker, whose answer stops the walk and is kept for the driver, whose
- * history and branch loops end with it. A failure is the walk proving nothing,
- * returned as it is.
+ * binding beneath it; a subtree is loaded before libgit2 descends into it, a
+ * blob is judged by its header, and a ciphertext presented to the asker, whose
+ * answer stops the walk and is kept for the driver, whose history and branch
+ * loops end with it. It never fails: what it cannot read — a subtree that will
+ * not load, a blob it cannot judge or open — it keeps on the walk where the walk
+ * holds none yet, named by its binding, and passes over (the rule above).
  */
 static error_t epoch_present_blob(
     const char *path, const git_tree_entry *entry, void *payload,
@@ -636,24 +647,52 @@ static error_t epoch_present_blob(
         return NULL;
     }
 
+    /* A first visit to a tree descends, and the tree is loaded here first: libgit2
+     * loads a subtree after its visitor has seen it and ends the whole walk where
+     * one will not load (tree.c tree_walk), every binding after it unmet. One
+     * that will not load is kept and skipped, so libgit2 never tries it; one
+     * that loads is libgit2's to load again, from its object cache for a tree
+     * under 4 KiB (cache.c), read twice where larger. */
     if (type == GIT_OBJECT_TREE) {
-        return NULL;  /* first visit: descend */
+        git_tree *subtree = NULL;
+        int rc = git_tree_lookup(&subtree, walk->repo, oid);
+        if (rc < 0) {
+            if (!walk->failure) {
+                walk->failure = error_wrap(
+                    error_from_git(rc), "Cannot read '%s:%s'", walk->branch, path
+                );
+            }
+            *next = GITOPS_NEXT_SKIP;
+            return NULL;
+        }
+        git_tree_free(subtree);
+        return NULL;
     }
 
     /* Judged as the entry it stands in: a link's bytes are its target, never a
-     * ciphertext, whatever they begin with (infra/content.h). */
+     * ciphertext, whatever they begin with (infra/content.h); and a ciphertext
+     * opened to be presented with its bytes — the second open a cached object
+     * lookup, paid for the few blobs that are ciphertext. */
     content_kind_t kind;
     uint8_t fp[KDF_EPOCH_FP_SIZE];
+    gitops_blob_view_t view;
     error_t err = content_classify(
         walk->repo, oid, git_tree_entry_filemode(entry), &kind, fp
     );
-    if (err || kind == CONTENT_PLAINTEXT) return err;
+    if (!err && kind == CONTENT_PLAINTEXT) return NULL;
+    if (!err) err = gitops_blob_view_open(walk->repo, oid, &view);
 
-    /* A ciphertext: present it with its bytes. The second open is a cached object
-     * lookup, paid for the few blobs that are ciphertext. */
-    gitops_blob_view_t view;
-    err = gitops_blob_view_open(walk->repo, oid, &view);
-    if (err) return err;
+    /* A blob it cannot judge or open may be a ciphertext, so it is kept and passed
+     * over, said as the question it left open. The cause is the classifier's
+     * own, one per such blob; the binding is wrapped onto the one kept alone. */
+    if (err) {
+        if (!walk->failure) {
+            walk->failure = error_wrap(
+                err, "Cannot tell whether '%s:%s' is encrypted", walk->branch, path
+            );
+        }
+        return NULL;
+    }
 
     const epoch_ciphertext_t ct = {
         .branch       = walk->branch,
@@ -673,16 +712,51 @@ static error_t epoch_present_blob(
 }
 
 /*
+ * One commit of a branch's history: its tree walked, every binding in it presented
+ * (epoch_present_blob). A commit whose tree will not load is kept on the walk
+ * where the walk holds no failure yet, named by its branch, and the history goes
+ * on past it: an older commit may hold the witness.
+ */
+static void epoch_walk_commit(epoch_walk_t *walk, const git_oid *commit_oid) {
+    git_commit *commit = NULL;
+    git_tree *tree = NULL;
+    int rc = git_commit_lookup(&commit, walk->repo, commit_oid);
+    if (rc == 0) {
+        rc = git_commit_tree(&tree, commit);
+        git_commit_free(commit);
+    }
+    if (rc < 0) {
+        if (!walk->failure) {
+            walk->failure = error_wrap(
+                error_from_git(rc), "Cannot read the history of 'refs/heads/%s'",
+                walk->branch
+            );
+        }
+        return;
+    }
+
+    /* Every commit's tree is walked: what an earlier commit already held is skipped
+     * at its first entry (epoch_present_blob), so a tree two commits share costs
+     * a visit of each entry it holds and nothing beneath them. The visitor passes
+     * over what it cannot read, so what the tree walk can fail on is libgit2's
+     * own load of a subtree the visitor loaded a moment before. */
+    error_t err = gitops_tree_walk(tree, epoch_present_blob, walk);
+    git_tree_free(tree);
+    if (!walk->failure) walk->failure = err;
+}
+
+/*
  * Walk the full history of every local branch and present every ciphertext to
  * `fn` until it stops the walk. Every asker here acts on an ABSENCE of ciphertext
  * — the licence to mint, to adopt, or to take a passphrase as given — so the
  * listing must be complete or an error, and sys/gitops's is (its header; listed
  * there rather than through core/profiles, so infra/epoch takes no core/
- * dependency). The walk holds no proof of its own: a listing's error fails it
- * closed like any error of its own, returned bare — sync prints the census's
- * cause as one line of its own (`epoch_reconcile`), and a wrap would stand where
- * the cause should. The revwalk speaks libgit2 directly the way sys/stats does.
- * The epoch ref lives outside refs/heads and is never walked.
+ * dependency). The walk holds no proof of its own: it answers by the rule at
+ * the head of the walk, an asker's answer whatever was passed over, else the
+ * first thing it could not read, which names where it stands — sync prints the
+ * census's cause whole beneath its own question (`epoch_reconcile`). The revwalk
+ * speaks libgit2 directly the way sys/stats does. The epoch ref lives outside
+ * refs/heads and is never walked.
  */
 static error_t epoch_walk(
     git_repository *repo, epoch_ciphertext_fn fn, void *payload
@@ -690,18 +764,18 @@ static error_t epoch_walk(
     /* The branches, their names and the bindings already seen, in a frame of
      * the walk's own: each read inside the loop and dropped with it. The set
      * owns its keys, so one spelled in the walk's buffer is copied into the frame
-     * only as it takes a slot. */
+     * only as it takes a slot. What the walk keeps is the error module's, never
+     * the frame's (base/error.h "Lifetime"). */
     arena_t *frame = arena_create(0);
     epoch_walk_t walk = {
         .repo = repo, .seen = hashmap_create(frame, 0), .fn = fn, .payload = payload,
     };
-    git_revwalk *walker = NULL;
 
     /* The branches, complete or an error (sys/gitops.h): a listing that refused
-     * proves no absence, and the walk ends with it. */
-    string_array_t branches;
-    error_t err = gitops_list_branches(repo, frame, &branches);
-    if (err) goto cleanup;
+     * leaves none to walk and proves no absence, and its failure is the first
+     * the walk keeps. */
+    string_array_t branches = { 0 };
+    walk.failure = gitops_list_branches(repo, frame, &branches);
 
     for (size_t i = 0; i < branches.count && !walk.stopped; i++) {
         walk.branch = branches.entries[i];
@@ -711,75 +785,45 @@ static error_t epoch_walk(
          * two shapes a reference can hold (HEAD, a leading '-'): the census walks
          * what Git holds, and a ref it refused would refuse every unlock and
          * every mint beside it. The name is spelled as long as Git made it, and
-         * its tip is read as every tip is (sys/gitops.h gitops_reference_commit);
-         * a branch gone since the listing holds nothing now. */
+         * its tip is read as every tip is (sys/gitops.h gitops_reference_commit),
+         * its failure naming the reference: a branch gone since the listing holds
+         * nothing now, and one whose tip will not read is kept and passed over. */
         const char *refname = arena_str_format(frame, "refs/heads/%s", walk.branch);
         git_commit *tip = NULL;
-        err = gitops_reference_commit(repo, refname, &tip);
-        if (err) goto cleanup;
+        error_t err = gitops_reference_commit(repo, refname, &tip);
+        if (!walk.failure) walk.failure = err;
         if (!tip) continue;
 
         /* The history from that tip, in no order of its own: the push copies
          * the tip's id, so the tip is freed once it is taken */
+        git_revwalk *walker = NULL;
         int rc = git_revwalk_new(&walker, repo);
         if (rc == 0) {
             git_revwalk_sorting(walker, GIT_SORT_NONE);
             rc = git_revwalk_push(walker, git_commit_id(tip));
         }
         git_commit_free(tip);
-        if (rc < 0) {
-            err = error_from_git(rc);
-            goto cleanup;
-        }
 
-        for (;;) {
-            /* Classified, not compared: GIT_ITEROVER is the branch walked out,
-             * and a negative code is a walk that ended early — which has proved
-             * no absence, and an absence is what both callers act on. */
-            git_oid commit_oid;
+        /* Each commit until the history ends, the asker answers or the history
+         * will not go on. Classified, not compared: GIT_ITEROVER is the branch
+         * walked out, and a negative code a history that ended early, which has
+         * proved no absence — kept, and the branches after it walked. */
+        for (git_oid commit_oid; rc == 0 && !walk.stopped;) {
             rc = git_revwalk_next(&commit_oid, walker);
-            if (rc == GIT_ITEROVER) {
-                break;
-            }
-            if (rc < 0) {
-                err = error_from_git(rc);
-                goto cleanup;
-            }
-
-            git_commit *commit = NULL;
-            rc = git_commit_lookup(&commit, repo, &commit_oid);
-            if (rc < 0) {
-                err = error_from_git(rc);
-                goto cleanup;
-            }
-
-            git_tree *tree = NULL;
-            rc = git_commit_tree(&tree, commit);
-            git_commit_free(commit);
-            if (rc < 0) {
-                err = error_from_git(rc);
-                goto cleanup;
-            }
-
-            /* Every commit's tree is walked: what an earlier commit already held
-             * is skipped at its first entry (epoch_present_blob), so a tree two
-             * commits share costs a visit of each entry it holds and nothing
-             * beneath them. */
-            err = gitops_tree_walk(tree, epoch_present_blob, &walk);
-            git_tree_free(tree);
-            if (err) goto cleanup;
-            if (walk.stopped) break;  /* the asker answered: the branch loop ends too */
+            if (rc == 0) epoch_walk_commit(&walk, &commit_oid);
         }
-
-        git_revwalk_free(walker);
-        walker = NULL;
+        if (rc < 0 && rc != GIT_ITEROVER && !walk.failure) {
+            walk.failure = error_wrap(
+                error_from_git(rc), "Cannot read the history of '%s'", refname
+            );
+        }
+        git_revwalk_free(walker);    /* NULL-safe: revwalk.c git_revwalk_free */
     }
 
-cleanup:
-    git_revwalk_free(walker);    /* NULL-safe: revwalk.c git_revwalk_free */
     buffer_deinit(&walk.key);
     arena_free(frame);
-    return err;
+
+    return walk.stopped ? NULL : walk.failure;
 }
 
 /*
@@ -811,11 +855,13 @@ static bool epoch_census_cb(const epoch_ciphertext_t *ct, void *payload) {
 }
 
 /*
- * Three states in two values, and the error is one of them: an unfinished census
- * proved no absence, and an absence is the whole of what both callers act on.
- * So neither reads `*out_found` past an error — each returns the cause to whoever
- * can name the subject — and the `false` written on that path is a courtesy,
- * not an answer. Failing closed is their policy, not the walk's.
+ * Three states in two values, and the error is one of them: a census that found
+ * nothing and could not read everything proved no absence, and an absence is
+ * the whole of what both callers act on — where one that found a ciphertext answers
+ * whatever it passed over (the walk's rule). So neither reads `*out_found` past
+ * an error — each returns the cause to whoever can name the subject — and the
+ * `false` written on that path is a courtesy, not an answer. Failing closed is
+ * their policy, not the walk's.
  */
 static error_t epoch_census(
     git_repository *repo, const uint8_t *local_fp, bool *out_found

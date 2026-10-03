@@ -49,8 +49,11 @@
  * mint, to adopt, or to take a passphrase as given — so the walk needs a branch
  * listing that is complete or an error, and sys/gitops's is one (its header:
  * libgit2 skips a loose ref it cannot read, and the listing reads the loose store
- * itself to catch it). The walk holds no proof of its own; a listing's error
- * fails the census closed like any error of the walk's.
+ * itself to catch it). The walk holds no proof of its own, and one rule serves
+ * both answers: a ciphertext found — a witness opened, one the census counts —
+ * stands whatever the walk could not read on the way, and a walk that ends without
+ * one fails on the first thing it could not read, a listing's error among them,
+ * so the census fails closed.
  *
  * Layering — `infra/` depends on sys/gitops + sys/entropy + sys/transfer +
  * crypto/kdf (the epoch type, its encoding and its fingerprint) + crypto/keymgr
@@ -113,12 +116,12 @@
  * and a fresh epoch would orphan it permanently. With any reachable ciphertext,
  * the refusal names the state of the ref and the restore that repairs it, and
  * the evidence stays in place (a remote holding the true epoch heals a divergence
- * via sync's fetch paths instead). A census that cannot finish proves no absence
- * and reaches the same verdict, but not for the same reason, so it carries its
- * own cause rather than borrowing that sentence. With a clean census the ref
- * binds nothing: an unreadable one is deleted and re-minted (`*out_repaired`
- * set — the caller renders the repair), an absent one is simply a repository
- * that has no epoch yet.
+ * via sync's fetch paths instead). A census that found none and could not read
+ * everything proves no absence and reaches the same verdict, but not for the
+ * same reason, so it carries its own cause rather than borrowing that sentence.
+ * With a clean census the ref binds nothing: an unreadable one is deleted and
+ * re-minted (`*out_repaired` set — the caller renders the repair), an absent
+ * one is simply a repository that has no epoch yet.
  *
  * Every refusal names the epoch or its act — the census, the ref and its restore,
  * the removal, the salt, the commit — and keeps its cause's code: ERR_CRYPTO
@@ -348,13 +351,13 @@ typedef enum {
  * Two errors, each in its own words, since neither has a second reporter anywhere
  * in sync: the local ref that would not read — read before the remote is asked,
  * so its failure is never taken for the remote's, and named in it (sys/gitops.h
- * gitops_reference_find) — and a census that could not finish, which fails closed:
- * an error and never a verdict, wrapped as the question it could not answer,
- * whose cause names the listing or the object that stopped it. A failure of the
- * remote's half — the lookup, the connect, the ls — folds to
- * EPOCH_RECONCILE_UNREACHABLE so the caller can skip epoch reconciliation
- * best-effort: the authoritative "remote unreachable" diagnostic comes from the
- * subsequent fetch phase.
+ * gitops_reference_find) — and a census that found nothing and could not read
+ * everything, which fails closed: an error and never a verdict, wrapped as the
+ * question it could not answer, whose cause names the first thing it could not
+ * read and where it stands. A failure of the remote's half — the lookup, the
+ * connect, the ls — folds to EPOCH_RECONCILE_UNREACHABLE so the caller can skip
+ * epoch reconciliation best-effort: the authoritative "remote unreachable"
+ * diagnostic comes from the subsequent fetch phase.
  *
  * This module owns only the *mechanism* of looking and classifying; the acts,
  * the CLI gating, and the rendering are policy and live in `cmd_sync`.
@@ -394,11 +397,13 @@ error_t epoch_resolve(
  * one over ciphertext the repository still holds — which for this asker means
  * taking a wrong passphrase as given (crypto/keymgr.h).
  *
- * The walk's own failure — a branch that will not list, an object that will not
- * load — is returned and stands as that attempt's refusal in the keymgr, and
- * leaves `*out_accepted` false; `accept` is a predicate and raises none. A
- * ciphertext reachable from no local branch is never presented, and a decrypt
- * of one reads its refusal on its own row.
+ * What the walk cannot read — a branch that will not list, a tip, a history or
+ * a tree that will not load, a blob it cannot judge — it passes over, so a witness
+ * accepted beyond it stands. Where none is accepted, the first of them is returned,
+ * named by where it stands, with `*out_accepted` false: an absence the walk could
+ * not prove (crypto/keymgr.c derive_and_check reads it so). `accept` is a predicate
+ * and raises none. A ciphertext reachable from no local branch is never presented,
+ * and a decrypt of one reads its refusal on its own row.
  *
  * Given to the keymgr at its creation by the dispatcher (`keymgr_create`); the
  * keymgr calls it only for a fresh master with no blob in hand or whose blob in

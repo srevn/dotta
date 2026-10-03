@@ -1,39 +1,241 @@
 /**
  * revision.c - A commit a user named: the spelling read, and asked of a branch
+ *
+ * One evaluator reads the steps after HEAD and walks them from a commit; with
+ * none in hand — at the read, before any branch is chosen, or past a history
+ * that ran out — it only reads them. Its loop and its lexing are libgit2's
+ * revparse's (lib/libgit2/src/libgit2/revparse.c revparse, extract_how_many);
+ * what each step means is git's (lib/git/object-name.c).
  */
 
 #include "sys/revision.h"
 
 #include <git2.h>
+#include <regex.h>
+#include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/refspec.h"
 #include "sys/gitops.h"
 
 /*
- * One of HEAD's steps, read at the cursor and the cursor moved past it: the step's
- * operator, `~` or `^`, with its count — 1 where none is written — or 0 where
- * the text at the cursor is no step. The count saturates rather than wraps: no
- * history is 2^64 commits deep, so a count past that reaches beyond the root
- * like any count longer than the history, git's own reading of one that overflows
- * (lib/git/object-name.c get_nth_ancestor). The digits are ASCII's ten, whatever
- * the locale's classes hold.
+ * What a walk that could not load a commit says: the revision, and the branch
+ * it was walked in where there is one — the read walks in none, and takes no step.
  */
-static char revision_step(const char **cursor, size_t *count) {
-    const char *p = *cursor;
-    const char op = *p++;
-    if (op != '~' && op != '^') return 0;
+static error_t revision_unwalked(int rc, const char *spelling, const char *branch) {
+    return branch
+        ? error_wrap(error_from_git(rc), "Cannot walk '%s' in branch '%s'", spelling, branch)
+        : error_wrap(error_from_git(rc), "Cannot walk '%s'", spelling);
+}
 
-    size_t n = *p >= '0' && *p <= '9' ? 0 : 1;
-    for (; *p >= '0' && *p <= '9'; p++) {
-        const size_t digit = (size_t) (*p - '0');
-        n = n > (SIZE_MAX - digit) / 10 ? SIZE_MAX : n * 10 + digit;
+/*
+ * `generations` steps from the commit in hand, each to its parent `nth` (0 the
+ * first): what `~N` and `^N` take. NULL in hand is the history ending before
+ * the steps do — an answer — and with none in hand there is nothing to take.
+ */
+static error_t revision_parents(
+    const char *spelling, const char *branch, size_t nth, size_t generations,
+    git_commit **commit
+) {
+    for (; *commit && generations > 0; generations--) {
+        /* The count the commit was parsed with is the evidence: a parent past
+         * it is a history shorter than the steps reach, while one it names is
+         * there to load, and a load that fails is an object the store lost, though
+         * libgit2 answers GIT_ENOTFOUND (lib/libgit2/src/libgit2/commit.c
+         * git_commit_parent). */
+        git_commit *parent = NULL;
+        int rc = nth < git_commit_parentcount(*commit)
+            ? git_commit_parent(&parent, *commit, (unsigned int) nth) : 0;
+        git_commit_free(*commit);
+        *commit = parent;
+        if (rc < 0) return revision_unwalked(rc, spelling, branch);
     }
 
-    *cursor = p;
-    *count = n;
-    return op;
+    return NULL;
+}
+
+/*
+ * `^{/pattern}` from the commit in hand: the youngest commit it reaches, itself
+ * among them, whose message the pattern matches, and NULL in hand where none
+ * does — an answer. With none in hand the pattern is only compiled, so one that
+ * is no expression refuses wherever the steps are read.
+ */
+static error_t revision_search(
+    git_repository *repo, const char *spelling, const char *branch,
+    const char *pattern, git_commit **commit
+) {
+    /* git's reading (lib/git/object-name.c peel_onion, get_oid_oneline): `^{/}`
+     * is the commit itself, with no expression compiled — a regcomp may refuse
+     * the empty one, as macOS's does — and `!-` leading the pattern matches where
+     * the rest does not, `!!` is a literal `!`, any other `!` git's to reserve. */
+    if (!*pattern) return NULL;
+
+    const bool negated = pattern[0] == '!' && pattern[1] == '-';
+    if (pattern[0] == '!') {
+        if (!negated && pattern[1] != '!') {
+            return error_create(
+                ERR_INVALID_ARG, "Cannot resolve '%s': a pattern opening on '!' "
+                "reads '!-' or '!!'", spelling
+            );
+        }
+        pattern += negated ? 2 : 1;
+    }
+
+    /* An extended POSIX expression, as git compiles it, so what a pattern means
+     * is never libgit2's build's (PCRE or regcomp, revparse.c build_regex) */
+    regex_t regex;
+    int rc = regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB);
+    if (rc != 0) {
+        char why[256];
+        regerror(rc, &regex, why, sizeof(why));
+        return error_create(ERR_INVALID_ARG, "Cannot resolve '%s': %s", spelling, why);
+    }
+    if (!*commit) {
+        regfree(&regex);
+        return NULL;
+    }
+
+    /* git's order, newest first, each commit's parents read as it is passed:
+     * libgit2's unsorted walk inserts them by date (GIT_SORT_NONE: revwalk.c
+     * get_revision), as git's pop_most_recent_commit does, where its own search
+     * sorts by time and reads the whole history before the first message
+     * (revparse.c handle_grep_syntax, revwalk.c limit_list). */
+    git_revwalk *walk = NULL;
+    rc = git_revwalk_new(&walk, repo);
+    if (rc == 0) rc = git_revwalk_push(walk, git_commit_id(*commit));
+
+    /* Each commit passed is looked up as the match, and let go where the pattern
+     * does not take its raw message — what follows the header's blank line, as
+     * git's search reads it. The walk's end is the answer that none matches; a
+     * commit the walk or the lookup could not read is the failure, never that
+     * answer — a commit-graph can name a commit whose object the store lost
+     * (commit_list.c git_commit_list_parse). */
+    git_commit *match = NULL;
+    git_oid id;
+    while (!match && rc == 0 && (rc = git_revwalk_next(&id, walk)) == 0) {
+        rc = git_commit_lookup(&match, repo, &id);
+        if (rc == 0 &&
+            (regexec(&regex, git_commit_message_raw(match), 0, NULL, 0) == 0) == negated) {
+            git_commit_free(match);
+            match = NULL;
+        }
+    }
+
+    /* The failure is read before anything is freed: the frees are libgit2's */
+    error_t err = match || rc == GIT_ITEROVER
+        ? NULL : revision_unwalked(rc, spelling, branch);
+    git_revwalk_free(walk);
+    regfree(&regex);
+    git_commit_free(*commit);
+    *commit = match;
+    return err;
+}
+
+/*
+ * One step, read at the cursor and taken from the commit in hand, the cursor
+ * moved past it; with none in hand it is only read. What is no step refuses,
+ * naming what one is.
+ */
+static error_t revision_step(
+    git_repository *repo, const char *spelling, const char *branch,
+    const char **cursor, git_commit **commit
+) {
+    const char *p = *cursor;
+
+    /* `~N` and `^N`: the operator, then its count — 1 where none is written.
+     * The count saturates rather than wraps: no history is 2^64 commits deep,
+     * so a count past that reaches beyond the root like any count longer than
+     * the history, git's own reading of one that overflows (lib/git/object-name.c
+     * get_oid_1, get_nth_ancestor). The digits are ASCII's ten, whatever the
+     * locale's classes hold. */
+    if (p[0] == '~' || (p[0] == '^' && p[1] != '{')) {
+        const char op = *p++;
+        size_t count = *p >= '0' && *p <= '9' ? 0 : 1;
+        for (; *p >= '0' && *p <= '9'; p++) {
+            const size_t digit = (size_t) (*p - '0');
+            count = count > (SIZE_MAX - digit) / 10 ? SIZE_MAX : count * 10 + digit;
+        }
+        *cursor = p;
+
+        /* `~N` takes N first parents; `^N` one step, to the Nth parent, and `^0`
+         * none — it is the commit itself */
+        if (op == '~') return revision_parents(spelling, branch, 0, count, commit);
+        return count > 0 ? revision_parents(spelling, branch, count - 1, 1, commit) : NULL;
+    }
+
+    /* `^{…}`: what the braces hold runs to the last '}' before the next `^{`
+     * that only `~N` and `^N` follow — git's reading, which takes the steps from
+     * the right (lib/git/object-name.c get_oid_1, peel_onion), so a pattern's
+     * own braces are the pattern's: `^{/a{2}}`, `^{/[}]}`, `^{/a\}b}`. */
+    if (p[0] == '^' && p[1] == '{') {
+        const char *body = p + 2;
+        const char *next = strstr(body, "^{");
+        const char *end = next ? next : body + strlen(body);
+        for (const char *q = end; q > body;) {
+            while (q > body && q[-1] >= '0' && q[-1] <= '9') q--;
+            if (q == body || (q[-1] != '~' && q[-1] != '^')) break;
+            end = --q;
+        }
+
+        if (end > body && end[-1] == '}') {
+            *cursor = end;
+
+            /* What the braces hold, as one word — the whole of it, where git's
+             * peel_onion reads `^{commit}x}` as `^{commit}` — a commit is its
+             * own ^{}, ^{commit} and ^{object}, and peeled to a tree, a blob or
+             * a tag it is no commit at all. */
+            char *group = heap_strndup(body, (size_t) (end - 1 - body));
+            error_t err = NULL;
+            if (group[0] == '/') {
+                err = revision_search(repo, spelling, branch, group + 1, commit);
+            } else if (strcmp(group, "tree") == 0 || strcmp(group, "blob") == 0 ||
+                strcmp(group, "tag") == 0) {
+                err = error_create(
+                    ERR_INVALID_ARG, "'%s' does not point to a commit", spelling
+                );
+            } else if (*group && strcmp(group, "commit") != 0 &&
+                strcmp(group, "object") != 0) {
+                err = error_create(
+                    ERR_INVALID_ARG, "Cannot resolve '%s': a step is ~N, ^N, ^{type} "
+                    "or ^{/pattern}", spelling
+                );
+            }
+            free(group);
+            return err;
+        }
+    }
+
+    return error_create(
+        ERR_INVALID_ARG, "Cannot resolve '%s': a step is ~N, ^N, ^{type} or "
+        "^{/pattern}", spelling
+    );
+}
+
+/*
+ * A revision's steps, read in order and walked from the commit in hand, which
+ * the walk owns from the call: what it holds after is the commit the steps reach,
+ * or NULL where none was given or the history ran out before them — an answer,
+ * and the steps after it are still read. A failure leaves NULL, the reference
+ * released.
+ */
+static error_t revision_walk(
+    git_repository *repo, const char *spelling, const char *branch, const char *steps,
+    git_commit **commit
+) {
+    for (const char *cursor = steps; *cursor;) {
+        error_t err = revision_step(repo, spelling, branch, &cursor, commit);
+        if (err) {
+            git_commit_free(*commit);
+            *commit = NULL;
+            return err;
+        }
+    }
+
+    return NULL;
 }
 
 error_t revision_resolve(
@@ -43,20 +245,15 @@ error_t revision_resolve(
     CHECK_NULL(spelling);
     CHECK_NULL(out);
 
-    /* HEAD's steps are read whole now, so one the walk would not take refuses
-     * before any branch is read; revision_find walks them from each tip. */
+    /* HEAD's steps are read whole now, so one that is no step refuses before
+     * any branch is read: walked from no commit, each is only read — the tip
+     * they are walked from is each branch's, at revision_find. */
     const char *steps = refspec_head_steps(spelling);
     if (steps) {
-        for (const char *step = steps; *step;) {
-            size_t count = 0;
-            if (!revision_step(&step, &count)) {
-                return error_create(
-                    ERR_INVALID_ARG,
-                    "Cannot resolve '%s': after HEAD, dotta reads ~N and ^N steps",
-                    spelling
-                );
-            }
-        }
+        git_commit *tip = NULL;
+        error_t err = revision_walk(repo, spelling, NULL, steps, &tip);
+        if (err) return err;
+
         *out = (revision_t){ .spelling = spelling, .steps = steps };
         return NULL;
     }
@@ -131,53 +328,11 @@ error_t revision_find(
         return NULL;
     }
 
-    /* HEAD's steps, walked back from the tip this branch was read at. The walk
-     * holds its own reference from the start — the tip is the answer to HEAD
-     * itself — and git_commit_dup's one answer is 0 (a count taken, nothing
-     * made). */
-    git_commit *commit = NULL;
-    (void) git_commit_dup(&commit, tip);
-
-    for (const char *step = rev->steps; *step;) {
-        size_t count = 0;
-        const char op = revision_step(&step, &count);
-        CHECK_ARG(op != 0, "a revision's steps are the ones its resolve read");
-
-        /* `~N` takes N first parents; `^N` takes one step, to the Nth parent,
-         * and `^0` none — it is the commit itself. */
-        size_t generations = count;
-        size_t nth = 0;
-        if (op == '^') {
-            if (count == 0) continue;
-            generations = 1;
-            nth = count - 1;
-        }
-
-        for (; generations > 0; generations--) {
-            /* The count read off the parsed commit is the evidence: a parent
-             * past it is a history shorter than the steps reach — no commit, an
-             * answer — while one it names is there to load, and a load that fails
-             * is an object the store lost, though libgit2 answers GIT_ENOTFOUND. */
-            if (nth >= git_commit_parentcount(commit)) {
-                git_commit_free(commit);
-                return NULL;
-            }
-
-            git_commit *parent = NULL;
-            int rc = git_commit_parent(&parent, commit, (unsigned int) nth);
-            git_commit_free(commit);
-            if (rc < 0) {
-                return error_wrap(
-                    error_from_git(rc), "Cannot walk '%s' in branch '%s'",
-                    rev->spelling, branch
-                );
-            }
-            commit = parent;
-        }
-    }
-
-    *out = commit;
-    return NULL;
+    /* HEAD's steps, walked from the tip this branch was read at. The walk holds
+     * its own reference from the start — the tip is the answer to HEAD itself —
+     * and git_commit_dup's one answer is 0 (a count taken, nothing made). */
+    (void) git_commit_dup(out, tip);
+    return revision_walk(repo, rev->spelling, branch, rev->steps, out);
 }
 
 /**
@@ -208,8 +363,8 @@ error_t revision_load(
     git_commit_free(tip);
     if (err || *out) return err;
 
-    /* The branch has no commit for it: HEAD's steps reach past its history, or
-     * its history does not hold the commit. */
+    /* The branch has no commit for it: HEAD's steps reach past its history or
+     * match nothing in it, or its history does not hold the commit. */
     if (rev.steps) {
         return error_create(
             ERR_NOT_FOUND, "'%s' names no commit of branch '%s'", spelling, branch

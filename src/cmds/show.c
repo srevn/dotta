@@ -911,7 +911,8 @@ const args_command_t spec_show = {
     .notes       =
         "Commit Mode:\n"
         "  Triggered when the first positional parses as a Git ref (SHA,\n"
-        "  HEAD, HEAD~N). Prints commit metadata, file change statistics,\n"
+        "  HEAD, HEAD~N, HEAD^{/pattern}: the newest commit whose message\n"
+        "  matches). Prints commit metadata, file change statistics,\n"
         "  and the full unified diff (equivalent to 'git show').\n"
         "\n"
         "File Mode:\n"

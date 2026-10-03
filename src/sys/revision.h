@@ -6,6 +6,28 @@
  * (revision_find), or of a named branch, where a branch that has no commit for
  * it is the refusal (revision_load). What a spelling looks like with no store
  * in hand is base/refspec.h's; what a reference holds is sys/gitops.h's.
+ *
+ * A spelling is a name and the steps after it, as git reads one
+ * (lib/git/object-name.c get_oid_1). dotta has one name of its own, HEAD — `HEAD`
+ * or `@` and everything after it (base/refspec.h refspec_head_steps) — a branch's
+ * tip, so a commit only once the branch is chosen. Every other spelling is git's,
+ * resolved whole by libgit2 once and peeled to its commit, which is the same
+ * whichever branch is asked after.
+ *
+ * HEAD's steps are dotta's, read by one evaluator: `~N` and `^N` in any chain;
+ * `^{}`, `^{commit}` and `^{object}`, which a commit answers as itself; `^{tree}`,
+ * `^{blob}` and `^{tag}`, which name no commit and are refused; and `^{/pattern}`,
+ * the youngest commit reached, itself among them, whose message the pattern
+ * matches. Anything else after HEAD is no step and is refused, `HEAD@{1}` and
+ * `@{1}` among it. Each is git's reading, and libgit2's revparse departs from
+ * it on five (lib/libgit2/src/libgit2/revparse.c): it has no `^{object}`, refuses
+ * `^{/}`, reads `^{/!-x}` as a pattern, refuses a count past 2^31 as no spelling,
+ * and ends a group at its first '}'. Its answers are the other reason the walk
+ * is dotta's: a history shorter than the steps reach, a search that matches nothing
+ * and an object the store lost all come back GIT_ENOTFOUND, the search's with
+ * no sentence at all (commit.c git_commit_parent; revparse.c walk_and_search).
+ * Here every "none" is proven — by the parent count each commit was read with,
+ * by the walk's end — and a look that could not read is the failure, never a none.
  */
 
 #ifndef DOTTA_REVISION_H
@@ -17,13 +39,12 @@
 /**
  * A revision a user named, read before any branch is chosen
  *
- * Two kinds of spelling name a commit. HEAD's — `HEAD` or `@`, alone or with
- * its steps back, `~N` and `^N` in any chain (base/refspec.h refspec_head_steps)
- * — names a commit of a branch, and only once the branch is chosen: its tip,
- * and the steps back from it. Every other spelling is git's revision syntax and
- * names one commit whichever branch is asked after — an id, a short id, a tag
- * peeled to its commit, `<id>~N` — so it is resolved once, when the revision is
- * read.
+ * HEAD's spelling names a commit of a branch, and only once the branch is chosen:
+ * its tip, and its steps walked from there, so the steps are kept and walked at
+ * each tip asked (revision_find). Every other spelling is git's revision syntax
+ * and names one commit whichever branch is asked after — an id, a short id, a
+ * tag peeled to its commit, `<id>~N` — so it is resolved once, when the revision
+ * is read, and kept as that commit's id.
  *
  * Nothing is held but the spelling and one commit's id, so the value needs no
  * release and is copied freely; it is valid while the spelling is.
@@ -37,10 +58,10 @@ typedef struct {
 /**
  * Read a revision
  *
- * HEAD's steps are read whole, so one dotta does not walk — anything after HEAD
- * but `~N` and `^N`, `HEAD@{1}`, `@{1}` and `HEAD^{commit}` among them — refuses
- * here, before any branch is. A count too large for any history is read as it
- * is: the walk answers that it reaches past the root.
+ * HEAD's steps are read whole, so one that is no step — `HEAD@{1}`, `@{1}`, a
+ * peel to no commit among them — refuses here, before any branch is, and so does
+ * a pattern that is no expression, compiled now. A count too large for any history
+ * is read as it is: the walk answers that it reaches past the root.
  *
  * Every other spelling is resolved now, and resolving it is required: one that
  * names no commit is the failure, in Git's words, whatever kept it from naming
@@ -64,14 +85,18 @@ error_t revision_resolve(
  *
  * A query, asked of a tip the caller read once (sys/gitops.h
  * gitops_load_branch_commit) so every revision asked of a branch is asked of
- * one tip. HEAD's steps are walked back from it, and NULL is the history shorter
- * than they reach — proven by the parent count each commit on the way was read
- * with, never by a lookup that missed. A commit is the branch's where the tip
- * is that commit or reaches it through its parents, and NULL is a history that
- * does not hold it. A parent the walk could not load and a history the query
- * could not read are the failures, each naming the revision and the branch —
- * even where libgit2 answers GIT_ENOTFOUND, which here is an object the store
- * has lost and never an answer.
+ * one tip. HEAD's steps are walked from it, and NULL is a history shorter than
+ * they reach or one that holds no commit a search matches — proven by the parent
+ * count each commit on the way was read with, and by the end of a walk that read
+ * every commit it passed, never by a lookup that missed. A commit is the branch's
+ * where the tip is that commit or reaches it through its parents, and NULL is a
+ * history that does not hold it. A commit the walk could not load and a history
+ * the query could not read are the failures, each naming the revision and the
+ * branch — even where libgit2 answers GIT_ENOTFOUND, which here is an object
+ * the store has lost and never an answer. The walk is stricter than its answer
+ * needs in one place: libgit2 reads a commit's parents before it yields the commit
+ * (revwalk.c get_revision), so a search whose match has lost a parent fails where
+ * git would answer the match.
  *
  * @param repo Repository (must not be NULL)
  * @param rev The revision (must not be NULL)
@@ -95,12 +120,12 @@ error_t revision_find(
  * The revision read (revision_resolve), the branch's tip read once (sys/gitops.h
  * gitops_load_branch_commit), and the one asked of the other (revision_find); a
  * revision the branch has no commit for is the refusal that says so — HEAD's
- * steps reaching past the branch's history, a commit its history does not hold.
- * Every failure names what failed, the revision or the branch, so a caller adds
- * nothing by restating the subject. Readers, none of which wraps: export.c
- * cmd_export (the refspec's @commit), revert.c cmd_revert (the commit reverted
- * to), show.c show_source and cmd_show (a file's tree, and a commit shown under
- * a named profile).
+ * steps reaching past the branch's history or matching nothing in it, a commit
+ * its history does not hold. Every failure names what failed, the revision or
+ * the branch, so a caller adds nothing by restating the subject. Readers, none
+ * of which wraps: export.c cmd_export (the refspec's @commit), revert.c cmd_revert
+ * (the commit reverted to), show.c show_source and cmd_show (a file's tree, and
+ * a commit shown under a named profile).
  *
  * The commit is the whole answer, and its OID is read off it (git_commit_id):
  * nothing is handed back beside it, so no caller holds two views of one fact

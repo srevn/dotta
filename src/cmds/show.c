@@ -758,7 +758,7 @@ static error_t show_post_parse(
     if (o->positional_count == 0) {
         return ERROR(
             ERR_INVALID_ARG,
-            "target argument is required (profile, file, or commit)"
+            "Target argument is required (profile, file, or commit)"
         );
     }
 

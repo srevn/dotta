@@ -620,7 +620,7 @@ static error_t completion_post_parse(
 
     if (strcmp(o->shell, "fish") != 0) {
         return ERROR(
-            ERR_INVALID_ARG, "unknown shell '%s' (fish is the one supported)",
+            ERR_INVALID_ARG, "Unknown shell '%s' (fish is the one supported)",
             o->shell
         );
     }

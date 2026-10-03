@@ -1263,7 +1263,7 @@ cleanup:
  * Interpret the 1-3 raw positionals into `profile`, `file_path`, and `commit`.
  *
  * Forms (POSITIONAL_RAW min=0, max=3; commit is always required):
- *   0 args        → error "file specification is required"
+ *   0 args        → error "File specification is required"
  *   1 arg         → parse [profile:]<file>[@commit] via refspec_parse
  *   2 args        → <file> <commit>         when arg[1] is a git ref;
  *                   <profile> <file[@commit]> otherwise (refspec on 2nd)
@@ -1285,7 +1285,7 @@ static error_t revert_post_parse(
 
     if (o->positional_count == 0) {
         return ERROR(
-            ERR_INVALID_ARG, "file specification is required"
+            ERR_INVALID_ARG, "File specification is required"
         );
     }
 
@@ -1343,7 +1343,7 @@ static error_t revert_post_parse(
      * successful refspec parsing or explicit positional assignment. */
     if (o->commit == NULL) {
         return ERROR(
-            ERR_INVALID_ARG, "commit reference is required"
+            ERR_INVALID_ARG, "Commit reference is required"
         );
     }
     return NULL;

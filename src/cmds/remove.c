@@ -1703,10 +1703,7 @@ static error_t remove_post_parse(
         o->path_count = o->positional_count;
     } else {
         if (o->positional_count == 0) {
-            return ERROR(
-                ERR_INVALID_ARG,
-                "profile name is required (as first positional or via -p)"
-            );
+            return ERROR(ERR_INVALID_ARG, "Profile name is required");
         }
         o->profile = o->positional_args[0];
         o->paths = o->positional_args + 1;
@@ -1714,16 +1711,10 @@ static error_t remove_post_parse(
     }
 
     if (o->delete_profile && o->path_count > 0) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "cannot specify paths when using --delete-profile"
-        );
+        return ERROR(ERR_INVALID_ARG, "Cannot specify paths when using --delete-profile");
     }
     if (!o->delete_profile && o->path_count == 0) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "at least one path is required (or use --delete-profile)"
-        );
+        return ERROR(ERR_INVALID_ARG, "At least one path is required");
     }
     return NULL;
 }

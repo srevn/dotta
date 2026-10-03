@@ -922,10 +922,7 @@ static error_t list_post_parse(
             o->mode = LIST_FILE_HISTORY;
             o->file_path = o->positional_args[0];
         } else {
-            return ERROR(
-                ERR_INVALID_ARG,
-                "only one file may accompany -p/--profile"
-            );
+            return ERROR(ERR_INVALID_ARG, "Only one file may accompany -p/--profile");
         }
         return NULL;
     }

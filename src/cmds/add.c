@@ -2729,10 +2729,7 @@ static error_t add_post_parse(
         o->file_count = o->positional_count;
     } else {
         if (o->positional_count == 0) {
-            return ERROR(
-                ERR_INVALID_ARG,
-                "profile name is required (as first positional or via -p)"
-            );
+            return ERROR(ERR_INVALID_ARG, "Profile name is required");
         }
         o->profile = o->positional_args[0];
         o->files = o->positional_args + 1;
@@ -2740,9 +2737,7 @@ static error_t add_post_parse(
     }
 
     if (o->file_count == 0) {
-        return ERROR(
-            ERR_INVALID_ARG, "at least one path is required"
-        );
+        return ERROR(ERR_INVALID_ARG, "At least one path is required");
     }
     return NULL;
 }

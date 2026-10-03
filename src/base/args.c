@@ -208,7 +208,7 @@ error_t args_parse_long(const char *text, long min, long max, long *out) {
     CHECK_NULL(text);
     CHECK_NULL(out);
     if (*text == '\0') {
-        return ERROR(ERR_INVALID_ARG, "empty integer value");
+        return ERROR(ERR_INVALID_ARG, "Empty integer value");
     }
 
     errno = 0;
@@ -362,7 +362,7 @@ static error_t apply_value_opt(
                 cur->pending = opt;
                 return NULL;
             }
-            return ERROR(ERR_INVALID_ARG, "option '%s' requires a value", tok);
+            return ERROR(ERR_INVALID_ARG, "Option '%s' requires a value", tok);
         }
         v = cur_take(cur);
     }
@@ -429,10 +429,7 @@ static error_t apply_flag_set(
                 break;
             }
         }
-        return ERROR(
-            ERR_INVALID_ARG, "option '%s' contradicts '%s'; give one or the other",
-            tok, given
-        );
+        return ERROR(ERR_INVALID_ARG, "Option '%s' contradicts '%s'", tok, given);
     }
 
     *field = opt->set_value;
@@ -450,13 +447,13 @@ static error_t apply_long_opt(
 
     const args_opt_t *opt = find_long(cmd->opts, name_start, name_len);
     if (opt == NULL) {
-        return ERROR(ERR_INVALID_ARG, "unknown option '%s'", tok);
+        return ERROR(ERR_INVALID_ARG, "Unknown option '%s'", tok);
     }
 
     /* A flag holds no value, so one written inline refuses the token, named whole:
      * `--force=yes` */
     if (inline_val != NULL && !opt_takes_value(opt)) {
-        return ERROR(ERR_INVALID_ARG, "option '%s' does not take a value", tok);
+        return ERROR(ERR_INVALID_ARG, "Option '%s' does not take a value", tok);
     }
 
     switch (opt->kind) {
@@ -493,7 +490,7 @@ static error_t apply_short_opt(
      * later without breaking any existing spec. */
     const args_opt_t *opt = tok[2] == '\0' ? find_short(cmd->opts, tok[1]) : NULL;
     if (opt == NULL) {
-        return ERROR(ERR_INVALID_ARG, "unknown option '%s'", tok);
+        return ERROR(ERR_INVALID_ARG, "Unknown option '%s'", tok);
     }
 
     switch (opt->kind) {
@@ -556,7 +553,7 @@ static error_t apply_positional(
     if (matched == NULL) matched = raw;
 
     if (matched == NULL) {
-        return ERROR(ERR_INVALID_ARG, "unexpected argument '%s'", tok);
+        return ERROR(ERR_INVALID_ARG, "Unexpected argument '%s'", tok);
     }
 
     if (matched->kind == ARGS_KIND_POSITIONAL_ARG) {
@@ -572,8 +569,8 @@ static error_t apply_positional(
         matched->positional_max > 0 &&
         *cnt >= matched->positional_max) {
         return ERROR(
-            ERR_INVALID_ARG, "too many arguments (max %zu allowed)",
-            matched->positional_max
+            ERR_INVALID_ARG, "Unexpected argument '%s' (max %zu allowed)",
+            tok, matched->positional_max
         );
     }
 
@@ -615,10 +612,10 @@ static error_t check_positional_counts(const args_command_t *cmd, void *opts) {
         if (cnt >= o->positional_min) continue;
 
         if (o->kind == ARGS_KIND_POSITIONAL_ARG && o->value_label != NULL) {
-            return ERROR(ERR_INVALID_ARG, "argument %s is required", o->value_label);
+            return ERROR(ERR_INVALID_ARG, "Argument %s is required", o->value_label);
         }
         return ERROR(
-            ERR_INVALID_ARG, "at least %zu positional argument(s) required",
+            ERR_INVALID_ARG, "At least %zu positional argument(s) required",
             o->positional_min
         );
     }
@@ -767,7 +764,7 @@ static args_outcome_t consume_tokens(
                 );
             }
             *errors = ERROR(
-                ERR_INVALID_ARG, "command '%s' requires a subcommand",
+                ERR_INVALID_ARG, "Command '%s' requires a subcommand",
                 command->name ? command->name : "?"
             );
             return ARGS_REFUSED;
@@ -790,7 +787,7 @@ static args_outcome_t consume_tokens(
                     );
                 }
                 *errors = ERROR(
-                    ERR_INVALID_ARG, "command '%s' requires a subcommand (got '%s')",
+                    ERR_INVALID_ARG, "Command '%s' requires a subcommand (got '%s')",
                     command->name ? command->name : "?", first
                 );
                 return ARGS_REFUSED;
@@ -810,7 +807,7 @@ static args_outcome_t consume_tokens(
         }
 
         *errors = ERROR(
-            ERR_INVALID_ARG, "unknown subcommand '%s' of '%s'",
+            ERR_INVALID_ARG, "Unknown subcommand '%s' of '%s'",
             first, command->name ? command->name : "?"
         );
         return ARGS_REFUSED;
@@ -1413,7 +1410,7 @@ static error_t check_command_names(const args_command_t *cmd) {
         if (!fish_word_ok(name, len)) {
             return ERROR(
                 ERR_INVALID_ARG,
-                "command '%s': root alias '%.*s' cannot stand as a fish word",
+                "Command '%s': root alias '%.*s' cannot stand as a fish word",
                 owner, (int) len, name
             );
         }
@@ -1425,7 +1422,7 @@ static error_t check_command_names(const args_command_t *cmd) {
                 if (!fish_word_ok(name, len)) {
                     return ERROR(
                         ERR_INVALID_ARG,
-                        "command '%s': flag name '%.*s' cannot stand as a fish word",
+                        "Command '%s': flag name '%.*s' cannot stand as a fish word",
                         owner, (int) len, name
                     );
                 }
@@ -1440,7 +1437,7 @@ static error_t check_command_names(const args_command_t *cmd) {
                 if (!fish_word_ok(name, len)) {
                     return ERROR(
                         ERR_INVALID_ARG,
-                        "command '%s': subcommand alias '%.*s' cannot stand as "
+                        "Command '%s': subcommand alias '%.*s' cannot stand as "
                         "a fish word", owner, (int) len, name
                     );
                 }
@@ -1796,7 +1793,7 @@ error_t args_export_completion_fish(
     if (!fish_word_ok(prog, strlen(prog))) {
         return ERROR(
             ERR_INVALID_ARG,
-            "program name '%s' cannot stand as a fish word", prog
+            "Program name '%s' cannot stand as a fish word", prog
         );
     }
     for (size_t i = 0; commands[i] != NULL; i++) {
@@ -1805,7 +1802,7 @@ error_t args_export_completion_fish(
         if (!fish_word_ok(name, strlen(name))) {
             return ERROR(
                 ERR_INVALID_ARG,
-                "command name '%s' cannot stand as a fish word", name
+                "Command name '%s' cannot stand as a fish word", name
             );
         }
         error_t err = check_command_names(c);

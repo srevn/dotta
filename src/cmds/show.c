@@ -610,10 +610,15 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
                 err = error_wrap(err, "Failed to load profiles");
                 goto cleanup;
             }
-            if (profiles.count == 0) {
-                err = error_create(
-                    ERR_NOT_FOUND, "No enabled profiles to search for '%s'; -p searches "
-                    "one", opts->commit
+
+            /* Nowhere to search: refused, the fact the set's own words, and the
+             * way through this command's — a profile named is searched whatever
+             * is enabled */
+            err = profile_require_enabled(state, &profiles, ctx->arena);
+            if (err) {
+                err = error_wrap(
+                    err, "Cannot search for '%s'; -p searches a profile by name",
+                    opts->commit
                 );
                 goto cleanup;
             }

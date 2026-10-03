@@ -113,7 +113,8 @@ void profile_order(string_array_t *names);
  * their names in the rows' order. One whose branch is gone is dropped unsaid:
  * the health commands say it, off the view (core/manifest.h manifest_missing).
  * None enabled, or none of them here, is an empty answer and not an error: every
- * reader decides what an empty set means to it.
+ * reader decides what an empty set means to it, and words it through
+ * profile_require_enabled, which tells the two apart.
  *
  * Readers: the commands that search the enabled set and hold no view — cmds/show.c
  * cmd_show, cmds/ignore.c ignore_test and cmds/bootstrap.c cmd_bootstrap. A command
@@ -137,6 +138,31 @@ error_t profile_resolve_enabled(
     const state_t *state,
     arena_t *arena,
     string_array_t *out
+);
+
+/**
+ * The refusal an empty enabled set earns, or NULL where it holds a profile
+ *
+ * `profiles` is the set a command reads: the enabled rows whose branch is here
+ * — the view's (core/manifest.h manifest_profiles, through core/scope.h
+ * scope_enabled) or the resolver's (profile_resolve_enabled). Empty, it is one
+ * of two facts, and the rows say which: none is enabled, or each one is and Git
+ * holds no branch for it — a row whose branch is here is in the set, since both
+ * producers drop a row only on a proven absence and fail on every other answer.
+ *
+ * Readers: cmds/update.c cmd_update, cmds/sync.c cmd_sync and cmds/show.c cmd_show
+ * refuse with it; cmds/diff.c cmd_diff, cmds/bootstrap.c cmd_bootstrap and
+ * cmds/ignore.c ignore_test warn it and go on.
+ *
+ * @param state State handle (must not be NULL): its enabled rows
+ * @param profiles The set the command reads (must not be NULL)
+ * @param arena Arena the names are joined in (must not be NULL)
+ * @return The refusal (ERR_NOT_FOUND), or NULL where `profiles` holds one
+ */
+error_t profile_require_enabled(
+    const state_t *state,
+    const string_array_t *profiles,
+    arena_t *arena
 );
 
 /**

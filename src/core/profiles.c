@@ -204,6 +204,44 @@ error_t profile_resolve_enabled(
     return NULL;
 }
 
+/**
+ * The refusal an empty enabled set earns
+ */
+error_t profile_require_enabled(
+    const state_t *state,
+    const string_array_t *profiles,
+    arena_t *arena
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(profiles);
+    CHECK_NULL(arena);
+
+    if (profiles->count > 0) return NULL;
+
+    /* Empty: the rows say which of the two facts it is. None at all is a set
+     * nothing enabled. */
+    state_profiles_t enabled_profiles = state_profiles(state);
+    if (enabled_profiles.count == 0) {
+        return error_create(ERR_NOT_FOUND, "No profile is enabled");
+    }
+
+    /* Every row's branch is gone — the set holds each row whose branch is here
+     * (the header) — named in apply's words for the same fact (cmds/apply.c
+     * cmd_apply's Profiles with no branch), in the arena the caller lent */
+    string_array_t names;
+    string_array_init_cap(&names, arena, enabled_profiles.count);
+    for (size_t i = 0; i < enabled_profiles.count; i++) {
+        string_array_push(&names, enabled_profiles.entries[i].name);
+    }
+    return error_create(
+        ERR_NOT_FOUND, "%s '%s' %s enabled, and Git holds no branch for %s",
+        enabled_profiles.count == 1 ? "Profile" : "Profiles",
+        string_array_join(arena, &names, "', '"),
+        enabled_profiles.count == 1 ? "is" : "are",
+        enabled_profiles.count == 1 ? "it" : "any of them"
+    );
+}
+
 /*
  * The search's absence, said of what it searched: every enabled profile, or the
  * ones the filter names — a filter that left the holder out has not made the

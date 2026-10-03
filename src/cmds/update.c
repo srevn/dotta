@@ -22,6 +22,7 @@
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/policy.h"
+#include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -1424,9 +1425,10 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     error_t err = scope_build(repo, manifest, &scope_inputs, ctx->arena, &scope);
     if (err) return err;
 
-    if (scope_enabled(scope)->count == 0) {
-        return error_create(ERR_NOT_FOUND, "No enabled profiles found");
-    }
+    /* Nothing to capture into: refused, in the words that say whether nothing
+     * is enabled or no enabled profile has its branch */
+    err = profile_require_enabled(state, scope_enabled(scope), ctx->arena);
+    if (err) return err;
 
     /* Load workspace for update analysis
      *

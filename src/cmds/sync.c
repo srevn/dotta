@@ -17,6 +17,7 @@
 #include "base/output.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
+#include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -1528,10 +1529,10 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     err = scope_build(repo, before, &scope_inputs, ctx->arena, &scope);
     if (err) goto cleanup;
 
-    if (scope_enabled(scope)->count == 0) {
-        err = error_create(ERR_NOT_FOUND, "No enabled profiles to sync");
-        goto cleanup;
-    }
+    /* Nothing to sync: refused, in the words that say whether nothing is enabled
+     * or no enabled profile has its branch */
+    err = profile_require_enabled(state, scope_enabled(scope), ctx->arena);
+    if (err) goto cleanup;
 
     /* Auto-detect remote early — fail fast before expensive workspace load. URL
      * is resolved alongside the name; the credential helper consumes it when

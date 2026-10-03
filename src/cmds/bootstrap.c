@@ -480,11 +480,12 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
         err = profile_resolve_enabled(repo, state, ctx->arena, &profiles);
         if (err) return err;
 
-        /* No profiles enabled — expected case, show guidance */
-        if (profiles.count == 0) {
-            output_info(out, OUTPUT_NORMAL, "No enabled profiles found.");
-            output_hint(out, OUTPUT_NORMAL, "Enable profiles first:");
-            output_hintline(out, OUTPUT_NORMAL, "  dotta profile enable <name>");
+        /* No script to run: said as a failure the run goes past, exit 0, in the
+         * words that say whether nothing is enabled or no enabled profile has
+         * its branch */
+        err = profile_require_enabled(state, &profiles, ctx->arena);
+        if (err) {
+            output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
             return NULL;
         }
     }

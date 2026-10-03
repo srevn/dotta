@@ -50,17 +50,19 @@
  * Empty-enabled policy
  * --------------------
  * scope_build returns success with an empty enabled set — it does NOT translate
- * "no enabled profiles" into an error. Callers apply their own policy:
+ * "no enabled profiles" into an error. The set is the readable one, the enabled
+ * rows whose branch is here, so empty it is one of two facts: nothing enabled,
+ * or no enabled profile Git holds a branch for. Callers apply their own policy,
+ * and those that speak of an empty set take its words from one producer
+ * (core/profiles.h profile_require_enabled), which tells the two apart:
  *
  *   apply   — empty is a valid convergence target (an empty view, orphan
  *             cleanup runs). No special handling needed.
  *   status  — empty is a valid degraded mode (everything is an orphan).
  *             No special handling needed.
- *   diff    — empty is user error with exit 0 ("nothing to diff"). Caller
- *             inspects scope_enabled(s)->count and emits its hint.
- *   sync    — empty is user error with exit 1. Each caller refuses in its
- *   update    own words ("No enabled profiles to sync", "… found"), so no
- *             shared helper is provided.
+ *   diff    — nothing to diff: warned, exit 0.
+ *   sync    — refused, exit 1.
+ *   update
  */
 
 #ifndef DOTTA_SCOPE_H

@@ -738,22 +738,32 @@ static error_t ignore_test(
         err = profile_resolve_enabled(repo, state, ctx->arena, &enabled);
         if (err) return error_wrap(err, "Failed to load profiles");
 
-        if (enabled.count > 0) {
-            askers = (const char *const *) enabled.entries;
-            asker_count = enabled.count;
-            output_info(out, OUTPUT_NORMAL, "Testing path: %s", test_path);
-            output_info(out, OUTPUT_NORMAL, "Enabled profiles: %zu", asker_count);
-            output_gap(out, OUTPUT_NORMAL);
-        } else {
-            /* The layers the one asker that is no profile meets, in the words
+        err = profile_require_enabled(state, &enabled, ctx->arena);
+        if (err) {
+            /* None to ask: said as a failure the run goes past, in the words
+             * that say whether nothing is enabled or no enabled profile has its
+             * branch — and dropped, so the loop meets no failure in hand. Then
+             * the layers the one asker that is no profile meets, in the words
              * its verdict names them by: Git's where the builder opened them. */
-            output_info(out, OUTPUT_NORMAL, "No enabled profiles found");
+            output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
+            err = NULL;
             output_info(
                 out, OUTPUT_NORMAL, "%s", ignore_source(ignore_rules)
                     ? "Testing against the baseline .dottaignore, config file patterns "
                 "and Git's ignore rules"
                     : "Testing against the baseline .dottaignore and config file patterns"
             );
+        } else {
+            /* The set asked is the enabled profiles whose branch is here, and
+             * the count says so: an enabled profile Git holds no branch for is
+             * none of them */
+            askers = (const char *const *) enabled.entries;
+            asker_count = enabled.count;
+            output_info(out, OUTPUT_NORMAL, "Testing path: %s", test_path);
+            output_info(
+                out, OUTPUT_NORMAL, "Enabled profiles with a branch: %zu", asker_count
+            );
+            output_gap(out, OUTPUT_NORMAL);
         }
     }
 

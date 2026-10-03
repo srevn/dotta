@@ -1434,9 +1434,11 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     error_t err = scope_build(repo, manifest, &scope_inputs, ctx->arena, &scope);
     if (err) return err;
 
-    if (scope_enabled(scope)->count == 0) {
-        output_info(out, OUTPUT_NORMAL, "No enabled profiles found");
-        output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
+    /* Nothing to diff: said as a failure the run goes past, exit 0, in the words
+     * that say whether nothing is enabled or no enabled profile has its branch */
+    err = profile_require_enabled(ctx->run.state, scope_enabled(scope), ctx->arena);
+    if (err) {
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
         return NULL;
     }
 

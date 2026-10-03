@@ -357,14 +357,14 @@ const gitignore_rule_t *gitignore_ruleset_rule(
  * Refuse a pattern that is not one rule.
  *
  * gitignore_rule_parse's refusals with nothing kept, for a caller that writes
- * the pattern itself and asks the grammar first (cmds/ignore's --add and --remove).
- * In order: a newline (a pattern is one line), a line that would make no rule —
- * a comment, in its own words and with the escape that makes it a pattern; anything
- * else as naming nothing — and a rule spelled from home, a `~/` opening it past
- * a `!`, with its anchored spelling and the escape that names a directory called
- * `~`. A refusal about what the pattern says quotes it, bounded by that order
- * to one line; one about its shape quotes nothing. The caller names its door
- * around the refusal and repeats none of it.
+ * the pattern itself and asks the grammar first (cmds/ignore.c ignore_post_parse,
+ * for --add and --remove). In order: a newline (a pattern is one line), a line
+ * that would make no rule — a comment, in its own words and with the escape that
+ * makes it a pattern; anything else as naming nothing — and a rule spelled from
+ * home, a `~/` opening it past a `!`, with its anchored spelling and the escape
+ * that names a directory called `~`. A refusal about what the pattern says quotes
+ * it, bounded by that order to one line; one about its shape quotes nothing.
+ * The caller names its door around the refusal and repeats none of it.
  *
  * @param pattern One pattern (must not be NULL)
  * @return Error (ERR_VALIDATION), or NULL when the pattern is one rule

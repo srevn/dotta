@@ -37,7 +37,7 @@
  * reads it, and two lines are one rule iff their spans are equal byte for byte —
  * so `foo` and `foo   ` are one rule while `foo` and `  foo` are two, and a
  * blank or comment line names none. `span` is the pattern's own, which the caller
- * has already asked for — never zero, since ignore_require_patterns refused every
+ * has already asked for — never zero, since ignore_post_parse refused every
  * argument that makes no rule. A span is the rule's identity, not its line: the
  * caller writes the pattern whole.
  *
@@ -63,33 +63,12 @@ static bool ignore_holds(const char *content, const char *pattern, size_t span) 
 }
 
 /**
- * Refuse an argument that is not one pattern, before anything is read or written.
- *
- * The grammar's refusing verb reads each as the line it would be in the file: a
- * newline (two lines would land as two rules), an over-long line, a line that
- * makes no rule — which would land as a comment or as nothing, reported as "no
- * changes" — and a rule spelled from home (`~/`), which would land as a directory
- * named `~`, are refused in its words, which quote the argument where its words
- * are the reason. The flag is named here.
- */
-static error_t ignore_require_patterns(const char *flag, char **patterns, size_t count) {
-    for (size_t i = 0; i < count; i++) {
-        error_t err = gitignore_validate_pattern(patterns[i]);
-        if (err) {
-            return error_wrap(err, "Invalid %s pattern", flag);
-        }
-    }
-
-    return NULL;
-}
-
-/**
  * Refuse a rule named by both --add and --remove, before the file is opened.
  *
  * The edit would write it and take it back — two receipts for a file that ends
  * as it began, or differs by a separator newline alone. Compared as rules, as
  * ignore_holds compares them: `--add foo --remove 'foo   '` names one rule.
- * Every span is nonzero here, since ignore_require_patterns refused the rest,
+ * Every span is nonzero here, since ignore_post_parse refused the rest first,
  * and the rule is quoted as written — its span, the spelling a verdict reports
  * it under.
  */
@@ -122,11 +101,11 @@ static error_t ignore_require_disjoint(
 /**
  * Append each pattern whose rule the file does not hold, as a line of its own
  *
- * Written as given, with its newline — the line ignore_require_patterns read it
- * as, so the file reads back the rule the pattern was checked as. The pattern,
- * never its span: `foo<CR><SP>` is the rule foo<CR>, and its span written back
- * alone would be the rule foo. Deduplication is by rule (ignore_holds), against
- * the file as it grows.
+ * Written as given, with its newline — the line ignore_post_parse read it as,
+ * so the file reads back the rule the pattern was checked as. The pattern, never
+ * its span: `foo<CR><SP>` is the rule foo<CR>, and its span written back alone
+ * would be the rule foo. Deduplication is by rule (ignore_holds), against the
+ * file as it grows.
  *
  * `file` is the file as read, or the seed — never empty, since ignore_blob_text
  * answers an empty blob as absent and ignore_modify seeds the absent one — so
@@ -202,7 +181,7 @@ static size_t ignore_remove(buffer_t *file, char **patterns, size_t count, size_
 
         /* The first request that names this line's rule, in the order given. A
          * blank or comment line's span is zero, which no request's is:
-         * ignore_require_patterns refused every argument that makes no rule. */
+         * ignore_post_parse refused every argument that makes no rule. */
         size_t i;
         for (i = 0; i < count; i++) {
             if (spans[i] == span && memcmp(line, patterns[i], span) == 0) {
@@ -903,21 +882,6 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
             break;
     }
 
-    /* A pattern is checked before its file is opened: an argument that names no
-     * rule, or names two, is refused by name rather than written, and so is a
-     * rule both added and removed, which the edit would write and take back.
-     * The editor takes none, so for it there is nothing to check. */
-    error_t err = ignore_require_patterns("--add", opts->add_patterns, opts->add_count);
-    if (err) return err;
-
-    err = ignore_require_patterns("--remove", opts->remove_patterns, opts->remove_count);
-    if (err) return err;
-
-    err = ignore_require_disjoint(
-        opts->add_patterns, opts->add_count, opts->remove_patterns, opts->remove_count
-    );
-    if (err) return err;
-
     /* The .dottaignore edit and modify change: the file's home, its layer on
      * the screen, and what an editor opens on when the file is not there yet.
      * Each arm establishes its home before naming it — the profile named must
@@ -927,7 +891,7 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     char refname[DOTTA_REFNAME_MAX];
     dottaignore_t dottaignore;
     if (opts->profile) {
-        err = profile_require(repo, opts->profile);
+        error_t err = profile_require(repo, opts->profile);
         if (err) return err;
 
         err = gitops_branch_refname(refname, sizeof(refname), opts->profile);
@@ -942,7 +906,7 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
          * init is what puts it back — on a repository that stands, which no fact
          * implies, so the clause says so. */
         bool seeded = false;
-        err = gitops_reference_exists(repo, BASELINE_REF, &seeded);
+        error_t err = gitops_reference_exists(repo, BASELINE_REF, &seeded);
         if (err) return err;
         if (!seeded) {
             return ERROR(
@@ -977,6 +941,9 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
  * — two things asked, and one would be done. The profile is no mode: it names
  * whose file an edit changes, or which asker --test asks, and beside
  * --list-defaults it changes nothing the defaults are.
+ *
+ * Then the edit's patterns, which the line alone decides: an argument that is
+ * not one rule, and a rule both added and removed.
  */
 static error_t ignore_post_parse(void *opts_v, arena_t *arena, const args_command_t *cmd) {
     (void) arena;
@@ -1001,7 +968,27 @@ static error_t ignore_post_parse(void *opts_v, arena_t *arena, const args_comman
         o->mode = IGNORE_MODE_DEFAULTS;
     }
 
-    return NULL;
+    /* An argument of the edit by rule is read as the line it would be in the
+     * file: one that makes no rule, or two, is refused by name rather than written
+     * (gitignore_validate_pattern). Only the edit by rule takes any. */
+    for (size_t i = 0; i < o->add_count; i++) {
+        error_t err = gitignore_validate_pattern(o->add_patterns[i]);
+        if (err) {
+            return error_wrap(err, "Invalid --add pattern");
+        }
+    }
+    for (size_t i = 0; i < o->remove_count; i++) {
+        error_t err = gitignore_validate_pattern(o->remove_patterns[i]);
+        if (err) {
+            return error_wrap(err, "Invalid --remove pattern");
+        }
+    }
+
+    /* And a rule both added and removed, which the edit would write and take
+     * back */
+    return ignore_require_disjoint(
+        o->add_patterns, o->add_count, o->remove_patterns, o->remove_count
+    );
 }
 
 /**

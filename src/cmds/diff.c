@@ -515,10 +515,7 @@ static void print_commit_header(
 /**
  * Print diff statistics
  */
-static error_t print_diff_stats(
-    output_t *out,
-    git_diff *diff
-) {
+static error_t print_diff_stats(output_t *out, git_diff *diff) {
     CHECK_NULL(out);
     CHECK_NULL(diff);
 
@@ -651,7 +648,9 @@ static error_t compare_tree_files_to_filesystem(
         if (entry->type == PATH_TYPE_DIRECTORY) continue;
 
         /* Check file filter */
-        if (!pathspec_matches(file_filter, filesystem_path, storage_path, PATH_KIND_FILE)) continue;
+        if (!pathspec_matches(file_filter, filesystem_path, storage_path, PATH_KIND_FILE)) {
+            continue;
+        }
 
         git_filemode_t mode = path_type_to_git_filemode(entry->type);
 
@@ -828,7 +827,9 @@ static bool validate_filter_paths(
         for (size_t i = 0; i < rows.count; i++) {
             const manifest_row_t *row = rows.entries[i];
             if (!pathspec_entry_matches_at(
-                file_filter, e, row->filesystem_path, row->storage_path,
+                file_filter, e,
+                row->filesystem_path,
+                row->storage_path,
                 path_type_kind(row->type)
                 )) {
                 continue;
@@ -854,16 +855,21 @@ static bool validate_filter_paths(
         } else if (reached) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "'%s' matches only directories (no content to diff)", entry.text
+                "'%s' matches only directories (no content to diff)",
+                entry.text
             );
         } else if (entry.glob) {
             output_warning(
-                out, OUTPUT_NORMAL, "No %s matches pattern '%s'", what, entry.text
+                out, OUTPUT_NORMAL,
+                "No %s matches pattern '%s'",
+                what, entry.text
             );
             unmatched++;
         } else {
             output_warning(
-                out, OUTPUT_NORMAL, "No %s matches '%s'", what, entry.text
+                out, OUTPUT_NORMAL,
+                "No %s matches '%s'",
+                what, entry.text
             );
             unmatched++;
         }
@@ -993,7 +999,9 @@ static error_t diff_commit_to_workspace(
      * anything is compared, as the workspace arm answers it over its own. Where
      * no entry reaches content, nothing can diff, and the answers are the whole
      * report. */
-    if (!validate_filter_paths(file_filter, historical, "path of the commit", out)) goto cleanup;
+    if (!validate_filter_paths(file_filter, historical, "path of the commit", out)) {
+        goto cleanup;
+    }
 
     /* Step 6: Compare the commit's view against the current filesystem */
     size_t diff_count = 0;
@@ -1208,7 +1216,10 @@ static error_t diff_commits(
         size_t count = git_diff_num_deltas(diff);
         for (size_t i = 0; i < count; i++) {
             const git_diff_delta *delta = git_diff_get_delta(diff, i);
-            output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_CYAN, "%s\n", delta->new_file.path);
+            output_colored(
+                out, OUTPUT_NORMAL, OUTPUT_COLOR_CYAN, "%s\n",
+                delta->new_file.path
+            );
         }
     } else {
         /* Full diff: statistics followed by patch */
@@ -1280,7 +1291,9 @@ static error_t diff_workspace(
     };
 
     workspace_t *ws = NULL;
-    error_t err = workspace_load(repo, state, config, cache, manifest, &ws_opts, arena, &ws);
+    error_t err = workspace_load(
+        repo, state, config, cache, manifest, &ws_opts, arena, &ws
+    );
     if (err) return error_wrap(err, "Failed to load workspace");
 
     /* What the load owes the record — its observations, its confirmations, the

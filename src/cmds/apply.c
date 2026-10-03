@@ -67,26 +67,27 @@
  * its own line, because dotta never writes on a guess. The refusals the run's
  * identity met — a landing whose bits deny the invoker, a directory it does not
  * own, a pair it cannot set, and a look that met EACCES on the path itself —
- * close by naming sudo, and only for a run that holds none: identity()->privileged,
- * the one process fact this block asks. The line offers root and promises nothing:
- * a policy may deny root a landing or a read as well. The key's refusal closes
- * the same way, naming the verb that lifts it; the two are told apart by the
- * field the label above reads. Neither line spells the command that would: the
- * user typed one, the verb the other names says the rest when it is run, and
- * what sudo does to their environment on the way is sudo's to document, not
- * dotta's. The consent remedy teaches both directions and names its cost the
- * way cleanup's does: --force keeps Git's and discards what stands there, and a
- * CONTENT skip adds the disk-wins verb, 'dotta update' — gated on CONTENT and
- * not on the class, because update refuses a retyped row (cmds/update.c
- * update_partition's kind refusal). It stops there: the 'dotta add --force' a
- * Git-moved row needs is what update's own refusal says at the moment the user
- * meets it, and '-e' is how to ignore a skip, not how to remedy one. The block
- * sits between the deploy preview and cleanup's, so each engine tells its story
- * the same way — what it will do, then what it will not and why. No total-count
- * line: the exit error's message is the count's one home.
+ * close by naming sudo, and only for a run that holds none: identity()->privileged.
+ * The line offers root and promises nothing: a policy may deny root a landing
+ * or a read as well. The key's refusal closes the same way, naming the verb that
+ * lifts it, and the switch before it where the configuration has encryption off
+ * (config->encryption_enabled) — the two facts of the run this block asks; the
+ * two refusals are told apart by the field the label above reads. Neither line
+ * spells the command that would: the user typed one, the verb the other names
+ * says the rest when it is run, and what sudo does to their environment on the
+ * way is sudo's to document, not dotta's. The consent remedy teaches both
+ * directions and names its cost the way cleanup's does: --force keeps Git's and
+ * discards what stands there, and a CONTENT skip adds the disk-wins verb, 'dotta
+ * update' — gated on CONTENT and not on the class, because update refuses a retyped
+ * row (cmds/update.c update_partition's kind refusal). It stops there: the 'dotta
+ * add --force' a Git-moved row needs is what update's own refusal says at the
+ * moment the user meets it, and '-e' is how to ignore a skip, not how to remedy
+ * one. The block sits between the deploy preview and cleanup's, so each engine
+ * tells its story the same way — what it will do, then what it will not and why.
+ * No total-count line: the exit error's message is the count's one home.
  */
 static void apply_print_deploy_skips(
-    output_t *out, const deploy_preflight_t *verdicts
+    output_t *out, const config_t *config, const deploy_preflight_t *verdicts
 ) {
     if (verdicts->skipped.count == 0) return;
 
@@ -314,7 +315,12 @@ static void apply_print_deploy_skips(
 
         if (s->reason == DEPLOY_SKIP_UNREADABLE &&
             s->item->fault == WORKSPACE_FAULT_LOCKED) {
-            output_info(out, OUTPUT_NORMAL, "  Run 'dotta key set' to deploy them");
+            output_info(
+                out, OUTPUT_NORMAL, config->encryption_enabled
+                    ? "  Run 'dotta key set' to deploy them"
+                    : "  Set encryption.enabled = true, then run 'dotta key set' to "
+                "deploy them"
+            );
             break;
         }
     }
@@ -2683,7 +2689,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * run. */
     apply_print_reassignments(out, pending_reassignments, pending_reassignment_count);
     apply_print_deploy_preview(out, deploy_verdicts);
-    apply_print_deploy_skips(out, deploy_verdicts);
+    apply_print_deploy_skips(out, config, deploy_verdicts);
     apply_print_cleanup_preview(out, cleanup_verdicts);
     apply_print_cleanup_skips(out, cleanup_verdicts);
     apply_print_cleanup_refused(out, cleanup_verdicts);

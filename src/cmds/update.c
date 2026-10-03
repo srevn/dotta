@@ -1571,15 +1571,18 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         /* One arm, up to three lines — by whose remedy the failed look is
          * (workspace_fault_t), because one sentence over the three is how a locked
          * path came to be told to fix its permissions. The key's rows name the
-         * verb that unlocks them; the unreadable ones name permissions, and root
-         * where the run holds none; the rest have no remedy to name and point
-         * at the listing that names each path. */
+         * verb that unlocks them, and the switch first where encryption is off;
+         * the unreadable ones name permissions, and root where the run holds
+         * none; the rest have no remedy to name and point at the listing that
+         * names each path. */
         const size_t *faults = partition.faults;
 
         if (faults[WORKSPACE_FAULT_LOCKED] > 0) {
             output_info(
-                out, OUTPUT_NORMAL,
-                "%zu path%s skipped: locked — run 'dotta key set'",
+                out, OUTPUT_NORMAL, config->encryption_enabled
+                    ? "%zu path%s skipped: locked — run 'dotta key set'"
+                    : "%zu path%s skipped: locked, and encryption is disabled — set "
+                "encryption.enabled = true, then run 'dotta key set'",
                 faults[WORKSPACE_FAULT_LOCKED],
                 faults[WORKSPACE_FAULT_LOCKED] == 1 ? "" : "s"
             );

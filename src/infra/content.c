@@ -162,8 +162,8 @@ size_t content_estimated_plaintext_size(size_t blob_size, bool encrypted) {
  * and not the blob's, and turning the feature on and setting the key is what
  * settles every such row at once. Names no path, and needs to name none: a report
  * that meets it already lists the path, and what it takes from the refusal is
- * the root's code alone — which classes the look LOCKED and puts the key in the
- * block's own closing line (core/workspace.h, workspace_fault_t).
+ * the root's code alone — which classes the look LOCKED and puts the switch and
+ * the key in the block's own closing line (core/workspace.h, workspace_fault_t).
  */
 static const char ENCRYPTION_DISABLED[] =
     "Encryption is disabled (encryption.enabled = false); enable it in "

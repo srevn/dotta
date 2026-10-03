@@ -354,11 +354,13 @@ static void status_print_manifest(
  * @param ws Workspace (must not be NULL, borrowed from caller)
  * @param scope Operation scope (must not be NULL; its filter dimension drives
  *              display)
+ * @param config Configuration (must not be NULL; its switch words the key's remedy)
  * @param out Output context (must not be NULL)
  */
 static void status_print_workspace(
     const workspace_t *ws,
     const scope_t *scope,
+    const config_t *config,
     output_t *out
 ) {
     if (!ws || !out) return;
@@ -718,18 +720,21 @@ static void status_print_workspace(
             );
 
             /* What the failed look was, then the way out of it: a key for the
-             * locked rows, root for the unreadable ones and only where the run
-             * holds none — offered, never promised, since a policy may deny root
-             * the read as well. The residual class has no remedy to name — there
-             * is no one remedy for a foreign epoch, a cipher this build does
-             * not read and an I/O error — so its line names the verb that will
-             * print the cause instead. */
+             * locked rows, and the switch before it where encryption is off, a
+             * run that holds no key at all; root for the unreadable ones and
+             * only where the run holds none — offered, never promised, since a
+             * policy may deny root the read as well. The residual class has no
+             * remedy to name — there is no one remedy for a foreign epoch, a
+             * cipher this build does not read and an I/O error — so its line
+             * names the verb that will print the cause instead. */
             const char *hint = NULL;
 
             switch (item->fault) {
                 case WORKSPACE_FAULT_LOCKED:
-                    hint = "encrypted, and no key opened it; "
-                        "'dotta key set' unlocks it";
+                    hint = config->encryption_enabled
+                        ? "encrypted, and no key opened it; 'dotta key set' unlocks it"
+                        : "encrypted, and encryption is disabled; 'dotta key set' "
+                        "unlocks it once encryption.enabled = true";
                     break;
                 case WORKSPACE_FAULT_UNREADABLE:
                     hint = identity()->privileged
@@ -1015,12 +1020,17 @@ static void status_print_workspace(
                         case CLEANUP_SKIP_UNVERIFIED:
                             /* Worded by whose remedy the failed look is, so the
                              * hint and the tag it is keyed by say the same thing
-                             * (workspace_fault_t). */
+                             * (workspace_fault_t) — the key's naming the switch
+                             * first where encryption is off. */
                             switch (item->fault) {
                                 case WORKSPACE_FAULT_LOCKED:
-                                    hint = "encrypted, and no key opened it "
+                                    hint = config->encryption_enabled
+                                        ? "encrypted, and no key opened it "
                                         "('dotta key set'); apply skips it, "
-                                        "--force prunes it";
+                                        "--force prunes it"
+                                        : "encrypted, and encryption is disabled "
+                                        "(encryption.enabled = true, then 'dotta key "
+                                        "set'); apply skips it, --force prunes it";
                                     break;
                                 case WORKSPACE_FAULT_UNREADABLE:
                                     hint = "cannot be read; "
@@ -1480,7 +1490,7 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
      * `dotta apply -p work` behavior.
      */
     if (opts->show_local) {
-        status_print_workspace(ws, scope, out);
+        status_print_workspace(ws, scope, config, out);
     }
 
     /* Show remote sync status (if requested): no remote configured is no section,

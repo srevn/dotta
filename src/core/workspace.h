@@ -322,7 +322,11 @@ typedef enum {
  *
  *   LOCKED       ERR_LOCKED: the run holds no usable master — none in reach,
  *                none read, none that opens this repository — or the feature is
- *                off over a sealed blob. One key settles every such row at once.
+ *                off over a sealed blob. One key settles every such row at once,
+ *                with the switch turned on first where it is off: which of the
+ *                two a run is, the configuration says (config->encryption_enabled
+ *                — no keymgr is made with it off), so the remedy's printers read
+ *                it and the class stays one.
  *   UNREADABLE   ERR_PERMISSION: the bits refused the read to the identity the
  *                run held (EACCES) — the invoker, or root as well where the run
  *                holds it and a policy denies root too (a MAC rule, an export

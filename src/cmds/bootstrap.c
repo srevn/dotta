@@ -84,7 +84,7 @@ static error_t bootstrap_create_template(
 
     /* Check if script already exists in Git */
     if (bootstrap_exists(repo, profile)) {
-        return ERROR(
+        return error_create(
             ERR_EXISTS, "Bootstrap script already exists for profile '%s'",
             profile
         );
@@ -178,7 +178,7 @@ static error_t bootstrap_edit(
 
     /* Validate edited content before committing */
     if (content_buf.size == 0) {
-        err = ERROR(ERR_INVALID_ARG, "Bootstrap script cannot be empty");
+        err = error_create(ERR_INVALID_ARG, "Bootstrap script cannot be empty");
         goto cleanup;
     }
 
@@ -261,7 +261,7 @@ static error_t bootstrap_show(
     CHECK_NULL(profile);
 
     if (!bootstrap_exists(repo, profile)) {
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND, "No bootstrap script found for profile '%s'",
             profile
         );
@@ -391,7 +391,7 @@ static error_t bootstrap_run(
                 output_info(out, OUTPUT_NORMAL, "Bootstrap cancelled.");
                 return NULL;
             case OUTPUT_ANSWER_NONE:
-                return ERROR(
+                return error_create(
                     ERR_VALIDATION, "Cannot run bootstrap scripts without a confirmation, "
                     "and none was read; --yes runs them without asking"
                 );
@@ -415,13 +415,13 @@ static error_t bootstrap_run(
      * is not one (cmds/profile.c profile_fetch keeps the same rule). */
     bootstrap_receipt_t receipt = bootstrap_fire(out, &spec);
     if (receipt.stopped) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL, "Bootstrap stopped at profile '%s'", receipt.stopped
         );
     }
     if (receipt.failures > 0) {
         /* The plural agrees with the total, the noun it qualifies */
-        return ERROR(
+        return error_create(
             ERR_INTERNAL, "%zu of %zu bootstrap script%s failed",
             receipt.failures, found.count, found.count == 1 ? "" : "s"
         );
@@ -542,13 +542,13 @@ static error_t bootstrap_post_parse(
     const cmd_bootstrap_options_t *o = opts_v;
 
     if (o->all_profiles && o->profile_count > 0) {
-        return ERROR(ERR_INVALID_ARG, "--all and profile names are mutually exclusive");
+        return error_create(ERR_INVALID_ARG, "--all and profile names are mutually exclusive");
     }
     if (o->mode == BOOTSTRAP_MODE_EDIT && o->profile_count != 1) {
-        return ERROR(ERR_INVALID_ARG, "--edit edits exactly one named profile's script");
+        return error_create(ERR_INVALID_ARG, "--edit edits exactly one named profile's script");
     }
     return o->mode == BOOTSTRAP_MODE_SHOW && o->profile_count != 1
-        ? ERROR(ERR_INVALID_ARG, "--show prints exactly one named profile's script")
+        ? error_create(ERR_INVALID_ARG, "--show prints exactly one named profile's script")
         : NULL;
 }
 

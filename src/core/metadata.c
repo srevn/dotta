@@ -567,7 +567,7 @@ static error_t metadata_capture_ownership(
      * down), and the claim is equally unmakeable either way. */
     struct passwd *pwd = getpwuid(st->st_uid);
     if (!pwd || !pwd->pw_name) {
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND, "Cannot resolve UID %u to a user name on this system",
             (unsigned) st->st_uid
         );
@@ -578,7 +578,7 @@ static error_t metadata_capture_ownership(
     /* Resolve GID to groupname: the owner brings its group with it */
     struct group *grp = getgrgid(st->st_gid);
     if (!grp || !grp->gr_name) {
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND, "Cannot resolve GID %u to a group name on this system",
             (unsigned) st->st_gid
         );
@@ -668,7 +668,7 @@ error_t metadata_capture_directory(
 
     /* Verify it's actually a directory */
     if (!S_ISDIR(st->st_mode)) {
-        return ERROR(ERR_INVALID_ARG, "Path is not a directory: %s", storage_path);
+        return error_create(ERR_INVALID_ARG, "Path is not a directory: %s", storage_path);
     }
 
     /* Create directory item via factory, its mode the stat's permission bits */
@@ -959,14 +959,14 @@ static error_t parse_mode(const char *mode_str, mode_t *out) {
 
     /* Reject empty/whitespace-only strings and trailing non-octal characters */
     if (endptr == mode_str || *endptr != '\0') {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Invalid mode string: '%s' (not valid octal)",
             mode_str
         );
     }
 
     if (mode > 0777) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Invalid mode: %04lo (must be <= 0777)",
             mode
         );
@@ -1015,7 +1015,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
          * parse that just failed set the position from the value it was handed
          * (lib/cjson/cJSON.c), and CHECK_NULL above says there was one. */
         const char *parse_end = cJSON_GetErrorPtr();
-        err = ERROR(
+        err = error_create(
             ERR_INVALID_ARG, "Failed to parse metadata JSON at byte %zu: '%.24s'",
             (size_t) (parse_end - json_str), parse_end
         );
@@ -1025,7 +1025,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
     /* Get and validate version */
     cJSON *version_obj = cJSON_GetObjectItem(root, "version");
     if (!version_obj || !cJSON_IsNumber(version_obj)) {
-        err = ERROR(
+        err = error_create(
             ERR_INVALID_ARG, "Missing or invalid version in metadata"
         );
         goto cleanup;
@@ -1033,7 +1033,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
 
     int version = version_obj->valueint;
     if (version != METADATA_VERSION) {
-        err = ERROR(
+        err = error_create(
             ERR_INVALID_ARG,
             "Unsupported metadata version: %d (this build reads %d)",
             version, METADATA_VERSION
@@ -1044,7 +1044,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
     /* Get items array */
     cJSON *items_array = cJSON_GetObjectItem(root, "items");
     if (!items_array || !cJSON_IsArray(items_array)) {
-        err = ERROR(
+        err = error_create(
             ERR_INVALID_ARG, "Missing or invalid items array in metadata"
         );
         goto cleanup;
@@ -1057,7 +1057,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
     cJSON *item_obj = NULL;
     cJSON_ArrayForEach(item_obj, items_array) {
         if (!cJSON_IsObject(item_obj)) {
-            err = ERROR(
+            err = error_create(
                 ERR_INVALID_ARG, "Invalid item in items array (not an object)"
             );
             goto cleanup;
@@ -1066,7 +1066,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
         /* Get kind discriminator (required) */
         cJSON *kind_obj = cJSON_GetObjectItem(item_obj, "kind");
         if (!kind_obj || !cJSON_IsString(kind_obj) || !kind_obj->valuestring) {
-            err = ERROR(
+            err = error_create(
                 ERR_INVALID_ARG, "Item missing kind field"
             );
             goto cleanup;
@@ -1078,7 +1078,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
         } else if (strcmp(kind_obj->valuestring, "directory") == 0) {
             kind = PATH_KIND_DIRECTORY;
         } else {
-            err = ERROR(
+            err = error_create(
                 ERR_INVALID_ARG, "Invalid kind value: %s "
                 "(expected 'file' or 'directory')", kind_obj->valuestring
             );
@@ -1088,7 +1088,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
         /* Get key (required) */
         cJSON *key_obj = cJSON_GetObjectItem(item_obj, "key");
         if (!key_obj || !cJSON_IsString(key_obj) || !key_obj->valuestring) {
-            err = ERROR(
+            err = error_create(
                 ERR_INVALID_ARG, "Item missing key field"
             );
             goto cleanup;
@@ -1110,7 +1110,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
          * malformation does. Only a hand-edit or a mis-resolved merge can author
          * one. */
         if (metadata_lookup(metadata, key_obj->valuestring)) {
-            err = ERROR(
+            err = error_create(
                 ERR_INVALID_ARG, "Duplicate key in metadata: %s",
                 key_obj->valuestring
             );
@@ -1122,7 +1122,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
         cJSON *mode_obj = cJSON_GetObjectItem(item_obj, "mode");
         if (mode_obj) {
             if (!cJSON_IsString(mode_obj) || !mode_obj->valuestring) {
-                err = ERROR(
+                err = error_create(
                     ERR_INVALID_ARG, "Invalid mode field (key: %s)",
                     key_obj->valuestring
                 );
@@ -1179,7 +1179,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
         if (owner_obj) {
             if (!cJSON_IsString(owner_obj) || !owner_obj->valuestring ||
                 !*owner_obj->valuestring) {
-                err = ERROR(
+                err = error_create(
                     ERR_INVALID_ARG, "Invalid owner field (key: %s)",
                     key_obj->valuestring
                 );
@@ -1193,7 +1193,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
         if (group_obj) {
             if (!cJSON_IsString(group_obj) || !group_obj->valuestring ||
                 !*group_obj->valuestring) {
-                err = ERROR(
+                err = error_create(
                     ERR_INVALID_ARG, "Invalid group field (key: %s)",
                     key_obj->valuestring
                 );

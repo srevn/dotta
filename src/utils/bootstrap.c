@@ -74,23 +74,23 @@ static void bootstrap_env(
  */
 static error_t script_error(const process_result_t *r) {
     if (r->exec_failed) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL, "exec failed: %s", strerror(r->exec_errno)
         );
     }
     if (r->timed_out) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL, "timed out after %d seconds",
             BOOTSTRAP_TIMEOUT_SECONDS
         );
     }
     if (r->signal_num) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL, "terminated by signal %d", r->signal_num
         );
     }
     if (r->exit_code != 0) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL, "exited with code %d", r->exit_code
         );
     }

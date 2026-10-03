@@ -619,7 +619,7 @@ static error_t completion_post_parse(
     const cmd_completion_options_t *o = opts_v;
 
     if (strcmp(o->shell, "fish") != 0) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Unknown shell '%s' (fish is the one supported)",
             o->shell
         );

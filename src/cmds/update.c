@@ -1425,7 +1425,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (err) return err;
 
     if (scope_enabled(scope)->count == 0) {
-        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
+        return error_create(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
     /* Load workspace for update analysis
@@ -1713,9 +1713,9 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                     output_info(out, OUTPUT_NORMAL, "Cancelled");
                     return NULL;
                 case OUTPUT_ANSWER_NONE:
-                    return ERROR(
-                        ERR_VALIDATION, "Cannot update: -i asks before updating, and no "
-                        "answer was read"
+                    return error_create(
+                        ERR_VALIDATION,
+                        "Cannot update: -i asks before updating, and no answer was read"
                     );
             }
         }

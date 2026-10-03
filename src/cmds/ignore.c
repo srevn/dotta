@@ -86,7 +86,7 @@ static error_t ignore_require_disjoint(
             const char *q = remove_patterns[j];
             if (gitignore_rule_span(q, strlen(q)) == span &&
                 memcmp(p, q, span) == 0) {
-                return ERROR(
+                return error_create(
                     ERR_INVALID_ARG,
                     "Cannot use --add and --remove on one rule: '%.*s'",
                     (int) span, p
@@ -258,7 +258,7 @@ static error_t ignore_editor(buffer_t *file) {
     int fd = mkstemp(tmpfile);
     if (fd < 0) {
         free(tmpfile);
-        return ERROR(ERR_FS, "Failed to create temporary file");
+        return error_create(ERR_FS, "Failed to create temporary file");
     }
 
     if (file->size > 0) {
@@ -267,7 +267,7 @@ static error_t ignore_editor(buffer_t *file) {
             close(fd);
             unlink(tmpfile);
             free(tmpfile);
-            return ERROR(ERR_FS, "Failed to write to temporary file");
+            return error_create(ERR_FS, "Failed to write to temporary file");
         }
     }
     close(fd);
@@ -909,7 +909,7 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         error_t err = gitops_reference_exists(repo, BASELINE_REF, &seeded);
         if (err) return err;
         if (!seeded) {
-            return ERROR(
+            return error_create(
                 ERR_NOT_FOUND, "No baseline .dottaignore: '%s' does not exist; dotta "
                 "init seeds it with the default patterns", BASELINE_REF
             );
@@ -955,13 +955,13 @@ static error_t ignore_post_parse(void *opts_v, arena_t *arena, const args_comman
     o->mode = o->add_count > 0 || o->remove_count > 0 ? IGNORE_MODE_MODIFY : IGNORE_MODE_EDIT;
     if (o->test_path) {
         if (o->mode != IGNORE_MODE_EDIT) {
-            return ERROR(ERR_INVALID_ARG, "Cannot use --test with --add or --remove");
+            return error_create(ERR_INVALID_ARG, "Cannot use --test with --add or --remove");
         }
         o->mode = IGNORE_MODE_TEST;
     }
     if (o->list_defaults) {
         if (o->mode != IGNORE_MODE_EDIT) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "Cannot use --list-defaults with --test, --add or --remove"
             );
         }

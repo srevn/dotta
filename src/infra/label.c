@@ -79,12 +79,12 @@ error_t label_validate_storage(const char *storage_path) {
     CHECK_NULL(storage_path);
 
     if (storage_path[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG, "Storage path cannot be empty");
+        return error_create(ERR_INVALID_ARG, "Storage path cannot be empty");
     }
 
     /* SECURITY: Reject absolute paths */
     if (storage_path[0] == '/') {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Storage path must be relative (got '%s')",
             storage_path
         );
@@ -95,7 +95,7 @@ error_t label_validate_storage(const char *storage_path) {
      * by this one. */
     label_split_t split = label_split(storage_path);
     if (!split.tail) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Storage path must start with "
             "'home/', 'root/', or 'custom/', or be one of those words alone "
             "(got '%s')", storage_path
@@ -106,7 +106,7 @@ error_t label_validate_storage(const char *storage_path) {
      * spelled by the word alone, as every directory is by its name, and a reader
      * of a directory spelling sheds it first (infra/path.c path_input_resolve). */
     if (storage_path[strlen(storage_path) - 1] == '/') {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Storage path must not end with '/': '%s'",
             storage_path
         );
@@ -114,7 +114,7 @@ error_t label_validate_storage(const char *storage_path) {
 
     /* Reject consecutive slashes */
     if (strstr(storage_path, "//") != NULL) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Invalid path format ('//'): '%s'",
             storage_path
         );
@@ -130,13 +130,13 @@ error_t label_validate_storage(const char *storage_path) {
     for (const char *comp = split.tail; comp != NULL;) {
         if (comp[0] == '.' &&
             comp[1] == '.' && (comp[2] == '/' || comp[2] == '\0')) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "Path traversal not allowed "
                 "(component '..' in '%s')", storage_path
             );
         }
         if (comp[0] == '.' && (comp[1] == '/' || comp[1] == '\0')) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "Invalid path component '.' in '%s'",
                 storage_path
             );

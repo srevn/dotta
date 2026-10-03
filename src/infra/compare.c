@@ -64,7 +64,7 @@ static error_t judge(
 
     git_oid computed;
     if (git_odb_hash(&computed, copy->data, copy->size, GIT_OBJECT_BLOB) != 0) {
-        return ERROR(
+        return error_create(
             ERR_GIT, "Failed to hash '%s': %s", disk_path, git_error_last()->message
         );
     }

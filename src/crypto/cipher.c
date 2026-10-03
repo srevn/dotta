@@ -71,7 +71,7 @@ _Static_assert(
 static error_t validate_path(const char *storage_path, size_t *out_len) {
     size_t len = strnlen(storage_path, CIPHER_STORAGE_PATH_MAX + 1);
     if (len > CIPHER_STORAGE_PATH_MAX) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Storage path too long (maximum %d bytes)",
             CIPHER_STORAGE_PATH_MAX
         );
@@ -96,14 +96,14 @@ static error_t validate_path(const char *storage_path, size_t *out_len) {
  */
 static error_t validate_header(const uint8_t *data, size_t data_len) {
     if (data_len < CIPHER_HEADER_SIZE) {
-        return ERROR(
+        return error_create(
             ERR_CRYPTO,
             "Encrypted blob too short to carry a header (got %zu, need %d)",
             data_len, CIPHER_HEADER_SIZE
         );
     }
     if (memcmp(data + CIPHER_OFFSET_MAGIC, CIPHER_MAGIC, CIPHER_MAGIC_SIZE) != 0) {
-        return ERROR(
+        return error_create(
             ERR_CRYPTO,
             "Invalid magic header (not a dotta encrypted file)"
         );
@@ -111,7 +111,7 @@ static error_t validate_header(const uint8_t *data, size_t data_len) {
     if (data[CIPHER_OFFSET_VERSION] != CIPHER_VERSION) {
         /* The same words infra/content uses when it classifies the version away
          * before a decrypt: one fact, one spelling. */
-        return ERROR(
+        return error_create(
             ERR_CRYPTO,
             "Unsupported encryption version 0x%02X (this build reads 0x%02X)",
             (unsigned) data[CIPHER_OFFSET_VERSION], (unsigned) CIPHER_VERSION
@@ -198,7 +198,7 @@ error_t cipher_encrypt(
     /* Policy cap: dotta manages small configuration files. A single cap on the
      * crypto entry point enforces the rule for every caller. */
     if (plaintext_len > CIPHER_MAX_CONTENT) {
-        err = ERROR(
+        err = error_create(
             ERR_INVALID_ARG, "Content too large: %zu bytes (max %zu bytes)",
             plaintext_len, CIPHER_MAX_CONTENT
         );
@@ -368,7 +368,7 @@ error_t cipher_decrypt(
      * constant `CIPHER_MAX_CONTENT + CIPHER_OVERHEAD` is well under SIZE_MAX so
      * the addition cannot wrap. */
     if (ciphertext_len > CIPHER_MAX_CONTENT + (size_t) CIPHER_OVERHEAD) {
-        err = ERROR(
+        err = error_create(
             ERR_INVALID_ARG, "Ciphertext too large: %zu bytes (max %zu bytes)",
             ciphertext_len, CIPHER_MAX_CONTENT + (size_t) CIPHER_OVERHEAD
         );
@@ -376,7 +376,7 @@ error_t cipher_decrypt(
     }
 
     if (ciphertext_len < CIPHER_OVERHEAD) {
-        err = ERROR(
+        err = error_create(
             ERR_CRYPTO,
             "Invalid ciphertext: too short (expected >= %d, got %zu)",
             CIPHER_OVERHEAD, ciphertext_len
@@ -394,7 +394,7 @@ error_t cipher_decrypt(
         ciphertext, ciphertext_len, mac_key, prf_key, storage_path, path_len,
         &output
         )) {
-        err = ERROR(
+        err = error_create(
             ERR_CRYPTO,
             "Authentication failed "
             "(wrong passphrase, tampered ciphertext, or path mismatch)"

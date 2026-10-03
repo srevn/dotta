@@ -48,7 +48,7 @@ static error_t load_bootstrap_entry(
         git_tree_entry_byname(tree, BOOTSTRAP_SCRIPT_NAME);
     if (!entry) {
         git_tree_free(tree);
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND,
             "Bootstrap script not found in profile '%s'", profile
         );
@@ -216,20 +216,20 @@ error_t bootstrap_validate(const unsigned char *content, size_t size) {
     CHECK_ARG(content != NULL || size == 0, "content cannot be NULL with a size");
 
     if (size == 0) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Bootstrap script is empty"
         );
     }
 
     if (size < 3) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "Bootstrap script too short to contain a shebang line"
         );
     }
 
     if (content[0] != '#' || content[1] != '!') {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "Bootstrap script must start with a shebang (#!)"
         );
@@ -244,14 +244,14 @@ error_t bootstrap_validate(const unsigned char *content, size_t size) {
     while (p < line_end && isspace(content[p])) p++;
 
     if (p >= line_end) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "Shebang line missing interpreter path"
         );
     }
 
     if (content[p] != '/') {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "Shebang interpreter must be an absolute path (start with /)"
         );

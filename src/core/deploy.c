@@ -770,7 +770,7 @@ static error_t resolve_deployment_ownership(
      * user asked to be stopped by: one fact, the row, the key and the name, as
      * the warning below says it */
     if (strict_ownership) {
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND, "Cannot deploy '%s' under strict_ownership: %s '%s' does not "
             "exist on this system", row->storage_path, half, name
         );
@@ -1461,7 +1461,7 @@ static error_t ensure_parents(deploy_run_t *run, const char *path) {
     scratch[len] = '\0';                         /* the ancestor, on its own */
 
     if (!is_dir) {
-        err = ERROR(
+        err = error_create(
             ERR_FS, "Cannot create parents of '%s': '%s' is not a directory",
             path, scratch
         );
@@ -1785,7 +1785,7 @@ deploy_receipt_t *deploy_execute(
         const deploy_verdict_t *v = &verdicts->directories.entries[i];
         const char *above = poisoned_above(receipt, v->item->filesystem_path);
 
-        error_t err = above ? ERROR(ERR_FS, "'%s' was not converged", above)
+        error_t err = above ? error_create(ERR_FS, "'%s' was not converged", above)
                             : deploy_directory(&run, v);
         if (err) {
             /* The row's own outcome; the cause already names its subject */
@@ -1810,7 +1810,7 @@ deploy_receipt_t *deploy_execute(
         deploy_outcome_t *o = &receipt->deployed.entries[receipt->deployed.count];
         const char *above = poisoned_above(receipt, v->item->filesystem_path);
 
-        error_t err = above ? ERROR(ERR_FS, "'%s' was not converged", above)
+        error_t err = above ? error_create(ERR_FS, "'%s' was not converged", above)
                             : deploy_file(&run, v, &o->stat);
         if (err) {
             /* The row's own outcome, as above. The deployed slot stays untaken:

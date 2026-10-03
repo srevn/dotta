@@ -38,7 +38,7 @@ error_t profile_require(git_repository *repo, const char *name) {
     error_t err = gitops_branch_exists(repo, name, &exists);
     if (err) return err;
     if (!exists) {
-        return ERROR(ERR_NOT_FOUND, "Profile '%s' doesn't exist locally", name);
+        return error_create(ERR_NOT_FOUND, "Profile '%s' doesn't exist locally", name);
     }
 
     return NULL;
@@ -211,7 +211,7 @@ error_t profile_resolve_enabled(
  */
 static error_t profile_unheld(const char *commit_ref, const string_array_t *filter) {
     if (!filter) {
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND, "Commit '%s' not found in any enabled profile",
             commit_ref
         );
@@ -219,7 +219,7 @@ static error_t profile_unheld(const char *commit_ref, const string_array_t *filt
 
     /* The names -p gave, joined in the arena the filter keeps them in: an array
      * remembers its arena (base/array.h) */
-    return ERROR(
+    return error_create(
         ERR_NOT_FOUND, "Commit '%s' not found in profile%s '%s'", commit_ref,
         filter->count == 1 ? "" : "s", string_array_join(filter->arena, filter, "', '")
     );
@@ -299,7 +299,7 @@ static error_t profile_holder(
     /* Each end held, and no profile holding both. Dotta profiles are orphan
      * branches — a range across two would diff two unrelated trees, producing
      * meaningless output. */
-    return ERROR(
+    return error_create(
         ERR_VALIDATION,
         "Commits belong to different profiles ('%s' and '%s'); "
         "cross-profile commit comparison is not supported",
@@ -513,7 +513,7 @@ static error_t profile_count_entry(
     size = content_estimated_plaintext_size(size, encrypted);
 
     if (walk->total_size > SIZE_MAX - size) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL, "Profile size exceeds maximum representable value"
         );
     }
@@ -1022,7 +1022,7 @@ error_t profile_discover_claims(
     /* The argument in its own key — whatever the enumeration held, this loop
      * having run or not. */
     if (count == 0) {
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND, "'%s' is not held by any profile",
             arg->key == PATH_KEY_FILESYSTEM ? arg->filesystem_path : arg->storage_path
         );

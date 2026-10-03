@@ -133,7 +133,7 @@ error_t credential_url_parse(const char *url, credential_url_t *out) {
     out->host = NULL;
 
     if (!*url) {
-        return ERROR(ERR_INVALID_ARG, "URL is empty");
+        return error_create(ERR_INVALID_ARG, "URL is empty");
     }
 
     /* Resolve protocol and the start of the authority component. */
@@ -145,7 +145,7 @@ error_t credential_url_parse(const char *url, credential_url_t *out) {
     if (scheme_sep) {
         size_t plen = (size_t) (scheme_sep - url);
         if (plen == 0) {
-            return ERROR(ERR_INVALID_ARG, "URL has empty scheme: %s", url);
+            return error_create(ERR_INVALID_ARG, "URL has empty scheme: %s", url);
         }
         protocol = heap_strndup(url, plen);
         authority_start = scheme_sep + 3;
@@ -156,7 +156,7 @@ error_t credential_url_parse(const char *url, credential_url_t *out) {
         const char *at = strchr(url, '@');
         const char *colon = strchr(url, ':');
         if (!(at && colon && at < colon)) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "URL has no scheme or SCP-style form: %s", url
             );
         }
@@ -203,7 +203,7 @@ error_t credential_url_parse(const char *url, credential_url_t *out) {
     if (!is_valid_credential_field(protocol) || !is_valid_host(host)) {
         free(host);
         free(protocol);
-        return ERROR(ERR_INVALID_ARG, "URL is malformed: %s", url);
+        return error_create(ERR_INVALID_ARG, "URL is malformed: %s", url);
     }
 
     out->protocol = protocol;
@@ -342,14 +342,14 @@ static error_t helper_outcome_error(
     const char *subcommand, const process_result_t *result
 ) {
     if (result->exec_failed) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL,
             "git credential %s failed to execute (errno=%d)",
             subcommand, result->exec_errno
         );
     }
     if (result->timed_out) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL,
             "git credential %s timed out after %d seconds",
             subcommand, CRED_HELPER_TIMEOUT_SECONDS
@@ -358,7 +358,7 @@ static error_t helper_outcome_error(
     /* The capture kept its first bytes and dropped the rest (sys/process.h): a
      * response read in part is no response, whatever its first lines say. */
     if (result->output_dropped > 0) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL,
             "git credential %s wrote more than %zu bytes, and a response is "
             "never read in part", subcommand, PROCESS_CAPTURE_MAX
@@ -390,7 +390,7 @@ static error_t credential_helper_commit(
     }
     if (!is_valid_credential_field(username) ||
         !is_valid_credential_field(password)) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "credential field contains protocol-breaking characters"
         );
@@ -533,7 +533,7 @@ error_t credential_helper_fill(
         !is_valid_credential_field(pass_buf)) {
         buffer_secure_free(user_buf, strlen(user_buf) + 1);
         buffer_secure_free(pass_buf, strlen(pass_buf) + 1);
-        return ERROR(
+        return error_create(
             ERR_INTERNAL,
             "git credential helper returned malformed fields"
         );

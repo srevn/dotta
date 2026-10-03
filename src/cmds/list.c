@@ -696,7 +696,7 @@ static error_t list_file_history(
             if (err) return err;
         }
         if (!row) {
-            return ERROR(
+            return error_create(
                 ERR_NOT_FOUND, "File '%s' not found in enabled profiles", opts->file_path
             );
         }
@@ -760,7 +760,7 @@ static error_t list_file_history(
 
         case PROFILE_HELD_DIRECTORY:
         case PROFILE_HELD_SUBMODULE:
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "'%s' is %s; list shows one file's history",
                 storage_path,
                 held.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule"
@@ -783,7 +783,7 @@ static error_t list_file_history(
         );
     }
     if (history.count == 0) {
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND, "No history found for '%s' in profile '%s'", storage_path,
             profile
         );
@@ -922,7 +922,7 @@ static error_t list_post_parse(
             o->mode = LIST_FILE_HISTORY;
             o->file_path = o->positional_args[0];
         } else {
-            return ERROR(ERR_INVALID_ARG, "Only one file may accompany -p/--profile");
+            return error_create(ERR_INVALID_ARG, "Only one file may accompany -p/--profile");
         }
         return NULL;
     }

@@ -288,7 +288,7 @@ error_t stats_blob_size_with_odb(
     if (rc < 0) return error_from_git(rc);
 
     if (type != GIT_OBJECT_BLOB) {
-        return ERROR(ERR_INVALID_ARG, "Object is not a blob");
+        return error_create(ERR_INVALID_ARG, "Object is not a blob");
     }
 
     *out = size;

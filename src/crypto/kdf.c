@@ -60,7 +60,7 @@ const kdf_preset_t kdf_presets[KDF_PRESET_COUNT] = {
 error_t kdf_validate_params(uint16_t memory_mib, uint8_t passes) {
     if (memory_mib < KDF_ARGON2_MEMORY_MIB_MIN
         || memory_mib > KDF_ARGON2_MEMORY_MIB_MAX) {
-        return ERROR(
+        return error_create(
             ERR_CRYPTO,
             "Argon2 memory %u MiB out of range (%u..%u)",
             (unsigned) memory_mib,
@@ -70,7 +70,7 @@ error_t kdf_validate_params(uint16_t memory_mib, uint8_t passes) {
     }
 
     if (passes < KDF_ARGON2_PASSES_MIN || passes > KDF_ARGON2_PASSES_MAX) {
-        return ERROR(
+        return error_create(
             ERR_CRYPTO,
             "Argon2 passes %u out of range (%u..%u)",
             (unsigned) passes,
@@ -136,7 +136,7 @@ error_t kdf_master_key(
      * caller's stack frame had), but it documents the invariant. */
     if (passphrase_len == 0) {
         crypto_wipe(out_master_key, KDF_KEY_SIZE);
-        return ERROR(ERR_INVALID_ARG, "Passphrase cannot be empty");
+        return error_create(ERR_INVALID_ARG, "Passphrase cannot be empty");
     }
 
     /* Argon2 carries the passphrase length in a `uint32_t` field; a `size_t`
@@ -146,7 +146,7 @@ error_t kdf_master_key(
      * sys/passphrase's 4 KiB UX cap. */
     if (passphrase_len > UINT32_MAX) {
         crypto_wipe(out_master_key, KDF_KEY_SIZE);
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "Passphrase too long: %zu bytes (accepted up to %u bytes)",
             passphrase_len, (unsigned int) UINT32_MAX
@@ -163,7 +163,7 @@ error_t kdf_master_key(
     void *work_area = secure_alloc(bytes);
     if (!work_area) {
         crypto_wipe(out_master_key, KDF_KEY_SIZE);
-        return ERROR(
+        return error_create(
             ERR_MEMORY,
             "Failed to map %zu MiB Argon2 work area: %s",
             (size_t) epoch->memory_mib, strerror(errno)

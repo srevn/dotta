@@ -121,7 +121,7 @@ static error_t resolve_merge_trees(
             /* Only a strategy that takes one side whole needs no common commit;
              * the strategies are this module's words, whichever spelling — the
              * flag, the configuration — named the one that met this */
-            return ERROR(
+            return error_create(
                 ERR_NOT_FOUND, "Branch '%s' and its remote share no history; the ours "
                 "and theirs strategies take one side whole", ctx->branch_name
             );
@@ -144,7 +144,7 @@ static error_t resolve_merge_trees(
     /* Check for conflicts */
     if (git_index_has_conflicts(merged_index)) {
         git_index_free(merged_index);
-        return ERROR(
+        return error_create(
             ERR_CONFLICT, "Merging branch '%s' with its remote met conflicts",
             ctx->branch_name
         );
@@ -353,7 +353,7 @@ error_t resolve_verify(
 
     /* After successful resolution, we should be ahead of remote (or equal) */
     if (state == UPSTREAM_NO_REMOTE) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL,
             "Divergence resolution completed but no remote tracking branch "
             "found for '%s'", ctx->branch_name
@@ -361,7 +361,7 @@ error_t resolve_verify(
     }
 
     if (state == UPSTREAM_NO_LOCAL) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL,
             "Divergence resolution completed but local branch '%s' no longer "
             "exists", ctx->branch_name
@@ -369,7 +369,7 @@ error_t resolve_verify(
     }
 
     if (state == UPSTREAM_REMOTE_AHEAD) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL,
             "Divergence resolution completed but branch '%s' is still "
             "behind remote (%zu commits)", ctx->branch_name, behind
@@ -377,7 +377,7 @@ error_t resolve_verify(
     }
 
     if (state == UPSTREAM_DIVERGED) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL,
             "Divergence resolution completed but branch '%s' is still diverged "
             "(ahead: %zu, behind: %zu)", ctx->branch_name, ahead, behind

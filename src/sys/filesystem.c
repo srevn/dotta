@@ -271,14 +271,14 @@ error_t fs_read_fd(int fd, buffer_t *out) {
      * has no extent — st_size tells the size guard below nothing and the loop
      * would drain without bound. */
     if (!S_ISREG(st.st_mode)) {
-        return ERROR(ERR_FS, "Not a regular file");
+        return error_create(ERR_FS, "Not a regular file");
     }
 
     /* Guard against unreasonably large files. st_size is signed (off_t); reject
      * negatives (pathological) before the unsigned comparison so we never widen
      * a negative into a huge size_t. */
     if (st.st_size < 0 || (size_t) st.st_size > FS_MAX_READ_SIZE) {
-        return ERROR(
+        return error_create(
             ERR_FS, "File too large (%lld bytes, max %zu)",
             (long long) st.st_size, (size_t) FS_MAX_READ_SIZE
         );
@@ -482,7 +482,7 @@ error_t fs_write_file_raw(
     int n = snprintf(tmp_path, sizeof(tmp_path), "%s" FS_TMP_SUFFIX, parent);
     free(parent);
     if (n < 0 || (size_t) n >= sizeof(tmp_path)) {
-        return ERROR(ERR_FS, "Path too long for atomic write of '%s'", path);
+        return error_create(ERR_FS, "Path too long for atomic write of '%s'", path);
     }
 
     /* Create temp file with restrictive 0600 mode (mkstemp guarantee).
@@ -803,7 +803,7 @@ error_t fs_create_dir_exclusive(
      * window; the final attributes apply through the descriptor below. */
     if (fs_mkdir(path, 0700) < 0) {
         if (errno == EEXIST) {
-            return ERROR(
+            return error_create(
                 ERR_EXISTS, "Path '%s' already exists",
                 path
             );
@@ -1116,7 +1116,7 @@ error_t fs_remove_empty_dir(const char *path) {
      * and nothing of the user's has moved. */
     for (size_t i = 0; i < listing.count && !err; i++) {
         if (!entry_is_removable_metadata(path, listing.entries[i])) {
-            err = ERROR(ERR_CONFLICT, "Directory '%s' is not empty", path);
+            err = error_create(ERR_CONFLICT, "Directory '%s' is not empty", path);
         }
     }
 
@@ -1131,7 +1131,7 @@ error_t fs_remove_empty_dir(const char *path) {
      * and it is the same refusal by another route. */
     if (fs_rmdir(path) != 0 && errno != ENOENT) {
         if (errno_means_not_empty(errno)) {
-            return ERROR(ERR_CONFLICT, "Directory '%s' is not empty", path);
+            return error_create(ERR_CONFLICT, "Directory '%s' is not empty", path);
         }
         return error_from_errno(errno, "Failed to remove directory '%s'", path);
     }
@@ -1282,7 +1282,7 @@ error_t fs_make_absolute(const char *path, arena_t *arena, const char **out) {
      * refused in git's words for it (lib/git/abspath.c strbuf_add_absolute_path),
      * ahead of the join below, which takes no empty name. */
     if (path[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG, "The empty string is not a valid path");
+        return error_create(ERR_INVALID_ARG, "The empty string is not a valid path");
     }
 
     /* The shell's order: the tilde, then the working directory beneath a path
@@ -1355,10 +1355,12 @@ error_t fs_expand_tilde(const char *path, arena_t *arena, const char **out) {
         free(name);
 
         if (!pw) {
-            return ERROR(ERR_INVALID_ARG, "'%s' names a user this system does not know", path);
+            return error_create(
+                ERR_INVALID_ARG, "'%s' names a user this system does not know", path
+            );
         }
         if (!pw->pw_dir || pw->pw_dir[0] == '\0') {
-            return ERROR(ERR_INVALID_ARG, "'%s' names a user with no home directory", path);
+            return error_create(ERR_INVALID_ARG, "'%s' names a user with no home directory", path);
         }
         home = pw->pw_dir;
     }

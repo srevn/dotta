@@ -138,7 +138,7 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out) {
     error_t err = gitops_reference_exists(repo, refname, &exists);
     if (err) return err;
     if (exists) {
-        return ERROR(ERR_EXISTS, "Reference '%s' already exists", refname);
+        return error_create(ERR_EXISTS, "Reference '%s' already exists", refname);
     }
 
     return stage_seed(repo, refname, NULL, out);
@@ -195,7 +195,7 @@ error_t stage_put(
 static error_t admit_tree_path(git_index *index, const char *path) {
     size_t len = strlen(path);
     if (len == 0 || path[0] == '/' || path[len - 1] == '/' || strstr(path, "//")) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "Cannot stage '%s': a tree path has no leading or trailing slash "
             "and no empty component", path
@@ -211,7 +211,7 @@ static error_t admit_tree_path(git_index *index, const char *path) {
         if (git_index_get_bypath(index, scratch, 0)) {
             int prefix_len = (int) (slash - scratch);
             free(scratch);
-            return ERROR(
+            return error_create(
                 ERR_CONFLICT, "Cannot stage '%s': '%.*s' is a file in this tree",
                 path, prefix_len, path
             );
@@ -249,7 +249,7 @@ static error_t put_entry(git_index *index, const git_index_entry *entry) {
     if (entry->mode != GIT_FILEMODE_BLOB &&
         entry->mode != GIT_FILEMODE_BLOB_EXECUTABLE &&
         entry->mode != GIT_FILEMODE_LINK) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "Cannot stage '%s' with mode 0%o: not a blob or link mode",
             path, (unsigned int) entry->mode
@@ -271,7 +271,7 @@ static error_t put_entry(git_index *index, const git_index_entry *entry) {
     free(beneath);
 
     if (rc == 0) {
-        return ERROR(
+        return error_create(
             ERR_CONFLICT, "Cannot stage '%s': it is a directory in this tree",
             path
         );
@@ -294,7 +294,7 @@ static error_t put_entry(git_index *index, const git_index_entry *entry) {
      * refused, so on this path it is raised by the path rule alone. */
     const git_error *cause = git_error_last();
     if (cause->klass == GIT_ERROR_INDEX) {
-        return ERROR(
+        return error_create(
             ERR_CONFLICT, "Cannot stage '%s': Git refuses the name (%s)", path,
             cause->message
         );
@@ -354,7 +354,7 @@ error_t stage_admit_subtree(const stage_admission_t *adm, const char *path) {
      * and nothing beneath it could be committed either. Entries beneath the path
      * are the subtree already standing, and need no asking. */
     if (git_index_get_bypath(adm->index, path, 0)) {
-        return ERROR(
+        return error_create(
             ERR_CONFLICT, "Cannot stage '%s': it is a file in this tree", path
         );
     }
@@ -393,7 +393,7 @@ error_t stage_remove(stage_t *st, const char *path) {
      * git_index_remove_bypath would swallow it ("ensure gone"). */
     int rc = git_index_remove(st->index, path, 0);
     if (rc == GIT_ENOTFOUND) {
-        return ERROR(ERR_NOT_FOUND, "'%s' is not in this tree", path);
+        return error_create(ERR_NOT_FOUND, "'%s' is not in this tree", path);
     }
     if (rc < 0) {
         return error_wrap(error_from_git(rc), "Failed to remove '%s'", path);
@@ -452,7 +452,7 @@ error_t stage_commit(stage_t *st, const char *message, bool *out_committed) {
     git_tree_free(tree);
 
     if (rc == GIT_EMODIFIED || rc == GIT_EEXISTS) {
-        return ERROR(
+        return error_create(
             ERR_CONFLICT, "Reference '%s' was changed by another writer since this "
             "command read it; nothing was committed", st->refname
         );

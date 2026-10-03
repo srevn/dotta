@@ -142,7 +142,7 @@ static error_t get_db_path(git_repository *repo, char **out) {
 
     const char *git_dir = git_repository_path(repo);
     if (!git_dir) {
-        return ERROR(ERR_GIT, "Failed to get repository path");
+        return error_create(ERR_GIT, "Failed to get repository path");
     }
 
     *out = heap_str_format(
@@ -179,7 +179,7 @@ static error_t state_error(sqlite3 *db, const char *fmt, ...) {
     vsnprintf(words, sizeof(words), fmt, args);
     va_end(args);
 
-    return ERROR(ERR_STATE_INVALID, "%s: %s (SQLite error %d)", words, message, code);
+    return error_create(ERR_STATE_INVALID, "%s: %s (SQLite error %d)", words, message, code);
 }
 
 /**
@@ -415,7 +415,7 @@ static error_t state_initialize(sqlite3 *db) {
     /* Execute schema SQL */
     rc = sqlite3_exec(db, schema_sql, NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t err = ERROR(
+        error_t err = error_create(
             ERR_STATE_INVALID, "Failed to initialize schema: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
         );
@@ -462,9 +462,9 @@ static error_t state_verify(sqlite3 *db) {
     if (rc != SQLITE_ROW) {
         err = state_error(db, "Failed to read the database's header");
     } else if (!sqlite3_column_int(stmt, 0)) {
-        err = ERROR(ERR_STATE_INVALID, "The database is not marked as dotta's");
+        err = error_create(ERR_STATE_INVALID, "The database is not marked as dotta's");
     } else if (!sqlite3_column_int(stmt, 1)) {
-        err = ERROR(
+        err = error_create(
             ERR_STATE_INVALID, "Unsupported schema version: %d (this build reads %s)",
             sqlite3_column_int(stmt, 2), STATE_SCHEMA_VERSION
         );
@@ -507,7 +507,7 @@ static error_t state_configure(sqlite3 *db) {
     /* 1. Fast synchronization (safe on crash, fast on commit) */
     rc = sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t err = ERROR(
+        error_t err = error_create(
             ERR_STATE_INVALID, "Failed to set synchronous mode: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
         );
@@ -524,7 +524,7 @@ static error_t state_configure(sqlite3 *db) {
      * under this. */
     rc = sqlite3_exec(db, "PRAGMA cache_size=10000;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t err = ERROR(
+        error_t err = error_create(
             ERR_STATE_INVALID, "Failed to set cache size: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
         );
@@ -754,7 +754,7 @@ static error_t state_read_profiles(state_t *state) {
         row->name = heap_strdup(name);
         row->target = heap_strdup(target);
         if (!row->name || (target_type != SQLITE_NULL && !row->target)) {
-            err = ERROR(ERR_MEMORY, "Failed to read an enabled profile row");
+            err = error_create(ERR_MEMORY, "Failed to read an enabled profile row");
             break;
         }
 
@@ -930,7 +930,7 @@ error_t state_reorder_profiles(
      * unguarded connection and leave no recovery path for errors in the INSERT
      * loop. The caller must hold BEGIN IMMEDIATE (state_open or state_begin). */
     if (!state->in_transaction) {
-        return ERROR(
+        return error_create(
             ERR_STATE_INVALID, "state_reorder_profiles requires an active transaction"
         );
     }
@@ -941,7 +941,7 @@ error_t state_reorder_profiles(
      * state_enable_profile first. */
     for (size_t i = 0; i < profiles->count; i++) {
         if (!state_find_profile(state, profiles->entries[i])) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG,
                 "state_reorder_profiles: profile '%s' is not currently enabled "
                 "(use state_enable_profile to add a profile)",
@@ -955,7 +955,7 @@ error_t state_reorder_profiles(
      * row, the counts equal, and UNIQUE(name) refusing a name twice at the
      * re-insert make the list the enabled set, permuted. */
     if (profiles->count != state->profiles.count) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "state_reorder_profiles: %zu names for %zu enabled profiles "
             "(reorder permutes the enabled set; use state_disable_profile to "
@@ -968,7 +968,7 @@ error_t state_reorder_profiles(
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "DELETE FROM enabled_profiles;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t err = ERROR(
+        error_t err = error_create(
             ERR_STATE_INVALID, "Failed to clear profiles: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
         );
@@ -1072,12 +1072,12 @@ static error_t state_admit(state_t *state) {
          * the failure had one (sqlite3_system_errno is 0 otherwise). */
         int os_errno = sqlite3_system_errno(state->db);
         if (os_errno) {
-            err = ERROR(
+            err = error_create(
                 ERR_STATE_INVALID, "%s: %s", sqlite3_errmsg(state->db),
                 strerror(os_errno)
             );
         } else {
-            err = ERROR(
+            err = error_create(
                 ERR_STATE_INVALID, "%s", sqlite3_errmsg(state->db)
             );
         }
@@ -1156,7 +1156,7 @@ static error_t state_create(const char *db_path) {
     int n = snprintf(temp, sizeof(temp), "%s.XXXXXX", db_path);
     if (n < 0 || (size_t) n >= sizeof(temp)) {
         return error_wrap(
-            ERROR(ERR_STATE_INVALID, "The path is too long"),
+            error_create(ERR_STATE_INVALID, "The path is too long"),
             "Cannot create the store's database at: %s", db_path
         );
     }
@@ -1166,7 +1166,7 @@ static error_t state_create(const char *db_path) {
     int fd = mkstemp(temp);
     if (fd < 0) {
         return error_wrap(
-            ERROR(ERR_STATE_INVALID, "%s", strerror(errno)),
+            error_create(ERR_STATE_INVALID, "%s", strerror(errno)),
             "Cannot create the store's database at: %s", db_path
         );
     }
@@ -1196,7 +1196,7 @@ static error_t state_create(const char *db_path) {
     }
     const char *mode = (const char *) sqlite3_column_text(stmt, 0);
     if (!mode || strcmp(mode, "wal") != 0) {
-        err = ERROR(
+        err = error_create(
             ERR_STATE_INVALID, "The filesystem refused WAL mode (the journal is '%s')",
             mode ? mode : "unknown"
         );
@@ -1211,7 +1211,7 @@ static error_t state_create(const char *db_path) {
     db = NULL;
 
     if (link(temp, db_path) != 0 && errno != EEXIST) {
-        err = ERROR(ERR_STATE_INVALID, "%s", strerror(errno));
+        err = error_create(ERR_STATE_INVALID, "%s", strerror(errno));
     }
 
 done:
@@ -1327,7 +1327,7 @@ error_t state_begin(state_t *state) {
     CHECK_NULL(state);
 
     if (state->in_transaction) {
-        return ERROR(ERR_STATE_INVALID, "Transaction already active");
+        return error_create(ERR_STATE_INVALID, "Transaction already active");
     }
 
     /* The promotion. A handle whose load found nothing at the path holds no
@@ -1348,7 +1348,7 @@ error_t state_begin(state_t *state) {
      * take the -wal file answers READONLY here, and an I/O error is its own. */
     int rc = sqlite3_exec(state->db, "BEGIN IMMEDIATE;", NULL, NULL, NULL);
     if (rc == SQLITE_BUSY) {
-        return ERROR(
+        return error_create(
             ERR_CONFLICT, "Failed to acquire write lock: %s; another process holds it",
             sqlite3_errmsg(state->db)
         );
@@ -1385,7 +1385,7 @@ error_t state_commit(state_t *state) {
     CHECK_NULL(state->db);
 
     if (!state->in_transaction) {
-        return ERROR(ERR_STATE_INVALID, "No active transaction to commit");
+        return error_create(ERR_STATE_INVALID, "No active transaction to commit");
     }
 
     /* Where this commit leaves the store, read while the lock still holds it
@@ -1399,7 +1399,7 @@ error_t state_commit(state_t *state) {
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "COMMIT;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        err = ERROR(
+        err = error_create(
             ERR_STATE_INVALID, "Failed to commit transaction: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
         );
@@ -1437,7 +1437,7 @@ error_t state_resume(state_t *state) {
     int64_t data_version = 0;
     err = state_data_version(state, &data_version);
     if (!err && data_version != state->data_version) {
-        err = ERROR(
+        err = error_create(
             ERR_CONFLICT, "Another process wrote to the database since this one last did"
         );
     }
@@ -1595,7 +1595,7 @@ error_t state_records(
             (group_type != SQLITE_NULL && !record->group) ||
             (blob_type != SQLITE_NULL && !blob)) {
             sqlite3_finalize(stmt);
-            return ERROR(ERR_MEMORY, "Failed to read the record's columns");
+            return error_create(ERR_MEMORY, "Failed to read the record's columns");
         }
 
         /* A NULL blob (a directory, or observed only) is the zero OID calloc
@@ -1747,7 +1747,7 @@ error_t state_order_prune(state_t *state, const char *filesystem_path, time_t no
     CHECK_NULL(state->db);
 
     if (now <= 0) {
-        return ERROR(ERR_INVALID_ARG, "Order timestamp must be > 0");
+        return error_create(ERR_INVALID_ARG, "Order timestamp must be > 0");
     }
 
     sqlite3_stmt *stmt = state_statement(state, STATEMENT_ORDER_PRUNE);

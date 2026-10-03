@@ -32,7 +32,7 @@ static error_t key_set(const dotta_ctx_t *ctx) {
 
     /* Check if encryption is enabled */
     if (!config->encryption_enabled) {
-        return ERROR(ERR_VALIDATION, "Encryption is disabled (encryption.enabled = false)");
+        return error_create(ERR_VALIDATION, "Encryption is disabled (encryption.enabled = false)");
     }
 
     /* Invariant: encryption_enabled implies ctx->run.keymgr != NULL for a command
@@ -111,7 +111,7 @@ static error_t key_clear(const dotta_ctx_t *ctx) {
 
     /* Check if encryption is enabled */
     if (!config->encryption_enabled) {
-        return ERROR(ERR_VALIDATION, "Encryption is disabled (encryption.enabled = false)");
+        return error_create(ERR_VALIDATION, "Encryption is disabled (encryption.enabled = false)");
     }
 
     /* Invariant: encryption_enabled implies ctx->run.keymgr != NULL for a command

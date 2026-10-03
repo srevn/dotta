@@ -435,7 +435,7 @@ static error_t collect_entry(
         }
 
         default:
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG,
                 "Unsupported entry '%s' in profile tree (submodule?)",
                 e.storage_path
@@ -567,7 +567,7 @@ static error_t collect_profile(
     if (err) goto cleanup;
 
     if (list->count == 1) {
-        err = ERROR(
+        err = error_create(
             ERR_NOT_FOUND, "Profile '%s'%s has no exportable content",
             profile, commit_suffix
         );
@@ -617,7 +617,7 @@ static error_t collect_storage(
 
     switch (held.kind) {
         case PROFILE_HELD_NOTHING:
-            err = ERROR(
+            err = error_create(
                 ERR_NOT_FOUND, "'%s' not found in profile '%s'%s",
                 name, profile, commit_suffix
             );
@@ -683,7 +683,7 @@ static error_t collect_storage(
         }
 
         case PROFILE_HELD_SUBMODULE:
-            err = ERROR(
+            err = error_create(
                 ERR_INVALID_ARG, "Unsupported entry type for '%s'", name
             );
             goto cleanup;
@@ -811,13 +811,13 @@ static error_t collect_filesystem(
          * being the profile this machine does not deploy: the reason the fact
          * then completes, its storage path the one key that names such a claim. */
         if (manifest_unbound(view).count > 0) {
-            return ERROR(
+            return error_create(
                 ERR_NOT_FOUND, "Profile '%s'%s places nothing at '%s'; some of its "
                 "paths have no target on this machine, and only their storage paths "
                 "name them", profile, commit_suffix, filesystem_path
             );
         }
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND, "Profile '%s'%s places nothing at '%s'",
             profile, commit_suffix, filesystem_path
         );
@@ -834,7 +834,7 @@ static error_t collect_filesystem(
                     first = row;
                 }
             }
-            return ERROR(
+            return error_create(
                 ERR_CONFLICT,
                 "Cannot export '%s': '%s' is a %s in profile '%s' and '%s' stands "
                 "beneath it — one filesystem cannot hold both",
@@ -931,7 +931,7 @@ static error_t complete_directories(export_entry_list_t *list, arena_t *arena) {
              * to climb. */
             const export_entry_t *blocker = &list->items[held - 1];
             if (blocker->kind != EXPORT_ENTRY_DIRECTORY) {
-                return ERROR(
+                return error_create(
                     ERR_CONFLICT,
                     "Cannot export '%s': '%s' is a %s in this profile, so "
                     "nothing can stand beneath it",
@@ -1000,7 +1000,7 @@ static error_t validate_destinations(export_entry_list_t *list) {
         if (fs_lstat(e->dest_path, &st) != 0) {
             if (errno == ENOENT) continue;  /* Fresh path */
             if (errno == ENOTDIR) {
-                return ERROR(
+                return error_create(
                     ERR_CONFLICT,
                     "A path component of '%s' exists and is not a directory",
                     e->dest_path
@@ -1016,20 +1016,20 @@ static error_t validate_destinations(export_entry_list_t *list) {
                     break;
                 }
                 if (S_ISLNK(st.st_mode)) {
-                    return ERROR(
+                    return error_create(
                         ERR_CONFLICT,
                         "'%s' is a symlink where a directory must go — "
                         "refusing to write through it", e->dest_path
                     );
                 }
-                return ERROR(
+                return error_create(
                     ERR_CONFLICT,
                     "'%s' exists and is not a directory", e->dest_path
                 );
 
             case EXPORT_ENTRY_FILE:
                 if (S_ISDIR(st.st_mode)) {
-                    return ERROR(
+                    return error_create(
                         ERR_CONFLICT,
                         "'%s' is a directory where a file must go",
                         e->dest_path
@@ -1038,13 +1038,13 @@ static error_t validate_destinations(export_entry_list_t *list) {
                 if (S_ISLNK(st.st_mode)) {
                     /* Follow: a link to a directory can't take a write */
                     if (fs_is_directory(e->dest_path)) {
-                        return ERROR(
+                        return error_create(
                             ERR_CONFLICT, "Destination '%s' is a directory",
                             e->dest_path
                         );
                     }
                     if (!single_dest) {
-                        return ERROR(
+                        return error_create(
                             ERR_CONFLICT,
                             "'%s' is a symlink where a file must go — "
                             "refusing to write through it", e->dest_path
@@ -1055,7 +1055,7 @@ static error_t validate_destinations(export_entry_list_t *list) {
 
             case EXPORT_ENTRY_SYMLINK:
                 if (S_ISDIR(st.st_mode)) {
-                    return ERROR(
+                    return error_create(
                         ERR_CONFLICT,
                         "'%s' is a directory where a symlink must go",
                         e->dest_path
@@ -1350,10 +1350,10 @@ static void print_dry_run(
 static error_t write_bytes_stdout(const buffer_t *content) {
     if (content->size > 0 &&
         fwrite(content->data, 1, content->size, stdout) != content->size) {
-        return ERROR(ERR_FS, "Failed to write content to stdout");
+        return error_create(ERR_FS, "Failed to write content to stdout");
     }
     if (fflush(stdout) != 0) {
-        return ERROR(ERR_FS, "Failed to write content to stdout");
+        return error_create(ERR_FS, "Failed to write content to stdout");
     }
     return NULL;
 }
@@ -1475,7 +1475,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     /* ── Phase 1 validation: every refusal before the first byte ── */
 
     if (to_stdout && tree_export) {
-        err = ERROR(
+        err = error_create(
             ERR_INVALID_ARG,
             "'-' streams a single file's bytes; '%s' is a directory and "
             "needs a path destination", opts->file_path
@@ -1603,7 +1603,7 @@ static error_t export_post_parse(
     const char *first = args[0];
     if (first[0] == '~' || first[0] == '/' ||
         (o->positional_count == 1 && label_prefixes(first))) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "'%s' looks like a path — export requires an explicit profile",
             first
@@ -1642,7 +1642,7 @@ static error_t export_post_parse(
             return error_wrap(err, "Failed to parse target specification");
         }
         if (rs.profile == NULL) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "Failed to parse target specification '%s'",
                 args[0]
             );
@@ -1652,13 +1652,13 @@ static error_t export_post_parse(
         o->commit = rs.commit;
 
         if (o->positional_count > 2) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG,
                 "Too many arguments for the refspec form"
             );
         }
         if (o->output != NULL) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG,
                 "Destination given twice: '-o %s' and positional '%s'",
                 o->output, args[1]
@@ -1691,14 +1691,14 @@ static error_t export_post_parse(
     }
 
     if (o->output == NULL || o->output[0] == '\0') {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "A destination is required: -o <dest>, or a positional after "
             "the <profile>:<path> form ('-' streams to stdout)"
         );
     }
     if (strcmp(o->output, "-") == 0 && o->file_path == NULL) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "'-' streams a single file's bytes; a whole-profile export "
             "needs a path destination"

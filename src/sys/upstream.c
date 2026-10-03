@@ -194,7 +194,7 @@ error_t upstream_ensure_tracking_branch(
     const char *blocker = NULL;
     err = gitops_branch_blocker(repo, branch_name, frame, &blocker);
     if (!err && blocker) {
-        err = ERROR(
+        err = error_create(
             ERR_CONFLICT,
             "Branch '%s' already exists, and Git cannot hold '%s' beside it: "
             "one is a name, the other a folder of names", blocker, branch_name

@@ -1618,7 +1618,7 @@ error_t manifest_holder(
         string_array_pushf(&named, "%s (%s)", row->profile, row->filesystem_path);
     }
 
-    return ERROR(
+    return error_create(
         ERR_INVALID_ARG, "'%s' is held by %zu profiles: %s",
         storage_path, holders, string_array_join(arena, &named, ", ")
     );

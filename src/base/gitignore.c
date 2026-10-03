@@ -355,14 +355,14 @@ static void parse_line(
  * no module of its own. */
 static error_t validate_pattern(const char *pattern, size_t len) {
     if (memchr(pattern, '\n', len))
-        return ERROR(ERR_VALIDATION, "A pattern is one line");
+        return error_create(ERR_VALIDATION, "A pattern is one line");
     if (rule_span(pattern, len) == 0) {
         if (*pattern == '#')
-            return ERROR(
+            return error_create(
                 ERR_VALIDATION, "'%s' is a comment, not a pattern; '\\%s' matches it",
                 pattern, pattern
             );
-        return ERROR(ERR_VALIDATION, "'%s' names no pattern", pattern);
+        return error_create(ERR_VALIDATION, "'%s' names no pattern", pattern);
     }
 
     int bang = *pattern == '!';
@@ -370,11 +370,11 @@ static error_t validate_pattern(const char *pattern, size_t len) {
         return NULL;
 
     if (pattern[bang + 2] == '\0')
-        return ERROR(
+        return error_create(
             ERR_VALIDATION, "'%s' names a directory called '~', not home; '%.*s\\%s' "
             "matches that directory", pattern, bang, pattern, pattern + bang
         );
-    return ERROR(
+    return error_create(
         ERR_VALIDATION, "'%s' names a directory called '~', not home; '%.*s%s' anchors "
         "it at the top, and '%.*s\\%s' matches that directory",
         pattern, bang, pattern, pattern + bang + 1, bang, pattern, pattern + bang

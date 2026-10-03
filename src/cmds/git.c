@@ -70,7 +70,7 @@ error_t cmd_git(const dotta_ctx_t *ctx, const cmd_git_options_t *opts) {
      * wait_or_whine). Any other death is said in git's words for one. */
     *ctx->exit_code = result.exit_code;
     if (result.signal_num != 0 && result.signal_num != SIGPIPE) {
-        return ERROR(ERR_GIT, "git died of signal %d", result.signal_num);
+        return error_create(ERR_GIT, "git died of signal %d", result.signal_num);
     }
     return NULL;
 }

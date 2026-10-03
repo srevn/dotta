@@ -95,7 +95,7 @@ error_t repo_is_store(git_repository *repo, bool *out) {
     rc = git_config_open_level(&local, config, GIT_CONFIG_LEVEL_LOCAL);
     git_config_free(config);
     if (rc == GIT_ENOTFOUND) {
-        return ERROR(ERR_GIT, "Cannot read the repository's config file");
+        return error_create(ERR_GIT, "Cannot read the repository's config file");
     }
     if (rc < 0) return error_from_git(rc);
 
@@ -157,12 +157,12 @@ error_t repo_open(const config_t *config, git_repository **repo_out) {
             int n = snprintf(head, sizeof(head), "%s/HEAD", repo_path);
             if (n >= 0 && (size_t) n < sizeof(head) &&
                 fs_lstat_occupant(head, NULL) == FS_OCCUPANT_NONE) {
-                return ERROR(
+                return error_create(
                     ERR_NOT_FOUND, "No dotta repository found at %s%s", repo_path,
                     origin
                 );
             }
-            return ERROR(
+            return error_create(
                 ERR_GIT, "Cannot read the repository at %s%s", repo_path, origin
             );
         }
@@ -188,7 +188,7 @@ error_t repo_open(const config_t *config, git_repository **repo_out) {
     }
     if (!declared) {
         git_repository_free(repo);
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND, "The repository at %s is not a dotta store%s", repo_path,
             origin
         );

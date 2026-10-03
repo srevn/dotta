@@ -1514,7 +1514,7 @@ static error_t diff_post_parse(
             o->commit2 = o->git_refs[1];
             break;
         default:
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG,
                 "Too many commit references (max 2, got %zu)",
                 o->git_ref_count
@@ -1523,7 +1523,7 @@ static error_t diff_post_parse(
 
     bool direction_explicit = (o->direction != DIFF_DIR_UNSET);
     if (direction_explicit && o->mode != DIFF_WORKSPACE) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "Direction flags (--upstream, --downstream, --all) "
             "only apply to workspace diffs"

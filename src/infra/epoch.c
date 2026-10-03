@@ -70,7 +70,7 @@ static error_t epoch_read_blob(
 ) {
     const git_tree_entry *entry = git_tree_entry_byname(tree, name);
     if (entry == NULL) {
-        return ERROR(
+        return error_create(
             ERR_CRYPTO,
             "Blob '%s' missing from %s tree",
             name, EPOCH_REF
@@ -78,7 +78,7 @@ static error_t epoch_read_blob(
     }
 
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-        return ERROR(
+        return error_create(
             ERR_CRYPTO,
             "Tree entry '%s' in %s is not a blob",
             name, EPOCH_REF
@@ -92,7 +92,7 @@ static error_t epoch_read_blob(
     git_object_size_t got = git_blob_rawsize(blob);
     if (got != size) {
         git_blob_free(blob);
-        return ERROR(
+        return error_create(
             ERR_CRYPTO,
             "Blob '%s' in %s has wrong size: %lld bytes (expected %zu)",
             name, EPOCH_REF, (long long) got, size
@@ -187,7 +187,7 @@ error_t epoch_load(git_repository *repo, kdf_epoch_t *out) {
     error_t err = gitops_reference_tree(repo, EPOCH_REF, &tree);
     if (!err) {
         err = tree ? epoch_read_tree(repo, tree, out)
-                   : ERROR(ERR_NOT_FOUND, "Epoch ref '%s' not found", EPOCH_REF);
+                   : error_create(ERR_NOT_FOUND, "Epoch ref '%s' not found", EPOCH_REF);
         git_tree_free(tree);
     }
     if (err) {
@@ -268,7 +268,7 @@ error_t epoch_init(
          * line already says. Only the census stands between the mint and whatever
          * the ref used to key. */
         if (any_ciphertext) {
-            return ERROR(
+            return error_create(
                 ERR_CRYPTO, "Repository epoch '%s' is missing and encrypted files may be "
                 "sealed under it; a fetch of '" EPOCH_RESTORE_REFSPEC "' from a remote "
                 "that holds this repository's epoch restores it", EPOCH_REF
@@ -456,7 +456,7 @@ error_t epoch_fetch(
     }
     if (!present) {
         git_remote_free(remote);
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND, "Remote '%s' does not advertise '%s'",
             remote_name, EPOCH_REF
         );
@@ -502,7 +502,7 @@ error_t epoch_fetch(
          * callers route uniformly — fold the read's specific cause into the message
          * rather than chaining, since error_wrap would inherit its varied codes
          * (ERR_CRYPTO / ERR_GIT) and split the callers' handling. */
-        return ERROR(
+        return error_create(
             ERR_CRYPTO,
             "Remote epoch is malformed; remote repo may be corrupt (%s)",
             error_message(err)

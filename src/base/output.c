@@ -731,7 +731,7 @@ error_t output_parse_verbosity(const char *word, output_verbosity_t *out) {
     } else if (strcmp(word, "verbose") == 0) {
         *out = OUTPUT_VERBOSE;
     } else {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "Unknown verbosity '%s' (valid: quiet, normal, verbose)", word
         );
@@ -750,7 +750,7 @@ error_t output_parse_color_mode(const char *word, output_color_mode_t *out) {
     } else if (strcmp(word, "never") == 0) {
         *out = OUTPUT_COLOR_NEVER;
     } else {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "Unknown color mode '%s' (valid: auto, always, never)", word
         );

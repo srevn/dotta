@@ -60,19 +60,19 @@ static const char *filemode_type_str(git_filemode_t mode) {
 static error_t write_stdout(const buffer_t *content) {
     if (content->size > 0 &&
         fwrite(content->data, 1, content->size, stdout) != content->size) {
-        return ERROR(ERR_FS, "Failed to write content to stdout");
+        return error_create(ERR_FS, "Failed to write content to stdout");
     }
 
     if (content->size > 0) {
         const char *data = (const char *) content->data;
         if (data[content->size - 1] != '\n' &&
             fputc('\n', stdout) == EOF) {
-            return ERROR(ERR_FS, "Failed to write content to stdout");
+            return error_create(ERR_FS, "Failed to write content to stdout");
         }
     }
 
     if (fflush(stdout) != 0) {
-        return ERROR(ERR_FS, "Failed to write content to stdout");
+        return error_create(ERR_FS, "Failed to write content to stdout");
     }
 
     return NULL;
@@ -362,15 +362,15 @@ static error_t show_file(
 
         case PROFILE_HELD_DIRECTORY:
         case PROFILE_HELD_SUBMODULE:
-            err = ERROR(
+            err = error_create(
                 ERR_INVALID_ARG, "'%s' is %s; show prints one file's bytes",
-                storage_path,
-                held.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule"
+                storage_path, held.kind == PROFILE_HELD_DIRECTORY
+                ? "a directory" : "a submodule"
             );
             break;
 
         case PROFILE_HELD_NOTHING:
-            err = ERROR(ERR_NOT_FOUND, "File '%s' not found", storage_path);
+            err = error_create(ERR_NOT_FOUND, "File '%s' not found", storage_path);
             break;
     }
 
@@ -614,7 +614,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
                 goto cleanup;
             }
             if (profiles.count == 0) {
-                err = ERROR(
+                err = error_create(
                     ERR_NOT_FOUND, "No enabled profiles to search for '%s'; -p searches "
                     "one", opts->commit
                 );
@@ -701,7 +701,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         if (err) goto cleanup;
     }
     if (!row) {
-        err = ERROR(
+        err = error_create(
             ERR_NOT_FOUND, "File '%s' not found in enabled profiles",
             opts->file_path
         );
@@ -756,7 +756,7 @@ static error_t show_post_parse(
     cmd_show_options_t *o = opts_v;
 
     if (o->positional_count == 0) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "Target argument is required (profile, file, or commit)"
         );
@@ -798,7 +798,7 @@ static error_t show_post_parse(
                 return error_wrap(err, "Failed to parse file specification");
             }
             if (rs.commit != NULL) {
-                return ERROR(
+                return error_create(
                     ERR_INVALID_ARG, "Commit given twice: '%s' and '%s'", rs.commit,
                     args[1]
                 );
@@ -832,7 +832,7 @@ static error_t show_post_parse(
      * find a file's owner is the tips' alone (cmd_show), so the profile is the
      * line's to name. A commit alone is searched across the enabled set. */
     return o->mode == SHOW_FILE && o->commit && !o->profile
-        ? ERROR(ERR_INVALID_ARG, "Showing a file at a specific commit requires a profile")
+        ? error_create(ERR_INVALID_ARG, "Showing a file at a specific commit requires a profile")
         : NULL;
 }
 

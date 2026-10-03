@@ -55,7 +55,7 @@ static error_t ensure_repository_adoptable(
     CHECK_NULL(path);
 
     if (!git_repository_is_bare(repo)) {
-        return ERROR(
+        return error_create(
             ERR_CONFLICT, "'%s' is a Git repository with a working tree, and dotta's "
             "store is bare", path
         );
@@ -80,7 +80,7 @@ static error_t ensure_repository_adoptable(
     }
     if (refs.count == 0) return NULL;
 
-    return ERROR(ERR_CONFLICT, "'%s' is a Git repository dotta did not create", path);
+    return error_create(ERR_CONFLICT, "'%s' is a Git repository dotta did not create", path);
 }
 
 /**
@@ -195,7 +195,7 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
      * given, is the no-op it reads as. */
     if (opts->strength && (epoch.memory_mib != opts->preset->memory_mib ||
         epoch.passes != opts->preset->passes)) {
-        err = ERROR(
+        err = error_create(
             ERR_CONFLICT,
             "The repository's epoch is already minted at %u MiB, %u passes; "
             "a change of strength is a new epoch: remove the encrypted files, "
@@ -265,7 +265,7 @@ static error_t init_post_parse(
     }
     return o->preset
         ? NULL
-        : ERROR(
+        : error_create(
         ERR_INVALID_ARG, "Unknown strength '%s' (valid: fast, balanced, paranoid)",
         name
         );

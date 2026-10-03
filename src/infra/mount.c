@@ -46,14 +46,14 @@ error_t mount_validate_target(const char *target) {
             return error_from_errno(errno, "Cannot stat target '%s'", target);
         }
         if (fs_lstat(target, &st) == 0 && S_ISLNK(st.st_mode)) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "Target '%s' is a link to nothing", target
             );
         }
-        return ERROR(ERR_INVALID_ARG, "Target directory does not exist: '%s'", target);
+        return error_create(ERR_INVALID_ARG, "Target directory does not exist: '%s'", target);
     }
     if (!S_ISDIR(st.st_mode)) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Target must be a directory: '%s'", target
         );
     }
@@ -216,14 +216,14 @@ error_t mount_table_build(
     size_t n = 0;
     for (size_t i = 0; i < mount_count; i++) {
         if (!mounts[i].profile) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "A binding names its profile (entry %zu)", i
             );
         }
         const char *raw = mounts[i].target;
         if (!raw) continue;
         if (!str_path_folded(raw)) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "A binding's target is an absolute, folded path "
                 "(profile '%s': '%s')", mounts[i].profile, raw
             );

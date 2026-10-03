@@ -475,9 +475,9 @@ int main(int argc, char **argv) {
              * down: a token spelled as a flag is an option, a word a command.
              * The token is a datum (base/output.h). */
             if (argv[1][0] == '-') {
-                output_error(&out, ERROR(ERR_INVALID_ARG, "Unknown option '%s'", argv[1]));
+                output_error(&out, error_create(ERR_INVALID_ARG, "Unknown option '%s'", argv[1]));
             } else {
-                output_error(&out, ERROR(ERR_INVALID_ARG, "Unknown command '%s'", argv[1]));
+                output_error(&out, error_create(ERR_INVALID_ARG, "Unknown command '%s'", argv[1]));
             }
             args_render_root_usage(stderr, dotta_commands, prog);
             return 1;

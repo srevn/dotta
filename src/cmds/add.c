@@ -337,7 +337,7 @@ static error_t add_spell(
      * path is beneath it. */
     if (target && input[0] != '~' && strcmp(spelled, target) != 0 &&
         !str_path_beneath(spelled, target, target[1] ? strlen(target) : 0)) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Path '%s' resolves outside target root '%s', and a path "
             "spelled from here or walking out with '..' cannot escape the target",
             spelled, target
@@ -475,7 +475,7 @@ static error_t add_admit(
         walk->sheet, storage_path
     );
     if (claimed) {
-        return ERROR(
+        return error_create(
             ERR_CONFLICT,
             "Cannot stage '%s': '%s' is a directory this profile claims beneath it",
             storage_path, claimed->key
@@ -588,7 +588,7 @@ static error_t add_collect(
      * they descend, so a deeper argument collected first does not make its parent's
      * walk fail when the parent arrives at the limit. */
     if (depth >= FS_WALK_MAX_DEPTH) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Cannot walk '%s': it is %d directories below the argument "
             "it was reached from; an argument of its own walks it", directory,
             FS_WALK_MAX_DEPTH
@@ -768,21 +768,21 @@ static error_t add_refuse_excluded(
 
     /* The operation's own -e: this command said it, and nothing is offered. */
     if (verdict->origin == IGNORE_ORIGIN_CLI) {
-        return ERROR(ERR_INVALID_ARG, "'%s' is ignored by %s", file, rule);
+        return error_create(ERR_INVALID_ARG, "'%s' is ignored by %s", file, rule);
     }
 
     /* The -e re-opening the rung, where a pattern reaches it: beside the switch
      * for Git's rules, which dotta does not write, and alone for the four's. */
     const char *negation = ignore_verdict_negation(arena, verdict, storage_path, kind);
     if (negation && verdict->origin == IGNORE_ORIGIN_SOURCE) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "'%s' is ignored by %s; -e %s re-opens it, or "
             "respect_gitignore = false turns Git's rules off", file, rule,
             str_shell_quote(arena, negation)
         );
     }
     if (negation) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "'%s' is ignored by %s; -e %s re-opens it", file, rule,
             str_shell_quote(arena, negation)
         );
@@ -791,12 +791,12 @@ static error_t add_refuse_excluded(
     /* No pattern reaches the rung: the switch is Git's rules' way past, and the
      * four's is the rule the fact names. */
     if (verdict->origin == IGNORE_ORIGIN_SOURCE) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "'%s' is ignored by %s, which no -e re-opens; "
             "respect_gitignore = false turns Git's rules off", file, rule
         );
     }
-    return ERROR(ERR_INVALID_ARG, "'%s' is ignored by %s, which no -e re-opens", file, rule);
+    return error_create(ERR_INVALID_ARG, "'%s' is ignored by %s, which no -e re-opens", file, rule);
 }
 
 /**
@@ -857,7 +857,7 @@ static error_t add_refuse_moves(const walk_t *walk) {
         char shown[PATH_MAX];
         output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));
 
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Profile '%s' names '%s' as '%s', and this command's "
             "directory claims would name it '%s', which it does not capture; dotta "
             "remove %s %s gives that name up", walk->profile, shown, kept, next,
@@ -1577,7 +1577,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         if (blocker) {
             const char *base = strlen(blocker) < strlen(opts->profile)
                 ? blocker : opts->profile;
-            err = ERROR(
+            err = error_create(
                 ERR_INVALID_ARG, "Profile '%s' cannot exist beside profile '%s': '%s' "
                 "cannot be both a branch and a folder of branches", opts->profile,
                 blocker, base
@@ -1616,7 +1616,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * so the flag takes the row's spelling here, and the arguments re-root
          * under it. */
         if (bound && !mount_same_target(bound, target)) {
-            err = ERROR(
+            err = error_create(
                 ERR_INVALID_ARG, "Profile '%s' is bound at %s, and a profile has one "
                 "target; dotta profile enable %s --target %s moves it", opts->profile,
                 bound, opts->profile, target
@@ -1812,7 +1812,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * answer is absolute and the arena's already. */
             filesystem_path = mount_resolve(ctx->arena, mounts, opts->profile, typed);
             if (!filesystem_path) {
-                err = ERROR(
+                err = error_create(
                     ERR_INVALID_ARG, "'%s' has no filesystem path for '%s' on this "
                     "machine; --target gives the profile one", file, opts->profile
                 );
@@ -1848,7 +1848,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                  * re-rooted, or a path read where it was typed. Most specific
                  * first, so each arm leaves on its own. */
                 if (typed) {
-                    err = ERROR(
+                    err = error_create(
                         ERR_NOT_FOUND, "Path not found: %s (storage path '%s'); ./%s "
                         "reads it relative to here", filesystem_path, file, file
                     );
@@ -1865,7 +1865,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                  * is read inside it as typed. */
                 if (target && file[0] == '/') {
                     if (!add_inside(file, target, ctx->arena)) {
-                        err = ERROR(
+                        err = error_create(
                             ERR_NOT_FOUND, "Path not found: %s ('%s' re-rooted beneath "
                             "the target at %s)", filesystem_path, file, target
                         );
@@ -1873,7 +1873,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                     }
                 }
 
-                err = ERROR(ERR_NOT_FOUND, "Path not found: %s", filesystem_path);
+                err = error_create(ERR_NOT_FOUND, "Path not found: %s", filesystem_path);
                 goto cleanup;
             }
 
@@ -1882,7 +1882,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 goto cleanup;
 
             case FS_OCCUPANT_OTHER:
-                err = ERROR(
+                err = error_create(
                     ERR_INVALID_ARG,
                     "'%s' is a %s, and a profile holds files, symlinks and "
                     "directories", file, fs_stat_noun(&st)
@@ -1911,7 +1911,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             if (typed && strcmp(listed->storage_path, typed) != 0) {
                 char shown[PATH_MAX];
                 output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));
-                err = ERROR(
+                err = error_create(
                     ERR_INVALID_ARG,
                     "'%s' is named twice in this command: as '%s' and as '%s'",
                     shown, listed->storage_path, typed
@@ -1986,7 +1986,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         if (held && path_type_kind(held->type) != kind) {
             char shown[PATH_MAX];
             output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));
-            err = ERROR(
+            err = error_create(
                 ERR_INVALID_ARG, "Profile '%s' holds '%s' as the %s '%s', and a %s "
                 "stands there now; dotta remove %s %s gives that claim up, and "
                 "everything beneath it", opts->profile, shown,
@@ -2010,7 +2010,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             !manifest_holds_name(view, opts->profile, filesystem_path, typed)) {
             char shown[PATH_MAX];
             output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));
-            err = ERROR(
+            err = error_create(
                 ERR_INVALID_ARG, "Profile '%s' names '%s' as '%s', and '%s' would be a "
                 "second name for it; dotta add %s --force %s re-captures it",
                 opts->profile, shown, held->storage_path, typed, opts->profile,
@@ -2159,7 +2159,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 )) {
                 continue;
             }
-            err = ERROR(
+            err = error_create(
                 ERR_EXISTS, "File '%s' (as '%s') already exists in profile '%s'; "
                 "--force overwrites it", path->filesystem_path,
                 path->claim.storage_path, opts->profile
@@ -2352,7 +2352,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
         if (!S_ISDIR(dir_stat.st_mode)) {
-            err = ERROR(
+            err = error_create(
                 ERR_CONFLICT,
                 "Cannot add '%s': it was walked as a directory and its type "
                 "changed on disk", path->filesystem_path
@@ -2729,7 +2729,7 @@ static error_t add_post_parse(
         o->file_count = o->positional_count;
     } else {
         if (o->positional_count == 0) {
-            return ERROR(ERR_INVALID_ARG, "Profile name is required");
+            return error_create(ERR_INVALID_ARG, "Profile name is required");
         }
         o->profile = o->positional_args[0];
         o->files = o->positional_args + 1;
@@ -2737,7 +2737,7 @@ static error_t add_post_parse(
     }
 
     if (o->file_count == 0) {
-        return ERROR(ERR_INVALID_ARG, "At least one path is required");
+        return error_create(ERR_INVALID_ARG, "At least one path is required");
     }
     return NULL;
 }

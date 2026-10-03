@@ -44,7 +44,7 @@ error_t editor_launch(const char *editor, const char *file_path) {
 
     /* Validate editor is not empty */
     if (*editor == '\0') {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Editor command cannot be empty"
         );
     }
@@ -67,7 +67,7 @@ error_t editor_launch(const char *editor, const char *file_path) {
     /* Killed, a Ctrl-C it did not answer among the causes: the edit is abandoned
      * and the caller's own cleanup runs, its temporary file included. */
     if (result.signal_num) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL, "Editor was terminated by signal: %d",
             result.signal_num
         );
@@ -75,7 +75,7 @@ error_t editor_launch(const char *editor, const char *file_path) {
 
     /* A non-zero exit is the editor's own refusal, and the edit is not taken. */
     if (result.exit_code != 0) {
-        return ERROR(
+        return error_create(
             ERR_INTERNAL, "Editor exited with non-zero status: %d",
             result.exit_code
         );

@@ -472,7 +472,7 @@ static error_t remove_resolve(
 
         if (matches_found == 0) {
             if (!opts->force) {
-                err = ERROR(
+                err = error_create(
                     ERR_NOT_FOUND, "Path '%s' not found in profile '%s'",
                     input_paths[i], profile
                 );
@@ -494,7 +494,7 @@ static error_t remove_resolve(
 
     /* Check if the arguments took any claims */
     if (taken_count == 0) {
-        err = ERROR(
+        err = error_create(
             ERR_NOT_FOUND, "No paths found to remove from profile '%s'",
             profile
         );
@@ -905,7 +905,7 @@ static error_t remove_paths(
             output_print(out, OUTPUT_NORMAL, "Cancelled\n");
             goto cleanup;  /* err is NULL, will return success */
         case OUTPUT_ANSWER_NONE:
-            err = ERROR(
+            err = error_create(
                 ERR_VALIDATION, "Cannot remove from profile '%s' without a confirmation, "
                 "and none was read; --force removes without asking", opts->profile
             );
@@ -931,7 +931,7 @@ static error_t remove_paths(
                     output_info(out, OUTPUT_VERBOSE, "Skipped: %s", claims[i].storage_path);
                     break;
                 case OUTPUT_ANSWER_NONE:
-                    err = ERROR(
+                    err = error_create(
                         ERR_VALIDATION, "Cannot choose what to remove: -i asks of each "
                         "path, and no answer was read for '%s'", claims[i].storage_path
                     );
@@ -1227,7 +1227,7 @@ static error_t remove_profile(
     if (err) goto cleanup;
     if (!exists) {
         if (!opts->force) {
-            err = ERROR(ERR_NOT_FOUND, "Profile '%s' does not exist", opts->profile);
+            err = error_create(ERR_NOT_FOUND, "Profile '%s' does not exist", opts->profile);
             goto cleanup;
         }
         /* With --force, just warn and exit */
@@ -1247,7 +1247,7 @@ static error_t remove_profile(
     }
 
     if (all_profiles.count <= 1) {
-        err = ERROR(
+        err = error_create(
             ERR_INVALID_ARG, "Cannot delete last remaining profile '%s'; a repository "
             "keeps at least one", opts->profile
         );
@@ -1425,7 +1425,7 @@ static error_t remove_profile(
             output_print(out, OUTPUT_NORMAL, "Cancelled\n");
             goto cleanup;  /* err is NULL, will return success */
         case OUTPUT_ANSWER_NONE:
-            err = ERROR(
+            err = error_create(
                 ERR_VALIDATION, "Cannot delete profile '%s' without a confirmation, "
                 "which only a terminal gives; --force deletes it without asking",
                 opts->profile
@@ -1670,7 +1670,7 @@ error_t cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
     /* Interactive mode requires a terminal for user prompts — refused at entry,
      * before any hook fires or any work begins */
     if (opts->interactive && !isatty(STDIN_FILENO)) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "Interactive mode requires a terminal (stdin is not a TTY)"
         );
@@ -1703,7 +1703,7 @@ static error_t remove_post_parse(
         o->path_count = o->positional_count;
     } else {
         if (o->positional_count == 0) {
-            return ERROR(ERR_INVALID_ARG, "Profile name is required");
+            return error_create(ERR_INVALID_ARG, "Profile name is required");
         }
         o->profile = o->positional_args[0];
         o->paths = o->positional_args + 1;
@@ -1711,10 +1711,10 @@ static error_t remove_post_parse(
     }
 
     if (o->delete_profile && o->path_count > 0) {
-        return ERROR(ERR_INVALID_ARG, "Cannot specify paths when using --delete-profile");
+        return error_create(ERR_INVALID_ARG, "Cannot specify paths when using --delete-profile");
     }
     if (!o->delete_profile && o->path_count == 0) {
-        return ERROR(ERR_INVALID_ARG, "At least one path is required");
+        return error_create(ERR_INVALID_ARG, "At least one path is required");
     }
     return NULL;
 }

@@ -107,7 +107,7 @@ const char *identity_home(
  */
 static error_t drop_to_invoker(void) {
     if (!self.name) {
-        return ERROR(
+        return error_create(
             ERR_PERMISSION, "Cannot run as uid %u: the user has no name",
             (unsigned) self.uid
         );
@@ -120,7 +120,7 @@ static error_t drop_to_invoker(void) {
          * not the producer here — base/error.h names this site: initgroups can
          * fail EAGAIN or EINVAL on Linux, and error_code_from_errno would call
          * a group-list failure ERR_FS. */
-        return ERROR(
+        return error_create(
             ERR_PERMISSION, "Failed to run as %s (uid %u): %s",
             self.name, (unsigned) self.uid, strerror(errno)
         );
@@ -202,13 +202,13 @@ error_t identity_init(arena_t *arena) {
         getenv("HOME"), roots_home, pw ? pw->pw_dir : NULL
     );
     if (!home) {
-        return ERROR(
+        return error_create(
             ERR_FS, "Unable to determine the home directory of uid %u",
             (unsigned) self.uid
         );
     }
     if (home[0] != '/') {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "The invoker's home directory is not absolute: '%s'",
             home
         );
@@ -260,12 +260,12 @@ error_t identity_init(arena_t *arena) {
      * The rules are a fixed point over their own publication: a nested dotta
      * reads back what this one wrote and answers with it. */
     if (setenv("HOME", self.home, 1) != 0) {
-        return ERROR(ERR_MEMORY, "Failed to set HOME to '%s'", self.home);
+        return error_create(ERR_MEMORY, "Failed to set HOME to '%s'", self.home);
     }
     if (self.name) {
         if (setenv("USER", self.name, 1) != 0
             || setenv("LOGNAME", self.name, 1) != 0) {
-            return ERROR(
+            return error_create(
                 ERR_MEMORY, "Failed to set USER and LOGNAME to '%s'", self.name
             );
         }

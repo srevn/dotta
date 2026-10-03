@@ -128,7 +128,7 @@ error_t refspec_parse(arena_t *arena, const char *input, refspec_t *out) {
     if (at) {
         size_t file_len = (size_t) (at - remainder);
         if (file_len == 0) {
-            return ERROR(ERR_INVALID_ARG, "Empty file path in refspec");
+            return error_create(ERR_INVALID_ARG, "Empty file path in refspec");
         }
 
         rs.file = arena_strndup(arena, remainder, file_len);

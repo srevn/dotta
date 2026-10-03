@@ -331,7 +331,7 @@ error_t session_load(
     fd = open(cache_path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) {
         if (errno == ENOENT) {
-            err = ERROR(ERR_NOT_FOUND, "Session cache does not exist");
+            err = error_create(ERR_NOT_FOUND, "Session cache does not exist");
         } else {
             err = error_from_errno(
                 errno, "Failed to open session cache '%s'", cache_path
@@ -350,12 +350,12 @@ error_t session_load(
     }
 
     if (!S_ISREG(st.st_mode)) {
-        err = ERROR(ERR_CRYPTO, "Session cache is not a regular file");
+        err = error_create(ERR_CRYPTO, "Session cache is not a regular file");
         unlink_on_fail = true;
         goto cleanup;
     }
     if ((st.st_mode & 0777) != 0600) {
-        err = ERROR(
+        err = error_create(
             ERR_CRYPTO,
             "Session cache has wrong permissions (got 0%o, expected 0600)",
             (unsigned) (st.st_mode & 0777)
@@ -364,7 +364,7 @@ error_t session_load(
         goto cleanup;
     }
     if (st.st_uid != identity()->uid) {
-        err = ERROR(
+        err = error_create(
             ERR_CRYPTO,
             "Session cache has wrong ownership (uid %u, expected %u)",
             (unsigned) st.st_uid, (unsigned) identity()->uid
@@ -373,7 +373,7 @@ error_t session_load(
         goto cleanup;
     }
     if ((uint64_t) st.st_size != (uint64_t) sizeof(cache)) {
-        err = ERROR(
+        err = error_create(
             ERR_CRYPTO,
             "Session cache size mismatch (got %lld, expected %zu)",
             (long long) st.st_size, sizeof(cache)
@@ -398,7 +398,7 @@ error_t session_load(
             goto cleanup;
         }
         if (n == 0) {
-            err = ERROR(
+            err = error_create(
                 ERR_CRYPTO,
                 "Session cache truncated (got %zu of %zu bytes)",
                 off, sizeof(cache)
@@ -412,12 +412,12 @@ error_t session_load(
     /* Magic + version. A version mismatch is an unloadable file (alpha policy:
      * no migration). */
     if (memcmp(cache.magic, SESSION_CACHE_MAGIC, SESSION_CACHE_MAGIC_SIZE) != 0) {
-        err = ERROR(ERR_CRYPTO, "Session cache magic mismatch");
+        err = error_create(ERR_CRYPTO, "Session cache magic mismatch");
         unlink_on_fail = true;
         goto cleanup;
     }
     if (cache.version != SESSION_CACHE_VERSION) {
-        err = ERROR(
+        err = error_create(
             ERR_CRYPTO,
             "Unsupported session cache version: %u "
             "(this build understands version %u)",
@@ -438,7 +438,7 @@ error_t session_load(
         NULL, 0
     );
     if (crypto_verify32(computed_mac, cache.mac) != 0) {
-        err = ERROR(
+        err = error_create(
             ERR_CRYPTO,
             "Session cache MAC verification failed "
             "(tampered, or written for another repository epoch)"
@@ -452,7 +452,7 @@ error_t session_load(
      * misleading "expired". */
     const uint64_t expires_at = load_le64(cache.expires_at_le);
     if (expires_at != 0 && (uint64_t) time(NULL) >= expires_at) {
-        err = ERROR(ERR_NOT_FOUND, "Session cache expired");
+        err = error_create(ERR_NOT_FOUND, "Session cache expired");
         unlink_on_fail = true;
         goto cleanup;
     }

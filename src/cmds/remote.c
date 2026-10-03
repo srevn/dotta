@@ -103,7 +103,7 @@ static error_t remote_add(
     if (rc == 0) {
         /* Remote exists */
         git_remote_free(existing);
-        return ERROR(ERR_EXISTS, "Remote '%s' already exists", name);
+        return error_create(ERR_EXISTS, "Remote '%s' already exists", name);
     } else if (rc != GIT_ENOTFOUND) {
         /* Unexpected error */
         return error_from_git(rc);
@@ -140,7 +140,7 @@ static error_t remote_remove(
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, name);
     if (rc == GIT_ENOTFOUND) {
-        return ERROR(ERR_NOT_FOUND, "Remote '%s' not found", name);
+        return error_create(ERR_NOT_FOUND, "Remote '%s' not found", name);
     } else if (rc < 0) {
         return error_from_git(rc);
     }
@@ -176,7 +176,7 @@ static error_t remote_set_url(
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, name);
     if (rc == GIT_ENOTFOUND) {
-        return ERROR(ERR_NOT_FOUND, "Remote '%s' not found", name);
+        return error_create(ERR_NOT_FOUND, "Remote '%s' not found", name);
     } else if (rc < 0) {
         return error_from_git(rc);
     }
@@ -212,7 +212,7 @@ static error_t remote_rename(
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, old_name);
     if (rc == GIT_ENOTFOUND) {
-        return ERROR(ERR_NOT_FOUND, "Remote '%s' not found", old_name);
+        return error_create(ERR_NOT_FOUND, "Remote '%s' not found", old_name);
     } else if (rc < 0) {
         return error_from_git(rc);
     }
@@ -222,7 +222,7 @@ static error_t remote_rename(
     rc = git_remote_lookup(&remote, repo, new_name);
     if (rc == 0) {
         git_remote_free(remote);
-        return ERROR(ERR_EXISTS, "Remote '%s' already exists", new_name);
+        return error_create(ERR_EXISTS, "Remote '%s' already exists", new_name);
     } else if (rc != GIT_ENOTFOUND) {
         return error_from_git(rc);
     }
@@ -273,7 +273,7 @@ static error_t remote_show(
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, name);
     if (rc == GIT_ENOTFOUND) {
-        return ERROR(ERR_NOT_FOUND, "Remote '%s' not found", name);
+        return error_create(ERR_NOT_FOUND, "Remote '%s' not found", name);
     } else if (rc < 0) {
         return error_from_git(rc);
     }

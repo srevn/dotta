@@ -227,7 +227,7 @@ static error_t get_plaintext_from_blob(
         case CONTENT_ENCRYPTED: {
             if (!keymgr) {
                 /* The feature off is the locked root. */
-                error_t err = ERROR(ERR_LOCKED, "%s", ENCRYPTION_DISABLED);
+                error_t err = error_create(ERR_LOCKED, "%s", ENCRYPTION_DISABLED);
                 return error_wrap(err, "Cannot decrypt '%s'", storage_path);
             }
 
@@ -248,7 +248,7 @@ static error_t get_plaintext_from_blob(
              * large enough to carry the version byte at offset CIPHER_MAGIC_SIZE,
              * so reading it here is safe. The version pair is the root, in the
              * words the cipher's own header gate uses for the same fact. */
-            error_t err = ERROR(
+            error_t err = error_create(
                 ERR_CRYPTO,
                 "Unsupported encryption version 0x%02X (this build reads 0x%02X)",
                 (unsigned) blob_data[CIPHER_MAGIC_SIZE], (unsigned) CIPHER_VERSION
@@ -414,7 +414,7 @@ error_t content_cache_get_from_blob_oid(
         (unsigned int) mode
     );
     if (n < 0 || (size_t) n >= sizeof(key)) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Content key too long for '%s'", storage_path
         );
     }
@@ -526,7 +526,7 @@ error_t content_require_encryption(const keymgr *keymgr, const char *storage_pat
     if (keymgr) return NULL;
 
     return error_wrap(
-        ERROR(ERR_LOCKED, "%s", ENCRYPTION_DISABLED),
+        error_create(ERR_LOCKED, "%s", ENCRYPTION_DISABLED),
         "Cannot encrypt '%s'", storage_path
     );
 }
@@ -585,7 +585,7 @@ error_t content_capture_file(
         /* This capture's own requirement, not a product rule: a symlink is
          * content_capture_link's (the header), and the walk lists one as a leaf;
          * what cannot be captured at all is a special file. */
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Cannot capture '%s': it is a %s, not a regular file.",
             filesystem_path, fs_stat_noun(&st)
         );
@@ -647,7 +647,7 @@ error_t content_capture_file(
             secure_wipe(bytes.data, bytes.size);
         }
         buffer_deinit(&bytes);
-        return ERROR(
+        return error_create(
             ERR_VALIDATION,
             "Cannot capture '%s' as plaintext: its first bytes are dotta's "
             "cipher magic, so every reader would take it for ciphertext; add it "
@@ -678,7 +678,7 @@ error_t content_capture_link(const char *filesystem_path, content_capture_t *out
         /* This capture's own requirement, as content_capture_file's is: a regular
          * file is that capture's, and what cannot be captured at all is a special
          * file. */
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Cannot capture '%s': it is a %s, not a symlink.",
             filesystem_path, fs_stat_noun(&st)
         );
@@ -696,7 +696,7 @@ error_t content_capture_link(const char *filesystem_path, content_capture_t *out
     if (fs_lstat(filesystem_path, &again) != 0 || again.st_dev != st.st_dev ||
         again.st_ino != st.st_ino || again.st_ctime != st.st_ctime) {
         buffer_deinit(&bytes);
-        return ERROR(
+        return error_create(
             ERR_CONFLICT, "Cannot capture '%s': it changed while it was read",
             filesystem_path
         );

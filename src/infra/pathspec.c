@@ -104,7 +104,7 @@ static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
 
         if ((body[0] != '/' && body[0] != '~' && body[0] != '.') ||
             (head_len == 0 && body[0] == '~')) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "Glob pattern '%s' must be a basename, a storage path "
                 "or a filesystem path (/x, ~/x, ./x)", input
             );

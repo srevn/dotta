@@ -72,7 +72,7 @@ error_t path_input_resolve(
     /* The same sentence the door gives, said here because the storage arm below
      * never reaches the door at all. */
     if (input[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
+        return error_create(ERR_INVALID_ARG, "Path cannot be empty");
     }
 
     /* A storage shape: the name as typed with its directory spelling shed — every
@@ -108,7 +108,7 @@ error_t path_input_resolve(
      * completion). */
     if (input[0] != '/' && input[0] != '~' && input[0] != '.' &&
         !strchr(input, '/')) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Path '%s' is neither a filesystem path (/x, ~/x, ./x) nor "
             "a storage path (home/..., root/..., custom/...)", input
         );
@@ -181,7 +181,7 @@ error_t path_input_filesystem_path(const char *input, arena_t *arena, const char
     *out = NULL;
 
     if (input[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
+        return error_create(ERR_INVALID_ARG, "Path cannot be empty");
     }
 
     /* Three spellings, one pipeline, each step's answer the arena's: the tilde

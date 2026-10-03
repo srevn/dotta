@@ -35,7 +35,7 @@ error_t gitops_init(void) {
      * has to be, main() being the one caller that prints an error rather than
      * wrapping it. */
     if (git_libgit2_init() < 0) {
-        return ERROR(ERR_GIT, "Failed to initialize libgit2");
+        return error_create(ERR_GIT, "Failed to initialize libgit2");
     }
 
     /* libgit2 caches a parsed object only below a per-type ceiling, 4096 bytes
@@ -116,10 +116,10 @@ error_t gitops_open_repository(git_repository **out, const char *path) {
 
     int rc = git_repository_open(out, path);
     if (rc == GIT_ENOTFOUND) {
-        return ERROR(ERR_NOT_FOUND, "No git repository at: %s", path);
+        return error_create(ERR_NOT_FOUND, "No git repository at: %s", path);
     }
     if (rc == GIT_EOWNER) {
-        return ERROR(
+        return error_create(
             ERR_PERMISSION,
             "Repository at %s is not owned by the current user", path
         );
@@ -231,7 +231,7 @@ error_t gitops_reference_find(
      * ends, and that is no absence. */
     rc = git_reference_lookup(out, repo, refname);
     if (rc == GIT_ENOTFOUND) {
-        return ERROR(
+        return error_create(
             ERR_GIT, "Reference '%s' is listed but no lookup reaches it", refname
         );
     }
@@ -356,7 +356,7 @@ static error_t gitops_walk_loose(const loose_walk_t *walk, const char *dir) {
     DIR *d = opendir(dir);
     if (!d) {
         if (errno == ENOENT) return NULL;
-        return ERROR(
+        return error_create(
             ERR_GIT, "Cannot read the refs under '%s': %s", dir, strerror(errno)
         );
     }
@@ -385,7 +385,7 @@ static error_t gitops_walk_loose(const loose_walk_t *walk, const char *dir) {
         struct stat st;
         if (stat(path, &st) != 0) {
             if (errno != ENOENT && errno != ENOTDIR) {
-                err = ERROR(
+                err = error_create(
                     ERR_GIT, "Cannot read the refs under '%s': %s", dir,
                     strerror(errno)
                 );
@@ -417,7 +417,7 @@ static error_t gitops_walk_loose(const loose_walk_t *walk, const char *dir) {
     }
 
     if (!err && errno != 0) {
-        err = ERROR(
+        err = error_create(
             ERR_GIT, "Cannot read the refs under '%s': %s", dir, strerror(errno)
         );
     }
@@ -445,7 +445,7 @@ error_t gitops_list_refs(
     char glob[DOTTA_REFNAME_MAX];
     int written = snprintf(glob, sizeof(glob), "%s/*", namespace);
     if (written < 0 || (size_t) written >= sizeof(glob)) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Reference namespace too long: '%s'", namespace
         );
     }
@@ -547,7 +547,7 @@ error_t gitops_delete_branch(git_repository *repo, const char *name) {
      * over by libgit2's walk of the worktrees and only a linked one can answer. */
     if (git_branch_is_checked_out(ref)) {
         git_reference_free(ref);
-        return ERROR(
+        return error_create(
             ERR_CONFLICT,
             "Branch '%s' is checked out in a worktree of the repository; "
             "remove that worktree first (git worktree list)", name
@@ -628,7 +628,7 @@ error_t gitops_load_branch_tree(
     err = gitops_reference_tree(repo, refname, out_tree);
     if (err) return err;
     if (!*out_tree) {
-        return ERROR(ERR_NOT_FOUND, "Reference '%s' not found", refname);
+        return error_create(ERR_NOT_FOUND, "Reference '%s' not found", refname);
     }
 
     return NULL;
@@ -729,7 +729,7 @@ error_t gitops_reference_commit(
     git_object_t type = git_object_type(object);
     if (type != GIT_OBJECT_COMMIT) {
         git_object_free(object);
-        return ERROR(
+        return error_create(
             ERR_GIT, "Reference '%s' names a %s, not a commit", ref_name,
             git_object_type2string(type)
         );
@@ -749,7 +749,7 @@ error_t gitops_load_reference_commit(
     error_t err = gitops_reference_commit(repo, ref_name, out);
     if (err || *out) return err;
 
-    return ERROR(ERR_NOT_FOUND, "Reference '%s' not found", ref_name);
+    return error_create(ERR_NOT_FOUND, "Reference '%s' not found", ref_name);
 }
 
 error_t gitops_load_branch_commit(
@@ -806,7 +806,7 @@ error_t gitops_revision_resolve(
         for (const char *step = ancestry; *step;) {
             size_t count = 0;
             if (!gitops_revision_step(&step, &count)) {
-                return ERROR(
+                return error_create(
                     ERR_INVALID_ARG,
                     "Cannot resolve '%s': after HEAD, dotta reads ~N and ^N steps",
                     spelling
@@ -968,12 +968,12 @@ error_t gitops_resolve_commit_in_branch(
     /* The branch has no commit for it: HEAD's steps reach past its history, or
      * its history does not hold the commit. */
     if (rev.ancestry) {
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND, "'%s' names no commit of branch '%s'", commit_ref,
             branch_name
         );
     }
-    return ERROR(
+    return error_create(
         ERR_NOT_FOUND, "Commit '%s' is not reachable from branch '%s'",
         commit_ref, branch_name
     );
@@ -1375,7 +1375,7 @@ error_t gitops_resolve_default_remote(
 
     if (remotes.count == 0) {
         git_strarray_dispose(&remotes);
-        return ERROR(ERR_NOT_FOUND, "No remotes configured");
+        return error_create(ERR_NOT_FOUND, "No remotes configured");
     }
 
     /* Select: "origin" wins; otherwise sole remote; otherwise ambiguous. */
@@ -1391,7 +1391,7 @@ error_t gitops_resolve_default_remote(
     }
     if (!selected) {
         git_strarray_dispose(&remotes);
-        return ERROR(ERR_INVALID_ARG, "Multiple remotes configured, but no 'origin' found");
+        return error_create(ERR_INVALID_ARG, "Multiple remotes configured, but no 'origin' found");
     }
 
     const char *name = arena_strdup(arena, selected);
@@ -1473,7 +1473,7 @@ error_t gitops_reference_oid(
     git_oid_cpy(out, git_reference_target(ref));
     git_reference_free(ref);
     if (git_oid_is_zero(out)) {
-        return ERROR(
+        return error_create(
             ERR_GIT, "Reference '%s' is broken: it names the null id", ref_name
         );
     }
@@ -1491,7 +1491,7 @@ error_t gitops_resolve_reference_oid(
     error_t err = gitops_reference_oid(repo, ref_name, out);
     if (err) return err;
     if (git_oid_is_zero(out)) {
-        return ERROR(ERR_NOT_FOUND, "Reference '%s' not found", ref_name);
+        return error_create(ERR_NOT_FOUND, "Reference '%s' not found", ref_name);
     }
 
     return NULL;
@@ -1639,7 +1639,7 @@ error_t gitops_find_merge_base(
     int rc = git_merge_base(out_oid, repo, one, two);
     if (rc < 0) {
         if (rc == GIT_ENOTFOUND) {
-            return ERROR(
+            return error_create(
                 ERR_NOT_FOUND, "No merge base found between commits"
             );
         }
@@ -1724,7 +1724,7 @@ error_t gitops_create_merge_commit(
 
     /* Check for conflicts */
     if (git_index_has_conflicts(index)) {
-        return ERROR(
+        return error_create(
             ERR_CONFLICT,
             "Cannot create merge commit: index has conflicts"
         );
@@ -1842,7 +1842,7 @@ error_t gitops_rebase_inmemory_safe(
              * GIT_EUNMERGED (-10) indicate conflicts
              */
             if (rc == GIT_EMERGECONFLICT || rc == GIT_EUNMERGED) {
-                return ERROR(ERR_CONFLICT, "Rebase met conflicts");
+                return error_create(ERR_CONFLICT, "Rebase met conflicts");
             }
 
             err = error_from_git(rc);
@@ -1952,7 +1952,7 @@ error_t gitops_branch_refname(
      * too, but as a name — "'' is not a valid branch name" — that leaves the
      * reader to decode what was typed. */
     if (name[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG, "Branch name cannot be empty");
+        return error_create(ERR_INVALID_ARG, "Branch name cannot be empty");
     }
 
     int valid = 0;
@@ -1961,7 +1961,7 @@ error_t gitops_branch_refname(
         return error_from_git(rc);
     }
     if (!valid) {
-        return ERROR(ERR_INVALID_ARG, "'%s' is not a valid branch name", name);
+        return error_create(ERR_INVALID_ARG, "'%s' is not a valid branch name", name);
     }
 
     return gitops_build_refname(buffer, buffer_size, "refs/heads/%s", name);
@@ -1990,7 +1990,7 @@ error_t gitops_build_refname(
     CHECK_ARG(written >= 0, "the reference format cannot be formatted");
 
     if ((size_t) written >= buffer_size) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Reference name '%.40s…' is %d bytes, longer than "
             "libgit2 reads (at most %d)", buffer, written, DOTTA_REFNAME_MAX - 1
         );
@@ -2004,7 +2004,7 @@ error_t gitops_build_refname(
             return error_from_git(rc);
         }
         if (!valid) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "Invalid Git reference name: '%s'",
                 buffer
             );

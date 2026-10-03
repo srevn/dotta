@@ -197,7 +197,7 @@ error_t keymgr_create(
 
     keymgr *km = secure_alloc(sizeof(*km));
     if (!km) {
-        return ERROR(ERR_MEMORY, "Failed to map key manager");
+        return error_create(ERR_MEMORY, "Failed to map key manager");
     }
 
     /* The mapping is zero-filled; only the bindings need assignment. */
@@ -362,13 +362,13 @@ static error_t derive_and_check(
      * a single ciphertext a miss is undecidable: a wrong passphrase and a damaged
      * file are the same "no". */
     if (trial.tried == 1) {
-        err = ERROR(
+        err = error_create(
             ERR_LOCKED,
             "%s does not open the one encrypted file it was tried against, "
             "which may itself be damaged", subject
         );
     } else {
-        err = ERROR(
+        err = error_create(
             ERR_LOCKED, "%s opens none of this repository's encrypted files",
             subject
         );
@@ -394,7 +394,7 @@ static error_t nothing_read(error_t err) {
     if (error_code(err) == ERR_MEMORY) {
         return err;
     }
-    return ERROR(
+    return error_create(
         ERR_LOCKED,
         "No passphrase: %s; set DOTTA_ENCRYPTION_PASSPHRASE, or run "
         "'dotta key set' at a terminal", error_message(err)
@@ -495,7 +495,7 @@ static error_t prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
         secure_free(passphrase, passphrase_len + 1);
 
         if (!tty || attempt == KEYMGR_ATTEMPTS) {
-            return refuse(km, ERROR(ERR_LOCKED, "Passphrases do not match"));
+            return refuse(km, error_create(ERR_LOCKED, "Passphrases do not match"));
         }
         prompt = "Passphrases do not match, try again: ";
     }
@@ -519,7 +519,7 @@ static error_t obtain(
     /* The caches are as far as a reporting command may reach: below them the
      * user would be asked, and a report never asks. */
     if (km->reach != KEYMGR_REACH_OBTAIN) {
-        error_t err = ERROR(
+        error_t err = error_create(
             ERR_LOCKED,
             "No passphrase is cached, and this command does not ask for one; "
             "run 'dotta key set'"
@@ -802,7 +802,7 @@ error_t keymgr_decrypt(
     error_t err = cipher_read_header(ciphertext, ciphertext_len, blob_fp);
     if (err) return err;
     if (memcmp(blob_fp, km->epoch_fp, KDF_EPOCH_FP_SIZE) != 0) {
-        return ERROR(
+        return error_create(
             ERR_CRYPTO,
             "Encrypted under a different repository epoch; this repository's "
             "keys can never decrypt it"

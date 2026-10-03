@@ -34,7 +34,7 @@ static error_t read_bool(
     toml_datum_t value, const char *section, const char *key, bool *out
 ) {
     if (value.type != TOML_BOOLEAN) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Invalid [%s] %s: expected a boolean", section, key
         );
     }
@@ -50,12 +50,12 @@ static error_t read_int(
     int32_t max, int32_t *out
 ) {
     if (value.type != TOML_INT64) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Invalid [%s] %s: expected an integer", section, key
         );
     }
     if (value.u.int64 < min || value.u.int64 > max) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Invalid [%s] %s: %lld (must be between %d and %d)",
             section, key, (long long) value.u.int64, min, max
         );
@@ -73,12 +73,12 @@ static error_t read_text(
     toml_datum_t value, const char *section, const char *key, const char **out
 ) {
     if (value.type != TOML_STRING) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Invalid [%s] %s: expected a string", section, key
         );
     }
     if (memchr(value.u.str.ptr, '\0', (size_t) value.u.str.len)) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Invalid [%s] %s: the string holds a NUL byte",
             section, key
         );
@@ -116,7 +116,7 @@ static error_t read_path(
     if (err) return err;
 
     if (text[0] == '\0') {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Invalid [%s] %s: an empty path (leave the key out "
             "for the default)", section, key
         );
@@ -179,7 +179,7 @@ static error_t read_patterns(
     const gitignore_ruleset_t **out
 ) {
     if (value.type != TOML_ARRAY) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Invalid [%s] %s: expected an array of strings",
             section, key
         );
@@ -190,13 +190,13 @@ static error_t read_patterns(
     for (int32_t i = 0; i < value.u.arr.size; i++) {
         toml_datum_t entry = value.u.arr.elem[i];
         if (entry.type != TOML_STRING) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "Invalid [%s] %s: the entry at line %d, column %d "
                 "is not a string", section, key, entry.lineno, entry.colno
             );
         }
         if (memchr(entry.u.str.ptr, '\0', (size_t) entry.u.str.len)) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "Invalid [%s] %s: the entry at line %d, column %d "
                 "holds a NUL byte", section, key, entry.lineno, entry.colno
             );
@@ -363,7 +363,7 @@ static error_t read_key(
             return read_int(value, section, key, -1, INT32_MAX, &config->session_timeout);
     }
 
-    return ERROR(ERR_INVALID_ARG, "Unknown key '%s' in [%s]", key, section);
+    return error_create(ERR_INVALID_ARG, "Unknown key '%s' in [%s]", key, section);
 }
 
 /**
@@ -389,23 +389,23 @@ static error_t read_sections(toml_datum_t top, config_t *config, arena_t *arena)
          * which may be one of the schema's. No name the schema knows holds one,
          * and the table's own length is the one place that says so. */
         if (strlen(section) != (size_t) top.u.tab.len[i]) {
-            return ERROR(ERR_INVALID_ARG, "Unknown section: its name holds a NUL byte");
+            return error_create(ERR_INVALID_ARG, "Unknown section: its name holds a NUL byte");
         }
         const char *const *known = sections;
         while (*known && strcmp(*known, section) != 0) {
             known++;
         }
         if (!*known) {
-            return ERROR(ERR_INVALID_ARG, "Unknown section [%s]", section);
+            return error_create(ERR_INVALID_ARG, "Unknown section [%s]", section);
         }
         if (table.type != TOML_TABLE) {
-            return ERROR(ERR_INVALID_ARG, "Invalid [%s]: expected a table", section);
+            return error_create(ERR_INVALID_ARG, "Invalid [%s]: expected a table", section);
         }
 
         for (int32_t k = 0; k < table.u.tab.size; k++) {
             const char *key = table.u.tab.key[k];
             if (strlen(key) != (size_t) table.u.tab.len[k]) {
-                return ERROR(
+                return error_create(
                     ERR_INVALID_ARG, "Unknown key in [%s]: its name holds a NUL byte",
                     section
                 );
@@ -444,7 +444,7 @@ static error_t read_file(const char *path, config_t *config, arena_t *arena) {
 
     err = result.ok
         ? read_sections(result.toptab, config, arena)
-        : ERROR(ERR_INVALID_ARG, "%s", result.errmsg);
+        : error_create(ERR_INVALID_ARG, "%s", result.errmsg);
     toml_free(result);
     return err;
 }
@@ -524,7 +524,7 @@ error_t config_parse_strategy(const char *word, sync_strategy_t *out) {
             return NULL;
         }
     }
-    return ERROR(
+    return error_create(
         ERR_INVALID_ARG,
         "Unknown divergence strategy '%s' (valid: warn, rebase, merge, ours, theirs)",
         word

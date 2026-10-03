@@ -403,7 +403,7 @@ static error_t profile_fetch(
             }
         }
         if (missing.count > 0) {
-            err = ERROR(
+            err = error_create(
                 ERR_NOT_FOUND, "%s '%s' %s not on remote '%s', which holds %s",
                 missing.count == 1 ? "Profile" : "Profiles",
                 string_array_join(ctx->arena, &missing, "', '"),
@@ -492,14 +492,14 @@ cleanup:
         /* The plural agrees with the total, which is the noun it qualifies: "1
          * of 2 profiles failed", "1 of 1 profile failed". */
         size_t attempted = fetched_count + failed_count;
-        return ERROR(
+        return error_create(
             ERR_GIT, "%zu of %zu profile%s failed to fetch",
             failed_count, attempted, attempted == 1 ? "" : "s"
         );
     }
 
     if (fetched_count == 0) {
-        return ERROR(
+        return error_create(
             ERR_GIT, "No profiles available to fetch"
         );
     }
@@ -752,7 +752,7 @@ static error_t profile_enable(
          * same error a live run would produce. Idempotent cases (all already
          * enabled) succeed. */
         if (to_enable_validated.count == 0 && (not_found > 0 || no_target > 0)) {
-            return ERROR(
+            return error_create(
                 not_found > 0 ? ERR_NOT_FOUND : ERR_INVALID_ARG,
                 "No profiles were enabled"
             );
@@ -868,7 +868,7 @@ static error_t profile_enable(
      * which, for the reader; every error exits the same. Pure idempotent cases
      * (all already-enabled, or --all on an empty repo) succeed. */
     if (to_enable_validated.count == 0 && (not_found > 0 || no_target > 0)) {
-        return ERROR(
+        return error_create(
             not_found > 0 ? ERR_NOT_FOUND : ERR_INVALID_ARG,
             "No profiles were enabled"
         );
@@ -1153,13 +1153,13 @@ static error_t profile_reorder(
 
     /* Edge case: no enabled profiles */
     if (enabled_profiles.count == 0) {
-        return ERROR(ERR_VALIDATION, "No enabled profiles to reorder");
+        return error_create(ERR_VALIDATION, "No enabled profiles to reorder");
     }
 
     /* Validation 1: All provided profiles must be currently enabled */
     for (size_t i = 0; i < opts->profile_count; i++) {
         if (!state_enabled(state, opts->profiles[i])) {
-            return ERROR(ERR_VALIDATION, "Profile '%s' is not enabled", opts->profiles[i]);
+            return error_create(ERR_VALIDATION, "Profile '%s' is not enabled", opts->profiles[i]);
         }
     }
 
@@ -1167,7 +1167,7 @@ static error_t profile_reorder(
      * own (profile_reorder_post_parse) — and every name enabled, equal counts
      * make the named set the enabled set: nothing is left to check for. */
     if (opts->profile_count != enabled_profiles.count) {
-        return ERROR(
+        return error_create(
             ERR_VALIDATION, "Profile count mismatch: %zu enabled, %zu provided; a "
             "reorder names every enabled profile",
             enabled_profiles.count, opts->profile_count
@@ -1492,10 +1492,10 @@ static error_t profile_post_parse(
     const cmd_profile_options_t *o = opts_v;
 
     if (o->all_profiles && o->profile_count > 0) {
-        return ERROR(ERR_INVALID_ARG, "--all and profile names are mutually exclusive");
+        return error_create(ERR_INVALID_ARG, "--all and profile names are mutually exclusive");
     }
     return o->all_profiles || o->profile_count > 0
-        ? NULL : ERROR(ERR_INVALID_ARG, "No profiles specified");
+        ? NULL : error_create(ERR_INVALID_ARG, "No profiles specified");
 }
 
 /* --- list --- */
@@ -1609,7 +1609,7 @@ static error_t profile_enable_post_parse(
     if (err) return err;
 
     return o->target && o->profile_count != 1
-        ? ERROR(ERR_INVALID_ARG, "--target binds exactly one named profile")
+        ? error_create(ERR_INVALID_ARG, "--target binds exactly one named profile")
         : NULL;
 }
 
@@ -1776,7 +1776,7 @@ static error_t profile_reorder_post_parse(
     const cmd_profile_options_t *o = opts_v;
 
     if (o->profile_count == 0) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "No profiles specified; a reorder names every enabled profile, in its "
             "new order"
@@ -1785,7 +1785,7 @@ static error_t profile_reorder_post_parse(
     for (size_t i = 0; i < o->profile_count; i++) {
         for (size_t j = i + 1; j < o->profile_count; j++) {
             if (strcmp(o->profiles[i], o->profiles[j]) == 0) {
-                return ERROR(
+                return error_create(
                     ERR_INVALID_ARG,
                     "Profile '%s' appears multiple times in reorder list",
                     o->profiles[i]

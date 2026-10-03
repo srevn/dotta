@@ -256,14 +256,6 @@ error_t error_root(error_t err);
 _Noreturn void error_die(const char *fmt, ...)
 __attribute__((format(printf, 1, 2)));
 
-/**
- * Convenience macros
- */
-
-/* Create error (error_create) */
-#define ERROR(code, ...) \
-    error_create(code, __VA_ARGS__)
-
 /*
  * A condition the caller owed, checked where it is relied on: broken, it is a
  * bug, and the run dies at the check's site (error_die). What only a caller's

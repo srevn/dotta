@@ -248,13 +248,13 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     CHECK_NULL(spec->envp);
 
     if (spec->argv[0] == NULL || spec->argv[0][0] == '\0') {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "process_spec.argv[0] must be a non-empty path"
         );
     }
     if (spec->timeout_seconds < 0) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "process_spec.timeout_seconds must be >= 0 (got %d)",
             spec->timeout_seconds
@@ -266,20 +266,20 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
      * that will not be delivered. Reject rather than silently ignore. */
     if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
         if (spec->stdin_content_len > 0 && !spec->stdin_content) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG,
                 "stdin_content_len > 0 but stdin_content is NULL"
             );
         }
         if (spec->stdin_content_len > PROCESS_STDIN_BUFFER_MAX) {
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG,
                 "stdin_content_len %zu exceeds PROCESS_STDIN_BUFFER_MAX (%d)",
                 spec->stdin_content_len, PROCESS_STDIN_BUFFER_MAX
             );
         }
     } else if (spec->stdin_content != NULL || spec->stdin_content_len > 0) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "stdin_content set but stdin_policy is not PROCESS_STDIN_BUFFER"
         );
@@ -604,7 +604,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
             if (!process_kill_and_wait(
                 pid, kill_target, SIGKILL, PROCESS_GRACE_KILL_SECONDS, &status
                 )) {
-                err = ERROR(
+                err = error_create(
                     ERR_FS, "Child PID %d failed to terminate after SIGKILL",
                     (int) pid
                 );

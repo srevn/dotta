@@ -2785,7 +2785,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     output_info(out, OUTPUT_NORMAL, "Cancelled");
                     return NULL;  /* Not an error - user cancelled */
                 case OUTPUT_ANSWER_NONE:
-                    return ERROR(
+                    return error_create(
                         ERR_VALIDATION, "Cannot apply without a confirmation, and none was "
                         "read; confirm_destructive = false applies without asking"
                     );
@@ -2940,7 +2940,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    return off > 0 ? ERROR(ERR_FS, "%s", why) : NULL;
+    return off > 0 ? error_create(ERR_FS, "%s", why) : NULL;
 }
 
 /* ══════════════════════════════════════════════════════════════════

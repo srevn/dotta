@@ -160,7 +160,7 @@ static error_t pull_branch_ff(
     if (rc == 0) {
         /* local is NOT an ancestor of remote - cannot fast-forward */
         git_reference_free(local_ref);
-        return ERROR(
+        return error_create(
             ERR_CONFLICT, "Cannot fast-forward '%s' - branches have diverged",
             branch_name
         );
@@ -209,7 +209,7 @@ static error_t sync_fetch_phase(
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, remote_name);
     if (rc == GIT_ENOTFOUND) {
-        return ERROR(ERR_NOT_FOUND, "No remote '%s' configured", remote_name);
+        return error_create(ERR_NOT_FOUND, "No remote '%s' configured", remote_name);
     } else if (rc < 0) {
         return error_from_git(rc);
     }
@@ -616,7 +616,7 @@ static void handle_diverged_ours(
                 result->outcome = SYNC_OUTCOME_DIVERGED;
                 return;
             case OUTPUT_ANSWER_NONE: {
-                error_t err = ERROR(
+                error_t err = error_create(
                     ERR_VALIDATION, "Cannot force push '%s' without a confirmation, which "
                     "only a terminal gives; confirm_destructive = false pushes without "
                     "asking", result->profile
@@ -675,7 +675,7 @@ static void handle_diverged_theirs(
                 result->outcome = SYNC_OUTCOME_DIVERGED;
                 return;
             case OUTPUT_ANSWER_NONE: {
-                error_t err = ERROR(
+                error_t err = error_create(
                     ERR_VALIDATION, "Cannot reset '%s' to the remote without a "
                     "confirmation, which only a terminal gives; confirm_destructive = false "
                     "resets without asking", result->profile
@@ -1265,7 +1265,7 @@ static error_t sync_failure(const sync_results_t *results) {
 
     /* The plural agrees with the total, which is the noun it qualifies: "1 of 2
      * profiles failed", "1 of 1 profile failed". */
-    return ERROR(
+    return error_create(
         ERR_GIT, "%zu of %zu profile%s failed to sync",
         failed, results->profile_count,
         results->profile_count == 1 ? "" : "s"
@@ -1531,7 +1531,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     if (err) goto cleanup;
 
     if (scope_enabled(scope)->count == 0) {
-        err = ERROR(ERR_NOT_FOUND, "No enabled profiles to sync");
+        err = error_create(ERR_NOT_FOUND, "No enabled profiles to sync");
         goto cleanup;
     }
 
@@ -1764,7 +1764,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 /* The refusal whole, on stderr, whatever the level: how much
                  * blocks, the key that makes it block, and the flag past it —
                  * which no step above names, the steps being the report's. */
-                err = ERROR(
+                err = error_create(
                     ERR_VALIDATION, "Cannot sync with %zu uncommitted item%s under "
                     "strict_mode; --force syncs anyway", blocking_count,
                     blocking_count == 1 ? "" : "s"
@@ -1841,7 +1841,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                     );
                 }
                 if (answer == OUTPUT_ANSWER_NONE) {
-                    err = ERROR(
+                    err = error_create(
                         ERR_VALIDATION, "Cannot sync with %zu uncommitted item%s without a "
                         "confirmation, and none was read; --force syncs anyway",
                         blocking_count, blocking_count == 1 ? "" : "s"

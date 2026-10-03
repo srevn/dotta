@@ -258,7 +258,7 @@ error_t ignore_blob_read(git_repository *repo, const char *refname, buffer_t *ou
     if (view.size <= MAX_DOTTAIGNORE_SIZE) {
         buffer_append(out, view.data, view.size);
     } else {
-        err = ERROR(
+        err = error_create(
             ERR_VALIDATION,
             ".dottaignore at '%s' exceeds capacity (max %zu bytes, actual %zu)",
             refname, (size_t) MAX_DOTTAIGNORE_SIZE, view.size
@@ -279,7 +279,7 @@ error_t ignore_blob_text(git_repository *repo, const char *refname, buffer_t *ou
      * length. */
     if (out->size && memchr(out->data, '\0', out->size)) {
         buffer_deinit(out);
-        return ERROR(
+        return error_create(
             ERR_VALIDATION,
             ".dottaignore at '%s' is not text: it holds a NUL byte", refname
         );
@@ -299,14 +299,14 @@ error_t ignore_blob_write(
     CHECK_ARG(refname[0] != '\0', "Reference name cannot be empty");
 
     if (size > MAX_DOTTAIGNORE_SIZE) {
-        return ERROR(
+        return error_create(
             ERR_VALIDATION,
             ".dottaignore content exceeds capacity (max %zu bytes, actual %zu)",
             (size_t) MAX_DOTTAIGNORE_SIZE, size
         );
     }
     if (memchr(content, '\0', size)) {
-        return ERROR(
+        return error_create(
             ERR_VALIDATION, ".dottaignore content is not text: it holds a NUL byte"
         );
     }

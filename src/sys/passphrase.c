@@ -45,7 +45,7 @@ error_t passphrase_prompt(
      * puts them back (base/terminal.h terminal_arm, main.c's handler). */
     if (is_tty) {
         if (tcgetattr(STDIN_FILENO, &old_term) != 0) {
-            return ERROR(ERR_FS, "Failed to get terminal attributes");
+            return error_create(ERR_FS, "Failed to get terminal attributes");
         }
 
         terminal_arm(&old_term);
@@ -55,7 +55,7 @@ error_t passphrase_prompt(
 
         if (tcsetattr(STDIN_FILENO, TCSANOW, &new_term) != 0) {
             terminal_disarm();   /* echo was never disabled */
-            return ERROR(ERR_FS, "Failed to disable echo");
+            return error_create(ERR_FS, "Failed to disable echo");
         }
 
         echo_disabled = true;
@@ -79,7 +79,7 @@ error_t passphrase_prompt(
             tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
             terminal_disarm();
         }
-        return ERROR(ERR_MEMORY, "Failed to map passphrase buffer");
+        return error_create(ERR_MEMORY, "Failed to map passphrase buffer");
     }
 
     /* EINTR retry: a signal whose handler returns interrupts fgets, and the read
@@ -112,7 +112,7 @@ error_t passphrase_prompt(
         secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         return read_failed
             ? error_from_errno(read_errno, "Read failed")
-            : ERROR(ERR_FS, "End of input");
+            : error_create(ERR_FS, "End of input");
     }
 
     /* Calculate length */
@@ -124,7 +124,7 @@ error_t passphrase_prompt(
     const bool has_newline = (len > 0 && passphrase[len - 1] == '\n');
     if (len == MAX_PASSPHRASE_LENGTH && !has_newline) {
         secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "Passphrase too long (maximum %d characters)",
             MAX_PASSPHRASE_LENGTH - 1
@@ -140,7 +140,7 @@ error_t passphrase_prompt(
     /* Check for empty passphrase */
     if (len == 0) {
         secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        return ERROR(ERR_INVALID_ARG, "Passphrase cannot be empty");
+        return error_create(ERR_INVALID_ARG, "Passphrase cannot be empty");
     }
 
     /* Return a right-sized copy so the caller's cleanup length (len + 1) matches
@@ -150,7 +150,7 @@ error_t passphrase_prompt(
     char *tight = secure_alloc(len + 1);
     if (!tight) {
         secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        return ERROR(ERR_MEMORY, "Failed to map passphrase buffer");
+        return error_create(ERR_MEMORY, "Failed to map passphrase buffer");
     }
 
     memcpy(tight, passphrase, len + 1);
@@ -192,14 +192,14 @@ error_t passphrase_from_env(
 
     const char *env_passphrase = getenv("DOTTA_ENCRYPTION_PASSPHRASE");
     if (!env_passphrase || env_passphrase[0] == '\0') {
-        return ERROR(ERR_NOT_FOUND, "DOTTA_ENCRYPTION_PASSPHRASE not set");
+        return error_create(ERR_NOT_FOUND, "DOTTA_ENCRYPTION_PASSPHRASE not set");
     }
 
     /* Copy the passphrase into a mapping of its own (base/secure.h). */
     const size_t len = strlen(env_passphrase);
     char *passphrase = secure_alloc(len + 1);
     if (!passphrase) {
-        return ERROR(ERR_MEMORY, "Failed to map passphrase buffer");
+        return error_create(ERR_MEMORY, "Failed to map passphrase buffer");
     }
 
     memcpy(passphrase, env_passphrase, len + 1);

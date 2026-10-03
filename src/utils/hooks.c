@@ -173,7 +173,7 @@ static error_t hook_execute(
      * path is named because hooks_dir is the config's to choose and the type
      * alone is not something a reader can act on. */
     if (!fs_is_executable(hook_path)) {
-        err = ERROR(
+        err = error_create(
             ERR_INTERNAL, "Hook '%s' at '%s' is not executable",
             hook_type_name(type), hook_path
         );
@@ -182,7 +182,7 @@ static error_t hook_execute(
 
     /* Sanity check: bound DOTTA_FILE_N env explosion. */
     if (context->file_count > 10000) {
-        err = ERROR(
+        err = error_create(
             ERR_INVALID_ARG,
             "Hook '%s': too many files in context (%zu, limit: 10000)",
             hook_type_name(type), context->file_count
@@ -220,22 +220,22 @@ static error_t hook_execute(
      * signal the script's own internal failures, which fall through to the generic
      * "exit code N" branch. */
     if (result.exec_failed) {
-        err = ERROR(
+        err = error_create(
             ERR_INTERNAL, "Hook '%s' failed: exec error: %s",
             hook_type_name(type), strerror(result.exec_errno)
         );
     } else if (result.timed_out) {
-        err = ERROR(
+        err = error_create(
             ERR_INTERNAL, "Hook '%s' exceeded timeout of %d seconds",
             hook_type_name(type), config->hook_timeout
         );
     } else if (result.signal_num) {
-        err = ERROR(
+        err = error_create(
             ERR_INTERNAL, "Hook '%s' terminated by signal %d",
             hook_type_name(type), result.signal_num
         );
     } else if (result.exit_code != 0) {
-        err = ERROR(
+        err = error_create(
             ERR_INTERNAL, "Hook '%s' failed with exit code %d",
             hook_type_name(type), result.exit_code
         );

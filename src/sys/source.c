@@ -167,7 +167,7 @@ static error_t source_line(
     /* A spelling past the kernel's reach names nothing it opens. */
     char path[PATH_MAX];
     if ((size_t) snprintf(path, sizeof(path), "%s%s", directory, name) >= sizeof(path)) {
-        return ERROR(
+        return error_create(
             ERR_GIT, "Failed to open '%s%s': %s", directory, name, strerror(ENAMETOOLONG)
         );
     }
@@ -176,7 +176,7 @@ static error_t source_line(
      * not a reach a run holding root would read through. */
     int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
-        return ERROR(ERR_GIT, "Failed to open '%s': %s", path, strerror(errno));
+        return error_create(ERR_GIT, "Failed to open '%s': %s", path, strerror(errno));
     }
 
     /* fs_read_fd's word names no file, a descriptor having none: the failure is
@@ -185,7 +185,7 @@ static error_t source_line(
     error_t err = fs_read_fd(fd, &text);
     close(fd);
     if (err) {
-        return ERROR(ERR_GIT, "Failed to read '%s': %s", path, error_message(err));
+        return error_create(ERR_GIT, "Failed to read '%s': %s", path, error_message(err));
     }
 
     size_t len = text.size;
@@ -240,7 +240,7 @@ static error_t source_commondir(source_filter_t *f, const char *gitdir, const ch
             f, named[0] == '/' ? named : arena_str_format(f->arena, "%s%s", gitdir, named)
         );
         if (!commondir) {
-            return ERROR(
+            return error_create(
                 ERR_GIT, "Failed to resolve commondir '%s' of '%s': %s", named, gitdir,
                 strerror(errno)
             );
@@ -297,7 +297,11 @@ static void source_read(
     error_t err = fs_read_fd(fd, &text);
     close(fd);
     if (err) {
-        out->failure = ERROR(error_code(err), "Failed to read '%s': %s", path, error_message(err));
+        out->failure = error_create(
+            error_code(err), "Failed to read '%s': %s", path, error_message(
+            err
+            )
+        );
         return;
     }
 
@@ -306,7 +310,7 @@ static void source_read(
      * would be lost without a word. */
     if (memchr(text.data, '\0', text.size)) {
         buffer_deinit(&text);
-        out->failure = ERROR(ERR_VALIDATION, "'%s' is not text: it holds a NUL byte", path);
+        out->failure = error_create(ERR_VALIDATION, "'%s' is not text: it holds a NUL byte", path);
         return;
     }
 
@@ -375,7 +379,7 @@ static error_t source_config(git_config *config, const char *path, git_config_le
      * where access(2) refused the file: the word is the kernel's, asked again
      * as libgit2 asked it, and where access(2) passes, the file is the directory
      * libgit2 refused. */
-    return ERROR(
+    return error_create(
         ERR_GIT, "Failed to read '%s': %s", path,
         strerror(access(path, R_OK) != 0 ? errno : EISDIR)
     );
@@ -443,10 +447,10 @@ static const repository_t *source_repository(
         int (*find)(git_buf *path);
         git_config_level_t level;
     } levels[] = {
-        { git_config_find_global,      GIT_CONFIG_LEVEL_GLOBAL      },
-        { git_config_find_xdg,         GIT_CONFIG_LEVEL_XDG         },
-        { git_config_find_system,      GIT_CONFIG_LEVEL_SYSTEM      },
-        { git_config_find_programdata, GIT_CONFIG_LEVEL_PROGRAMDATA },
+        { git_config_find_global,      GIT_CONFIG_LEVEL_GLOBAL              },
+        { git_config_find_xdg,         GIT_CONFIG_LEVEL_XDG                 },
+        { git_config_find_system,      GIT_CONFIG_LEVEL_SYSTEM              },
+        { git_config_find_programdata, GIT_CONFIG_LEVEL_PROGRAMDATA         },
     };
 
     /* One composition serves both readings, read and let go before anything is
@@ -504,7 +508,7 @@ static const repository_t *source_repository(
     if (!version || (commondir != gitdir && !worktree_config)) {
         r->workdir = found;
     } else if (worktree && bare) {
-        r->failure = ERROR(
+        r->failure = error_create(
             ERR_VALIDATION, "'%s' sets both core.bare and core.worktree, which do not make sense",
             gitdir
         );
@@ -515,7 +519,7 @@ static const repository_t *source_repository(
                 ? arena_str_format(f->arena, "%s%s", gitdir, worktree) : worktree
         );
         if (!r->workdir) {
-            r->failure = ERROR(
+            r->failure = error_create(
                 ERR_GIT, "Failed to resolve core.worktree '%s' of '%s': %s", worktree, gitdir,
                 strerror(errno)
             );
@@ -554,7 +558,7 @@ static const repository_t *source_repository(
              * itself, and every command in the repository with it (config.c
              * git_config_pathname dies, `:(optional)` or not) — the repository's
              * failure, as a configuration that does not parse is, and one line. */
-            r->failure = ERROR(
+            r->failure = error_create(
                 ERR_VALIDATION, "Failed to expand core.excludesFile: %s", error_message(err)
             );
             return r;
@@ -710,7 +714,7 @@ static error_t source_discover(
             error_t err = source_line(f, directory, ".git", &named);
             if (err) return err;
             if (strncmp(named, "gitdir: ", 8) != 0) {
-                return ERROR(ERR_VALIDATION, "Invalid gitfile format: '%s.git'", directory);
+                return error_create(ERR_VALIDATION, "Invalid gitfile format: '%s.git'", directory);
             }
 
             named += 8;
@@ -720,7 +724,7 @@ static error_t source_discover(
             err = gitdir ? source_commondir(f, gitdir, &commondir) : NULL;
             if (err) return err;
             if (!commondir) {
-                return ERROR(
+                return error_create(
                     ERR_VALIDATION, "'%s.git' names no git repository: '%s'", directory, named
                 );
             }
@@ -730,7 +734,7 @@ static error_t source_discover(
         } else {
             /* Neither: git reads a `.git` it can stat as a directory or a file,
              * and refuses anything else ("not a regular file"). */
-            return ERROR(ERR_VALIDATION, "'%s.git' is not a regular file", directory);
+            return error_create(ERR_VALIDATION, "'%s.git' is not a regular file", directory);
         }
     }
 
@@ -910,7 +914,7 @@ source_filter_t *source_filter_create(arena_t *arena) {
     const char *across = getenv("GIT_DISCOVERY_ACROSS_FILESYSTEM");
     int value = 0;
     if (across && git_config_parse_bool(&value, across) < 0) {
-        f->failure = ERROR(
+        f->failure = error_create(
             ERR_VALIDATION, "GIT_DISCOVERY_ACROSS_FILESYSTEM is not a boolean: '%s'", across
         );
     }

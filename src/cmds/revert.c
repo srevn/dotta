@@ -99,7 +99,7 @@ static error_t select_profile(
         /* Held at no tip: a file deleted from its profile is the case a revert
          * exists for, and naming the profile is what reaches it — a profile named
          * is not asked what its tip holds (the -p arm above). */
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND, "'%s' is not held by any profile; -p restores it into a "
             "profile that deleted it", subject
         );
@@ -122,7 +122,7 @@ static error_t select_profile(
             claims.entries[i].storage_path
         );
     }
-    return ERROR(
+    return error_create(
         ERR_INVALID_ARG,
         "'%s' is held by %zu profiles: %s; -p names one", subject,
         claims.count, string_array_join(ctx->arena, &holders, ", ")
@@ -244,7 +244,7 @@ static error_t refuse_second_name(
          * reverts the file as its path does — a name the commit did not hold
          * falls through to the path (entry_to_restore) — and giving that name
          * up is remove's, the verb the fact implies. */
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Profile '%s' names '%s' as '%s', and '%s' would be a "
             "second name for it", profile, shown, row->storage_path, name
         );
@@ -354,7 +354,7 @@ static error_t entry_to_restore(
 
         case PROFILE_HELD_DIRECTORY:
         case PROFILE_HELD_SUBMODULE:
-            return ERROR(
+            return error_create(
                 ERR_INVALID_ARG, "'%s' is %s at commit %s; revert restores one file",
                 name,
                 held.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule",
@@ -369,13 +369,13 @@ static error_t entry_to_restore(
      * or the other and cannot reach here; if it ever did, this block is honest
      * for it too. */
     if (arg->key == PATH_KEY_FILESYSTEM) {
-        return ERROR(
+        return error_create(
             ERR_NOT_FOUND, "Profile '%s' held nothing at '%s' at commit %s",
             profile, arg->filesystem_path, commit
         );
     }
 
-    return ERROR(
+    return error_create(
         ERR_NOT_FOUND, "File '%s' not found at commit %s in profile '%s'",
         arg->storage_path, commit, profile
     );
@@ -907,7 +907,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     if (standing_entry) {
         git_object_t standing_type = git_tree_entry_type(standing_entry);
         if (standing_type != GIT_OBJECT_BLOB) {
-            err = ERROR(
+            err = error_create(
                 ERR_INVALID_ARG, "'%s' is %s in profile '%s'; revert restores one file",
                 restored_name,
                 standing_type == GIT_OBJECT_TREE ? "a directory" : "a submodule",
@@ -1035,7 +1035,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         standing_sheet, restored_name
     );
     if (claimed) {
-        err = ERROR(
+        err = error_create(
             ERR_CONFLICT,
             "Cannot restore '%s': '%s' is a directory profile '%s' claims beneath "
             "it", restored_name, claimed->key, profile
@@ -1169,7 +1169,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
                 output_info(out, OUTPUT_NORMAL, "Aborted.");
                 goto cleanup;  /* err is NULL here: an abort is not a failure */
             case OUTPUT_ANSWER_NONE:
-                err = ERROR(
+                err = error_create(
                     ERR_VALIDATION, "Cannot revert '%s' without a confirmation, which "
                     "only a terminal gives; --force reverts without asking", restored_name
                 );
@@ -1284,7 +1284,7 @@ static error_t revert_post_parse(
     char **args = o->positional_args;
 
     if (o->positional_count == 0) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "File specification is required"
         );
     }
@@ -1310,7 +1310,7 @@ static error_t revert_post_parse(
                 return error_wrap(err, "Failed to parse file specification");
             }
             if (rs.commit != NULL) {
-                return ERROR(
+                return error_create(
                     ERR_INVALID_ARG, "Commit given twice: '%s' and '%s'", rs.commit,
                     args[1]
                 );
@@ -1342,7 +1342,7 @@ static error_t revert_post_parse(
     /* A commit is required by the command; file_path is guaranteed set by
      * successful refspec parsing or explicit positional assignment. */
     if (o->commit == NULL) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG, "Commit reference is required"
         );
     }

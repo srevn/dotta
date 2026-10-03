@@ -77,7 +77,7 @@ error_t scope_build(
             if (!string_array_contains(&s->enabled, name)) {
                 error_t err = profile_require(repo, name);
                 if (err) return err;
-                return ERROR(ERR_INVALID_ARG, "Profile '%s' is not enabled", name);
+                return error_create(ERR_INVALID_ARG, "Profile '%s' is not enabled", name);
             }
             string_array_push(&s->filter, name);
         }

@@ -305,13 +305,13 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             case FS_DIR_EMPTY:
                 break;
             case FS_DIR_OCCUPIED:
-                err = ERROR(
+                err = error_create(
                     ERR_EXISTS, "'%s' exists and is not an empty directory",
                     local_path
                 );
                 goto cleanup;
             case FS_DIR_UNREADABLE:
-                err = ERROR(ERR_FS, "Cannot read '%s'", local_path);
+                err = error_create(ERR_FS, "Cannot read '%s'", local_path);
                 goto cleanup;
         }
     }
@@ -364,9 +364,9 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 repo, "origin", ctx->arena, &remote_refs
             );
             if (!list_err && remote_refs.count == 0) {
-                err = ERROR(ERR_NOT_FOUND, "Remote is empty: nothing to clone");
+                err = error_create(ERR_NOT_FOUND, "Remote is empty: nothing to clone");
             } else {
-                err = ERROR(
+                err = error_create(
                     ERR_NOT_FOUND, "Remote is not a dotta repository: it does not "
                     "advertise '%s'; a sync from a machine that holds the repository "
                     "establishes it", EPOCH_REF
@@ -689,7 +689,7 @@ static error_t clone_post_parse(
     const cmd_clone_options_t *o = opts_v;
 
     if (o->all_profiles && o->profile_count > 0) {
-        return ERROR(
+        return error_create(
             ERR_INVALID_ARG,
             "--all and --profile are mutually exclusive"
         );

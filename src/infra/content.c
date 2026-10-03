@@ -124,9 +124,7 @@ error_t content_classify(
     /* Loaded whatever the mode: the load is the proof the object is there. */
     gitops_blob_view_t view;
     error_t err = gitops_blob_view_open(repo, blob_oid, &view);
-    if (err) {
-        return error_wrap(err, "Failed to load blob for classification");
-    }
+    if (err) return err;
 
     *out_kind = classify_entry((const uint8_t *) view.data, view.size, mode);
 
@@ -574,12 +572,12 @@ error_t content_capture_file(
          * below name the type as before; it binds nothing. */
         int open_errno = errno;
         if (fs_lstat(filesystem_path, &st) != 0 || S_ISREG(st.st_mode)) {
-            return error_from_errno(open_errno, "Failed to open '%s'", filesystem_path);
+            return error_errno(open_errno, "Failed to open '%s'", filesystem_path);
         }
     } else if (fstat(fd, &st) < 0) {
         int stat_errno = errno;
         close(fd);
-        return error_from_errno(stat_errno, "Failed to stat '%s'", filesystem_path);
+        return error_errno(stat_errno, "Failed to stat '%s'", filesystem_path);
     }
 
     if (!S_ISREG(st.st_mode)) {
@@ -675,7 +673,7 @@ error_t content_capture_link(const char *filesystem_path, content_capture_t *out
     /* The look: what stands here, and the stat the capture keeps */
     struct stat st;
     if (fs_lstat(filesystem_path, &st) != 0) {
-        return error_from_errno(errno, "Failed to stat '%s'", filesystem_path);
+        return error_errno(errno, "Failed to stat '%s'", filesystem_path);
     }
     if (!S_ISLNK(st.st_mode)) {
         /* This capture's own requirement, as content_capture_file's is: a regular

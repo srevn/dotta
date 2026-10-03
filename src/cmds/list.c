@@ -124,9 +124,7 @@ static error_t list_profiles(
     /* Every profile here */
     string_array_t branches;
     error_t err = gitops_list_branches(repo, ctx->arena, &branches);
-    if (err) {
-        return error_wrap(err, "Failed to list branches");
-    }
+    if (err) return err;
 
     if (branches.count == 0) {
         output_info(out, OUTPUT_NORMAL, "No profiles found");
@@ -205,7 +203,7 @@ static error_t list_profiles(
             int rc = git_commit_tree(&tree, tip);
             git_commit_free(tip);
             profile_stats_t stats = { 0 };
-            err = rc < 0 ? error_from_git(rc)
+            err = rc < 0 ? error_git(rc, "Cannot read the tip's tree")
                          : profile_get_tree_stats(repo, tree, bname, &stats);
             git_tree_free(tree);
             if (err) {
@@ -367,9 +365,7 @@ static error_t list_files(
     int rc = git_commit_tree(&tree, tip);
     git_commit_free(tip);
     if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc), "Failed to list files in profile '%s'", opts->profile
-        );
+        return error_git(rc, "Failed to list files in profile '%s'", opts->profile);
     }
 
     string_array_t files;
@@ -723,9 +719,7 @@ static error_t list_file_history(
     int rc = git_commit_tree(&tree, tip);
     git_commit_free(tip);
     if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc), "Failed to load tree for profile '%s'", profile
-        );
+        return error_git(rc, "Failed to load tree for profile '%s'", profile);
     }
 
     /* A path under a named profile, named by the branch at that tip

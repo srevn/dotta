@@ -1241,10 +1241,7 @@ static error_t remove_profile(
     /* SAFETY: Prevent deletion of last remaining profile */
     string_array_t all_profiles;
     err = gitops_list_branches(repo, ctx->arena, &all_profiles);
-    if (err) {
-        err = error_wrap(err, "Failed to list profiles");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     if (all_profiles.count <= 1) {
         err = error_create(

@@ -471,9 +471,7 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
          * variants'. Named profiles run in the order given; the enabled set below
          * runs in the machine's. */
         err = gitops_list_branches(repo, ctx->arena, &profiles);
-        if (err) {
-            return error_wrap(err, "Failed to list all profiles");
-        }
+        if (err) return err;
         profile_order(&profiles);
     } else {
         /* Use enabled profiles from state */

@@ -12,9 +12,9 @@
  *   - epoch_find_ciphertext — the keymgr's witness source, over the census's walk
  *
  * Every entry point validates inputs, manages libgit2 object lifetimes via local
- * cleanup blocks, and translates libgit2 error codes through `error_from_git`;
- * a static trusts the entry point that called it and checks nothing again. The
- * module never holds resources across return.
+ * cleanup blocks, and words each libgit2 failure itself, libgit2's sentence after
+ * its own (`error_git`); a static trusts the entry point that called it and checks
+ * nothing again. The module never holds resources across return.
  *
  * The push/fetch primitives speak libgit2 directly rather than going through
  * `sys/gitops::gitops_*_branches` — those build branch-specific `refs/heads/...`
@@ -87,7 +87,7 @@ static error_t epoch_read_blob(
 
     git_blob *blob = NULL;
     int rc = git_blob_lookup(&blob, repo, git_tree_entry_id(entry));
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot read '%s' in %s", name, EPOCH_REF);
 
     git_object_size_t got = git_blob_rawsize(blob);
     if (got != size) {
@@ -154,18 +154,14 @@ static error_t epoch_read_commit(
     git_commit *commit = NULL;
     int rc = git_commit_lookup(&commit, repo, oid);
     if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc), "Failed to load the epoch commit"
-        );
+        return error_git(rc, "Failed to load the epoch commit");
     }
 
     git_tree *tree = NULL;
     rc = git_commit_tree(&tree, commit);
     git_commit_free(commit);
     if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc), "Failed to load the epoch commit's tree"
-        );
+        return error_git(rc, "Failed to load the epoch commit's tree");
     }
 
     error_t err = epoch_read_tree(repo, tree, out);
@@ -254,10 +250,7 @@ error_t epoch_init(
 
         int rc = git_reference_remove(repo, EPOCH_REF);
         if (rc < 0) {
-            return error_wrap(
-                error_from_git(rc),
-                "Failed to remove unreadable epoch ref '%s'", EPOCH_REF
-            );
+            return error_git(rc, "Failed to remove unreadable epoch ref '%s'", EPOCH_REF);
         }
         if (out_repaired) {
             *out_repaired = true;
@@ -338,7 +331,7 @@ error_t epoch_push(
 
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot push '%s' to remote '%s'", EPOCH_REF, remote_name);
 
     git_push_options push_opts;
     git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
@@ -356,18 +349,16 @@ error_t epoch_push(
     transfer_op_begin(xfer, GIT_DIRECTION_PUSH);
     rc = git_remote_push(remote, &refs, &push_opts);
     transfer_op_end(xfer, rc);
+
+    /* The act and the remote in its words, then libgit2's reason — a
+     * non-fast-forward, a rejected namespace, the credentials — read before the
+     * free as every transfer's is (sys/gitops.c gitops_fetch_remote): the whole
+     * of what cmd_sync's establish arm prints */
+    err = rc < 0
+        ? error_git(rc, "Cannot push '%s' to remote '%s'", EPOCH_REF, remote_name)
+        : NULL;
     git_remote_free(remote);
-
-    if (rc < 0) {
-        /* Bare: the boundary (cmd_sync's establish arm) prefixes exactly one
-         * layer of context, and its warning renders error_message — outermost
-         * only — so a wrap here would displace the actual libgit2 reason
-         * (non-fast-forward, rejected namespace, auth) with a restatement of
-         * what the caller already says. */
-        return error_from_git(rc);
-    }
-
-    return NULL;
+    return err;
 }
 
 /**
@@ -408,12 +399,16 @@ static error_t epoch_probe_remote(
         remote, GIT_DIRECTION_FETCH, &callbacks, NULL, NULL
     );
     transfer_op_end(xfer, rc);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) {
+        return error_git(rc, "Cannot list the references of remote '%s'", git_remote_name(remote));
+    }
 
     const git_remote_head **heads = NULL;
     size_t heads_len = 0;
     rc = git_remote_ls(&heads, &heads_len, remote);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) {
+        return error_git(rc, "Cannot list the references of remote '%s'", git_remote_name(remote));
+    }
 
     for (size_t i = 0; i < heads_len; i++) {
         if (heads[i] == NULL || heads[i]->name == NULL
@@ -438,7 +433,7 @@ error_t epoch_fetch(
 
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot fetch '%s' from remote '%s'", EPOCH_REF, remote_name);
 
     /* Look before taking. The advertisement gives a clean ERR_NOT_FOUND surface
      * for "this remote is not a dotta repository", where asking for a ref the
@@ -481,13 +476,15 @@ error_t epoch_fetch(
      * transport connected (remote.c git_remote_download disconnects nothing,
      * where git_remote_push does before it returns), and freeing the remote writes
      * a flush to a connection the remote may have reset (transports/smart.c
-     * git_smart__close), whose failure would be the sentence read. Bare, matching
-     * epoch_push: the boundaries (sync's adopt arm, clone's acquisition gate)
-     * each attach their own single layer of context. */
+     * git_smart__close), whose failure would be the sentence read. The act and
+     * the remote in its words, as epoch_push's: what the boundaries print whole
+     * (sync's adopt arm, clone's acquisition gate). */
     transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
     rc = git_remote_download(remote, &refs, &fetch_opts);
     transfer_op_end(xfer, rc);
-    err = rc < 0 ? error_from_git(rc) : NULL;
+    err = rc < 0
+        ? error_git(rc, "Cannot fetch '%s' from remote '%s'", EPOCH_REF, remote_name)
+        : NULL;
     git_remote_free(remote);
     if (err) return err;
 
@@ -506,10 +503,11 @@ error_t epoch_fetch(
          * tell them apart: bytes the read refused (a wrong size, a missing blob,
          * a pair out of range, an object that is no commit), the remote's; and
          * an object that would not load after a download that completed, this
-         * store's. So the words blame neither: the act that failed, and the
-         * mechanism's own sentence — a re-mint keeps one fact's words (base/error.h
-         * "Messages"), and the read's own wraps say only which object it was
-         * loading, which this sentence says for all of them. */
+         * store's. So the words blame neither: the act that failed, and the root's
+         * — which object the read was loading and the mechanism's sentence for
+         * it, one node as every libgit2 failure is (base/error.h error_git), or
+         * the pair's refusal beneath the wrap that names the ref this act names
+         * too. A re-mint keeps one fact's words (base/error.h "Messages"). */
         return error_create(
             ERR_CRYPTO, "Cannot adopt the epoch remote '%s' advertises: %s",
             remote_name, error_message(error_root(err))
@@ -528,10 +526,8 @@ error_t epoch_fetch(
      * on CONFLICT, not adopt. NULL ref_out: libgit2 frees the handle it makes. */
     rc = git_reference_create(NULL, repo, EPOCH_REF, &advertised, 1, NULL);
     if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc),
-            "Failed to point '%s' at the epoch fetched from '%s'",
-            EPOCH_REF, remote_name
+        return error_git(
+            rc, "Failed to point '%s' at the epoch fetched from '%s'", EPOCH_REF, remote_name
         );
     }
 
@@ -658,9 +654,7 @@ static error_t epoch_present_blob(
         int rc = git_tree_lookup(&subtree, walk->repo, oid);
         if (rc < 0) {
             if (!walk->failure) {
-                walk->failure = error_wrap(
-                    error_from_git(rc), "Cannot read '%s:%s'", walk->branch, path
-                );
+                walk->failure = error_git(rc, "Cannot read '%s:%s'", walk->branch, path);
             }
             *next = GITOPS_NEXT_SKIP;
             return NULL;
@@ -727,9 +721,8 @@ static void epoch_walk_commit(epoch_walk_t *walk, const git_oid *commit_oid) {
     }
     if (rc < 0) {
         if (!walk->failure) {
-            walk->failure = error_wrap(
-                error_from_git(rc), "Cannot read the history of 'refs/heads/%s'",
-                walk->branch
+            walk->failure = error_git(
+                rc, "Cannot read the history of 'refs/heads/%s'", walk->branch
             );
         }
         return;
@@ -813,9 +806,7 @@ static error_t epoch_walk(
             if (rc == 0) epoch_walk_commit(&walk, &commit_oid);
         }
         if (rc < 0 && rc != GIT_ITEROVER && !walk.failure) {
-            walk.failure = error_wrap(
-                error_from_git(rc), "Cannot read the history of '%s'", refname
-            );
+            walk.failure = error_git(rc, "Cannot read the history of '%s'", refname);
         }
         git_revwalk_free(walker);    /* NULL-safe: revwalk.c git_revwalk_free */
     }
@@ -1014,7 +1005,7 @@ static error_t epoch_inspect_remote(
 ) {
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot list the references of remote '%s'", remote_name);
 
     /* The advertisement, its sentence read before the free closes the transport
      * (epoch_probe_remote reads it at the failing call) */

@@ -82,7 +82,7 @@ static error_t write_all(int fd, const void *data, size_t size) {
         ssize_t n = write(fd, p + written, size - written);
         if (n < 0) {
             if (errno == EINTR) continue;
-            return error_from_errno(errno, "Write to temp file failed");
+            return error_errno(errno, "Write to temp file failed");
         }
         written += (size_t) n;
     }
@@ -177,7 +177,7 @@ error_t bootstrap_extract_to_temp(
 
     fd = mkstemp(path);
     if (fd < 0) {
-        err = error_from_errno(errno, "Failed to create temp file");
+        err = error_errno(errno, "Failed to create temp file");
         goto cleanup;
     }
 
@@ -185,7 +185,7 @@ error_t bootstrap_extract_to_temp(
     if (err) goto cleanup;
 
     if (fchmod(fd, 0700) != 0) {
-        err = error_from_errno(
+        err = error_errno(
             errno, "Failed to set executable permissions on temp file"
         );
         goto cleanup;
@@ -193,7 +193,7 @@ error_t bootstrap_extract_to_temp(
 
     if (close(fd) != 0) {
         fd = -1;
-        err = error_from_errno(errno, "Failed to close temp file");
+        err = error_errno(errno, "Failed to close temp file");
         goto cleanup;
     }
     fd = -1;

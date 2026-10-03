@@ -231,9 +231,11 @@ error_t epoch_push(
  * back, because an epoch that was not proven never stood in `refs/dotta/epoch`
  * for a later `epoch_resolve` or `epoch_load` to read as canonical.
  *
- * Both codes are read: cmds/clone.c cmd_clone refuses a remote without the ref
- * as no dotta repository and warns past ERR_CRYPTO, and cmds/sync.c epoch_reconcile
- * prints an ERR_CRYPTO's words whole where it prefixes every other.
+ * Both codes are read by cmds/clone.c cmd_clone, which refuses a remote without
+ * the ref as no dotta repository and warns past ERR_CRYPTO. Every failure names
+ * the act and the remote — the transport's in libgit2's words after them
+ * (base/error.h error_git) — so cmds/sync.c epoch_reconcile prints each whole
+ * and reads no code.
  *
  * The install is a force: whatever the local ref held is replaced wholesale.
  * Whether that is safe is the caller's to decide, not this boundary's —

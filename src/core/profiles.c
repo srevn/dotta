@@ -596,7 +596,7 @@ error_t profile_get_tree_stats(
     git_odb *odb = NULL;
     int rc = git_repository_odb(&odb, repo);
     if (rc < 0) {
-        err = error_from_git(rc);
+        err = error_git(rc, "Cannot open the object database");
         goto cleanup;
     }
 
@@ -649,10 +649,7 @@ error_t profile_get_tree_stats(
             git_tree_entry_free(entry);
             if (is_blob) continue;
         } else if (rc != GIT_ENOTFOUND) {
-            err = error_wrap(
-                error_from_git(rc), "Failed to read '%s' in profile '%s'",
-                items[i]->key, profile
-            );
+            err = error_git(rc, "Failed to read '%s' in profile '%s'", items[i]->key, profile);
             goto cleanup;
         }
 
@@ -748,10 +745,7 @@ error_t profile_holds(
         return NULL;
     }
     if (rc != GIT_ENOTFOUND) {
-        return error_wrap(
-            error_from_git(rc), "Failed to read '%s' in profile '%s'", name,
-            profile
-        );
+        return error_git(rc, "Failed to read '%s' in profile '%s'", name, profile);
     }
 
     /* The sheet, and only on the tree's silence: a directory claim with nothing

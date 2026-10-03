@@ -155,11 +155,11 @@ static error_t get_db_path(git_repository *repo, char **out) {
  * A refusal the store's connection met, in the caller's words
  *
  * The caller's prose, then ": " and SQLite's own message and code — the shape
- * error_from_errno gives a kernel refusal (base/error.h), coded by the store's
- * subsystem (ERR_STATE_INVALID). SQLite's words are read first and at once after
- * the call that failed: it leaves them undefined after any call that succeeds,
- * a bind's among them. A connection that could not be made (NULL) is SQLite's
- * "out of memory", its own answer for one.
+ * error_errno gives a kernel refusal (base/error.h), coded by the store's subsystem
+ * (ERR_STATE_INVALID). SQLite's words are read first and at once after the call
+ * that failed: it leaves them undefined after any call that succeeds, a bind's
+ * among them. A connection that could not be made (NULL) is SQLite's "out of
+ * memory", its own answer for one.
  *
  * @param db Database connection (may be NULL)
  * @param fmt The caller's part of the message (printf-style), a path among its

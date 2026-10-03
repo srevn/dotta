@@ -305,14 +305,14 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
 
     /* Output pipe (child stdout/stderr → parent). */
     if (pipe(pipefd) != 0) {
-        return error_from_errno(errno, "Failed to create output pipe");
+        return error_errno(errno, "Failed to create output pipe");
     }
     set_pipe_cloexec(pipefd);
 
     /* Exec-errno self-pipe (child writes errno+_exit on exec failure;
      * on exec success, FD_CLOEXEC closes the write end and parent reads EOF). */
     if (pipe(errfd) != 0) {
-        err = error_from_errno(errno, "Failed to create exec-errno pipe");
+        err = error_errno(errno, "Failed to create exec-errno pipe");
         goto cleanup;
     }
     set_pipe_cloexec(errfd);
@@ -321,7 +321,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
      * its stdin). Only created for BUFFER policy. */
     if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
         if (pipe(stdin_pipe) != 0) {
-            err = error_from_errno(errno, "Failed to create stdin pipe");
+            err = error_errno(errno, "Failed to create stdin pipe");
             goto cleanup;
         }
         set_pipe_cloexec(stdin_pipe);
@@ -335,7 +335,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
 
     pid = fork();
     if (pid < 0) {
-        err = error_from_errno(errno, "Failed to fork");
+        err = error_errno(errno, "Failed to fork");
         goto cleanup;
     }
 
@@ -523,7 +523,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
             if (errno == EINTR) {
                 continue;
             }
-            err = error_from_errno(errno, "select on child pipe");
+            err = error_errno(errno, "select on child pipe");
             goto cleanup;
         }
         if (rs == 0) {
@@ -536,7 +536,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
                 continue;
             }
-            err = error_from_errno(errno, "read child pipe");
+            err = error_errno(errno, "read child pipe");
             goto cleanup;
         }
         if (n == 0) {
@@ -626,7 +626,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
                 if (errno == EINTR) {
                     continue;
                 }
-                err = error_from_errno(errno, "waitpid");
+                err = error_errno(errno, "waitpid");
                 goto cleanup;
             }
 
@@ -738,7 +738,7 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
      * that could not be run is told from one that exited 127. */
     int errfd[2] = { -1, -1 };
     if (pipe(errfd) != 0) {
-        return error_from_errno(errno, "Failed to create exec-errno pipe");
+        return error_errno(errno, "Failed to create exec-errno pipe");
     }
     set_pipe_cloexec(errfd);
 
@@ -757,7 +757,7 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
         (void) sigprocmask(SIG_SETMASK, &before, NULL);
         close(errfd[0]);
         close(errfd[1]);
-        return error_from_errno(e, "Failed to fork");
+        return error_errno(e, "Failed to fork");
     }
 
     if (pid == 0) {
@@ -818,7 +818,7 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
     (void) sigaction(SIGQUIT, &saved_quit, NULL);
 
     if (reaped < 0) {
-        return error_from_errno(wait_errno, "Failed to wait for '%s'", argv[0]);
+        return error_errno(wait_errno, "Failed to wait for '%s'", argv[0]);
     }
 
     /* The wait status decoded as process_run decodes it. */

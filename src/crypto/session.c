@@ -254,7 +254,7 @@ error_t session_save(
         0600
     );
     if (fd < 0) {
-        err = error_from_errno(
+        err = error_errno(
             errno, "Failed to create session cache file '%s'", cache_path
         );
         goto cleanup;
@@ -265,7 +265,7 @@ error_t session_save(
      * obfuscated master. The session file is a regular file or nothing. */
     struct stat st;
     if (fstat(fd, &st) != 0) {
-        err = error_from_errno(
+        err = error_errno(
             errno, "Failed to stat session cache file '%s'", cache_path
         );
         goto cleanup;
@@ -281,7 +281,7 @@ error_t session_save(
      * bits and produces a 0400 file the load path cannot accept. fchmod forces
      * 0600 regardless of umask. */
     if (fchmod(fd, 0600) != 0) {
-        err = error_from_errno(
+        err = error_errno(
             errno, "Failed to set session cache file permissions"
         );
         goto cleanup;
@@ -297,7 +297,7 @@ error_t session_save(
             if (errno == EINTR) {
                 continue;
             }
-            err = error_from_errno(errno, "Failed to write session cache");
+            err = error_errno(errno, "Failed to write session cache");
             goto cleanup;
         }
         off += (size_t) n;
@@ -307,7 +307,7 @@ error_t session_save(
      * a crash, and the parent-dir fsync's extra cost does not pay for itself
      * under the "save re-typing a passphrase" threat model. */
     if (fsync(fd) != 0) {
-        err = error_from_errno(errno, "Failed to fsync session cache");
+        err = error_errno(errno, "Failed to fsync session cache");
         goto cleanup;
     }
 
@@ -353,7 +353,7 @@ error_t session_load(
         if (errno == ENOENT) {
             err = error_create(ERR_NOT_FOUND, "Session cache does not exist");
         } else {
-            err = error_from_errno(
+            err = error_errno(
                 errno, "Failed to open session cache '%s'", cache_path
             );
         }
@@ -365,7 +365,7 @@ error_t session_load(
      * will be read. */
     struct stat st;
     if (fstat(fd, &st) != 0) {
-        err = error_from_errno(errno, "Failed to stat session cache");
+        err = error_errno(errno, "Failed to stat session cache");
         goto cleanup;
     }
 
@@ -414,7 +414,7 @@ error_t session_load(
             if (errno == EINTR) {
                 continue;
             }
-            err = error_from_errno(errno, "Failed to read session cache");
+            err = error_errno(errno, "Failed to read session cache");
             goto cleanup;
         }
         if (n == 0) {

@@ -29,13 +29,13 @@
  * into libgit2, SQLite, the keymgr or a fork: it is one syscall wide, inside
  * one wrapper.
  *
- * The word: every error this module makes from a kernel refusal is
- * error_from_errno's — the site's prose, strerror's word, the errno's code — so
- * a reader acts on the code and never on the prose: ERR_PERMISSION is the class
- * the workspace reads off any failed look, and a read of any other code is named
- * in the doc of the function it calls (base/error.h "Codes"). A site that tells
- * two refusals apart by errno before the error is made (ENOENT is "already gone"
- * to a removal) keeps doing so at the syscall; the error carries the rest.
+ * The word: every error this module makes from a kernel refusal is error_errno's
+ * — the site's prose, strerror's word, the errno's code — so a reader acts on
+ * the code and never on the prose: ERR_PERMISSION is the class the workspace
+ * reads off any failed look, and a read of any other code is named in the doc
+ * of the function it calls (base/error.h "Codes"). A site that tells two refusals
+ * apart by errno before the error is made (ENOENT is "already gone" to a removal)
+ * keeps doing so at the syscall; the error carries the rest.
  *
  * Dotta's own artifacts are the exception and keep their raw calls: the session
  * cache (crypto/session), the temp scripts (cmds/ignore, the bootstrap trio),
@@ -726,7 +726,7 @@ error_t fs_make_absolute(const char *path, arena_t *arena, const char **out);
  *
  * Path must exist: a path that does not (ENOENT, or ENOTDIR — a component above
  * it is not a directory) is ERR_NOT_FOUND; any other failure carries its errno's
- * code (error_code_from_errno).
+ * code (error_errno_code).
  *
  * @param path Path to resolve (must not be NULL)
  * @param arena Arena the canonical path lives in (must not be NULL)

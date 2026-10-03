@@ -451,7 +451,9 @@ error_t metadata_prune_ancestors(
         int rc = git_index_find_prefix(&position, index, prefix);
         free(prefix);
         if (rc == 0) continue;
-        if (rc != GIT_ENOTFOUND) return error_from_git(rc);
+        if (rc != GIT_ENOTFOUND) {
+            return error_git(rc, "Cannot search the tree beneath '%s'", dir->key);
+        }
 
         /* And the other half: the one path a tree cannot hold. */
         if (tracked_beneath(items, item_count, dir->key)) continue;
@@ -1281,7 +1283,7 @@ error_t metadata_load_from_tree(
         return NULL;
     }
     if (rc < 0) {
-        err = error_from_git(rc);
+        err = error_git(rc, "Cannot read '%s'", METADATA_FILE_PATH);
         goto cleanup;
     }
 

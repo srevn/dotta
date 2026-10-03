@@ -123,12 +123,12 @@ static error_t pull_branch_ff(
      * is the failure. */
     git_reference *branch = NULL;
     int rc = git_reference_lookup(&branch, repo, local_refname);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot fast-forward '%s'", branch_name);
 
     git_reference *local_ref = NULL;
     rc = git_reference_resolve(&local_ref, branch);
     git_reference_free(branch);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot fast-forward '%s'", branch_name);
     const git_oid *local_oid = git_reference_target(local_ref);
 
     /* The remote-tracking tip, or its absence proven (sys/gitops.h
@@ -155,7 +155,7 @@ static error_t pull_branch_ff(
     rc = git_graph_descendant_of(repo, &remote_oid, local_oid);
     if (rc < 0) {
         git_reference_free(local_ref);
-        return error_from_git(rc);
+        return error_git(rc, "Cannot fast-forward '%s'", branch_name);
     }
 
     if (rc == 0) {
@@ -176,7 +176,7 @@ static error_t pull_branch_ff(
     );
     git_reference_free(local_ref);
 
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot fast-forward '%s'", branch_name);
 
     git_reference_free(updated_ref);
     *updated = true;
@@ -212,7 +212,7 @@ static error_t sync_fetch_phase(
     if (rc == GIT_ENOTFOUND) {
         return error_create(ERR_NOT_FOUND, "No remote '%s' configured", remote_name);
     } else if (rc < 0) {
-        return error_from_git(rc);
+        return error_git(rc, "Cannot fetch from remote '%s'", remote_name);
     }
     git_remote_free(remote);
 
@@ -284,18 +284,11 @@ static error_t sync_fetch_phase(
         output_endline(out, OUTPUT_NORMAL);
     }
 
-    /* The fetch's own error is the cause, and the wrap names the remote once.
-     * Whose refusal it was is read from the transfer's outcome rather than from
-     * libgit2's English, and read now: the next transfer_op_begin overwrites
-     * it. No hint: an outcome that is not the credentials' is any failure the
-     * fetch met, a ref write as well as a network, and the cause says which. */
-    if (err) {
-        return transfer_last_outcome(xfer) == TRANSFER_OUTCOME_AUTH_FAILED
-            ? error_wrap(err, "Authentication failed for remote '%s'", remote_name)
-            : error_wrap(err, "Failed to fetch profiles from remote '%s'", remote_name);
-    }
-
-    return NULL;
+    /* The fetch's own error, which names the remote and the act: a refused
+     * credential in the words the transfer's callback set for what was offered
+     * (sys/transfer.c transfer_credentials_callback), any other failure — a ref
+     * write as well as a network — in libgit2's */
+    return err;
 }
 
 /**
@@ -1405,13 +1398,11 @@ static void epoch_reconcile(
                 );
                 return;
             }
+            /* The push's failure names its act, the ref and the remote, then
+             * libgit2's reason (infra/epoch.c epoch_push): printed whole */
             err = epoch_push(repo, remote_name, xfer);
             if (err) {
-                output_warning(
-                    out, OUTPUT_NORMAL,
-                    "Failed to establish repository epoch on remote: %s",
-                    error_line(err)
-                );
+                output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
                 return;  /* best-effort; retried next sync */
             }
             output_success(
@@ -1456,16 +1447,10 @@ static void epoch_reconcile(
             kdf_epoch_t fetched;
             err = epoch_fetch(repo, remote_name, xfer, &fetched);
             if (err) {
-                /* An epoch the fetch could not adopt: epoch_fetch judged it before
-                 * installing it, so the local ref still stands, and its message
-                 * names the act and the mechanism's cause — printed whole, as
-                 * clone prints it. Anything else is the fetch's own failure under
-                 * one line of context. */
-                output_warning(
-                    out, OUTPUT_NORMAL, error_code(err) == ERR_CRYPTO ? "%s"
-                    : "Failed to adopt repository epoch from remote: %s",
-                    error_line(err)
-                );
+                /* Every failure of the fetch names its act and leaves the local
+                 * ref standing — one it could not adopt was judged before it
+                 * was installed — so each is printed whole, as clone prints it */
+                output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
                 return;  /* best-effort */
             }
             output_success(

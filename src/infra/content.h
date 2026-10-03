@@ -408,7 +408,7 @@ error_t content_rebind(
  *   epoch, or a version this build does not read
  * - ERR_GIT: the blob could not be loaded
  * - ERR_PERMISSION / ERR_FS: the disk copy could not be read, by its errno
- *   (base/error.h error_code_from_errno); a copy that left before its read is
+ *   (base/error.h error_errno_code); a copy that left before its read is
  *   the verdict CMP_MISSING, never an error (infra/compare.h)
  */
 error_t content_compare_blob_to_disk(
@@ -622,7 +622,7 @@ typedef struct {
  *
  * Errors:
  * - ERR_NOT_FOUND / ERR_PERMISSION / ERR_FS: The source could not be opened or
- *   read, by its errno (base/error.h error_code_from_errno)
+ *   read, by its errno (base/error.h error_errno_code)
  * - ERR_VALIDATION: A plaintext capture whose bytes would classify as ciphertext
  * - ERR_LOCKED: Encryption requested with the feature off (no keymgr), or the
  *   keymgr obtained no usable master — under "Cannot encrypt '<path>'"

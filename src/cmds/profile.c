@@ -184,10 +184,7 @@ static error_t profile_list(
     /* Every profile here */
     string_array_t all_branches;
     err = gitops_list_branches(repo, ctx->arena, &all_branches);
-    if (err) {
-        err = error_wrap(err, "Failed to list branches");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Separate into enabled and available */
     string_array_t available;
@@ -306,10 +303,7 @@ static error_t profile_list(
                 repo, remote_name, xfer, ctx->arena, &remote_branches
             );
             if (remote_err) {
-                output_warning(
-                    out, OUTPUT_NORMAL, "Could not query remote: %s",
-                    error_line(remote_err)
-                );
+                output_warning(out, OUTPUT_NORMAL, "%s", error_line(remote_err));
             } else if (remote_branches.count > 0) {
                 /* Filter out branches that already exist locally */
                 string_array_t remote_only;
@@ -385,10 +379,7 @@ static error_t profile_fetch(
     err = gitops_list_remote_branches(
         repo, remote_name, xfer, ctx->arena, &remote_branches
     );
-    if (err) {
-        err = error_wrap(err, "Failed to query remote branches");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Every name the remote does not hold, refused together before anything is
      * fetched: a fetch of named branches is whole or nothing, as git's is. The
@@ -430,8 +421,7 @@ static error_t profile_fetch(
         error_t fetch_err = gitops_fetch_branch(repo, remote_name, profile, xfer);
         if (fetch_err) {
             output_print(
-                out, OUTPUT_QUIET,
-                "  {red}✗{reset} Failed to fetch %s: %s\n",
+                out, OUTPUT_QUIET, "  {red}✗{reset} %s: %s\n",
                 profile, error_line(fetch_err)
             );
             failed_count++;
@@ -444,8 +434,7 @@ static error_t profile_fetch(
         fetch_err = upstream_ensure_tracking_branch(repo, remote_name, profile);
         if (fetch_err) {
             output_print(
-                out, OUTPUT_QUIET,
-                "  {red}✗{reset} Failed to create local branch %s: %s\n",
+                out, OUTPUT_QUIET, "  {red}✗{reset} %s: %s\n",
                 profile, error_line(fetch_err)
             );
             failed_count++;
@@ -583,7 +572,7 @@ static error_t profile_enable(
          * this list has. Named profiles keep the order typed; a row that exists
          * keeps its slot. */
         err = gitops_list_branches(repo, ctx->arena, &to_enable);
-        if (err) return error_wrap(err, "Failed to list branches");
+        if (err) return err;
         profile_order(&to_enable);
     } else {
         /* Enable the profiles the line names, one at least (profile_post_parse) */

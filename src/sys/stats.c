@@ -97,11 +97,11 @@ static error_t stats_walk(
      * read its tip once, beside everything else it read off that commit.
      * git_revwalk_push copies the id it is given. */
     int rc = git_revwalk_new(&walker, repo);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot walk the history");
 
     rc = git_revwalk_push(walker, tip_oid);
     if (rc < 0) {
-        err = error_from_git(rc);
+        err = error_git(rc, "Cannot walk the history");
         goto cleanup;
     }
 
@@ -118,7 +118,7 @@ static error_t stats_walk(
             break;
         }
         if (rc < 0) {
-            err = error_from_git(rc);
+            err = error_git(rc, "Cannot walk the history");
             goto cleanup;
         }
 
@@ -130,7 +130,7 @@ static error_t stats_walk(
         git_commit *commit = NULL;
         rc = git_commit_lookup(&commit, repo, &oid);
         if (rc < 0) {
-            err = error_from_git(rc);
+            err = error_git(rc, "Cannot read a commit in the history");
             goto cleanup;
         }
 
@@ -139,7 +139,7 @@ static error_t stats_walk(
         rc = git_commit_tree(&tree, commit);
         if (rc < 0) {
             git_commit_free(commit);
-            err = error_from_git(rc);
+            err = error_git(rc, "Cannot read a commit's tree in the history");
             goto cleanup;
         }
 
@@ -161,7 +161,7 @@ static error_t stats_walk(
             if (rc < 0) {
                 git_tree_free(tree);
                 git_commit_free(commit);
-                err = error_from_git(rc);
+                err = error_git(rc, "Cannot read a commit's parent in the history");
                 goto cleanup;
             }
         }
@@ -177,7 +177,7 @@ static error_t stats_walk(
 
         if (rc < 0) {
             git_commit_free(commit);
-            err = error_from_git(rc);
+            err = error_git(rc, "Cannot compare a commit with its parent");
             goto cleanup;
         }
 
@@ -263,7 +263,7 @@ error_t stats_blob_size(
     /* Get object database */
     git_odb *odb = NULL;
     int rc = git_repository_odb(&odb, repo);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot open the object database");
 
     error_t err = stats_blob_size_with_odb(odb, blob_oid, out);
     git_odb_free(odb);
@@ -285,7 +285,7 @@ error_t stats_blob_size_with_odb(
     size_t size;
     git_object_t type;
     int rc = git_odb_read_header(&size, &type, odb, blob_oid);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot read a blob's size");
 
     if (type != GIT_OBJECT_BLOB) {
         return error_create(ERR_INVALID_ARG, "Object is not a blob");

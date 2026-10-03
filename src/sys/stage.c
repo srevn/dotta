@@ -62,9 +62,7 @@ static error_t stage_seed(
         rc = git_commit_tree(&st->tree, parent);
         if (rc < 0) {
             stage_free(st);
-            return error_wrap(
-                error_from_git(rc), "Failed to read the tip of '%s'", refname
-            );
+            return error_git(rc, "Failed to read the tip of '%s'", refname);
         }
     } else {
         /* The empty tree: Git's own "nothing", the tree every orphan's stage
@@ -82,10 +80,7 @@ static error_t stage_seed(
         }
         if (rc < 0) {
             stage_free(st);
-            return error_wrap(
-                error_from_git(rc), "Failed to read the empty tree for '%s'",
-                refname
-            );
+            return error_git(rc, "Failed to read the empty tree for '%s'", refname);
         }
     }
 
@@ -95,9 +90,7 @@ static error_t stage_seed(
     }
     if (rc < 0) {
         stage_free(st);
-        return error_wrap(
-            error_from_git(rc), "Failed to read the tree of '%s'", refname
-        );
+        return error_git(rc, "Failed to read the tree of '%s'", refname);
     }
 
     *out = st;
@@ -165,9 +158,7 @@ error_t stage_put(
         &blob, st->repo, size > 0 ? data : "", size
     );
     if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc), "Failed to write the blob for '%s'", path
-        );
+        return error_git(rc, "Failed to write the blob for '%s'", path);
     }
 
     /* The id is answered once the entry stands: a refused put names no blob the
@@ -241,7 +232,7 @@ static error_t admit_tree_path(git_index *index, const char *path) {
  * is the owner's, and the collision check replaces (index_insert). A name the
  * rule refuses is a verdict about the name, as a collision is, and is spelled
  * as one — here, because nothing later can: error_wrap keeps its cause's code,
- * and error_from_git is always ERR_GIT.
+ * and error_git is always ERR_GIT.
  */
 static error_t put_entry(git_index *index, const git_index_entry *entry) {
     const char *path = entry->path;
@@ -281,9 +272,7 @@ static error_t put_entry(git_index *index, const git_index_entry *entry) {
          * blob the index would then make room for by dropping an entry. The linked
          * libgit2 is whichever one pkg-config found at or above 1.9, and its
          * contract here is "0 or an error code". */
-        return error_wrap(
-            error_from_git(rc), "Failed to search the tree beneath '%s'", path
-        );
+        return error_git(rc, "Failed to search the tree beneath '%s'", path);
     }
 
     /* The same path already an entry: replaced — the upsert every writer wants. */
@@ -300,7 +289,7 @@ static error_t put_entry(git_index *index, const git_index_entry *entry) {
         );
     }
 
-    return error_wrap(error_from_git(rc), "Failed to stage '%s'", path);
+    return error_git(rc, "Failed to stage '%s'", path);
 }
 
 error_t stage_admission_create(const stage_t *st, stage_admission_t **out) {
@@ -320,9 +309,7 @@ error_t stage_admission_create(const stage_t *st, stage_admission_t **out) {
     }
     if (rc < 0) {
         stage_admission_free(adm);
-        return error_wrap(
-            error_from_git(rc), "Failed to read the tree of '%s'", st->refname
-        );
+        return error_git(rc, "Failed to read the tree of '%s'", st->refname);
     }
 
     *out = adm;
@@ -396,7 +383,7 @@ error_t stage_remove(stage_t *st, const char *path) {
         return error_create(ERR_NOT_FOUND, "'%s' is not in this tree", path);
     }
     if (rc < 0) {
-        return error_wrap(error_from_git(rc), "Failed to remove '%s'", path);
+        return error_git(rc, "Failed to remove '%s'", path);
     }
 
     return NULL;
@@ -413,9 +400,7 @@ error_t stage_commit(stage_t *st, const char *message, bool *out_committed) {
     git_oid tree_oid;
     int rc = git_index_write_tree_to(&tree_oid, st->index, st->repo);
     if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc), "Failed to write the tree for '%s'", st->refname
-        );
+        return error_git(rc, "Failed to write the tree for '%s'", st->refname);
     }
 
     /* The tree the open read: nothing to commit, nothing moves. */
@@ -426,10 +411,7 @@ error_t stage_commit(stage_t *st, const char *message, bool *out_committed) {
     git_tree *tree = NULL;
     rc = git_tree_lookup(&tree, st->repo, &tree_oid);
     if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc), "Failed to read the tree written for '%s'",
-            st->refname
-        );
+        return error_git(rc, "Failed to read the tree written for '%s'", st->refname);
     }
 
     git_signature *sig = NULL;
@@ -458,9 +440,7 @@ error_t stage_commit(stage_t *st, const char *message, bool *out_committed) {
         );
     }
     if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc), "Failed to commit to '%s'", st->refname
-        );
+        return error_git(rc, "Failed to commit to '%s'", st->refname);
     }
 
     if (out_committed) {

@@ -53,7 +53,7 @@ error_t cmd_git(const dotta_ctx_t *ctx, const cmd_git_options_t *opts) {
      * it found and could not run. */
     if (result.exec_failed) {
         *ctx->exit_code = result.exec_errno == ENOENT ? 127 : 126;
-        return error_from_errno(result.exec_errno, "Cannot run git");
+        return error_errno(result.exec_errno, "Cannot run git");
     }
 
     /* Dead of the keyboard's signal: the terminal sent it to dotta too, which

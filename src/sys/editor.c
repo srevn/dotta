@@ -57,9 +57,9 @@ error_t editor_launch(const char *editor, const char *file_path) {
     if (err) return err;
 
     /* An editor that could not be run says why: the errno's word, and ERR_NOT_FOUND
-     * for a program no PATH entry holds (error_from_errno). */
+     * for a program no PATH entry holds (error_errno). */
     if (result.exec_failed) {
-        return error_from_errno(
+        return error_errno(
             result.exec_errno, "Editor '%s' could not be run", editor
         );
     }

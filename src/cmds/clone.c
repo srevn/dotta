@@ -116,11 +116,7 @@ static error_t land_all_profiles(
     error_t err = gitops_list_remote_tracking(
         repo, remote_name, arena, &all_branches
     );
-    if (err) {
-        return error_wrap(
-            err, "Failed to list remote branches"
-        );
-    }
+    if (err) return err;
 
     /* Create local branches */
     land_profiles(
@@ -319,10 +315,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     /* The store: bare, declared dotta's from birth, with the remote it came from.
      * Everything from here is the rollback's to undo. */
     err = gitops_init_repository(&repo, local_path);
-    if (err) {
-        err = error_wrap(err, "Failed to create the repository");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
     clone_landed = true;
 
     err = repo_declare_store(repo);
@@ -331,7 +324,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     git_remote *remote = NULL;
     int rc = git_remote_create(&remote, repo, "origin", opts->url);
     if (rc < 0) {
-        err = error_from_git(rc);
+        err = error_git(rc, "Cannot add remote 'origin'");
         goto cleanup;
     }
     git_remote_free(remote);
@@ -352,50 +345,47 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * (the record, the local branches, the baseline). The ref also carries the
      * repository's epoch; without it, every encrypted blob is undecryptable. */
     err = epoch_fetch(repo, "origin", xfer, NULL);
-    if (err) {
-        if (error_code(err) == ERR_NOT_FOUND) {
-            /* Split the diagnostic: an empty remote holds nothing to clone, and
-             * a ref-bearing one is not dotta's until a machine that holds the
-             * repository syncs to it — the one way to the ref the fact cannot
-             * imply. On a listing failure fall through to the foreign
-             * diagnostic. */
-            string_array_t remote_refs;
-            error_t list_err = gitops_list_remote_tracking(
-                repo, "origin", ctx->arena, &remote_refs
-            );
-            if (!list_err && remote_refs.count == 0) {
-                err = error_create(ERR_NOT_FOUND, "Remote is empty: nothing to clone");
-            } else {
-                err = error_create(
-                    ERR_NOT_FOUND, "Remote is not a dotta repository: it does not "
-                    "advertise '%s'; a sync from a machine that holds the repository "
-                    "establishes it", EPOCH_REF
-                );
-            }
-            goto cleanup;
-        } else if (error_code(err) == ERR_CRYPTO) {
-            /* An epoch the fetch could not adopt — epoch_fetch installs only
-             * what it proved, so no garbage ref persists. The advertised ref
-             * establishes identity (the gate above), but its payload is a crypto
-             * concern: warn-and-continue, a plaintext clone is still fine, only
-             * encryption is unavailable until a valid epoch arrives — which a
-             * sync brings from the remote, and never an init here, which mints
-             * one the remote's would not reconcile with, or refuses over the
-             * ciphertext this clone just fetched. */
-            output_warning(
-                out, OUTPUT_NORMAL,
-                "%s; encryption operations fail until a valid epoch is fetched",
-                error_line(err)
-            );
-            /* Said: the error is dropped here, so the arms below meet a clone
-             * with no failure in hand rather than one the next assignment
-             * overwrites */
-            err = NULL;
+    if (error_code(err) == ERR_NOT_FOUND) {
+        /* Split the diagnostic: an empty remote holds nothing to clone, and a
+         * ref-bearing one is not dotta's until a machine that holds the repository
+         * syncs to it — the one way to the ref the fact cannot imply. On a listing
+         * failure fall through to the foreign diagnostic. */
+        string_array_t remote_refs;
+        error_t list_err = gitops_list_remote_tracking(
+            repo, "origin", ctx->arena, &remote_refs
+        );
+        if (!list_err && remote_refs.count == 0) {
+            err = error_create(ERR_NOT_FOUND, "Remote is empty: nothing to clone");
         } else {
-            err = error_wrap(err, "Failed to fetch repository epoch");
-            goto cleanup;
+            err = error_create(
+                ERR_NOT_FOUND, "Remote is not a dotta repository: it does not "
+                "advertise '%s'; a sync from a machine that holds the repository "
+                "establishes it", EPOCH_REF
+            );
         }
+        goto cleanup;
     }
+    if (error_code(err) == ERR_CRYPTO) {
+        /* An epoch the fetch could not adopt — epoch_fetch installs only what
+         * it proved, so no garbage ref persists. The advertised ref establishes
+         * identity (the gate above), but its payload is a crypto concern:
+         * warn-and-continue, a plaintext clone is still fine, only encryption
+         * is unavailable until a valid epoch arrives — which a sync brings from
+         * the remote, and never an init here, which mints one the remote's would
+         * not reconcile with, or refuses over the ciphertext this clone just
+         * fetched. */
+        output_warning(
+            out, OUTPUT_NORMAL,
+            "%s; encryption operations fail until a valid epoch is fetched",
+            error_line(err)
+        );
+        /* Said: the error is dropped here, so the arms below meet a clone with
+         * no failure in hand rather than one the next assignment overwrites */
+        err = NULL;
+    }
+
+    /* Any other failure is the fetch's own, naming the act and the remote */
+    if (err) goto cleanup;
 
     /* Determine which profiles to fetch */
     string_array_t fetched_profiles;
@@ -438,10 +428,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
          * as hub mode's does, never read as "no profiles auto-detected" */
         string_array_t remote_branches;
         err = gitops_list_remote_tracking(repo, "origin", ctx->arena, &remote_branches);
-        if (err) {
-            err = error_wrap(err, "Failed to list remote branches");
-            goto cleanup;
-        }
+        if (err) goto cleanup;
 
         /* Name-based detection against remote branches */
         string_array_t detected_profiles = profile_detect(ctx->arena, &remote_branches);

@@ -81,12 +81,7 @@ static error_t resolve_rebase_inmemory(
     err = gitops_update_branch_reference(
         ctx->repo, ctx->branch_name, &rebased_oid, reflog_msg
     );
-    if (err) {
-        return error_wrap(
-            err, "Failed to update branch '%s' after rebase",
-            ctx->branch_name
-        );
-    }
+    if (err) return err;
 
     if (out_oid) {
         git_oid_cpy(out_oid, &rebased_oid);
@@ -158,14 +153,14 @@ static error_t resolve_merge_trees(
     int rc = git_commit_lookup(&local_commit, ctx->repo, &ctx->saved_oid);
     if (rc < 0) {
         git_index_free(merged_index);
-        return error_from_git(rc);
+        return error_git(rc, "Cannot read the tip of branch '%s'", ctx->branch_name);
     }
 
     rc = git_commit_lookup(&remote_commit, ctx->repo, &remote_oid);
     if (rc < 0) {
         git_commit_free(local_commit);
         git_index_free(merged_index);
-        return error_from_git(rc);
+        return error_git(rc, "Cannot read the remote tip of branch '%s'", ctx->branch_name);
     }
 
     /* Create merge commit */
@@ -202,12 +197,7 @@ static error_t resolve_merge_trees(
     err = gitops_update_branch_reference(
         ctx->repo, ctx->branch_name, &merge_commit_oid, reflog_msg
     );
-    if (err) {
-        return error_wrap(
-            err, "Failed to update branch '%s' after merge",
-            ctx->branch_name
-        );
-    }
+    if (err) return err;
 
     if (out_oid) {
         git_oid_cpy(out_oid, &merge_commit_oid);
@@ -258,12 +248,7 @@ static error_t resolve_theirs(resolve_context_t *ctx, git_oid *out_oid) {
     err = gitops_update_branch_reference(
         ctx->repo, ctx->branch_name, &remote_oid, reflog_msg
     );
-    if (err) {
-        return error_wrap(
-            err, "Failed to reset branch '%s' to remote",
-            ctx->branch_name
-        );
-    }
+    if (err) return err;
 
     /* Return the new OID (remote) */
     if (out_oid) {
@@ -337,12 +322,7 @@ error_t resolve_verify(
     error_t err = upstream_analyze_profile(
         ctx->repo, ctx->remote_name, ctx->branch_name, &info
     );
-    if (err) {
-        return error_wrap(
-            err, "Failed to analyze branch '%s' after resolution",
-            ctx->branch_name
-        );
-    }
+    if (err) return err;
 
     if (out_ahead) *out_ahead = info.ahead;
     if (out_behind) *out_behind = info.behind;

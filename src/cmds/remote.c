@@ -24,7 +24,7 @@ static error_t remote_list(
 
     git_strarray remotes = { 0 };
     int rc = git_remote_list(&remotes, repo);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot list the remotes");
 
     if (remotes.count == 0) {
         output_info(out, OUTPUT_NORMAL, "No remotes configured");
@@ -41,8 +41,10 @@ static error_t remote_list(
             git_remote *remote = NULL;
             rc = git_remote_lookup(&remote, repo, remote_name);
             if (rc < 0) {
+                /* The name is the listing's, so the error is made before it goes */
+                error_t err = error_git(rc, "Cannot read remote '%s'", remote_name);
                 git_strarray_dispose(&remotes);
-                return error_from_git(rc);
+                return err;
             }
 
             const char *fetch_url = git_remote_url(remote);
@@ -106,13 +108,13 @@ static error_t remote_add(
         return error_create(ERR_EXISTS, "Remote '%s' already exists", name);
     } else if (rc != GIT_ENOTFOUND) {
         /* Unexpected error */
-        return error_from_git(rc);
+        return error_git(rc, "Cannot add remote '%s'", name);
     }
 
     /* Create remote */
     git_remote *remote = NULL;
     rc = git_remote_create(&remote, repo, name, url);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot add remote '%s'", name);
 
     git_remote_free(remote);
 
@@ -142,13 +144,13 @@ static error_t remote_remove(
     if (rc == GIT_ENOTFOUND) {
         return error_create(ERR_NOT_FOUND, "Remote '%s' not found", name);
     } else if (rc < 0) {
-        return error_from_git(rc);
+        return error_git(rc, "Cannot remove remote '%s'", name);
     }
     git_remote_free(remote);
 
     /* Delete remote */
     rc = git_remote_delete(repo, name);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot remove remote '%s'", name);
 
     /* Success message */
     output_success(
@@ -178,13 +180,13 @@ static error_t remote_set_url(
     if (rc == GIT_ENOTFOUND) {
         return error_create(ERR_NOT_FOUND, "Remote '%s' not found", name);
     } else if (rc < 0) {
-        return error_from_git(rc);
+        return error_git(rc, "Cannot set the URL of remote '%s'", name);
     }
     git_remote_free(remote);
 
     /* Set new URL */
     rc = git_remote_set_url(repo, name, new_url);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot set the URL of remote '%s'", name);
 
     /* Success message */
     output_success(
@@ -214,7 +216,7 @@ static error_t remote_rename(
     if (rc == GIT_ENOTFOUND) {
         return error_create(ERR_NOT_FOUND, "Remote '%s' not found", old_name);
     } else if (rc < 0) {
-        return error_from_git(rc);
+        return error_git(rc, "Cannot rename remote '%s' to '%s'", old_name, new_name);
     }
     git_remote_free(remote);
 
@@ -224,7 +226,7 @@ static error_t remote_rename(
         git_remote_free(remote);
         return error_create(ERR_EXISTS, "Remote '%s' already exists", new_name);
     } else if (rc != GIT_ENOTFOUND) {
-        return error_from_git(rc);
+        return error_git(rc, "Cannot rename remote '%s' to '%s'", old_name, new_name);
     }
 
     /* Rename remote */
@@ -247,7 +249,7 @@ static error_t remote_rename(
 
     git_strarray_dispose(&problems);
 
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot rename remote '%s' to '%s'", old_name, new_name);
 
     /* Success message */
     output_success(
@@ -275,7 +277,7 @@ static error_t remote_show(
     if (rc == GIT_ENOTFOUND) {
         return error_create(ERR_NOT_FOUND, "Remote '%s' not found", name);
     } else if (rc < 0) {
-        return error_from_git(rc);
+        return error_git(rc, "Cannot read remote '%s'", name);
     }
 
     /* Show remote information */

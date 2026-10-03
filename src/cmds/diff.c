@@ -971,9 +971,7 @@ static error_t diff_commit_to_workspace(
      * in hand, the OID helper beside it being a second lookup of what is here. */
     int rc = git_commit_tree(&tree, commit);
     if (rc < 0) {
-        err = error_wrap(
-            error_from_git(rc), "Failed to get tree from commit"
-        );
+        err = error_git(rc, "Failed to get tree from commit %s", oid_str);
         goto cleanup;
     }
 
@@ -1172,17 +1170,13 @@ static error_t diff_commits(
      * its tree the same way). */
     int rc = git_commit_tree(&tree1, commit1);
     if (rc < 0) {
-        err = error_wrap(
-            error_from_git(rc), "Failed to get tree from commit %s", oid1_str
-        );
+        err = error_git(rc, "Failed to get tree from commit %s", oid1_str);
         goto cleanup;
     }
 
     rc = git_commit_tree(&tree2, commit2);
     if (rc < 0) {
-        err = error_wrap(
-            error_from_git(rc), "Failed to get tree from commit %s", oid2_str
-        );
+        err = error_git(rc, "Failed to get tree from commit %s", oid2_str);
         goto cleanup;
     }
 
@@ -1201,10 +1195,7 @@ static error_t diff_commits(
     }
 
     err = gitops_diff_trees(repo, tree1, tree2, &diff_opts, &diff);
-    if (err) {
-        err = error_wrap(err, "Failed to generate diff");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     if (opts->name_only) {
         /* Name-only: each changed path, cyan, as the patch's file header colours
@@ -1231,7 +1222,7 @@ static error_t diff_commits(
 
         rc = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out);
         if (rc < 0) {
-            err = error_from_git(rc);
+            err = error_git(rc, "Cannot print the diff");
             goto cleanup;
         }
     }

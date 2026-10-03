@@ -86,10 +86,7 @@ static error_t ensure_repository_adoptable(
      * nothing to lose. */
     string_array_t refs;
     err = gitops_list_refs(repo, "refs", ctx->arena, &refs);
-    if (err) {
-        return error_wrap(err, "Failed to list repository references");
-    }
-    if (refs.count == 0) return NULL;
+    if (err || refs.count == 0) return err;
 
     return error_create(ERR_CONFLICT, "'%s' is a Git repository dotta did not create", path);
 }
@@ -150,10 +147,7 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     if (error_code(err) == ERR_NOT_FOUND) {
         err = gitops_init_repository(&repo, path);
     }
-    if (err) {
-        err = error_wrap(err, "Failed to initialize repository");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Whose repository is this? Asked before the first step below writes, so a
      * refusal leaves it exactly as it was found. */

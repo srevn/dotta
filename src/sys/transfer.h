@@ -26,19 +26,6 @@
 typedef struct transfer_context_s transfer_context_t;
 
 /**
- * Outcome of the most recent op within a transfer session.
- *
- * Reported by transfer_last_outcome() to let callers classify errors
- * authoritatively instead of matching on libgit2's English error strings.
- */
-typedef enum {
-    TRANSFER_OUTCOME_NONE = 0,     /* No op has completed in this session. */
-    TRANSFER_OUTCOME_OK,           /* Op succeeded. */
-    TRANSFER_OUTCOME_AUTH_FAILED,  /* Op failed with an authentication error. */
-    TRANSFER_OUTCOME_OTHER_FAILURE /* Op failed for a non-auth reason. */
-} transfer_outcome_t;
-
-/**
  * Cumulative transfer metrics for a session.
  *
  * Aggregated across every op that actually transferred data. Fetches of zero
@@ -131,16 +118,6 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
  * @param rc libgit2 return code (0, GIT_EAUTH, or other negative)
  */
 void transfer_op_end(transfer_context_t *xfer, int rc);
-
-/**
- * Return the outcome of the most recent op.
- *
- * Callers should inspect this immediately after the op completes, before the
- * next transfer_op_begin() overwrites it.
- *
- * NULL-safe (returns TRANSFER_OUTCOME_NONE).
- */
-transfer_outcome_t transfer_last_outcome(const transfer_context_t *xfer);
 
 /**
  * Return the cumulative transfer stats for this session.

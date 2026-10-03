@@ -43,7 +43,7 @@ error_t mount_validate_target(const char *target) {
     struct stat st;
     if (fs_stat(target, &st) != 0) {
         if (errno != ENOENT) {
-            return error_from_errno(errno, "Cannot stat target '%s'", target);
+            return error_errno(errno, "Cannot stat target '%s'", target);
         }
         if (fs_lstat(target, &st) == 0 && S_ISLNK(st.st_mode)) {
             return error_create(

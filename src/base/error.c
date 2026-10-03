@@ -81,19 +81,44 @@ error_t error_wrap(error_t cause, const char *fmt, ...) {
     return error_node((struct error){ .message = message, .line = line, .cause = cause });
 }
 
-error_t error_from_git(int git_error_code) {
-    /* libgit2 answers a sentence whatever stands: the one the failing call set,
-     * one an earlier call left where the failing one set none — a callback's
-     * code is handed up unworded, so a callback words its own refusal
-     * (sys/transfer.c transfer_credentials_callback) — or a static one of its
-     * own where nothing stands (util/errors.c git_error_last) */
-    return error_create(
-        ERR_GIT, "Git error (%d): %s",
-        git_error_code, git_error_last()->message
-    );
+error_t error_git(int git_error_code, const char *fmt, ...) {
+    CHECK_NULL(fmt);
+
+    /* libgit2's sentence for the call that failed — or, where it set none, the
+     * static "no error", the one error of class GIT_ERROR_NONE (util/errors.c
+     * git_error_last), which a search libgit2 ended with the error cleared answers
+     * (revparse.c walk_and_search). There, and only there, the code is the one
+     * fact there is: a code says nothing a user reads, an EACCES on a ref file
+     * being -14, GIT_ELOCKED. A sentence an earlier call left standing reads as
+     * the failing call's — libgit2 words a callback's return only where none
+     * stands (util/errors.h git_error_set_after_callback_function) — so a callback
+     * words its own refusal (sys/transfer.c transfer_credentials_callback). */
+    const git_error *last = git_error_last();
+    char code[32];
+    snprintf(code, sizeof(code), "Git error %d", git_error_code);
+    const char *why = last->klass == GIT_ERROR_NONE ? code : last->message;
+
+    /* The caller's prose, then ": " and that word: one message, sized before
+     * the arena is asked, so it is one allocation as every other's is. */
+    va_list args;
+    va_start(args, fmt);
+    va_list sized;
+    va_copy(sized, args);
+    int len = vsnprintf(NULL, 0, fmt, sized);
+    va_end(sized);
+    CHECK_ARG(len >= 0, "fmt cannot be formatted");
+
+    const size_t prose = (size_t) len;
+    const size_t total = prose + 2 + strlen(why);
+    char *message = arena_alloc(error_arena(), total + 1);
+    vsnprintf(message, prose + 1, fmt, args);
+    va_end(args);
+    snprintf(message + prose, total - prose + 1, ": %s", why);
+
+    return error_node((struct error){ .code = ERR_GIT, .message = message });
 }
 
-error_code_t error_code_from_errno(int errno_val) {
+error_code_t error_errno_code(int errno_val) {
     switch (errno_val) {
         /* The bits, an ACL among them, refused the identity the call ran as:
          * the one refusal another identity may not meet (sys/filesystem.h
@@ -110,7 +135,7 @@ error_code_t error_code_from_errno(int errno_val) {
     }
 }
 
-error_t error_from_errno(int errno_val, const char *fmt, ...) {
+error_t error_errno(int errno_val, const char *fmt, ...) {
     CHECK_NULL(fmt);
 
     /* The caller's prose, then ": " and strerror's word: one message, sized before
@@ -133,7 +158,7 @@ error_t error_from_errno(int errno_val, const char *fmt, ...) {
     snprintf(message + prose, total - prose + 1, ": %s", why);
 
     return error_node(
-        (struct error){ .code = error_code_from_errno(errno_val), .message = message }
+        (struct error){ .code = error_errno_code(errno_val), .message = message }
     );
 }
 

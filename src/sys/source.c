@@ -285,7 +285,7 @@ static void source_read(
         if (open_errno == ENOENT || open_errno == ENOTDIR) return;
         if (nofollow && fs_lstat(path, &st) == 0 && S_ISLNK(st.st_mode)) return;
 
-        out->failure = error_from_errno(open_errno, "Failed to open '%s'", path);
+        out->failure = error_errno(open_errno, "Failed to open '%s'", path);
         return;
     }
 
@@ -369,7 +369,7 @@ static const file_t *source_gitignore(
 static error_t source_config(git_config *config, const char *path, git_config_level_t level) {
     /* Read, or not there: libgit2's answer; a file that does not parse, its error. */
     int rc = git_config_add_file_ondisk(config, path, level, NULL, 0);
-    if (rc != GIT_ENOTFOUND) return rc < 0 ? error_from_git(rc) : NULL;
+    if (rc != GIT_ENOTFOUND) return rc < 0 ? error_git(rc, "Failed to read '%s'", path) : NULL;
 
     /* There, and not to be read: the machine's is absent, as git skips one. */
     if (level < GIT_CONFIG_LEVEL_LOCAL) return NULL;
@@ -395,7 +395,7 @@ static error_t source_bool(git_config *config, const char *key, bool *out) {
     int rc = git_config_get_bool(&value, config, key);
 
     *out = rc == 0 && value;
-    return rc < 0 && rc != GIT_ENOTFOUND ? error_from_git(rc) : NULL;
+    return rc < 0 && rc != GIT_ENOTFOUND ? error_git(rc, "Failed to read %s", key) : NULL;
 }
 
 /**
@@ -411,7 +411,7 @@ static error_t source_string(
 
     *out = rc == 0 ? arena_strdup(f->arena, value.ptr) : NULL;
     git_buf_dispose(&value);
-    return rc < 0 && rc != GIT_ENOTFOUND ? error_from_git(rc) : NULL;
+    return rc < 0 && rc != GIT_ENOTFOUND ? error_git(rc, "Failed to read %s", key) : NULL;
 }
 
 /**
@@ -447,10 +447,10 @@ static const repository_t *source_repository(
         int (*find)(git_buf *path);
         git_config_level_t level;
     } levels[] = {
-        { git_config_find_global,      GIT_CONFIG_LEVEL_GLOBAL              },
-        { git_config_find_xdg,         GIT_CONFIG_LEVEL_XDG                 },
-        { git_config_find_system,      GIT_CONFIG_LEVEL_SYSTEM              },
-        { git_config_find_programdata, GIT_CONFIG_LEVEL_PROGRAMDATA         },
+        { git_config_find_global,      GIT_CONFIG_LEVEL_GLOBAL      },
+        { git_config_find_xdg,         GIT_CONFIG_LEVEL_XDG         },
+        { git_config_find_system,      GIT_CONFIG_LEVEL_SYSTEM      },
+        { git_config_find_programdata, GIT_CONFIG_LEVEL_PROGRAMDATA },
     };
 
     /* One composition serves both readings, read and let go before anything is
@@ -460,7 +460,7 @@ static const repository_t *source_repository(
     git_config *config = NULL;
     int rc = git_config_new(&config);
     if (rc < 0) {
-        r->failure = error_from_git(rc);
+        r->failure = error_git(rc, "Failed to read the configuration of '%s'", gitdir);
         return r;
     }
 
@@ -833,7 +833,7 @@ static error_t source_physical(const char *path, size_t len, char *physical) {
     /* realpath's own limit: a spelling past it names nothing the kernel resolves */
     char spelled[PATH_MAX];
     if (len >= sizeof(spelled)) {
-        return error_from_errno(ENAMETOOLONG, "Failed to resolve path '%.*s'", (int) len, path);
+        return error_errno(ENAMETOOLONG, "Failed to resolve path '%.*s'", (int) len, path);
     }
     memcpy(spelled, path, len);
     spelled[len] = '\0';
@@ -845,7 +845,7 @@ static error_t source_physical(const char *path, size_t len, char *physical) {
     size_t stands = len;
     while (!fs_realpath(spelled, physical)) {
         if ((errno != ENOENT && errno != ENOTDIR) || stands == 1) {
-            return error_from_errno(errno, "Failed to resolve path '%s'", spelled);
+            return error_errno(errno, "Failed to resolve path '%s'", spelled);
         }
         stands = source_parent(spelled, stands);
         spelled[stands] = '\0';

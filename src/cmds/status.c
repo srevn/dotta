@@ -1226,11 +1226,9 @@ static void status_print_remote(
         }
 
         if (err) {
-            /* Non-fatal: warn and continue with status display */
-            output_warning(
-                out, OUTPUT_VERBOSE, "Failed to fetch branches: %s",
-                error_line(err)
-            );
+            /* Non-fatal: warn and continue with status display. The fetch's failure
+             * names its act and the remote (sys/gitops.h). */
+            output_warning(out, OUTPUT_VERBOSE, "%s", error_line(err));
         }
 
         transfer_context_free(xfer);

@@ -43,7 +43,7 @@ error_t terminal_init(terminal_t **out) {
     /* Save original terminal settings */
     struct termios orig;
     if (tcgetattr(STDIN_FILENO, &orig) < 0) {
-        return error_from_errno(errno, "failed to get terminal attributes");
+        return error_errno(errno, "failed to get terminal attributes");
     }
 
     /* Configure raw mode */
@@ -86,7 +86,7 @@ error_t terminal_init(terminal_t **out) {
     /* Apply raw mode settings. A refusal disarms, which moves no errno. */
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) {
         terminal_disarm();
-        return error_from_errno(errno, "failed to enable raw mode");
+        return error_errno(errno, "failed to enable raw mode");
     }
 
     /* The state, made once raw mode is on: nothing before it had to be undone */
@@ -166,7 +166,7 @@ error_t terminal_get_size(terminal_size_t *out) {
 
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) < 0) {
-        return error_from_errno(errno, "failed to get terminal size");
+        return error_errno(errno, "failed to get terminal size");
     }
 
     /* Validate terminal size */

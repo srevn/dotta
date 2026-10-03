@@ -934,7 +934,7 @@ static void workspace_analyze_file(
          *
          * Returns here because every phase below needs a valid stat. */
         item->divergence |= DIVERGENCE_UNVERIFIED;
-        item->fault = workspace_code_fault(error_code_from_errno(item->lstat_errno));
+        item->fault = workspace_code_fault(error_errno_code(item->lstat_errno));
         return;
     }
 
@@ -1945,14 +1945,14 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
     if (item->occupant == FS_OCCUPANT_UNKNOWN) {
         /* Present but unstattable, either kind: nothing to measure the copy with,
          * and the errno says whose refusal it was. */
-        item->fault = workspace_code_fault(error_code_from_errno(item->lstat_errno));
+        item->fault = workspace_code_fault(error_errno_code(item->lstat_errno));
     } else if (item->item_kind == PATH_KIND_FILE) {
         item->fault = workspace_error_fault(workspace_compare_orphan(ws, item));
     } else if (fs_eaccess(item->filesystem_path, R_OK | X_OK) < 0) {
         /* A directory: read for the readdir, search for the walk's look at an
          * entry named like OS metadata (fs_directory_emptiness). Any failure
          * leaves it unmeasured, and the errno, faccessat's, says whose. */
-        item->fault = workspace_code_fault(error_code_from_errno(errno));
+        item->fault = workspace_code_fault(error_errno_code(errno));
     }
 
     if (item->fault != WORKSPACE_FAULT_NONE) {
@@ -2519,7 +2519,7 @@ static workspace_fault_t workspace_scan(
                  * name is made. The directory's search bit, or the path above
                  * it, refuses every entry alike: this frame could not look beneath
                  * its directory, and its parent says so, once. */
-                const workspace_fault_t fault = workspace_code_fault(error_code_from_errno(errno));
+                const workspace_fault_t fault = workspace_code_fault(error_errno_code(errno));
                 if (errno == EACCES || errno == ELOOP) return fault;
 
                 /* Any other is this entry's own — a name past PATH_MAX, an I/O
@@ -2529,7 +2529,8 @@ static workspace_fault_t workspace_scan(
                  * a directory stood there to look beneath. */
                 if (!claim) {
                     workspace_add_unscanned(
-                        ws, child, manifest_name(scratch, ws->manifest, scan->profile, child, NULL),
+                        ws, child,
+                        manifest_name(scratch, ws->manifest, scan->profile, child, NULL),
                         scan->profile, occupant, NULL, fault
                     );
                 }
@@ -2865,7 +2866,7 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
          * the row, which left status reporting a clean workspace for a path it
          * had just failed to read. Same three-way policy as the file rows. */
         item->divergence = DIVERGENCE_UNVERIFIED;
-        item->fault = workspace_code_fault(error_code_from_errno(item->lstat_errno));
+        item->fault = workspace_code_fault(error_errno_code(item->lstat_errno));
         return;
     }
 

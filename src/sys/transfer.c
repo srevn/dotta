@@ -33,6 +33,21 @@ typedef enum {
 } credential_state_t;
 
 /**
+ * Outcome of the most recent op within a transfer session (file-local).
+ *
+ * What the credential state machine advances on (transfer_op_end) and what keeps
+ * a failed session's summary silent (transfer_summarize). No caller reads it: a
+ * failure says whose refusal it was in its own words, the credential callback's
+ * among them (transfer_credentials_callback).
+ */
+typedef enum {
+    TRANSFER_OUTCOME_NONE = 0,     /* No op has completed in this session. */
+    TRANSFER_OUTCOME_OK,           /* Op succeeded. */
+    TRANSFER_OUTCOME_AUTH_FAILED,  /* Op failed with an authentication error. */
+    TRANSFER_OUTCOME_OTHER_FAILURE /* Op failed for a non-auth reason. */
+} transfer_outcome_t;
+
+/**
  * Transfer context.
  *
  * Owns the full lifecycle of a network session against one remote:
@@ -132,7 +147,7 @@ static bool url_is_local(const char *url) {
  * A run that exhausts libgit2's own replay budget is GIT_ERROR — "the exact cause
  * is unclear", in its words (transports/http.c http_stream_read) — and classifies
  * as OTHER_FAILURE, as do the auth failures some TLS and SSH paths surface as
- * other errors; the wording that follows is generic, never false.
+ * other errors: their credentials stay pending, neither approved nor rejected.
  */
 static transfer_outcome_t classify_outcome(int rc) {
     if (rc == 0) return TRANSFER_OUTCOME_OK;
@@ -320,13 +335,6 @@ void transfer_op_end(transfer_context_t *xfer, int rc) {
              * op may validate or invalidate it. */
             break;
     }
-}
-
-/**
- * Return the outcome of the most recent op.
- */
-transfer_outcome_t transfer_last_outcome(const transfer_context_t *xfer) {
-    return xfer ? xfer->last_outcome : TRANSFER_OUTCOME_NONE;
 }
 
 /**

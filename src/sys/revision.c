@@ -29,8 +29,8 @@
  */
 static error_t revision_unwalked(int rc, const char *spelling, const char *branch) {
     return branch
-        ? error_wrap(error_from_git(rc), "Cannot walk '%s' in branch '%s'", spelling, branch)
-        : error_wrap(error_from_git(rc), "Cannot walk '%s'", spelling);
+        ? error_git(rc, "Cannot walk '%s' in branch '%s'", spelling, branch)
+        : error_git(rc, "Cannot walk '%s'", spelling);
 }
 
 /*
@@ -288,7 +288,7 @@ error_t revision_resolve(
     int rc = git_revparse_single(&named, repo, name);
     free(name);
     if (rc < 0) {
-        return error_wrap(error_from_git(rc), "Cannot resolve '%s'", spelling);
+        return error_git(rc, "Cannot resolve '%s'", spelling);
     }
 
     /* Peeled to a commit before any step is walked: an annotated tag's id is
@@ -302,9 +302,7 @@ error_t revision_resolve(
     rc = git_object_peel(&peeled, named, GIT_OBJECT_COMMIT);
     git_object_free(named);
     if (rc < 0) {
-        return error_wrap(
-            error_from_git(rc), "'%s' does not point to a commit", spelling
-        );
+        return error_git(rc, "'%s' does not point to a commit", spelling);
     }
 
     /* The steps, walked once: the name's commit is the same whichever branch is
@@ -345,9 +343,8 @@ error_t revision_find(
          * decides nothing. */
         int rc = git_graph_reachable_from_any(repo, &rev->commit, git_commit_id(tip), 1);
         if (rc < 0) {
-            return error_wrap(
-                error_from_git(rc),
-                "Cannot tell whether commit '%s' is reachable from branch '%s'",
+            return error_git(
+                rc, "Cannot tell whether commit '%s' is reachable from branch '%s'",
                 rev->spelling, branch
             );
         }
@@ -355,9 +352,7 @@ error_t revision_find(
 
         rc = git_commit_lookup(out, repo, &rev->commit);
         if (rc < 0) {
-            return error_wrap(
-                error_from_git(rc), "Cannot read commit '%s'", rev->spelling
-            );
+            return error_git(rc, "Cannot read commit '%s'", rev->spelling);
         }
         return NULL;
     }

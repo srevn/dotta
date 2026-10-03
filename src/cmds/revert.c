@@ -492,7 +492,7 @@ static error_t show_diff_preview(
     if (rc < 0) {
         buffer_deinit(&standing_plaintext);
         buffer_deinit(&target_plaintext);
-        return error_from_git(rc);
+        return error_git(rc, "Cannot compare the two versions of '%s'", standing_name);
     }
 
     /* Get patch stats */
@@ -781,7 +781,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * that reads the commit. */
     int rc = git_commit_tree(&target_tree, target_commit);
     if (rc < 0) {
-        err = error_from_git(rc);
+        err = error_git(rc, "Cannot read the tree of commit '%s'", opts->commit);
         goto cleanup;
     }
 
@@ -898,7 +898,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * read as one of its non-readers. */
     rc = git_tree_entry_bypath(&standing_entry, stage_tree(stage), restored_name);
     if (rc < 0 && rc != GIT_ENOTFOUND) {
-        err = error_from_git(rc);
+        err = error_git(rc, "Cannot read '%s' in profile '%s'", restored_name, profile);
         goto cleanup;
     }
 
@@ -967,10 +967,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
             &restored_blob, rebound.data, rebound.size, GIT_OBJECT_BLOB
         );
         if (rc < 0) {
-            err = error_wrap(
-                error_from_git(rc), "Cannot identify the resealed '%s'",
-                restored_name
-            );
+            err = error_git(rc, "Cannot identify the resealed '%s'", restored_name);
             goto cleanup;
         }
     }

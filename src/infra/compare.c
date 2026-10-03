@@ -149,7 +149,7 @@ static error_t read_copy(
 
     int fd = fs_open(disk_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0);
     if (fd < 0) {
-        return error_from_errno(errno, "Failed to open '%s'", disk_path);
+        return error_errno(errno, "Failed to open '%s'", disk_path);
     }
 
     error_t err = fs_read_fd(fd, out);
@@ -396,7 +396,7 @@ static error_t generate_text_diff(
 
     if (rc < 0) {
         buffer_deinit(&diff_output);
-        return error_from_git(rc);
+        return error_git(rc, "Cannot compare the two versions of '%s'", path_label);
     }
 
     /* Extract result - transfer ownership and free buffer structure */
@@ -433,7 +433,7 @@ error_t compare_generate_diff(
 
     if (fs_lstat(disk_path, &st) != 0) {
         if (errno != ENOENT && errno != ENOTDIR) {
-            err = error_from_errno(errno, "Failed to stat '%s'", disk_path);
+            err = error_errno(errno, "Failed to stat '%s'", disk_path);
             goto cleanup;
         }
 

@@ -249,9 +249,7 @@ static error_t show_source(
     int rc = git_commit_tree(out_tree, commit);
     if (rc < 0) {
         git_commit_free(commit);
-        return error_wrap(
-            error_from_git(rc), "Failed to load tree from commit '%s'", commit_ref
-        );
+        return error_git(rc, "Failed to load tree from commit '%s'", commit_ref);
     }
 
     *out_commit = commit;
@@ -459,7 +457,7 @@ static error_t show_commit(
     /* Get commit tree — from the commit in hand, not by a second lookup */
     int rc = git_commit_tree(&commit_tree, commit);
     if (rc < 0) {
-        err = error_from_git(rc);
+        err = error_git(rc, "Cannot read the commit's tree");
         goto cleanup;
     }
 
@@ -554,7 +552,7 @@ static error_t show_commit(
         diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out
     );
     if (rc < 0) {
-        err = error_from_git(rc);
+        err = error_git(rc, "Cannot print the diff");
         goto cleanup;
     }
 

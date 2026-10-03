@@ -81,7 +81,11 @@ error_t upstream_analyze_profile(
     int rc = git_graph_ahead_behind(
         &ahead, &behind, repo, &local_oid, &remote_oid
     );
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) {
+        return error_git(
+            rc, "Cannot count the commits between '%s' and '%s'", local_refname, remote_refname
+        );
+    }
 
     out->ahead = ahead;
     out->behind = behind;

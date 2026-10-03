@@ -506,9 +506,7 @@ static error_t append_claim_dirs(
             continue;   /* Tree-backed: the walk collected it */
         }
         if (rc != GIT_ENOTFOUND) {
-            return error_wrap(
-                error_from_git(rc), "Failed to read '%s' in the profile tree", key
-            );
+            return error_git(rc, "Failed to read '%s' in the profile tree", key);
         }
 
         export_entry_t e;
@@ -644,7 +642,7 @@ static error_t collect_storage(
             if (held.filemode == GIT_FILEMODE_TREE) {
                 int rc = git_tree_lookup(&subtree, ctx->run.repo, &held.oid);
                 if (rc < 0) {
-                    err = error_from_git(rc);
+                    err = error_git(rc, "Cannot read '%s' in profile '%s'", name, profile);
                     goto cleanup;
                 }
 
@@ -1007,7 +1005,7 @@ static error_t validate_destinations(export_entry_list_t *list) {
                     e->dest_path
                 );
             }
-            return error_from_errno(errno, "Cannot stat '%s'", e->dest_path);
+            return error_errno(errno, "Cannot stat '%s'", e->dest_path);
         }
 
         switch (e->kind) {
@@ -1409,10 +1407,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
          * helper beside this one would look the commit up a second time. */
         int rc = git_commit_tree(&tree, commit);
         if (rc < 0) {
-            err = error_wrap(
-                error_from_git(rc),
-                "Failed to load tree from commit '%s'", opts->commit
-            );
+            err = error_git(rc, "Failed to load tree from commit '%s'", opts->commit);
             goto cleanup;
         }
 

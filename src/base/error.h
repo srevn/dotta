@@ -84,9 +84,9 @@
  * reader of both), so their meaning is fixed here. ERR_LOCKED is the run's want
  * of a key: crypto/keymgr's refusals, and infra/content's over a sealed blob
  * with no key in reach or the feature off. ERR_PERMISSION is a refusal an identity
- * met: the kernel's — EACCES, through error_from_errno below: the bits refused
- * the identity the call ran as, where an EPERM may be a flag's or a policy's
- * that root meets as flatly (ERR_FS) — and libgit2's owner check on the repository,
+ * met: the kernel's — EACCES, through error_errno below: the bits refused the
+ * identity the call ran as, where an EPERM may be a flag's or a policy's that
+ * root meets as flatly (ERR_FS) — and libgit2's owner check on the repository,
  * which spells its own because GIT_EOWNER carries no errno (sys/gitops.c
  * gitops_open_repository). An answer dotta looked up is never one, whatever the
  * answer is about: a hook's mode, a claim's ids, a policy's verdict.
@@ -142,12 +142,23 @@ error_t error_wrap(error_t cause, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
- * Create error from libgit2 error
+ * Create an error from a libgit2 failure
  *
- * @param git_error_code Git error code (from libgit2)
+ * The caller's prose, then ": " and libgit2's sentence for the call that failed
+ * — the shape error_errno gives a kernel refusal — coded ERR_GIT; libgit2's code
+ * stands in the sentence's place only where the call set none. The prose is what
+ * could not be done, about what the caller holds ("Messages" above). The sentence
+ * is the last libgit2 set, so this is called directly after the failing call:
+ * nothing between them — the arguments of this call among them, which are evaluated
+ * first — may call into libgit2 where that sets another.
+ *
+ * @param git_error_code The failing call's return
+ * @param fmt Format string (printf-style) for the caller's part of the message
+ * @param ... Format arguments
  * @return The error, the process's
  */
-error_t error_from_git(int git_error_code);
+error_t error_git(int git_error_code, const char *fmt, ...)
+__attribute__((format(printf, 2, 3)));
 
 /**
  * The error code an errno names
@@ -160,13 +171,13 @@ error_t error_from_git(int git_error_code);
  * @param errno_val errno value
  * @return The code
  */
-error_code_t error_code_from_errno(int errno_val);
+error_code_t error_errno_code(int errno_val);
 
 /**
  * Create an error from a kernel refusal
  *
  * The one producer for every site that turns an errno into an error: the code
- * is error_code_from_errno's, the message the caller's prose, then ": " and
+ * is error_errno_code's, the message the caller's prose, then ": " and
  * strerror's word — exactly what a site would spell by hand, so a reader can
  * act on the code (ERR_PERMISSION, ERR_NOT_FOUND) without matching prose. Read
  * errno into the argument before anything that could move it (a close, a free).
@@ -180,7 +191,7 @@ error_code_t error_code_from_errno(int errno_val);
  * @param ... Format arguments
  * @return The error, the process's
  */
-error_t error_from_errno(int errno_val, const char *fmt, ...)
+error_t error_errno(int errno_val, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**

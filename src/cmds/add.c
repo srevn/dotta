@@ -614,7 +614,7 @@ static error_t add_collect(
                 continue;
 
             case FS_OCCUPANT_UNKNOWN:
-                return error_from_errno(errno, "Failed to stat '%s'", child_fs);
+                return error_errno(errno, "Failed to stat '%s'", child_fs);
 
             case FS_OCCUPANT_OTHER:
                 output_info(
@@ -1870,7 +1870,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             }
 
             case FS_OCCUPANT_UNKNOWN:
-                err = error_from_errno(errno, "Cannot access '%s'", filesystem_path);
+                err = error_errno(errno, "Cannot access '%s'", filesystem_path);
                 goto cleanup;
 
             case FS_OCCUPANT_OTHER:
@@ -2338,7 +2338,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * with lstat, so anything else standing here changed since. */
         struct stat dir_stat;
         if (fs_lstat(path->filesystem_path, &dir_stat) != 0) {
-            err = error_from_errno(
+            err = error_errno(
                 errno, "Failed to stat directory '%s'", path->filesystem_path
             );
             goto cleanup;

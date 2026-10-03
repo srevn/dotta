@@ -46,7 +46,7 @@ error_t entropy_fill(uint8_t *out, size_t len) {
             /* Scrub partial output so callers get the "all valid or all zero"
              * contract documented in entropy.h. */
             secure_wipe(out, len);
-            return error_from_errno(
+            return error_errno(
                 saved_errno, "entropy_fill: failed after %zu of %zu bytes",
                 off, len
             );

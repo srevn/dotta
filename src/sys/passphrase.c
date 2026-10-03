@@ -111,7 +111,7 @@ error_t passphrase_prompt(
     if (result == NULL) {
         secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         return read_failed
-            ? error_from_errno(read_errno, "Read failed")
+            ? error_errno(read_errno, "Read failed")
             : error_create(ERR_FS, "End of input");
     }
 

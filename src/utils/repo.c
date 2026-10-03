@@ -66,17 +66,19 @@ error_t repo_declare_store(git_repository *repo) {
     /* The layered handle writes at its write level, the repository's own file. */
     git_config *config = NULL;
     int rc = git_repository_config(&config, repo);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot read the repository's configuration");
 
     rc = git_config_set_bool(config, "dotta.store", 1);
     if (rc < 0) {
         git_config_free(config);
-        return error_from_git(rc);
+        return error_git(rc, "Cannot set dotta.store in the repository's configuration");
     }
 
     rc = git_config_set_bool(config, "core.logAllRefUpdates", 1);
     git_config_free(config);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) {
+        return error_git(rc, "Cannot set core.logAllRefUpdates in the repository's configuration");
+    }
 
     return NULL;
 }
@@ -90,7 +92,7 @@ error_t repo_is_store(git_repository *repo, bool *out) {
 
     git_config *config = NULL;
     int rc = git_repository_config(&config, repo);
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot read the repository's configuration");
 
     /* The repository's own level, cut out of the layered handle (the header). */
     git_config *local = NULL;
@@ -110,7 +112,7 @@ error_t repo_is_store(git_repository *repo, bool *out) {
             strerror(access(path, R_OK) != 0 ? errno : EISDIR)
         );
     }
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot read the repository's own configuration");
 
     int declared = 0;
     rc = git_config_get_bool(&declared, local, "dotta.store");
@@ -119,7 +121,7 @@ error_t repo_is_store(git_repository *repo, bool *out) {
         *out = false;
         return NULL;
     }
-    if (rc < 0) return error_from_git(rc);
+    if (rc < 0) return error_git(rc, "Cannot read dotta.store");
 
     *out = declared != 0;
     return NULL;

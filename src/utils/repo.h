@@ -111,12 +111,15 @@ error_t repo_declare_store(git_repository *repo);
  * the store's own file, never the user's global config, where a `dotta.store`
  * would declare every repository on the machine (pinned: the layered handle reads
  * it through). Two callers, two uses of the answer: `repo_open` refuses on false;
- * init takes the repository on true and looks at its refs on false.
+ * init takes a bare repository on true and looks at its refs on false — and asks
+ * this first, since the bareness it then trusts is a value of the same file
+ * (cmds/init.c ensure_repository_adoptable).
  *
  * A store whose config file cannot be read is not "not a store": libgit2 drops
- * the local level when the file will not open (a missing file still yields an
- * empty level) and reports the drop as GIT_ENOTFOUND, and that one is returned
- * as the error it is. A value that is not a boolean is Git's own error.
+ * the local level when the file will not open — access(2) refused it, or it is
+ * a directory; a missing file still yields an empty level — and reports the drop
+ * as GIT_ENOTFOUND, and that one is refused naming the file, in the kernel's
+ * word. A value that is not a boolean is Git's own error.
  *
  * @param repo Repository (must not be NULL)
  * @param out Output boolean (must not be NULL)

@@ -4,7 +4,11 @@
 
 #include "utils/repo.h"
 
+#include <errno.h>
+#include <limits.h>
+#include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "base/error.h"
 #include "sys/filesystem.h"
@@ -93,7 +97,18 @@ error_t repo_is_store(git_repository *repo, bool *out) {
     rc = git_config_open_level(&local, config, GIT_CONFIG_LEVEL_LOCAL);
     git_config_free(config);
     if (rc == GIT_ENOTFOUND) {
-        return error_create(ERR_GIT, "Cannot read the repository's config file");
+        /* The level libgit2 dropped (config_file.c config_file_open), which says
+         * why only for a directory, and nothing where access(2) refused the file:
+         * the word is the kernel's, asked again as libgit2 asked it, and where
+         * access(2) passes, the file is the directory libgit2 refused — the words
+         * sys/source.c source_config gives the same fact. The store is never a
+         * worktree, so the file is its commondir's. */
+        char path[PATH_MAX + sizeof("config")];
+        snprintf(path, sizeof(path), "%sconfig", git_repository_commondir(repo));
+        return error_create(
+            ERR_GIT, "Cannot read '%s': %s", path,
+            strerror(access(path, R_OK) != 0 ? errno : EISDIR)
+        );
     }
     if (rc < 0) return error_from_git(rc);
 

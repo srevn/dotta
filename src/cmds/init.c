@@ -27,10 +27,14 @@
  * repository, so the question is asked once here, before the first of them, and
  * a refusal leaves the repository exactly as it was found.
  *
+ *   config unreadable        refused, the file named (utils/repo.h repo_is_store):
+ *                            libgit2 reads the level it cannot open as absent,
+ *                            core.bare with it, so every row below would answer
+ *                            for a file nobody read
  *   not bare                 refused: dotta's store is bare (utils/repo.h), and a
  *                            working tree is somebody's — a project, or the store
  *                            an older dotta kept checked out. Nothing here
- *                            re-shapes one.
+ *                            re-shapes one, declared or not.
  *   declared (dotta.store)   dotta's own — the marker its maker wrote — repaired
  *                            in place: a missing record, epoch or baseline is
  *                            re-made below and what stands is kept
@@ -54,16 +58,23 @@ static error_t ensure_repository_adoptable(
     CHECK_NULL(repo);
     CHECK_NULL(path);
 
+    /* The declaration first, read off the repository's own config file, which
+     * it refuses where libgit2 could not open it: libgit2 drops that level as
+     * absent and core.bare goes with it (repository.c load_config_data reads an
+     * unset value as not bare), so a bare store whose config will not open would
+     * answer "a working tree" below */
+    bool declared = false;
+    error_t err = repo_is_store(repo, &declared);
+    if (err) return err;
+
+    /* The shape before the declaration is taken: a repository with a working
+     * tree is refused whatever it declares */
     if (!git_repository_is_bare(repo)) {
         return error_create(
             ERR_CONFLICT, "'%s' is a Git repository with a working tree, and dotta's "
             "store is bare", path
         );
     }
-
-    bool declared = false;
-    error_t err = repo_is_store(repo, &declared);
-    if (err) return err;
     if (declared) return NULL;
 
     /* Any reference at all is history this run did not write, and the listing

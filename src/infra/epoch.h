@@ -113,20 +113,23 @@
  * and a fresh epoch would orphan it permanently. With any reachable ciphertext,
  * the refusal names the state of the ref and the restore that repairs it, and
  * the evidence stays in place (a remote holding the true epoch heals a divergence
- * via sync's fetch paths instead). Its code is ERR_CRYPTO where the ref is missing,
- * and the load's where it stands: ERR_CRYPTO for bytes the load refused, ERR_GIT
- * for an object it could not read. A census that cannot finish proves no absence
+ * via sync's fetch paths instead). A census that cannot finish proves no absence
  * and reaches the same verdict, but not for the same reason, so it carries its
- * own cause rather than borrowing that sentence — and that cause's code, ERR_GIT
- * or, for a header it could not read, ERR_CRYPTO. With a clean census the ref
+ * own cause rather than borrowing that sentence. With a clean census the ref
  * binds nothing: an unreadable one is deleted and re-minted (`*out_repaired`
  * set — the caller renders the repair), an absent one is simply a repository
  * that has no epoch yet.
  *
- * Called by `cmd_init` once the store is declared its own (utils/repo.h), and
- * read there (cmds/init.c cmd_init): an ERR_CRYPTO refusal stands as it is, and
- * every other is wrapped. Encryption-disabled installations still produce the
- * ref so a future `dotta key set` (or a clone fetching this remote) finds it ready.
+ * Every refusal names the epoch or its act — the census, the ref and its restore,
+ * the removal, the salt, the commit — and keeps its cause's code: ERR_CRYPTO
+ * where the ref is missing, the load's or the census's where they stand (ERR_CRYPTO
+ * for bytes refused, ERR_GIT for an object that would not read). No caller reads
+ * it.
+ *
+ * Called by `cmd_init` once the store is declared its own (utils/repo.h), which
+ * returns each refusal as it is said (cmds/init.c cmd_init). Encryption-disabled
+ * installations still produce the ref so a future `dotta key set` (or a clone
+ * fetching this remote) finds it ready.
  *
  * @param repo         Repository (must not be NULL)
  * @param memory_mib   Argon2 memory in MiB to mint with (a preset's; in range)

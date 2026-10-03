@@ -179,22 +179,16 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
      * regenerated when the ciphertext census proves the repository holds none,
      * and surfaced as an error otherwise. Done unconditionally (not gated on
      * encryption_enabled) so a later `dotta key set` finds the epoch ready, and
-     * so `dotta clone` of this repo can fetch it regardless of the cloner's
-     * config. */
+     * so `dotta clone` of this repo can fetch it regardless of the cloner's config.
+     * Every refusal names the epoch or its act — the census, the ref and the
+     * restore that repairs it, the salt, the commit — so each stands as it is
+     * said: a wrap would only push it under a line that says less. */
     kdf_epoch_t epoch;
     bool epoch_repaired = false;
     err = epoch_init(
         repo, opts->preset->memory_mib, opts->preset->passes, &epoch, &epoch_repaired
     );
-    if (err) {
-        /* ERR_CRYPTO is the refusal to mint over reachable ciphertext. It already
-         * names the state of the ref and the restore that repairs it, so a wrap
-         * would only push both under a line that says less. */
-        if (error_code(err) != ERR_CRYPTO) {
-            err = error_wrap(err, "Failed to initialize repository epoch");
-        }
-        goto cleanup;
-    }
+    if (err) goto cleanup;
     if (epoch_repaired) {
         output_info(
             out, OUTPUT_NORMAL,

@@ -1330,15 +1330,15 @@ static void epoch_emit_damaged(output_t *out, const char *remote_name) {
  *
  * Runs before the fetch phase so the decision's census is never contaminated by
  * pulled remote ciphertext. Every outcome is best-effort — a warning and the
- * rest of the sync — which is why nothing here is returned: the one error the
- * resolve produces is a census that could not finish, and that is a verdict to
- * render, not a run to fail.
+ * rest of the sync — which is why nothing here is returned: the two errors the
+ * resolve produces, a local ref that would not read and a census that could not
+ * finish, are verdicts to render, not a run to fail.
  *
  * The epoch is machinery, so it says as little as it can get away with. Five of
  * the seven verdicts are a verbose line or nothing at all: dotta either did the
  * right thing or had nothing to do, and neither is the user's business at NORMAL.
  * What speaks up is what the user has to act on — a divergence over ciphertext,
- * a ref that cannot be read over ciphertext, and a census that could not finish
+ * a ref that cannot be read over ciphertext, and a resolve that could not decide
  * — and each is one line of finding plus one of remedy or cause. Nothing here
  * reports the census, the salt, or which of three routes reached an adopt.
  */
@@ -1355,14 +1355,13 @@ static void epoch_reconcile(
     epoch_reconcile_t decision;
     error_t err = epoch_resolve(repo, remote_name, xfer, &decision);
     if (err) {
-        /* The census could not finish, so no absence was proved and the verdict
-         * is the one a found ciphertext gets: no git op. Sync is the only place
-         * this cause is ever reported — the resolve returns it bare precisely
-         * so that the line naming the subject is written here. */
+        /* No decision: the local ref would not read, or the census could not
+         * finish — each error says which, in its own words (infra/epoch.h
+         * epoch_resolve) — so no absence was proved and the verdict is the one
+         * a found ciphertext gets: no git op. Sync is the only place either is
+         * ever reported, so the line says what it knows and the error the rest. */
         output_warning(
-            out, OUTPUT_NORMAL,
-            "Repository epoch left alone: whether any encrypted file here is "
-            "sealed under the local epoch could not be determined: %s", error_line(err)
+            out, OUTPUT_NORMAL, "Repository epoch left alone: %s", error_line(err)
         );
         return;
     }

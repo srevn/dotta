@@ -957,46 +957,36 @@ typedef enum {
 
 /*
  * Inspect the remote epoch without transferring objects: connect + ls, then compare
- * the advertised refs/dotta/epoch OID against the local ref target. Read-only
- * and dry-run-safe. Transport failure surfaces as an error (which epoch_resolve
- * folds to UNREACHABLE); a remote that simply lacks the ref is ABSENT, never an
- * error.
+ * the advertised refs/dotta/epoch OID against the local one the caller read —
+ * the zero id where no local ref stands. Read-only and dry-run-safe. Its failure
+ * is the remote's alone, the lookup or the transport (which epoch_resolve folds
+ * to UNREACHABLE); a remote that simply lacks the ref is ABSENT, never an error.
  */
 static error_t epoch_inspect_remote(
     git_repository *repo, const char *remote_name, transfer_context_t *xfer,
-    epoch_remote_t *out_status
+    const git_oid *local, epoch_remote_t *out_status
 ) {
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, remote_name);
     if (rc < 0) return error_from_git(rc);
 
+    /* The advertisement, its sentence read before the free closes the transport
+     * (epoch_probe_remote reads it at the failing call) */
     bool present = false;
     git_oid remote_oid;
     error_t err = epoch_probe_remote(remote, xfer, &present, &remote_oid);
     git_remote_free(remote);
-    if (err) {
-        /* Transport failure — propagate so the caller can skip epoch reconciliation
-         * best-effort. */
-        return err;
-    }
+    if (err) return err;
 
     if (!present) {
         *out_status = EPOCH_REMOTE_ABSENT;
         return NULL;
     }
 
-    /* Remote advertises the ref. Compare its commit OID against the local ref
-     * target. A missing local ref is DIVERGENT (a joiner that has no epoch yet
-     * must converge to the remote's). */
-    git_oid local_oid;
-    err = gitops_reference_oid(repo, EPOCH_REF, &local_oid);
-    if (err) return err;
-    if (git_oid_is_zero(&local_oid)) {
-        *out_status = EPOCH_REMOTE_DIVERGENT;
-        return NULL;
-    }
-
-    *out_status = git_oid_equal(&local_oid, &remote_oid)
+    /* Remote advertises the ref: its commit OID against the local one. No
+     * advertised id is the zero id, so a missing local ref compares DIVERGENT —
+     * a joiner that has no epoch yet must converge to the remote's. */
+    *out_status = git_oid_equal(local, &remote_oid)
         ? EPOCH_REMOTE_EQUAL
         : EPOCH_REMOTE_DIVERGENT;
 
@@ -1012,12 +1002,19 @@ error_t epoch_resolve(
     CHECK_NULL(xfer);
     CHECK_NULL(out_decision);
 
+    /* This store's own ref, read before the remote is asked: two questions, and
+     * a failure here is the run's and never the remote's. It names the ref
+     * (sys/gitops.h gitops_reference_find), which the caller's line does not. */
+    git_oid local;
+    error_t err = gitops_reference_oid(repo, EPOCH_REF, &local);
+    if (err) return err;
+
+    /* The remote's half alone now: a lookup or transport failure folds to
+     * UNREACHABLE — the caller skips epoch reconciliation best-effort, and the
+     * fetch phase carries the authoritative "remote unreachable" diagnostic. */
     epoch_remote_t status;
-    error_t err = epoch_inspect_remote(repo, remote_name, xfer, &status);
+    err = epoch_inspect_remote(repo, remote_name, xfer, &local, &status);
     if (err) {
-        /* Transport / lookup failure folds to UNREACHABLE: the caller skips epoch
-         * reconciliation best-effort, and the fetch phase carries the authoritative
-         * "remote unreachable" diagnostic. */
         *out_decision = EPOCH_RECONCILE_UNREACHABLE;
         return NULL;
     }
@@ -1042,8 +1039,17 @@ error_t epoch_resolve(
 
         case EPOCH_REMOTE_DIVERGENT:
             /* Five findings, and the fail-closed one is the return: a fetch arm
-             * is reached only over bytes nothing here can depend on. */
-            return epoch_decide(repo, out_decision);
+             * is reached only over bytes nothing here can depend on. A census
+             * that could not finish is said as the question it could not answer,
+             * here where it was asked, as epoch_init says its own */
+            err = epoch_decide(repo, out_decision);
+            if (err) {
+                return error_wrap(
+                    err, "Whether any encrypted file here is sealed under the local "
+                    "epoch could not be determined"
+                );
+            }
+            return NULL;
     }
 
     /* epoch_inspect_remote yields exactly one of three statuses */

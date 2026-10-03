@@ -345,14 +345,16 @@ typedef enum {
  * which may be exactly that root. The bytes are already gone; nothing this decision
  * licenses can make it worse.
  *
- * Fails closed by returning: a census that cannot finish is an error, never a
- * verdict, and it is the only error this call produces. Transport failure (connect
- * / ls) still folds to EPOCH_RECONCILE_UNREACHABLE so the caller can skip epoch
- * reconciliation best-effort — the authoritative "remote unreachable" diagnostic
- * comes from the subsequent fetch phase — but a census failure has no second
- * reporter anywhere in sync, so its cause is returned rather than dropped. It
- * is returned bare: this boundary knows the mechanism, and the caller that renders
- * it is the one that can name the subject.
+ * Two errors, each in its own words, since neither has a second reporter anywhere
+ * in sync: the local ref that would not read — read before the remote is asked,
+ * so its failure is never taken for the remote's, and named in it (sys/gitops.h
+ * gitops_reference_find) — and a census that could not finish, which fails closed:
+ * an error and never a verdict, wrapped as the question it could not answer,
+ * whose cause names the listing or the object that stopped it. A failure of the
+ * remote's half — the lookup, the connect, the ls — folds to
+ * EPOCH_RECONCILE_UNREACHABLE so the caller can skip epoch reconciliation
+ * best-effort: the authoritative "remote unreachable" diagnostic comes from the
+ * subsequent fetch phase.
  *
  * This module owns only the *mechanism* of looking and classifying; the acts,
  * the CLI gating, and the rendering are policy and live in `cmd_sync`.
@@ -361,8 +363,8 @@ typedef enum {
  * @param remote_name  Remote name (must not be NULL, e.g. "origin")
  * @param xfer         Transfer context for credentials / progress (must not be NULL)
  * @param out_decision Output decision (must not be NULL)
- * @return Error on a census that could not finish; otherwise NULL with
- *         *out_decision set
+ * @return Error where the local ref would not read or the census could not finish;
+ *         otherwise NULL with *out_decision set
  */
 error_t epoch_resolve(
     git_repository *repo,

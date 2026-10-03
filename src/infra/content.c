@@ -164,10 +164,13 @@ size_t content_estimated_plaintext_size(size_t blob_size, bool encrypted) {
  * that meets it already lists the path, and what it takes from the refusal is
  * the root's code alone — which classes the look LOCKED and puts the switch and
  * the key in the block's own closing line (core/workspace.h, workspace_fault_t).
+ * No way out follows the fact: it names the switch and its value, and every verb
+ * that meets it reads the content and obtains its own key once the switch is on
+ * (include/runtime.h, OBTAIN) — show, export, revert, add, update, diff and apply's
+ * failed row — so a clause would name a step none of them needs. The same sentence
+ * cmds/key.c key_set and key_clear refuse with.
  */
-static const char ENCRYPTION_DISABLED[] =
-    "Encryption is disabled (encryption.enabled = false); enable it in "
-    "config.toml, then run 'dotta key set'";
+static const char ENCRYPTION_DISABLED[] = "Encryption is disabled (encryption.enabled = false)";
 
 /**
  * Get plaintext from blob (internal workhorse)

@@ -141,17 +141,16 @@ error_t profile_resolve_enabled(
 /**
  * The enabled profile that holds a commit, and the commit
  *
- * The revision is read once, before any profile is asked (sys/gitops.h
- * gitops_revision_resolve): a spelling that names no commit refuses there, in
- * Git's words, and no profile is passed over for it. Then the enabled set is
- * asked from its highest precedence down — the last enabled first, the profile
- * that wins every path it shares — so `HEAD` is the tip of the profile the view
- * reads, and a history too short for `HEAD~N` is passed for the next one down.
- * Each profile's tip is read once and the revision asked of it
- * (gitops_revision_find), and the first profile holding it is the answer: the
- * tip itself or a commit its history reaches, or for HEAD's steps a history long
- * enough to take them. A profile behind that one is never asked: the order has
- * already decided.
+ * The revision is read once, before any profile is asked (sys/revision.h
+ * revision_resolve): a spelling that names no commit refuses there, in Git's
+ * words, and no profile is passed over for it. Then the enabled set is asked
+ * from its highest precedence down — the last enabled first, the profile that
+ * wins every path it shares — so `HEAD` is the tip of the profile the view reads,
+ * and a history too short for `HEAD~N` is passed for the next one down. Each
+ * profile's tip is read once and the revision asked of it (revision_find), and
+ * the first profile holding it is the answer: the tip itself or a commit its
+ * history reaches, or for HEAD's steps a history long enough to take them. A
+ * profile behind that one is never asked: the order has already decided.
  *
  * `filter` narrows the search to the profiles it names — the ones -p named, each
  * an enabled profile (core/scope.h scope_build refuses any other) — still asked
@@ -177,8 +176,8 @@ error_t profile_resolve_enabled(
  * Readers: diff.c diff_commit_to_workspace (the filter -p's), show.c cmd_show
  * (a commit named with no profile, no filter). A range's two ends are searched
  * for together (profile_resolve_range). A caller that names one profile resolves
- * in it directly (gitops_resolve_commit_in_branch) — the question there is not
- * which profile.
+ * in it directly (sys/revision.h revision_load) — the question there is not which
+ * profile.
  *
  * @param repo Repository (must not be NULL)
  * @param enabled The enabled set, in precedence order (must not be NULL)

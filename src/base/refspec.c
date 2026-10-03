@@ -25,7 +25,7 @@ bool refspec_looks_like_commit(const char *token) {
     }
 
     /* HEAD's spellings, `@` among them: one rule for the lexer and the resolver */
-    if (refspec_ancestry(token)) {
+    if (refspec_head_steps(token)) {
         return true;
     }
 
@@ -62,7 +62,7 @@ bool refspec_looks_like_commit(const char *token) {
     return false;
 }
 
-const char *refspec_ancestry(const char *spelling) {
+const char *refspec_head_steps(const char *spelling) {
     if (!spelling) {
         return NULL;
     }

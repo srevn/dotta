@@ -25,6 +25,7 @@
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
+#include "sys/revision.h"
 
 /**
  * Check if content appears to be binary
@@ -207,7 +208,7 @@ static error_t print_blob_content(
  *
  * The branch's tip, or the tree of the commit the user named — resolved in the
  * branch, so a ref that means something elsewhere means nothing here. A resolved
- * commit is always in hand (sys/gitops.h), and the handle is the tree's source
+ * commit is always in hand (sys/revision.h), and the handle is the tree's source
  * and the header's alike: it comes back beside the tree rather than being spent
  * here, because what it captions is printed once the argument has an answer
  * (show_provenance). `*out_commit` is NULL where the tip was read — a tip is
@@ -240,9 +241,7 @@ static error_t show_source(
     }
 
     git_commit *commit = NULL;
-    error_t err = gitops_resolve_commit_in_branch(
-        repo, profile, commit_ref, &commit
-    );
+    error_t err = revision_load(repo, profile, commit_ref, &commit);
     if (err) return err;
 
     /* The commit is in hand, so its tree is one dereference and not a second
@@ -602,9 +601,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             err = profile_require(repo, profile);
             if (err) goto cleanup;
 
-            err = gitops_resolve_commit_in_branch(
-                repo, profile, opts->commit, &source
-            );
+            err = revision_load(repo, profile, opts->commit, &source);
             if (err) goto cleanup;
         } else {
             string_array_t profiles;

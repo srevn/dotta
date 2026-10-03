@@ -25,6 +25,7 @@
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
+#include "sys/revision.h"
 #include "sys/stats.h"
 
 /**
@@ -244,8 +245,8 @@ error_t profile_resolve_commit(
 
     /* The revision once, whatever the set: a spelling that names nothing is its
      * own failure, before any profile could be passed over for it. */
-    gitops_revision_t rev;
-    error_t err = gitops_revision_resolve(repo, commit_ref, &rev);
+    revision_t rev;
+    error_t err = revision_resolve(repo, commit_ref, &rev);
     if (err) return err;
 
     /* From the highest precedence down: the last enabled wins every path it shares,
@@ -264,7 +265,7 @@ error_t profile_resolve_commit(
         if (err) return err;
 
         git_commit *commit = NULL;
-        err = gitops_revision_find(repo, &rev, profile, tip, &commit);
+        err = revision_find(repo, &rev, profile, tip, &commit);
         git_commit_free(tip);
         if (err) return err;
 
@@ -303,11 +304,11 @@ error_t profile_resolve_range(
 
     /* Both ends once, before any profile is asked: a spelling that names nothing
      * is its own failure, at either end. */
-    gitops_revision_t rev1;
-    gitops_revision_t rev2;
-    error_t err = gitops_revision_resolve(repo, commit1_ref, &rev1);
+    revision_t rev1;
+    revision_t rev2;
+    error_t err = revision_resolve(repo, commit1_ref, &rev1);
     if (err) return err;
-    err = gitops_revision_resolve(repo, commit2_ref, &rev2);
+    err = revision_resolve(repo, commit2_ref, &rev2);
     if (err) return err;
 
     /* Each end's first holder alone, for the refusal */
@@ -329,8 +330,8 @@ error_t profile_resolve_range(
 
         git_commit *commit1 = NULL;
         git_commit *commit2 = NULL;
-        err = gitops_revision_find(repo, &rev1, profile, tip, &commit1);
-        if (!err) err = gitops_revision_find(repo, &rev2, profile, tip, &commit2);
+        err = revision_find(repo, &rev1, profile, tip, &commit1);
+        if (!err) err = revision_find(repo, &rev2, profile, tip, &commit2);
         git_commit_free(tip);
 
         /* Nothing is published until a profile holds both. */

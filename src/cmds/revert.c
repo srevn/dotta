@@ -27,6 +27,7 @@
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
+#include "sys/revision.h"
 #include "sys/identity.h"
 #include "sys/stage.h"
 #include "utils/commit.h"
@@ -754,9 +755,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         opts->commit
     );
 
-    err = gitops_resolve_commit_in_branch(
-        repo, profile, opts->commit, &target_commit
-    );
+    err = revision_load(repo, profile, opts->commit, &target_commit);
     if (err) goto cleanup;
 
     char oid_str[8];

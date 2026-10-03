@@ -1159,7 +1159,9 @@ static error_t profile_reorder(
     /* Validation 1: All provided profiles must be currently enabled */
     for (size_t i = 0; i < opts->profile_count; i++) {
         if (!state_enabled(state, opts->profiles[i])) {
-            return error_create(ERR_VALIDATION, "Profile '%s' is not enabled", opts->profiles[i]);
+            return error_create(
+                ERR_VALIDATION, "Profile '%s' is not enabled", opts->profiles[i]
+            );
         }
     }
 

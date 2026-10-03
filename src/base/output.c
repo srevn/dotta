@@ -191,12 +191,12 @@ typedef struct {
     const char *name;       /* Tag name (e.g., "red", "bold") */
     output_color_t color;   /* The colour it names */
     uint8_t name_len;       /* strlen(name), computed at compile time */
-} tag_t;
+} style_tag_t;
 
 #define STYLE_TAG(n, c) { n, c, sizeof(n) - 1 }
 
 /* MUST remain sorted by name (ASCII order) for binary search */
-static const tag_t TAG_TABLE[] = {
+static const style_tag_t TAG_TABLE[] = {
     STYLE_TAG("blue",    OUTPUT_COLOR_BLUE),
     STYLE_TAG("bold",    OUTPUT_COLOR_BOLD),
     STYLE_TAG("cyan",    OUTPUT_COLOR_CYAN),
@@ -217,13 +217,13 @@ static const tag_t TAG_TABLE[] = {
  * Lexicographic comparison against the sorted TAG_TABLE. Returns pointer to
  * matching entry, or NULL for unknown tags.
  */
-static const tag_t *output_find_tag(const char *name, size_t len) {
+static const style_tag_t *output_find_tag(const char *name, size_t len) {
     int lo = 0;
     int hi = (int) TAG_COUNT - 1;
 
     while (lo <= hi) {
         int mid = lo + (hi - lo) / 2;
-        const tag_t *entry = &TAG_TABLE[mid];
+        const style_tag_t *entry = &TAG_TABLE[mid];
 
         size_t cmp_len = len < entry->name_len ? len : entry->name_len;
         int cmp = memcmp(name, entry->name, cmp_len);
@@ -262,7 +262,7 @@ static const tag_t *output_find_tag(const char *name, size_t len) {
  * @return true if tag was recognized, false to pass through literally
  */
 static bool output_expand_tag(line_t *line, const char *tag, size_t tag_len) {
-    const tag_t *resolved[8];
+    const style_tag_t *resolved[8];
     size_t count = 0;
     const char *p = tag;
     const char *end = tag + tag_len;
@@ -276,7 +276,7 @@ static bool output_expand_tag(line_t *line, const char *tag, size_t tag_len) {
             if (count >= sizeof(resolved) / sizeof(resolved[0]))
                 return false;
 
-            const tag_t *entry = output_find_tag(p, part_len);
+            const style_tag_t *entry = output_find_tag(p, part_len);
             if (!entry) return false;
 
             resolved[count++] = entry;

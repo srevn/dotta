@@ -261,14 +261,15 @@ static error_t init_post_parse(
 
     const char *name = o->strength ? o->strength : KDF_PRESET_DEFAULT;
     for (size_t i = 0; i < KDF_PRESET_COUNT; i++) {
-        if (strcmp(kdf_presets[i].name, name) == 0) o->preset = &kdf_presets[i];
+        if (strcmp(kdf_presets[i].name, name) == 0) {
+            o->preset = &kdf_presets[i];
+            return NULL;
+        }
     }
-    return o->preset
-        ? NULL
-        : error_create(
-        ERR_INVALID_ARG, "Unknown strength '%s' (valid: fast, balanced, paranoid)",
-        name
-        );
+
+    return error_create(
+        ERR_INVALID_ARG, "Unknown strength '%s' (valid: fast, balanced, paranoid)", name
+    );
 }
 
 /**

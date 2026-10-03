@@ -691,8 +691,8 @@ static void apply_print_withheld(
  * that omits what went wrong is not a receipt, and no run-level error will name
  * it (cleanup's receipt ends on its failures the same way). So is a directory
  * the run held at a working mode and could not narrow back (the receipt's held),
- * after the failed rows: the mode it was left at, the one it owed, and the
- * release's refusal. No total-count line: the exit error's message is the count's
+ * after the failed rows: the mode it was left at, the one it owed, and the refusal
+ * that kept it wide. No total-count line: the exit error's message is the count's
  * one home, as for the skip block.
  *
  * Adoption (ownership stamping for pre-existing matching files) is an apply-level
@@ -920,10 +920,10 @@ static void apply_print_deploy_receipt(
 
     /* The directories the run held at a working mode and could not narrow back
      * — each wider than the mode it owed, or out of reach: the mode it was left
-     * at, the one it owed, and the release's refusal, as the failed rows give
-     * theirs. At every verbosity and last: what the run widened and could not
-     * undo is not a receipt's to omit. The sections above still say what landed,
-     * and the run records it all the same. */
+     * at, the one it owed, and the refusal that kept it wide, as the failed rows
+     * give theirs. At every verbosity and last: what the run widened and could
+     * not undo is not a receipt's to omit. The sections above still say what
+     * landed, and the run records it all the same. */
     if (receipt->held.count > 0) {
         output_section(out, OUTPUT_QUIET, "Directories left wide");
         for (size_t i = 0; i < receipt->held.count && i < LIST_LIMIT; i++) {
@@ -1736,10 +1736,10 @@ static error_t apply_write_record(
      *                             own test
      *   ancestors                 claimed parents made on the way, either
      *                             class — dotta made them too, an ownership event
-     *   held                      the holds the release could not let go, after
-     *                             the writes above: the record learns the mode
-     *                             the directory was left at, wherever it says
-     *                             the mode the hold owed (below)
+     *   held                      the directories the run could not narrow back,
+     *                             after the writes above: the record learns the
+     *                             mode the directory was left at, wherever it
+     *                             says the mode the hold owed (below)
      * Every other active directory present on disk was present at load too, and
      * has its record from the flush by the same argument; the load established
      * presence at the boundary, and nothing here walks the disk to establish it
@@ -1822,9 +1822,9 @@ static error_t apply_write_record(
         if (err) goto cleanup;
     }
 
-    /* The holds the release could not let go (core/deploy.h deploy_hold_t): each
-     * directory stands at the working mode its hold set, not the mode it owed.
-     * The record is the base a difference is read from — disk off it the user's,
+    /* The directories the run could not narrow back (core/deploy.h deploy_hold_t):
+     * each stands at the working mode its hold set, not the mode it owed. The
+     * record is the base a difference is read from — disk off it the user's,
      * the row off it Git's to bring (core/state.h) — so a record that says the
      * owed mode would read dotta's widening as the user's [mode], update's to
      * commit. It learns the mode that stands, and the next load reads the row's
@@ -2891,16 +2891,16 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * and the receipt is the whole of its report; a row the run planned and could
      * not deliver was promised, and the exit code says so — the incapacity skips,
      * and the rows the run could not land (the receipt's failed bucket) — as
-     * does an orphan the run tried to prune and could not (failed_prunes, off
-     * cleanup's receipt), and a directory the run widened and could not narrow
-     * back (left_wide, the receipt's held: outside the promise, as the ancestors
-     * are, and a change the run made and could not undo). The execution halves
-     * are facts a dry run does not have, so `apply -n` predicts the preflight
-     * half alone. Every skip and failure was already rendered where it happened,
-     * so the error carries the one fact the receipt does not — that the run did
-     * not keep its promise. ERR_FS, not ERR_CONFLICT: the class is filesystem
-     * incapacity, and a conflict no longer ends the run. */
-    size_t undelivered = deploy_receipt->failed.count;
+     * does a directory the run widened for its writes and could not narrow back
+     * (the receipt's held), a path the run leaves off its claim as surely as a
+     * row it could not land, and an orphan the run tried to prune and could not
+     * (failed_prunes, off cleanup's receipt): one clause per engine. The execution
+     * halves are facts a dry run does not have, so `apply -n` predicts the
+     * preflight half alone. Every skip and failure was already rendered where
+     * it happened, so the error carries the one fact the receipt does not — that
+     * the run did not keep its promise. ERR_FS, not ERR_CONFLICT: the class is
+     * filesystem incapacity, and a conflict no longer ends the run. */
+    size_t undelivered = deploy_receipt->failed.count + deploy_receipt->held.count;
 
     for (size_t i = 0; i < deploy_verdicts->skipped.count; i++) {
         if (!deploy_skip_needs_force(deploy_verdicts->skipped.entries[i].reason)) {
@@ -2908,39 +2908,32 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    size_t left_wide = deploy_receipt->held.count;
-
     /* Attempted and refused only — the skipped orphans stay out: cleanup's plan
      * is permission, not obligation (cleanup_receipt_t's exit contract, the table
      * both engines draw). */
     size_t failed_prunes = cleanup_receipt->failed.count;
 
-    /* One clause per count that is not zero, in the receipt's order, ", " between
-     * them, as the prompt composes its parts; three clauses of at most 63 bytes
-     * fit the buffer with room to spare */
-    char why[192];
-    size_t off = 0;
-
+    if (undelivered > 0 && failed_prunes > 0) {
+        return error_create(
+            ERR_FS, "%zu path%s could not be deployed, %zu orphan%s could not be pruned",
+            undelivered, undelivered == 1 ? "" : "s",
+            failed_prunes, failed_prunes == 1 ? "" : "s"
+        );
+    }
     if (undelivered > 0) {
-        off += (size_t) snprintf(
-            why + off, sizeof(why) - off, "%zu path%s could not be deployed",
+        return error_create(
+            ERR_FS, "%zu path%s could not be deployed",
             undelivered, undelivered == 1 ? "" : "s"
         );
     }
-    if (left_wide > 0) {
-        off += (size_t) snprintf(
-            why + off, sizeof(why) - off, "%s%zu director%s left wide",
-            off > 0 ? ", " : "", left_wide, left_wide == 1 ? "y" : "ies"
-        );
-    }
     if (failed_prunes > 0) {
-        off += (size_t) snprintf(
-            why + off, sizeof(why) - off, "%s%zu orphan%s could not be pruned",
-            off > 0 ? ", " : "", failed_prunes, failed_prunes == 1 ? "" : "s"
+        return error_create(
+            ERR_FS, "%zu orphan%s could not be pruned",
+            failed_prunes, failed_prunes == 1 ? "" : "s"
         );
     }
 
-    return off > 0 ? error_create(ERR_FS, "%s", why) : NULL;
+    return NULL;
 }
 
 /* ══════════════════════════════════════════════════════════════════

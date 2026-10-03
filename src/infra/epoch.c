@@ -621,8 +621,8 @@ static error_t epoch_present_blob(
 
     buffer_clear(&walk->key);
     buffer_appendf(
-        &walk->key, "%s:%06o:%s:%s", oid_hex, (unsigned) git_tree_entry_filemode(entry),
-        walk->branch, path
+        &walk->key, "%s:%06o:%s:%s", oid_hex,
+        (unsigned) git_tree_entry_filemode(entry), walk->branch, path
     );
     if (!hashmap_add(walk->seen, walk->key.data, NULL)) {
         *next = GITOPS_NEXT_SKIP;

@@ -624,8 +624,10 @@ typedef struct {
  * A held directory's act stands where it landed — on converged, on ancestors,
  * or on no array for a landing opened for a write beneath it — and only its exact
  * mode did not. Outside the promise, as the ancestors are; the exit contract
- * reads it all the same (cmds/apply.c cmd_apply): the run widened what it could
- * not narrow back. Sized to the holds the run took, filled by the release.
+ * counts each with the rows the run could not land (cmds/apply.c cmd_apply), a
+ * path the run leaves off its claim, and the screen names it a directory left
+ * wide (cmds/apply.c apply_print_deploy_receipt). Sized to the holds the run
+ * took, filled by the release.
  *
  * A value of the arena its run was handed, as its arrays are: nothing frees one.
  * Its outcomes borrow the verdicts, so a receipt lives in the arena they were

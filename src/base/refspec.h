@@ -84,12 +84,16 @@ typedef struct {
 /**
  * Parse refspec: [profile:]<path>[@commit]
  *
- * Splits the input into profile, file path, and commit components. The ':'
- * separator for profile is optional (profile defaults to NULL). The commit is
- * the shortest suffix after an '@' that has a commit's shape
- * (refspec_looks_like_commit): an '@' that no commit follows is the name's own,
- * and a commit that carries an '@' of its own — `@` alone, `HEAD@{1}` — is split
- * before it.
+ * Splits the input into profile, file path, and commit components. The commit
+ * is found first: the shortest suffix after an '@' that has a commit's shape
+ * (refspec_looks_like_commit), so an '@' that no commit follows is the name's
+ * own, and a commit that carries an '@' of its own — `@` alone, `HEAD@{1}` — is
+ * split before it. The profile is then what precedes the first ':' before the
+ * commit, and is optional (NULL where no ':' stands there): a ':' the commit
+ * carries — `HEAD^{/fix: typo}` — is the commit's, and no profile holds one
+ * (git-check-ref-format). The one name this order reads otherwise is a profile
+ * holding an '@' with a commit's shape after it — `x@HEAD@y:home/f` — which is
+ * read as a file at a commit the resolver then refuses.
  *
  * Output slices are bump-allocated in the provided arena and share its lifetime.
  * On error, *out is left unchanged; callers should only read *out after the
@@ -101,6 +105,7 @@ typedef struct {
  *   "home/.bashrc@a4f2c8e"          -> {NULL,         "home/.bashrc", "a4f2c8e"}
  *   "home/.bashrc@HEAD~1"           -> {NULL,         "home/.bashrc", "HEAD~1"}
  *   "home/.bashrc@@"                -> {NULL,         "home/.bashrc", "@"}
+ *   "home/.bashrc@HEAD^{/a: b}"     -> {NULL,         "home/.bashrc", "HEAD^{/a: b}"}
  *   "global:home/.bashrc@a4f2c8e"   -> {"global",     "home/.bashrc", "a4f2c8e"}
  *   "darwin/work:home/.bashrc"      -> {"darwin/work","home/.bashrc", NULL}
  *   "foo@bar.txt"                   -> {NULL,         "foo@bar.txt",  NULL}  (not a git ref)

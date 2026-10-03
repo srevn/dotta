@@ -100,43 +100,37 @@ error_t refspec_parse(arena_t *arena, const char *input, refspec_t *out) {
 
     refspec_t rs = { 0 };
 
-    /* Step 1: first ':' separates profile (permits sub-profile like darwin/work). */
-    const char *colon = strchr(input, ':');
-    const char *remainder = input;
-
-    if (colon) {
-        size_t profile_len = (size_t) (colon - input);
-        if (profile_len > 0) {
-            rs.profile = arena_strndup(arena, input, profile_len);
-        }
-        remainder = colon + 1;
-    }
-
-    /* Step 2: the commit is the shortest suffix after an '@' that has a commit's
-     * shape. The last '@' is not always the one: a commit may carry an '@' of
-     * its own — `@` alone, HEAD@{…} — so `x@@` is x at HEAD, and `x@HEAD@{1}`
-     * reaches the resolver's refusal of a step it does not take instead of reading
-     * as a file whose name holds it. */
-    const char *at = NULL;
-    for (const char *p = remainder + strlen(remainder); p > remainder; p--) {
+    /* The commit first: the shortest suffix with a commit's shape after an '@',
+     * and the file ends at that '@'. The last '@' is not always the one: a commit
+     * may carry an '@' of its own — `@` alone, HEAD@{…} — so `x@@` is x at HEAD,
+     * and `x@HEAD@{1}` reaches the resolver's refusal of a step it does not take
+     * instead of reading as a file whose name holds it. */
+    const char *end = input + strlen(input);
+    for (const char *p = end; p > input; p--) {
         if (p[-1] == '@' && refspec_looks_like_commit(p)) {
-            at = p - 1;
+            rs.commit = arena_strdup(arena, p);
+            end = p - 1;
             break;
         }
     }
 
-    if (at) {
-        size_t file_len = (size_t) (at - remainder);
-        if (file_len == 0) {
-            return error_create(ERR_INVALID_ARG, "Empty file path in refspec");
+    /* Then the profile, at the first ':' before the commit (a sub-profile like
+     * darwin/work keeps its own separator): a ':' the commit carries — a pattern's,
+     * `^{/fix: typo}` — is the commit's, and no profile holds one
+     * (git-check-ref-format). */
+    const char *remainder = input;
+    const char *colon = memchr(input, ':', (size_t) (end - input));
+    if (colon) {
+        if (colon > input) {
+            rs.profile = arena_strndup(arena, input, (size_t) (colon - input));
         }
-
-        rs.file = arena_strndup(arena, remainder, file_len);
-        rs.commit = arena_strdup(arena, at + 1);
-    } else {
-        /* No '@' with a commit after it: the whole remainder is the file. */
-        rs.file = arena_strdup(arena, remainder);
+        remainder = colon + 1;
     }
+
+    if (rs.commit && remainder == end) {
+        return error_create(ERR_INVALID_ARG, "Empty file path in refspec");
+    }
+    rs.file = arena_strndup(arena, remainder, (size_t) (end - remainder));
 
     *out = rs;
     return NULL;

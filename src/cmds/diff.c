@@ -1105,8 +1105,9 @@ static int select_delta(
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, this
  *            machine's mount table, the command arena and the output)
- * @param commit1_ref The older commit (must not be NULL)
- * @param commit2_ref The newer commit (must not be NULL)
+ * @param commit1_ref The first commit named (must not be NULL)
+ * @param commit2_ref The second commit named, whose header is printed (must not
+ *                    be NULL)
  * @param scope Operation scope (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success

@@ -175,9 +175,10 @@ error_t profile_resolve_enabled(
  * own words before they ask.
  *
  * Readers: diff.c diff_commit_to_workspace (the filter -p's), show.c cmd_show
- * (a commit named with no profile, no filter). A caller that names one profile
- * resolves in it directly (gitops_resolve_commit_in_branch) — the question there
- * is not which profile.
+ * (a commit named with no profile, no filter). A range's two ends are searched
+ * for together (profile_resolve_range). A caller that names one profile resolves
+ * in it directly (gitops_resolve_commit_in_branch) — the question there is not
+ * which profile.
  *
  * @param repo Repository (must not be NULL)
  * @param enabled The enabled set, in precedence order (must not be NULL)
@@ -202,28 +203,28 @@ error_t profile_resolve_commit(
 /**
  * The enabled profile that holds both ends of a range, and the two commits
  *
- * profile_resolve_commit's search, asked for two ends at once: both read before
- * any profile is, each profile's tip read once and both asked of that one tip,
- * and the answer the first profile — from the highest precedence down, among
- * what `filter` names — whose history holds both. A range is one profile's history:
- * `HEAD~1 HEAD` is the first profile long enough for both, and `<id> HEAD` the
- * id's own profile, whatever profile a search for either end alone would have
- * answered.
+ * A range is one profile's history, so its ends are searched for together: both
+ * read once, before any profile is asked, then profile_resolve_commit's order
+ * and failure rule — from the highest precedence down, among what `filter` names,
+ * a tip or a history that will not read ending the search — with each tip read
+ * once and both ends asked of it. The answer is the first profile holding both:
+ * `HEAD~1 HEAD` the first history long enough for both, `<id> HEAD` the id's
+ * own profile, whatever either end alone would have answered.
  *
- * Each end's first holder is kept for the refusal: an end no profile searched
- * holds is that end's absence, in profile_resolve_commit's words, and two ends
- * held only apart refuse naming the profiles that hold them, a range across two
- * orphan branches being no range. Failures are the single search's.
+ * An end no profile searched holds is that end's absence, in
+ * profile_resolve_commit's words; ends held only apart are refused naming the
+ * first profile holding each, in the ends' order, a range across two orphan
+ * branches being no range.
  *
- * Readers: diff.c diff_commits (a range's two ends, -p's filter).
+ * Readers: diff.c diff_commits.
  *
  * @param repo Repository (must not be NULL)
  * @param enabled The enabled set, in precedence order (must not be NULL)
  * @param filter The profiles the search may ask, or NULL for all of `enabled`
- * @param from_ref The older end (must not be NULL)
- * @param to_ref The newer end (must not be NULL)
- * @param out_from The older end's commit (must not be NULL; git_commit_free)
- * @param out_to The newer end's commit (must not be NULL; git_commit_free)
+ * @param commit1_ref The first end, as typed (must not be NULL)
+ * @param commit2_ref The second end, as typed (must not be NULL)
+ * @param out_commit1 The first end's commit (must not be NULL; git_commit_free)
+ * @param out_commit2 The second end's commit (must not be NULL; git_commit_free)
  * @param out_profile The profile holding both (must not be NULL; borrowed from
  *                    `enabled`)
  * @return Error or NULL on success; nothing is written on a failure
@@ -232,10 +233,10 @@ error_t profile_resolve_range(
     git_repository *repo,
     const string_array_t *enabled,
     const string_array_t *filter,
-    const char *from_ref,
-    const char *to_ref,
-    git_commit **out_from,
-    git_commit **out_to,
+    const char *commit1_ref,
+    const char *commit2_ref,
+    git_commit **out_commit1,
+    git_commit **out_commit2,
     const char **out_profile
 );
 

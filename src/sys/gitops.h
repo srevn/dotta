@@ -581,11 +581,12 @@ error_t gitops_load_reference_commit(
  *
  * gitops_load_reference_commit of refs/heads/<branch>, the name through the branch
  * rule (gitops_branch_refname) on the way, and every failure names the reference.
- * Readers: the revision's two askers, gitops_resolve_commit_in_branch and
- * core/profiles.c profile_holder, which read a branch's tip once and ask it;
- * cmds/list.c list_profiles, list_files and list_file_history, which read every
- * fact a screen prints off it; cmds/status.c status_print_remote, which prints
- * it; cmds/completion.c commits_walk, which walks back from it.
+ * Readers: the revision's three askers, gitops_resolve_commit_in_branch and
+ * core/profiles.c profile_resolve_commit and profile_resolve_range, which read
+ * a branch's tip once and ask it; cmds/list.c list_profiles, list_files and
+ * list_file_history, which read every fact a screen prints off it; cmds/status.c
+ * status_print_remote, which prints it; cmds/completion.c commits_walk, which
+ * walks back from it.
  *
  * @param repo Repository (must not be NULL)
  * @param branch Branch name (must not be NULL)

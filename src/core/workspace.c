@@ -309,19 +309,43 @@ static divergence_type_t workspace_compare_ownership(
 /**
  * Class a failed look by whose remedy it is
  *
- * The root's code, and nothing else (workspace.h, workspace_fault_t): ERR_LOCKED
- * is the run's key, ERR_PERMISSION the run's identity — sudo the remedy offered,
- * never promised — and everything else is a refusal dotta cannot name one remedy
- * for. The root, not the top — the layers above it added the subject the row
- * already names, and the code the producer chose is the root's (crypto/keymgr.h,
- * "The codes").
+ * The code, and nothing else (workspace.h, workspace_fault_t): ERR_LOCKED is
+ * the run's key, ERR_PERMISSION the run's identity — sudo the remedy offered,
+ * never promised — and every other a refusal dotta cannot name one remedy for.
+ * The code is the root's (base/error.h error_code): the layers above it added
+ * the subject the row already names, and the producer chose it (crypto/keymgr.h,
+ * "The codes"). This is the one reader of the two classes base/error.h "Codes"
+ * fixes for every producer, so every code is named here, and a new one is classed
+ * by hand rather than folded into the rest unasked.
  */
 static workspace_fault_t workspace_code_fault(error_code_t code) {
     switch (code) {
-        case ERR_LOCKED:     return WORKSPACE_FAULT_LOCKED;
-        case ERR_PERMISSION: return WORKSPACE_FAULT_UNREADABLE;
-        default:             return WORKSPACE_FAULT_UNVERIFIED;
+        case ERR_LOCKED:
+            return WORKSPACE_FAULT_LOCKED;
+
+        case ERR_PERMISSION:
+            return WORKSPACE_FAULT_UNREADABLE;
+
+        case ERR_INVALID_ARG:
+        case ERR_NOT_FOUND:
+        case ERR_EXISTS:
+        case ERR_GIT:
+        case ERR_FS:
+        case ERR_STATE_INVALID:
+        case ERR_CONFLICT:
+        case ERR_VALIDATION:
+        case ERR_MEMORY:
+        case ERR_CRYPTO:
+        case ERR_INTERNAL:
+            return WORKSPACE_FAULT_UNVERIFIED;
+
+        case OK:
+            break;
     }
+
+    /* A failed look has a code: OK, or a value no enumerator names, is its caller's
+     * (base/error.h CHECK_ARG) */
+    CHECK_ARG(false, "a failed look classed from no failure");
 }
 
 /**
@@ -344,7 +368,7 @@ static workspace_fault_t workspace_code_fault(error_code_t code) {
 static workspace_fault_t workspace_error_fault(error_t err) {
     if (!err) return WORKSPACE_FAULT_NONE;
 
-    return workspace_code_fault(error_code(error_root(err)));
+    return workspace_code_fault(error_code(err));
 }
 
 /**

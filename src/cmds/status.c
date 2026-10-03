@@ -1109,9 +1109,11 @@ static void status_print_workspace(
  * Print the remote sync status for profiles
  *
  * By default shows only enabled profiles for consistency with workspace status.
- * Use show_all_profiles to report on every branch in the repository.
+ * Use show_all_profiles to report on every branch in the repository. Its failures
+ * are lines of its own section, as its siblings' are: no remote configured is
+ * no section, and every other failure is a warning in its place.
  */
-static error_t status_print_remote(
+static void status_print_remote(
     const dotta_ctx_t *ctx,
     const string_array_t *profiles,
     bool show_all_profiles,
@@ -1132,9 +1134,18 @@ static error_t status_print_remote(
     error_t err = gitops_resolve_default_remote(
         repo, ctx->arena, &remote_name, no_fetch ? NULL : &remote_url
     );
+    if (error_code(err) == ERR_NOT_FOUND) {
+        /* No remote configured — no section to print (sys/gitops.h names this
+         * read) */
+        return;
+    }
     if (err) {
-        /* No remote configured - not an error, just skip this section */
-        return NULL;
+        /* A remote the resolver could not choose, or one it could not read: the
+         * section's question has no answer, and says so where it would stand */
+        output_warning(
+            out, OUTPUT_NORMAL, "Cannot tell remote sync status: %s", error_line(err)
+        );
+        return;
     }
 
     /* Build profile array to check */
@@ -1145,12 +1156,16 @@ static error_t status_print_remote(
         /* Explicit request: show ALL local profiles (lightweight, no ref resolution) */
         err = gitops_list_branches(repo, ctx->arena, &all_local);
         if (err) {
-            return error_wrap(err, "Failed to list all profiles");
+            output_warning(
+                out, OUTPUT_NORMAL, "Cannot list every profile for remote sync status: %s",
+                error_line(err)
+            );
+            return;
         }
         check = &all_local;
     }
 
-    if (check->count == 0) return NULL;
+    if (check->count == 0) return;
 
     /* Fetch if requested */
     if (!no_fetch) {
@@ -1384,8 +1399,6 @@ static error_t status_print_remote(
     if (failed > 0) {
         output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} failed\n", failed);
     }
-
-    return NULL;
 }
 
 /**
@@ -1464,12 +1477,10 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         status_print_workspace(ws, scope, out);
     }
 
-    /* Show remote sync status (if requested). Non-fatal: there might be no remote
-     * configured, and the section's own failure is dropped here. */
+    /* Show remote sync status (if requested): no remote configured is no section,
+     * and every failure of its own is a line of it */
     if (opts->show_remote) {
-        (void) status_print_remote(
-            ctx, scope_profiles(scope), opts->all_profiles, opts->no_fetch
-        );
+        status_print_remote(ctx, scope_profiles(scope), opts->all_profiles, opts->no_fetch);
     }
 
     return NULL;

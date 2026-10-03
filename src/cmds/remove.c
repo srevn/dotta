@@ -1294,33 +1294,42 @@ static error_t remove_profile(
 
     /* Resolve remote name + URL up-front: the URL feeds the credential helper
      * for the deletion's push further down (its transfer context). One resolve,
-     * two consumers. */
+     * two consumers. No remote configured is an answer — the profile is this
+     * repository's alone (sys/gitops.h names this read) — and every other failure
+     * is the run's, joined below with the upstream's own. */
     err = gitops_resolve_default_remote(
         repo, ctx->arena, &remote_name, &remote_url
     );
-    if (!err && remote_name) {
-        /* Remote exists - check upstream state */
+    if (error_code(err) == ERR_NOT_FOUND) {
+        is_local_only = true;
+        err = NULL;
+    } else if (!err) {
+        /* A remote: where the profile stands against it */
         upstream_info_t upstream_info;
         err = upstream_analyze_profile(
             repo, remote_name, opts->profile, &upstream_info
         );
         if (!err) {
-            /* Determine if profile has actual remote tracking */
-            if (upstream_info.state == UPSTREAM_NO_REMOTE) {
-                /* Profile exists locally but was never pushed to remote */
-                is_local_only = true;
-            } else if (upstream_info.state == UPSTREAM_LOCAL_AHEAD ||
-                upstream_info.state == UPSTREAM_DIVERGED){
-                /* Profile has remote tracking and has unpushed changes */
-                has_unpushed = true;
-            }
-        } else {
-            /* Non-fatal: can't determine upstream state */
-            err = NULL;
+            /* Never pushed, or ahead of what it pushed — the one finding the
+             * warning below is for */
+            is_local_only = upstream_info.state == UPSTREAM_NO_REMOTE;
+            has_unpushed = upstream_info.state == UPSTREAM_LOCAL_AHEAD ||
+                upstream_info.state == UPSTREAM_DIVERGED;
         }
-    } else if (err) {
-        /* No remote configured - treat as local-only */
-        is_local_only = true;
+    }
+    if (err) {
+        /* Where the profile stands is unknown — a remote the resolver could not
+         * choose, an upstream that would not read: said where unpushed changes
+         * are said, before the same confirmation, and --force skips it as it
+         * skips that warning. A refusal here would refuse past --force, where a
+         * positive finding only warns. */
+        if (!opts->force) {
+            output_gap(out, OUTPUT_NORMAL);
+            output_warning(
+                out, OUTPUT_NORMAL, "Cannot tell whether profile '%s' has unpushed "
+                "changes: %s", opts->profile, error_line(err)
+            );
+        }
         err = NULL;
     }
 

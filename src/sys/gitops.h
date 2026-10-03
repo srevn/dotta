@@ -777,8 +777,11 @@ error_t gitops_get_remote_url(
  * Selection strategy:
  *   1. Prefer "origin" if it exists.
  *   2. Otherwise use the only configured remote.
- *   3. Multiple remotes without "origin" → error (require explicit choice).
- *   4. No remotes → error with a hint to add one.
+ *   3. Multiple remotes without "origin" → ERR_INVALID_ARG, naming the case.
+ *   4. No remotes → ERR_NOT_FOUND, and nothing else is: a listing that fails,
+ *      and a URL lookup that fails, are libgit2's errors (ERR_GIT). Read by
+ *      cmds/remove.c remove_profile, as a profile that is this repository's alone,
+ *      and cmds/status.c status_print_remote, as no section to print.
  *
  * When `out_url` is non-NULL, also looks up the remote's URL
  * (gitops_get_remote_url). A remote configured without a URL yields `*out_url =

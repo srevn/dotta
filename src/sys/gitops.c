@@ -189,11 +189,16 @@ error_t gitops_reference_find(
 
     /* A loose ref answers "not there" only where no file stands, or a directory
      * does — an unreadable one is GIT_ELOCKED (fs_path.c git_fs_path_set_error)
-     * — so a lookup that finds, or fails, is the answer. */
+     * — so a lookup that finds, or fails, is the answer. Its failure names the
+     * reference, as the lookups below name theirs: libgit2's sentence names the
+     * file only for a loose ref it could not parse (refdb_fs.c loose_parse_oid),
+     * and never for packed-refs. */
     *out = NULL;
     int rc = git_reference_lookup(out, repo, refname);
     if (rc != GIT_ENOTFOUND) {
-        return rc < 0 ? error_from_git(rc) : NULL;
+        return rc < 0
+            ? error_wrap(error_from_git(rc), "Cannot read reference '%s'", refname)
+            : NULL;
     }
 
     /* A miss read packed-refs one of two ways, and neither proves it: under the

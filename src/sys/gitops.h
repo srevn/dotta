@@ -164,7 +164,9 @@ void gitops_close_repository(git_repository *repo);
  * listing of the name parses it whole — a damaged file refuses there — and a
  * name that listing holds and no lookup reaches (records out of order, CRLF line
  * ends under the sorted trait) is the failure. The reference comes back as it
- * is stored: a symbolic one is not resolved.
+ * is stored: a symbolic one is not resolved. A lookup that fails names the
+ * reference, above libgit2's sentence where it has one, so a reader that prints
+ * the failure as one line has said which.
  *
  * A miss leaves the handle on that fresh reference database, so a create-only
  * write that follows a proven absence finds the name free on the store as the

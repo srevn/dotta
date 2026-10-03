@@ -325,8 +325,11 @@ error_t fs_read_file(const char *path, buffer_t *out) {
     /* fs_read_fd clears this too, but an open that fails never reaches it. */
     *out = (buffer_t){ 0 };
 
-    /* Open file */
-    int fd = fs_open(path, O_RDONLY, 0);
+    /* O_NONBLOCK keeps a FIFO with no writer from wedging the open, harmless
+     * for a regular file — fs_read_fd then refuses what is not one — and O_CLOEXEC
+     * is hygiene, as a managed path's read opens (infra/compare.c,
+     * infra/content.c) */
+    int fd = fs_open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0);
     if (fd < 0) {
         return error_from_errno(errno, "Failed to open '%s'", path);
     }

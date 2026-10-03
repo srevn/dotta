@@ -245,16 +245,34 @@ error_t session_save(
     );
 
     /* Open with secure permissions atomically. O_NOFOLLOW guards against a symlink
-     * swapping our path for a sensitive file; O_CLOEXEC matches the secure-file
-     * pattern used elsewhere (see fs_write_file_raw). */
+     * swapping our path for a sensitive file; O_NONBLOCK keeps a FIFO with no
+     * reader from wedging the open, which fails ENXIO at once; O_CLOEXEC matches
+     * the secure-file pattern used elsewhere (see fs_write_file_raw). */
     fd = open(
         cache_path,
-        O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC,
+        O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC,
         0600
     );
     if (fd < 0) {
         err = error_from_errno(
             errno, "Failed to create session cache file '%s'", cache_path
+        );
+        goto cleanup;
+    }
+
+    /* What was opened, judged before a byte is written into it — as the load
+     * judges what it reads: a FIFO a reader holds opens, and would take the
+     * obfuscated master. The session file is a regular file or nothing. */
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        err = error_from_errno(
+            errno, "Failed to stat session cache file '%s'", cache_path
+        );
+        goto cleanup;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        err = error_create(
+            ERR_FS, "Session cache file '%s' is not a regular file", cache_path
         );
         goto cleanup;
     }
@@ -326,9 +344,11 @@ error_t session_load(
     error_t err = NULL;
 
     /* Open with O_NOFOLLOW so a symlink-swapped path returns ELOOP rather than
-     * reading the unintended file. ENOENT is the "no cache yet" path — distinct
-     * from ERR_FS so the caller can proceed silently. */
-    fd = open(cache_path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+     * reading the unintended file, and O_NONBLOCK so a FIFO with no writer cannot
+     * wedge the open — the regular-file check below then refuses it, and takes
+     * it off disk. ENOENT is the "no cache yet" path — distinct from ERR_FS so
+     * the caller can proceed silently. */
+    fd = open(cache_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
         if (errno == ENOENT) {
             err = error_create(ERR_NOT_FOUND, "Session cache does not exist");
@@ -488,9 +508,11 @@ bool session_clear(const kdf_epoch_t *epoch) {
 
     /* Open without O_TRUNC so the existing bytes can be overwritten with zeros
      * before the unlink; O_NOFOLLOW so a symlink swap cannot make this truncate
-     * an unrelated file. Best-effort throughout: any failure here falls through
-     * to the unlink, which is what guarantees the file is gone. */
-    int fd = open(cache_path, O_WRONLY | O_NOFOLLOW | O_CLOEXEC);
+     * an unrelated file; O_NONBLOCK so a FIFO with no reader fails the open at
+     * once (ENXIO) rather than wedge it. Best-effort throughout: any failure
+     * here falls through to the unlink, which is what guarantees the file is
+     * gone. */
+    int fd = open(cache_path, O_WRONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     if (fd >= 0) {
         const uint8_t zero_block[SESSION_FILE_SIZE] = { 0 };
         size_t off = 0;

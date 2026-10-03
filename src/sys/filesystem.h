@@ -150,9 +150,10 @@ char *fs_realpath(const char *path, char *resolved);
  *
  * Opens the path and delegates to fs_read_fd: follows symlinks (the fd's fstat
  * sees the resolved target), refuses non-regular files and files past 256 MB
- * through the primitive's own gates. A file that is not there is the open's
- * ERR_NOT_FOUND (ENOENT, or ENOTDIR above it), and utils/config.c read_file reads
- * it as no configuration file.
+ * through the primitive's own gates. The open waits on nothing, so a FIFO is
+ * refused at once, never read while its writer comes. A file that is not there
+ * is the open's ERR_NOT_FOUND (ENOENT, or ENOTDIR above it), and utils/config.c
+ * read_file reads it as no configuration file — a FIFO is no absence.
  *
  * @param path File path (must not be NULL)
  * @param out Output buffer (must not be NULL)

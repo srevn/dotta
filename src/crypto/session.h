@@ -65,7 +65,10 @@
  * Creates ~/.cache/dotta (mode 0700) if missing and writes the file with mode
  * 0600 (set at open, reasserted via fchmod against umask), obfuscated, MAC-tagged
  * and fsynced before return. The write is in place with O_TRUNC: a crash leaves
- * a short file the loader's size check rejects.
+ * a short file the loader's size check rejects. Anything at the path but a regular
+ * file is refused before a byte is written into it, and at once: a FIFO with no
+ * reader by the open, which waits on nothing; one a reader holds by the check
+ * after it.
  *
  * @param master_key Secret to persist (32 bytes; non-NULL)
  * @param epoch      The epoch the master derives under: names the file and keys
@@ -73,7 +76,8 @@
  * @param expires_at Unix seconds after which the file refuses to load; 0 = never
  * @return NULL on success; the failure's errno code (base/error.h
  *         error_code_from_errno) — an I/O failure's, or the nonce's draw's
- *         (sys/entropy.h entropy_fill)
+ *         (sys/entropy.h entropy_fill) — or ERR_FS for a path that holds no regular
+ *         file
  */
 error_t session_save(
     const uint8_t master_key[KDF_KEY_SIZE],
@@ -95,6 +99,8 @@ error_t session_save(
  * authenticated bytes. A file that fails for a reason of its own — corruption,
  * wrong mode or owner, another epoch's bytes under this name, expired — is unlinked
  * so the next call starts fresh; a transient I/O failure leaves it in place.
+ * The open waits on nothing, so a FIFO at the path is refused at once by the
+ * first check, and unlinked with the rest.
  *
  * @param out_master_key Buffer for the 32-byte secret (the caller wipes after
  *                       use; scrubbed here on every error path)
@@ -115,7 +121,8 @@ error_t session_load(
  *
  * Best-effort secure overwrite — zeros across the file, fsync — then unlink;
  * the unlink is what guarantees the file is no longer loadable, and any failure
- * of the overwrite is silent. Nothing to do when there is no file.
+ * of the overwrite is silent, a FIFO's with no reader among them, whose open
+ * fails at once rather than wait. Nothing to do when there is no file.
  *
  * `false` is "this removed nothing", not "nothing was there": the file may have
  * been absent, or its unlink refused.

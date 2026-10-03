@@ -374,15 +374,17 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             }
             goto cleanup;
         } else if (error_code(err) == ERR_CRYPTO) {
-            /* Malformed remote epoch — epoch_fetch installs only what it proved,
-             * so no garbage ref persists. The advertised ref establishes identity
-             * (the gate above), but its payload is a crypto concern:
-             * warn-and-continue, a plaintext clone is still fine, only encryption
-             * is unavailable until a valid epoch arrives. */
+            /* An epoch the fetch could not adopt — epoch_fetch installs only
+             * what it proved, so no garbage ref persists. The advertised ref
+             * establishes identity (the gate above), but its payload is a crypto
+             * concern: warn-and-continue, a plaintext clone is still fine, only
+             * encryption is unavailable until a valid epoch arrives — which a
+             * sync brings from the remote, and never an init here, which mints
+             * one the remote's would not reconcile with, or refuses over the
+             * ciphertext this clone just fetched. */
             output_warning(
                 out, OUTPUT_NORMAL,
-                "%s. Encryption operations will fail until a valid epoch "
-                "is fetched or 'dotta init' is run locally.",
+                "%s; encryption operations fail until a valid epoch is fetched",
                 error_line(err)
             );
             /* Said: the error is dropped here, so the arms below meet a clone

@@ -220,10 +220,12 @@ error_t epoch_push(
  * with no destination, so nothing local points at them; both blobs are validated
  * at that commit; and only a proven epoch is written to `refs/dotta/epoch`, the
  * one mutation this call makes and its last step. Every failure of that proof
- * returns one ERR_CRYPTO worded as a malformed remote — a wrong-size or missing
- * blob, a pair out of range, an advertised object that is no commit, one the
- * read could not load — and leaves the local ref untouched: there is nothing to
- * roll back, because a corrupt remote epoch never stood in `refs/dotta/epoch`
+ * returns one ERR_CRYPTO, worded as an epoch that could not be adopted and caused
+ * by the mechanism's own sentence — a wrong-size or missing blob, a pair out of
+ * range, an advertised object that is no commit, one the read could not load —
+ * blaming neither side, since the code cannot tell the remote's bytes from this
+ * store's read; and leaves the local ref untouched: there is nothing to roll
+ * back, because an epoch that was not proven never stood in `refs/dotta/epoch`
  * for a later `epoch_resolve` or `epoch_load` to read as canonical.
  *
  * Both codes are read: cmds/clone.c cmd_clone refuses a remote without the ref

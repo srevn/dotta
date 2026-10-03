@@ -1456,11 +1456,11 @@ static void epoch_reconcile(
             kdf_epoch_t fetched;
             err = epoch_fetch(repo, remote_name, xfer, &fetched);
             if (err) {
-                /* A malformed remote epoch: epoch_fetch judged the bytes before
-                 * installing them, so the local ref still stands, and its message
-                 * names the blob that is wrong — printed whole, as clone prints
-                 * it. Anything else is the fetch's own failure under one line
-                 * of context. */
+                /* An epoch the fetch could not adopt: epoch_fetch judged it before
+                 * installing it, so the local ref still stands, and its message
+                 * names the act and the mechanism's cause — printed whole, as
+                 * clone prints it. Anything else is the fetch's own failure under
+                 * one line of context. */
                 output_warning(
                     out, OUTPUT_NORMAL, error_code(err) == ERR_CRYPTO ? "%s"
                     : "Failed to adopt repository epoch from remote: %s",

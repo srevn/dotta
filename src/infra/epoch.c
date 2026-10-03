@@ -477,16 +477,19 @@ error_t epoch_fetch(
     char *refspecs[] = { EPOCH_REF };
     git_strarray refs = { refspecs, 1 };
 
+    /* The download's sentence is read before the close: the download leaves the
+     * transport connected (remote.c git_remote_download disconnects nothing,
+     * where git_remote_push does before it returns), and freeing the remote writes
+     * a flush to a connection the remote may have reset (transports/smart.c
+     * git_smart__close), whose failure would be the sentence read. Bare, matching
+     * epoch_push: the boundaries (sync's adopt arm, clone's acquisition gate)
+     * each attach their own single layer of context. */
     transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
     rc = git_remote_download(remote, &refs, &fetch_opts);
     transfer_op_end(xfer, rc);
-    git_remote_free(remote);  /* freeing the remote closes the transport */
-
-    if (rc < 0) {
-        /* Bare, matching epoch_push: the boundaries (sync's adopt arm, clone's
-         * acquisition gate) each attach their own single layer of context. */
-        return error_from_git(rc);
-    }
+    err = rc < 0 ? error_from_git(rc) : NULL;
+    git_remote_free(remote);
+    if (err) return err;
 
     /* Judge the bytes while no ref names them. This is the epoch acquisition
      * boundary, so it owns the "is this a well-formed epoch?" check — and there
@@ -497,15 +500,19 @@ error_t epoch_fetch(
     err = epoch_read_commit(repo, &advertised, &fetched);
     /* The epoch is public — no wipe. */
     if (err) {
-        /* Normalize every validation failure (wrong size, missing blob, a pair
-         * out of range, a non-commit object) to a single ERR_CRYPTO surface so
-         * callers route uniformly — fold the read's specific cause into the message
-         * rather than chaining, since error_wrap would inherit its varied codes
-         * (ERR_CRYPTO / ERR_GIT) and split the callers' handling. */
+        /* One ERR_CRYPTO surface for every way the read can fail, so clone and
+         * sync route it alike — a wrap would keep the cause's code (ERR_CRYPTO
+         * or ERR_GIT) and split them. The ways are two kinds, and the code cannot
+         * tell them apart: bytes the read refused (a wrong size, a missing blob,
+         * a pair out of range, an object that is no commit), the remote's; and
+         * an object that would not load after a download that completed, this
+         * store's. So the words blame neither: the act that failed, and the
+         * mechanism's own sentence — a re-mint keeps one fact's words (base/error.h
+         * "Messages"), and the read's own wraps say only which object it was
+         * loading, which this sentence says for all of them. */
         return error_create(
-            ERR_CRYPTO,
-            "Remote epoch is malformed; remote repo may be corrupt (%s)",
-            error_message(err)
+            ERR_CRYPTO, "Cannot adopt the epoch remote '%s' advertises: %s",
+            remote_name, error_message(error_root(err))
         );
     }
 

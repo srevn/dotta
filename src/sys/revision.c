@@ -1,11 +1,11 @@
 /**
  * revision.c - A commit a user named: the spelling read, and asked of a branch
  *
- * One evaluator reads the steps after HEAD and walks them from a commit; with
- * none in hand — at the read, before any branch is chosen, or past a history
- * that ran out — it only reads them. Its loop and its lexing are libgit2's
- * revparse's (lib/libgit2/src/libgit2/revparse.c revparse, extract_how_many);
- * what each step means is git's (lib/git/object-name.c).
+ * One evaluator reads the steps after a name, HEAD's and git's alike, and walks
+ * them from a commit; with none in hand — HEAD's at the read, before any branch
+ * is chosen, or past a history that ran out — it only reads them. Its loop and
+ * its lexing are libgit2's revparse's (lib/libgit2/src/libgit2/revparse.c revparse,
+ * extract_how_many); what each step means is git's (lib/git/object-name.c).
  */
 
 #include "sys/revision.h"
@@ -24,7 +24,8 @@
 
 /*
  * What a walk that could not load a commit says: the revision, and the branch
- * it was walked in where there is one — the read walks in none, and takes no step.
+ * it was walked in where there is one — HEAD's steps are walked at a branch's
+ * tip, a name's once, in none.
  */
 static error_t revision_unwalked(int rc, const char *spelling, const char *branch) {
     return branch
@@ -238,6 +239,24 @@ static error_t revision_walk(
     return NULL;
 }
 
+/*
+ * Where a name's steps begin: at the first `~` or `^` standing outside a `@{…}`,
+ * the reflog's and the upstream's selector, which is the name's own. No ref may
+ * hold either byte (git-check-ref-format), so the first is always the name's
+ * end. A spelling that reaches a `:` first is git's whole — the rest a path or
+ * a search (lib/libgit2/src/libgit2/revparse.c revparse) — and so is one that
+ * opens on a step, with no name to walk from: its steps are none, as where no
+ * step stands at all.
+ */
+static const char *revision_name_steps(const char *spelling) {
+    const char *p = spelling;
+    while (*p && *p != ':' && *p != '~' && *p != '^') {
+        const char *close = p[0] == '@' && p[1] == '{' ? strchr(p, '}') : NULL;
+        p = close ? close + 1 : p + 1;
+    }
+    return *p == ':' || p == spelling ? p + strlen(p) : p;
+}
+
 error_t revision_resolve(
     git_repository *repo, const char *spelling, revision_t *out
 ) {
@@ -258,24 +277,29 @@ error_t revision_resolve(
         return NULL;
     }
 
-    /* Every other spelling is git's, and names one commit whichever branch is
-     * asked after, so it is resolved here, once. revparse answers a typo, a lost
-     * commit and a tag whose object is gone alike (GIT_ENOTFOUND), and nothing
-     * after it could tell them apart: a spelling that does not resolve is the
-     * failure, and never a branch passed over. */
+    /* Every other spelling is a name and its steps. The name is git's, and names
+     * one object whichever branch is asked after. revparse answers a typo, a
+     * lost commit and a tag whose object is gone alike (GIT_ENOTFOUND), and nothing
+     * after it could tell them apart: a name that does not resolve is the failure,
+     * and never a branch passed over. */
+    steps = revision_name_steps(spelling);
+    char *name = heap_strndup(spelling, (size_t) (steps - spelling));
     git_object *named = NULL;
-    int rc = git_revparse_single(&named, repo, spelling);
+    int rc = git_revparse_single(&named, repo, name);
+    free(name);
     if (rc < 0) {
         return error_wrap(error_from_git(rc), "Cannot resolve '%s'", spelling);
     }
 
-    /* Peeled to a commit: an annotated tag's id is the tag's, and the commit is
-     * the one it names, so the id the revision holds is always a commit's — the
-     * reachability query reads commits. A tree or a blob names none, refused
-     * here rather than as a failure later. A commit peels to a counted reference
-     * to itself, which is why the named object is freed on its own. */
-    git_object *commit = NULL;
-    rc = git_object_peel(&commit, named, GIT_OBJECT_COMMIT);
+    /* Peeled to a commit before any step is walked: an annotated tag's id is
+     * the tag's, and the commit is the one it names, so every step starts from
+     * a commit, as every step dotta reads does — and the id the revision holds
+     * is always a commit's, which the reachability query reads. A tree or a blob
+     * names none, refused here rather than as a failure later. A commit peels
+     * to a counted reference to itself, which is why the named object is freed
+     * on its own. */
+    git_object *peeled = NULL;
+    rc = git_object_peel(&peeled, named, GIT_OBJECT_COMMIT);
     git_object_free(named);
     if (rc < 0) {
         return error_wrap(
@@ -283,9 +307,19 @@ error_t revision_resolve(
         );
     }
 
+    /* The steps, walked once: the name's commit is the same whichever branch is
+     * asked after, and so is every commit its steps reach — so steps that reach
+     * none name none in any branch. */
+    git_commit *commit = (git_commit *) peeled;
+    error_t err = revision_walk(repo, spelling, NULL, steps, &commit);
+    if (err) return err;
+    if (!commit) {
+        return error_create(ERR_NOT_FOUND, "'%s' names no commit", spelling);
+    }
+
     *out = (revision_t){ .spelling = spelling };
-    git_oid_cpy(&out->commit, git_object_id(commit));
-    git_object_free(commit);
+    git_oid_cpy(&out->commit, git_commit_id(commit));
+    git_commit_free(commit);
     return NULL;
 }
 

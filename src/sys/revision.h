@@ -10,24 +10,26 @@
  * A spelling is a name and the steps after it, as git reads one
  * (lib/git/object-name.c get_oid_1). dotta has one name of its own, HEAD — `HEAD`
  * or `@` and everything after it (base/refspec.h refspec_head_steps) — a branch's
- * tip, so a commit only once the branch is chosen. Every other spelling is git's,
- * resolved whole by libgit2 once and peeled to its commit, which is the same
- * whichever branch is asked after.
+ * tip, so a commit only once the branch is chosen. Every other name is git's —
+ * an id, a short id, a tag, a branch, `name@{…}`, `:/text`, `rev:path` — and
+ * libgit2 resolves it once, peeled to its commit, which is the same whichever
+ * branch is asked after.
  *
- * HEAD's steps are dotta's, read by one evaluator: `~N` and `^N` in any chain;
- * `^{}`, `^{commit}` and `^{object}`, which a commit answers as itself; `^{tree}`,
- * `^{blob}` and `^{tag}`, which name no commit and are refused; and `^{/pattern}`,
- * the youngest commit reached, itself among them, whose message the pattern
- * matches. Anything else after HEAD is no step and is refused, `HEAD@{1}` and
- * `@{1}` among it. Each is git's reading, and libgit2's revparse departs from
- * it on five (lib/libgit2/src/libgit2/revparse.c): it has no `^{object}`, refuses
- * `^{/}`, reads `^{/!-x}` as a pattern, refuses a count past 2^31 as no spelling,
- * and ends a group at its first '}'. Its answers are the other reason the walk
- * is dotta's: a history shorter than the steps reach, a search that matches nothing
- * and an object the store lost all come back GIT_ENOTFOUND, the search's with
- * no sentence at all (commit.c git_commit_parent; revparse.c walk_and_search).
- * Here every "none" is proven — by the parent count each commit was read with,
- * by the walk's end — and a look that could not read is the failure, never a none.
+ * The steps are dotta's after either name, read by one evaluator: `~N` and `^N`
+ * in any chain; `^{}`, `^{commit}` and `^{object}`, which a commit answers as
+ * itself; `^{tree}`, `^{blob}` and `^{tag}`, which name no commit and are refused;
+ * and `^{/pattern}`, the youngest commit reached, itself among them, whose message
+ * the pattern matches. Anything else after a name is no step and is refused,
+ * `HEAD@{1}` and `@{1}` among it. Each is git's reading, and libgit2's revparse
+ * departs from it on five (lib/libgit2/src/libgit2/revparse.c): it has no
+ * `^{object}`, refuses `^{/}`, reads `^{/!-x}` as a pattern, refuses a count
+ * past 2^31 as no spelling, and ends a group at its first '}'. Its answers are
+ * the other reason the walk is dotta's: a history shorter than the steps reach,
+ * a search that matches nothing and an object the store lost all come back
+ * GIT_ENOTFOUND, the search's with no sentence at all (commit.c git_commit_parent;
+ * revparse.c walk_and_search). Here every "none" is proven — by the parent count
+ * each commit was read with, by the walk's end — and a look that could not read
+ * is the failure, never a none.
  */
 
 #ifndef DOTTA_REVISION_H
@@ -41,10 +43,10 @@
  *
  * HEAD's spelling names a commit of a branch, and only once the branch is chosen:
  * its tip, and its steps walked from there, so the steps are kept and walked at
- * each tip asked (revision_find). Every other spelling is git's revision syntax
- * and names one commit whichever branch is asked after — an id, a short id, a
- * tag peeled to its commit, `<id>~N` — so it is resolved once, when the revision
- * is read, and kept as that commit's id.
+ * each tip asked (revision_find). Every other spelling names one commit whichever
+ * branch is asked after — a name and the steps from it, `<id>~N`, `release^{}`,
+ * `<id>^{/fix}` — so it is resolved once, when the revision is read, and kept
+ * as that commit's id.
  *
  * Nothing is held but the spelling and one commit's id, so the value needs no
  * release and is copied freely; it is valid while the spelling is.
@@ -58,16 +60,19 @@ typedef struct {
 /**
  * Read a revision
  *
- * HEAD's steps are read whole, so one that is no step — `HEAD@{1}`, `@{1}`, a
- * peel to no commit among them — refuses here, before any branch is, and so does
- * a pattern that is no expression, compiled now. A count too large for any history
- * is read as it is: the walk answers that it reaches past the root.
+ * The steps are read whole, after HEAD as after any name, so one that is no step
+ * — `HEAD@{1}`, `@{1}`, a peel to no commit among them — refuses here, before
+ * any branch is, and so does a pattern that is no expression, compiled now. A
+ * count too large for any history is read as it is: the walk answers that it
+ * reaches past the root.
  *
- * Every other spelling is resolved now, and resolving it is required: one that
- * names no commit is the failure, in Git's words, whatever kept it from naming
- * one — a typo, an ambiguous short id, a commit or a tag object the store has
- * lost — and a spelling that names a tree or a blob refuses as naming no commit.
- * No branch is ever passed over for a spelling that does not resolve.
+ * Every other spelling is resolved now, and resolving it is required: a name
+ * that names no commit is the failure, in Git's words, whatever kept it from
+ * naming one — a typo, an ambiguous short id, a commit or a tag object the store
+ * has lost — and a name that names a tree or a blob refuses as naming no commit.
+ * Its steps are walked now too, from the name's commit, and steps that reach no
+ * commit refuse as naming none: they reach none in any branch. No branch is ever
+ * passed over for a spelling that does not resolve.
  *
  * @param repo Repository (must not be NULL)
  * @param spelling The revision as typed (must not be NULL; borrowed by `out`)

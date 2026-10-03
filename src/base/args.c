@@ -67,8 +67,8 @@ enum token_kind {
     TOK_END_OF_OPTS,   /* "--" */
     TOK_HELP,          /* "-h" or "--help" */
     TOK_LONG_OPT,      /* "--name" or "--name=value" */
-    TOK_SHORT_OPT,     /* "-X" where X is a non-digit single char */
-    TOK_POSITIONAL     /* everything else: "foo", "-", "-1", "-fv"-like */
+    TOK_SHORT_OPT,     /* "-X…", X no digit and no dash; only "-X" names a flag */
+    TOK_POSITIONAL     /* everything else: "foo", "-", "-1", and all after "--" */
 };
 
 /**
@@ -367,23 +367,33 @@ static void ensure_array(
  * Per-kind application routines
  * ══════════════════════════════════════════════════════════════════ */
 
-/**
- * True if this opt kind consumes the next token (or an inline `=value`).
- */
 /* The help renderer's flag label ("--force, -f"), defined with the rest of the
  * rendering below. Forward-declared because one parse error names a flag the
  * way `--help` does; it stays where it belongs rather than being hoisted here. */
 static size_t format_flag_label(char *buf, size_t buf_size, const char *flags);
 
+/**
+ * True if this opt kind consumes the next token (or an inline `=value`).
+ */
 static bool opt_takes_value(const args_opt_t *o) {
     switch (o->kind) {
         case ARGS_KIND_STRING:
         case ARGS_KIND_APPEND:
         case ARGS_KIND_INT:
             return true;
-        default:
+        case ARGS_KIND_END:
+        case ARGS_KIND_GROUP:
+        case ARGS_KIND_FLAG:
+        case ARGS_KIND_FLAG_SET:
+        case ARGS_KIND_POSITIONAL:
+        case ARGS_KIND_POSITIONAL_ARG:
+        case ARGS_KIND_POSITIONAL_RAW:
             return false;
     }
+
+    /* A kind no enumerator names, which only a cast can make: no value, the answer
+     * that asks for none (base/error.h CHECK_ARG) */
+    return false;
 }
 
 /**
@@ -686,7 +696,13 @@ static void check_positional_counts(
             case ARGS_KIND_POSITIONAL_ARG:
                 cnt = *string_field(opts, o) != NULL ? 1 : 0;
                 break;
-            default:
+            case ARGS_KIND_END:
+            case ARGS_KIND_GROUP:
+            case ARGS_KIND_FLAG:
+            case ARGS_KIND_FLAG_SET:
+            case ARGS_KIND_STRING:
+            case ARGS_KIND_APPEND:
+            case ARGS_KIND_INT:
                 continue;
         }
         if (cnt >= o->positional_min) continue;
@@ -1046,7 +1062,9 @@ void args_complete_candidates(
                 at.current = eq + 1;
                 break;
             }
-            default:
+            case TOK_END_OF_OPTS:
+            case TOK_HELP:
+            case TOK_SHORT_OPT:
                 return;
         }
     }

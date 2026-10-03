@@ -83,7 +83,10 @@ error_t error_wrap(error_t cause, const char *fmt, ...) {
 
 error_t error_from_git(int git_error_code) {
     /* libgit2 answers a sentence whatever stands: the one the failing call set,
-     * or a static one of its own where none does (util/errors.c git_error_last) */
+     * one an earlier call left where the failing one set none — a callback's
+     * code is handed up unworded, so a callback words its own refusal
+     * (sys/transfer.c transfer_credentials_callback) — or a static one of its
+     * own where nothing stands (util/errors.c git_error_last) */
     return error_create(
         ERR_GIT, "Git error (%d): %s",
         git_error_code, git_error_last()->message

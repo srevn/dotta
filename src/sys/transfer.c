@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include <git2/errors.h>
+#include <git2/sys/errors.h>
 
 #include "base/buffer.h"
 #include "base/error.h"
@@ -123,15 +124,15 @@ static bool url_is_local(const char *url) {
 /**
  * Map a libgit2 return code to a transfer outcome class.
  *
- * GIT_EAUTH is libgit2's canonical auth-failure signal — returned when our
- * credential callback bails with GIT_EAUTH, or when libgit2 exhausts its own
- * retry budget against server rejections. We treat it as definitive.
+ * GIT_EAUTH is libgit2's auth-failure code: the credential callback returns it
+ * when it gives up (transfer_credentials_callback), and libgit2 where a remote
+ * asks for credentials no callback could give (transports/http.c handle_auth,
+ * transports/ssh_libssh2.c request_creds). We treat it as definitive.
  *
- * Rarely, auth failures may surface as generic errors (certain TLS/SSH paths,
- * HTTP 401 before the credential callback runs). Those classify as OTHER_FAILURE
- * here; the resulting wording is suboptimal but not incorrect. If smoke tests
- * surface a misclassified case, widen the match (e.g., inspect
- * giterr_last()->klass).
+ * A run that exhausts libgit2's own replay budget is GIT_ERROR — "the exact cause
+ * is unclear", in its words (transports/http.c http_stream_read) — and classifies
+ * as OTHER_FAILURE, as do the auth failures some TLS and SSH paths surface as
+ * other errors; the wording that follows is generic, never false.
  */
 static transfer_outcome_t classify_outcome(int rc) {
     if (rc == 0) return TRANSFER_OUTCOME_OK;
@@ -452,6 +453,9 @@ static void discard_obtained_credentials(char *user, char *pass) {
  *      within a single negotiation. transfer_op_begin resets the per-op counter,
  *      so across-op retries are allowed.
  *
+ *      Both refusals are worded here, in libgit2's own slot: the sentence a failed
+ *      op ends on is the one this callback leaves.
+ *
  *   3. SSH path takes precedence when allowed; SSH never populates the cred cache,
  *      so the session stays in NOT_ACQUIRED.
  *
@@ -469,8 +473,34 @@ int transfer_credentials_callback(
 ) {
     transfer_context_t *ctx = (transfer_context_t *) payload;
 
-    if (ctx->credential_state == CRED_STATE_REJECTED) return GIT_EAUTH;
-    if (ctx->op_attempts++ > 0) return GIT_EAUTH;
+    /* A refusal is worded where it is decided. libgit2 hands a callback's code
+     * up with no sentence of its own (transports/http.c handle_auth,
+     * transports/ssh_libssh2.c request_creds), and the sentence it last set may
+     * be a lookup that succeeded (remote.c lookup_redirect_config's value "not
+     * found"). The session is REJECTED only once the helper's pair was refused:
+     * no other offer moves it out of NOT_ACQUIRED. */
+    if (ctx->credential_state == CRED_STATE_REJECTED) {
+        (void) git_error_set_str(
+            GIT_ERROR_CALLBACK, "the remote refused the credentials the git credential helper gave"
+        );
+        return GIT_EAUTH;
+    }
+
+    /* Asked again within one op: what this op offered was refused. Where an SSH
+     * key is allowed the offer was the agent's, refused in libssh2's words, set
+     * before this call (transports/ssh_libssh2.c ssh_agent_auth), and those stand;
+     * else it was the helper's pair, or with none the anonymous one, which the
+     * remote answered by asking again. */
+    if (ctx->op_attempts++ > 0) {
+        if (!(allowed_types & GIT_CREDENTIAL_SSH_KEY)) {
+            (void) git_error_set_str(
+                GIT_ERROR_CALLBACK, ctx->username
+                    ? "the remote refused the credentials the git credential helper gave"
+                    : "the remote requires credentials, and no git credential helper gave any"
+            );
+        }
+        return GIT_EAUTH;
+    }
     if (!url) return GIT_PASSTHROUGH;
 
     /* SSH path — agent then on-disk key. */

@@ -50,8 +50,8 @@ struct transfer_context_s {
     output_t *output;               /* Borrowed. */
 
     /* Progress UI state */
-    bool progress_active;           /* Line is mid-display. */
-    bool ephemeral;                 /* Clear on completion. */
+    bool progress_active;           /* The op drew a line its end has not ended. */
+    bool ephemeral;                 /* The op's end clears it, never says done. */
 
     /* Cumulative session stats (TTY-independent) */
     transfer_stats_t stats;
@@ -165,25 +165,6 @@ static void secure_replace(char **slot, char *incoming) {
     *slot = incoming;
 }
 
-/**
- * Finalize the current progress line.
- *
- * In ephemeral mode on a TTY, clears the entire line (progress vanishes). In
- * persistent mode, appends the given completion text (e.g., ", done.\n"). Non-TTY
- * ephemeral falls back to newline (ANSI clear requires terminal).
- */
-static void finalize_progress(transfer_context_t *ctx, const char *completion) {
-    if (ctx->ephemeral) {
-        /* Ephemeral: clear the line — progress vanishes */
-        output_clear_line(ctx->output);
-    } else {
-        /* Persistent: show completion text */
-        fputs(completion, ctx->output->stream);
-        fflush(ctx->output->stream);
-    }
-    ctx->progress_active = false;
-}
-
 transfer_context_t *transfer_context_create(const transfer_options_t *opts) {
     CHECK_NULL(opts);
     CHECK_NULL(opts->output);
@@ -257,11 +238,6 @@ void transfer_context_free(transfer_context_t *ctx) {
 
     transfer_commit_credential_decision(ctx);
 
-    /* Clear progress if still active (safety net for interrupted transfers) */
-    if (ctx->progress_active && ctx->output) {
-        finalize_progress(ctx, "\n");
-    }
-
     if (ctx->username) {
         buffer_secure_free(ctx->username, strlen(ctx->username) + 1);
     }
@@ -285,10 +261,27 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction) {
 }
 
 /**
- * End an op — fold stats, classify outcome, advance state machine.
+ * End an op — end its progress line, fold stats, classify outcome, advance state
+ * machine.
  */
 void transfer_op_end(transfer_context_t *xfer, int rc) {
     if (!xfer) return;
+
+    /* The line the op drew ends here, once. A callback cannot tell its last call
+     * from one libgit2 makes after it — the smart protocol reports a fetch once
+     * more past the indexer's last object (transports/smart_protocol.c
+     * git_smart__download_pack), a local push's indexer once per delta it resolves
+     * — so a line a callback ended by its counts was drawn and ended again. An
+     * ephemeral line is cleared; a lasting one says done only for an op that
+     * succeeded. */
+    if (xfer->progress_active) {
+        if (xfer->ephemeral) output_clear_line(xfer->output);
+        else {
+            fputs(rc == 0 ? ", done.\n" : "\n", xfer->output->stream);
+            fflush(xfer->output->stream);
+        }
+        xfer->progress_active = false;
+    }
 
     xfer->last_outcome = classify_outcome(rc);
 
@@ -423,11 +416,6 @@ void transfer_configure_callbacks(
     }
 }
 
-void transfer_progress_resolved(transfer_context_t *xfer) {
-    if (!xfer) return;
-    xfer->progress_active = false;
-}
-
 /**
  * Drop credentials handed back by credential_helper_fill that we couldn't install
  * (libgit2 cred construction failed under memory pressure). Both inputs are
@@ -481,7 +469,8 @@ int transfer_credentials_callback(
      * no other offer moves it out of NOT_ACQUIRED. */
     if (ctx->credential_state == CRED_STATE_REJECTED) {
         (void) git_error_set_str(
-            GIT_ERROR_CALLBACK, "the remote refused the credentials the git credential helper gave"
+            GIT_ERROR_CALLBACK,
+            "the remote refused the credentials the git credential helper gave"
         );
         return GIT_EAUTH;
     }
@@ -603,7 +592,6 @@ int transfer_progress_callback(
 
     unsigned int total = stats->total_objects;
     unsigned int received = stats->received_objects;
-    unsigned int indexed = stats->indexed_objects;
 
     /* Determine what to display based on state */
     if (total > 0) {
@@ -619,11 +607,6 @@ int transfer_progress_callback(
         );
         fflush(ctx->output->stream);
         ctx->progress_active = true;
-
-        /* Check if indexing is complete (guard prevents double finalization) */
-        if (indexed == total && received == total && ctx->progress_active) {
-            finalize_progress(ctx, ", done.\n");
-        }
     } else if (received > 0) {
         /* Don't know total yet, just show count */
         char bytes_str[32];
@@ -687,11 +670,6 @@ int transfer_push_progress_callback(
         }
         fflush(ctx->output->stream);
         ctx->progress_active = true;
-
-        /* Check if complete (guard prevents double finalization) */
-        if (current == total && ctx->progress_active) {
-            finalize_progress(ctx, ", done.\n");
-        }
     } else {
         /* Total unknown — show count (and bytes when meaningful). */
         if (ctx->local_transport) {

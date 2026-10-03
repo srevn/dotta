@@ -111,6 +111,11 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
 /**
  * End an op on this transfer session.
  *
+ * Ends the progress line the op drew, the one place it ends: cleared where the
+ * session's progress is ephemeral, else closed with ", done." for an op that
+ * succeeded and a bare newline for one that failed. So no line outlives its op,
+ * and a caller that announced the op on that line finds only its announce left.
+ *
  * Classifies `rc` into last_outcome and advances the credential state machine:
  *
  *   NOT_ACQUIRED  + anything     → NOT_ACQUIRED   (no helper fill happened)
@@ -186,18 +191,6 @@ void transfer_configure_callbacks(
     transfer_context_t *xfer,
     git_direction direction
 );
-
-/**
- * Release ownership of the progress line back to the caller.
- *
- * Callers that take manual ownership of the current output line (clearing it or
- * emitting their own content) invoke this to suppress the safety-net newline
- * that transfer_context_free would otherwise emit at teardown. Only marks the
- * line as inactive — does not itself write or clear.
- *
- * NULL-safe.
- */
-void transfer_progress_resolved(transfer_context_t *xfer);
 
 /**
  * libgit2 credential callback (payload = transfer_context_t *).

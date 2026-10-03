@@ -1181,9 +1181,9 @@ static error_t status_print_remote(
         /* Resolve the "Fetching from ..." preamble line (verbose only) */
         if (verbose) {
             if (output_is_tty(out)) {
-                /* TTY: clear any remaining text. Handles all cases uniformly
-                 * (callback-finalized, mid-progress error, up-to-date). */
-                transfer_progress_resolved(xfer);
+                /* TTY: clear the preamble. Progress drawn over it ended with
+                 * its op (sys/transfer.h transfer_op_end), so the preamble is
+                 * all that can stand. */
                 output_clear_line(out);
             } else if (err) {
                 /* Non-TTY + error: finish the line before the warning */

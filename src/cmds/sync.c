@@ -273,11 +273,10 @@ static error_t sync_fetch_phase(
     /* Perform batched fetch - single network operation for all branches */
     err = gitops_fetch_branches(repo, remote_name, &branch_names, xfer);
 
-    /* Resolve the ephemeral fetch/progress line. Handles all cases:
-     *   - Callback completed: already cleared, harmless no-op
-     *   - Mid-progress error: clears partial progress
-     *   - Up-to-date: clears "Fetching..." text */
-    transfer_progress_resolved(xfer);
+    /* The announce line ends here. Progress drawn over it ended with its op
+     * (sys/transfer.h transfer_op_end), whichever way the op went, so what can
+     * stand is the announce alone — an up-to-date fetch draws nothing over it:
+     * cleared on a terminal, ended on a pipe. */
     if (ephemeral) {
         output_clear_line(out);
     } else {

@@ -977,10 +977,6 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
  * — two things asked, and one would be done. The profile is no mode: it names
  * whose file an edit changes, or which asker --test asks, and beside
  * --list-defaults it changes nothing the defaults are.
- *
- * One-node refusals only: the collector keeps an error's top message (base/args.c),
- * so the pattern checks, whose refusal wraps the grammar's reason, stay in the
- * command.
  */
 static error_t ignore_post_parse(void *opts_v, arena_t *arena, const args_command_t *cmd) {
     (void) arena;

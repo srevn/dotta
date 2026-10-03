@@ -299,8 +299,8 @@ void output_write(
  * asks none of its own, and one that follows a complete block prints directly
  * under it.
  *
- * Its callers are main.c's: run_spec for the run's refusal, and main for the
- * prologue's and for a word the root does not know.
+ * Its callers are main.c's: run_spec for the run's refusal, and main for a word
+ * the root does not know, a refused line and the prologue's refusal.
  *
  * @param ctx Output context (NULL: nothing)
  * @param err The failure (NULL: nothing)

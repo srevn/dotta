@@ -13,9 +13,12 @@
  *
  * The engine:
  *   - never writes to stdio (rendering is caller-driven);
- *   - never calls exit();
+ *   - never tells a refusal: a line is refused by its first mistake — the
+ *     grammar's, or a hook's error whole — answered as an error (base/error.h),
+ *     as every base parser answers one, for its caller to tell;
+ *   - never calls exit(), so its caller's cleanup runs on every path;
  *   - holds no global state;
- *   - uses a caller-supplied arena for every allocation (error messages, positional
+ *   - uses a caller-supplied arena for every allocation of its own (positional
  *     arrays, post-parse strings).
  *
  * Key design points
@@ -71,11 +74,6 @@
  *                          partial parse filled (`args_complete_candidates`);
  *                          the exported wrapper is how the shell asks.
  *
- *   Cleanup chain          The engine is signal-safe and key-zero-safe: no
- *                          `exit()`, no libc-free in the error path, no
- *                          process-level state. The dispatcher owns the arena
- *                          and frees it after dispatch returns.
- *
  * Picking a subcommand pattern
  * ----------------------------
  * Three patterns coexist because real CLIs vary. Pick by shape, not by taste:
@@ -122,8 +120,6 @@ typedef struct arena arena_t;
 typedef struct args_opt args_opt_t;
 typedef struct args_command args_command_t;
 typedef struct args_subcommand args_subcommand_t;
-typedef struct args_error args_error_t;
-typedef struct args_errors args_errors_t;
 
 /* ══════════════════════════════════════════════════════════════════
  * Enums
@@ -164,8 +160,8 @@ typedef int args_class_t;
  */
 typedef enum args_outcome {
     ARGS_OK,                   /* Parse succeeded; proceed to dispatch */
-    ARGS_HELP_REQUESTED,       /* `-h`/`--help` was seen */
-    ARGS_FAILED                /* Errors recorded; inspect `errors` */
+    ARGS_HELP,                 /* `-h`/`--help` was seen */
+    ARGS_REFUSED               /* The line was refused; `*errors_out` says why */
 } args_outcome_t;
 
 /**
@@ -194,8 +190,8 @@ typedef enum args_root_outcome {
  * Called for every positional token when the command defines it. The returned
  * value is matched against `class_accept` on each POSITIONAL / POSITIONAL_ARG
  * row; the first row with equal value wins. A token whose class matches no row
- * falls back to the POSITIONAL_RAW bucket (if present) or reports an "unexpected
- * argument" error.
+ * falls back to the POSITIONAL_RAW bucket (if present), or the line is refused
+ * ("unexpected argument").
  *
  * Return values are defined by the command itself via a local enum starting at
  * 1 — see `args_class_t`.
@@ -212,15 +208,15 @@ typedef args_class_t (*args_classify)(const char *token);
 typedef void (*args_defaults)(void *opts);
 
 /**
- * Post-parse hook: interpret positional buckets, do secondary parsing, and reject
+ * Post-parse hook: interpret positional buckets, do secondary parsing, and refuse
  * what the rows cannot express.
  *
- * Called after all tokens have been consumed without recorded parse errors and
- * after the positional rows' counts are validated. Use for refspec parsing,
- * N-positional reinterpretation, mode inference, and cross-field invariants
- * (mutually exclusive flags, a value one mode requires and another forbids).
- * Allocations may use `arena`. Returning a non-NULL error aborts dispatch; the
- * error's message is copied into the error collector.
+ * Called after all tokens have been consumed with nothing refused and after the
+ * positional rows' counts are checked. Use for refspec parsing, N-positional
+ * reinterpretation, mode inference, and cross-field invariants (mutually exclusive
+ * flags, a value one mode requires and another forbids). Allocations may use
+ * `arena`. A non-NULL return refuses the line: the error is the line's refusal,
+ * whole — its causes beneath it — for args_parse's caller to tell.
  *
  * A hook decides from the line alone — the options struct and the command, nothing
  * of the process around them: no file, no environment, no state of its caller's
@@ -373,7 +369,7 @@ struct args_command {
     /* Behavior hooks (all optional) */
     args_classify classify;      /* Classify positional token into command-local class ID */
     args_defaults init_defaults; /* Seed opts with non-zero defaults before parsing */
-    args_postparse post_parse;   /* Populate derived fields, reject invariants; non-NULL return aborts dispatch */
+    args_postparse post_parse;   /* Populate derived fields, check invariants; non-NULL refuses the line */
     args_complete complete;      /* What can stand at the cursor; NULL = nothing */
 
     /* Execution  */
@@ -387,29 +383,6 @@ struct args_command {
     bool passthrough;            /* Skip parsing, hand argv to dispatch as-is */
     bool silent_failure;         /* Suppress stderr on error */
     bool hidden;                 /* Hide from root help listing */
-};
-
-/**
- * One parse error.
- */
-struct args_error {
-    const char *message;         /* Arena-allocated; NUL-terminated */
-    const args_opt_t *opt;       /* Offending opt, or NULL */
-    int token_index;             /* argv index, or -1 if no token */
-};
-
-/**
- * Fixed-capacity error collector.
- *
- * Eight slots hold every realistic typo-heavy parse. Overflow sets the flag;
- * later errors are dropped silently and the renderer shows a "more errors
- * suppressed" trailer.
- */
-#define ARGS_ERRORS_CAP 8
-struct args_errors {
-    args_error_t items[ARGS_ERRORS_CAP];
-    size_t count;
-    bool overflowed;
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -466,7 +439,7 @@ args_root_outcome_t args_resolve_root(
  *
  * Pre-conditions:
  *   - command != NULL;
- *   - arena != NULL (used for error messages and positional arrays);
+ *   - arena != NULL (positional arrays, post-parse strings);
  *   - opts_out: zero-initialized, of size `command->opts_size` — NULL where that
  *     is 0, for a spec no row and no hook writes;
  *   - errors_out != NULL (will be initialized; stack-declared is fine).
@@ -475,38 +448,48 @@ args_root_outcome_t args_resolve_root(
  *   - Seeds defaults via `init_defaults` if set.
  *   - For subcommand trees: recurses into the matching child, or into
  *     `default_subcommand` when the user passes no positional, or a flag at the
- *     slot.
- *   - Otherwise walks the token stream applying opts, collecting parse errors
- *     up to ARGS_ERRORS_CAP.
- *   - Runs `post_parse` if no errors so far.
+ *     slot; a tree that resolves to no child refuses the line there.
+ *   - Otherwise walks the token stream applying opts. The first token refused
+ *     is the line's refusal, and the only one: past a misspelt flag the stream
+ *     is no evidence — its value lands in a positional's slot, and the token it
+ *     displaced would read as a second mistake. The stream is still read to its
+ *     end, for a `-h` after the refusal (below).
+ *   - On a line nothing refused: the positional rows' counts, the first row short
+ *     of its minimum refusing the line, then `post_parse`, whose error is the
+ *     refusal, whole.
  *
- * Help wins over errors: if `-h`/`--help` appears in the token stream the parser
- * returns ARGS_HELP_REQUESTED immediately, discarding any errors already recorded
+ * Help wins over a refusal: if `-h`/`--help` appears in the token stream the
+ * parser returns ARGS_HELP immediately, discarding the refusal kept before it
  * AND any tokens still to read. `dotta add --bogus -h` prints help and exits 0
- * — the user asked for help, so the typo is a secondary concern. Rule of thumb
- * for spec authors: don't rely on post_parse firing when -h is on the line.
+ * — the user asked for help, so the typo is a secondary concern. A `-h` read as
+ * an option's value is the value (`-p -h`), and a tree that resolves to no child
+ * stops the stream before a `-h` after it. Rule of thumb for spec authors: don't
+ * rely on post_parse firing when -h is on the line.
  *
- * Side effects: none on stdio; none on global state; no exit(). Every allocation
- * comes from `arena`.
+ * Side effects: none on stdio; no exit(). Every allocation of its own comes from
+ * `arena`; a refusal is an error, the process's (base/error.h).
  *
  * @param command      Command spec (must not be NULL).
  * @param argc         Argument count.
  * @param argv         Argument vector.
  * @param start_idx    First index to parse (1 at root, 2 after command).
- * @param arena        Arena for error messages / positional arrays.
+ * @param arena        Arena for positional arrays and post-parse strings.
  * @param opts_out     Zero-initialized options struct; populated in place.
- * @param errors_out   Caller-provided; populated with parse errors.
+ * @param errors_out   Receives the line's refusal on ARGS_REFUSED — a token's, a
+ *                     tree's, a positional row's, or the hook's error whole,
+ *                     its causes beneath it — and NULL otherwise.
  * @param resolved_out If non-NULL, set on every outcome to the leaf command
- *                     actually reached after subcommand resolution. The caller
- *                     uses this to render help/errors against the correct command
- *                     and to invoke the leaf's dispatch. For a non-tree command
- *                     this is just `command`. NULL is allowed for callers that
- *                     do not care (test fixtures, etc.).
+ *                     actually reached after subcommand resolution — a tree that
+ *                     resolves to no child is its own. The caller renders help,
+ *                     and the usage beneath a refusal, against it, and invokes
+ *                     the leaf's dispatch. For a non-tree command this is just
+ *                     `command`. NULL is allowed for callers that do not care
+ *                     (test fixtures, etc.).
  * @return Outcome enum (`-v`/`--version` is handled at root, not here).
  */
 args_outcome_t args_parse(
     const args_command_t *command, int argc, char **argv, int start_idx,
-    arena_t *arena, void *opts_out, args_errors_t *errors_out,
+    arena_t *arena, void *opts_out, error_t *errors_out,
     const args_command_t **resolved_out
 );
 
@@ -522,10 +505,10 @@ args_outcome_t args_parse(
  * to a bucket. The line is resolved and consumed exactly as `args_parse` would
  * — the registry for argv[1], the subcommand tree, the option loop — except that
  * it stops where the tokens stop: a trailing value flag names the value being
- * typed instead of recording an error, and a line the command would reject (an
- * unknown flag, one positional too many) still has a next token, so the loop's
- * errors are recorded and ignored. Then the command's `complete` hook answers
- * with the buckets as they stand.
+ * typed instead of being refused, and a line the command would refuse (an unknown
+ * flag, one positional too many) still has a next token, since the stream reads
+ * on past what it refuses. Then the command's `complete` hook answers with the
+ * buckets as they stand.
  *
  * Nothing is printed and no hook is called where the exported rules already answer
  * or nothing can: the root slot (the command names), a tree's subcommand slot
@@ -583,6 +566,20 @@ void args_render_usage_line(
 );
 
 /**
+ * Render the usage a refused line was refused against: its `Usage:` line, then
+ * where the command's help is ("Try '<prog> <cmd> --help' for more information.").
+ *
+ * The refusal is never the engine's to render — args_parse answers it, for its
+ * caller to tell — and this is written beneath it, flush, as the root's usage
+ * is beneath a word the root does not know.
+ */
+void args_render_usage(
+    FILE *out,
+    const args_command_t *command,
+    const char *prog
+);
+
+/**
  * Render full help for a command:
  *   1) usage line,
  *   2) summary,
@@ -598,18 +595,6 @@ void args_render_usage_line(
  */
 void args_render_help(
     FILE *out,
-    const args_command_t *command,
-    const char *prog
-);
-
-/**
- * Render collected parse errors followed by the usage line and "Try '<prog> <cmd>
- * --help'" hint. Safe to call with errors->count == 0 (it will still emit the
- * usage/help hint).
- */
-void args_render_errors(
-    FILE *out,
-    const args_errors_t *errors,
     const args_command_t *command,
     const char *prog
 );
@@ -684,7 +669,7 @@ error_t args_export_completion_fish(
  * Fails on: empty, non-numeric trailing chars, value outside [min, max], or ERANGE
  * from strtol. `text` and `out` must not be NULL.
  *
- * @return NULL on success; the error on failure.
+ * @return NULL on success, `*out` written; else the error, `*out` as it was.
  */
 error_t args_parse_long(const char *text, long min, long max, long *out);
 
@@ -880,9 +865,9 @@ const int *args_flag_set_value(
 
 /**
  * Unclassified raw positional bucket: every positional that does not match a
- * POSITIONAL / POSITIONAL_ARG row lands here. Enforced min/max bounds are reported
- * as parse errors. The command's post_parse hook is responsible for interpreting
- * the bucket.
+ * POSITIONAL / POSITIONAL_ARG row lands here. Enforced min/max bounds refuse
+ * the line. The command's post_parse hook is responsible for interpreting the
+ * bucket.
  */
 #define ARGS_POSITIONAL_RAW(type, field, count_field, min_c, max_c) \
     { .kind           = ARGS_KIND_POSITIONAL_RAW, \

@@ -283,7 +283,8 @@ static void close_run(dotta_run_t *run) {
 }
 
 /**
- * The name the program was invoked by, for every usage line, hint and parse error.
+ * The name the program was invoked by, for every usage line and every pointer
+ * to help.
  *
  * argv[0] is an invocation — a bare word after a PATH lookup, a relative or an
  * absolute path — and what those spellings have in common is the last component.
@@ -420,13 +421,13 @@ int main(int argc, char **argv) {
     /* Line-buffer the report
      *
      * dotta writes one document to stdout and, from several layers, diagnostics
-     * to stderr: the terminal failure and the questions from base/output, a refused
-     * line's errors and usage from base/args, the passphrase prompt from
-     * sys/passphrase and the one mlock warning from base/secure. stderr is never
-     * fully buffered (POSIX), while stdout is block-buffered the moment it is
-     * not a terminal — so a redirected run reads back with every diagnostic hoisted
-     * above the report it annotates, and the heading of a block separated from
-     * its list.
+     * to stderr: the terminal failure and the questions from base/output, the
+     * usage beneath a refused line or word from base/args, the passphrase prompt
+     * from sys/passphrase and the one mlock warning from base/secure. stderr is
+     * never fully buffered (POSIX), while stdout is block-buffered the moment
+     * it is not a terminal — so a redirected run reads back with every diagnostic
+     * hoisted above the report it annotates, and the heading of a block separated
+     * from its list.
      *
      * Flush granularity is what differs, so flush granularity is what is fixed:
      * one line, matching stderr's, makes the order the reader sees the order
@@ -515,15 +516,18 @@ int main(int argc, char **argv) {
     /* The engine answers `resolved` and resets `errors` on every path, so the
      * uninitialized stack declarations are intentional. */
     const args_command_t *resolved;
-    args_errors_t errors;
+    error_t errors;
     switch (args_parse(spec, argc, argv, 2, process, opts, &errors, &resolved)) {
-        case ARGS_HELP_REQUESTED:
+        case ARGS_HELP:
             args_render_help(stdout, resolved, prog);
             arena_free(process);
             return 0;
-        case ARGS_FAILED:
+        case ARGS_REFUSED:
+            /* The line's refusal, told as every refusal is, and beneath it the
+             * usage it was refused against: the root's arm, one level down */
             if (!resolved->silent_failure) {
-                args_render_errors(stderr, &errors, resolved, prog);
+                output_error(&out, errors);
+                args_render_usage(stderr, resolved, prog);
             }
             arena_free(process);
             return 1;

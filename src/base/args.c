@@ -1,22 +1,24 @@
 /**
  * args.c - Declarative argument-parser engine
  *
- * Straight-line parse over a caller-supplied (command, argv) pair, with every
- * allocation drawn from a caller-supplied arena. Errors are accumulated in a
- * fixed-capacity collector so a single mis-typed argv reports every mistake at
- * once.
+ * Straight-line parse over a caller-supplied (command, argv) pair, every allocation
+ * of its own drawn from a caller-supplied arena. A line is refused by its first
+ * mistake, answered as an error for the caller to tell (base/error.h), and the
+ * stream is read on past it to its end.
  *
  * Layout:
  *   1) internal cursor + token classifier,
  *   2) names — the space-separated lists a spec is written in — and the matchers
  *      over them,
- *   3) error collector helpers,
- *   4) typed-int parser,
- *   5) per-kind "apply" routines that write into the options struct,
+ *   3) typed-int parser, and the flag readers for a caller without the options
+ *      struct's type,
+ *   4) field writers, the per-kind "apply" routines that write into the options
+ *      struct and the positional rows' counts, each answering what it refuses,
+ *   5) the root dispatcher,
  *   6) the token consumer (tree resolution + option loop) and the args_parse
  *      entry point that settles what it consumed,
  *   7) completion: the candidates driver, a partial consume and the hook,
- *   8) rendering (root usage, single-command help, error batch),
+ *   8) rendering (the root's usage, a command's usage and help),
  *   9) the fish completion exporter.
  */
 
@@ -25,7 +27,6 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -200,61 +201,6 @@ static const args_subcommand_t *find_subcommand(
 }
 
 /* ══════════════════════════════════════════════════════════════════
- * Error collector
- * ══════════════════════════════════════════════════════════════════ */
-
-__attribute__((format(printf, 5, 0)))
-static void record_error_v(
-    args_errors_t *errors, arena_t *arena, int token_index,
-    const args_opt_t *opt, const char *fmt, va_list ap
-) {
-    if (errors == NULL) return;
-
-    if (errors->count >= ARGS_ERRORS_CAP) {
-        errors->overflowed = true;
-        return;
-    }
-
-    /* Two-pass formatting: first pass sizes the buffer, second fills it.
-     * `vsnprintf(NULL, 0, ...)` is a standard C99 idiom. The format is the engine's
-     * own: one that cannot be formatted is a bug, never a parse error dropped —
-     * a dropped one would let a refused line parse as accepted. */
-    va_list ap_copy;
-    va_copy(ap_copy, ap);
-    int needed = vsnprintf(NULL, 0, fmt, ap_copy);
-    va_end(ap_copy);
-    CHECK_ARG(needed >= 0, "fmt cannot be formatted");
-
-    char *msg = arena_alloc(arena, (size_t) needed + 1);
-    (void) vsnprintf(msg, (size_t) needed + 1, fmt, ap);
-
-    errors->items[errors->count] = (args_error_t) {
-        .message = msg,
-        .opt = opt,
-        .token_index = token_index,
-    };
-    errors->count++;
-}
-
-__attribute__((format(printf, 5, 6)))
-static void record_error(
-    args_errors_t *errors, arena_t *arena, int token_index,
-    const args_opt_t *opt, const char *fmt, ...
-) {
-    va_list ap;
-    va_start(ap, fmt);
-    record_error_v(errors, arena, token_index, opt, fmt, ap);
-    va_end(ap);
-}
-
-static void record_error_from_err(
-    args_errors_t *errors, arena_t *arena, int token_index,
-    const args_opt_t *opt, error_t err
-) {
-    record_error(errors, arena, token_index, opt, "%s", error_message(err));
-}
-
-/* ══════════════════════════════════════════════════════════════════
  * Typed int parser (public — also used by hooks)
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -368,8 +314,8 @@ static void ensure_array(
  * ══════════════════════════════════════════════════════════════════ */
 
 /* The help renderer's flag label ("--force, -f"), defined with the rest of the
- * rendering below. Forward-declared because one parse error names a flag the
- * way `--help` does; it stays where it belongs rather than being hoisted here. */
+ * rendering below. Forward-declared because one refusal names a flag the way
+ * `--help` does; it stays where it belongs rather than being hoisted here. */
 static size_t format_flag_label(char *buf, size_t buf_size, const char *flags);
 
 /**
@@ -400,25 +346,23 @@ static bool opt_takes_value(const args_opt_t *o) {
  * Apply a value-taking opt (STRING / APPEND / INT).
  *
  * `inline_value` is non-NULL iff the user wrote `--name=value`; else the value
- * is consumed from the cursor's next token. A partial stream that ends on the
- * flag has its value at the cursor: reported, not an error.
+ * is consumed from the cursor's next token, whatever it reads as — `-p -h` gives
+ * -p the value `-h`. A partial stream that ends on the flag has its value at
+ * the cursor: reported, never refused. `tok` is the flag as typed, which a missing
+ * value is refused by.
  */
-static void apply_value_opt(
-    const args_opt_t *opt, const char *inline_value, args_cursor_t *cur,
-    void *opts, arena_t *arena, args_errors_t *errors, int tok_idx
+static error_t apply_value_opt(
+    const args_opt_t *opt, const char *tok, char *inline_value, args_cursor_t *cur,
+    void *opts, arena_t *arena
 ) {
-    char *v = (char *) inline_value;
+    char *v = inline_value;
     if (v == NULL) {
         if (!cur_more(cur)) {
             if (cur->partial) {
                 cur->pending = opt;
-                return;
+                return NULL;
             }
-            record_error(
-                errors, arena, tok_idx, opt, "option '%s' requires a value",
-                cur->argv[tok_idx]
-            );
-            return;
+            return ERROR(ERR_INVALID_ARG, "option '%s' requires a value", tok);
         }
         v = cur_take(cur);
     }
@@ -426,7 +370,7 @@ static void apply_value_opt(
     switch (opt->kind) {
         case ARGS_KIND_STRING: {
             *string_field(opts, opt) = v;
-            break;
+            return NULL;
         }
 
         case ARGS_KIND_APPEND: {
@@ -434,21 +378,13 @@ static void apply_value_opt(
             size_t *cnt = count_field(opts, opt);
             ensure_array(arr, arena, cur->argc);
             (*arr)[(*cnt)++] = v;
-            break;
+            return NULL;
         }
 
-        case ARGS_KIND_INT: {
-            /* A refused value is its message in the collector, and the error is
-             * dropped: one per integer token that does not parse. */
-            long parsed = 0;
-            error_t err = args_parse_long(v, opt->int_min, opt->int_max, &parsed);
-            if (err != NULL) {
-                record_error_from_err(errors, arena, tok_idx, opt, err);
-                return;
-            }
-            *long_field(opts, opt) = parsed;
-            break;
-        }
+        case ARGS_KIND_INT:
+            /* args_parse_long's refusal is the line's, whole, and it writes the
+             * field only where the value parsed */
+            return args_parse_long(v, opt->int_min, opt->int_max, long_field(opts, opt));
 
         case ARGS_KIND_END:
         case ARGS_KIND_GROUP:
@@ -457,10 +393,12 @@ static void apply_value_opt(
         case ARGS_KIND_POSITIONAL:
         case ARGS_KIND_POSITIONAL_ARG:
         case ARGS_KIND_POSITIONAL_RAW:
-            /* The callers route the value-taking kinds alone (apply_long_opt,
-             * apply_short_opt) */
-            CHECK_ARG(false, "a kind that takes no value was handed one");
+            break;
     }
+
+    /* The callers route the value-taking kinds alone (apply_long_opt,
+     * apply_short_opt): one of the others, or a value no enumerator names */
+    CHECK_ARG(false, "a kind that takes no value was handed one");
 }
 
 /**
@@ -474,9 +412,8 @@ static void apply_value_opt(
  * and every group it will have. The same flag twice names one value and is applied
  * silently, as repeating any flag is.
  */
-static void apply_flag_set(
-    const args_command_t *cmd, const args_opt_t *opt, const char *tok,
-    void *opts, arena_t *arena, args_errors_t *errors, int tok_idx
+static error_t apply_flag_set(
+    const args_command_t *cmd, const args_opt_t *opt, const char *tok, void *opts
 ) {
     int *field = int_field(opts, opt);
 
@@ -492,123 +429,98 @@ static void apply_flag_set(
                 break;
             }
         }
-        record_error(
-            errors, arena, tok_idx, opt,
-            "option '%s' contradicts '%s'; give one or the other", tok, given
+        return ERROR(
+            ERR_INVALID_ARG, "option '%s' contradicts '%s'; give one or the other",
+            tok, given
         );
-        return;
     }
 
     *field = opt->set_value;
+    return NULL;
 }
 
-static void apply_long_opt(
-    const args_command_t *cmd, char *tok, args_cursor_t *cur, void *opts,
-    arena_t *arena, args_errors_t *errors, int tok_idx
+static error_t apply_long_opt(
+    const args_command_t *cmd, char *tok, args_cursor_t *cur, void *opts, arena_t *arena
 ) {
     /* tok starts with "--" (verified by classify_token). */
-    const char *name_start = tok + 2;
-    const char *eq = strchr(name_start, '=');
+    char *name_start = tok + 2;
+    char *eq = strchr(name_start, '=');
     size_t name_len = eq ? (size_t) (eq - name_start) : strlen(name_start);
-    const char *inline_val = eq ? eq + 1 : NULL;
+    char *inline_val = eq ? eq + 1 : NULL;
 
     const args_opt_t *opt = find_long(cmd->opts, name_start, name_len);
     if (opt == NULL) {
-        record_error(
-            errors, arena, tok_idx, NULL,
-            "unknown option '%s'", tok
-        );
-        return;
+        return ERROR(ERR_INVALID_ARG, "unknown option '%s'", tok);
+    }
+
+    /* A flag holds no value, so one written inline refuses the token, named whole:
+     * `--force=yes` */
+    if (inline_val != NULL && !opt_takes_value(opt)) {
+        return ERROR(ERR_INVALID_ARG, "option '%s' does not take a value", tok);
     }
 
     switch (opt->kind) {
         case ARGS_KIND_FLAG:
-            if (inline_val != NULL) {
-                record_error(
-                    errors, arena, tok_idx, opt,
-                    "option '%s' does not take a value", tok
-                );
-                return;
-            }
             *bool_field(opts, opt) = true;
-            break;
+            return NULL;
 
         case ARGS_KIND_FLAG_SET:
-            if (inline_val != NULL) {
-                record_error(
-                    errors, arena, tok_idx, opt,
-                    "option '%s' does not take a value", tok
-                );
-                return;
-            }
-            apply_flag_set(cmd, opt, tok, opts, arena, errors, tok_idx);
-            break;
+            return apply_flag_set(cmd, opt, tok, opts);
 
         case ARGS_KIND_STRING:
         case ARGS_KIND_APPEND:
         case ARGS_KIND_INT:
-            apply_value_opt(opt, inline_val, cur, opts, arena, errors, tok_idx);
-            break;
+            return apply_value_opt(opt, tok, inline_val, cur, opts, arena);
 
         case ARGS_KIND_END:
         case ARGS_KIND_GROUP:
         case ARGS_KIND_POSITIONAL:
         case ARGS_KIND_POSITIONAL_ARG:
         case ARGS_KIND_POSITIONAL_RAW:
-            /* find_long answers a row a flag names, and these rows name none */
-            CHECK_ARG(false, "a row no flag names was found by a flag");
+            break;
     }
+
+    /* find_long answers a row a flag names, and these rows name none — nor does
+     * a value no enumerator names */
+    CHECK_ARG(false, "a row no flag names was found by a flag");
 }
 
-static void apply_short_opt(
-    const args_command_t *cmd, char *tok, args_cursor_t *cur,
-    void *opts, arena_t *arena, args_errors_t *errors, int tok_idx
+static error_t apply_short_opt(
+    const args_command_t *cmd, char *tok, args_cursor_t *cur, void *opts, arena_t *arena
 ) {
-    /* v1 rejects bundling (`-fv` != `-f -v`); each short opt must be exactly
-     * `-X`. The bundling enhancement can be added later without breaking any
-     * existing spec. */
-    if (tok[2] != '\0') {
-        record_error(
-            errors, arena, tok_idx, NULL,
-            "unknown option '%s'", tok
-        );
-        return;
-    }
-
-    const args_opt_t *opt = find_short(cmd->opts, tok[1]);
+    /* v1 refuses bundling (`-fv` != `-f -v`): each short opt must be exactly
+     * `-X`, so a longer token names no row. The bundling enhancement can be added
+     * later without breaking any existing spec. */
+    const args_opt_t *opt = tok[2] == '\0' ? find_short(cmd->opts, tok[1]) : NULL;
     if (opt == NULL) {
-        record_error(
-            errors, arena, tok_idx, NULL,
-            "unknown option '%s'", tok
-        );
-        return;
+        return ERROR(ERR_INVALID_ARG, "unknown option '%s'", tok);
     }
 
     switch (opt->kind) {
         case ARGS_KIND_FLAG:
             *bool_field(opts, opt) = true;
-            break;
+            return NULL;
         case ARGS_KIND_FLAG_SET:
-            apply_flag_set(cmd, opt, tok, opts, arena, errors, tok_idx);
-            break;
+            return apply_flag_set(cmd, opt, tok, opts);
         case ARGS_KIND_STRING:
         case ARGS_KIND_APPEND:
         case ARGS_KIND_INT:
-            apply_value_opt(opt, NULL, cur, opts, arena, errors, tok_idx);
-            break;
+            return apply_value_opt(opt, tok, NULL, cur, opts, arena);
         case ARGS_KIND_END:
         case ARGS_KIND_GROUP:
         case ARGS_KIND_POSITIONAL:
         case ARGS_KIND_POSITIONAL_ARG:
         case ARGS_KIND_POSITIONAL_RAW:
-            /* find_short answers a row a flag names, and these rows name none */
-            CHECK_ARG(false, "a row no flag names was found by a flag");
+            break;
     }
+
+    /* find_short answers a row a flag names, and these rows name none — nor does
+     * a value no enumerator names */
+    CHECK_ARG(false, "a row no flag names was found by a flag");
 }
 
-static void apply_positional(
-    const args_command_t *cmd, char *tok, void *opts, arena_t *arena,
-    args_errors_t *errors, int tok_idx, int argc
+static error_t apply_positional(
+    const args_command_t *cmd, char *tok, void *opts, arena_t *arena, int argc
 ) {
     /* Classify the token. cls=0 when the command has no classifier, matching
      * rows declared via ARGS_POSITIONAL_ANY (zero-init on class_accept). Commands
@@ -644,16 +556,12 @@ static void apply_positional(
     if (matched == NULL) matched = raw;
 
     if (matched == NULL) {
-        record_error(
-            errors, arena, tok_idx, NULL,
-            "unexpected argument '%s'", tok
-        );
-        return;
+        return ERROR(ERR_INVALID_ARG, "unexpected argument '%s'", tok);
     }
 
     if (matched->kind == ARGS_KIND_POSITIONAL_ARG) {
         *string_field(opts, matched) = tok;
-        return;
+        return NULL;
     }
 
     /* POSITIONAL or POSITIONAL_RAW: append to the backing array. */
@@ -663,28 +571,27 @@ static void apply_positional(
     if (matched->kind == ARGS_KIND_POSITIONAL_RAW &&
         matched->positional_max > 0 &&
         *cnt >= matched->positional_max) {
-        record_error(
-            errors, arena, tok_idx, NULL,
-            "too many arguments (max %zu allowed)",
+        return ERROR(
+            ERR_INVALID_ARG, "too many arguments (max %zu allowed)",
             matched->positional_max
         );
-        return;
     }
 
     ensure_array(arr, arena, argc);
     (*arr)[(*cnt)++] = tok;
+    return NULL;
 }
 
 /**
- * Validate every positional row's count against its declared minimum — an array's
- * or a RAW bucket's count, an ARG row's one value or none. The RAW `max` bound
- * is enforced during parse (it's a cap, not a floor).
+ * Check every positional row's count against its declared minimum — an array's
+ * or a RAW bucket's count, an ARG row's one value or none. The first row short
+ * of it refuses the line, alone: the usage beneath names every row. The RAW `max`
+ * bound is enforced during parse (it's a cap, not a floor).
+ *
+ * @return NULL, or the refusal naming the first row short of its minimum.
  */
-static void check_positional_counts(
-    const args_command_t *cmd, void *opts,
-    args_errors_t *errors, arena_t *arena
-) {
-    if (cmd->opts == NULL) return;
+static error_t check_positional_counts(const args_command_t *cmd, void *opts) {
+    if (cmd->opts == NULL) return NULL;
 
     for (const args_opt_t *o = cmd->opts; o->kind != ARGS_KIND_END; o++) {
         size_t cnt;
@@ -708,18 +615,14 @@ static void check_positional_counts(
         if (cnt >= o->positional_min) continue;
 
         if (o->kind == ARGS_KIND_POSITIONAL_ARG && o->value_label != NULL) {
-            record_error(
-                errors, arena, -1, o,
-                "argument %s is required", o->value_label
-            );
-        } else {
-            record_error(
-                errors, arena, -1, o,
-                "at least %zu positional argument(s) required",
-                o->positional_min
-            );
+            return ERROR(ERR_INVALID_ARG, "argument %s is required", o->value_label);
         }
+        return ERROR(
+            ERR_INVALID_ARG, "at least %zu positional argument(s) required",
+            o->positional_min
+        );
     }
+    return NULL;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -809,18 +712,19 @@ args_root_outcome_t args_resolve_root(
  * Resolve the subcommand tree and consume the token stream into the buckets.
  *
  * The first half of a parse, shared by `args_parse` — which then settles: the
- * error gate, the positional counts, `post_parse` — and by the completion driver,
- * which reads the cursor instead. Seeds defaults at every tree level, recurses
- * into the matched subcommand, and walks the option loop of the leaf; `*leaf_out`
- * is the command whose buckets were filled.
+ * stream's refusal, the positional counts, `post_parse` — and by the completion
+ * driver, which reads the cursor instead. Seeds defaults at every tree level,
+ * recurses into the matched subcommand, and walks the option loop of the leaf;
+ * `*leaf_out` is the command whose buckets were filled.
  *
- * @return ARGS_OK when the stream was consumed — the loop's errors, if any, are
- *         in `errors`; ARGS_HELP_REQUESTED on `-h`/`--help`; ARGS_FAILED when
- *         the tree could not be resolved and there is no leaf to fill.
+ * @return ARGS_OK when the stream was consumed — the first token it refused, if
+ *         any, in `*errors`; ARGS_HELP on `-h`/`--help`; ARGS_REFUSED when the
+ *         tree could not be resolved and there is no leaf to fill, the refusal
+ *         in `*errors`.
  */
 static args_outcome_t consume_tokens(
     const args_command_t *command, args_cursor_t *cur, arena_t *arena,
-    void *opts, args_errors_t *errors, const args_command_t **leaf_out
+    void *opts, error_t *errors, const args_command_t **leaf_out
 ) {
     /* Surface the current command as the leaf. Recursive calls into a subcommand
      * overwrite this with the deeper command, so after the top-level call returns,
@@ -862,12 +766,11 @@ static args_outcome_t consume_tokens(
                     opts, errors, leaf_out
                 );
             }
-            record_error(
-                errors, arena, -1, NULL,
-                "command '%s' requires a subcommand",
+            *errors = ERROR(
+                ERR_INVALID_ARG, "command '%s' requires a subcommand",
                 command->name ? command->name : "?"
             );
-            return ARGS_FAILED;
+            return ARGS_REFUSED;
         }
 
         /* The slot reads its token as the option loop does: `-h` is help; a flag
@@ -876,7 +779,7 @@ static args_outcome_t consume_tokens(
         const char *first = cur->argv[cur->index];
         switch (classify_token(first, false)) {
             case TOK_HELP:
-                return ARGS_HELP_REQUESTED;
+                return ARGS_HELP;
             case TOK_END_OF_OPTS:
             case TOK_LONG_OPT:
             case TOK_SHORT_OPT:
@@ -886,12 +789,11 @@ static args_outcome_t consume_tokens(
                         opts, errors, leaf_out
                     );
                 }
-                record_error(
-                    errors, arena, cur->index, NULL,
-                    "command '%s' requires a subcommand (got '%s')",
+                *errors = ERROR(
+                    ERR_INVALID_ARG, "command '%s' requires a subcommand (got '%s')",
                     command->name ? command->name : "?", first
                 );
-                return ARGS_FAILED;
+                return ARGS_REFUSED;
             case TOK_POSITIONAL:
                 break;
         }
@@ -907,12 +809,11 @@ static args_outcome_t consume_tokens(
             );
         }
 
-        record_error(
-            errors, arena, cur->index, NULL,
-            "unknown subcommand '%s' of '%s'",
+        *errors = ERROR(
+            ERR_INVALID_ARG, "unknown subcommand '%s' of '%s'",
             first, command->name ? command->name : "?"
         );
-        return ARGS_FAILED;
+        return ARGS_REFUSED;
     }
 
     /* --- Passthrough path -------------------------------------------
@@ -925,53 +826,48 @@ static args_outcome_t consume_tokens(
 
     /* --- Standard option loop ---------------------------------------
      *
-     * Once `-h`/`--help` is seen the loop short-circuits: the user's intent is
-     * to read help, and any trailing argv is about to be thrown away by the render
-     * path. Processing further tokens would only record errors that help_seen
-     * suppresses anyway — wasted work and misleading if a post_parse hook were
-     * still invoked. */
+     * The first token refused is the line's refusal, and the loop reads on past
+     * it: a -h later on the line still asks for help, and a partial stream still
+     * reaches its cursor. What a later token refuses is made and dropped, bounded
+     * by the line (base/error.h "Lifetime"). Once `-h`/`--help` is seen the loop
+     * short-circuits: the user's intent is to read help, so the refusal kept
+     * before it is dropped with any trailing argv. */
+    error_t refusal = NULL;
     while (cur_more(cur)) {
-        int tok_idx = cur->index;
         char *t = cur_take(cur);
 
+        error_t err = NULL;
         switch (classify_token(t, cur->end_of_opts)) {
             case TOK_END_OF_OPTS:
                 cur->end_of_opts = true;
                 break;
             case TOK_HELP:
-                return ARGS_HELP_REQUESTED;
+                return ARGS_HELP;
             case TOK_LONG_OPT:
-                apply_long_opt(
-                    command, t, cur, opts, arena, errors, tok_idx
-                );
+                err = apply_long_opt(command, t, cur, opts, arena);
                 break;
             case TOK_SHORT_OPT:
-                apply_short_opt(
-                    command, t, cur, opts, arena, errors, tok_idx
-                );
+                err = apply_short_opt(command, t, cur, opts, arena);
                 break;
             case TOK_POSITIONAL:
-                apply_positional(
-                    command, t, opts, arena, errors, tok_idx, cur->argc
-                );
+                err = apply_positional(command, t, opts, arena, cur->argc);
                 break;
         }
+        if (refusal == NULL) refusal = err;
     }
 
+    *errors = refusal;
     return ARGS_OK;
 }
 
 args_outcome_t args_parse(
     const args_command_t *command, int argc, char **argv, int start_idx,
-    arena_t *arena, void *opts_out, args_errors_t *errors_out,
+    arena_t *arena, void *opts_out, error_t *errors_out,
     const args_command_t **resolved_out
 ) {
-    /* Reset the error collector in-place so callers can stack-declare it without
+    /* Reset the refusal in-place so callers can stack-declare it without
      * pre-zeroing. */
-    if (errors_out != NULL) {
-        errors_out->count = 0;
-        errors_out->overflowed = false;
-    }
+    *errors_out = NULL;
 
     args_cursor_t cur = { .argc = argc, .argv = argv, .index = start_idx };
     const args_command_t *leaf = command;
@@ -983,19 +879,16 @@ args_outcome_t args_parse(
     }
     if (outcome != ARGS_OK) return outcome;
 
-    if (errors_out != NULL && errors_out->count > 0) return ARGS_FAILED;
+    if (*errors_out != NULL) return ARGS_REFUSED;
 
-    check_positional_counts(leaf, opts_out, errors_out, arena);
-    if (errors_out != NULL && errors_out->count > 0) return ARGS_FAILED;
+    *errors_out = check_positional_counts(leaf, opts_out);
+    if (*errors_out != NULL) return ARGS_REFUSED;
 
-    /* Hook: interpret positional buckets, parse refspecs, reject what the rows
-     * cannot express. */
+    /* Hook: interpret positional buckets, parse refspecs, refuse what the rows
+     * cannot express. Its error is the line's refusal, whole. */
     if (leaf->post_parse != NULL) {
-        error_t err = leaf->post_parse(opts_out, arena, leaf);
-        if (err != NULL) {
-            record_error_from_err(errors_out, arena, -1, NULL, err);
-            return ARGS_FAILED;
-        }
+        *errors_out = leaf->post_parse(opts_out, arena, leaf);
+        if (*errors_out != NULL) return ARGS_REFUSED;
     }
 
     return ARGS_OK;
@@ -1022,9 +915,9 @@ void args_complete_candidates(
     }
 
     /* Consume the line as the parser would, to where it stops. A line the command
-     * would reject still has a next token: the loop's errors are collected here
-     * and ignored. */
-    args_errors_t errors = { 0 };
+     * would refuse still has a next token: the stream reads on past what it
+     * refuses, and its refusal, the parse's alone, is received here and dropped. */
+    error_t errors = NULL;
     args_cursor_t cur = {
         .argc = argc, .argv = argv, .index = 2, .partial = true
     };
@@ -1292,6 +1185,17 @@ void args_render_usage_line(
         );
     }
     fputc('\n', out);
+}
+
+void args_render_usage(
+    FILE *out,
+    const args_command_t *command,
+    const char *prog
+) {
+    args_render_usage_line(out, command, prog);
+    if (command->name != NULL) {
+        fprintf(out, "Try '%s %s --help' for more information.\n", prog, command->name);
+    }
 }
 
 /**
@@ -1584,9 +1488,9 @@ static void emit_guard(FILE *out, const char *prog, const fish_guard_t *guard) {
  *
  * `-o` — fish's "old-style option" — declares a single-dash option that is exactly
  * `-X`: never grouped, its value the next token. That is what the parser reads
- * (`apply_short_opt` rejects `-fv` and `-pVALUE` alike). `-s` would declare a
+ * (`apply_short_opt` refuses `-fv` and `-pVALUE` alike). `-s` would declare a
  * POSIX short option, and fish would then offer the bundles `-fv`, `-fn`… and
- * probe a value flag for `-pVALUE` — forms the parser rejects. If short bundling
+ * probe a value flag for `-pVALUE` — forms the parser refuses. If short bundling
  * ever lands in the engine, this is the line that flips back to `-s`.
  */
 static void emit_flag_names(FILE *out, const char *flags) {
@@ -1998,33 +1902,4 @@ error_t args_export_completion_fish(
         }
     }
     return NULL;
-}
-
-void args_render_errors(
-    FILE *out,
-    const args_errors_t *errors,
-    const args_command_t *command,
-    const char *prog
-) {
-    if (errors != NULL) {
-        for (size_t i = 0; i < errors->count; i++) {
-            fprintf(out, "%s", prog);
-            if (command && command->name) fprintf(out, " %s", command->name);
-            fprintf(out, ": error: %s\n", errors->items[i].message);
-        }
-        if (errors->overflowed) {
-            fprintf(out, "%s: error: (more errors suppressed)\n", prog);
-        }
-        if (errors->count > 0 || errors->overflowed) fputc('\n', out);
-    }
-
-    if (command != NULL) {
-        args_render_usage_line(out, command, prog);
-        if (command->name != NULL) {
-            fprintf(
-                out, "Try '%s %s --help' for more information.\n",
-                prog, command->name
-            );
-        }
-    }
 }

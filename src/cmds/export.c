@@ -1668,10 +1668,10 @@ static error_t export_post_parse(
     } else if (o->positional_count == 2) {
         o->profile = args[0];
 
-        /* A bare ref selects a whole-profile historical export; anything
-         * path-shaped goes through refspec parsing. */
-        if (refspec_looks_like_commit(args[1]) && !strchr(args[1], '/') &&
-            !strchr(args[1], '.')) {
+        /* A commit selects a whole-profile historical export, by its shape alone
+         * — a search's '/' and '.' are the revision's, and a file named like
+         * one is spelled `./name`; anything else goes through refspec parsing. */
+        if (refspec_looks_like_commit(args[1])) {
             o->commit = args[1];
         } else {
             refspec_t rs = { 0 };

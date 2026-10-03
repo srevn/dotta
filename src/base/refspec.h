@@ -35,9 +35,9 @@
  * is the whole reason the two forms differ.
  *
  * Readers: the parse below, for its '@' gate; show's one- and two-positional
- * forms, export's second positional and revert's, each deciding whether a token
- * is its commit slot's; and diff's classifier, which asks this second — a token
- * that announces a path is never read as a commit (infra/path.h
+ * forms, export's second positional and revert's, each deciding by this alone
+ * whether a token is its commit slot's; and diff's classifier, which asks this
+ * second — a token that announces a path is never read as a commit (infra/path.h
  * path_input_announces_path).
  *
  * @param token The token to read (may be NULL, which looks like nothing)

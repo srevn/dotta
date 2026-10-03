@@ -764,9 +764,10 @@ static error_t show_post_parse(
     if (o->positional_count == 1) {
         const char *arg = args[0];
 
-        if (refspec_looks_like_commit(arg) && !strchr(arg, '/') &&
-            !strchr(arg, '.')) {
-            /* Pure commit ref: git ref without path separators. */
+        if (refspec_looks_like_commit(arg)) {
+            /* A commit by its shape alone, as the two-positional form asks it:
+             * a '/' or '.' a revision holds — a search's, `^{/fix.conf}` — is
+             * the revision's, and a file named like one is spelled `./name`. */
             o->mode = SHOW_COMMIT;
             o->commit = arg;
         } else {

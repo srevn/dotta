@@ -591,15 +591,35 @@ static error_t check_positional_counts(const args_command_t *cmd, void *opts) {
     if (cmd->opts == NULL) return NULL;
 
     for (const args_opt_t *o = cmd->opts; o->kind != ARGS_KIND_END; o++) {
-        size_t cnt;
+        /* Each kind's arm decides its row, so only a kind no enumerator names
+         * reaches the tail */
         switch (o->kind) {
             case ARGS_KIND_POSITIONAL:
             case ARGS_KIND_POSITIONAL_RAW:
-                cnt = *count_field(opts, o);
-                break;
+                if (*count_field(opts, o) >= o->positional_min) continue;
+                return error_create(
+                    ERR_INVALID_ARG,
+                    "At least %zu positional argument(s) required",
+                    o->positional_min
+                );
+
             case ARGS_KIND_POSITIONAL_ARG:
-                cnt = *string_field(opts, o) != NULL ? 1 : 0;
-                break;
+                /* One value or none, against a minimum of 0 or 1 (args.h) */
+                if (*string_field(opts, o) != NULL || o->positional_min == 0) {
+                    continue;
+                }
+                if (o->value_label != NULL) {
+                    return error_create(
+                        ERR_INVALID_ARG,
+                        "Argument %s is required", o->value_label
+                    );
+                }
+                return error_create(
+                    ERR_INVALID_ARG,
+                    "At least %zu positional argument(s) required",
+                    o->positional_min
+                );
+
             case ARGS_KIND_END:
             case ARGS_KIND_GROUP:
             case ARGS_KIND_FLAG:
@@ -609,15 +629,11 @@ static error_t check_positional_counts(const args_command_t *cmd, void *opts) {
             case ARGS_KIND_INT:
                 continue;
         }
-        if (cnt >= o->positional_min) continue;
 
-        if (o->kind == ARGS_KIND_POSITIONAL_ARG && o->value_label != NULL) {
-            return error_create(ERR_INVALID_ARG, "Argument %s is required", o->value_label);
-        }
-        return error_create(
-            ERR_INVALID_ARG, "At least %zu positional argument(s) required",
-            o->positional_min
-        );
+        /* A kind no enumerator names, which only its table's cast can make: the
+         * row has no count to check, and passing it would accept the line unchecked
+         * (base/error.h CHECK_ARG) */
+        CHECK_ARG(false, "an option kind no enumerator names");
     }
     return NULL;
 }

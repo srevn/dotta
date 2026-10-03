@@ -37,7 +37,8 @@
  * Readers: the parse below, for its '@' gate; show's one- and two-positional
  * forms, export's second positional and revert's, each deciding by this alone
  * whether a token is its commit slot's; and diff's classifier, which asks this
- * second — a token that announces a path is never read as a commit (infra/path.h
+ * first — a token shaped like a commit is never read as a path, and the two shapes
+ * meet only in a revision whose pattern holds a glob's bytes (infra/path.h
  * path_input_announces_path).
  *
  * @param token The token to read (may be NULL, which looks like nothing)

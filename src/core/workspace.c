@@ -1653,11 +1653,11 @@ static bool same_entry(const char *path, const char *other, const struct stat *s
  * orphan arm means prunable.
  *
  * Any row that pairs, in an order the sort does not fix: the reader asks whether
- * one stands, never which — a scan root is a selection with a winner (scan_root_t);
- * this is not. An active item carries its row and an orphan none (the partition
- * bears an orphan with no row, and nothing gives it one), which is how this tells
- * the view's entries from the record's — and why the orphan asking, which the
- * index holds on its own entry, is never its own answer.
+ * one stands, never which — a scan root is a selection with a winner
+ * (workspace_find_root); this is not. An active item carries its row and an orphan
+ * none (the partition bears an orphan with no row, and nothing gives it one),
+ * which is how this tells the view's entries from the record's — and why the
+ * orphan asking, which the index holds on its own entry, is never its own answer.
  *
  * Reader: the orphan analysis's BACKED arm — a stale key of an active path is
  * released, never pruned, whoever's row; the row the record's binding names
@@ -2236,15 +2236,14 @@ static const manifest_row_t *workspace_blob_above(
 }
 
 /**
- * One scan root: a directory to enumerate, whose walk it is, and its spelling
+ * The scan root standing at a directory, or NULL
  *
- * Three facts and nothing else of whatever produced one: the identity, the disk's
- * word on which directory this is; the owner, whose names, rules and attribution
- * the walk runs under (scan_t); and the spelling the walk starts from, which
- * every child joins onto. A tracked row carries much besides and a walk reads
- * none of it, which is what makes a registration no row; the two strings are
- * the view's, borrowed, the rows and this array being one arena's
- * (include/runtime.h).
+ * A scan root is a tracked directory's item, kept whole: the directory to
+ * enumerate, by the spelling its row gave it, which every child joins onto; the
+ * owner, whose names, rules and attribution the walk runs under (scan_t); and
+ * the look the join took there, whose identity is the key. A registration copies
+ * nothing — the item holds its row and its look, and a walk reads what it needs
+ * off it — and is no row: the array is the driver's selection among them.
  *
  * Keyed by the directory's identity — the (dev, ino) the join's look found at
  * the spelling it registers — because a traversal must not enumerate one directory
@@ -2253,46 +2252,34 @@ static const manifest_row_t *workspace_blob_above(
  * one directory (a link a binding is declared through, one no binding names, a
  * firmlink, a bind mount), and a walk reaches a directory by whatever spelling
  * its frame joined. Two keys at one directory are two paths to the view and one
- * walk to the scan. One entry per directory, so the array is both the boundaries
- * — a walk stops at any of them it meets, by whichever string (workspace_find_root)
- * — and the walks: the driver enumerates each once, in a walk of its own. Where
- * several rows stand at one directory the later-enabled profile's is the one
- * kept, owner and spelling together, the index's rule for a contested path
- * (core/manifest.c manifest_layer) applied where the keys differ; among one
- * profile's, the later in path order. The consequence: where two tracked rows
- * stand at one directory under two spellings, the later-enabled profile's walk
- * is the one that runs, and the other's namespace never sees an offer beneath it.
+ * walk to the scan. One root per directory, so the array is both the boundaries
+ * — a walk stops at any of them it meets, by whichever string — and the walks:
+ * the driver enumerates each once, in a walk of its own.
  *
  * The entries index (index_entries) reads the same look off the same items, for
  * the two verbs that act on an entry through a string, and the two are not one
  * structure: a root is a selection with a winner and a mutable registration, an
- * entry a look with a run of equals — and the shapes differ with them, an entry
- * being the item its readers ask what stands on, a root the two strings its walk
- * reads.
- */
-typedef struct {
-    dev_t dev;              /* The directory's identity */
-    ino_t ino;
-    const char *profile;    /* The owner: its names, its rules, its attribution */
-    const char *directory;  /* The spelling the walk starts from, and every child's prefix */
-} scan_root_t;
-
-/**
- * The scan root standing at a directory, or NULL
+ * entry a look with a run of equals.
  *
  * Asked by the driver as it registers each tracked directory — is one already
  * standing here? — and by the walk of every directory child — is this another
- * root's? — each against one lstat the caller already took. Linear: every tracked
- * directory is a root and is met once as some root's child, so the compares are
- * the square of their count — three hundred is nothing, ten thousand is some
- * twenty milliseconds. A map keyed by the formatted pair is the upgrade if a
- * machine ever shows it.
+ * root's? — each against one lstat the caller already took. The answer is the
+ * slot, which the registration overwrites. Linear: every tracked directory is a
+ * root and is met once as some root's child, so the compares are the square of
+ * their count — three hundred is nothing, ten thousand is some twenty milliseconds.
+ * A map keyed by the formatted pair is the upgrade if a machine ever shows it.
+ *
+ * @param roots The registered roots (must not be NULL where count > 0)
+ * @param count How many
+ * @param st    The directory's lstat; its identity is the key (must not be NULL)
  */
-static scan_root_t *workspace_find_root(
-    scan_root_t *roots, size_t count, dev_t dev, ino_t ino
+static const workspace_item_t **workspace_find_root(
+    const workspace_item_t **roots, size_t count, const struct stat *st
 ) {
     for (size_t i = 0; i < count; i++) {
-        if (roots[i].dev == dev && roots[i].ino == ino) return &roots[i];
+        if (roots[i]->st.st_dev == st->st_dev && roots[i]->st.st_ino == st->st_ino) {
+            return &roots[i];
+        }
     }
 
     return NULL;
@@ -2315,7 +2302,7 @@ static scan_root_t *workspace_find_root(
  */
 typedef struct {
     workspace_t *ws;                   /* The view, the record, the arena offers live in */
-    scan_root_t *roots;                /* Every scan root — the boundaries — and how many */
+    const workspace_item_t **roots;    /* Every scan root — the boundaries — and how many */
     size_t root_count;
     const char *profile;               /* The owner of the root this walk began at */
     const gitignore_ruleset_t *rules;  /* That profile's layered ruleset */
@@ -2475,7 +2462,7 @@ static void workspace_scan(const scan_t *scan, arena_t *scratch, const char *dir
              * spelling a frame joins, and the view holds a row at one of them.
              * Asked before the name and before any rule: an owner's exclusion
              * is the owner's, and a walk from outside inherits none of it. */
-            if (workspace_find_root(scan->roots, scan->root_count, st.st_dev, st.st_ino)) {
+            if (workspace_find_root(scan->roots, scan->root_count, &st)) {
                 continue;
             }
         } else if (claim || workspace_find_item(ws->orphans, ws->orphan_count, child) ||
@@ -2555,7 +2542,8 @@ static void workspace_scan(const scan_t *scan, arena_t *scratch, const char *dir
  * (cmds/update.c).
  *
  * The driver enumerates the view's tracked directories, one scan each, and the
- * walk descends only into directories the view does not track (scan_root_t).
+ * walk descends only into directories the view does not track
+ * (workspace_find_root).
  */
 static error_t workspace_analyze_untracked(
     workspace_t *ws,
@@ -2587,10 +2575,14 @@ static error_t workspace_analyze_untracked(
      * here to enumerate, where claim_stands asks whether a claim's kind stands
      * — and over the directory items the kind is a constant. Registered in the
      * view's order, lowest profile first, so a later profile's row standing at
-     * a directory an earlier one already stands at takes it — the index's own
-     * rule for a contested path (core/manifest.c manifest_layer), applied where
-     * the keys differ — and within one profile the later row in path order. */
-    scan_root_t *roots = arena_calloc(ws->arena, ws->dir_count, sizeof(*roots));
+     * a directory an earlier one already stands at takes it, owner and spelling
+     * together — the index's own rule for a contested path (core/manifest.c
+     * manifest_layer), applied where the keys differ — and within one profile
+     * the later row in path order. The consequence: where two tracked rows stand
+     * at one directory under two spellings, the later-enabled profile's walk is
+     * the one that runs, and the other's namespace never sees an offer beneath
+     * it. */
+    const workspace_item_t **roots = arena_calloc(ws->arena, ws->dir_count, sizeof(*roots));
     size_t root_count = 0;
 
     size_t profile_count = 0;
@@ -2603,15 +2595,9 @@ static error_t workspace_analyze_untracked(
             if (!item->row->tracked || strcmp(item->profile, profiles[p]) != 0) continue;
             if (item->occupant != FS_OCCUPANT_DIRECTORY) continue;
 
-            scan_root_t *root = workspace_find_root(
-                roots, root_count, item->st.st_dev, item->st.st_ino
-            );
+            const workspace_item_t **root = workspace_find_root(roots, root_count, &item->st);
             if (!root) root = &roots[root_count++];
-
-            *root = (scan_root_t){
-                .dev = item->st.st_dev, .ino = item->st.st_ino,
-                .profile = item->profile, .directory = item->filesystem_path,
-            };
+            *root = item;
         }
     }
     if (root_count == 0) return NULL;
@@ -2629,7 +2615,7 @@ static error_t workspace_analyze_untracked(
     if (err) return err;
 
     for (size_t r = 0; r < root_count; r++) {
-        const scan_root_t *root = &roots[r];
+        const workspace_item_t *root = roots[r];
 
         /* A blob the view holds at this directory or over it, asked once for
          * the whole walk beneath it: an offer under a blob is one no apply can
@@ -2646,7 +2632,7 @@ static error_t workspace_analyze_untracked(
          * inherits this answer and climbs nothing of its own: it asks the view
          * at each child's own key, and every rung over that key is this one
          * (workspace_scan). */
-        if (workspace_blob_above(ws->manifest, root->directory, ws->arena)) continue;
+        if (workspace_blob_above(ws->manifest, root->filesystem_path, ws->arena)) continue;
 
         /* The owner's ruleset (memoised in the builder). Fatal on failure: scanning
          * a profile without its ignore rules risks reporting genuinely ignored
@@ -2671,7 +2657,7 @@ static error_t workspace_analyze_untracked(
         /* The walk's one scratch, freed whatever the walk met: every frame's
          * listing and every entry's strings, none of which outlives it. */
         arena_t *scratch = arena_create(0);
-        workspace_scan(&scan, scratch, root->directory);
+        workspace_scan(&scan, scratch, root->filesystem_path);
         arena_free(scratch);
     }
 

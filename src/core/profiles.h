@@ -690,9 +690,10 @@ typedef struct {
  * Complete or an error: a branch that will not load, a lookup that fails for
  * any reason but absence, a claim that could not be recorded — each is the call's
  * failure and never a shorter list, a falsely unique answer being one a verb
- * acts on. Empty is ERR_NOT_FOUND naming the argument in its own key, and so is
- * the failure of a branch the listing named and a delete took before its load —
- * the load's own "not found" (sys/gitops.h gitops_load_branch_tree). The branch
+ * acts on. None holding it is the empty set, an answer; every error is the
+ * search's, a branch the listing named and a delete took before its load among
+ * them — the load's own "not found" (sys/gitops.h gitops_load_branch_tree), a
+ * branch that could not be read and never one that holds nothing. The branch
  * list is one enumeration, not a snapshot: a ref born between it and the reads
  * is not consulted.
  *
@@ -707,14 +708,14 @@ typedef struct {
  * search entirely, and the one caller says so where it refuses.
  *
  * Reader: revert without a profile (cmds/revert.c select_profile), whose question
- * is every local branch and not the enabled set, and which reads ERR_NOT_FOUND
+ * is every local branch and not the enabled set, and which reads the empty set
  * as no profile holding the argument. A caller that wants the owning profile
  * among the enabled set asks the view instead (manifest_lookup, manifest_holder
  * — list, show).
  *
  * The key is the input here, where its sibling takes a filesystem path outright
  * (profile_claim_name): both keys run this one search — the same enumeration,
- * the same collection, the same refusal when nothing holds it — and the tag chooses
+ * the same collection, the same answer when nothing holds it — and the tag chooses
  * which probe each branch is asked. Over there the other key is an answer the
  * caller already holds, so nothing is left for the call to do with it. A sum
  * that chooses among a function's own behaviours is its input; one whose arm
@@ -725,8 +726,9 @@ typedef struct {
  * @param arg The argument, in the key it named — a filesystem path or a storage
  *        path (must not be NULL)
  * @param arena Arena that owns the claims (must not be NULL)
- * @param out The claims, at least one (must not be NULL; zeroed after an error)
- * @return Error (ERR_NOT_FOUND when no branch holds it) or NULL on success
+ * @param out The claims, none where no branch holds it (must not be NULL; zeroed
+ *        after an error)
+ * @return Error or NULL on success
  */
 error_t profile_discover_claims(
     git_repository *repo,

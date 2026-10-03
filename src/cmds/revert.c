@@ -84,19 +84,18 @@ static error_t select_profile(
         repo, ctx->run.mounts, arg, ctx->arena, &claims
     );
     if (err) {
-        if (error_code(err) != ERR_NOT_FOUND) {
-            /* The search crosses every local branch, so a branch this command
-             * has nothing to do with can stop it — a sheet no loader will parse,
-             * an object the store lost. Whatever the cause, the way through is
-             * the same one: name the profile and one branch is read instead of
-             * all of them. Said here rather than at the search, which knows the
-             * branch that failed and not the flag that names one. */
-            return error_wrap(
-                err, "Cannot search every profile for '%s'; -p reads one instead",
-                subject
-            );
-        }
+        /* The search crosses every local branch, so a branch this command has
+         * nothing to do with can stop it — a sheet no loader will parse, an object
+         * the store lost, a branch a delete took mid-search. Whatever the cause,
+         * the way through is the same one: name the profile and one branch is
+         * read instead of all of them. Said here rather than at the search, which
+         * knows the branch that failed and not the flag that names one. */
+        return error_wrap(
+            err, "Cannot search every profile for '%s'; -p reads one instead", subject
+        );
+    }
 
+    if (claims.count == 0) {
         /* Held at no tip: a file deleted from its profile is the case a revert
          * exists for, and naming the profile is what reaches it — a profile named
          * is not asked what its tip holds (the -p arm above). */

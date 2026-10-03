@@ -1019,15 +1019,8 @@ error_t profile_discover_claims(
 
     if (err) return err;
 
-    /* The argument in its own key — whatever the enumeration held, this loop
-     * having run or not. */
-    if (count == 0) {
-        return error_create(
-            ERR_NOT_FOUND, "'%s' is not held by any profile",
-            arg->key == PATH_KEY_FILESYSTEM ? arg->filesystem_path : arg->storage_path
-        );
-    }
-
+    /* Every branch answered: none holding the argument is the empty set, the
+     * caller's to word, and never an error a failed read could also wear */
     *out = (profile_claims_t){ claims, count };
 
     return NULL;

@@ -151,7 +151,7 @@ Dotta uses a multi-layered ignore system (in precedence order):
 
 The layers decide what is new: what `dotta add` picks up while it walks a directory, and what `status` offers beneath a tracked one. A path a profile already tracks is not new to it, so `dotta add` re-captures it whatever the patterns say, as `dotta update` does; only the command's own `--exclude` leaves it out, as it does for `apply` and `update`.
 
-Where Git's rules cannot be read — a `.gitignore` that is a directory, a repository whose configuration does not parse — nothing is taken to be admitted: `dotta add` refuses the path and says what it could not read, `status` leaves out the new files it could not judge, and `dotta ignore --test` says it could not tell; `respect_gitignore = false` turns Git's rules off.
+Where Git's rules cannot be read — a `.gitignore` that is a directory, a repository whose configuration does not parse — nothing is taken to be admitted: `dotta add` refuses the path and says what it could not read, `status` and `update` list what the scan could not judge and never offer it, and `dotta ignore --test` says it could not tell; `respect_gitignore = false` turns Git's rules off.
 
 A pattern is matched against the path **as seen from the directory it deploys under** — exactly what a `.gitignore` sitting at `~` (for `home/` files), at `/` (for `root/` files) or at the profile's target (for `custom/` files) would see. So write `.config/Code/Cache/` for `~/.config/Code/Cache` and `etc/ssh/*_key` for `/etc/ssh/ssh_host_*_key`. The leading `home/`, `root/` and `custom/` never appear in a pattern, and nothing above that directory takes part in a match: a `$HOME` that happens to live under `/srv/build` is not caught by `build/`.
 

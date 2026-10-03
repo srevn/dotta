@@ -107,6 +107,7 @@ typedef enum {
     WORKSPACE_STATE_DELETED,       /* The view claims the path, dotta saw its node there, and nothing does */
     WORKSPACE_STATE_ORPHANED,      /* A record whose path the view lacks */
     WORKSPACE_STATE_UNTRACKED,     /* Beneath a tracked directory, in neither the view nor the record */
+    WORKSPACE_STATE_UNSCANNED,     /* Where the scan could not look: nothing at or beneath it is offered */
     WORKSPACE_STATE_RELEASED       /* An orphan dotta lets go: the path stays, the record retires */
 } workspace_state_t;
 
@@ -341,14 +342,15 @@ typedef enum {
  *
  * One invariant, established at every fold and trusted downstream: `fault !=
  * NONE` iff the item carries DIVERGENCE_UNVERIFIED. Only DEPLOYED (both kinds)
- * and ORPHANED items can carry one — RELEASED is born of answers, never of a
- * failed look (three that are not looks, and the relocation read's inode compare,
- * whose failure leaves the orphan where it stood), and UNDEPLOYED, DELETED and
- * UNTRACKED of looks that answered. And only a file row can be LOCKED: a directory
- * seals no content, so every fault it can carry comes from an errno.
+ * and ORPHANED items can carry one, and UNSCANNED always does — RELEASED is born
+ * of answers, never of a failed look (three that are not looks, and the relocation
+ * read's inode compare, whose failure leaves the orphan where it stood), and
+ * UNDEPLOYED, DELETED and UNTRACKED of looks that answered. And only a file row
+ * can be LOCKED: a directory seals no content, so every fault it can carry comes
+ * from an errno, and the scan reads no content at all.
  *
  * Readers: workspace_item_tags (the tag — [locked] / [unreadable] / [unverified],
- * the same word on both arms), status's two keys — Unverifiable's and Issues' —
+ * the same word on every arm), status's two keys — Unverifiable's and Issues' —
  * update's census, apply's preflight rows and the closers under them, diff's
  * status line. The engines read the bit and never the fault: one verb, three words.
  */
@@ -365,13 +367,14 @@ typedef enum {
 
 /**
  * One path the workspace knows — a row of the view, a record the view lacks, or
- * a discovery of the scan — with the load's look at it, the verdict over that
- * look, and the confirmation the record is owed
+ * an item of the scan's — with the load's look at it, the verdict over that look,
+ * and the confirmation the record is owed
  *
  * One per active path and one per orphan record, made at the partition before
- * anything is looked at, with the record at its path paired onto it there; a
- * discovery is one more, made at the scan's door with neither source. Items can
- * be files (PATH_KIND_FILE: content, claimed by a profile's tree) or directories
+ * anything is looked at, with the record at its path paired onto it there; an
+ * item of the scan's is one more, made at one of its two doors with neither source
+ * — a discovery, or a place it could not look (UNSCANNED). Items can be files
+ * (PATH_KIND_FILE: content, claimed by a profile's tree) or directories
  * (PATH_KIND_DIRECTORY: metadata only, claimed by a profile's metadata.json,
  * planned and converged by core/deploy on apply's behalf). Arena-allocated and
  * never moved, so an item's address is stable for the workspace's lifetime —
@@ -422,13 +425,15 @@ typedef enum {
  * the entries index and the scan's roots read its identity, and deploy reads
  * its owner where it would converge a directory in place (core/deploy.c
  * deploy_preflight's FIX arm, DEPLOY_SKIP_FOREIGN) — where a narrowed look would
- * have to synthesize one back for each. A discovery's is the scan's own lstat.
+ * have to synthesize one back for each. A scan item's is the scan's own lstat,
+ * where it answered.
  *
  * The identity is the source's strings, lent read-only: the row's for an active
- * item, the record's for an orphan, a discovery's own copies (profile: the view's
+ * item, the record's for an orphan, a scan item's own copies (profile: the view's
  * profile list's). A discovery's kind is FILE: the scan offers regular files
  * and symlinks alone (workspace.c workspace_analyze_untracked), which status's
- * New files label reads.
+ * New files label reads. An unscanned place's is its look's: a directory where
+ * the walk could not look beneath one, a file otherwise.
  *
  * `stat` is what stands behind the content verdict where it found disk to be
  * the row's pair (workspace.c workspace_analyze_file): the base's own stat where
@@ -448,7 +453,7 @@ typedef enum {
  * each claim Git moved that the look found disk already standing on
  * (DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP). The flush clears it once the store
  * holds what the item learned, so it is NONE on every item that owes the record
- * nothing — orphans and discoveries always.
+ * nothing — orphans and the scan's items always.
  *
  * `record` is the record at the path as the load read it, then as each writer
  * wrote it — published, and never edited: a writer builds the record its write
@@ -463,14 +468,14 @@ typedef enum {
  */
 typedef struct {
     /* The join's sources — borrowed for the workspace's lifetime */
-    const manifest_row_t *row;           /* The view's claim; NULL on an orphan and a discovery */
+    const manifest_row_t *row;           /* The view's claim; NULL on an orphan and a scan item */
     const state_record_t *record;        /* The record at the path, or NULL; the writers' alone */
 
     /* The identity — the source's strings, read-only */
     const char *filesystem_path;         /* Target path on filesystem */
     const char *storage_path;            /* Path in profile, e.g., home/.bashrc */
-    const char *profile;                 /* The profile it is from (a discovery: the one it is in) */
-    path_kind_t item_kind;               /* The identity source's kind (a discovery: FILE) */
+    const char *profile;                 /* The profile it is from (a scan item: the one it is in) */
+    path_kind_t item_kind;               /* The identity source's kind (a scan item: its look's) */
 
     /* The look, taken once (workspace_look) */
     fs_occupant_t occupant;              /* What the lstat found; UNKNOWN where none was taken or it failed */
@@ -795,15 +800,16 @@ typedef struct {
  *
  * Deployed items only. Every other state routes trivially by the state itself
  * (DELETED → update's, UNDEPLOYED → apply's, UNTRACKED → update --include-new's,
- * ORPHANED / RELEASED → cleanup_verdict's) and is not drift-prone. DELETED earns
- * that triviality upstream, three times: classify_absent reads absence as a
- * deletion only for a claim that asserts its path, so an ancestor claim never
- * arrives here; only over a record of the claim's own kind, so a path where dotta
- * only ever saw another kind of node never does either; and only where a look
- * was taken, so a path whose absence the squatter above it caused is a displaced
- * DEPLOYED item instead (workspace_displaced_t). Every DELETED item can therefore
- * bear update's verb. Callers keep their state switch and read this table for
- * the DEPLOYED arm alone.
+ * UNSCANNED → no verb's, since the scan could not look, ORPHANED / RELEASED →
+ * cleanup_verdict's) and is not drift-prone. DELETED earns that triviality
+ * upstream, three times: classify_absent reads absence as a deletion only for a
+ * claim that asserts its path, so an ancestor claim never arrives here; only
+ * over a record of the claim's own kind, so a path where dotta only ever saw
+ * another kind of node never does either; and only where a look was taken, so a
+ * path whose absence the squatter above it caused is a displaced DEPLOYED item
+ * instead (workspace_displaced_t). Every DELETED item can therefore bear update's
+ * verb. Callers keep their state switch and read this table for the DEPLOYED
+ * arm alone.
  */
 typedef enum {
     WORKSPACE_ROUTE_CLEAN,             /* No divergence, no reassignment */
@@ -925,12 +931,13 @@ typedef struct workspace workspace_t;
  *   cmds/status.c status_print_workspace (Issues).
  * - analyze_untracked — every regular file and symlink beneath a tracked directory
  *   that no enabled profile claims and dotta has no record of, at a readdir walk
- *   per tracked directory. Read by cmds/update.c update_partition, cmds/status.c
- *   status_print_workspace (New files) and cmds/sync.c cmd_sync (the
- *   clean-workspace guard). Declined for a second reason the orphan analysis
- *   has no equivalent of: auto_detect_new_files and --include-new are the user
- *   saying whether to look at all, so this one is a config read where the other
- *   is a per-command constant.
+ *   per tracked directory, and every place it could not look (UNSCANNED). Read
+ *   by cmds/update.c update_partition (the new files, and the places listed by
+ *   path), cmds/status.c status_print_workspace (New files, and Unverifiable)
+ *   and cmds/sync.c cmd_sync (the clean-workspace guard). Declined for a second
+ *   reason the orphan analysis has no equivalent of: auto_detect_new_files and
+ *   --include-new are the user saying whether to look at all, so this one is a
+ *   config read where the other is a per-command constant.
  *
  * A reader not named above is a bug. Declining an analysis declines its items;
  * it never asserts there are none — a load with the orphan analysis off reads
@@ -973,15 +980,16 @@ typedef struct {
  * the nearest by the directory's own identity, the later-enabled where two stand
  * at one directory — under the name that profile's own claims give it and minus
  * what its ignore layers exclude — and nothing beneath a path the view holds a
- * blob at, where no apply could ever place it. A best-effort look that lists
- * what it can read and goes on with the siblings past the rest: what it could
- * not list or look at, and what Git's ignore rules could not judge, which it
- * withholds, are neither listed nor said — and never a path the view settles,
- * which the join has already named (workspace_analyze_untracked). The record's
- * half is a load fact, not an analysis's: a path dotta remembers is no discovery
- * on any surface, whichever of the two the caller asked for — and so is the entry
- * each row and each record stands on, so a path the view claims or the record
- * remembers under another spelling is no discovery either (see Identity above).
+ * blob at, where no apply could ever place it. A look that lists what it can
+ * read and goes on with the siblings past the rest: what it could not list or
+ * look at, and what Git's ignore rules could not judge, which it withholds, it
+ * says at the path where it stopped (WORKSPACE_STATE_UNSCANNED) — and never a
+ * look the join already says, at a path a claim names
+ * (workspace_analyze_untracked). The record's half is a load fact, not an
+ * analysis's: a path dotta remembers is no discovery on any surface, whichever
+ * of the two the caller asked for — and so is the entry each row and each record
+ * stands on, so a path the view claims or the record remembers under another
+ * spelling is no discovery either (see Identity above).
  *
  * The workspace is scoped to the persistent enabled profile set — the view is
  * built over exactly those profiles, and a record under any other profile is an
@@ -1032,12 +1040,12 @@ error_t workspace_load(
  * The diverged items
  *
  * Every item the load's analyses left with something to say, derived once every
- * verdict is in (workspace.c workspace_list), then the scan's discoveries — as
- * a borrowed slice. Pure value return — no allocation, no error path. Items are
+ * verdict is in (workspace.c workspace_list), then the scan's items — as a borrowed
+ * slice. Pure value return — no allocation, no error path. Items are
  * arena-allocated, so the slice and the item addresses it carries are valid for
  * the workspace's lifetime.
  *
- * The discoveries follow every other item, an order a reader may keep:
+ * The scan's items follow every other item, an order a reader may keep:
  * cmds/update.c cmd_update declines the new files as its accepted items' suffix.
  *
  * Every item it holds has something to say: a state but DEPLOYED, or a DEPLOYED
@@ -1198,7 +1206,7 @@ void workspace_buckets_fill(workspace_buckets_t *buckets);
  * reader would take for a copy to prune. Found by the path's spelling, the join's
  * own key (see Identity above). NULL where the load lends no item at the path:
  * no row and no record is spelled so, the orphans went unanalyzed, or the path
- * is a discovery of the scan, which the diverged items alone lend
+ * is an item of the scan's, which the diverged items alone lend
  * (workspace_diverged). Pure value return — no allocation, no error path; the
  * item is valid for the workspace's lifetime.
  *
@@ -1353,7 +1361,9 @@ const workspace_squatted_t *workspace_squatted_ancestor(
  * Metadata Format:
  *   - "from {profile}" - Standard source profile
  *   - "{old} → {new}" - Profile reassignment transition
- *   - "in {profile}" - For untracked items
+ *   - "in {profile}" - For the scan's items: a new file, and a place the scan
+ *     could not look, whose one tag is the fault's word (MAGENTA), beside the
+ *     join's "from" line where both stand at one path
  *
  * Thread Safety: Uses only stack variables and string literals. Safe for concurrent
  * calls with different items.

@@ -42,10 +42,10 @@
  * kind-specific arm. A file row can carry ENCRYPTION beside any of those; the
  * arm masks it either way.
  *
- * The planner walks the active items, so the three states an orphan or a discovery
- * takes never reach this: their arms name the owner that does handle them, keep
- * -Wswitch quiet, and die with the tail — answered false, the item would fall
- * to the clean bucket, which adoption reads.
+ * The planner walks the active items, so the four states an orphan or a scan
+ * item takes never reach this: their arms name the owner that does handle them,
+ * keep -Wswitch quiet, and die with the tail — answered false, the item would
+ * fall to the clean bucket, which adoption reads.
  *
  * @param item An active item, the verdict on it (must not be NULL)
  * @return true when deploy must act on the path
@@ -107,6 +107,9 @@ static bool deploy_needs_work(const workspace_item_t *item) {
         /* A file in a tracked directory that Git does not hold: the user adds
          * it. Never among the active items, which are made from the view's rows,
          * not filesystem scans. */
+        case WORKSPACE_STATE_UNSCANNED:
+        /* A place the scan could not look: nobody's work, and never among the
+         * active items either. */
         case WORKSPACE_STATE_RELEASED:
             /* The path left its profile in Git (an external commit, a pulled
              * removal, a vanished branch), or dotta never deployed it, and it
@@ -115,7 +118,7 @@ static bool deploy_needs_work(const workspace_item_t *item) {
             break;
     }
 
-    /* An item the planner cannot hand in: one of the three above, or a value no
+    /* An item the planner cannot hand in: one of the four above, or a value no
      * enumerator names. */
     CHECK_ARG(false, "deploy_needs_work was handed an item that is not active");
 }

@@ -1598,7 +1598,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         size_t conflict_count = 0;    /* CONFLICT ∪ KIND — status's Conflicts: no default verb */
         size_t deleted_count = 0;     /* DELETED state — update's to commit */
         size_t untracked_count = 0;   /* UNTRACKED state — update --include-new's */
-        size_t unverified_count = 0;  /* UNVERIFIABLE — dotta could not look; blocks nothing */
+        size_t unverified_count = 0;  /* UNVERIFIABLE, UNSCANNED — dotta could not look; blocks nothing */
         size_t squatted_count = 0;    /* KIND_DERIVED — a rung dotta only passes through; blocks nothing */
         size_t displaced_count = 0;   /* DISPLACED_* — dotta did not look; blocks nothing */
 
@@ -1674,6 +1674,15 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
                 case WORKSPACE_STATE_UNTRACKED:
                     untracked_count++;
+                    break;
+
+                case WORKSPACE_STATE_UNSCANNED:
+                    /* Where the scan could not look: nothing there to commit,
+                     * so no local edit a pull could turn into a conflict — said
+                     * as a deployed path dotta could not look at is, never
+                     * blocking. The note's "'dotta status' lists them" holds:
+                     * sync scans where status does, under the one switch. */
+                    unverified_count++;
                     break;
 
                 case WORKSPACE_STATE_UNDEPLOYED:

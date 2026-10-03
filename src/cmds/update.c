@@ -177,17 +177,22 @@ typedef struct {
 /**
  * What the filter made of the diverged items, in scope
  *
- * One walk partitions every in-scope item four ways. Excluded — an -e pattern's,
+ * One walk partitions every in-scope item five ways. Excluded — an -e pattern's,
  * whatever the state rule would say of it: answered for the command's trace,
  * and never touched. Accepted — the run's work: a deployed item on the capture
  * route, a deleted path, a new file under a tracked directory when a flag or
  * the config asked for it. Refused — a deployed item on any other route
  * (workspace_item_route), counted under that route so the census names the table's
- * own reason; a multi-bit divergence counts under the route that refused it. Or
- * neither — a state that is another verb's, and, under --only-new, every deployed
- * and deleted item: the user asked about new files, nothing about the others
- * answers that, so none is accepted and none is counted (a refused route would
- * name a reason the user did not ask for).
+ * own reason; a multi-bit divergence counts under the route that refused it.
+ * Unscanned — a place the scan could not look: never accepted, since what it
+ * could not judge may be what Git excludes, and listed by path rather than counted
+ * (cmd_update), since no route refused it and status lists it only where the
+ * config scans. Or neither — a state that is another verb's, and, under --only-new,
+ * every deployed and deleted item: the user asked about new files, nothing about
+ * the others answers that, so none is accepted and none is counted (a refused
+ * route would name a reason the user did not ask for) — but a directory the load
+ * could not look at, beneath which the scan never looked either, which is counted
+ * under its route.
  *
  * An accepted item is answered by its fate as well — the preview lists one section
  * per fate, and the new-files prompt counts new_files. The modified fate splits
@@ -226,6 +231,7 @@ typedef struct {
     workspace_items_t unencrypted;           /* DEPLOYED policy violators (a path bit beside it or alone) */
 
     workspace_items_t excluded;              /* In scope, spared by -e — traced, never touched */
+    workspace_items_t unscanned;             /* In scope, where the scan could not look — listed, never taken */
     size_t refused[WORKSPACE_ROUTE_COUNT];   /* In scope, deployed, refused — by the route that refused it */
     size_t faults[WORKSPACE_FAULT_COUNT];    /* The UNVERIFIABLE arm again — by whose remedy the look is */
 } partition_t;
@@ -297,9 +303,16 @@ static void update_partition(
                  * its route, so the preview never promises an update the executor
                  * would refuse and the census says why in the table's words.
                  * Under --only-new the user asked about new files alone: neither
-                 * accepted nor counted. */
-                if (opts->only_new) continue;
-                workspace_route_t route = workspace_item_route(item);
+                 * accepted nor counted — but a directory the load could not look
+                 * at, beneath which the scan did not look either (no root is
+                 * registered where the join's look failed, and the walk adds no
+                 * item where a rung's did), so the new files asked for may stand
+                 * there. */
+                const workspace_route_t route = workspace_item_route(item);
+                if (opts->only_new && (route != WORKSPACE_ROUTE_UNVERIFIABLE ||
+                    item->item_kind != PATH_KIND_DIRECTORY)) {
+                    continue;
+                }
                 if (route != WORKSPACE_ROUTE_CAPTURE) {
                     partition->refused[route]++;
                     if (route == WORKSPACE_ROUTE_UNVERIFIABLE) {
@@ -341,6 +354,14 @@ static void update_partition(
                  * consent prompt (cmd_update's analyze_untracked) */
                 workspace_buckets_add(buckets, item, &partition->new_files);
                 break;
+
+            case WORKSPACE_STATE_UNSCANNED:
+                /* Where the scan could not look: never accepted — what it could
+                 * not judge may be what Git excludes — and listed by path, not
+                 * counted (cmd_update): no route refused it, and status may not
+                 * have it */
+                workspace_buckets_add(buckets, item, &partition->unscanned);
+                continue;
 
             case WORKSPACE_STATE_UNDEPLOYED:
             case WORKSPACE_STATE_ORPHANED:
@@ -1622,6 +1643,41 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             refused[WORKSPACE_ROUTE_KIND_DERIVED] == 1 ? "" : "s",
             refused[WORKSPACE_ROUTE_KIND_DERIVED] == 1 ? "it" : "them"
         );
+    }
+
+    /* Where the scan could not look, by path and above the exit below, so a run
+     * that found nothing to add still says where it could not look: this may be
+     * the one screen that has them — status scans only where the config asks,
+     * and this run may have scanned on its own flag. Each line is the item's
+     * tags and path, as status lists it; add meets each cause again and prints
+     * it. */
+    if (partition.unscanned.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Not scanned for new files",
+            "nothing at or beneath these is offered; 'dotta add -n' says why"
+        );
+
+        for (size_t i = 0; i < partition.unscanned.count; i++) {
+            const workspace_item_t *item = partition.unscanned.entries[i];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256];
+            char path[PATH_MAX + 2];
+
+            if (workspace_item_tags(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                snprintf(
+                    path, sizeof(path), "%s%s", item->filesystem_path,
+                    path_kind_suffix(item->item_kind)
+                );
+                output_list_add(list, tags, tag_count, color, path, metadata);
+            }
+        }
+
+        output_list_render(list);
+        output_list_free(list);
     }
 
     /* A named path re-derives its subtree's chains. Naming is consent, so a run

@@ -359,11 +359,12 @@ static workspace_fault_t workspace_code_fault(error_code_t code) {
  * call itself rather than through a local whose only job is to outlive the test
  * (workspace_measure; Rule 5).
  *
- * Called at the two folds that hold an error of the look they just made —
- * workspace_analyze_file's look at the content, workspace_measure's compare.
- * The four that hold an errno instead reach workspace_code_fault directly:
- * workspace_analyze_file and workspace_analyze_directory at their lstat,
- * workspace_measure at its own and at a directory's access check.
+ * Called at the four folds that hold an error of the look they just made —
+ * workspace_analyze_file's look at the content, workspace_measure's compare,
+ * workspace_scan's listing and its ignore verdict. The five that hold an errno
+ * instead reach workspace_code_fault directly: workspace_analyze_file and
+ * workspace_analyze_directory at their lstat, workspace_measure at its own and
+ * at a directory's access check, workspace_scan at an entry's lstat.
  */
 static workspace_fault_t workspace_error_fault(error_t err) {
     if (!err) return WORKSPACE_FAULT_NONE;
@@ -427,9 +428,10 @@ static const workspace_squatted_t *workspace_squatter_above(
  * Note an item among the diverged items, after every one noted before it
  *
  * The list grows in the workspace's arena, beside the items it lists: derived
- * once every verdict is in (workspace_list), then extended by the scan's
- * discoveries (workspace_add_untracked). No reader is lent it before the load
- * returns, so none holds an array a later note outgrows (workspace_diverged).
+ * once every verdict is in (workspace_list), then extended by the scan's items
+ * (workspace_add_untracked, workspace_add_unscanned). No reader is lent it before
+ * the load returns, so none holds an array a later note outgrows
+ * (workspace_diverged).
  *
  * @param ws Workspace (must not be NULL)
  * @param item The item, the workspace's own (must not be NULL)
@@ -443,7 +445,7 @@ static void workspace_note_diverged(workspace_t *ws, const workspace_item_t *ite
 }
 
 /**
- * Add an untracked item — the one producer with neither source
+ * Add an untracked item — a discovery, the scan's first door
  *
  * The untracked scan found a new file inside a tracked directory: no row (the
  * view does not claim the path), no record (dotta has no memory of having managed
@@ -451,12 +453,12 @@ static void workspace_note_diverged(workspace_t *ws, const workspace_item_t *ite
  * so a path either of them holds under any spelling never reaches here. State,
  * divergence and kind are the constants of the state.
  *
- * This is the one door the walk's strings leave its scratch through, and it copies
- * them rather than aliasing: the path the walk joined and the name the namer
- * answered live in the walk's scratch, which the frame's next entry reclaims
- * (sys/filesystem.h fs_listing_t), and the item outlives the walk. The profile
- * is the owner's — the row's own, whose tracked directory the walk began at —
- * and is the view's arena's already.
+ * This door and the unscanned one (workspace_add_unscanned) are the two the walk's
+ * strings leave its scratch through, and each copies them rather than aliasing:
+ * the path the walk joined and the name the namer answered live in the walk's
+ * scratch, which the frame's next entry reclaims (sys/filesystem.h fs_listing_t),
+ * and the item outlives the walk. The profile is the owner's — the row's own,
+ * whose tracked directory the walk began at — and is the view's arena's already.
  *
  * No earlier item stands at the path: the view's and the record's paths were
  * skipped at the leaf guard, and no directory is enumerated twice (one scan root
@@ -497,6 +499,64 @@ static void workspace_add_untracked(
         .st = *st,
         .state = WORKSPACE_STATE_UNTRACKED,
     };
+
+    workspace_note_diverged(ws, item);
+}
+
+/**
+ * Add an unscanned item — where the scan could not look, at or beneath a path
+ *
+ * The scan's other answer: a place its walk stopped, so nothing at or beneath
+ * it is offered — a directory it could not list or look into, an entry it could
+ * not look at, a rule it could not judge (workspace_scan). Said at the path
+ * whatever the join holds there: a tracked root, a rung or a directory the record
+ * remembers keeps its own item beside this one, which says what stands at the
+ * directory where this says what the walk could not see beneath it. The walk
+ * says no failed look the join already says, and no directory is enumerated twice
+ * (one scan root per directory), so the scan says each path once.
+ *
+ * The look is the scan's own where it answered, and the kind follows it: a
+ * directory where the walk could not look beneath one, a file otherwise — an
+ * entry whose look failed included, its occupant UNKNOWN and its stat none. The
+ * divergence is DIVERGENCE_UNVERIFIED and the fault the failed look's class
+ * (workspace.h workspace_fault_t), never NONE and never LOCKED: the scan reads
+ * no content. The strings are copied out of the walk's scratch, the profile is
+ * the view's, as at the untracked door.
+ *
+ * @param ws Workspace context (must not be NULL)
+ * @param filesystem_path The path where the walk stopped (must not be NULL)
+ * @param storage_path The name the namer answered for it (must not be NULL)
+ * @param profile The owner of the walk, the view's (must not be NULL)
+ * @param occupant What the scan's lstat found there; UNKNOWN where it failed
+ * @param st The scan's lstat of the path, or NULL where it failed
+ * @param fault Whose remedy the failed look is
+ */
+static void workspace_add_unscanned(
+    workspace_t *ws,
+    const char *filesystem_path,
+    const char *storage_path,
+    const char *profile,
+    fs_occupant_t occupant,
+    const struct stat *st,
+    workspace_fault_t fault
+) {
+    CHECK_NULL(ws);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(profile);
+
+    workspace_item_t *item = arena_alloc(ws->arena, sizeof(*item));
+    *item = (workspace_item_t){
+        .filesystem_path = arena_strdup(ws->arena, filesystem_path),
+        .storage_path = arena_strdup(ws->arena, storage_path),
+        .profile = profile,
+        .item_kind = occupant == FS_OCCUPANT_DIRECTORY ? PATH_KIND_DIRECTORY : PATH_KIND_FILE,
+        .occupant = occupant,
+        .state = WORKSPACE_STATE_UNSCANNED,
+        .divergence = DIVERGENCE_UNVERIFIED,
+        .fault = fault,
+    };
+    if (st) item->st = *st;
 
     workspace_note_diverged(ws, item);
 }
@@ -2374,20 +2434,28 @@ typedef struct {
  * child by the view's own word, and the directory is the winner's to enumerate,
  * under the winner's name, in a walk of its own.
  *
- * Cannot fail, and says nothing: what it could not read — a directory that will
- * not list, an entry that will not stat, a path past the kernel's PATH_MAX among
- * them — is skipped where it happens, as absence is, and what Git's ignore rules
- * could not judge is withheld — a file not offered, a directory not entered —
- * and either way the siblings go on. The look lists what it can read; what it
- * could not is neither listed nor said.
+ * What kept the frame from looking beneath its directory is its answer, for whoever
+ * entered it to say — the driver at a root, the frame above at a child
+ * (workspace_add_unscanned): a listing that would not open or read, or a look
+ * its directory refuses every entry alike. A directory that left between the
+ * look that found it and this listing is an absence, and no answer. Everything
+ * else the walk could not do it says itself, at the path, and the siblings go
+ * on: a look that failed at a path no claim names — at a rung, the join's look
+ * met it at the same key and its item says so — a rule it could not judge, and
+ * a directory whose descent came back with an answer. Each is never offered,
+ * since what could not be judged may be what Git excludes.
  *
  * @param scan      What the walk runs under (must not be NULL)
  * @param scratch   The walk's: every frame's listing and every entry's strings
  *                  (must not be NULL)
  * @param directory The path this frame enumerates: a key the view holds no blob
  *                  at or over (must not be NULL)
+ * @return Whose remedy what kept the frame from looking beneath its directory
+ *         is; WORKSPACE_FAULT_NONE where it looked
  */
-static void workspace_scan(const scan_t *scan, arena_t *scratch, const char *directory) {
+static workspace_fault_t workspace_scan(
+    const scan_t *scan, arena_t *scratch, const char *directory
+) {
     CHECK_NULL(scan);
     CHECK_NULL(directory);
 
@@ -2398,19 +2466,23 @@ static void workspace_scan(const scan_t *scan, arena_t *scratch, const char *dir
      * the recursion rather than one per frame. The frames hold entry names where
      * they would hold directory streams — a deep walk holds no descriptor per
      * level, and pays for the names instead. A directory that left between the
-     * look that found it and this listing, and one that will not open or read,
-     * list nothing alike: the listing's error is dropped, one per directory the
-     * walk could not list. */
+     * look that found it and this listing is an absence (fs_listing_init's
+     * NOT_FOUND); one that will not open or read is what kept this frame from
+     * looking beneath it, classed and its error dropped — the class is all its
+     * item keeps (workspace_error_fault). */
     fs_listing_t listing;
     error_t err = fs_listing_init(&listing, scratch, directory);
-    if (err) return;
+    if (err) {
+        return error_code(err) == ERR_NOT_FOUND ? WORKSPACE_FAULT_NONE
+                                                : workspace_error_fault(err);
+    }
 
     /* Each child is a key joined onto a key (infra/mount.h), and its strings —
      * the path, the namer's copy and its answer — go at the next entry, the frames
      * of its subtree with them: a frame beneath this one lists above them, so
      * `child` stands as that frame's `directory` for the whole subtree. What
-     * outlives the entry is an offer's, copied at its door
-     * (workspace_add_untracked). */
+     * outlives the entry is an item's, copied at its door (workspace_add_untracked,
+     * workspace_add_unscanned). */
     for (const char *child; (child = fs_listing_next(&listing)) != NULL;) {
         /* The view's word at the child's own key, before any look. A claim that
          * names its own path settles the child whatever stands there: a blob
@@ -2429,21 +2501,40 @@ static void workspace_scan(const scan_t *scan, arena_t *scratch, const char *dir
 
         /* One lstat names what stands there — its kind, and for a directory its
          * identity: a symlink is never a directory here. Absence is a skip —
-         * the listing and this look are two moments — and so is a look that failed:
-         * nothing downstream can name a path it could not see, and a claim that
-         * settles the child was skipped above, so what a failed look skips is
-         * an unclaimed child or a rung the walk only passes through. What no
-         * branch can hold — a device, a socket, a FIFO — is not a new file;
-         * offered, the capture refuses it by its noun and takes the whole profile's
-         * update with it (cmds/add.c reads it the same way). */
+         * the listing and this look are two moments. What no branch can hold —
+         * a device, a socket, a FIFO — is not a new file; offered, the capture
+         * refuses it by its noun and takes the whole profile's update with it
+         * (cmds/add.c reads it the same way). */
         struct stat st;
         path_kind_t kind = PATH_KIND_FILE;
-        fs_occupant_t occupant = fs_lstat_occupant(child, &st);
+        const fs_occupant_t occupant = fs_lstat_occupant(child, &st);
         switch (occupant) {
             case FS_OCCUPANT_NONE:
-            case FS_OCCUPANT_UNKNOWN:
             case FS_OCCUPANT_OTHER:
                 continue;
+
+            case FS_OCCUPANT_UNKNOWN: {
+                /* A look that failed, classed off lstat's errno — its own until
+                 * anything else runs (fs_lstat_occupant), so read before the
+                 * name is made. The directory's search bit, or the path above
+                 * it, refuses every entry alike: this frame could not look beneath
+                 * its directory, and its parent says so, once. */
+                const workspace_fault_t fault = workspace_code_fault(error_code_from_errno(errno));
+                if (errno == EACCES || errno == ELOOP) return fault;
+
+                /* Any other is this entry's own — a name past PATH_MAX, an I/O
+                 * error — and the siblings go on. At a rung the join's look met
+                 * it at this very key, and the rung's item says so; anywhere
+                 * else no item says it but this one, which cannot tell whether
+                 * a directory stood there to look beneath. */
+                if (!claim) {
+                    workspace_add_unscanned(
+                        ws, child, manifest_name(scratch, ws->manifest, scan->profile, child, NULL),
+                        scan->profile, occupant, NULL, fault
+                    );
+                }
+                continue;
+            }
 
             case FS_OCCUPANT_DIRECTORY:
                 kind = PATH_KIND_DIRECTORY;
@@ -2507,22 +2598,37 @@ static void workspace_scan(const scan_t *scan, arena_t *scratch, const char *dir
          * standing inside a repository whose rules name it is not entered, which
          * is the answer the directory would get under any other name. */
         ignore_verdict_t verdict;
-        error_t failure = ignore_verdict(scan->rules, scan->source, name, child, kind, &verdict);
+        err = ignore_verdict(scan->rules, scan->source, name, child, kind, &verdict);
 
         /* What Git's rules could not judge may be what git excludes, so it is
-         * withheld — a directory not entered — and the siblings go on; the failure
-         * is dropped, the source layer's answer to every entry its cause reaches
-         * (sys/source.h). */
-        if (failure) continue;
+         * withheld — a file not offered, a directory not entered — and said,
+         * once, at the path, whatever stands there: the join asks no rule, so
+         * the question is the walk's alone. The failure is classed and dropped,
+         * the source layer's answer to every entry its cause reaches
+         * (sys/source.h), and the siblings go on. */
+        if (err) {
+            workspace_add_unscanned(
+                ws, child, name, scan->profile, occupant, &st, workspace_error_fault(err)
+            );
+            continue;
+        }
         if (verdict.origin != IGNORE_ORIGIN_NONE) continue;
 
-        /* Settled: a directory is descended, and anything else offered. */
+        /* Settled: a file is offered, and a directory descended. What kept the
+         * descent from looking beneath the directory is said at it, whatever
+         * stands there — a rung, a directory the record remembers: its listing
+         * is the walk's question alone. */
         if (kind == PATH_KIND_FILE) {
             workspace_add_untracked(ws, child, name, scan->profile, occupant, &st);
             continue;
         }
-        workspace_scan(scan, scratch, child);
+        const workspace_fault_t fault = workspace_scan(scan, scratch, child);
+        if (fault != WORKSPACE_FAULT_NONE) {
+            workspace_add_unscanned(ws, child, name, scan->profile, occupant, &st, fault);
+        }
     }
+
+    return WORKSPACE_FAULT_NONE;
 }
 
 /**
@@ -2534,12 +2640,12 @@ static void workspace_scan(const scan_t *scan, arena_t *scratch, const char *dir
  * later-enabled where two stand at one — under the name that profile's own claims
  * give it (core/manifest.h manifest_name), minus what that profile's ignore layers
  * and the source tree exclude — and nothing at all beneath a path the view holds
- * a blob at, a tracked root of its own included (workspace_blob_above). A
- * best-effort look, which lists what it can read and says nothing of the rest —
- * a directory it could not list, a path it could not look at, what Git's ignore
- * rules could not judge, withheld: not a snapshot, and not an admission — what
- * the commit can hold at that name is update's question at its capture
- * (cmds/update.c).
+ * a blob at, a tracked root of its own included (workspace_blob_above). A look
+ * that lists what it can read and says where it could not — a directory it could
+ * not list, a path it could not look at, what Git's ignore rules could not judge,
+ * withheld — each an unscanned item at the path (workspace_add_unscanned): not
+ * a snapshot, and not an admission — what the commit can hold at that name is
+ * update's question at its capture (cmds/update.c).
  *
  * The driver enumerates the view's tracked directories, one scan each, and the
  * walk descends only into directories the view does not track
@@ -2655,10 +2761,20 @@ static error_t workspace_analyze_untracked(
         };
 
         /* The walk's one scratch, freed whatever the walk met: every frame's
-         * listing and every entry's strings, none of which outlives it. */
+         * listing and every entry's strings, none of which outlives it. What
+         * kept the walk from looking beneath the root is said at the root, as a
+         * frame says it of a child: the scan's own question, beside whatever
+         * the root's item says of the directory itself — its mode, its owner —
+         * which the listing does not answer (workspace_add_unscanned). */
         arena_t *scratch = arena_create(0);
-        workspace_scan(&scan, scratch, root->filesystem_path);
+        const workspace_fault_t fault = workspace_scan(&scan, scratch, root->filesystem_path);
         arena_free(scratch);
+        if (fault != WORKSPACE_FAULT_NONE) {
+            workspace_add_unscanned(
+                ws, root->filesystem_path, root->storage_path, root->profile,
+                root->occupant, &root->st, fault
+            );
+        }
     }
 
     return NULL;
@@ -2949,8 +3065,9 @@ static error_t workspace_partition(workspace_t *ws) {
  * Derived once, after every analysis and before any write, so it is a load product:
  * an ownership event that later makes an item's route CLEAN leaves it here (apply
  * reads its reassignment facts before its writes for that reason). The scan appends
- * its discoveries after it (workspace_add_untracked), so the order is the active
- * items', then the orphans', then the discoveries' — the order every screen prints.
+ * its items after it (workspace_add_untracked, workspace_add_unscanned), so the
+ * order is the active items', then the orphans', then the scan's — the order
+ * every screen prints.
  *
  * @param ws Workspace (must not be NULL)
  */
@@ -3675,6 +3792,30 @@ bool workspace_item_tags(
             snprintf(metadata_buf, metadata_size, "in %s", item->profile);
             break;
 
+        case WORKSPACE_STATE_UNSCANNED:
+            /* Where the scan could not look, worded by whose remedy the failed
+             * look is (workspace_fault_t) — the word the deployed and orphaned
+             * arms print, so one failure has one name wherever it is listed —
+             * and "in", the scan's word, beside the join's "from" where both
+             * stand at one path. Never LOCKED: the scan reads no content. */
+            if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
+                switch (item->fault) {
+                    case WORKSPACE_FAULT_LOCKED:
+                        tags_out[tag_count++] = "locked";
+                        break;
+                    case WORKSPACE_FAULT_UNREADABLE:
+                        tags_out[tag_count++] = "unreadable";
+                        break;
+                    case WORKSPACE_FAULT_NONE:
+                    case WORKSPACE_FAULT_UNVERIFIED:
+                        tags_out[tag_count++] = "unverified";
+                        break;
+                }
+            }
+            *color_out = OUTPUT_COLOR_MAGENTA;
+            snprintf(metadata_buf, metadata_size, "in %s", item->profile);
+            break;
+
         case WORKSPACE_STATE_RELEASED:
             /* Released from management — Git let the claim go, dotta never deployed
              * it, another kind of path stands in its place, or a row stands on
@@ -3695,16 +3836,6 @@ bool workspace_item_tags(
                 }
             }
 
-            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
-            break;
-
-        default:
-            /* Unknown state - defensive fallback Should never happen in normal
-             * operation, but handle gracefully */
-            if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                tags_out[tag_count++] = "unknown";
-            }
-            *color_out = OUTPUT_COLOR_DIM;
             snprintf(metadata_buf, metadata_size, "from %s", item->profile);
             break;
     }

@@ -604,8 +604,8 @@ error_t fs_list_dir(const char *path, arena_t *arena, string_array_t *out);
  *
  * A value its frame holds, and nothing frees one. Readers: sys/filesystem.c
  * fs_remove_subtree; core/workspace.c workspace_scan, whose entries leave the
- * scratch through workspace_add_untracked; cmds/add.c add_collect, whose leave
- * through add_list.
+ * scratch through workspace_add_untracked and workspace_add_unscanned; cmds/add.c
+ * add_collect, whose leave through add_list.
  */
 typedef struct {
     arena_t *scratch;       /* The walk's: every listing, path and string it makes */
@@ -621,7 +621,10 @@ typedef struct {
  *
  * The whole listing, in `scratch`, above a mark the listing returns it to once
  * its entries run out. A listing that fails leaves the scratch as it was found,
- * and the error is fs_list_dir's, naming the directory.
+ * and the error is fs_list_dir's, naming the directory. Its ERR_NOT_FOUND is
+ * the directory's own ENOENT or ENOTDIR, at the open or, rarely, at a read —
+ * nothing else beneath mints it — and core/workspace.c workspace_scan reads it
+ * so: a directory that left since the look that found it, no failure of the walk's.
  *
  * @param listing   The frame's listing (must not be NULL)
  * @param scratch   The walk's scratch (must not be NULL)

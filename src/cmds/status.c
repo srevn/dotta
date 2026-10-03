@@ -487,6 +487,12 @@ static void status_print_workspace(
                 workspace_buckets_add(buckets, item, &new_files);
                 break;
 
+            case WORKSPACE_STATE_UNSCANNED:
+                /* Where the scan could not look: no verb is promised, and New
+                 * files' closer would send it to an update that never takes it */
+                workspace_buckets_add(buckets, item, &unverifiable);
+                break;
+
             case WORKSPACE_STATE_ORPHANED:
             case WORKSPACE_STATE_RELEASED:
                 workspace_buckets_add(buckets, item, &orphaned);

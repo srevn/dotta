@@ -334,8 +334,9 @@ source_filter_t *ignore_source(ignore_rules_t *rules);
  * git excludes — and each reader decides what it does about it: cmds/add.c refuses
  * the path, named or walked, collection preceding capture so the refusal costs
  * nothing; core/workspace.c workspace_scan withholds what it could not judge, a
- * directory not entered, and says nothing, its look a best effort; cmds/ignore.c
- * ignore_test says the asker could not tell, and why.
+ * file not offered and a directory not entered, and says it at the path, an
+ * unscanned item that keeps the failure's class alone; cmds/ignore.c ignore_test
+ * says the asker could not tell, and why.
  *
  * Readers: cmds/add.c add_verdict (a claim with the -e layer alone, anything
  * else with every layer), core/workspace.c workspace_scan, cmds/ignore.c

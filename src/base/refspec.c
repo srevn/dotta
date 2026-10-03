@@ -69,25 +69,29 @@ const char *refspec_head_steps(const char *spelling) {
 
     /* `@` is HEAD wherever it stands for it, as git reads it: alone the tip itself
      * — the empty string the spelling ends with — or with a modifier right after
-     * it (@~1, @^, @~3^2, @{1}), the reflog's `{` in the place HEAD's `@{`
-     * takes. */
+     * it (@~1, @^, @~3^2, @{1}, @:path), the reflog's `{` in the place HEAD's
+     * `@{` takes. */
     if (spelling[0] == '@') {
         const char *steps = spelling + 1;
-        if (steps[0] == '\0' || steps[0] == '~' || steps[0] == '^' || steps[0] == '{') {
+        if (steps[0] == '\0' || steps[0] == '~' || steps[0] == '^' || steps[0] == '{' ||
+            steps[0] == ':') {
             return steps;
         }
         return NULL;
     }
 
     /* HEAD alone, or a modifier standing right after it (HEAD~1, HEAD^, HEAD~3^2,
-     * HEAD@{1}). The byte past the four is the whole of the rule — a prefix test
-     * alone reads every word that begins with those letters as a commit, and a
-     * profile named HEADER is not one. */
+     * HEAD@{1}, HEAD:path). The byte past the four is the whole of the rule — a
+     * prefix test alone reads every word that begins with those letters as a
+     * commit, and a profile named HEADER is not one — and it takes git's every
+     * continuation of a name, so no spelling that opens on HEAD reaches git's
+     * own, the store's. */
     if (strncmp(spelling, "HEAD", 4) != 0) {
         return NULL;
     }
     const char *steps = spelling + 4;
-    if (steps[0] == '\0' || steps[0] == '~' || steps[0] == '^' || steps[0] == '@') {
+    if (steps[0] == '\0' || steps[0] == '~' || steps[0] == '^' || steps[0] == '@' ||
+        steps[0] == ':') {
         return steps;
     }
     return NULL;

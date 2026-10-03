@@ -23,8 +23,8 @@
  * — for the verbs whose positional slot could hold one — what a whole token may
  * be. It recognizes the spellings that name a commit with nothing looked up:
  * HEAD's (refspec_head_steps — `HEAD` or `@` where the word ends there or a
- * modifier follows it: `HEAD~1`, `HEAD^`, `HEAD~3^2`, `HEAD@{1}`, `@`, `@~1`,
- * `@^2`), a bare SHA of 7 to 40 hex digits, and a SHA carrying a modifier
+ * modifier follows it: `HEAD~1`, `HEAD^`, `HEAD~3^2`, `HEAD@{1}`, `HEAD:x`, `@`,
+ * `@~1`, `@^2`), a bare SHA of 7 to 40 hex digits, and a SHA carrying a modifier
  * (`a4f2c8e^`, `def4567~2`).
  *
  * A shape and never an existence: nothing is resolved and no store is read, so
@@ -47,20 +47,22 @@
 bool refspec_looks_like_commit(const char *token);
 
 /**
- * The steps a HEAD spelling takes back from a branch's tip
+ * The steps a HEAD spelling takes from a branch's tip
  *
  * dotta's HEAD is a branch's tip, whichever branch a verb reads (sys/revision.h
  * revision_t), and `@` is HEAD wherever it stands for it, as git reads it. So
  * `HEAD` and `@` answer "", the tip itself, and either with a modifier right
  * after it answers the modifier on: `HEAD~3^2` is "~3^2", `@~1` is "~1", `HEAD@{1}`
- * is "@{1}" and `@{1}` is "{1}". Every other spelling answers NULL, a word that
- * merely begins with the four letters among them — `HEADER` is a profile name
- * like any other — and an `@` followed by a name: `@foo` is a path.
+ * is "@{1}", `@{1}` is "{1}" and `HEAD:x` is ":x". Every other spelling answers
+ * NULL, a word that merely begins with the four letters among them — `HEADER`
+ * is a profile name like any other — and an `@` followed by a name: `@foo` is a
+ * path.
  *
  * The shape alone: which steps a branch can take is the resolver's to say, so a
- * modifier it refuses is still HEAD's here. Readers: refspec_looks_like_commit,
- * whose HEAD and `@` spellings are exactly these, and sys/revision.c
- * revision_resolve, which reads the steps and walks them.
+ * modifier it refuses is still HEAD's here, and a spelling that opens on HEAD
+ * never reaches git's own HEAD, the store's, which nothing reads. Readers:
+ * refspec_looks_like_commit, whose HEAD and `@` spellings are exactly these,
+ * and sys/revision.c revision_resolve, which reads the steps and walks them.
  *
  * @param spelling The spelling to read (may be NULL, which is nobody's HEAD)
  * @return The steps after HEAD, borrowed from `spelling` ("" for the tip), or
@@ -92,9 +94,9 @@ typedef struct {
  * split before it. The profile is then what precedes the first ':' before the
  * commit, and is optional (NULL where no ':' stands there): a ':' the commit
  * carries — `HEAD^{/fix: typo}` — is the commit's, and no profile holds one
- * (git-check-ref-format). The one name this order reads otherwise is a profile
- * holding an '@' with a commit's shape after it — `x@HEAD@y:home/f` — which is
- * read as a file at a commit the resolver then refuses.
+ * (git-check-ref-format). The names this order reads otherwise are a profile's
+ * holding an '@' with a commit's shape after it — `x@HEAD@y:home/f`, or one ending
+ * in `@HEAD` or `@@` — each read as a file at a commit the resolver then refuses.
  *
  * Output slices are bump-allocated in the provided arena and share its lifetime.
  * On error, *out is left unchanged; callers should only read *out after the

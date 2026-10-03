@@ -20,9 +20,9 @@
  * itself; `^{tree}`, `^{blob}` and `^{tag}`, which name no commit and are refused;
  * and `^{/pattern}`, the youngest commit reached, itself among them, whose message
  * the pattern matches. Anything else after a name is no step and is refused,
- * `HEAD@{1}` and `@{1}` among it. Each is git's reading, and libgit2's revparse
- * departs from it on five (lib/libgit2/src/libgit2/revparse.c): it has no
- * `^{object}`, refuses `^{/}`, reads `^{/!-x}` as a pattern, refuses a count
+ * `HEAD@{1}`, `@{1}` and `HEAD:path` among it. Each is git's reading, and libgit2's
+ * revparse departs from it on five (lib/libgit2/src/libgit2/revparse.c): it has
+ * no `^{object}`, refuses `^{/}`, reads `^{/!-x}` as a pattern, refuses a count
  * past 2^31 as no spelling, and ends a group at its first '}'. Its answers are
  * the other reason the walk is dotta's: a history shorter than the steps reach,
  * a search that matches nothing and an object the store lost all come back

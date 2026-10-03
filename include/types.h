@@ -64,7 +64,7 @@ typedef enum {
     ERR_VALIDATION,            /* Validation failed */
     ERR_MEMORY,                /* A mapping or a linked library could not get memory */
     ERR_CRYPTO,                /* Cryptographic operation failed */
-    ERR_LOCKED,                /* No usable passphrase this run */
+    ERR_LOCKED,                /* No usable key this run, or encryption off */
     ERR_INTERNAL               /* Internal error */
 } error_code_t;
 

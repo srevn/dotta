@@ -27,8 +27,9 @@
  * is borrowed from the tree (same lifetime). On failure, both outputs are left
  * untouched.
  *
- * Returns ERR_NOT_FOUND if the tree exists but has no .bootstrap entry; wraps
- * any underlying Git error otherwise.
+ * Returns ERR_NOT_FOUND if the tree exists but has no .bootstrap entry, and wraps
+ * the tree's load otherwise — whose own ERR_NOT_FOUND, for a branch that is not
+ * there (sys/gitops.h gitops_load_branch_tree), stands beneath the wrap.
  */
 static error_t load_bootstrap_entry(
     git_repository *repo,

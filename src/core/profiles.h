@@ -120,7 +120,8 @@ void profile_order(string_array_t *names);
  * that holds the view reads the same set off it (core/manifest.h manifest_profiles,
  * through core/scope.h scope_build).
  *
- * Does NOT resolve Git references or load profile trees.
+ * Asks each enabled branch whether it is here (sys/gitops.h gitops_branch_exists)
+ * and loads no tree.
  *
  * @param repo Repository (must not be NULL)
  * @param state State handle (must not be NULL; borrowed, not freed). Nothing is
@@ -689,7 +690,9 @@ typedef struct {
  * Complete or an error: a branch that will not load, a lookup that fails for
  * any reason but absence, a claim that could not be recorded — each is the call's
  * failure and never a shorter list, a falsely unique answer being one a verb
- * acts on. Empty is ERR_NOT_FOUND naming the argument in its own key. The branch
+ * acts on. Empty is ERR_NOT_FOUND naming the argument in its own key, and so is
+ * the failure of a branch the listing named and a delete took before its load —
+ * the load's own "not found" (sys/gitops.h gitops_load_branch_tree). The branch
  * list is one enumeration, not a snapshot: a ref born between it and the reads
  * is not consulted.
  *
@@ -703,9 +706,11 @@ typedef struct {
  * that is left of the strict/tolerant split here. Naming the profile skips the
  * search entirely, and the one caller says so where it refuses.
  *
- * Reader: revert without a profile, whose question is every local branch and
- * not the enabled set. A caller that wants the owning profile among the enabled
- * set asks the view instead (manifest_lookup, manifest_holder — list, show).
+ * Reader: revert without a profile (cmds/revert.c select_profile), whose question
+ * is every local branch and not the enabled set, and which reads ERR_NOT_FOUND
+ * as no profile holding the argument. A caller that wants the owning profile
+ * among the enabled set asks the view instead (manifest_lookup, manifest_holder
+ * — list, show).
  *
  * The key is the input here, where its sibling takes a filesystem path outright
  * (profile_claim_name): both keys run this one search — the same enumeration,

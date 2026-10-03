@@ -31,11 +31,11 @@
  *
  * The word: every error this module makes from a kernel refusal is
  * error_from_errno's — the site's prose, strerror's word, the errno's code — so
- * a reader acts on the code and never on the prose: ERR_PERMISSION is what the
- * workspace's class of a failed look reads, ERR_NOT_FOUND what compare's absence
- * rule and the mount target's validation read. A site that tells two refusals
- * apart by errno before the error is made (ENOENT is "already gone" to a removal)
- * keeps doing so at the syscall; the error carries the rest.
+ * a reader acts on the code and never on the prose: ERR_PERMISSION is the class
+ * the workspace reads off any failed look, and a read of any other code is named
+ * in the doc of the function it calls (base/error.h "Codes"). A site that tells
+ * two refusals apart by errno before the error is made (ENOENT is "already gone"
+ * to a removal) keeps doing so at the syscall; the error carries the rest.
  *
  * Dotta's own artifacts are the exception and keep their raw calls: the session
  * cache (crypto/session), the temp scripts (cmds/ignore, the bootstrap trio),
@@ -150,7 +150,9 @@ char *fs_realpath(const char *path, char *resolved);
  *
  * Opens the path and delegates to fs_read_fd: follows symlinks (the fd's fstat
  * sees the resolved target), refuses non-regular files and files past 256 MB
- * through the primitive's own gates.
+ * through the primitive's own gates. A file that is not there is the open's
+ * ERR_NOT_FOUND (ENOENT, or ENOTDIR above it), and utils/config.c read_file reads
+ * it as no configuration file.
  *
  * @param path File path (must not be NULL)
  * @param out Output buffer (must not be NULL)
@@ -551,7 +553,8 @@ bool fs_is_directory_empty(const char *path);
  * before removing anything, if any entry is one it may not remove — so a file
  * that appeared since an emptiness probe stops the removal instead of going with
  * it, and a refused directory keeps its metadata too. That is what makes this
- * safe to call on a prediction.
+ * safe to call on a prediction, and core/cleanup.c cleanup_execute reads the
+ * code so: a directory not empty after all, skipped.
  *
  * Absence is success: a caller that must tell "removed" from "was never there"
  * probes presence first (cleanup_execute does, with fs_lstat_occupant).
@@ -822,7 +825,10 @@ error_t fs_create_symlink(
  * the target on success and nothing after an error. The target whole, or a refusal:
  * readlink(2) cuts a target longer than its buffer short without a word, so a
  * read that fills the PATH_MAX bytes offered is refused as the name too long it
- * is (ENAMETOOLONG, ERR_FS) rather than taken for a shorter target.
+ * is (ENAMETOOLONG, ERR_FS) rather than taken for a shorter target. A link that
+ * is not there is ERR_NOT_FOUND (ENOENT, or ENOTDIR above it), which
+ * infra/compare.c judge_copy reads as a path that left between its look and this
+ * read.
  *
  * @param linkpath Link path (must not be NULL, must be a symlink)
  * @param out Output buffer (must not be NULL)

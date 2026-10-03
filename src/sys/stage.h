@@ -197,8 +197,9 @@ error_t stage_admission_create(const stage_t *st, stage_admission_t **out);
  *     libgit2 protects — which is libgit2's own rule, asked through the door
  *     the put uses.
  * The last three are ERR_CONFLICT: a verdict about the name, which a caller that
- * walks skips and a caller that was named refuses. An entry at the path itself
- * is the upsert every writer wants, and is admitted.
+ * walks skips (cmds/add.c add_collect reads it, through add_admit) and a caller
+ * that was named refuses. An entry at the path itself is the upsert every writer
+ * wants, and is admitted.
  *
  * The mode is not asked. libgit2 validates a path with mode 0 whatever the entry
  * carries (index.c index_entry_dup passes no stat), so nothing a mode could change

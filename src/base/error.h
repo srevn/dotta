@@ -68,26 +68,33 @@
  * never its causes. A message opening on a word opens capitalised; none closes
  * with a period; a datum is quoted '%s'.
  *
- * ERR_PERMISSION
- * --------------
- * The one code a consumer acts on rather than prints, so its meaning is fixed
- * here and not per producer: a refusal an identity met. The kernel's — EACCES,
- * through error_from_errno below: the bits refused the identity the call ran
- * as, where an EPERM may be a flag's or a policy's that root meets as flatly
- * (ERR_FS) — and libgit2's owner check on the repository, which spells its own
- * because GIT_EOWNER carries no errno. An answer dotta looked up is never one,
- * whatever the answer is about: a hook's mode, a claim's ids, a policy's verdict.
- * Every reader turns the code straight into a remedy only a refusal has —
- * core/workspace classes the failed look UNREADABLE and its readers offer root,
- * utils/repo offers to reclaim the repository — and none of them can see which
- * producer it came from, which is what makes the class load-bearing rather than
- * descriptive. The code is the one the kernel's refusal was made with (error_code),
- * whatever wraps stand above it.
+ * Codes
+ * -----
+ * A code is the root's (error_code), so a read of one is a contract with every
+ * producer beneath the call it reads, not only the one the reader means: sound
+ * only where each of them means what the reader acts on. The function a read
+ * calls names the read in its doc, by file.c symbol, beside the code, and says
+ * every way that code arises beneath it — so the reader's assumption stands in
+ * the one place its producers are listed. A code a doc names with no read beside
+ * it describes the failure and binds no caller, and a new read is named there
+ * before it branches.
  *
- * sys/identity's drop is outside the rule and out of reach of it: its two refusals
- * say the run cannot *become* an identity, they are coded by subsystem because
- * a setuid-family EAGAIN is not ERR_FS, and identity_init returns to main() before
- * there is a command to read them.
+ * Two are read as a class instead, across frames and from any producer, each by
+ * the remedy its reader offers (core/workspace.c workspace_code_fault, the one
+ * reader of both), so their meaning is fixed here. ERR_LOCKED is the run's want
+ * of a key: crypto/keymgr's refusals, and infra/content's over a sealed blob
+ * with no key in reach or the feature off. ERR_PERMISSION is a refusal an identity
+ * met: the kernel's — EACCES, through error_from_errno below: the bits refused
+ * the identity the call ran as, where an EPERM may be a flag's or a policy's
+ * that root meets as flatly (ERR_FS) — and libgit2's owner check on the repository,
+ * which spells its own because GIT_EOWNER carries no errno (sys/gitops.c
+ * gitops_open_repository). An answer dotta looked up is never one, whatever the
+ * answer is about: a hook's mode, a claim's ids, a policy's verdict.
+ *
+ * sys/identity's drop is outside that meaning and out of reach of its reader:
+ * its two refusals say the run cannot *become* an identity, they are coded by
+ * subsystem because a setuid-family EAGAIN is not ERR_FS, and identity_init returns
+ * to main() before there is a command to read them.
  *
  * A refusal met where no second try spans the call is outside it too, and is
  * coded by its subsystem: no identity a run can take reads through it. core/state's
@@ -204,7 +211,8 @@ const char *error_line(error_t err);
  * Get error code
  *
  * The root's (error_root), whatever wraps stand above it, so a reader that acts
- * on the code acts on the mechanism's refusal.
+ * on the code acts on the mechanism's refusal — and on every producer's beneath
+ * the call it reads ("Codes" above).
  *
  * @param err Error
  * @return Error code, or OK for NULL

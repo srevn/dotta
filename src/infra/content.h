@@ -269,7 +269,7 @@ typedef struct content_cache content_cache_t;
  * - ERR_LOCKED: encryption is disabled, or the keymgr holds no usable master
  * - ERR_CRYPTO: a held master does not open the blob (wrong key, corruption,
  *   path mismatch), a foreign epoch, or a version this build does not read
- * - ERR_NOT_FOUND / ERR_GIT: the blob could not be loaded
+ * - ERR_GIT: the blob could not be loaded
  */
 error_t content_get_from_blob_oid(
     git_repository *repo,
@@ -328,8 +328,11 @@ error_t content_get_from_blob_oid(
  *
  * Errors:
  * - ERR_LOCKED / ERR_CRYPTO: the read's own ladder, unwrapped (see
- *   content_get_from_blob_oid), and the encrypt's under "Cannot encrypt '<to>'"
- * - ERR_NOT_FOUND / ERR_GIT: the blob could not be loaded
+ *   content_get_from_blob_oid)
+ * - ERR_INVALID_ARG: a name past the cipher's bound, the seal's refusal under
+ *   "Cannot encrypt '<to>'" — the read left the master held, so the seal asks
+ *   no key
+ * - ERR_GIT: the blob could not be loaded
  *
  * Reader: a revert whose name changed between the commit and the branch's tip
  * (cmds/revert.c).
@@ -403,9 +406,10 @@ error_t content_rebind(
  * compare primitive's:
  * - ERR_LOCKED / ERR_CRYPTO: no key in reach, a blob a held key refuses, a foreign
  *   epoch, or a version this build does not read
- * - ERR_NOT_FOUND / ERR_GIT: the blob could not be loaded
- * - ERR_NOT_FOUND / ERR_PERMISSION / ERR_FS: the disk copy could not be read,
- *   by its errno (base/error.h error_code_from_errno)
+ * - ERR_GIT: the blob could not be loaded
+ * - ERR_PERMISSION / ERR_FS: the disk copy could not be read, by its errno
+ *   (base/error.h error_code_from_errno); a copy that left before its read is
+ *   the verdict CMP_MISSING, never an error (infra/compare.h)
  */
 error_t content_compare_blob_to_disk(
     content_cache_t *cache,
@@ -622,7 +626,9 @@ typedef struct {
  * - ERR_VALIDATION: A plaintext capture whose bytes would classify as ciphertext
  * - ERR_LOCKED: Encryption requested with the feature off (no keymgr), or the
  *   keymgr obtained no usable master — under "Cannot encrypt '<path>'"
- * - ERR_CRYPTO: Encryption failed
+ * - The seal's other refusals, under the same wrap: a name or a file past the
+ *   cipher's bounds (ERR_INVALID_ARG), and a derivation or a witness walk that
+ *   failed on its own, by its own code (crypto/keymgr.h "The codes")
  * - ERR_INVALID_ARG: The path is not a regular file
  */
 error_t content_capture_file(

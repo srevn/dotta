@@ -111,18 +111,22 @@
  * no blob's fingerprint can be matched against anything, so any reachable
  * ciphertext (any fingerprint, any version) may be keyed by what the ref held,
  * and a fresh epoch would orphan it permanently. With any reachable ciphertext,
- * ERR_CRYPTO propagates naming the state of the ref and the restore that repairs
- * it, and the evidence stays in place (a remote holding the true epoch heals a
- * divergence via sync's fetch paths instead). A census that cannot finish proves
- * no absence and reaches the same verdict, but not for the same reason, so it
- * carries its own cause rather than borrowing that sentence. With a clean census
- * the ref binds nothing: an unreadable one is deleted and re-minted
- * (`*out_repaired` set — the caller renders the repair), an absent one is simply
- * a repository that has no epoch yet.
+ * the refusal names the state of the ref and the restore that repairs it, and
+ * the evidence stays in place (a remote holding the true epoch heals a divergence
+ * via sync's fetch paths instead). Its code is ERR_CRYPTO where the ref is missing,
+ * and the load's where it stands: ERR_CRYPTO for bytes the load refused, ERR_GIT
+ * for an object it could not read. A census that cannot finish proves no absence
+ * and reaches the same verdict, but not for the same reason, so it carries its
+ * own cause rather than borrowing that sentence — and that cause's code, ERR_GIT
+ * or, for a header it could not read, ERR_CRYPTO. With a clean census the ref
+ * binds nothing: an unreadable one is deleted and re-minted (`*out_repaired`
+ * set — the caller renders the repair), an absent one is simply a repository
+ * that has no epoch yet.
  *
- * Called by `cmd_init` once the store is declared its own (utils/repo.h).
- * Encryption-disabled installations still produce the ref so a future `dotta
- * key set` (or a clone fetching this remote) finds it ready.
+ * Called by `cmd_init` once the store is declared its own (utils/repo.h), and
+ * read there (cmds/init.c cmd_init): an ERR_CRYPTO refusal stands as it is, and
+ * every other is wrapped. Encryption-disabled installations still produce the
+ * ref so a future `dotta key set` (or a clone fetching this remote) finds it ready.
  *
  * @param repo         Repository (must not be NULL)
  * @param memory_mib   Argon2 memory in MiB to mint with (a preset's; in range)
@@ -152,9 +156,9 @@ error_t epoch_init(
  * Returns ERR_NOT_FOUND when — and only when — the ref itself is missing, the
  * canonical diagnostic for "this dotta repo has not been initialized" or "this
  * clone fetched from a remote that does not host the epoch ref". The dispatcher
- * wraps it with the restore; `epoch_init` reads it as "there is no ref to delete
- * before minting", which is why the code stops at the ref and never speaks for
- * the payload.
+ * wraps it with the restore (main.c open_run); `epoch_init` reads it as "there
+ * is no ref to delete before minting" (infra/epoch.c epoch_init), which is why
+ * the code stops at the ref and never speaks for the payload.
  *
  * Returns ERR_CRYPTO when the ref exists but yields no epoch — the tree lacks a
  * blob, an entry is not a blob, a blob is the wrong size, or the pair is out of
@@ -165,9 +169,10 @@ error_t epoch_init(
  * stands and yields no epoch — differing only in the mechanism that got there.
  * ERR_NOT_FOUND is the statement about the ref, made deliberately at one site;
  * everything else is that one fact, and every consumer may treat them as one.
- * All three do: `epoch_init` asks whether there is a ref to delete before it
- * mints, the reconcile's divergent branch asks whether it got an epoch, and the
- * dispatcher picks between two first lines. What none of them may read into
+ * All three readers of the code do: `epoch_init` asks whether there is a ref to
+ * delete before it mints, the reconcile's divergent branch whether there are
+ * bytes at the ref to take a census over (infra/epoch.c epoch_decide), and the
+ * dispatcher which of two first lines it prints. What none of them may read into
  * ERR_CRYPTO is that the bytes are certainly malformed rather than merely
  * unavailable.
  *
@@ -211,11 +216,16 @@ error_t epoch_push(
  * remote's advertisement names a commit; its objects are downloaded under a refspec
  * with no destination, so nothing local points at them; both blobs are validated
  * at that commit; and only a proven epoch is written to `refs/dotta/epoch`, the
- * one mutation this call makes and its last step. A malformed epoch (a wrong-size
- * or missing blob, a pair out of range) returns ERR_CRYPTO with the local ref
- * untouched — there is nothing to roll back, because a corrupt remote epoch never
- * stood in `refs/dotta/epoch` for a later `epoch_resolve` or `epoch_load` to
- * read as canonical.
+ * one mutation this call makes and its last step. Every failure of that proof
+ * returns one ERR_CRYPTO worded as a malformed remote — a wrong-size or missing
+ * blob, a pair out of range, an advertised object that is no commit, one the
+ * read could not load — and leaves the local ref untouched: there is nothing to
+ * roll back, because a corrupt remote epoch never stood in `refs/dotta/epoch`
+ * for a later `epoch_resolve` or `epoch_load` to read as canonical.
+ *
+ * Both codes are read: cmds/clone.c cmd_clone refuses a remote without the ref
+ * as no dotta repository and warns past ERR_CRYPTO, and cmds/sync.c epoch_reconcile
+ * prints an ERR_CRYPTO's words whole where it prefixes every other.
  *
  * The install is a force: whatever the local ref held is replaced wholesale.
  * Whether that is safe is the caller's to decide, not this boundary's —
@@ -232,7 +242,8 @@ error_t epoch_push(
  * @param xfer        Transfer context for credentials / progress
  * @param out         Optional: the validated epoch (can be NULL)
  * @return Error or NULL on success; ERR_NOT_FOUND if the remote lacks the ref;
- *         ERR_CRYPTO if the fetched epoch is malformed (the local ref untouched)
+ *         ERR_CRYPTO if the fetched epoch could not be proved (the local ref
+ *         untouched)
  */
 error_t epoch_fetch(
     git_repository *repo,

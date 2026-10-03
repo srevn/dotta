@@ -105,7 +105,9 @@ error_t gitops_get_signature(git_signature **out, git_repository *repo);
  * The failure is classified so a caller can tell the cases apart:
  *   ERR_NOT_FOUND  — libgit2 found no repository here. It reports an
  *                    unreadable .git the same way and words both the same, so a
- *                    caller that needs the distinction asks the filesystem.
+ *                    caller that needs the distinction asks the filesystem. Read
+ *                    by utils/repo.c repo_open, which asks it, and by cmds/init.c
+ *                    cmd_init, which makes a repository wherever it reads the code.
  *   ERR_PERMISSION — the repository is owned by another user.
  *   ERR_GIT        — everything else, carrying libgit2's own message: a
  *                    config file that will not parse (the user's ~/.gitconfig
@@ -1008,7 +1010,11 @@ error_t gitops_diff_get_stats(
 /**
  * Find merge base between two commits
  *
- * Finds the best common ancestor for a three-way merge.
+ * Finds the best common ancestor for a three-way merge. Two commits that share
+ * no history are ERR_NOT_FOUND — libgit2's GIT_ENOTFOUND, which it answers for
+ * that alone, a commit it could not load being -1 (lib/libgit2/src/libgit2/merge.c
+ * merge_bases) — read by sys/resolve.c resolve_merge_trees, which names the two
+ * strategies that need no common commit.
  *
  * @param repo Repository (must not be NULL)
  * @param one First commit OID (must not be NULL)

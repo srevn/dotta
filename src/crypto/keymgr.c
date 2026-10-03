@@ -305,9 +305,11 @@ static bool witness_exists(void *self, const keymgr_witness_t *witness) {
  * whatever the source presents. One that opens fills the proof; none wipes it
  * and refuses the run, worded by how much there was to open — against a lone
  * ciphertext a miss decides nothing, against several it is the passphrase's.
- * With nothing to open at all the master is taken as given: the caller confirmed
- * it, or the environment asserted it. `subject` is what the refusal is about:
- * "The passphrase" or "DOTTA_ENCRYPTION_PASSPHRASE".
+ * That refusal is ERR_LOCKED, which prompt_and_verify reads as a passphrase a
+ * terminal asks for again; a derivation or a walk that failed on its own keeps
+ * its own code. With nothing to open at all the master is taken as given: the
+ * caller confirmed it, or the environment asserted it. `subject` is what the
+ * refusal is about: "The passphrase" or "DOTTA_ENCRYPTION_PASSPHRASE".
  *
  * Three returns and one refusal: each success is taken where its condition is
  * decided, and every failure — the derivation's own included — leaves through

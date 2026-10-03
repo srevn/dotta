@@ -458,9 +458,10 @@ static void add_list(
  * (cmd_add).
  *
  * One producer, two voices: every refusal is ERR_CONFLICT and says which name
- * stands in the way, and the callers give it their own — the argument arm wraps
- * it as an error, the walk prints it and skips the subtree. Anything else is
- * the run failing to decide, which is never a verdict about the path.
+ * stands in the way, and the callers give it their own — the argument arm (cmd_add)
+ * wraps it as an error, the walk (add_collect) reads the code, prints it and
+ * skips the subtree. Anything else is the run failing to decide, which is never
+ * a verdict about the path.
  */
 static error_t add_admit(
     const walk_t *walk, const char *storage_path, path_kind_t kind

@@ -569,17 +569,21 @@ error_t metadata_capture_file(
  * walk entered the directory or only passed above it, so `tracked` is carried
  * through to the factory unread.
  *
- * The two callers answer a failure here differently, and the difference is what
- * the claim is for. **add refuses**: a directory it listed is the name its walk
- * composed beneath, so a claim that does not land leaves files committed under
- * a name nothing authors — and the listing, which the command reads as a promise
- * of its own commit, would be a wish (cmds/add.c). **update warns and carries
- * on**: a claim it could not refresh keeps standing, nothing was named from this
- * run, and the sheet goes on saying what it said (cmds/update.c). Either way
- * the loss is the mode with the ownership, so update's warning is one the user
- * reads at any verbosity.
+ * The two callers that capture a claim answer a failure here differently, and
+ * the difference is what the claim is for. **add refuses**: a directory it listed
+ * is the name its walk composed beneath, so a claim that does not land leaves
+ * files committed under a name nothing authors — and the listing, which the command
+ * reads as a promise of its own commit, would be a wish (cmds/add.c). **update
+ * warns and carries on**: a claim it could not refresh keeps standing, nothing
+ * was named from this run, and the sheet goes on saying what it said
+ * (cmds/update.c). Either way the loss is the mode with the ownership, so update's
+ * warning is one the user reads at any verbosity.
  *
- * Ownership capture (user/group): the file capture's rule, above.
+ * Ownership capture (user/group): the file capture's rule, above. An owner or a
+ * group this host has no name for is ERR_NOT_FOUND — the lookup's absence or
+ * its failure alike, the claim unmakeable either way — and a derivation reads
+ * it (core/metadata.c capture_ancestor): its rung keeps the claim it had, as it
+ * does for a path it could not look at.
  *
  * @param storage_path Storage path in profile (must not be NULL, e.g.,
  *                     "home/.config/nvim")

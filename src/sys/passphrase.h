@@ -69,8 +69,10 @@
  *                        with secure_free(p, *out_len + 1).
  * @param out_len         Passphrase length, excluding the NUL terminator.
  * @return NULL on success. ERR_FS on tty manipulation or end of input; the errno's
- *         code on a read failure. ERR_MEMORY when the mapping fails.
- *         ERR_INVALID_ARG on empty or truncated input.
+ *         code on a read failure. ERR_MEMORY when the mapping fails, read by
+ *         crypto/keymgr.c nothing_read, which passes it through as itself.
+ *         ERR_INVALID_ARG on empty or truncated input, read by crypto/keymgr.c
+ *         prompt_and_verify and prompt_and_confirm as a miss a terminal asks again.
  */
 error_t passphrase_prompt(
     const char *prompt,
@@ -95,8 +97,9 @@ error_t passphrase_prompt(
  * @param out_passphrase  The passphrase's own mapping. Caller owns; release
  *                        with secure_free(p, *out_len + 1).
  * @param out_len         Passphrase length, excluding the NUL terminator.
- * @return NULL on success. ERR_NOT_FOUND if the env var is unset or empty.
- *         ERR_MEMORY when the mapping fails.
+ * @return NULL on success. ERR_NOT_FOUND if the env var is unset or empty, read
+ *         by crypto/keymgr.c obtain as the prompt's turn. ERR_MEMORY when the
+ *         mapping fails.
  */
 error_t passphrase_from_env(
     char **out_passphrase,

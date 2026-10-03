@@ -68,10 +68,13 @@ typedef struct {
  * PROCESS_CAPTURE_MAX bytes and counts the rest ("... and N more bytes"); a hook
  * is never stopped for what it writes (sys/process.h).
  *
- * Every way a hook fails is ERR_INTERNAL — a mode that will not exec, an exec
- * that failed, a timeout, a signal, a non-zero exit — and nothing branches on
- * the code. Never ERR_PERMISSION, however permission-shaped the cause: that code
- * is a refusal an identity met (base/error.h), and a hook that did not run is none.
+ * A hook that did not run, or ran and failed, is ERR_INTERNAL — a mode that will
+ * not exec, an exec that failed, a timeout, a signal, a non-zero exit; beside
+ * them a context past 10,000 files is ERR_INVALID_ARG, and a spawn the process
+ * layer could not make keeps its own code (sys/process.h process_run) — and nothing
+ * branches on the code. Never ERR_PERMISSION, however permission-shaped the cause:
+ * that code is a refusal an identity met (base/error.h "Codes"), and a hook that
+ * did not run is none.
  *
  * The hook's DOTTA_REPO_DIR is the store's directory the configuration settled
  * (`config->repo_dir`), and its path the configured hooks directory's.

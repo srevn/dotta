@@ -905,7 +905,8 @@ static void apply_print_deploy_receipt(
      * At every verbosity, and after what landed (the header carries the rationale);
      * capped the way the skip block is. The cause is the chain's root, where
      * the refusal speaks verbatim — EISDIR, ENOSPC, a blob that would not load;
-     * the wraps above it restate the row the line already names. */
+     * each wrap above it names the row, in its storage spelling or its filesystem
+     * one, and the line already names it. */
     if (receipt->failed.count > 0) {
         output_section(out, OUTPUT_QUIET, "Failed deployments");
         for (size_t i = 0; i < receipt->failed.count && i < LIST_LIMIT; i++) {
@@ -1182,7 +1183,7 @@ static void apply_print_cleanup_receipt(
      * cause. At every verbosity, and after what went (the header carries the
      * rationale); capped the way deploy's failed section is. The cause is the
      * chain's root, where the refusal speaks verbatim — EROFS, an immutable flag's
-     * EPERM, EBUSY; the wraps above it restate the path the line already names. */
+     * EPERM, EBUSY — read as deploy's failed rows read theirs. */
     if (receipt->failed.count > 0) {
         output_section(out, OUTPUT_QUIET, "Failed prunes");
         for (size_t i = 0; i < receipt->failed.count && i < LIST_LIMIT; i++) {

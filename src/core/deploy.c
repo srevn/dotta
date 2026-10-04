@@ -1423,11 +1423,7 @@ static error_t open_landing_directory(
 
     mode_t current = st->st_mode & 0777;
     error_t err = fs_set_dir_mode(item->filesystem_path, deploy_working_mode(current));
-    if (err) {
-        return error_wrap(
-            err, "Failed to open directory '%s' for the run", ancestor
-        );
-    }
+    if (err) return err;
     hold_directory(run, item, current);
 
     return NULL;
@@ -1481,12 +1477,7 @@ static error_t ensure_parents(deploy_run_t *run, const char *path) {
         *slash = '\0';
         err = create_ancestor(run, scratch);
         *slash = '/';
-        if (err) {
-            err = error_wrap(
-                err, "Failed to create parent directory for '%s'", path
-            );
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
 cleanup:
@@ -1564,13 +1555,6 @@ static error_t deploy_file(
         err = fs_create_symlink(
             target_str, file->filesystem_path, v->uid, v->gid
         );
-        if (err) {
-            err = error_wrap(
-                err, "Failed to deploy symlink '%s'", file->filesystem_path
-            );
-            goto cleanup;
-        }
-
         goto cleanup;
     }
 
@@ -1583,13 +1567,7 @@ static error_t deploy_file(
         file->profile,
         &content_buffer
     );
-
-    if (err) {
-        err = error_wrap(
-            err, "Failed to get content for '%s'", file->storage_path
-        );
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     const unsigned char *content = (const unsigned char *) content_buffer->data;
     size_t size = content_buffer->size;
@@ -1613,14 +1591,7 @@ static error_t deploy_file(
     err = fs_write_file_raw(
         file->filesystem_path, content, size, file->mode, v->uid, v->gid, &written
     );
-
-    if (err) {
-        err = error_wrap(
-            err, "Failed to deploy file '%s'",
-            file->filesystem_path
-        );
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* The write's own stat, distilled where the write authority is in scope:
      * authorship, not a read, vouches for the triple, so its own open second
@@ -1684,12 +1655,7 @@ static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
 
     /* Create-or-fix with atomic ownership and permissions (fchown/fchmod on the
      * directory fd — no window with wrong metadata). Idempotent. */
-    err = materialize_directory(run, v);
-    if (err) {
-        return error_wrap(err, "Failed to create directory: %s", path);
-    }
-
-    return NULL;
+    return materialize_directory(run, v);
 }
 
 /**

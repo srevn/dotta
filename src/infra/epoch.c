@@ -106,9 +106,9 @@ static error_t epoch_read_blob(
  * A failure can leave `*out` half-filled — the salt read before the params blob
  * refused. `epoch_load` zeroes it at its one exit, which is where its header
  * states the promise, so no caller proceeds with stale stack content under a
- * swallowed error code; `epoch_read_commit` makes no such promise and its caller
- * discards a failed read whole. The pair is validated here — the boundary it
- * enters at — with `kdf_validate_params`.
+ * swallowed error code; `epoch_read_commit` makes no such promise and its callers
+ * discard a failed read whole. The pair is validated here — the boundary it enters
+ * at — with `kdf_validate_params`.
  */
 static error_t epoch_read_tree(
     git_repository *repo, git_tree *tree, kdf_epoch_t *out
@@ -134,10 +134,12 @@ static error_t epoch_read_tree(
 /**
  * Read the epoch from the commit at `oid`, validating both blobs.
  *
- * The ref is never consulted, which is exactly what the acquisition boundary
- * needs: bytes sitting in the object database while `refs/dotta/epoch` still
- * holds whatever it held. An object that is not a commit, or a commit whose tree
- * or blobs the transfer did not carry, refuses here — before anything points at it.
+ * The ref is never consulted, which is exactly what its two readers need: the
+ * acquisition boundary (epoch_fetch), judging bytes that sit in the object database
+ * while `refs/dotta/epoch` still holds whatever it held — an object that is not
+ * a commit, or a commit whose tree or blobs the transfer did not carry, refuses
+ * here, before anything points at it — and the reconcile (epoch_resolve,
+ * epoch_decide), judging the commit its one read of the ref named.
  */
 static error_t epoch_read_commit(
     git_repository *repo, const git_oid *oid, kdf_epoch_t *out
@@ -210,8 +212,8 @@ error_t epoch_init(
      * by what the ref held, and minting over it would orphan that ciphertext
      * permanently. One census answers both because it is one danger. */
     bool any_ciphertext = false;
-    error_t cerr = epoch_census(repo, NULL, &any_ciphertext);
-    if (cerr) {
+    error_t err = epoch_census(repo, NULL, &any_ciphertext);
+    if (err) {
         /* No absence was proved, so the verdict is the found-ciphertext verdict
          * — do not mint — but the reason is not that reason, and the census's
          * own message names the first thing it could not read, and where. Carry
@@ -219,7 +221,7 @@ error_t epoch_init(
          * the thing that broke the census is, and this refusal is the one blocking
          * it. */
         return error_wrap(
-            cerr, "Cannot tell whether this repository holds encrypted files sealed "
+            err, "Cannot tell whether this repository holds encrypted files sealed "
             "under the epoch at '%s', so minting a new one is refused", EPOCH_REF
         );
     }
@@ -269,7 +271,7 @@ error_t epoch_init(
     uint8_t params[KDF_PARAMS_SIZE];
     kdf_params_store(params, memory_mib, passes);
 
-    error_t err = entropy_fill(out->salt, KDF_SALT_SIZE);
+    err = entropy_fill(out->salt, KDF_SALT_SIZE);
 
     /* The mint is a root commit on a ref nothing names: the two blobs on an
      * orphan's stage, committed. The census and the delete above ran on an absent
@@ -913,7 +915,9 @@ error_t epoch_find_ciphertext(
  * anything this repository holds depend on the BYTES at refs/dotta/epoch?" The
  * two come apart on a ref that stands and yields no epoch, which is precisely
  * where the salt blob may still be one restore away, and that is the whole of
- * the difference. Five findings out of one load and at most one census:
+ * the difference. Five findings out of the one read of the ref epoch_resolve
+ * made — `local`, the zero id where none stood — the bytes at that commit, and
+ * at most one census:
  *
  *   ref absent             nothing to lose, nothing to attribute   ADOPT
  *   ref yields no epoch    + any ciphertext at all                 DAMAGED
@@ -935,13 +939,9 @@ error_t epoch_find_ciphertext(
  * `epoch_resolve` in the header; it is the caller's contract, not an internal.
  */
 static error_t epoch_decide(
-    git_repository *repo, epoch_reconcile_t *out_decision
+    git_repository *repo, const git_oid *local, epoch_reconcile_t *out_decision
 ) {
-    kdf_epoch_t local;
-    error_t lerr = epoch_load(repo, &local);
-    /* The epoch is public — no wipe. */
-
-    if (error_code(lerr) == ERR_NOT_FOUND) {
+    if (git_oid_is_zero(local)) {
         /* No bytes at the ref: nothing to make unreachable, and whatever this
          * repository holds was orphaned by whatever removed them. A census here
          * would attribute against a value that does not exist. */
@@ -949,7 +949,13 @@ static error_t epoch_decide(
         return NULL;
     }
 
-    if (lerr) {
+    /* The bytes at the commit the remote's was compared against, never a second
+     * read of the ref, which could judge a commit the compare never saw. The
+     * epoch is public — no wipe. */
+    kdf_epoch_t epoch;
+    error_t err = epoch_read_commit(repo, local, &epoch);
+
+    if (err) {
         /* The ref stands and yields no epoch, whichever mechanism got there
          * (epoch.h). Its salt blob may be intact and may be the only copy of
          * what keys this repository — but with the pair unreadable no fingerprint
@@ -957,19 +963,19 @@ static error_t epoch_decide(
          * at all. Its own cause has nothing to add to either verdict: what the
          * blob is wrong about does not change whether something is sealed. */
         bool any = false;
-        error_t cerr = epoch_census(repo, NULL, &any);
-        if (cerr) return cerr;
+        err = epoch_census(repo, NULL, &any);
+        if (err) return err;
         *out_decision = any ? EPOCH_RECONCILE_DAMAGED : EPOCH_RECONCILE_ADOPT;
         return NULL;
     }
 
     /* A readable epoch: only the ciphertext IT keys pins it. */
     uint8_t fp[KDF_EPOCH_FP_SIZE];
-    kdf_epoch_fingerprint(&local, fp);
+    kdf_epoch_fingerprint(&epoch, fp);
 
     bool keyed = false;
-    error_t cerr = epoch_census(repo, fp, &keyed);
-    if (cerr) return cerr;
+    err = epoch_census(repo, fp, &keyed);
+    if (err) return err;
     *out_decision = keyed ? EPOCH_RECONCILE_CONFLICT : EPOCH_RECONCILE_ADOPT;
     return NULL;
 }
@@ -999,7 +1005,11 @@ static error_t epoch_inspect_remote(
 ) {
     git_remote *remote = NULL;
     int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) return error_git(rc, "Cannot list the references of remote '%s'", remote_name);
+    if (rc < 0) {
+        return error_git(
+            rc, "Cannot list the references of remote '%s'", remote_name
+        );
+    }
 
     /* The advertisement, its sentence read before the free closes the transport
      * (epoch_probe_remote reads it at the failing call) */
@@ -1035,7 +1045,8 @@ error_t epoch_resolve(
 
     /* This store's own ref, read before the remote is asked: two questions, and
      * a failure here is the run's and never the remote's. It names the ref
-     * (sys/gitops.h gitops_reference_find), which the caller's line does not. */
+     * (sys/gitops.h gitops_reference_find), which the caller's line does not.
+     * The one read: every finding below judges the commit it names. */
     git_oid local;
     error_t err = gitops_reference_oid(repo, EPOCH_REF, &local);
     if (err) return err;
@@ -1057,13 +1068,14 @@ error_t epoch_resolve(
 
         case EPOCH_REMOTE_ABSENT: {
             /* Establish publishes THIS machine's epoch, so a valid local one
-             * must exist. A repo whose ref is absent, or stands and yields no
-             * epoch, has nothing to publish — distinguish the two so the caller
-             * never claims an establish it cannot perform (the establish guard). */
+             * must exist, judged at the commit read above. A repo whose ref is
+             * absent, or stands and yields no epoch, has nothing to publish —
+             * distinguish the two so the caller never claims an establish it
+             * cannot perform (the establish guard). */
             kdf_epoch_t scratch;
-            error_t lerr = epoch_load(repo, &scratch);
-            *out_decision = lerr ? EPOCH_RECONCILE_NO_LOCAL_EPOCH
-                                 : EPOCH_RECONCILE_ESTABLISH;
+            *out_decision = git_oid_is_zero(&local)
+                || epoch_read_commit(repo, &local, &scratch)
+                ? EPOCH_RECONCILE_NO_LOCAL_EPOCH : EPOCH_RECONCILE_ESTABLISH;
 
             return NULL;
         }
@@ -1073,7 +1085,7 @@ error_t epoch_resolve(
              * is reached only over bytes nothing here can depend on. A census
              * that could not finish is said as the question it could not answer,
              * here where it was asked, as epoch_init says its own */
-            err = epoch_decide(repo, out_decision);
+            err = epoch_decide(repo, &local, out_decision);
             if (err) {
                 return error_wrap(
                     err, "Whether any encrypted file here is sealed under the local "

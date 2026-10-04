@@ -175,12 +175,11 @@ error_t epoch_init(
  * stands and yields no epoch — differing only in the mechanism that got there.
  * ERR_NOT_FOUND is the statement about the ref, made deliberately at one site;
  * everything else is that one fact, and every consumer may treat them as one.
- * All three readers of the code do: `epoch_init` asks whether there is a ref to
- * delete before it mints, the reconcile's divergent branch whether there are
- * bytes at the ref to take a census over (infra/epoch.c epoch_decide), and the
- * dispatcher which of two first lines it prints. What none of them may read into
- * ERR_CRYPTO is that the bytes are certainly malformed rather than merely
- * unavailable.
+ * Both readers of the code do: `epoch_init` asks whether there is a ref to delete
+ * before it mints, and the dispatcher which of two first lines it prints. What
+ * neither may read into ERR_CRYPTO is that the bytes are certainly malformed
+ * rather than merely unavailable. The reconcile reads the ref's id instead, and
+ * judges the bytes at it (`epoch_resolve`).
  *
  * @param repo Repository (must not be NULL)
  * @param out  The epoch (must not be NULL; zeroed on failure)

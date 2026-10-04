@@ -384,8 +384,8 @@ error_t gitops_reference_commit(
  * gitops_reference_commit, and its tree: NULL is the reference's absence, proven;
  * one that stands and names no commit is refused there. For the readers that
  * act on the absence as an answer, in one read where a presence question and a
- * load were two: core/ignore.c ignore_ref_text (no .dottaignore yet) and
- * gitops_branch_tree.
+ * load were two: core/ignore.c ignore_ref_text (no .dottaignore yet), infra/epoch.c
+ * epoch_load (no epoch) and gitops_branch_tree.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (must not be NULL or empty)
@@ -842,9 +842,9 @@ error_t gitops_create_reference(
  * git reads one as broken (lib/git/refs/files-backend.c), never as missing. For
  * the readers that act on a reference's absence as an answer: sys/upstream.c
  * upstream_analyze_profile (no branch, no remote branch), cmds/sync.c
- * pull_branch_ff (nothing fetched to fast-forward to), infra/epoch.c
- * epoch_inspect_remote (no local epoch), gitops_reference_commit, which reads
- * the commit at the id, and gitops_resolve_reference_oid, which refuses it.
+ * pull_branch_ff (nothing fetched to fast-forward to), infra/epoch.c epoch_resolve
+ * (no local epoch), gitops_reference_commit, which reads the commit at the id,
+ * and gitops_resolve_reference_oid, which refuses it.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (must not be NULL or empty)

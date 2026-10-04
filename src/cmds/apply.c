@@ -2622,9 +2622,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * read off the item each planned bucket holds; the landing check is
      * filesystem-level. The mode and ownership every write applies are decided
      * here too — deployable rows alone — so a strict_ownership failure ends the
-     * run before the prompt (the wrap below is for such real errors; a skip is
-     * not one), and the anomalies met on the way — an owner this system does
-     * not know — print as warnings closing the preview.
+     * run before the prompt, said under the run's outcome as the resume's is (a
+     * skip is no failure), and the anomalies met on the way — an owner this system
+     * does not know — print as warnings closing the preview.
      */
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Running pre-flight checks...\n");
@@ -2636,7 +2636,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     deploy_preflight_t *deploy_verdicts = NULL;
     err = deploy_preflight(ws, deploy_plan, &deploy_opts, ctx->arena, &deploy_verdicts);
-    if (err) return error_wrap(err, "Pre-flight checks failed");
+    if (err) return error_wrap(err, "Nothing was deployed or pruned");
 
     /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
      * no orphans in scope) yields empty verdicts and a silent preview — no gate

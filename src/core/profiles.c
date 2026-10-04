@@ -199,7 +199,7 @@ error_t profile_resolve_enabled(
 
         bool exists = false;
         error_t err = gitops_branch_exists(repo, profile, &exists);
-        if (err) return error_wrap(err, "Failed to validate state profiles");
+        if (err) return err;
         if (exists) string_array_push(&valid_profiles, profile);
     }
 

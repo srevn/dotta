@@ -596,10 +596,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         } else {
             string_array_t profiles;
             err = profile_resolve_enabled(repo, state, ctx->arena, &profiles);
-            if (err) {
-                err = error_wrap(err, "Failed to load profiles");
-                goto cleanup;
-            }
+            if (err) goto cleanup;
 
             /* Nowhere to search: refused, the fact the set's own words, and the
              * way through this command's — a profile named is searched whatever

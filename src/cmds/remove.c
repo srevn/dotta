@@ -1006,10 +1006,7 @@ static error_t remove_paths(
     string_array_t pruned_dirs;   /* Directory entries the metadata step pruned (storage paths) */
     string_array_init(&pruned_dirs, ctx->arena);
     err = metadata_prune_ancestors(metadata, stage_index(stage), &pruned_dirs);
-    if (err) {
-        err = error_wrap(err, "Failed to prune redundant directories");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
     if (pruned_dirs.count > 0) {
         output_info(
             out, OUTPUT_VERBOSE, "Pruned %zu redundant directory entr%s",

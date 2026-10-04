@@ -726,7 +726,7 @@ static error_t ignore_test(
 
     if (!profile) {
         err = profile_resolve_enabled(repo, state, ctx->arena, &enabled);
-        if (err) return error_wrap(err, "Failed to load profiles");
+        if (err) return err;
 
         err = profile_require_enabled(state, &enabled, ctx->arena);
         if (err) {

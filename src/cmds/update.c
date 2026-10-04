@@ -762,10 +762,7 @@ static error_t update_profile(
      * entry indefinitely. The keys go on the commit's bookkeeping: the entry
      * leaves the view by this commit, so its record is this verb's to retire. */
     err = metadata_prune_ancestors(metadata, stage_index(stage), &commit->pruned);
-    if (err) {
-        err = error_wrap(err, "Failed to prune redundant directories");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     if (commit->pruned.count > 0) {
         output_info(

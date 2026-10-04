@@ -318,6 +318,26 @@ error_t fs_read_fd(int fd, buffer_t *out) {
     return NULL;
 }
 
+error_t fs_write_fd(int fd, const char *path, const void *data, size_t size) {
+    CHECK_NULL(path);
+    CHECK_ARG(data != NULL || size == 0, "data cannot be NULL with a size");
+
+    /* Until every byte is down: a short write resumes past what it wrote, and a
+     * write a signal interrupted before it wrote anything is asked again */
+    const unsigned char *bytes = data;
+    size_t written = 0;
+    while (written < size) {
+        ssize_t n = write(fd, bytes + written, size - written);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return error_errno(errno, "Cannot write '%s'", path);
+        }
+        written += (size_t) n;
+    }
+
+    return NULL;
+}
+
 error_t fs_read_file(const char *path, buffer_t *out) {
     CHECK_NULL(path);
     CHECK_NULL(out);
@@ -420,18 +440,10 @@ static error_t write_and_close_fd(
      * Now it's safe to write sensitive data. If the process crashes during write,
      * we have an incomplete file with correct metadata (acceptable).
      */
-    size_t written = 0;
-    while (written < size) {
-        ssize_t n = write(fd, data + written, size - written);
-        if (n < 0) {
-            if (errno == EINTR) {
-                continue;  /* Interrupted, retry */
-            }
-            int saved_errno = errno;
-            close(fd);
-            return error_errno(saved_errno, "Write error on '%s'", path);
-        }
-        written += n;
+    error_t err = fs_write_fd(fd, path, data, size);
+    if (err) {
+        close(fd);
+        return err;
     }
 
     /* Sync to disk */

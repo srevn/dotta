@@ -289,23 +289,10 @@ error_t session_save(
         goto cleanup;
     }
 
-    /* Write the struct in a loop that handles EINTR and partial writes. For 113
-     * bytes on a regular file the loop is in practice one iteration. */
-    const uint8_t *bytes = (const uint8_t *) &cache;
-    size_t off = 0;
-    while (off < sizeof(cache)) {
-        ssize_t n = write(fd, bytes + off, sizeof(cache) - off);
-        if (n < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            err = error_errno(
-                errno, "Failed to write session cache file '%s'", cache_path
-            );
-            goto cleanup;
-        }
-        off += (size_t) n;
-    }
+    /* The struct, every byte of it (sys/filesystem.h fs_write_fd): for 113 bytes
+     * on a regular file one write in practice */
+    err = fs_write_fd(fd, cache_path, &cache, sizeof(cache));
+    if (err) goto cleanup;
 
     /* fsync the file but not the parent dir: a half-written file cannot survive
      * a crash, and the parent-dir fsync's extra cost does not pay for itself

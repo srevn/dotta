@@ -18,6 +18,7 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
+#include "sys/filesystem.h"
 #include "sys/gitops.h"
 
 /**
@@ -75,28 +76,6 @@ static error_t bootstrap_open_script(
 static const char *bootstrap_tmp_dir(void) {
     const char *d = getenv("TMPDIR");
     return (d && *d) ? d : "/tmp";
-}
-
-/**
- * Write exactly `size` bytes from `data` to `fd`, the file at `path`, retrying
- * on EINTR and handling short writes. Returns NULL on success, or the write's
- * refusal naming the path.
- */
-static error_t bootstrap_write_all(
-    int fd, const char *path, const void *data, size_t size
-) {
-    const unsigned char *p = data;
-    size_t written = 0;
-    while (written < size) {
-        ssize_t n = write(fd, p + written, size - written);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return error_errno(errno, "Cannot write '%s'", path);
-        }
-        written += (size_t) n;
-    }
-
-    return NULL;
 }
 
 bool bootstrap_exists(git_repository *repo, const char *profile) {
@@ -174,7 +153,7 @@ error_t bootstrap_extract_to_temp(
         goto cleanup;
     }
 
-    err = bootstrap_write_all(fd, path, script.data, script.size);
+    err = fs_write_fd(fd, path, script.data, script.size);
     if (err) goto cleanup;
 
     if (fchmod(fd, 0700) != 0) {

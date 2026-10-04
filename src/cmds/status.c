@@ -1459,7 +1459,7 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         err = workspace_load(
             repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
         );
-        if (err) return error_wrap(err, "Failed to load workspace");
+        if (err) return err;
 
         /* What the load owes the record — its observations, its confirmations,
          * the voids of orders the view took back (core/workspace.h workspace_flush)

@@ -1263,7 +1263,7 @@ static error_t diff_workspace(
     error_t err = workspace_load(
         repo, state, config, cache, manifest, &ws_opts, arena, &ws
     );
-    if (err) return error_wrap(err, "Failed to load workspace");
+    if (err) return err;
 
     /* What the load owes the record — its observations, its confirmations, the
      * voids of orders the view took back (core/workspace.h workspace_flush) —

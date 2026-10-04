@@ -1959,7 +1959,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     err = workspace_load(
         repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
     );
-    if (err) return error_wrap(err, "Failed to load workspace");
+    if (err) return err;
 
     /* What the load owes the record — its observations, a directory's or a file's
      * in the place of a record whose node the look found gone among them, its

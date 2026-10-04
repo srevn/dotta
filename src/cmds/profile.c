@@ -767,7 +767,7 @@ static error_t profile_enable(
          * and the retargeted row's new binding, included. */
         manifest_t *after = NULL;
         err = manifest_build(repo, state, ctx->arena, &after);
-        if (err) return error_wrap(err, "Failed to build manifest after enable");
+        if (err) return err;
 
         state_record_t *records = NULL;
         size_t record_count = 0;
@@ -1020,11 +1020,7 @@ static error_t profile_disable(
          * the profile; warn with it and disable without the receipt. */
         manifest_t *before = NULL;
         err = manifest_build(repo, state, ctx->arena, &before);
-        if (err) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Manifest build failed: %s", error_line(err)
-            );
-        }
+        if (err) output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
 
         /* Phase 3: Write scope to state */
         for (size_t i = 0; i < to_disable_validated.count; i++) {
@@ -1040,7 +1036,7 @@ static error_t profile_disable(
         if (before) {
             manifest_t *after = NULL;
             err = manifest_build(repo, state, ctx->arena, &after);
-            if (err) return error_wrap(err, "Failed to build manifest after disable");
+            if (err) return err;
 
             state_record_t *records = NULL;
             size_t record_count = 0;

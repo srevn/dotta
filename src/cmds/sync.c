@@ -1540,10 +1540,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         err = workspace_load(
             repo, state, config, content_cache, before, &ws_opts, ctx->arena, &ws
         );
-        if (err) {
-            err = error_wrap(err, "Failed to load workspace");
-            goto cleanup;
-        }
+        if (err) goto cleanup;
 
         /* What the load owes the record — its observations, its confirmations,
          * the voids of orders the view took back (core/workspace.h workspace_flush)
@@ -1995,9 +1992,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     err = manifest_build(repo, state, ctx->arena, &after);
     if (err) {
-        output_warning(
-            out, OUTPUT_NORMAL, "Manifest build failed: %s", error_line(err)
-        );
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
     } else {
         state_record_t *records = NULL;
         size_t record_count = 0;

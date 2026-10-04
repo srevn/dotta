@@ -140,7 +140,7 @@ static error_t build_items(git_repository *repo, state_t *deploy_state, view_t *
     if (err) return err;
 
     if (all_profiles.count == 0) {
-        return error_create(ERR_NOT_FOUND, "no profiles found in repository");
+        return error_create(ERR_NOT_FOUND, "No profiles found in repository");
     }
 
     /* First-run case: a handle whose underlying DB doesn't exist holds a load
@@ -430,9 +430,7 @@ static error_t plan_check(git_repository *repo, state_t *deploy_state) {
     manifest_t *view = NULL;
     error_t err = manifest_build(repo, deploy_state, frame, &view);
     arena_free(frame);
-
-    if (err) return error_wrap(err, "Failed to build manifest with new scope");
-    return NULL;
+    return err;
 }
 
 /* Save orchestrator. Holds a scoped write transaction for the diff window only;
@@ -448,7 +446,7 @@ static error_t view_save(git_repository *repo, state_t *deploy_state, view_t *vi
      * source of truth for "is this enabled?". A sibling counter would be a cache
      * of a cache. */
     if (plan.new_order.count == 0) {
-        return error_create(ERR_INVALID_ARG, "no profiles enabled");
+        return error_create(ERR_INVALID_ARG, "No profiles enabled");
     }
 
     error_t err = state_begin(deploy_state);
@@ -821,7 +819,7 @@ static error_t check_screen(const view_t *view) {
     int required_lines = view_required_lines(view);
     if (required_lines > size.rows) {
         return error_create(
-            ERR_INVALID_ARG, "terminal too small (need %d lines, have %d)",
+            ERR_INVALID_ARG, "Terminal too small (need %d lines, have %d)",
             required_lines, size.rows
         );
     }
@@ -836,7 +834,7 @@ static error_t check_screen(const view_t *view) {
     size_t worst_width = ROW_PREFIX_COLS + max_name + ROW_ANNOTATION_COLS;
     if (worst_width > (size_t) size.cols) {
         return error_create(
-            ERR_INVALID_ARG, "terminal too narrow (longest profile name: "
+            ERR_INVALID_ARG, "Terminal too narrow (longest profile name: "
             "%zu chars, need %zu columns, have %d)",
             max_name, worst_width, size.cols
         );
@@ -875,7 +873,7 @@ static error_t interactive_run(
     git_repository *repo, state_t *deploy_state, arena_t *arena
 ) {
     if (!terminal_is_tty()) {
-        return error_create(ERR_INVALID_ARG, "interactive mode requires a TTY");
+        return error_create(ERR_INVALID_ARG, "Interactive mode requires a TTY");
     }
 
     terminal_t *term TERMINAL_CLEANUP = NULL;

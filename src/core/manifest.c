@@ -1255,9 +1255,7 @@ error_t manifest_build(
      * path always resolves under the target the row it came from carries. */
     mount_table_t *mounts = NULL;
     error_t err = manifest_mount_table(state, NULL, arena, &mounts);
-    if (err) {
-        return error_wrap(err, "Failed to build mount table");
-    }
+    if (err) return err;
 
     manifest_t *manifest = manifest_allocate(arena, 128, profiles.count);
     manifest->mounts = mounts;

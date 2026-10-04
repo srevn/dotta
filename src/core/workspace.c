@@ -3138,7 +3138,7 @@ error_t workspace_load(
      * computed from Git at dispatch, so it is current by construction — nothing
      * upstream repairs anything. */
     error_t err = workspace_partition(ws);
-    if (err) return error_wrap(err, "Failed to partition workspace");
+    if (err) return err;
 
     /* The join, one walk over the active items in their order
      * (workspace_kind_order): every directory before any file, each analyzed as
@@ -3195,7 +3195,7 @@ error_t workspace_load(
     /* Optional: new files beneath the tracked directories */
     if (opts->analyze_untracked) {
         err = workspace_analyze_untracked(ws, config);
-        if (err) return error_wrap(err, "Failed to analyze untracked files");
+        if (err) return err;
     }
 
     *out = ws;

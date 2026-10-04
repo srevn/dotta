@@ -72,9 +72,10 @@
  *
  * Layer: sys/. The module knows libgit2 and sys/gitops' signature, nothing of
  * mounts, content or dotta's vocabulary. Called by the commands that write trees
- * (add, update, remove, revert, bootstrap), by core/metadata's sheet writer,
- * core/ignore's two writers (a profile's .dottaignore, the machine's baseline),
- * and infra/epoch's mint; add alone creates an admission.
+ * (add, update, remove, revert, bootstrap, ignore), by core/metadata's sheet
+ * writer, by core/ignore — a .dottaignore put onto the stage its edit opened,
+ * and the machine's baseline seeded on a stage of its own — and by infra/epoch's
+ * mint; add alone creates an admission.
  */
 
 #ifndef DOTTA_STAGE_H
@@ -128,11 +129,13 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out);
  * The tree the stage opened at — the ref's own bytes at open
  *
  * Readers: the sheet loader (add, update, revert); add's view of its own branch
- * (manifest_build_tree); and the questions revert and remove ask of the branch
- * as it stood — the claim at a path, the entry at a name, a second name, the
- * claims an argument removes. Never NULL: an orphan's stage stands on the empty
- * tree, and add — the one reader that opens one — reads it as a profile with
- * nothing in it yet, no entry and no sheet. Borrowed; valid until stage_free.
+ * (manifest_build_tree); the questions revert and remove ask of the branch as
+ * it stood — the claim at a path, the entry at a name, a second name, the claims
+ * an argument removes; and the file an edit session opens on (cmds/ignore.c
+ * ignore_edit, ignore_modify), read from the tree the session commits on. Never
+ * NULL: an orphan's stage stands on the empty tree, and add — the one reader
+ * that opens one — reads it as a profile with nothing in it yet, no entry and
+ * no sheet. Borrowed; valid until stage_free.
  *
  * @param st Stage (must not be NULL)
  * @return The opened tree

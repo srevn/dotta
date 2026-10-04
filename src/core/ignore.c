@@ -169,6 +169,28 @@ struct ignore_rules {
 };
 
 /**
+ * The text of the `.dottaignore` at a ref's tip, read by the ref
+ *
+ * The rule builders' read (ignore_rules_create, ignore_compose), which ask a
+ * ref by its name where the editor sessions ask the tree their stage opened at:
+ * a ref that does not stand reads as a file that is not there, empty, its absence
+ * proven (sys/gitops.h gitops_reference_tree), and the rest is ignore_blob_text's.
+ */
+static error_t ignore_ref_text(
+    git_repository *repo, const char *refname, buffer_t *out
+) {
+    *out = (buffer_t){ 0 };
+
+    git_tree *tree = NULL;
+    error_t err = gitops_reference_tree(repo, refname, &tree);
+    if (err || !tree) return err;
+
+    err = ignore_blob_text(repo, tree, refname, out);
+    git_tree_free(tree);
+    return err;
+}
+
+/**
  * Compose a fresh ruleset for `profile` in the builder's arena.
  *
  * Appends the four layers in precedence order (baseline/builtin, profile, config,
@@ -198,7 +220,7 @@ static error_t ignore_compose(
         if (err) return err;
 
         buffer_t content = BUFFER_INIT;
-        err = ignore_blob_text(r->repo, refname, &content);
+        err = ignore_ref_text(r->repo, refname, &content);
         if (err) return err;
         if (content.size) {
             gitignore_ruleset_append_file(
@@ -222,32 +244,27 @@ static error_t ignore_compose(
     return NULL;
 }
 
-error_t ignore_blob_read(git_repository *repo, const char *refname, buffer_t *out) {
+error_t ignore_blob_read(
+    git_repository *repo, const git_tree *tree, const char *refname, buffer_t *out
+) {
     CHECK_NULL(repo);
+    CHECK_NULL(tree);
     CHECK_NULL(refname);
     CHECK_NULL(out);
     CHECK_ARG(refname[0] != '\0', "Reference name cannot be empty");
 
     *out = (buffer_t){ 0 };
 
-    /* An absent ref is not an error — callers read an empty buffer as "no
-     * baseline/profile .dottaignore yet" — and any other failure of the read is
-     * one (I/O, corruption), naming the ref. */
-    git_tree *tree = NULL;
-    error_t err = gitops_reference_tree(repo, refname, &tree);
-    if (err || !tree) return err;
-
+    /* No entry at the tree's root is no file yet — callers read an empty buffer
+     * as "no baseline/profile .dottaignore yet" — and any failure of the read
+     * is one (I/O, corruption), naming the ref the tree was read from. */
     const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
-    if (!entry) {
-        git_tree_free(tree);
-        return NULL;
-    }
+    if (!entry) return NULL;
 
     /* The blob's read names an id alone (sys/gitops.h gitops_blob_view_open):
      * the file and the ref are what it was not handed */
     gitops_blob_view_t view;
-    err = gitops_blob_view_open(repo, git_tree_entry_id(entry), &view);
-    git_tree_free(tree);
+    error_t err = gitops_blob_view_open(repo, git_tree_entry_id(entry), &view);
     if (err) return error_wrap(err, "Cannot read .dottaignore at '%s'", refname);
 
     /* The one copy, and the cap asked before it. An empty blob appends nothing,
@@ -267,8 +284,10 @@ error_t ignore_blob_read(git_repository *repo, const char *refname, buffer_t *ou
     return err;
 }
 
-error_t ignore_blob_text(git_repository *repo, const char *refname, buffer_t *out) {
-    error_t err = ignore_blob_read(repo, refname, out);
+error_t ignore_blob_text(
+    git_repository *repo, const git_tree *tree, const char *refname, buffer_t *out
+) {
+    error_t err = ignore_blob_read(repo, tree, refname, out);
     if (err) return err;
 
     /* A NUL would end every string reading of the file — the rules compiled from
@@ -286,15 +305,9 @@ error_t ignore_blob_text(git_repository *repo, const char *refname, buffer_t *ou
     return NULL;
 }
 
-error_t ignore_blob_write(
-    git_repository *repo, const char *refname, const char *content,
-    size_t size, const char *commit_msg, bool *out_committed
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(refname);
+error_t ignore_blob_write(stage_t *stage, const char *content, size_t size) {
+    CHECK_NULL(stage);
     CHECK_NULL(content);
-    CHECK_NULL(commit_msg);
-    CHECK_ARG(refname[0] != '\0', "Reference name cannot be empty");
 
     if (size > MAX_DOTTAIGNORE_SIZE) {
         return error_create(
@@ -309,18 +322,9 @@ error_t ignore_blob_write(
         );
     }
 
-    stage_t *stage = NULL;
-    error_t err = stage_open(repo, refname, &stage);
-    if (err) return err;
-
-    err = stage_put(
+    return stage_put(
         stage, ".dottaignore", content, size, GIT_FILEMODE_BLOB, NULL
     );
-    if (!err) {
-        err = stage_commit(stage, commit_msg, out_committed);
-    }
-    stage_free(stage);
-    return err;
 }
 
 error_t ignore_excludes_compile(
@@ -369,7 +373,7 @@ error_t ignore_rules_create(
     gitignore_ruleset_t *baseline = gitignore_ruleset_create(arena, GITIGNORE_CASE_SENSITIVE);
 
     buffer_t blob = BUFFER_INIT;
-    error_t err = ignore_blob_text(repo, BASELINE_REF, &blob);
+    error_t err = ignore_ref_text(repo, BASELINE_REF, &blob);
     if (err) return err;
 
     ignore_origin_t origin = blob.size ? IGNORE_ORIGIN_BASELINE : IGNORE_ORIGIN_BUILTIN;

@@ -87,6 +87,7 @@
  * typedef identically there */
 typedef struct gitignore_ruleset gitignore_ruleset_t;
 typedef struct source_filter source_filter_t;
+typedef struct stage stage_t;
 
 /**
  * The baseline's home: a ref of this machine's own.
@@ -407,97 +408,90 @@ const char *ignore_verdict_negation(
 );
 
 /**
- * Read a `.dottaignore` blob from a ref into a buffer: its bytes, as Git holds
+ * Read a `.dottaignore` blob from a tree into a buffer: its bytes, as Git holds
  * them — as sys/filesystem's fs_read_file reads a file into one.
  *
- * The editor's read (cmds/ignore's edit mode), which hands the bytes to a human
- * and reads them back — the one reader that interprets nothing, and so the one
- * that can mend a file the others refuse. Every reader that interprets the file,
- * its rules or its lines, reads ignore_blob_text.
+ * The editor's read (cmds/ignore.c ignore_edit), of the tree its stage opened
+ * at, which hands the bytes to a human and reads them back — the one reader that
+ * interprets nothing, and so the one that can mend a file the others refuse.
+ * Every reader that interprets the file, its rules or its lines, reads
+ * ignore_blob_text.
  *
  * Leaves `out` empty, without error, when the file is absent:
- *   - The ref does not exist
- *   - Its tree has no `.dottaignore` at the root
+ *   - The tree has no `.dottaignore` at the root
  *   - The blob is empty
  *
  * Only I/O failures, malformed trees, or the 1 MB size cap produce an error,
  * the cap asked before a byte is copied; on failure `out` is empty too. Each
- * names the ref — a reference that will not read in its own words, the rest as
- * the `.dottaignore` at it — so no reader names the layer again.
+ * names the ref the tree was read from — the `.dottaignore` at it — so no reader
+ * names the layer again.
  *
  * `out` is written, never read (base/buffer.h): its bytes may hold a NUL of their
  * own, so the size is their length, never strlen. The caller owns them.
  *
  * @param repo    Repository (must not be NULL)
- * @param refname Full reference name — BASELINE_REF, or a profile's through
- *                gitops_branch_refname (must not be NULL or empty)
+ * @param tree    The tree a ref's tip holds — a stage's (sys/stage.h stage_tree),
+ *                or a tip read by the ref (must not be NULL)
+ * @param refname The ref the tree was read from, named by every refusal —
+ *                BASELINE_REF, or a profile's through gitops_branch_refname (must
+ *                not be NULL or empty)
  * @param out     The bytes; empty when the file is absent (must not be NULL)
  * @return Error or NULL on success
  */
 error_t ignore_blob_read(
     git_repository *repo,
+    const git_tree *tree,
     const char *refname,
     buffer_t *out
 );
 
 /**
- * Read a `.dottaignore` blob as text: ignore_blob_read's bytes, refused when a
- * NUL stands among them (ERR_VALIDATION, naming the ref).
+ * Read a `.dottaignore` blob from a tree as text: ignore_blob_read's bytes, refused
+ * when a NUL stands among them (ERR_VALIDATION, naming the ref).
  *
  * A NUL would end every string reading of the file — the rules the builder
  * compiles, the lines `dotta ignore --add` and `--remove` rewrite — and whatever
  * stood behind it would be lost without a word. Its readers: ignore_rules_create
- * (the baseline), the per-profile composition behind ignore_ruleset, and
- * cmds/ignore's --add / --remove. The editor reads the bytes, so a file refused
- * here is mended by `dotta ignore`.
+ * (the baseline) and the per-profile composition behind ignore_ruleset, each of
+ * a ref's tip read by the ref, where a ref that does not stand reads as no file;
+ * and cmds/ignore.c ignore_modify, of the tree its stage opened at. The editor
+ * reads the bytes, so a file refused here is mended by `dotta ignore`.
  *
- * Absent — no ref, no entry, an empty blob — as ignore_blob_read answers it:
- * `out` empty. On failure `out` is empty too.
+ * Absent — no entry, an empty blob — as ignore_blob_read answers it: `out` empty.
+ * On failure `out` is empty too.
  *
  * @param repo    Repository (must not be NULL)
- * @param refname Full reference name — BASELINE_REF, or a profile's through
- *                gitops_branch_refname (must not be NULL or empty)
+ * @param tree    The tree a ref's tip holds (must not be NULL)
+ * @param refname The ref the tree was read from, named by every refusal (must
+ *                not be NULL or empty)
  * @param out     The text, NUL-terminated and owned by the caller; empty when the
  *                file is absent (must not be NULL)
  * @return Error or NULL on success
  */
 error_t ignore_blob_text(
     git_repository *repo,
+    const git_tree *tree,
     const char *refname,
     buffer_t *out
 );
 
 /**
- * Write `content` as the `.dottaignore` blob on `refname`, creating a commit
- * with `commit_msg`.
+ * Write `content` as the `.dottaignore` blob onto a stage
  *
- * One stage: open the ref, put the blob, commit — so a blob identical to the
- * ref's commits nothing (the stage's own rule), and the ref must exist
- * (ERR_NOT_FOUND otherwise; the callers verify it up front — the profile named,
- * or the baseline `dotta init` seeded). Refuses up front what ignore_blob_text
- * refuses — content past the 1 MB cap, or holding a NUL (ERR_VALIDATION) — so
- * an editor buffer that grew past the cap or took a NUL fails cleanly, instead
- * of committing a blob its readers would refuse.
+ * The write's half of cmds/ignore's edits, which open the stage on the ref before
+ * they read the file and commit it after: a blob identical to the ref's then
+ * commits nothing (the stage's own rule), and a commit another writer made to
+ * the ref since the open refuses this one (sys/stage.h stage_commit). Refuses
+ * up front what ignore_blob_text refuses — content past the 1 MB cap, or holding
+ * a NUL (ERR_VALIDATION) — so an editor buffer that grew past the cap or took a
+ * NUL fails cleanly, instead of committing a blob its readers would refuse.
  *
- * @param repo       Repository (must not be NULL)
- * @param refname    Full reference name — BASELINE_REF, or a profile's through
- *                   gitops_branch_refname (must not be NULL or empty)
- * @param content    Blob content (must not be NULL; may be empty)
- * @param size       Size in bytes (at most 1 MB, and no NUL among them)
- * @param commit_msg Commit message (must not be NULL)
- * @param out_committed Whether a commit was made — the stage's own answer
- *                   (sys/stage.h stage_commit), for the caller that must say
- *                   "nothing changed" (optional, can be NULL)
+ * @param stage   The stage on the file's ref (must not be NULL)
+ * @param content Blob content (must not be NULL; may be empty)
+ * @param size    Size in bytes (at most 1 MB, and no NUL among them)
  * @return Error or NULL on success
  */
-error_t ignore_blob_write(
-    git_repository *repo,
-    const char *refname,
-    const char *content,
-    size_t size,
-    const char *commit_msg,
-    bool *out_committed
-);
+error_t ignore_blob_write(stage_t *stage, const char *content, size_t size);
 
 /**
  * Seed the baseline `.dottaignore` at BASELINE_REF.
@@ -511,10 +505,10 @@ error_t ignore_blob_write(
  * emptied, even the entry taken away by hand — and `dotta ignore` is how it
  * changes. `dotta init` is idempotent by re-running its steps, and this step's
  * idempotence is "the ref stands → nothing to do", never "rewrite with the
- * defaults", which is what `ignore_blob_write` does (it no-ops only on *identical*
- * content) and which once silently discarded a customised baseline on every
- * re-init. A ref that appears between the look and the seed's commit — two inits
- * racing — is refused by the stage, not seeded over.
+ * defaults", which is what `ignore_blob_write` does (its stage commits nothing
+ * only over *identical* content) and which once silently discarded a customised
+ * baseline on every re-init. A ref that appears between the look and the seed's
+ * commit — two inits racing — is refused by the stage, not seeded over.
  *
  * Every refusal names BASELINE_REF, or the `.dottaignore` the stage puts on it
  * (sys/stage.h), so its two readers — cmds/init.c cmd_init and cmds/clone.c

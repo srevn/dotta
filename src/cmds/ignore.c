@@ -28,6 +28,7 @@
 #include "sys/editor.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/stage.h"
 
 /**
  * Does any line of content name the same rule as pattern? (zero-allocation)
@@ -249,13 +250,13 @@ typedef struct {
  * Edit a .dottaignore via external editor.
  *
  * Called with dottaignore->refname already verified to exist (cmd_ignore hoists
- * that check). Loads existing content, hands it to the user's editor, commits
- * the result back to the same ref, and says whether a commit was made.
+ * that check). Opens the ref's stage, hands the bytes its tree holds to the user's
+ * editor, commits the edit on that stage, and says whether a commit was made.
  *
  * The bytes, not the text (ignore_blob_read): a human reads the file here, so a
  * .dottaignore every other reader refuses — one holding a NUL — opens as it stands,
- * to be mended. The write refuses what those readers would, and an edit it refuses
- * is kept, named in the refusal.
+ * to be mended. The write refuses what those readers would, and an edit the stage
+ * refuses is kept, named in the refusal.
  */
 static error_t ignore_edit(
     git_repository *repo,
@@ -265,76 +266,83 @@ static error_t ignore_edit(
     CHECK_NULL(repo);
     CHECK_NULL(dottaignore);
 
+    /* The ref's stage, opened before the editor: the read the session decides
+     * from is its tree, so a commit another writer makes to the ref while the
+     * editor is open refuses this session's commit where it was overwritten
+     * (sys/stage.h stage_commit); a deletion meanwhile is the stage's own rule,
+     * the ref recreated with the edit */
+    stage_t *stage = NULL;
+    error_t err = stage_open(repo, dottaignore->refname, &stage);
+    if (err) return err;
+
+    buffer_t file = BUFFER_INIT;
+    char *kept = NULL;
+    char *commit_msg = NULL;
+
     /* The file's bytes, or its seed where it has none: what the editor opens
      * on, and one buffer from here to the write. */
-    buffer_t file = BUFFER_INIT;
-    error_t err = ignore_blob_read(repo, dottaignore->refname, &file);
-    if (err) return err;
+    err = ignore_blob_read(repo, stage_tree(stage), dottaignore->refname, &file);
+    if (err) goto cleanup;
     if (file.size == 0) {
         buffer_append_string(&file, dottaignore->seed);
     }
 
     /* The user's editor, in a file of the edit's own that stands after it
      * (sys/editor.h editor_edit) */
-    char *kept = NULL;
     err = editor_edit("dotta-ignore", &file, &kept);
     if (err) {
-        buffer_deinit(&file);
-        return error_wrap(
-            err, "Failed to edit %s .dottaignore", dottaignore->layer
-        );
+        err = error_wrap(err, "Failed to edit %s .dottaignore", dottaignore->layer);
+        goto cleanup;
     }
 
-    char *commit_msg = heap_str_format(
-        "Update %s .dottaignore", dottaignore->layer
-    );
-
     /* Whether anything changed is the stage's answer, asked of the tree the write
-     * would commit: one equal to the ref's commits nothing — the editor closed
-     * on the bytes the branch holds — and the receipt says which. An edit that
-     * leaves a NUL is refused before it is staged, changed or not. */
+     * leaves: one equal to the ref's commits nothing — the editor closed on the
+     * bytes the branch holds — and the receipt says which. An edit that leaves
+     * a NUL is refused before it is staged, changed or not. */
+    commit_msg = heap_str_format("Update %s .dottaignore", dottaignore->layer);
     bool committed = false;
-    err = ignore_blob_write(
-        repo, dottaignore->refname, file.data, file.size, commit_msg, &committed
-    );
-    free(commit_msg);
-    buffer_deinit(&file);
+    err = ignore_blob_write(stage, file.data, file.size);
+    if (!err) err = stage_commit(stage, commit_msg, &committed);
 
-    /* An edit the write refused is kept where the editor left it, and the refusal
-     * says where — a clause of the fact, which -q keeps; one the write took lets
+    /* An edit the stage refused is kept where the editor left it, and the refusal
+     * says where — a clause of the fact, which -q keeps; one the stage took lets
      * its file go. */
     if (err) {
         err = error_wrap(
             err, "Failed to update %s .dottaignore; the edit is kept in '%s'",
             dottaignore->layer, kept
         );
-        free(kept);
-        return err;
+        goto cleanup;
     }
     unlink(kept);
-    free(kept);
 
-    if (!committed) {
+    if (committed) {
+        output_success(
+            out, OUTPUT_NORMAL, "Updated %s .dottaignore", dottaignore->layer
+        );
+    } else {
         output_info(
             out, OUTPUT_NORMAL, "No changes to %s .dottaignore", dottaignore->layer
         );
-        return NULL;
     }
 
-    output_success(
-        out, OUTPUT_NORMAL, "Updated %s .dottaignore", dottaignore->layer
-    );
-    return NULL;
+cleanup:
+    free(kept);
+    free(commit_msg);
+    buffer_deinit(&file);
+    stage_free(stage);
+    return err;
 }
 
 /**
  * Add / remove patterns in a .dottaignore non-interactively.
  *
- * Called with dottaignore->refname already verified to exist. Loads the text
- * (ignore_blob_text) into one buffer, which --add and --remove each change in
- * place, each answering its count, and commits it where a count says it changed:
- * a line appended grows the file and a line taken out shrinks it, so the stage
- * is asked nothing the counts have not said.
+ * Called with dottaignore->refname already verified to exist. Opens the ref's
+ * stage and loads the text its tree holds (ignore_blob_text) into one buffer,
+ * which --add and --remove each change in place, each answering its count, and
+ * commits it on that stage where a count says it changed: a line appended grows
+ * the file and a line taken out shrinks it, so the stage is asked nothing the
+ * counts have not said.
  */
 static error_t ignore_modify(
     git_repository *repo,
@@ -348,9 +356,20 @@ static error_t ignore_modify(
     CHECK_NULL(repo);
     CHECK_NULL(dottaignore);
 
-    buffer_t text = BUFFER_INIT;
-    error_t err = ignore_blob_text(repo, dottaignore->refname, &text);
+    /* The ref's stage, opened before the read: the patterns are matched against
+     * the tree the commit lands on, and a commit another writer makes to the
+     * ref meanwhile refuses this one (sys/stage.h stage_commit). Nothing the
+     * user typed is lost to a refusal — the patterns are the command line, run
+     * again. */
+    stage_t *stage = NULL;
+    error_t err = stage_open(repo, dottaignore->refname, &stage);
     if (err) return err;
+
+    buffer_t text = BUFFER_INIT;
+    char *commit_msg = NULL;
+
+    err = ignore_blob_text(repo, stage_tree(stage), dottaignore->refname, &text);
+    if (err) goto cleanup;
 
     /* Nothing to work with: no existing file and no adds to seed one. Wording
      * uses "%s .dottaignore" so it composes naturally for both layers: "No baseline
@@ -360,7 +379,7 @@ static error_t ignore_modify(
             out, OUTPUT_NORMAL, "No %s .dottaignore exists",
             dottaignore->layer
         );
-        return NULL;
+        goto cleanup;
     }
 
     /* The file, or its seed where it has none — as the editor opens it — so the
@@ -373,10 +392,8 @@ static error_t ignore_modify(
     size_t missing = 0;
     size_t removed = ignore_remove(&text, remove_patterns, remove_count, &missing);
 
-    /* Nothing actually changed — report why and return early. */
+    /* Nothing actually changed — report why and stop. */
     if (added == 0 && removed == 0) {
-        buffer_deinit(&text);
-
         if (add_count > 0 && remove_count > 0) {
             output_info(
                 out, OUTPUT_NORMAL,
@@ -391,10 +408,9 @@ static error_t ignore_modify(
                 out, OUTPUT_NORMAL, "No changes: patterns not found"
             );
         }
-        return NULL;
+        goto cleanup;
     }
 
-    char *commit_msg = NULL;
     if (added > 0 && removed > 0) {
         commit_msg = heap_str_format(
             "Update %s .dottaignore (added %zu, removed %zu patterns)",
@@ -412,17 +428,11 @@ static error_t ignore_modify(
         );
     }
 
-    err = ignore_blob_write(
-        repo, dottaignore->refname, text.data, text.size, commit_msg, NULL
-    );
-
-    free(commit_msg);
-    buffer_deinit(&text);
-
+    err = ignore_blob_write(stage, text.data, text.size);
+    if (!err) err = stage_commit(stage, commit_msg, NULL);
     if (err) {
-        return error_wrap(
-            err, "Failed to update %s .dottaignore", dottaignore->layer
-        );
+        err = error_wrap(err, "Failed to update %s .dottaignore", dottaignore->layer);
+        goto cleanup;
     }
 
     if (added > 0) {
@@ -447,7 +457,11 @@ static error_t ignore_modify(
         );
     }
 
-    return NULL;
+cleanup:
+    free(commit_msg);
+    buffer_deinit(&text);
+    stage_free(stage);
+    return err;
 }
 
 /**
@@ -844,7 +858,9 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
      * the screen, and what an editor opens on when the file is not there yet.
      * Each arm establishes its home before naming it — the profile named must
      * be here, the baseline's ref must stand — so edit and modify start on a
-     * ref that exists. The profile's refname lives in this frame, its layer's
+     * ref that exists. The stage each opens would refuse a ref that is not there
+     * as well, in the ref's own words; these say it in the user's, with the way
+     * to bring it back. The profile's refname lives in this frame, its layer's
      * words in the command arena. */
     char refname[DOTTA_REFNAME_MAX];
     dottaignore_t dottaignore;

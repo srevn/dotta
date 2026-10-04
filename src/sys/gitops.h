@@ -384,7 +384,7 @@ error_t gitops_reference_commit(
  * gitops_reference_commit, and its tree: NULL is the reference's absence, proven;
  * one that stands and names no commit is refused there. For the readers that
  * act on the absence as an answer, in one read where a presence question and a
- * load were two: core/ignore.c ignore_blob_read (no .dottaignore yet) and
+ * load were two: core/ignore.c ignore_ref_text (no .dottaignore yet) and
  * gitops_branch_tree.
  *
  * @param repo Repository (must not be NULL)

@@ -1266,6 +1266,12 @@ error_t fs_working_directory(arena_t *arena, const char **out) {
     return NULL;
 }
 
+const char *fs_temp_directory(void) {
+    const char *directory = getenv("TMPDIR");
+
+    return directory && *directory ? directory : "/tmp";
+}
+
 /**
  * Does the kernel read a `..` after `through` as the string does — as the directory
  * holding its last component?

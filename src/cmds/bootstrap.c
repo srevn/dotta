@@ -9,7 +9,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 #include "base/args.h"
@@ -22,7 +21,6 @@
 #include "core/profiles.h"
 #include "sys/bootstrap.h"
 #include "sys/editor.h"
-#include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/stage.h"
 #include "utils/bootstrap.h"
@@ -125,9 +123,10 @@ static error_t bootstrap_create_template(
 /**
  * Edit bootstrap script.
  *
- * Extracts the script to a temporary file, hands it to the user's editor, validates
- * the edited content, and commits the result back to Git. If the profile has no
- * script yet, one is created from the template first.
+ * Hands the script the branch holds to the user's editor, validates the edited
+ * content, and commits the result back to Git. If the profile has no script yet,
+ * one is created from the template first. An edit the validation or the commit
+ * refuses is kept, named in the refusal.
  */
 static error_t bootstrap_edit(
     git_repository *repo,
@@ -138,8 +137,8 @@ static error_t bootstrap_edit(
     CHECK_NULL(profile);
 
     error_t err = NULL;
-    char *temp_path = NULL;
-    buffer_t content_buf = BUFFER_INIT;
+    buffer_t script = BUFFER_INIT;
+    char *kept = NULL;
     char *commit_msg = NULL;
     stage_t *stage = NULL;
 
@@ -153,28 +152,26 @@ static error_t bootstrap_edit(
         );
     }
 
-    /* Extract script to temporary file for editing: its refusals name the profile's
-     * script, or the temporary file's place */
-    err = bootstrap_extract_to_temp(repo, profile, &temp_path);
-    if (err) return err;
+    /* The script as the branch holds it, refused where a run would refuse it:
+     * the read names the profile's script, the validation is said of it */
+    err = bootstrap_read(repo, profile, &script);
+    if (err) goto cleanup;
 
-    /* The user's editor: DOTTA_EDITOR, VISUAL, EDITOR, then vi (sys/editor.h) */
-    err = editor_launch_with_env(temp_path);
-    if (err) goto cleanup;   /* the editor's refusal names itself */
-
-    /* Read edited content back from temp file */
-    err = fs_read_file(temp_path, &content_buf);
+    err = bootstrap_validate((const unsigned char *) script.data, script.size);
     if (err) {
-        err = error_wrap(err, "Failed to read edited bootstrap script");
+        err = error_wrap(err, "Invalid bootstrap script in profile '%s'", profile);
         goto cleanup;
     }
 
+    /* The user's editor, in a file of the edit's own that stands after it
+     * (sys/editor.h editor_edit): DOTTA_EDITOR, VISUAL, EDITOR, then vi. The
+     * editor's refusal names itself. */
+    err = editor_edit("dotta-bootstrap", &script, &kept);
+    if (err) goto cleanup;
+
     /* Validate edited content before committing. The validation refuses an empty
-     * edit too, and its words need no wrap: the edit is the one the user just
-     * closed */
-    err = bootstrap_validate(
-        (const unsigned char *) content_buf.data, content_buf.size
-    );
+     * edit too, and the refusal below says it of the script, the edit kept */
+    err = bootstrap_validate((const unsigned char *) script.data, script.size);
     if (err) goto cleanup;
 
     /* Auto-commit the changes */
@@ -192,7 +189,7 @@ static error_t bootstrap_edit(
     if (err) goto cleanup;
 
     err = stage_put(
-        stage, BOOTSTRAP_SCRIPT_NAME, content_buf.data, content_buf.size,
+        stage, BOOTSTRAP_SCRIPT_NAME, script.data, script.size,
         GIT_FILEMODE_BLOB_EXECUTABLE, NULL
     );
     if (err) goto cleanup;
@@ -215,14 +212,20 @@ static error_t bootstrap_edit(
         );
     }
 
-    err = NULL;
-
 cleanup:
-    if (temp_path) {
-        unlink(temp_path);
-        free(temp_path);
+    /* An edit the session could not commit is kept where the editor left it,
+     * and the refusal says where — a clause of the fact, which -q keeps; one
+     * the session took, or that changed nothing, lets its file go. */
+    if (err && kept) {
+        err = error_wrap(
+            err, "Failed to update bootstrap script for profile '%s'; the edit is "
+            "kept in '%s'", profile, kept
+        );
+    } else if (kept) {
+        unlink(kept);
     }
-    buffer_deinit(&content_buf);
+    free(kept);
+    buffer_deinit(&script);
     free(commit_msg);
     stage_free(stage);
     return err;

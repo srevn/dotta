@@ -4,9 +4,14 @@
 
 #include "sys/editor.h"
 
+#include <errno.h>
 #include <stdlib.h>
+#include <unistd.h>
 
+#include "base/buffer.h"
 #include "base/error.h"
+#include "base/heap.h"
+#include "sys/filesystem.h"
 #include "sys/process.h"
 
 /**
@@ -14,7 +19,7 @@
  *
  * Priority: DOTTA_EDITOR → VISUAL → EDITOR → vi
  */
-const char *editor_get_from_env(void) {
+const char *editor_from_env(void) {
     const char *editor = getenv("DOTTA_EDITOR");
     if (editor && *editor) {
         return editor;
@@ -87,10 +92,57 @@ error_t editor_launch(const char *editor, const char *file_path) {
 /**
  * Launch editor for a file with environment-based selection
  *
- * Convenience function that combines editor_get_from_env() and editor_launch().
+ * Convenience function that combines editor_from_env() and editor_launch().
  */
 error_t editor_launch_with_env(const char *file_path) {
     CHECK_NULL(file_path);
 
-    return editor_launch(editor_get_from_env(), file_path);
+    return editor_launch(editor_from_env(), file_path);
+}
+
+error_t editor_edit(const char *prefix, buffer_t *bytes, char **out_path) {
+    CHECK_NULL(prefix);
+    CHECK_NULL(bytes);
+    CHECK_NULL(out_path);
+
+    *out_path = NULL;
+
+    /* The edit's own file, made where every temporary file is. A template mkstemp
+     * could not make is no file of this run's, whatever name it tried last, so
+     * nothing is unlinked. */
+    const char *dir = fs_temp_directory();
+    char *path = heap_str_format("%s/%s-XXXXXX", dir, prefix);
+    int fd = mkstemp(path);
+    if (fd < 0) {
+        error_t err = error_errno(errno, "Cannot create a temporary file in '%s'", dir);
+        free(path);
+        return err;
+    }
+
+    /* The bytes the editor opens on, then the editor. A file that would not take
+     * them holds nothing of the user's, and an edit the editor refused is the
+     * user's refusal: either way the file goes. */
+    error_t err = fs_write_fd(fd, path, bytes->data, bytes->size);
+    if (close(fd) != 0 && !err) {
+        err = error_errno(errno, "Cannot close '%s'", path);
+    }
+    if (!err) err = editor_launch_with_env(path);
+    if (err) {
+        unlink(path);
+        free(path);
+        return err;
+    }
+
+    /* What the editor left is the edit from here on: read back into the one buffer,
+     * the bytes it opened on released first. A read that fails leaves the file
+     * where the editor left it, the user's work in it, and the refusal names it. */
+    buffer_deinit(bytes);
+    err = fs_read_file(path, bytes);
+    if (err) {
+        free(path);
+        return err;
+    }
+
+    *out_path = path;
+    return NULL;
 }

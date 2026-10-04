@@ -67,17 +67,6 @@ static error_t bootstrap_open_script(
     return NULL;
 }
 
-/**
- * Resolve the directory for temporary files.
- *
- * Honors TMPDIR when set and non-empty; falls back to "/tmp" which POSIX guarantees
- * exists.
- */
-static const char *bootstrap_tmp_dir(void) {
-    const char *d = getenv("TMPDIR");
-    return (d && *d) ? d : "/tmp";
-}
-
 bool bootstrap_exists(git_repository *repo, const char *profile) {
     if (!repo || !profile || *profile == '\0') return false;
 
@@ -139,7 +128,7 @@ error_t bootstrap_extract_to_temp(
         goto cleanup;
     }
 
-    const char *dir = bootstrap_tmp_dir();
+    const char *dir = fs_temp_directory();
     path = heap_str_format("%s/dotta-bootstrap-XXXXXX", dir);
 
     /* A template mkstemp could not make is no file of this run's, whatever name

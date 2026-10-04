@@ -232,60 +232,6 @@ static size_t ignore_remove(buffer_t *file, char **patterns, size_t count, size_
 }
 
 /**
- * The file's bytes, through the user's editor: written to a temporary file the
- * editor opens, and read back once it closes.
- *
- * `file` holds the bytes the editor opens on, and after it the bytes the editor
- * left — read back into it (sys/filesystem.h fs_read_file), what it held before
- * released first. A fresh mkstemp file in $TMPDIR, else /tmp, unlinked on every
- * exit; the editor is the user's (editor_launch_with_env: DOTTA_EDITOR, VISUAL,
- * EDITOR, falling back to `vi`). On failure `file` holds what the failure left,
- * and the caller releases it.
- *
- * @param file The bytes, in and out (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t ignore_editor(buffer_t *file) {
-    CHECK_NULL(file);
-
-    const char *tmpdir = getenv("TMPDIR");
-    if (!tmpdir || !*tmpdir) {
-        tmpdir = "/tmp";
-    }
-
-    char *tmpfile = heap_str_format("%s/dotta-ignore-XXXXXX", tmpdir);
-
-    int fd = mkstemp(tmpfile);
-    if (fd < 0) {
-        free(tmpfile);
-        return error_create(ERR_FS, "Failed to create temporary file");
-    }
-
-    if (file->size > 0) {
-        ssize_t written = write(fd, file->data, file->size);
-        if (written < 0 || (size_t) written != file->size) {
-            close(fd);
-            unlink(tmpfile);
-            free(tmpfile);
-            return error_create(ERR_FS, "Failed to write to temporary file");
-        }
-    }
-    close(fd);
-
-    /* What the editor leaves is the file from here on: read back into the one
-     * buffer, the bytes it opened on released first. */
-    error_t err = editor_launch_with_env(tmpfile);
-    if (!err) {
-        buffer_deinit(file);
-        err = fs_read_file(tmpfile, file);
-    }
-    unlink(tmpfile);
-    free(tmpfile);
-
-    return err;
-}
-
-/**
  * The .dottaignore an edit changes: the baseline at its own ref, or a named
  * profile's on its branch.
  *
@@ -303,12 +249,13 @@ typedef struct {
  * Edit a .dottaignore via external editor.
  *
  * Called with dottaignore->refname already verified to exist (cmd_ignore hoists
- * that check). Loads existing content, delegates to the editor helper, commits
+ * that check). Loads existing content, hands it to the user's editor, commits
  * the result back to the same ref, and says whether a commit was made.
  *
  * The bytes, not the text (ignore_blob_read): a human reads the file here, so a
  * .dottaignore every other reader refuses — one holding a NUL — opens as it stands,
- * to be mended. The write refuses what those readers would.
+ * to be mended. The write refuses what those readers would, and an edit it refuses
+ * is kept, named in the refusal.
  */
 static error_t ignore_edit(
     git_repository *repo,
@@ -327,7 +274,10 @@ static error_t ignore_edit(
         buffer_append_string(&file, dottaignore->seed);
     }
 
-    err = ignore_editor(&file);
+    /* The user's editor, in a file of the edit's own that stands after it
+     * (sys/editor.h editor_edit) */
+    char *kept = NULL;
+    err = editor_edit("dotta-ignore", &file, &kept);
     if (err) {
         buffer_deinit(&file);
         return error_wrap(
@@ -350,11 +300,19 @@ static error_t ignore_edit(
     free(commit_msg);
     buffer_deinit(&file);
 
+    /* An edit the write refused is kept where the editor left it, and the refusal
+     * says where — a clause of the fact, which -q keeps; one the write took lets
+     * its file go. */
     if (err) {
-        return error_wrap(
-            err, "Failed to update %s .dottaignore", dottaignore->layer
+        err = error_wrap(
+            err, "Failed to update %s .dottaignore; the edit is kept in '%s'",
+            dottaignore->layer, kept
         );
+        free(kept);
+        return err;
     }
+    unlink(kept);
+    free(kept);
 
     if (!committed) {
         output_info(

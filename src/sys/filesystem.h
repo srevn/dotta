@@ -701,6 +701,20 @@ error_t fs_ensure_parent_dirs(const char *path);
 error_t fs_working_directory(arena_t *arena, const char **out);
 
 /**
+ * The directory a temporary file goes in: $TMPDIR where it names one, else /tmp
+ *
+ * One answer for every file the run makes to hand to another program, so no two
+ * of them drift: the editor's (sys/editor.h editor_edit) and a bootstrap script's
+ * run (sys/bootstrap.h bootstrap_extract_to_temp). An empty $TMPDIR names none,
+ * and /tmp is the directory POSIX promises. Nothing is asked of the directory
+ * here: a file that cannot be made in it is refused by the mkstemp that tried,
+ * naming it.
+ *
+ * @return The directory (never NULL)
+ */
+const char *fs_temp_directory(void);
+
+/**
  * A path as the kernel will open it: absolute, folded wherever the kernel reads
  * the fold the same, no link resolved
  *

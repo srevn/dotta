@@ -27,9 +27,9 @@
  * is borrowed from the tree (same lifetime). On failure, both outputs are left
  * untouched.
  *
- * Returns ERR_NOT_FOUND if the tree exists but has no .bootstrap entry, and wraps
- * the tree's load otherwise — whose own ERR_NOT_FOUND, for a branch that is not
- * there (sys/gitops.h gitops_load_branch_tree), stands beneath the wrap.
+ * Returns ERR_NOT_FOUND if the tree exists but has no .bootstrap entry, and the
+ * tree's load's own failure otherwise — its ERR_NOT_FOUND, for a branch that is
+ * not there (sys/gitops.h gitops_load_branch_tree), naming the reference.
  */
 static error_t load_bootstrap_entry(
     git_repository *repo,
@@ -39,11 +39,7 @@ static error_t load_bootstrap_entry(
 ) {
     git_tree *tree = NULL;
     error_t err = gitops_load_branch_tree(repo, profile, &tree);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load tree for profile '%s'", profile
-        );
-    }
+    if (err) return err;
 
     const git_tree_entry *entry =
         git_tree_entry_byname(tree, BOOTSTRAP_SCRIPT_NAME);

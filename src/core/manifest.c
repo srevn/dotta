@@ -1275,11 +1275,7 @@ error_t manifest_build(
          * reads its records as orphans — broken is an error that must propagate. */
         git_tree *tree = NULL;
         err = gitops_branch_tree(repo, profile, &tree);
-        if (err) {
-            return error_wrap(
-                err, "Failed to load tree for profile '%s'", profile
-            );
-        }
+        if (err) return err;
         if (!tree) {
             manifest_note_missing(manifest, arena_strdup(arena, profile), arena);
             continue;
@@ -1342,8 +1338,8 @@ error_t manifest_build_tree(
 /**
  * Build the manifest from a branch's tip
  *
- * The load is wrapped and the build is not: a build's own failures already name
- * the profile they were reading.
+ * Neither step is wrapped: the load's failures name the branch's reference, and
+ * the build's the profile it was reading.
  */
 error_t manifest_build_branch(
     git_repository *repo,
@@ -1362,9 +1358,7 @@ error_t manifest_build_branch(
 
     git_tree *tree = NULL;
     error_t err = gitops_load_branch_tree(repo, branch, &tree);
-    if (err) {
-        return error_wrap(err, "Failed to load tree for profile '%s'", branch);
-    }
+    if (err) return err;
 
     err = manifest_build_tree(repo, tree, branch, mounts, arena, out);
     git_tree_free(tree);

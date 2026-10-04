@@ -484,11 +484,7 @@ error_t profile_list_files(
 
     git_tree *tree = NULL;
     error_t err = gitops_load_branch_tree(repo, profile, &tree);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load tree for profile '%s'", profile
-        );
-    }
+    if (err) return err;
 
     err = profile_list_tree_files(tree, arena, out);
     git_tree_free(tree);
@@ -686,11 +682,7 @@ error_t profile_get_stats(
 
     git_tree *tree = NULL;
     error_t err = gitops_load_branch_tree(repo, profile, &tree);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load tree for profile '%s'", profile
-        );
-    }
+    if (err) return err;
 
     err = profile_get_tree_stats(repo, tree, profile, out);
     git_tree_free(tree);
@@ -978,9 +970,7 @@ static error_t claim_by_name(
 
     git_tree *tree = NULL;
     error_t err = gitops_load_branch_tree(repo, branch, &tree);
-    if (err) {
-        return error_wrap(err, "Failed to load tree for profile '%s'", branch);
-    }
+    if (err) return err;
 
     profile_held_t held;
     err = profile_holds(repo, tree, NULL, branch, storage_path, &held);

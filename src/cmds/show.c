@@ -230,13 +230,7 @@ static error_t show_source(
     *out_tree = NULL;
     *out_commit = NULL;
 
-    if (!commit_ref) {
-        error_t err = gitops_load_branch_tree(repo, profile, out_tree);
-        if (err) {
-            return error_wrap(err, "Failed to load tree for profile '%s'", profile);
-        }
-        return NULL;
-    }
+    if (!commit_ref) return gitops_load_branch_tree(repo, profile, out_tree);
 
     git_commit *commit = NULL;
     error_t err = revision_load(repo, profile, commit_ref, &commit);

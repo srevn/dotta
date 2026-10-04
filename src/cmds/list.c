@@ -353,11 +353,7 @@ static error_t list_files(
 
     git_commit *tip = NULL;
     err = gitops_load_branch_commit(repo, opts->profile, &tip);
-    if (err) {
-        return error_wrap(
-            err, "Failed to list files in profile '%s'", opts->profile
-        );
-    }
+    if (err) return err;
 
     git_oid tip_oid;
     git_oid_cpy(&tip_oid, git_commit_id(tip));
@@ -709,9 +705,7 @@ static error_t list_file_history(
      * other snapshot. The id is kept and the commit let go. */
     git_commit *tip = NULL;
     err = gitops_load_branch_commit(repo, profile, &tip);
-    if (err) {
-        return error_wrap(err, "Failed to load tree for profile '%s'", profile);
-    }
+    if (err) return err;
 
     git_oid tip_oid;
     git_oid_cpy(&tip_oid, git_commit_id(tip));

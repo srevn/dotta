@@ -1237,9 +1237,7 @@ error_t metadata_load_from_branch(
 
     git_tree *tree = NULL;
     error_t err = gitops_load_branch_tree(repo, branch_name, &tree);
-    if (err) {
-        return error_wrap(err, "Failed to load tree of branch '%s'", branch_name);
-    }
+    if (err) return err;
 
     err = metadata_load_from_tree(repo, tree, branch_name, out);
     git_tree_free(tree);

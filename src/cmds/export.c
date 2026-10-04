@@ -1394,12 +1394,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         snprintf(commit_suffix, sizeof(commit_suffix), " @ %s", oid_str);
     } else {
         err = gitops_load_branch_tree(repo, opts->profile, &tree);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to load tree for profile '%s'", opts->profile
-            );
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
     if (opts->file_path) {

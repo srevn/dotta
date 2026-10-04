@@ -337,12 +337,7 @@ static error_t show_file_diff_from_workspace(
     error_t err = content_cache_get_from_blob_oid(
         cache, &file->blob_oid, mode, file->storage_path, file->profile, &content
     );
-    if (err) {
-        return error_wrap(
-            err, "Failed to get content for '%s'",
-            item->filesystem_path
-        );
-    }
+    if (err) return err;
 
     /* Generate diff */
     compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM)
@@ -352,13 +347,7 @@ static error_t show_file_diff_from_workspace(
     err = compare_generate_diff(
         content, item->filesystem_path, file->storage_path, mode, cmp_dir, &diff
     );
-
-    if (err) {
-        return error_wrap(
-            err, "Failed to generate diff for '%s'",
-            item->filesystem_path
-        );
-    }
+    if (err) return err;
 
     /* The separator belongs to a text, not to a verdict: where the renderer's
      * own look found the copy matching after all — the one thing that can change
@@ -676,18 +665,14 @@ static error_t compare_tree_files_to_filesystem(
             error_t err = content_cache_get_from_blob_oid(
                 cache, &entry->blob_oid, mode, storage_path, profile, &hist_content
             );
-            if (err) {
-                return error_wrap(
-                    err, "Failed to get historical content for '%s'", filesystem_path
-                );
-            }
+            if (err) return err;
 
             /* Compare with filesystem */
             compare_result_t result;
             err = compare_buffer_to_disk(
                 hist_content, filesystem_path, mode, &st, &result
             );
-            if (err) return error_wrap(err, "Failed to compare '%s'", filesystem_path);
+            if (err) return err;
 
             if (result != CMP_EQUAL) {
                 output_print(out, OUTPUT_NORMAL, "%s\n", filesystem_path);
@@ -704,18 +689,13 @@ static error_t compare_tree_files_to_filesystem(
         error_t err = content_cache_get_from_blob_oid(
             cache, &entry->blob_oid, mode, storage_path, profile, &hist_content
         );
-        if (err) {
-            return error_wrap(
-                err, "Failed to get historical content for '%s'",
-                filesystem_path
-            );
-        }
+        if (err) return err;
 
         file_diff_t diff = { 0 };
         err = compare_generate_diff(
             hist_content, filesystem_path, storage_path, mode, CMP_DIR_DOWNSTREAM, &diff
         );
-        if (err) return error_wrap(err, "Failed to generate diff for '%s'", filesystem_path);
+        if (err) return err;
 
         /* The status message, in the commit's words rather than the renderer's
          * — and the verdict this form has no line for is a copy that is the

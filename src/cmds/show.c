@@ -124,9 +124,7 @@ static error_t print_blob_content(
     error_t err = content_get_from_blob_oid(
         repo, blob_oid, filemode, storage_path, profile, keymgr, &content
     );
-    if (err) {
-        return error_wrap(err, "Failed to get file content");
-    }
+    if (err) return err;
 
     bool is_link = (filemode == GIT_FILEMODE_LINK);
 

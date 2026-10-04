@@ -1108,11 +1108,7 @@ static error_t validate_content(
                     repo, &e->blob_oid, GIT_FILEMODE_LINK, e->storage_path,
                     profile, keymgr, &e->content
                 );
-                if (err) {
-                    return error_wrap(
-                        err, "Failed to read symlink '%s'", e->storage_path
-                    );
-                }
+                if (err) return err;
                 e->content_held = true;
 
                 /* Phase 2 and the listing read the target as a C string, and an
@@ -1181,11 +1177,7 @@ static error_t materialize_entries(
                  * Every directory beneath it is an entry created before this
                  * loop reached its contents (complete_directories). */
                 err = fs_create_dir_with_mode(e->dest_path, e->mode | S_IRWXU, is_root);
-                if (err) {
-                    return error_wrap(
-                        err, "Failed to create directory '%s'", e->dest_path
-                    );
-                }
+                if (err) return err;
                 if (!is_root) {
                     output_print(
                         out, OUTPUT_VERBOSE, "  created {cyan}%s/{reset} (mode %04o)\n",
@@ -1202,9 +1194,7 @@ static error_t materialize_entries(
                         repo, &e->blob_oid, GIT_FILEMODE_BLOB, e->storage_path,
                         profile, keymgr, &local
                     );
-                    if (err) {
-                        return error_wrap(err, "Failed to read '%s'", e->storage_path);
-                    }
+                    if (err) return err;
                     bytes = &local;
                 }
 
@@ -1213,11 +1203,7 @@ static error_t materialize_entries(
                     bytes->size, e->mode, (uid_t) -1, (gid_t) -1, NULL
                 );
                 buffer_deinit(&local);
-                if (err) {
-                    return error_wrap(
-                        err, "Failed to write '%s'", e->dest_path
-                    );
-                }
+                if (err) return err;
                 output_print(
                     out, OUTPUT_VERBOSE, "  wrote {cyan}%s{reset} (mode %04o%s)\n",
                     e->rel_path, (unsigned) e->mode, e->encrypted ? ", decrypted" : ""
@@ -1243,11 +1229,7 @@ static error_t materialize_entries(
                     (const char *) e->content.data, e->dest_path,
                     (uid_t) -1, (gid_t) -1      /* no claim: the export's own */
                 );
-                if (err) {
-                    return error_wrap(
-                        err, "Failed to create symlink '%s'", e->dest_path
-                    );
-                }
+                if (err) return err;
                 output_print(
                     out, OUTPUT_VERBOSE, "  linked {cyan}%s{reset} -> %s\n",
                     e->rel_path, (const char *) e->content.data
@@ -1264,11 +1246,7 @@ static error_t materialize_entries(
         if ((e->mode | S_IRWXU) == e->mode) continue;
 
         err = fs_set_permissions(e->dest_path, e->mode);
-        if (err) {
-            return error_wrap(
-                err, "Failed to set mode on '%s'", e->dest_path
-            );
-        }
+        if (err) return err;
     }
 
     return NULL;

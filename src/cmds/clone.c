@@ -315,12 +315,11 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     /* One fetch of everything the remote has, with progress: every branch lands
      * as a remote-tracking ref, and the profile arms below read them from there.
-     * No local branch is made here — that is each arm's, for the names it chose. */
+     * No local branch is made here — that is each arm's, for the names it chose.
+     * Its refusal names the act and the remote, under the section that printed
+     * the URL; the URL goes in no sentence, since one may carry a password. */
     err = gitops_fetch_remote(repo, "origin", xfer);
-    if (err) {
-        err = error_wrap(err, "Failed to clone repository");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Identity gate + epoch acquisition. refs/dotta/epoch is the one unconditional,
      * synced dotta artifact — the fetch above does not carry it, the default

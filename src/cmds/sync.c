@@ -408,12 +408,14 @@ static void handle_remote_ahead(
         result->profile, result->behind, result->behind == 1 ? "" : "s"
     );
 
+    /* A pull that fails is the profile's row, its cause as it stands: the
+     * fast-forward names its act and its branch (pull_branch_ff) */
     bool pulled = false;
     error_t err = pull_branch_ff(repo, remote_name, result->profile, &pulled);
     if (err) {
         output_print(
             out, OUTPUT_NORMAL,
-            "  {red}✗{reset} {red}%s{reset}: pull failed - %s\n",
+            "  {red}✗{reset} {red}%s{reset}: %s\n",
             result->profile, error_line(err)
         );
         mark_result_failed(result, err);
@@ -463,8 +465,6 @@ static error_t resolve_and_push_divergence(
     transfer_context_t *xfer,
     bool no_push
 ) {
-    const char *cap_name = (strategy == RESOLVE_STRATEGY_REBASE)
-        ? "Rebase" : "Merge";
     const char *past_desc = (strategy == RESOLVE_STRATEGY_REBASE)
         ? "rebased onto remote" : "merged with remote";
     const char *push_desc = (strategy == RESOLVE_STRATEGY_REBASE)
@@ -476,17 +476,15 @@ static error_t resolve_and_push_divergence(
         strategy_name
     );
 
-    /* Initialize divergence context (saves current state for rollback) */
+    /* Initialize divergence context (saves current state for rollback). A step
+     * that fails is a row of its own beneath the announce above, its cause as
+     * it stands: each names its act and its branch (sys/resolve.h, sys/gitops.h) */
     resolve_context_t resolve;
     error_t err = resolve_init(
         &resolve, repo, remote_name, result->profile, strategy
     );
     if (err) {
-        output_print(
-            out, OUTPUT_NORMAL,
-            "    {red}✗{reset} Failed to initialize divergence context: %s\n",
-            error_line(err)
-        );
+        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
         mark_result_failed(result, err);
         return NULL;
     }
@@ -494,11 +492,7 @@ static error_t resolve_and_push_divergence(
     /* Perform in-memory resolution (never modifies HEAD) */
     err = resolve_execute(&resolve, NULL);
     if (err) {
-        output_print(
-            out, OUTPUT_NORMAL,
-            "    {red}✗{reset} %s failed: %s\n",
-            cap_name, error_line(err)
-        );
+        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
         mark_result_failed(result, err);
         return NULL;
     }
@@ -507,11 +501,7 @@ static error_t resolve_and_push_divergence(
     size_t ahead = 0;
     err = resolve_verify(&resolve, &ahead, NULL);
     if (err) {
-        output_print(
-            out, OUTPUT_NORMAL,
-            "    {red}✗{reset} %s verification failed: %s\n",
-            cap_name, error_line(err)
-        );
+        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
         mark_result_failed(result, err);
 
         char reason[64];
@@ -533,11 +523,7 @@ static error_t resolve_and_push_divergence(
         /* Push resolved commits */
         err = gitops_push_branch(repo, remote_name, result->profile, xfer);
         if (err) {
-            output_print(
-                out, OUTPUT_NORMAL,
-                "    {red}✗{reset} Push after %s failed: %s\n",
-                strategy_name, error_line(err)
-            );
+            output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
             mark_result_failed(result, err);
 
             output_info(
@@ -617,11 +603,7 @@ static void handle_diverged_ours(
     /* Force push local to remote (local branch stays unchanged) */
     error_t err = gitops_force_push_branch(repo, remote_name, result->profile, xfer);
     if (err) {
-        output_print(
-            out, OUTPUT_NORMAL,
-            "    {red}✗{reset} Force push failed: %s\n",
-            error_line(err)
-        );
+        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
         mark_result_failed(result, err);
         return;
     }
@@ -679,11 +661,7 @@ static void handle_diverged_theirs(
         &resolve, repo, remote_name, result->profile, RESOLVE_STRATEGY_THEIRS
     );
     if (err) {
-        output_print(
-            out, OUTPUT_NORMAL,
-            "    {red}✗{reset} Failed to initialize divergence context: %s\n",
-            error_line(err)
-        );
+        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
         mark_result_failed(result, err);
         return;
     }
@@ -691,11 +669,7 @@ static void handle_diverged_theirs(
     /* Resolve divergence (resets local branch to remote) */
     err = resolve_execute(&resolve, NULL);
     if (err) {
-        output_print(
-            out, OUTPUT_NORMAL,
-            "    {red}✗{reset} Reset failed: %s\n",
-            error_line(err)
-        );
+        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
         mark_result_failed(result, err);
         return;
     }
@@ -707,11 +681,7 @@ static void handle_diverged_theirs(
      */
     err = resolve_verify(&resolve, NULL, NULL);
     if (err) {
-        output_print(
-            out, OUTPUT_NORMAL,
-            "    {red}✗{reset} Reset verification failed: %s\n",
-            error_line(err)
-        );
+        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
         output_print(
             out, OUTPUT_NORMAL,
             "    {yellow}⚠{reset} Local branch was reset but verification failed\n"
@@ -893,7 +863,7 @@ static error_t sync_push_phase(
                 if (err) {
                     output_print(
                         out, OUTPUT_NORMAL,
-                        "  {red}✗{reset} {red}%s{reset}: push failed - %s\n",
+                        "  {red}✗{reset} {red}%s{reset}: %s\n",
                         result->profile, error_line(err)
                     );
                     mark_result_failed(result, err);
@@ -930,7 +900,7 @@ static error_t sync_push_phase(
                 if (err) {
                     output_print(
                         out, OUTPUT_NORMAL,
-                        "  {red}✗{reset} {red}%s{reset}: failed to create remote branch - %s\n",
+                        "  {red}✗{reset} {red}%s{reset}: %s\n",
                         result->profile, error_line(err)
                     );
                     mark_result_failed(result, err);

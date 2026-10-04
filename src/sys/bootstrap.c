@@ -21,22 +21,24 @@
 #include "sys/gitops.h"
 
 /**
- * Load a profile's Git tree and look up its .bootstrap entry.
+ * Open a view on a profile's .bootstrap script: the one read of it
  *
- * On success: *out_tree is owned by the caller (git_tree_free) and *out_entry
- * is borrowed from the tree (same lifetime). On failure, both outputs are left
- * untouched.
+ * The profile's tree is loaded, its .bootstrap entry found, the blob's view opened
+ * and the tree let go: a view holds its blob, never the tree it was found in.
+ * The caller closes the view (sys/gitops.h gitops_blob_view_close); on failure
+ * it is the empty view, whose close does nothing.
  *
  * Returns ERR_NOT_FOUND if the tree exists but has no .bootstrap entry, and the
  * tree's load's own failure otherwise — its ERR_NOT_FOUND, for a branch that is
  * not there (sys/gitops.h gitops_load_branch_tree), naming the reference.
  */
-static error_t load_bootstrap_entry(
+static error_t bootstrap_open_script(
     git_repository *repo,
     const char *profile,
-    git_tree **out_tree,
-    const git_tree_entry **out_entry
+    gitops_blob_view_t *out
 ) {
+    *out = (gitops_blob_view_t){ 0 };
+
     git_tree *tree = NULL;
     error_t err = gitops_load_branch_tree(repo, profile, &tree);
     if (err) return err;
@@ -51,9 +53,9 @@ static error_t load_bootstrap_entry(
         );
     }
 
-    *out_tree = tree;
-    *out_entry = entry;
-    return NULL;
+    err = gitops_blob_view_open(repo, git_tree_entry_id(entry), out);
+    git_tree_free(tree);
+    return err;
 }
 
 /**
@@ -111,27 +113,14 @@ error_t bootstrap_read(
 
     *out_content = (buffer_t){ 0 };
 
-    git_tree *tree = NULL;
-    const git_tree_entry *entry = NULL;
-    void *raw = NULL;
-    error_t err = NULL;
+    /* The script's bytes, copied once out of its view */
+    gitops_blob_view_t script;
+    error_t err = bootstrap_open_script(repo, profile, &script);
+    if (err) return err;
 
-    err = load_bootstrap_entry(repo, profile, &tree, &entry);
-    if (err) goto cleanup;
-
-    /* Read blob content */
-    size_t size = 0;
-    err = gitops_read_blob_content(
-        repo, git_tree_entry_id(entry), &raw, &size
-    );
-    if (err) goto cleanup;
-
-    buffer_append(out_content, raw, size);
-
-cleanup:
-    free(raw);
-    if (tree) git_tree_free(tree);
-    return err;
+    buffer_append(out_content, script.data, script.size);
+    gitops_blob_view_close(&script);
+    return NULL;
 }
 
 error_t bootstrap_extract_to_temp(
@@ -143,25 +132,16 @@ error_t bootstrap_extract_to_temp(
     CHECK_NULL(profile);
     CHECK_NULL(out_temp_path);
 
-    git_tree *tree = NULL;
-    const git_tree_entry *entry = NULL;
-    void *raw = NULL;
+    gitops_blob_view_t script;
     char *path = NULL;
     int fd = -1;
-    error_t err = NULL;
 
-    err = load_bootstrap_entry(repo, profile, &tree, &entry);
-    if (err) goto cleanup;
-
-    size_t size = 0;
-    err = gitops_read_blob_content(
-        repo, git_tree_entry_id(entry), &raw, &size
-    );
+    error_t err = bootstrap_open_script(repo, profile, &script);
     if (err) goto cleanup;
 
     /* Validate BEFORE creating the temp file — a bad shebang never produces a
      * half-written artifact on disk. */
-    err = bootstrap_validate((const unsigned char *) raw, size);
+    err = bootstrap_validate((const unsigned char *) script.data, script.size);
     if (err) {
         err = error_wrap(
             err, "Invalid bootstrap script in profile '%s'", profile
@@ -177,7 +157,7 @@ error_t bootstrap_extract_to_temp(
         goto cleanup;
     }
 
-    err = write_all(fd, raw, size);
+    err = write_all(fd, script.data, script.size);
     if (err) goto cleanup;
 
     if (fchmod(fd, 0700) != 0) {
@@ -204,8 +184,7 @@ cleanup:
         unlink(path);
         free(path);
     }
-    free(raw);
-    if (tree) git_tree_free(tree);
+    gitops_blob_view_close(&script);
     return err;
 }
 

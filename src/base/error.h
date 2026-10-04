@@ -62,11 +62,22 @@
  * fact, after ';', and only where the fact does not imply it: the flag, key or
  * spelling the user could not guess, and what it does (base/gitignore.c
  * validate_pattern's escape), true for every caller of the site — a template
- * the user must fill in is none. A wrap says where its cause stands — a file, a
- * key, a profile or a role the cause cannot name — or it is not written. A re-mint
- * — a new error spelled from another's error_message — keeps one fact's words,
- * never its causes. A message opening on a word opens capitalised; none closes
- * with a period; a datum is quoted '%s'.
+ * the user must fill in is none. A re-mint — a new error spelled from another's
+ * error_message — keeps one fact's words, never its causes. A message opening
+ * on a word opens capitalised; none closes with a period; a datum is quoted '%s'.
+ *
+ * A failure names what its function was handed — a path, a reference, a name,
+ * in the spelling it was handed — so no caller says it again. A function handed
+ * the subject of an act words every failure of the act as the act, a lookup the
+ * act begins with among them; one handed only an id words its step, and libgit2's
+ * sentence names the id. A wrap says what the function it called was not handed
+ * — a file, a key, a flag, a profile, a role, or what a run that touched the
+ * filesystem left undone — or it is not written. The subject again, in another
+ * spelling dotta made of it (profile 'p' over refs/heads/p, ~/x over home/x),
+ * says no where; an argument as the user typed it does, where a command fails
+ * argument by argument (cmds/add.c cmd_add); and a stage — what the command was
+ * doing — is none. A lead, the words a warning or a row sets before a failure,
+ * is held to the wrap's rule.
  *
  * Codes
  * -----
@@ -177,14 +188,14 @@ error_code_t error_errno_code(int errno_val);
  * Create an error from a kernel refusal
  *
  * The one producer for every site that turns an errno into an error: the code
- * is error_errno_code's, the message the caller's prose, then ": " and
- * strerror's word — exactly what a site would spell by hand, so a reader can
- * act on the code (ERR_PERMISSION, ERR_NOT_FOUND) without matching prose. Read
- * errno into the argument before anything that could move it (a close, a free).
- * A site that codes its refusal by subsystem rather than by errno (a session
- * file's ERR_CRYPTO, the drop's ERR_PERMISSION, the store database's
- * ERR_STATE_INVALID, a source repository's ERR_GIT) keeps its own spelling; every
- * ERR_FS born from a refusal reads through here.
+ * is error_errno_code's, the message the caller's prose, then ": " and strerror's
+ * word — exactly what a site would spell by hand, so a reader can act on the
+ * code (ERR_PERMISSION, ERR_NOT_FOUND) without matching prose. Read errno into
+ * the argument before anything that could move it (a close, a free). A site that
+ * codes its refusal by subsystem rather than by errno (a session file's ERR_CRYPTO,
+ * the drop's ERR_PERMISSION, the store database's ERR_STATE_INVALID, a source
+ * repository's ERR_GIT) keeps its own spelling; every ERR_FS born from a refusal
+ * reads through here.
  *
  * @param errno_val errno value
  * @param fmt Format string (printf-style) for the caller's part of the message

@@ -153,11 +153,10 @@ static error_t bootstrap_edit(
         );
     }
 
-    /* Extract script to temporary file for editing */
+    /* Extract script to temporary file for editing: its refusals name the profile's
+     * script, or the temporary file's place */
     err = bootstrap_extract_to_temp(repo, profile, &temp_path);
-    if (err) {
-        return error_wrap(err, "Failed to extract bootstrap script");
-    }
+    if (err) return err;
 
     /* The user's editor: DOTTA_EDITOR, VISUAL, EDITOR, then vi (sys/editor.h) */
     err = editor_launch_with_env(temp_path);
@@ -170,19 +169,13 @@ static error_t bootstrap_edit(
         goto cleanup;
     }
 
-    /* Validate edited content before committing */
-    if (content_buf.size == 0) {
-        err = error_create(ERR_INVALID_ARG, "Bootstrap script cannot be empty");
-        goto cleanup;
-    }
-
+    /* Validate edited content before committing. The validation refuses an empty
+     * edit too, and its words need no wrap: the edit is the one the user just
+     * closed */
     err = bootstrap_validate(
         (const unsigned char *) content_buf.data, content_buf.size
     );
-    if (err) {
-        err = error_wrap(err, "Edited bootstrap script has invalid content");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Auto-commit the changes */
     commit_msg = heap_str_format(
@@ -248,19 +241,12 @@ static error_t bootstrap_show(
     CHECK_NULL(repo);
     CHECK_NULL(profile);
 
-    if (!bootstrap_exists(repo, profile)) {
-        return error_create(
-            ERR_NOT_FOUND, "No bootstrap script found for profile '%s'",
-            profile
-        );
-    }
-
-    /* Read content from Git blob */
+    /* Read content from Git blob: the read refuses a profile with no script,
+     * and a branch it cannot read is that failure, never no script
+     * (bootstrap_exists folds the two, sys/bootstrap.h) */
     buffer_t content = BUFFER_INIT;
     error_t err = bootstrap_read(repo, profile, &content);
-    if (err) {
-        return error_wrap(err, "Failed to read bootstrap script");
-    }
+    if (err) return err;
 
     /* Display content: a payload, the script's bytes as they are */
     if (content.size > 0) {

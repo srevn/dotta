@@ -53,9 +53,17 @@ static error_t bootstrap_open_script(
         );
     }
 
+    /* The blob's read names an id alone (sys/gitops.h gitops_blob_view_open):
+     * the script and its profile are what it was not handed */
     err = gitops_blob_view_open(repo, git_tree_entry_id(entry), out);
     git_tree_free(tree);
-    return err;
+    if (err) {
+        return error_wrap(
+            err, "Cannot read the bootstrap script in profile '%s'", profile
+        );
+    }
+
+    return NULL;
 }
 
 /**
@@ -64,23 +72,26 @@ static error_t bootstrap_open_script(
  * Honors TMPDIR when set and non-empty; falls back to "/tmp" which POSIX guarantees
  * exists.
  */
-static const char *tmp_dir(void) {
+static const char *bootstrap_tmp_dir(void) {
     const char *d = getenv("TMPDIR");
     return (d && *d) ? d : "/tmp";
 }
 
 /**
- * Write exactly `size` bytes from `data` to `fd`, retrying on EINTR and handling
- * short writes. Returns NULL on success.
+ * Write exactly `size` bytes from `data` to `fd`, the file at `path`, retrying
+ * on EINTR and handling short writes. Returns NULL on success, or the write's
+ * refusal naming the path.
  */
-static error_t write_all(int fd, const void *data, size_t size) {
+static error_t bootstrap_write_all(
+    int fd, const char *path, const void *data, size_t size
+) {
     const unsigned char *p = data;
     size_t written = 0;
     while (written < size) {
         ssize_t n = write(fd, p + written, size - written);
         if (n < 0) {
             if (errno == EINTR) continue;
-            return error_errno(errno, "Write to temp file failed");
+            return error_errno(errno, "Cannot write '%s'", path);
         }
         written += (size_t) n;
     }
@@ -149,27 +160,31 @@ error_t bootstrap_extract_to_temp(
         goto cleanup;
     }
 
-    path = heap_str_format("%s/dotta-bootstrap-XXXXXX", tmp_dir());
+    const char *dir = bootstrap_tmp_dir();
+    path = heap_str_format("%s/dotta-bootstrap-XXXXXX", dir);
 
+    /* A template mkstemp could not make is no file of this run's, whatever name
+     * it tried last — another process's, perhaps — so it is let go unlinked:
+     * the cleanup unlinks only the file this run made */
     fd = mkstemp(path);
     if (fd < 0) {
-        err = error_errno(errno, "Failed to create temp file");
+        err = error_errno(errno, "Cannot create a temporary file in '%s'", dir);
+        free(path);
+        path = NULL;
         goto cleanup;
     }
 
-    err = write_all(fd, script.data, script.size);
+    err = bootstrap_write_all(fd, path, script.data, script.size);
     if (err) goto cleanup;
 
     if (fchmod(fd, 0700) != 0) {
-        err = error_errno(
-            errno, "Failed to set executable permissions on temp file"
-        );
+        err = error_errno(errno, "Cannot make '%s' executable", path);
         goto cleanup;
     }
 
     if (close(fd) != 0) {
         fd = -1;
-        err = error_errno(errno, "Failed to close temp file");
+        err = error_errno(errno, "Cannot close '%s'", path);
         goto cleanup;
     }
     fd = -1;

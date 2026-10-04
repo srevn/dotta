@@ -82,7 +82,8 @@ error_t bootstrap_read(
  * @param profile       Profile branch name (must not be NULL)
  * @param out_temp_path Receives a heap-allocated path (must not be NULL)
  * @return NULL on success; ERR_NOT_FOUND if the profile has no script, or no
- *         branch; wrapped error on validation, Git, or filesystem failure
+ *         branch; otherwise a refusal naming the profile's script — its read,
+ *         its validation — or the temporary file's place
  */
 error_t bootstrap_extract_to_temp(
     git_repository *repo,

@@ -116,10 +116,7 @@ static error_t run_live(
     process_result_t result = { 0 };
 
     error_t err = bootstrap_extract_to_temp(repo, profile, &temp_path);
-    if (err) {
-        err = error_wrap(err, "Failed to extract bootstrap script");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* The script's environment, in a frame of the spawn's own: read by the child
      * at its exec, and dropped with the frame once the script has run */

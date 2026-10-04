@@ -207,8 +207,13 @@ static error_t hook_execute(
         .pgrp_policy       = PROCESS_PGRP_NEW,
     };
 
+    /* The primitive's own refusals — a pipe, a fork, a wait — name no program:
+     * the hook is what they were not handed */
     err = process_run(&spec, out_result);
-    if (err) goto cleanup;
+    if (err) {
+        err = error_wrap(err, "Cannot run hook '%s'", hook_type_name(type));
+        goto cleanup;
+    }
 
     /* Map result fields to a domain-specific error. exec_failed is checked first
      * because it carries the most specific reason (errno from execve / chdir /
@@ -334,16 +339,13 @@ error_t hook_fire_pre(
     CHECK_NULL(config);
     CHECK_NULL(inv);
 
+    /* The refusal names its hook, pre-<command> (hook_execute), so the command
+     * says nothing over it */
     process_result_t result = { 0 };
     error_t err = hook_fire(config, inv, pre_type_for(inv->cmd), &result);
-
-    if (err) {
-        hook_print_output(out, OUTPUT_QUIET, &result);
-        process_result_deinit(&result);
-        return error_wrap(err, "Pre-%s hook failed", cmd_name(inv->cmd));
-    }
+    if (err) hook_print_output(out, OUTPUT_QUIET, &result);
     process_result_deinit(&result);
-    return NULL;
+    return err;
 }
 
 void hook_fire_post(
@@ -356,14 +358,12 @@ void hook_fire_post(
 
     if (inv->dry_run) return;
 
+    /* A failure the run goes past, warned in its own words: they name the hook,
+     * post-<command> (hook_execute) */
     process_result_t result = { 0 };
     error_t err = hook_fire(config, inv, post_type_for(inv->cmd), &result);
-
     if (err) {
-        output_warning(
-            out, OUTPUT_NORMAL, "Post-%s hook failed: %s",
-            cmd_name(inv->cmd), error_line(err)
-        );
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
         hook_print_output(out, OUTPUT_NORMAL, &result);
     }
     process_result_deinit(&result);

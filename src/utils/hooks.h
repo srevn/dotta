@@ -63,10 +63,11 @@ typedef struct {
  *
  * Builds a hook environment from inv and runs the pre_<cmd> hook script (if
  * configured and present). On failure, prints captured hook output (if any) at
- * OUTPUT_NORMAL and returns a wrapped error "Pre-<cmd> hook failed". Callers
- * should goto-cleanup on non-NULL return. The capture keeps the hook's first
- * PROCESS_CAPTURE_MAX bytes and counts the rest ("... and N more bytes"); a hook
- * is never stopped for what it writes (sys/process.h).
+ * OUTPUT_QUIET, the refusal's reason at every level, and returns the refusal,
+ * which names its hook (Hook 'pre-<cmd>' …). Callers should goto-cleanup on
+ * non-NULL return. The capture keeps the hook's first PROCESS_CAPTURE_MAX bytes
+ * and counts the rest ("... and N more bytes"); a hook is never stopped for what
+ * it writes (sys/process.h).
  *
  * A hook that did not run, or ran and failed, is ERR_INTERNAL — a mode that will
  * not exec, an exec that failed, a timeout, a signal, a non-zero exit; beside

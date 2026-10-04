@@ -896,8 +896,8 @@ error_t gitops_resolve_branch_oid(
 /**
  * Resolve a remote-tracking branch's current OID
  *
- * Convenience for `refs/remotes/<remote_name>/<branch_name>` resolution. Builds
- * the full refname and dispatches to gitops_resolve_reference_oid.
+ * gitops_resolve_reference_oid of the branch's remote-tracking reference
+ * (gitops_remote_branch_refname).
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL)
@@ -923,7 +923,8 @@ error_t gitops_resolve_remote_branch_oid(
  * here is longer than any libgit2 reads.
  *
  * A branch name goes through gitops_branch_refname, which carries Git's branch
- * rule; this is for the other shapes.
+ * rule, and a branch's remote-tracking name through gitops_remote_branch_refname;
+ * this is for the other shapes.
  *
  * @param buffer Output buffer for the reference name (must not be NULL)
  * @param buffer_size Size of output buffer: DOTTA_REFNAME_MAX, DOTTA_REFSPEC_MAX
@@ -962,6 +963,29 @@ error_t gitops_build_refname(
  */
 error_t gitops_branch_refname(
     char *buffer, size_t buffer_size, const char *name
+);
+
+/**
+ * A branch's remote-tracking reference, or the reference rule's refusal
+ *
+ * The one place a remote and a branch become `refs/remotes/<remote>/<branch>`,
+ * sized and checked by gitops_build_refname, whose refusals name the whole
+ * reference. The branch half is the caller's: a profile's name, held to the branch
+ * rule where its own ref is built (gitops_branch_refname). A refspec joining
+ * this name and the branch's fits DOTTA_REFSPEC_MAX by that constant's definition.
+ *
+ * Readers: cmds/sync.c pull_branch_ff and sync_fetch_phase, cmds/status.c
+ * status_print_remote, sys/upstream.c upstream_analyze_profile, and this file's
+ * gitops_resolve_remote_branch_oid, gitops_fetch_branch and gitops_fetch_branches.
+ *
+ * @param buffer Output buffer for the reference name (must not be NULL)
+ * @param buffer_size Size of output buffer: DOTTA_REFNAME_MAX
+ * @param remote Remote name (must not be NULL)
+ * @param branch Branch name (must not be NULL)
+ * @return NULL, or the builder's refusal naming the reference
+ */
+error_t gitops_remote_branch_refname(
+    char *buffer, size_t buffer_size, const char *remote, const char *branch
 );
 
 /**

@@ -39,16 +39,10 @@ error_t upstream_analyze_profile(
     );
     if (err) return err;
 
-    err = gitops_build_refname(
-        remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
-        remote_name, profile_name
+    err = gitops_remote_branch_refname(
+        remote_refname, sizeof(remote_refname), remote_name, profile_name
     );
-    if (err) {
-        return error_wrap(
-            err, "Invalid remote/profile name '%s/%s'",
-            remote_name, profile_name
-        );
-    }
+    if (err) return err;
 
     /* Each side's tip, or its absence proven (sys/gitops.h gitops_reference_oid):
      * a packed-refs that will not parse is the analysis's failure, never a branch

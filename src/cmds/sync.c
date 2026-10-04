@@ -106,16 +106,10 @@ static error_t pull_branch_ff(
     );
     if (err) return err;
 
-    err = gitops_build_refname(
-        remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
-        remote_name, branch_name
+    err = gitops_remote_branch_refname(
+        remote_refname, sizeof(remote_refname), remote_name, branch_name
     );
-    if (err) {
-        return error_wrap(
-            err, "Invalid remote/branch name '%s/%s'", remote_name,
-            branch_name
-        );
-    }
+    if (err) return err;
 
     /* The branch that moves, read through a symbolic one to the ref it names:
      * its target is what the fast-forward compares and sets. Its absence is no
@@ -238,9 +232,8 @@ static error_t sync_fetch_phase(
     error_t err = NULL;
     for (size_t i = 0; i < profiles->count; i++) {
         char remote_refname[DOTTA_REFNAME_MAX];
-        err = gitops_build_refname(
-            remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
-            remote_name, profiles->entries[i]
+        err = gitops_remote_branch_refname(
+            remote_refname, sizeof(remote_refname), remote_name, profiles->entries[i]
         );
         if (err) break;
 

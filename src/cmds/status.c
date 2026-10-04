@@ -1357,9 +1357,8 @@ static void status_print_remote(
             /* Remote commit info — guaranteed reachable per the enclosing filter
              * above. */
             char remote_ref[DOTTA_REFNAME_MAX];
-            err = gitops_build_refname(
-                remote_ref, sizeof(remote_ref), "refs/remotes/%s/%s",
-                remote_name, profile
+            err = gitops_remote_branch_refname(
+                remote_ref, sizeof(remote_ref), remote_name, profile
             );
             git_commit *remote_commit = NULL;
             if (!err) err = gitops_load_reference_commit(repo, remote_ref, &remote_commit);

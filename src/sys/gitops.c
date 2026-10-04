@@ -841,9 +841,21 @@ error_t gitops_fetch_branch(
     CHECK_NULL(branch_name);
     CHECK_NULL(xfer);
 
-    /* The refspec's source is the branch's ref, spelled where every one is. */
+    /* The refspec's halves, the branch's ref and the remote-tracking ref it lands
+     * at, each spelled where every one is; two built names fit the refspec's
+     * buffer by its definition (DOTTA_REFSPEC_MAX) */
     char refname[DOTTA_REFNAME_MAX];
     error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
+    if (err) return err;
+
+    char tracking[DOTTA_REFNAME_MAX];
+    err = gitops_remote_branch_refname(
+        tracking, sizeof(tracking), remote_name, branch_name
+    );
+    if (err) return err;
+
+    char refspec[DOTTA_REFSPEC_MAX];
+    err = gitops_build_refname(refspec, sizeof(refspec), "%s:%s", refname, tracking);
     if (err) return err;
 
     git_remote *remote = NULL;
@@ -857,19 +869,6 @@ error_t gitops_fetch_branch(
     transfer_configure_callbacks(
         &fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
     );
-
-    char refspec[DOTTA_REFSPEC_MAX];
-    err = gitops_build_refname(
-        refspec, sizeof(refspec), "%s:refs/remotes/%s/%s",
-        refname, remote_name, branch_name
-    );
-    if (err) {
-        git_remote_free(remote);
-        return error_wrap(
-            err, "Invalid branch/remote name '%s/%s'",
-            remote_name, branch_name
-        );
-    }
 
     char *refspecs[] = { refspec };
     git_strarray refs = { refspecs, 1 };
@@ -910,24 +909,21 @@ error_t gitops_fetch_branches(
 
     error_t err = NULL;
     for (size_t i = 0; i < branches->count; i++) {
-        /* Each refspec's source is its branch's ref, spelled where every one is. */
+        /* Each refspec's halves, as one branch's are (gitops_fetch_branch):
+         * refs/heads/<branch>:refs/remotes/<remote>/<branch> */
         char refname[DOTTA_REFNAME_MAX];
         err = gitops_branch_refname(refname, sizeof(refname), branches->entries[i]);
         if (err) goto cleanup;
 
-        /* Build refspec: refs/heads/branch:refs/remotes/origin/branch */
-        char refspec[DOTTA_REFSPEC_MAX];
-        err = gitops_build_refname(
-            refspec, sizeof(refspec), "%s:refs/remotes/%s/%s",
-            refname, remote_name, branches->entries[i]
+        char tracking[DOTTA_REFNAME_MAX];
+        err = gitops_remote_branch_refname(
+            tracking, sizeof(tracking), remote_name, branches->entries[i]
         );
-        if (err) {
-            err = error_wrap(
-                err, "Invalid branch/remote name '%s/%s'",
-                remote_name, branches->entries[i]
-            );
-            goto cleanup;
-        }
+        if (err) goto cleanup;
+
+        char refspec[DOTTA_REFSPEC_MAX];
+        err = gitops_build_refname(refspec, sizeof(refspec), "%s:%s", refname, tracking);
+        if (err) goto cleanup;
         string_array_push(&refspecs, refspec);
     }
 
@@ -960,9 +956,14 @@ error_t gitops_push_branch(
     CHECK_NULL(branch_name);
     CHECK_NULL(xfer);
 
-    /* The refspec's halves are the branch's ref, spelled where every one is. */
+    /* The refspec's halves are the branch's ref, spelled where every one is; a
+     * built name twice fits the refspec's buffer by its definition */
     char refname[DOTTA_REFNAME_MAX];
     error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
+    if (err) return err;
+
+    char refspec[DOTTA_REFSPEC_MAX];
+    err = gitops_build_refname(refspec, sizeof(refspec), "%s:%s", refname, refname);
     if (err) return err;
 
     git_remote *remote = NULL;
@@ -974,17 +975,6 @@ error_t gitops_push_branch(
     transfer_configure_callbacks(
         &push_opts.callbacks, xfer, GIT_DIRECTION_PUSH
     );
-
-    char refspec[DOTTA_REFSPEC_MAX];
-    err = gitops_build_refname(
-        refspec, sizeof(refspec), "%s:%s", refname, refname
-    );
-    if (err) {
-        git_remote_free(remote);
-        return error_wrap(
-            err, "Invalid branch name '%s'", branch_name
-        );
-    }
 
     char *refspecs[] = { refspec };
     git_strarray refs = { refspecs, 1 };
@@ -1010,9 +1000,15 @@ error_t gitops_force_push_branch(
     CHECK_NULL(branch_name);
     CHECK_NULL(xfer);
 
-    /* The refspec's halves are the branch's ref, spelled where every one is. */
+    /* The refspec's halves are the branch's ref, spelled where every one is,
+     * and the '+' before them accepts a non-fast-forward update; the '+' and a
+     * built name twice fit the refspec's buffer by its definition */
     char refname[DOTTA_REFNAME_MAX];
     error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
+    if (err) return err;
+
+    char refspec[DOTTA_REFSPEC_MAX];
+    err = gitops_build_refname(refspec, sizeof(refspec), "+%s:%s", refname, refname);
     if (err) return err;
 
     git_remote *remote = NULL;
@@ -1026,18 +1022,6 @@ error_t gitops_force_push_branch(
     transfer_configure_callbacks(
         &push_opts.callbacks, xfer, GIT_DIRECTION_PUSH
     );
-
-    /* Force push refspec ('+' prefix accepts non-fast-forward update) */
-    char refspec[DOTTA_REFSPEC_MAX];
-    err = gitops_build_refname(
-        refspec, sizeof(refspec), "+%s:%s", refname, refname
-    );
-    if (err) {
-        git_remote_free(remote);
-        return error_wrap(
-            err, "Invalid branch name '%s'", branch_name
-        );
-    }
 
     char *refspecs[] = { refspec };
     git_strarray refs = { refspecs, 1 };
@@ -1063,9 +1047,15 @@ error_t gitops_delete_remote_branch(
     CHECK_NULL(branch_name);
     CHECK_NULL(xfer);
 
-    /* The refspec's halves are the branch's ref, spelled where every one is. */
+    /* The refspec's destination is the branch's ref, spelled where every one
+     * is, and its empty source deletes it there: ":refs/heads/<branch>", which
+     * fits the refspec's buffer by its definition */
     char refname[DOTTA_REFNAME_MAX];
     error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
+    if (err) return err;
+
+    char refspec[DOTTA_REFSPEC_MAX];
+    err = gitops_build_refname(refspec, sizeof(refspec), ":%s", refname);
     if (err) return err;
 
     git_remote *remote = NULL;
@@ -1079,18 +1069,6 @@ error_t gitops_delete_remote_branch(
     transfer_configure_callbacks(
         &push_opts.callbacks, xfer, GIT_DIRECTION_PUSH
     );
-
-    /* Delete remote branch using empty refspec: :refs/heads/branch */
-    char refspec[DOTTA_REFSPEC_MAX];
-    err = gitops_build_refname(
-        refspec, sizeof(refspec), ":%s", refname
-    );
-    if (err) {
-        git_remote_free(remote);
-        return error_wrap(
-            err, "Invalid branch name '%s'", branch_name
-        );
-    }
 
     char *refspecs[] = { refspec };
     git_strarray refs = { refspecs, 1 };
@@ -1363,16 +1341,10 @@ error_t gitops_resolve_remote_branch_oid(
     CHECK_NULL(out);
 
     char refname[DOTTA_REFNAME_MAX];
-    error_t err = gitops_build_refname(
-        refname, sizeof(refname), "refs/remotes/%s/%s",
-        remote_name, branch_name
+    error_t err = gitops_remote_branch_refname(
+        refname, sizeof(refname), remote_name, branch_name
     );
-    if (err) {
-        return error_wrap(
-            err, "Invalid remote/branch name '%s/%s'",
-            remote_name, branch_name
-        );
-    }
+    if (err) return err;
 
     return gitops_resolve_reference_oid(repo, refname, out);
 }
@@ -1804,6 +1776,19 @@ error_t gitops_branch_refname(
     }
 
     return gitops_build_refname(buffer, buffer_size, "refs/heads/%s", name);
+}
+
+/**
+ * A branch's remote-tracking reference, or the reference rule's refusal
+ */
+error_t gitops_remote_branch_refname(
+    char *buffer, size_t buffer_size, const char *remote, const char *branch
+) {
+    CHECK_NULL(buffer);
+    CHECK_NULL(remote);
+    CHECK_NULL(branch);
+
+    return gitops_build_refname(buffer, buffer_size, "refs/remotes/%s/%s", remote, branch);
 }
 
 /**

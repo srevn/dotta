@@ -11,6 +11,19 @@
  * - The record read in one pass per run (state_records)
  * - The record stored sorted by its key: a read in key order walks the table
  *   (core/state.h)
+ *
+ * Every refusal the store's connection meets is made where it is met, in the
+ * shape error_errno gives a kernel refusal (base/error.h): the prose of what
+ * could not be done, then ": " and SQLite's own words, read off the connection
+ * (sqlite3_errmsg) as an argument of the error made once the call has failed,
+ * with no call that succeeds between them — SQLite leaves its words undefined
+ * after one, a bind's among them, where the failed statement's own finalize says
+ * its failure again (lib/sqlite3/sqlite3.c sqlite3VdbeReset) — and answers "out
+ * of memory" for a connection never made. An exec is read the same way and handed
+ * no out-parameter: the message it would copy out is the connection's
+ * (lib/sqlite3/sqlite3.c sqlite3_exec). Coded by the store's subsystem
+ * (ERR_STATE_INVALID), save a lock another process holds (ERR_CONFLICT,
+ * state_begin); SQLite's number says nothing its words do not.
  */
 
 #include "core/state.h"
@@ -19,7 +32,6 @@
 #include <git2.h>
 #include <limits.h>
 #include <sqlite3.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -152,37 +164,6 @@ static error_t get_db_path(git_repository *repo, char **out) {
 }
 
 /**
- * A refusal the store's connection met, in the caller's words
- *
- * The caller's prose, then ": " and SQLite's own message and code — the shape
- * error_errno gives a kernel refusal (base/error.h), coded by the store's subsystem
- * (ERR_STATE_INVALID). SQLite's words are read first and at once after the call
- * that failed: it leaves them undefined after any call that succeeds, a bind's
- * among them. A connection that could not be made (NULL) is SQLite's "out of
- * memory", its own answer for one.
- *
- * @param db Database connection (may be NULL)
- * @param fmt The caller's part of the message (printf-style), a path among its
- *            arguments where the refusal is a path's
- * @return Error object
- */
-static error_t state_error(sqlite3 *db, const char *fmt, ...)
-__attribute__((format(printf, 2, 3)));
-
-static error_t state_error(sqlite3 *db, const char *fmt, ...) {
-    const char *message = sqlite3_errmsg(db);
-    int code = sqlite3_errcode(db);
-
-    char words[PATH_MAX + 128];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(words, sizeof(words), fmt, args);
-    va_end(args);
-
-    return error_create(ERR_STATE_INVALID, "%s: %s (SQLite error %d)", words, message, code);
-}
-
-/**
  * A record's node as the text the kind column holds
  *
  * The one boundary where a kind becomes a column, as state_kind_from_text is
@@ -295,9 +276,6 @@ static fs_occupant_t state_kind_from_text(const char *text) {
  */
 static error_t state_initialize(sqlite3 *db) {
     CHECK_NULL(db);
-
-    char *errmsg = NULL;
-    int rc;
 
     const char *schema_sql =
         "BEGIN;"
@@ -413,14 +391,10 @@ static error_t state_initialize(sqlite3 *db) {
         "COMMIT;";
 
     /* Execute schema SQL */
-    rc = sqlite3_exec(db, schema_sql, NULL, NULL, &errmsg);
-    if (rc != SQLITE_OK) {
-        error_t err = error_create(
-            ERR_STATE_INVALID, "Failed to initialize schema: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc)
+    if (sqlite3_exec(db, schema_sql, NULL, NULL, NULL) != SQLITE_OK) {
+        return error_create(
+            ERR_STATE_INVALID, "Failed to initialize schema: %s", sqlite3_errmsg(db)
         );
-        sqlite3_free(errmsg);
-        return err;
     }
 
     return NULL;
@@ -460,7 +434,9 @@ static error_t state_verify(sqlite3 *db) {
      * header. */
     error_t err = NULL;
     if (rc != SQLITE_ROW) {
-        err = state_error(db, "Failed to read the database's header");
+        err = error_create(
+            ERR_STATE_INVALID, "Failed to read the database's header: %s", sqlite3_errmsg(db)
+        );
     } else if (!sqlite3_column_int(stmt, 0)) {
         err = error_create(ERR_STATE_INVALID, "The database is not marked as dotta's");
     } else if (!sqlite3_column_int(stmt, 1)) {
@@ -501,18 +477,11 @@ static error_t state_verify(sqlite3 *db) {
 static error_t state_configure(sqlite3 *db) {
     CHECK_NULL(db);
 
-    char *errmsg = NULL;
-    int rc;
-
     /* 1. Fast synchronization (safe on crash, fast on commit) */
-    rc = sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", NULL, NULL, &errmsg);
-    if (rc != SQLITE_OK) {
-        error_t err = error_create(
-            ERR_STATE_INVALID, "Failed to set synchronous mode: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc)
+    if (sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", NULL, NULL, NULL) != SQLITE_OK) {
+        return error_create(
+            ERR_STATE_INVALID, "Failed to set synchronous mode: %s", sqlite3_errmsg(db)
         );
-        sqlite3_free(errmsg);
-        return err;
     }
 
     /* 2. A larger page cache: 10000 pages, where the default is 2000 KiB (about
@@ -522,14 +491,8 @@ static error_t state_configure(sqlite3 *db) {
      * and spills fewer pages. Measured at 0.151.26: 12,000 keyed writes in one
      * transaction over 60,000 records took 102 ms under the default and 68 ms
      * under this. */
-    rc = sqlite3_exec(db, "PRAGMA cache_size=10000;", NULL, NULL, &errmsg);
-    if (rc != SQLITE_OK) {
-        error_t err = error_create(
-            ERR_STATE_INVALID, "Failed to set cache size: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc)
-        );
-        sqlite3_free(errmsg);
-        return err;
+    if (sqlite3_exec(db, "PRAGMA cache_size=10000;", NULL, NULL, NULL) != SQLITE_OK) {
+        return error_create(ERR_STATE_INVALID, "Failed to set cache size: %s", sqlite3_errmsg(db));
     }
 
     /* 3. Disable persistent WAL */
@@ -631,7 +594,10 @@ static error_t state_prepare(state_t *state) {
             &state->statements[statement], NULL
         );
         if (rc != SQLITE_OK) {
-            return state_error(state->db, "Failed to prepare the store's statements");
+            return error_create(
+                ERR_STATE_INVALID, "Failed to prepare the store's statements: %s",
+                sqlite3_errmsg(state->db)
+            );
         }
     }
 
@@ -725,7 +691,9 @@ static error_t state_read_profiles(state_t *state) {
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        return state_error(state->db, "Failed to prepare profile query");
+        return error_create(
+            ERR_STATE_INVALID, "Failed to prepare profile query: %s", sqlite3_errmsg(state->db)
+        );
     }
 
     rc = sqlite3_step(stmt);
@@ -765,7 +733,9 @@ static error_t state_read_profiles(state_t *state) {
     sqlite3_finalize(stmt);
 
     if (!err && rc != SQLITE_DONE) {
-        err = state_error(state->db, "Failed to query profiles");
+        err = error_create(
+            ERR_STATE_INVALID, "Failed to query profiles: %s", sqlite3_errmsg(state->db)
+        );
     }
 
     if (err) {
@@ -867,7 +837,9 @@ error_t state_enable_profile(
     if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 2, target, -1, SQLITE_TRANSIENT);
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-        return state_error(state->db, "Failed to enable profile");
+        return error_create(
+            ERR_STATE_INVALID, "Failed to enable profile: %s", sqlite3_errmsg(state->db)
+        );
     }
 
     return state_read_profiles(state);
@@ -891,7 +863,9 @@ error_t state_disable_profile(
     int rc = sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-        return state_error(state->db, "Failed to disable profile");
+        return error_create(
+            ERR_STATE_INVALID, "Failed to disable profile: %s", sqlite3_errmsg(state->db)
+        );
     }
 
     /* Not an error if profile wasn't enabled (DELETE with 0 rows affected is OK) */
@@ -965,15 +939,10 @@ error_t state_reorder_profiles(
 
     /* Delete all existing rows under the caller's transaction. On failure, SQL
      * is unchanged and the cache still matches — safe to return. */
-    char *errmsg = NULL;
-    int rc = sqlite3_exec(state->db, "DELETE FROM enabled_profiles;", NULL, NULL, &errmsg);
-    if (rc != SQLITE_OK) {
-        error_t err = error_create(
-            ERR_STATE_INVALID, "Failed to clear profiles: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc)
+    if (sqlite3_exec(state->db, "DELETE FROM enabled_profiles;", NULL, NULL, NULL) != SQLITE_OK) {
+        return error_create(
+            ERR_STATE_INVALID, "Failed to clear profiles: %s", sqlite3_errmsg(state->db)
         );
-        sqlite3_free(errmsg);
-        return err;
     }
 
     /* Insert rows. SQLITE_TRANSIENT on every binding means SQLite copies the
@@ -995,14 +964,16 @@ error_t state_reorder_profiles(
          * immediately; source lifetimes are ours. A bind SQLite refuses ends
          * the reorder before its step, which would re-insert the row with that
          * parameter NULL: a target lost. */
-        rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64) i);
+        int rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64) i);
         if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 2, name, -1, SQLITE_TRANSIENT);
         if (rc == SQLITE_OK) {
             rc = sqlite3_bind_text(stmt, 3, preserved->target, -1, SQLITE_TRANSIENT);
         }
         if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
         if (rc != SQLITE_DONE) {
-            return state_error(state->db, "Failed to insert profile");
+            return error_create(
+                ERR_STATE_INVALID, "Failed to insert profile: %s", sqlite3_errmsg(state->db)
+            );
         }
     }
 
@@ -1030,7 +1001,10 @@ static error_t state_data_version(state_t *state, int64_t *out) {
     if (rc == SQLITE_ROW) {
         *out = sqlite3_column_int64(stmt, 0);
     } else {
-        err = state_error(state->db, "Failed to read the database's version");
+        err = error_create(
+            ERR_STATE_INVALID, "Failed to read the database's version: %s",
+            sqlite3_errmsg(state->db)
+        );
     }
 
     sqlite3_finalize(stmt);
@@ -1178,7 +1152,9 @@ static error_t state_create(const char *db_path) {
 
     int rc = sqlite3_open_v2(temp, &db, SQLITE_OPEN_READWRITE, NULL);
     if (rc != SQLITE_OK) {
-        err = state_error(db, "Failed to open the new database");
+        err = error_create(
+            ERR_STATE_INVALID, "Failed to open the new database: %s", sqlite3_errmsg(db)
+        );
         goto done;
     }
 
@@ -1191,7 +1167,7 @@ static error_t state_create(const char *db_path) {
     rc = sqlite3_prepare_v2(db, "PRAGMA journal_mode=WAL;", -1, &stmt, NULL);
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW) {
-        err = state_error(db, "Failed to set WAL mode");
+        err = error_create(ERR_STATE_INVALID, "Failed to set WAL mode: %s", sqlite3_errmsg(db));
         goto done;
     }
     const char *mode = (const char *) sqlite3_column_text(stmt, 0);
@@ -1354,7 +1330,9 @@ error_t state_begin(state_t *state) {
         );
     }
     if (rc != SQLITE_OK) {
-        return state_error(state->db, "Failed to acquire write lock");
+        return error_create(
+            ERR_STATE_INVALID, "Failed to acquire write lock: %s", sqlite3_errmsg(state->db)
+        );
     }
 
     /* Re-read inside the new lock: a handle open since before the lock was taken
@@ -1396,15 +1374,10 @@ error_t state_commit(state_t *state) {
     error_t err = state_data_version(state, &data_version);
     if (err) return err;
 
-    char *errmsg = NULL;
-    int rc = sqlite3_exec(state->db, "COMMIT;", NULL, NULL, &errmsg);
-    if (rc != SQLITE_OK) {
-        err = error_create(
-            ERR_STATE_INVALID, "Failed to commit transaction: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc)
+    if (sqlite3_exec(state->db, "COMMIT;", NULL, NULL, NULL) != SQLITE_OK) {
+        return error_create(
+            ERR_STATE_INVALID, "Failed to commit transaction: %s", sqlite3_errmsg(state->db)
         );
-        sqlite3_free(errmsg);
-        return err;
     }
 
     /* Kept once the COMMIT landed: a refused one left the store where the handle's
@@ -1546,7 +1519,9 @@ error_t state_records(
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        return state_error(state->db, "Failed to prepare the record's read");
+        return error_create(
+            ERR_STATE_INVALID, "Failed to prepare the record's read: %s", sqlite3_errmsg(state->db)
+        );
     }
 
     rc = sqlite3_step(stmt);
@@ -1619,7 +1594,9 @@ error_t state_records(
     sqlite3_finalize(stmt);
 
     if (rc != SQLITE_DONE) {
-        return state_error(state->db, "Failed to read the record");
+        return error_create(
+            ERR_STATE_INVALID, "Failed to read the record: %s", sqlite3_errmsg(state->db)
+        );
     }
 
     *out = records;
@@ -1703,8 +1680,9 @@ error_t state_write(state_t *state, const state_record_t *record) {
 
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-        return state_error(
-            state->db, "Failed to write the record at '%s'", record->filesystem_path
+        return error_create(
+            ERR_STATE_INVALID, "Failed to write the record at '%s': %s",
+            record->filesystem_path, sqlite3_errmsg(state->db)
         );
     }
 
@@ -1729,7 +1707,10 @@ error_t state_retire(state_t *state, const char *filesystem_path) {
     int rc = sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-        return state_error(state->db, "Failed to retire the record at '%s'", filesystem_path);
+        return error_create(
+            ERR_STATE_INVALID, "Failed to retire the record at '%s': %s",
+            filesystem_path, sqlite3_errmsg(state->db)
+        );
     }
 
     return NULL;
@@ -1757,7 +1738,10 @@ error_t state_order_prune(state_t *state, const char *filesystem_path, time_t no
     if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 2, (sqlite3_int64) now);
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-        return state_error(state->db, "Failed to order '%s' pruned", filesystem_path);
+        return error_create(
+            ERR_STATE_INVALID, "Failed to order '%s' pruned: %s",
+            filesystem_path, sqlite3_errmsg(state->db)
+        );
     }
 
     return NULL;

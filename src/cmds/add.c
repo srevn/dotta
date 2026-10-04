@@ -1709,10 +1709,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * been diagnosed — the branch's own state is the earlier question.
      */
     err = metadata_load_from_tree(repo, stage_tree(stage), opts->profile, &metadata);
-    if (err) {
-        err = error_wrap(err, "Failed to load existing metadata");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* The branch as this command found it, under this command's table: one
      * contribution, this profile's, from the tree the stage opened at. Built

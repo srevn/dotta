@@ -357,12 +357,7 @@ static error_t remove_resolve(
     }
 
     err = metadata_load_from_tree(repo, tree, profile, &metadata);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to load metadata for profile '%s'", profile
-        );
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     size_t item_count = 0;
     size_t dir_count = 0;

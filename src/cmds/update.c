@@ -445,9 +445,7 @@ static error_t update_profile(
     /* The one metadata load: the sheet in the tree the stage opened at — the
      * branch's own bytes — mutated as the walk goes, saved once. */
     err = metadata_load_from_tree(repo, stage_tree(stage), profile, &metadata);
-    if (err) {
-        return error_wrap(err, "Failed to load existing metadata");
-    }
+    if (err) return err;
 
     /* The capture and deletion lists can each hold every item; the walk fills
      * them with the ones that landed. A rows-only call has nothing to capture

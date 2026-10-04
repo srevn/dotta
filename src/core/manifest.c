@@ -951,11 +951,7 @@ static error_t manifest_contribute(
      * fails whole rather than read it as "no claims". */
     metadata_t *metadata = NULL;
     error_t err = metadata_load_from_tree(repo, tree, c->profile, &metadata);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load metadata for profile '%s'", c->profile
-        );
-    }
+    if (err) return err;
 
     /* The step's three lists, read only while it runs: every row this profile
      * placed, in claim order; the rows that met a path it had already named;

@@ -393,8 +393,8 @@ static error_t list_files(
          * (core/profiles.c profile_list_entry, profile_count_entry), so a file
          * list that came back empty is an empty one there too and no blob header
          * is read. Which is why the refusal is rendered from its root — between
-         * it and here the chain names the profile twice more and nothing else,
-         * and this line names it a third time (base/error.h error_root). */
+         * it and here the loader names the profile once more and nothing else,
+         * and this line names it already (base/error.h error_root). */
         profile_stats_t stats = { 0 };
         err = profile_get_tree_stats(repo, tree, opts->profile, &stats);
         if (err) {

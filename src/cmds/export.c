@@ -309,10 +309,10 @@ static metadata_t *load_sheet(
     error_t err = metadata_load_from_tree(ctx->run.repo, tree, profile, &metadata);
     if (!err) return metadata;
 
+    /* The loader names the profile; the warning adds only what the export does
+     * without the sheet */
     output_warning(
-        ctx->out, OUTPUT_NORMAL,
-        "Metadata unreadable for profile '%s' (%s); falling back to git filemodes",
-        profile, error_line(err)
+        ctx->out, OUTPUT_NORMAL, "%s; falling back to git filemodes", error_line(err)
     );
 
     return metadata_create_empty();

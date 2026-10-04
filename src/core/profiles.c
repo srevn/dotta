@@ -586,11 +586,7 @@ error_t profile_get_tree_stats(
      * — and every load error is real and propagates. */
     metadata_t *metadata = NULL;
     error_t err = metadata_load_from_tree(repo, tree, profile, &metadata);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load metadata for profile '%s'", profile
-        );
-    }
+    if (err) return err;
 
     /* The files: one walk, one ODB handle, sizes read from the object headers. */
     git_odb *odb = NULL;
@@ -755,11 +751,7 @@ error_t profile_holds(
     metadata_t *own = NULL;
     if (!sheet) {
         error_t err = metadata_load_from_tree(repo, tree, profile, &own);
-        if (err) {
-            return error_wrap(
-                err, "Failed to load metadata for profile '%s'", profile
-            );
-        }
+        if (err) return err;
         sheet = own;
     }
 

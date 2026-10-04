@@ -1081,7 +1081,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
             kind = PATH_KIND_DIRECTORY;
         } else {
             err = error_create(
-                ERR_INVALID_ARG, "Invalid kind value: %s "
+                ERR_INVALID_ARG, "Invalid kind value: '%s' "
                 "(expected 'file' or 'directory')", kind_obj->valuestring
             );
             goto cleanup;
@@ -1096,15 +1096,10 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
             goto cleanup;
         }
 
-        /* Validate key format (prevent path traversal) */
+        /* Validate key format (prevent path traversal): the refusal names the
+         * key, which is a storage path */
         err = label_validate_storage(key_obj->valuestring);
-        if (err) {
-            err = error_wrap(
-                err, "Invalid key in metadata: %s",
-                key_obj->valuestring
-            );
-            goto cleanup;
-        }
+        if (err) goto cleanup;
 
         /* Refuse a duplicated key before the factory runs. The collection's upsert
          * would resolve the contradiction silently, last-wins; a document saying
@@ -1113,7 +1108,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
          * one. */
         if (metadata_lookup(metadata, key_obj->valuestring)) {
             err = error_create(
-                ERR_INVALID_ARG, "Duplicate key in metadata: %s",
+                ERR_INVALID_ARG, "Duplicate key in metadata: '%s'",
                 key_obj->valuestring
             );
             goto cleanup;
@@ -1125,7 +1120,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
         if (mode_obj) {
             if (!cJSON_IsString(mode_obj) || !mode_obj->valuestring) {
                 err = error_create(
-                    ERR_INVALID_ARG, "Invalid mode field (key: %s)",
+                    ERR_INVALID_ARG, "Invalid mode field (key: '%s')",
                     key_obj->valuestring
                 );
                 goto cleanup;
@@ -1133,7 +1128,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
             err = parse_mode(mode_obj->valuestring, &mode);
             if (err) {
                 err = error_wrap(
-                    err, "Failed to parse mode for item: %s",
+                    err, "Failed to parse mode for item: '%s'",
                     key_obj->valuestring
                 );
                 goto cleanup;
@@ -1182,7 +1177,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
             if (!cJSON_IsString(owner_obj) || !owner_obj->valuestring ||
                 !*owner_obj->valuestring) {
                 err = error_create(
-                    ERR_INVALID_ARG, "Invalid owner field (key: %s)",
+                    ERR_INVALID_ARG, "Invalid owner field (key: '%s')",
                     key_obj->valuestring
                 );
                 goto cleanup;
@@ -1196,7 +1191,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
             if (!cJSON_IsString(group_obj) || !group_obj->valuestring ||
                 !*group_obj->valuestring) {
                 err = error_create(
-                    ERR_INVALID_ARG, "Invalid group field (key: %s)",
+                    ERR_INVALID_ARG, "Invalid group field (key: '%s')",
                     key_obj->valuestring
                 );
                 goto cleanup;
@@ -1256,7 +1251,8 @@ error_t metadata_load_from_branch(
  * Loads metadata.json from a specific Git tree — a branch tip or a historical
  * commit's tree alike. A tree without the entry holds an empty sheet: the
  * absent-entry arm is the one producer of that answer, so no reader folds a
- * not-found into a collection of its own.
+ * not-found into a collection of its own. Every failure meets one tail, which
+ * names the profile over it.
  */
 error_t metadata_load_from_tree(
     git_repository *repo,
@@ -1296,13 +1292,7 @@ error_t metadata_load_from_tree(
 
     /* Parse JSON */
     err = metadata_from_json(json_str, &metadata);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to parse metadata from profile: %s",
-            profile
-        );
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Success - transfer ownership to caller */
     *out = metadata;
@@ -1313,7 +1303,10 @@ cleanup:
     if (entry) git_tree_entry_free(entry);
     if (metadata) metadata_free(metadata);
 
-    return err;
+    /* Each step names its own — the entry, the blob, the byte the parse stopped
+     * at — and none the profile, which this loader alone was handed: said once,
+     * over whichever refused, so no caller says it again */
+    return error_wrap(err, "Failed to load metadata for profile '%s'", profile);
 }
 
 /**

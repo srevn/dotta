@@ -723,7 +723,8 @@ error_t metadata_load_from_branch(
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)
- * @param profile Profile name for error messages (must not be NULL)
+ * @param profile The profile whose sheet this is, named over every failure —
+ *                its callers name it nowhere (must not be NULL)
  * @param out Metadata (must not be NULL, caller must free with metadata_free)
  * @return Error or NULL on success
  */

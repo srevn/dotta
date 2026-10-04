@@ -988,10 +988,7 @@ static error_t diff_commit_to_workspace(
     err = manifest_build_tree(
         repo, tree, profile, mounts, arena, &historical
     );
-    if (err) {
-        err = error_wrap(err, "Failed to build manifest from commit");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Step 5: The filter's coverage over the commit's view, answered before
      * anything is compared, as the workspace arm answers it over its own. Where

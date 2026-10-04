@@ -63,6 +63,10 @@ static error_t epoch_census(
  * it: a ref that resolves to a commit whose tree lacks a blob is a broken shape,
  * not an uninitialized repository. `epoch_init` reads exactly that distinction
  * to decide whether there is a ref to delete before it mints.
+ *
+ * Every refusal names the blob and never a ref: the tree is the ref's at a load
+ * and an advertisement's at a fetch, which no ref names until it is proven, so
+ * the caller says where (base/error.h "Messages").
  */
 static error_t epoch_read_blob(
     git_repository *repo, git_tree *tree, const char *name,
@@ -70,32 +74,23 @@ static error_t epoch_read_blob(
 ) {
     const git_tree_entry *entry = git_tree_entry_byname(tree, name);
     if (entry == NULL) {
-        return error_create(
-            ERR_CRYPTO,
-            "Blob '%s' missing from %s tree",
-            name, EPOCH_REF
-        );
+        return error_create(ERR_CRYPTO, "Blob '%s' missing from the tree", name);
     }
 
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-        return error_create(
-            ERR_CRYPTO,
-            "Tree entry '%s' in %s is not a blob",
-            name, EPOCH_REF
-        );
+        return error_create(ERR_CRYPTO, "Tree entry '%s' is not a blob", name);
     }
 
     git_blob *blob = NULL;
     int rc = git_blob_lookup(&blob, repo, git_tree_entry_id(entry));
-    if (rc < 0) return error_git(rc, "Cannot read '%s' in %s", name, EPOCH_REF);
+    if (rc < 0) return error_git(rc, "Cannot read '%s'", name);
 
     git_object_size_t got = git_blob_rawsize(blob);
     if (got != size) {
         git_blob_free(blob);
         return error_create(
-            ERR_CRYPTO,
-            "Blob '%s' in %s has wrong size: %lld bytes (expected %zu)",
-            name, EPOCH_REF, (long long) got, size
+            ERR_CRYPTO, "Blob '%s' has wrong size: %lld bytes (expected %zu)",
+            name, (long long) got, size
         );
     }
 
@@ -131,11 +126,7 @@ static error_t epoch_read_tree(
 
     kdf_params_load(params, &out->memory_mib, &out->passes);
     err = kdf_validate_params(out->memory_mib, out->passes);
-    if (err) {
-        return error_wrap(
-            err, "Params blob in %s is out of range", EPOCH_REF
-        );
-    }
+    if (err) return error_wrap(err, "Params blob is out of range");
 
     return NULL;
 }
@@ -505,10 +496,12 @@ error_t epoch_fetch(
          * a pair out of range, an object that is no commit), the remote's; and
          * an object that would not load after a download that completed, this
          * store's. So the words blame neither: the act that failed, and the root's
-         * — which object the read was loading and the mechanism's sentence for
-         * it, one node as every libgit2 failure is (base/error.h error_git), or
-         * the pair's refusal beneath the wrap that names the ref this act names
-         * too. A re-mint keeps one fact's words (base/error.h "Messages"). */
+         * — the blob the read refused, which object it was loading and the
+         * mechanism's sentence for it, one node as every libgit2 failure is
+         * (base/error.h error_git), or the bound the pair broke beneath the wrap
+         * naming the params blob. The act names the advertisement, where the
+         * reader names no ref (epoch_read_blob). A re-mint keeps one fact's words
+         * (base/error.h "Messages"). */
         return error_create(
             ERR_CRYPTO, "Cannot adopt the epoch remote '%s' advertises: %s",
             remote_name, error_message(error_root(err))

@@ -491,7 +491,8 @@ static error_t update_profile(
                 /* The capture, and the entry it becomes on the stage, at the
                  * name the seal was made under (infra/content.h). One tail past
                  * the door: the bytes are released whichever step refused, and
-                 * either refusal names the path the same way. */
+                 * each refusal names the path itself — the capture's the file,
+                 * the put's the name it lands at. */
                 content_capture_t capture = { 0 };
                 git_oid blob;
                 err = update_capture(ctx, stage, item, profile, &capture);
@@ -502,10 +503,7 @@ static error_t update_profile(
                     );
                 }
                 content_capture_free(&capture);
-                if (err) {
-                    err = error_wrap(err, "Failed to capture '%s'", item->filesystem_path);
-                    goto cleanup;
-                }
+                if (err) goto cleanup;
 
                 /* The claim from the capture's own stat, sealed as the capture
                  * sealed the bytes: its write-time invariant makes that verdict
@@ -518,13 +516,7 @@ static error_t update_profile(
                     capture.encrypted,
                     &meta_item
                 );
-                if (err) {
-                    err = error_wrap(
-                        err, "Failed to capture metadata for: %s",
-                        item->filesystem_path
-                    );
-                    goto cleanup;
-                }
+                if (err) goto cleanup;
 
                 /* What the capture committed, as the record keeps it: the node
                  * the load found and the capture held to, the blob the put wrote
@@ -1147,7 +1139,7 @@ static error_t update_execute(
 
         /* Any error is a failure before the commit: no commit landed, whatever
          * the bookkeeping holds */
-        if (err) return error_wrap(err, "Failed to update profile '%s'", profile);
+        if (err) return err;
 
         /* The commit gate's own sum, read back off the bookkeeping the walk filled:
          * on a clean return, zero means the gate closed without a commit and

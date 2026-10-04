@@ -1086,12 +1086,7 @@ static error_t add_capture(
     err = metadata_capture_file(
         storage_path, &capture.st, capture.encrypted, &item
     );
-    if (err) {
-        return error_wrap(
-            err, "Failed to capture metadata for '%s'",
-            filesystem_path
-        );
-    }
+    if (err) return err;
 
     /* What the capture committed, as the record keeps it: the node the listing
      * found and the capture held to, the blob the put wrote under the look its
@@ -1800,10 +1795,13 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         } else {
             /* Regular filesystem path — as add reads it: the target's when one
              * stands (add_spell), the shell's when none does. The key the walk
-             * begins at, and everything it joins beneath is a key too. */
+             * begins at, and everything it joins beneath is a key too. Its refusal
+             * names what it folded; the argument, as typed, is said over it —
+             * the one key the user wrote, and the one every refusal of this
+             * argument's steps is said under (base/error.h "Messages"). */
             err = add_spell(file, target, ctx->arena, &filesystem_path);
             if (err) {
-                err = error_wrap(err, "Failed to resolve path '%s'", file);
+                err = error_wrap(err, "Cannot add '%s'", file);
                 goto cleanup;
             }
         }
@@ -2017,7 +2015,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             err = add_collect(&walk, scratch, filesystem_path, 0);
             arena_free(scratch);
             if (err) {
-                err = error_wrap(err, "Failed to collect from '%s'", file);
+                err = error_wrap(err, "Cannot add '%s'", file);
                 goto cleanup;
             }
 
@@ -2344,12 +2342,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * itself, scans it for new files and converges its attributes. */
         metadata_item_t *dir_item = NULL;
         err = metadata_capture_directory(storage_path, &dir_stat, true, &dir_item);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to capture directory '%s'", path->filesystem_path
-            );
-            goto cleanup;
-        }
+        if (err) goto cleanup;
 
         /* What the capture committed, as the record keeps it: the directory the
          * guard above just held it to, and its claim — no content, which a
@@ -2381,10 +2374,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         path_t *path = walk.files.entries[i];
 
         err = add_capture(ctx, stage, opts->profile, path, metadata);
-        if (err) {
-            err = error_wrap(err, "Failed to add file '%s'", path->filesystem_path);
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
     /* The ancestry: the chain above every path this add captured, claimed as

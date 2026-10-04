@@ -566,12 +566,13 @@ static error_t metadata_capture_ownership(
 
     /* Resolve UID to username. "Cannot resolve" rather than "does not exist": a
      * NULL answer is an absent entry or a lookup that failed (a directory service
-     * down), and the claim is equally unmakeable either way. */
+     * down), and the claim is equally unmakeable either way. The refusal names
+     * the path it was handed, so no caller names it again. */
     struct passwd *pwd = getpwuid(st->st_uid);
     if (!pwd || !pwd->pw_name) {
         return error_create(
-            ERR_NOT_FOUND, "Cannot resolve UID %u to a user name on this system",
-            (unsigned) st->st_uid
+            ERR_NOT_FOUND, "Cannot resolve UID %u, the owner of '%s', to a user name "
+            "on this system", (unsigned) st->st_uid, storage_path
         );
     }
 
@@ -581,8 +582,8 @@ static error_t metadata_capture_ownership(
     struct group *grp = getgrgid(st->st_gid);
     if (!grp || !grp->gr_name) {
         return error_create(
-            ERR_NOT_FOUND, "Cannot resolve GID %u to a group name on this system",
-            (unsigned) st->st_gid
+            ERR_NOT_FOUND, "Cannot resolve GID %u, the group of '%s', to a group name "
+            "on this system", (unsigned) st->st_gid, storage_path
         );
     }
 
@@ -670,7 +671,7 @@ error_t metadata_capture_directory(
 
     /* Verify it's actually a directory */
     if (!S_ISDIR(st->st_mode)) {
-        return error_create(ERR_INVALID_ARG, "Path is not a directory: %s", storage_path);
+        return error_create(ERR_INVALID_ARG, "Path is not a directory: '%s'", storage_path);
     }
 
     /* Create directory item via factory, its mode the stat's permission bits */

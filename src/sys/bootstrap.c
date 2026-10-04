@@ -22,32 +22,25 @@
 #include "sys/gitops.h"
 
 /**
- * Open a view on a profile's .bootstrap script: the one read of it
+ * Open a view on the .bootstrap script a profile's tree holds: the one read of it
  *
- * The profile's tree is loaded, its .bootstrap entry found, the blob's view opened
- * and the tree let go: a view holds its blob, never the tree it was found in.
- * The caller closes the view (sys/gitops.h gitops_blob_view_close); on failure
- * it is the empty view, whose close does nothing.
+ * The tree's .bootstrap entry found and its blob's view opened: a view holds
+ * its blob, never the tree it was found in. The caller closes the view
+ * (sys/gitops.h gitops_blob_view_close); on failure it is the empty view, whose
+ * close does nothing.
  *
- * Returns ERR_NOT_FOUND if the tree exists but has no .bootstrap entry, and the
- * tree's load's own failure otherwise — its ERR_NOT_FOUND, for a branch that is
- * not there (sys/gitops.h gitops_load_branch_tree), naming the reference.
+ * Returns ERR_NOT_FOUND where the tree holds no .bootstrap entry, and the blob's
+ * read's own failure otherwise, said of the profile's script.
  */
 static error_t bootstrap_open_script(
-    git_repository *repo,
-    const char *profile,
+    git_repository *repo, const git_tree *tree, const char *profile,
     gitops_blob_view_t *out
 ) {
     *out = (gitops_blob_view_t){ 0 };
 
-    git_tree *tree = NULL;
-    error_t err = gitops_load_branch_tree(repo, profile, &tree);
-    if (err) return err;
-
     const git_tree_entry *entry =
         git_tree_entry_byname(tree, BOOTSTRAP_SCRIPT_NAME);
     if (!entry) {
-        git_tree_free(tree);
         return error_create(
             ERR_NOT_FOUND,
             "Bootstrap script not found in profile '%s'", profile
@@ -56,8 +49,7 @@ static error_t bootstrap_open_script(
 
     /* The blob's read names an id alone (sys/gitops.h gitops_blob_view_open):
      * the script and its profile are what it was not handed */
-    err = gitops_blob_view_open(repo, git_tree_entry_id(entry), out);
-    git_tree_free(tree);
+    error_t err = gitops_blob_view_open(repo, git_tree_entry_id(entry), out);
     if (err) {
         return error_wrap(
             err, "Cannot read the bootstrap script in profile '%s'", profile
@@ -82,11 +74,11 @@ bool bootstrap_exists(git_repository *repo, const char *profile) {
 }
 
 error_t bootstrap_read(
-    git_repository *repo,
-    const char *profile,
+    git_repository *repo, const git_tree *tree, const char *profile,
     buffer_t *out_content
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(tree);
     CHECK_NULL(profile);
     CHECK_NULL(out_content);
 
@@ -94,7 +86,7 @@ error_t bootstrap_read(
 
     /* The script's bytes, copied once out of its view */
     gitops_blob_view_t script;
-    error_t err = bootstrap_open_script(repo, profile, &script);
+    error_t err = bootstrap_open_script(repo, tree, profile, &script);
     if (err) return err;
 
     buffer_append(out_content, script.data, script.size);
@@ -103,19 +95,25 @@ error_t bootstrap_read(
 }
 
 error_t bootstrap_extract_to_temp(
-    git_repository *repo,
-    const char *profile,
-    char **out_temp_path
+    git_repository *repo, const char *profile, char **out_temp_path
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
     CHECK_NULL(out_temp_path);
 
-    gitops_blob_view_t script;
+    gitops_blob_view_t script = { 0 };
     char *path = NULL;
     int fd = -1;
 
-    error_t err = bootstrap_open_script(repo, profile, &script);
+    /* The script at the branch's tip: the tree loaded by the profile's name,
+     * the script read off it — a branch that is not there refused in the load's
+     * words, naming the reference (sys/gitops.h gitops_load_branch_tree) */
+    git_tree *tree = NULL;
+    error_t err = gitops_load_branch_tree(repo, profile, &tree);
+    if (!err) {
+        err = bootstrap_open_script(repo, tree, profile, &script);
+        git_tree_free(tree);
+    }
     if (err) goto cleanup;
 
     /* Validate BEFORE creating the temp file — a bad shebang never produces a

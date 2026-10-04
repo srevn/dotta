@@ -26,6 +26,7 @@
 #include "base/output.h"
 #include "base/string.h"
 #include "sys/bootstrap.h"
+#include "sys/gitops.h"
 #include "sys/identity.h"
 #include "sys/process.h"
 
@@ -157,20 +158,22 @@ cleanup:
 }
 
 /**
- * Dry-run: read the script into memory, validate its shebang, free. No temp file,
- * no subprocess, no environment build.
+ * Dry-run: read the script at the branch's tip into memory, validate its shebang,
+ * free. No temp file, no subprocess, no environment build.
  */
 static error_t run_dry(git_repository *repo, const char *profile) {
-    buffer_t content = BUFFER_INIT;
-    error_t err = bootstrap_read(repo, profile, &content);
-    if (err) {
-        buffer_deinit(&content);
-        return err;
-    }
+    git_tree *tree = NULL;
+    error_t err = gitops_load_branch_tree(repo, profile, &tree);
+    if (err) return err;
 
-    err = bootstrap_validate(
-        (const unsigned char *) content.data, content.size
-    );
+    buffer_t content = BUFFER_INIT;
+    err = bootstrap_read(repo, tree, profile, &content);
+    git_tree_free(tree);
+    if (!err) {
+        err = bootstrap_validate(
+            (const unsigned char *) content.data, content.size
+        );
+    }
     buffer_deinit(&content);
     return err;
 }

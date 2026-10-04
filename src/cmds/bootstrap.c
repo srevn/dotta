@@ -8,7 +8,6 @@
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 
 #include "base/args.h"
@@ -67,28 +66,24 @@ static const char *const BOOTSTRAP_TEMPLATE =
     "echo \"%s bootstrap complete!\"\n";
 
 /**
- * Create bootstrap script from template.
+ * Edit bootstrap script.
  *
- * Commits the default template directly into the profile's Git tree (no
- * working-tree write). The profile is here — cmd_bootstrap's selection required
- * it — and the call fails if a bootstrap script already exists for it.
+ * Opens the profile's stage, hands the script its tree holds to the user's editor
+ * — the template, where it holds none — validates the edit, and commits it on
+ * that stage, one commit for the session. An edit the validation or the stage
+ * refuses is kept, named in the refusal.
  */
-static error_t bootstrap_create_template(
-    git_repository *repo,
-    const char *profile
+static error_t bootstrap_edit(
+    git_repository *repo, const char *profile, output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
 
-    /* Check if script already exists in Git */
-    if (bootstrap_exists(repo, profile)) {
-        return error_create(
-            ERR_EXISTS, "Bootstrap script already exists for profile '%s'",
-            profile
-        );
-    }
-
-    /* The profile's stage: the script goes on it, executable, in one commit */
+    /* The profile's stage, opened before the editor: the read the session decides
+     * from is its tree, so a commit another writer makes to the branch while
+     * the editor is open refuses this session's commit where it was overwritten
+     * (sys/stage.h stage_commit); a deletion meanwhile is the stage's own rule,
+     * the branch recreated with the edit */
     char refname[DOTTA_REFNAME_MAX];
     error_t err = gitops_branch_refname(refname, sizeof(refname), profile);
     if (err) return err;
@@ -97,71 +92,21 @@ static error_t bootstrap_create_template(
     err = stage_open(repo, refname, &stage);
     if (err) return err;
 
-    /* Generate template content */
-    char *content = heap_str_format(BOOTSTRAP_TEMPLATE, profile, profile, profile);
-
-    err = stage_put(
-        stage, BOOTSTRAP_SCRIPT_NAME, content, strlen(content),
-        GIT_FILEMODE_BLOB_EXECUTABLE, NULL
-    );
-    free(content);
-    if (err) {
-        stage_free(stage);
-        return err;
-    }
-
-    char *commit_message = heap_str_format(
-        "Add bootstrap script for %s profile", profile
-    );
-
-    err = stage_commit(stage, commit_message, NULL);
-    free(commit_message);
-    stage_free(stage);
-    return err;
-}
-
-/**
- * Edit bootstrap script.
- *
- * Hands the script the branch holds to the user's editor, validates the edited
- * content, and commits the result back to Git. If the profile has no script yet,
- * one is created from the template first. An edit the validation or the commit
- * refuses is kept, named in the refusal.
- */
-static error_t bootstrap_edit(
-    git_repository *repo,
-    const char *profile,
-    output_t *out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profile);
-
-    error_t err = NULL;
     buffer_t script = BUFFER_INIT;
     char *kept = NULL;
     char *commit_msg = NULL;
-    stage_t *stage = NULL;
 
-    /* Create the script from the template if none exists yet. */
-    if (!bootstrap_exists(repo, profile)) {
-        err = bootstrap_create_template(repo, profile);
-        if (err) return err;
-        output_success(
-            out, OUTPUT_NORMAL,
-            "Created bootstrap script for profile '%s'", profile
-        );
+    /* The script the branch holds, as it stands — unvalidated, so a script a
+     * run would refuse opens to be mended — or, where it holds none, the template,
+     * which the session's commit creates together with the edit and nothing commits
+     * alone (sys/bootstrap.h bootstrap_read: ERR_NOT_FOUND, no script) */
+    err = bootstrap_read(repo, stage_tree(stage), profile, &script);
+    bool created = error_code(err) == ERR_NOT_FOUND;
+    if (created) {
+        err = NULL;
+        buffer_appendf(&script, BOOTSTRAP_TEMPLATE, profile, profile, profile);
     }
-
-    /* The script as the branch holds it, refused where a run would refuse it:
-     * the read names the profile's script, the validation is said of it */
-    err = bootstrap_read(repo, profile, &script);
     if (err) goto cleanup;
-
-    err = bootstrap_validate((const unsigned char *) script.data, script.size);
-    if (err) {
-        err = error_wrap(err, "Invalid bootstrap script in profile '%s'", profile);
-        goto cleanup;
-    }
 
     /* The user's editor, in a file of the edit's own that stands after it
      * (sys/editor.h editor_edit): DOTTA_EDITOR, VISUAL, EDITOR, then vi. The
@@ -169,37 +114,36 @@ static error_t bootstrap_edit(
     err = editor_edit("dotta-bootstrap", &script, &kept);
     if (err) goto cleanup;
 
-    /* Validate edited content before committing. The validation refuses an empty
-     * edit too, and the refusal below says it of the script, the edit kept */
+    /* The edit, refused where a run would refuse it — an empty one too — before
+     * it is staged; the refusal below says it of the script, the edit kept */
     err = bootstrap_validate((const unsigned char *) script.data, script.size);
     if (err) goto cleanup;
 
-    /* Auto-commit the changes */
-    commit_msg = heap_str_format(
-        "Update bootstrap script for %s profile", profile
-    );
-
-    /* The edited script onto the profile's stage; the stage commits only a tree
-     * that differs from the branch's, and says which. */
-    char refname[DOTTA_REFNAME_MAX];
-    err = gitops_branch_refname(refname, sizeof(refname), profile);
-    if (err) goto cleanup;
-
-    err = stage_open(repo, refname, &stage);
-    if (err) goto cleanup;
-
+    /* The edited script onto the stage; the stage commits only a tree that differs
+     * from the branch's, and says which */
     err = stage_put(
         stage, BOOTSTRAP_SCRIPT_NAME, script.data, script.size,
         GIT_FILEMODE_BLOB_EXECUTABLE, NULL
     );
     if (err) goto cleanup;
 
-    bool was_modified = false;
-    err = stage_commit(stage, commit_msg, &was_modified);
+    commit_msg = heap_str_format(
+        created ? "Add bootstrap script for %s profile"
+                : "Update bootstrap script for %s profile",
+        profile
+    );
+    bool committed = false;
+    err = stage_commit(stage, commit_msg, &committed);
     if (err) goto cleanup;
 
-    /* Inform user */
-    if (was_modified) {
+    /* What the session made: a script, a change to one, or nothing — a script
+     * the branch did not hold is a tree that differs, always committed */
+    if (created) {
+        output_success(
+            out, OUTPUT_NORMAL,
+            "Created bootstrap script for profile '%s'", profile
+        );
+    } else if (committed) {
         output_success(
             out, OUTPUT_NORMAL,
             "Updated and committed bootstrap script for profile '%s'",
@@ -225,8 +169,8 @@ cleanup:
         unlink(kept);
     }
     free(kept);
-    buffer_deinit(&script);
     free(commit_msg);
+    buffer_deinit(&script);
     stage_free(stage);
     return err;
 }
@@ -237,25 +181,28 @@ cleanup:
  * Reads the script from Git and writes its bytes to `out`.
  */
 static error_t bootstrap_show(
-    git_repository *repo,
-    const char *profile,
-    output_t *out
+    git_repository *repo, const char *profile, output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
 
-    /* Read content from Git blob: the read refuses a profile with no script,
-     * and a branch it cannot read is that failure, never no script
+    /* The script at the branch's tip, read off its tree: the read refuses a profile
+     * with no script, and a branch it cannot load is that failure, never no script
      * (bootstrap_exists folds the two, sys/bootstrap.h) */
+    git_tree *tree = NULL;
+    error_t err = gitops_load_branch_tree(repo, profile, &tree);
+    if (err) return err;
+
     buffer_t content = BUFFER_INIT;
-    error_t err = bootstrap_read(repo, profile, &content);
+    err = bootstrap_read(repo, tree, profile, &content);
+    git_tree_free(tree);
     if (err) return err;
 
     /* Display content: a payload, the script's bytes as they are */
     if (content.size > 0) {
         output_write(
-            out, OUTPUT_NORMAL, OUTPUT_COLOR_RESET, (const char *) content.data,
-            content.size
+            out, OUTPUT_NORMAL, OUTPUT_COLOR_RESET,
+            (const char *) content.data, content.size
         );
     }
 
@@ -270,9 +217,7 @@ static error_t bootstrap_show(
  * Closes with a hint about how to create one.
  */
 static void bootstrap_list(
-    git_repository *repo,
-    const string_array_t *profiles,
-    output_t *out
+    git_repository *repo, const string_array_t *profiles, output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
@@ -283,14 +228,12 @@ static void bootstrap_list(
         const char *profile = profiles->entries[i];
         if (bootstrap_exists(repo, profile)) {
             output_print(
-                out, OUTPUT_NORMAL,
-                "  {green}✓{reset} %-15s %s/%s\n",
+                out, OUTPUT_NORMAL, "  {green}✓{reset} %-15s %s/%s\n",
                 profile, profile, BOOTSTRAP_SCRIPT_NAME
             );
         } else {
             output_print(
-                out, OUTPUT_NORMAL,
-                "  {red}✗{reset} %-15s (no bootstrap script)\n",
+                out, OUTPUT_NORMAL, "  {red}✗{reset} %-15s (no bootstrap script)\n",
                 profile
             );
         }
@@ -306,8 +249,7 @@ static void bootstrap_list(
  * --dry-run, fired in the selection's order (utils/bootstrap.h bootstrap_fire)
  */
 static error_t bootstrap_run(
-    const dotta_ctx_t *ctx,
-    const cmd_bootstrap_options_t *opts,
+    const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opts,
     const string_array_t *profiles
 ) {
     CHECK_NULL(ctx);
@@ -344,6 +286,7 @@ static error_t bootstrap_run(
         output_gap(out, OUTPUT_NORMAL);
         output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
         output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap <profile> --edit");
+
         return NULL;
     }
 

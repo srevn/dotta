@@ -43,20 +43,28 @@
 bool bootstrap_exists(git_repository *repo, const char *profile);
 
 /**
- * Read a profile's .bootstrap script into a buffer.
+ * Read the .bootstrap script a profile's tree holds into a buffer.
+ *
+ * The tree is the caller's, read where its decision is made: the edit's, the
+ * tree its stage opened at, so the script it opens is the one its commit lands
+ * on (cmds/bootstrap.c bootstrap_edit); the show's and the dry run's, the branch's
+ * tip, loaded first (cmds/bootstrap.c bootstrap_show, utils/bootstrap.c run_dry).
  *
  * On success, ownership of *out_content transfers to the caller, who must
  * buffer_deinit() it. On failure, *out_content is left in the zero-initialized
  * state (safe to buffer_deinit).
  *
  * @param repo        Open Git repository (must not be NULL)
- * @param profile     Profile branch name (must not be NULL)
+ * @param tree        The profile's tree (must not be NULL)
+ * @param profile     Profile name, which every refusal names (must not be NULL)
  * @param out_content Destination buffer (must not be NULL)
- * @return NULL on success; ERR_NOT_FOUND if the profile has no script, or no
- *         branch; a Git error otherwise
+ * @return NULL on success; ERR_NOT_FOUND where the tree holds no script — read
+ *         by cmds/bootstrap.c bootstrap_edit, which opens the template there —
+ *         and the blob's read's failure otherwise
  */
 error_t bootstrap_read(
     git_repository *repo,
+    const git_tree *tree,
     const char *profile,
     buffer_t *out_content
 );

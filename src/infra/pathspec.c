@@ -190,9 +190,7 @@ error_t pathspec_create(
              * reading that reaches a claim standing nowhere on this machine. */
             path_input_t arg;
             error_t err = path_input_resolve(input, arena, &arg);
-            if (err) {
-                return error_wrap(err, "Invalid path '%s'", input);
-            }
+            if (err) return err;
             switch (arg.key) {
                 case PATH_KEY_FILESYSTEM:
                     prefix_filesystem(&entry, arg.filesystem_path);

@@ -90,9 +90,7 @@ error_t path_input_resolve(
 
         char *storage = arena_strndup(arena, input, len);
         error_t err = label_validate_storage(storage);
-        if (err) {
-            return error_wrap(err, "Invalid storage path '%s'", input);
-        }
+        if (err) return err;
         out->key = PATH_KEY_STORAGE;
         out->storage_path = storage;
         return NULL;

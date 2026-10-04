@@ -1533,5 +1533,5 @@ error_t fs_ensure_parent_dirs(const char *path) {
     error_t err = fs_is_directory(parent) ? NULL : fs_create_dir(parent, true);
     free(parent);
 
-    return err ? error_wrap(err, "Failed to create parent directories for: %s", path) : NULL;
+    return err ? error_wrap(err, "Failed to create parent directories for '%s'", path) : NULL;
 }

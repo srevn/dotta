@@ -686,9 +686,7 @@ static error_t ignore_test(
          * path_input_filesystem_path). */
         arg.key = PATH_KEY_FILESYSTEM;
         err = path_input_filesystem_path(test_path, ctx->arena, &arg.filesystem_path);
-        if (err) {
-            return error_wrap(err, "Failed to resolve path '%s'", test_path);
-        }
+        if (err) return err;
     }
 
     /* What each key owes before there is an asker to ask — the door, and the

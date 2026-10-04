@@ -91,7 +91,7 @@ error_t scope_build(
      *    input read in the key its own shape names (infra/pathspec) — and none,
      *    every path in, where no positional was given. */
     error_t err = pathspec_create(in->files, in->file_count, arena, &s->paths);
-    if (err) return error_wrap(err, "Failed to build path filter");
+    if (err) return err;
 
     /* 5. The -e layer, compiled once (core/ignore): a pattern the grammar refuses
      *    refuses the scope, under the flag's name. */

@@ -60,12 +60,15 @@
  * Nothing here touches HEAD, a working directory, or the repository's own index,
  * and neither an open nor an admission writes anything — the ref is resolved
  * and its tree read, an orphan's empty tree included — so a stage freed before
- * its first put leaves the repository exactly as it found it. A put writes its
- * blob at once: a stage freed after one without a commit, or whose commit was
- * refused, leaves loose objects and no ref, and a refused put may leave its blob
- * the same way. One commit per stage: after it the ref names the commit and the
- * stage still describes the tree it opened on, so a second commit is refused by
- * the tip check — a writer with more to write opens another.
+ * its first put leaves the repository exactly as it found it. A put admits its
+ * path before it writes a byte, so a refused put writes nothing; one admitted
+ * writes its blob at once, and a stage freed after it without a commit, or whose
+ * commit was refused, leaves loose objects and no ref. A put whose blob write
+ * fails leaves its entry at the null id, which the commit's tree write refuses,
+ * and an entry it replaced is gone from the index: a writer abandons a stage
+ * whose put failed. One commit per stage: after it the ref names the commit and
+ * the stage still describes the tree it opened on, so a second commit is refused
+ * by the tip check — a writer with more to write opens another.
  *
  * Layer: sys/. The module knows libgit2 and sys/gitops' signature, nothing of
  * mounts, content or dotta's vocabulary. Called by the commands that write trees
@@ -254,7 +257,7 @@ error_t stage_admit_subtree(const stage_admission_t *adm, const char *path);
 void stage_admission_free(stage_admission_t *adm);
 
 /**
- * A blob from bytes, then the entry at `path`
+ * The entry at `path`, admitted, then its blob from bytes
  *
  * `mode` is the caller's — a capture's own stat mapped where it was taken, never
  * a re-stat here — and one of GIT_FILEMODE_BLOB, GIT_FILEMODE_BLOB_EXECUTABLE
@@ -264,11 +267,14 @@ void stage_admission_free(stage_admission_t *adm);
  * is unchanged; a mode or a path shape outside the contract is refused
  * (ERR_INVALID_ARG).
  *
+ * Every refusal comes before a byte is written, and the blob is written once:
+ * the entry is put under the null id first — the ownerless index asks for no
+ * object (index.c index_insert) — then pointed at the blob the bytes became.
  * The blob is answered to the caller that asks, and only once the entry stands:
- * a refused put answers none, whatever it left in the object database (the header).
- * Readers: the captures that record what they committed, cmds/add.c add_capture
- * and cmds/update.c update_profile — the id is their evidence of what the commit
- * holds at the name, where the branch, read after it, is another writer's to move.
+ * a refused put answers none, and wrote none. Readers: the captures that record
+ * what they committed, cmds/add.c add_capture and cmds/update.c update_profile
+ * — the id is their evidence of what the commit holds at the name, where the
+ * branch, read after it, is another writer's to move.
  *
  * @param st Stage (must not be NULL)
  * @param path Tree path (must not be NULL; canonical, see the header)

@@ -145,33 +145,6 @@ git_index *stage_index(stage_t *st) {
     return st ? st->index : NULL;
 }
 
-error_t stage_put(
-    stage_t *st, const char *path, const void *data, size_t size,
-    git_filemode_t mode, git_oid *out_blob
-) {
-    CHECK_NULL(st);
-    CHECK_NULL(path);
-    CHECK_ARG(data != NULL || size == 0, "data cannot be NULL with a size");
-
-    git_oid blob;
-    int rc = git_blob_create_from_buffer(
-        &blob, st->repo, size > 0 ? data : "", size
-    );
-    if (rc < 0) {
-        return error_git(rc, "Failed to write the blob for '%s'", path);
-    }
-
-    /* The id is answered once the entry stands: a refused put names no blob the
-     * tree holds */
-    error_t err = stage_put_blob(st, path, &blob, mode);
-    if (err) return err;
-    if (out_blob) {
-        git_oid_cpy(out_blob, &blob);
-    }
-
-    return NULL;
-}
-
 /**
  * Can anything at all be named at this path — the shape, and no blob above it?
  *
@@ -354,6 +327,48 @@ void stage_admission_free(stage_admission_t *adm) {
 
     git_index_free(adm->index);
     free(adm);
+}
+
+error_t stage_put(
+    stage_t *st, const char *path, const void *data, size_t size,
+    git_filemode_t mode, git_oid *out_blob
+) {
+    CHECK_NULL(st);
+    CHECK_NULL(path);
+    CHECK_ARG(data != NULL || size == 0, "data cannot be NULL with a size");
+
+    /* The entry first, under the null id: every refusal the put has — the mode,
+     * the shape, both collisions, Git's own name rule — is met before a byte is
+     * written (put_entry). The index is ownerless, so libgit2 asks for no object
+     * behind it (index.c index_insert), as it asks for none behind an
+     * admission's. */
+    git_index_entry entry;
+    memset(&entry, 0, sizeof(entry));
+    entry.mode = (uint32_t) mode;
+    entry.path = path;
+    error_t err = put_entry(st->index, &entry);
+    if (err) return err;
+
+    /* Then the blob, written once — the one hash of the bytes — and the entry
+     * pointed at it through the same door, which meets the answers it met. A
+     * write that fails leaves the entry at the null id (the header). */
+    git_oid blob;
+    int rc = git_blob_create_from_buffer(
+        &blob, st->repo, size > 0 ? data : "", size
+    );
+    if (rc < 0) {
+        return error_git(rc, "Failed to write the blob for '%s'", path);
+    }
+
+    /* The id is answered once the entry stands: a refused put names no blob the
+     * tree holds */
+    err = stage_put_blob(st, path, &blob, mode);
+    if (err) return err;
+    if (out_blob) {
+        git_oid_cpy(out_blob, &blob);
+    }
+
+    return NULL;
 }
 
 error_t stage_put_blob(

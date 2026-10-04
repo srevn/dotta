@@ -9,7 +9,8 @@ A missing file means the defaults. A file that cannot be read, does not parse, o
 ```bash
 DOTTA_REPO_DIR       # Override repository location
 DOTTA_CONFIG_FILE    # Use a different config file
-DOTTA_EDITOR         # Editor for bootstrap/ignore (fallback: VISUAL → EDITOR → vi/nano)
+DOTTA_EDITOR         # Editor for bootstrap/ignore (fallback: VISUAL → EDITOR → vi);
+                     # a command line such as "code --wait" runs through /bin/sh, as git runs one
 ```
 
 ## Config Sections

@@ -1,10 +1,10 @@
 /**
  * editor.h - Editor invocation utilities
  *
- * Provides secure editor selection and invocation for interactive editing, and
- * the file an edit is made in (editor_edit). The editor runs through sys/process's
- * foreground primitive — fork and exec, no shell — instead of system(), for better
- * security.
+ * Provides editor selection and invocation for interactive editing, and the file
+ * an edit is made in (editor_edit). The editor runs through sys/process's
+ * foreground primitive — fork and exec, never system() — and through the shell
+ * only where its value is a command line, as git runs one (editor_launch).
  */
 
 #ifndef DOTTA_EDITOR_H
@@ -26,16 +26,22 @@ const char *editor_from_env(void);
 /**
  * Launch editor for a file, in the foreground
  *
- * More secure than system() - no shell interpretation, better error handling.
- * Blocks until editor exits. The editor takes the terminal, and the keyboard's
- * signals are its own while it runs (sys/process.h process_foreground): a Ctrl-C
- * it answers never ends dotta underneath it, and one that kills it abandons the
- * edit as any failure does, the caller's cleanup running.
+ * As git runs its own editor (lib/git/run-command.c prepare_shell_cmd): a value
+ * holding no character the shell reads is a program, its name or its path, run
+ * as named with no shell between; any other — `code --wait`, `vim -u NONE` — is
+ * a command line, run by /bin/sh with the file its first argument ("$@"), so
+ * the file's name is never read as words. Blocks until the editor exits. The
+ * editor takes the terminal, and the keyboard's signals are its own while it
+ * runs (sys/process.h process_foreground): a Ctrl-C it answers never ends dotta
+ * underneath it, and one that kills it abandons the edit as any failure does,
+ * the caller's cleanup running.
  *
  * @param editor Editor command to launch (must not be NULL)
  * @param file_path Path to file to edit (must not be NULL)
  * @return Error or NULL on success: the program could not be run (ERR_NOT_FOUND
- *         when no PATH entry holds it), it was killed, or it exited non-zero
+ *         when no PATH entry holds it; a command line's program is the shell's
+ *         to find, and its absence the shell's exit 127), it was killed, or it
+ *         exited non-zero
  */
 error_t editor_launch(const char *editor, const char *file_path);
 

@@ -151,10 +151,12 @@ void transfer_summarize(
 /**
  * Wire transfer context into a libgit2 remote_callbacks struct.
  *
- * Installs the credential callback (always) and the progress callback matching
- * `direction`. The transfer context is required — every gitops_* network primitive
- * enforces this with CHECK_NULL, so a NULL payload here would be a dotta-internal
- * contract violation, not a user-recoverable case.
+ * Installs the credential callback (always), the progress callback matching
+ * `direction`, and for a push the per-ref status (transfer_push_status_callback),
+ * without which a ref the remote refused reads as pushed. The transfer context
+ * is required — every gitops_* network primitive enforces this with CHECK_NULL,
+ * so a NULL payload here would be a dotta-internal contract violation, not a
+ * user-recoverable case.
  *
  * Ops with no byte transfer (e.g., git_remote_connect + git_remote_ls) may pass
  * GIT_DIRECTION_FETCH; the installed progress callback simply never fires.
@@ -201,6 +203,23 @@ int transfer_push_progress_callback(
     unsigned int current,
     unsigned int total,
     size_t bytes,
+    void *payload
+);
+
+/**
+ * libgit2 push status callback (payload = transfer_context_t *).
+ *
+ * A ref the remote refused is the push's failure, said in the remote's words: a
+ * local remote's refusal (lib/libgit2/src/libgit2/transports/local.c local_push)
+ * and a server's per-ref report alike. Installed by transfer_configure_callbacks
+ * for a push. Not intended for direct use.
+ *
+ * @return 0 for a ref the remote updated; for one it refused, a failure whose
+ *         sentence is the remote's reason
+ */
+int transfer_push_status_callback(
+    const char *refname,
+    const char *status,
     void *payload
 );
 

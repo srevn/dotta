@@ -419,6 +419,7 @@ void transfer_configure_callbacks(
 
     if (direction == GIT_DIRECTION_PUSH) {
         cb->push_transfer_progress = transfer_push_progress_callback;
+        cb->push_update_reference = transfer_push_status_callback;
     } else {
         cb->transfer_progress = transfer_progress_callback;
     }
@@ -695,4 +696,28 @@ int transfer_push_progress_callback(
     }
 
     return 0;
+}
+
+/**
+ * libgit2 push status callback: a ref the remote refused is the push's failure
+ */
+int transfer_push_status_callback(
+    const char *refname,
+    const char *status,
+    void *payload
+) {
+    (void) refname;
+    (void) payload;
+
+    /* A ref the remote updated answers NULL, and one it refused its reason; libgit2
+     * counts the push done either way, reading the statuses through this callback
+     * alone (remote.c git_remote_upload). So the refusal is the push's failure,
+     * worded here in libgit2's own slot, which a non-zero return keeps (push.c
+     * git_push_status_foreach, util/errors.h git_error_set_after_callback). The
+     * reason is the remote's as it stands: every push dotta makes moves one ref,
+     * which its caller's words name (sys/gitops.c gitops_push_branch). */
+    if (!status) return 0;
+
+    (void) git_error_set_str(GIT_ERROR_CALLBACK, status);
+    return GIT_ERROR;
 }

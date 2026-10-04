@@ -270,17 +270,15 @@ error_t epoch_init(
     }
 
     /* Mint: a fresh salt beside the pair given. entropy_fill scrubs the buffer
-     * to zeros on any failure, so a half-populated salt cannot leak out. */
-    error_t err = entropy_fill(out->salt, KDF_SALT_SIZE);
-    if (err) {
-        memset(out, 0, sizeof(*out));
-        return error_wrap(err, "Failed to generate repository salt");
-    }
+     * to zeros on any failure, so a half-populated salt cannot leak out; its
+     * failure is the mint's first, said with the rest below. */
     out->memory_mib = memory_mib;
     out->passes = passes;
 
     uint8_t params[KDF_PARAMS_SIZE];
     kdf_params_store(params, memory_mib, passes);
+
+    error_t err = entropy_fill(out->salt, KDF_SALT_SIZE);
 
     /* The mint is a root commit on a ref nothing names: the two blobs on an
      * orphan's stage, committed. The census and the delete above ran on an absent
@@ -289,7 +287,7 @@ error_t epoch_init(
      * commit on this ref would seal every blob away. The message is purely
      * diagnostic; nothing in dotta parses it. */
     stage_t *stage = NULL;
-    err = stage_orphan(repo, EPOCH_REF, &stage);
+    if (!err) err = stage_orphan(repo, EPOCH_REF, &stage);
     if (!err) {
         err = stage_put(
             stage, EPOCH_SALT_BLOB, out->salt, KDF_SALT_SIZE, GIT_FILEMODE_BLOB, NULL
@@ -307,8 +305,8 @@ error_t epoch_init(
     stage_free(stage);
 
     /* The stage names the ref where its refusal is the ref's, and the blob where
-     * it is a blob's — the salt's or the params' — so the mint is said over every
-     * step, the ref never twice */
+     * it is a blob's — the salt's or the params' — and the salt's draw names
+     * its bytes alone, so the mint is said over every step, the ref never twice */
     if (err) {
         memset(out, 0, sizeof(*out));
         return error_wrap(err, "Cannot mint the repository epoch");

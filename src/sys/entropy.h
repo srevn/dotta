@@ -45,8 +45,9 @@
 /**
  * Fill `out` with `len` cryptographically-strong random bytes.
  *
- * Returns NULL on success. Returns ERR_FS on syscall failure, with `out[0..len]`
- * scrubbed before return.
+ * Returns NULL on success. Returns ERR_FS on syscall failure, naming the count
+ * it could not read — what the bytes are for is its caller's to say — with
+ * `out[0..len]` scrubbed before return.
  *
  * NULL-safe for `len == 0` (no-op success). `out` MUST be non-NULL when `len > 0`.
  *

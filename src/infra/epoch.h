@@ -124,10 +124,10 @@
  * one is simply a repository that has no epoch yet.
  *
  * Every refusal names the epoch or its act — the census, the ref and its restore,
- * the removal, the salt, the mint — and keeps its cause's code: ERR_CRYPTO where
- * the ref is missing, the load's or the census's where they stand (ERR_CRYPTO
- * for bytes refused, ERR_GIT for an object that would not read). No caller reads
- * it.
+ * the removal, the mint (the salt's draw its first step) — and keeps its cause's
+ * code: ERR_CRYPTO where the ref is missing, the load's or the census's where
+ * they stand (ERR_CRYPTO for bytes refused, ERR_GIT for an object that would
+ * not read). No caller reads it.
  *
  * Called by `cmd_init` once the store is declared its own (utils/repo.h), which
  * returns each refusal as it is said (cmds/init.c cmd_init). Encryption-disabled

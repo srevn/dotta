@@ -219,10 +219,12 @@ error_t session_save(
     store_le64(cache.expires_at_le, (uint64_t) expires_at);
 
     /* entropy_fill scrubs the buffer to zeros on failure, so a failed draw cannot
-     * leak partial random state. */
+     * leak partial random state. Its refusal names the bytes alone, and is said
+     * as the file's that was never written: key set prints the save's error as
+     * it stands (cmds/key.c key_set). */
     err = entropy_fill(cache.nonce, sizeof(cache.nonce));
     if (err) {
-        err = error_wrap(err, "Failed to read random bytes for session nonce");
+        err = error_wrap(err, "Failed to write session cache file '%s'", cache_path);
         goto cleanup;
     }
 
@@ -282,7 +284,7 @@ error_t session_save(
      * 0600 regardless of umask. */
     if (fchmod(fd, 0600) != 0) {
         err = error_errno(
-            errno, "Failed to set session cache file permissions"
+            errno, "Failed to set permissions on session cache file '%s'", cache_path
         );
         goto cleanup;
     }
@@ -297,7 +299,9 @@ error_t session_save(
             if (errno == EINTR) {
                 continue;
             }
-            err = error_errno(errno, "Failed to write session cache");
+            err = error_errno(
+                errno, "Failed to write session cache file '%s'", cache_path
+            );
             goto cleanup;
         }
         off += (size_t) n;
@@ -307,7 +311,7 @@ error_t session_save(
      * a crash, and the parent-dir fsync's extra cost does not pay for itself
      * under the "save re-typing a passphrase" threat model. */
     if (fsync(fd) != 0) {
-        err = error_errno(errno, "Failed to fsync session cache");
+        err = error_errno(errno, "Failed to sync session cache file '%s'", cache_path);
         goto cleanup;
     }
 

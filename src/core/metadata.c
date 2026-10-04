@@ -1222,9 +1222,9 @@ cleanup:
  *
  * Composed: the branch's tree via gitops_load_branch_tree — its tip commit's, a
  * branch that names anything else refused there — then metadata_load_from_tree.
- * A branch without a sheet loads as an empty one, as the tree loader says; a
- * missing branch is the tree loader's refusal (ERR_NOT_FOUND), never a sheet
- * with nothing in it.
+ * A branch without a sheet loads as an empty one, as metadata_load_from_tree
+ * says; a missing branch is gitops_load_branch_tree's refusal (ERR_NOT_FOUND),
+ * never a sheet with nothing in it.
  */
 error_t metadata_load_from_branch(
     git_repository *repo,
@@ -1248,10 +1248,11 @@ error_t metadata_load_from_branch(
  * Load metadata from a Git tree
  *
  * Loads metadata.json from a specific Git tree — a branch tip or a historical
- * commit's tree alike. A tree without the entry holds an empty sheet: the
- * absent-entry arm is the one producer of that answer, so no reader folds a
- * not-found into a collection of its own. Every failure meets one tail, which
- * names the profile over it.
+ * commit's tree alike. A tree without the sheet — no .dotta, or a .dotta directory
+ * without the file — holds an empty sheet: the absence's arm is the one producer
+ * of that answer, so no reader folds a not-found into a collection of its own,
+ * and a file at .dotta is never read as the absence. Every failure meets one
+ * tail, which names the profile over it.
  */
 error_t metadata_load_from_tree(
     git_repository *repo,
@@ -1266,45 +1267,46 @@ error_t metadata_load_from_tree(
 
     error_t err = NULL;
     git_tree_entry *entry = NULL;
-    char *json_str = NULL;
-    metadata_t *metadata = NULL;
 
-    /* Look for .dotta/metadata.json (use bypath for nested paths). No entry is
-     * a sheet claiming nothing — the settled answer every reader wants — and
-     * only a lookup that failed to look is an error. */
+    /* The sheet at its one name. No entry is a sheet claiming nothing — the settled
+     * answer every reader wants — but Git's lookup answers not-found where a
+     * file stands on the way exactly as where nothing does, and only the second
+     * is that answer. A subtree that will not load on the way is -1, never
+     * not-found: only a lookup that failed to look is an error, and a not-found
+     * through a tree is the file's own absence (lib/libgit2/src/libgit2/tree.c
+     * git_tree_entry_bypath). */
     int rc = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
     if (rc == GIT_ENOTFOUND) {
-        *out = metadata_create_empty();
-        return NULL;
-    }
-    if (rc < 0) {
+        /* One rung can stand in the way, the sheet's directory, so it alone is
+         * asked: absent, or a tree without the file, is the absence; a blob, a
+         * link or a gitlink there is no sheet a reader may read as empty. */
+        const git_tree_entry *dir = git_tree_entry_byname(tree, METADATA_DIR);
+        if (!dir || git_tree_entry_type(dir) == GIT_OBJECT_TREE) {
+            *out = metadata_create_empty();
+            return NULL;
+        }
+        err = error_create(ERR_CONFLICT, "'%s' is a file in this tree", METADATA_DIR);
+    } else if (rc < 0) {
         err = error_git(rc, "Cannot read '%s'", METADATA_FILE_PATH);
-        goto cleanup;
     }
 
-    /* Read blob content (null-terminated for JSON parsing) */
+    /* The blob's bytes, NUL-terminated for the parser, which writes *out on success
+     * alone (metadata_from_json): nothing here holds a sheet across the tail */
+    char *json_str = NULL;
     size_t size = 0;
-    err = gitops_read_blob_content(
-        repo, git_tree_entry_id(entry), (void **) &json_str, &size
-    );
-    if (err) goto cleanup;
+    if (!err) {
+        err = gitops_read_blob_content(
+            repo, git_tree_entry_id(entry), (void **) &json_str, &size
+        );
+    }
+    if (!err) err = metadata_from_json(json_str, out);
 
-    /* Parse JSON */
-    err = metadata_from_json(json_str, &metadata);
-    if (err) goto cleanup;
+    free(json_str);
+    git_tree_entry_free(entry);             /* NULL-safe, and NULL unless rc == 0 */
 
-    /* Success - transfer ownership to caller */
-    *out = metadata;
-    metadata = NULL;
-
-cleanup:
-    if (json_str) free(json_str);
-    if (entry) git_tree_entry_free(entry);
-    if (metadata) metadata_free(metadata);
-
-    /* Each step names its own — the entry, the blob, the byte the parse stopped
-     * at — and none the profile, which this loader alone was handed: said once,
-     * over whichever refused, so no caller says it again */
+    /* Each step names its own — the file at .dotta, the entry, the blob, the
+     * byte the parse stopped at — and none the profile, which this loader alone
+     * was handed: said once, over whichever refused, so no caller says it again */
     return error_wrap(err, "Failed to load metadata for profile '%s'", profile);
 }
 

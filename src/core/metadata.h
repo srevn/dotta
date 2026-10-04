@@ -671,9 +671,9 @@ error_t metadata_capture_ancestors(
 /**
  * Load metadata from profile branch
  *
- * Reads .dotta/metadata.json from the branch's tip, under the tree loader's
+ * Reads .dotta/metadata.json from the branch's tip, under metadata_load_from_tree's
  * contract: a branch without a sheet loads as an empty one. A branch that cannot
- * be read is the error the tree loader raises (ERR_GIT), never an empty sheet.
+ * be read is gitops_load_branch_tree's error (ERR_GIT), never an empty sheet.
  * Rejects version mismatches with a clear error message (no migration code).
  *
  * @param repo Repository (must not be NULL)
@@ -693,13 +693,15 @@ error_t metadata_load_from_branch(
  * Loads metadata.json from a specific Git tree — a branch tip or a historical
  * commit's tree alike.
  *
- * A tree without a sheet holds an empty sheet. The absent entry is a settled
- * answer (nothing claimed), not a failure to look, and this loader is its one
- * producer: a reader receives a collection on every success and never folds a
- * not-found into one of its own. Every error is real — a lookup that failed, an
- * unreadable blob, a document the parser refuses (a version mismatch, a duplicate
- * key) — and a reader that folds one into an empty sheet is reading a corrupt
- * sheet as "no claims".
+ * A tree without a sheet holds an empty sheet: no .dotta, or a .dotta directory
+ * without the file. The absent entry is a settled answer (nothing claimed), not
+ * a failure to look, and this loader is its one producer: a reader receives a
+ * collection on every success and never folds a not-found into one of its own.
+ * Every error is real — a lookup that failed, a file at .dotta, which Git's lookup
+ * reads as nothing there (lib/libgit2/src/libgit2/tree.c git_tree_entry_bypath),
+ * an unreadable blob, a document the parser refuses (a version mismatch, a
+ * duplicate key) — and a reader that folds one into an empty sheet is reading a
+ * corrupt sheet as "no claims".
  *
  * The view holds to that without exception: both builders load the sheet of the
  * tree they read, and one that will not load fails the build (core/manifest.h).
@@ -725,7 +727,10 @@ error_t metadata_load_from_branch(
  * @param tree Git tree to load from (must not be NULL)
  * @param profile The profile whose sheet this is, named over every failure —
  *                its callers name it nowhere (must not be NULL)
- * @param out Metadata (must not be NULL, caller must free with metadata_free)
+ * @param out Metadata (must not be NULL, caller must free with metadata_free);
+ *            untouched on failure, so the NULL a caller passed is still no sheet
+ *            (core/workspace.c workspace_orphan_authority's cache, cmds/list.c
+ *            list_files' marks)
  * @return Error or NULL on success
  */
 error_t metadata_load_from_tree(
@@ -755,7 +760,9 @@ buffer_t metadata_to_json(const metadata_t *metadata);
  * message (no migration code).
  *
  * @param json_str JSON string (must not be NULL)
- * @param out Metadata (must not be NULL, caller must free with metadata_free)
+ * @param out Metadata (must not be NULL, caller must free with metadata_free);
+ *            untouched on failure, so metadata_load_from_tree hands the parse
+ *            its own out
  * @return Error or NULL on success
  */
 error_t metadata_from_json(

@@ -719,9 +719,9 @@ static error_t capture_ancestor(
      * the walk's own word about a directory the profile tracks, and nothing derived
      * refreshes or retires it. A FILE item is the tree's business: a path is a
      * blob or a tree, so an item of that kind at a directory's key is stale
-     * metadata, and the tree is its authority — the view drops it where its own
-     * walk met the blob (core/manifest.c manifest_contribute), and a capture at
-     * that key replaces it. The prune is no authority over it: it takes
+     * metadata, and the tree is its authority — the branch reads a FILE item
+     * only at a blob its walk meets (core/branch.c branch_step), and a capture
+     * at that key replaces it. The prune is no authority over it: it takes
      * derivations, and this item is not one. */
     const metadata_item_t *held = metadata_lookup(metadata, storage_path);
     if (held && (held->kind != PATH_KIND_DIRECTORY || held->tracked)) {

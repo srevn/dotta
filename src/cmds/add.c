@@ -21,6 +21,7 @@
 #include "base/output.h"
 #include "base/string.h"
 #include "cmds/completion.h"
+#include "core/branch.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
@@ -1707,15 +1708,15 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (err) goto cleanup;
 
     /* The branch as this command found it, under this command's table: one
-     * contribution, this profile's, from the tree the stage opened at. Built
-     * after the sheet load so a sheet that will not load is still the earlier
-     * refusal — the builder loads it again and would say the same thing later.
-     * Every naming question below reads it, so does the kind question, and so
-     * does the refusal the completed selection owes; the command's arena's, as
-     * every view is. */
-    err = manifest_build_tree(
-        repo, stage_tree(stage), opts->profile, mounts, ctx->arena, &view
-    );
+     * contribution, this profile's, from the branch over the tree the stage opened
+     * at, let go once its view is built. Built after the sheet load so a sheet
+     * that will not load is still the earlier refusal — the branch loads it again
+     * and would say the same thing later. Every naming question below reads it,
+     * so does the kind question, and so does the refusal the completed selection
+     * owes; the command's arena's, as every view is. */
+    branch_t *branch = branch_open(repo, opts->profile, stage_tree(stage));
+    err = manifest_build_branch(branch, mounts, ctx->arena, &view);
+    branch_free(branch);
     if (err) goto cleanup;
 
     /* The tree this commit will write, as its names are chosen: the branch's

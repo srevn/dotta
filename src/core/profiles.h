@@ -50,6 +50,7 @@
 #include <types.h>
 
 #include "base/hashmap.h"
+#include "core/branch.h"
 #include "core/metadata.h"
 #include "core/state.h"
 #include "infra/mount.h"
@@ -300,13 +301,13 @@ error_t profile_require(git_repository *repo, const char *name);
  *
  * Counted from the branch, not from the view: the listings that report these
  * name available profiles too, and a profile nothing has enabled owns no rows.
- * The two sources are the ones the view's per-profile step reads when the profile
- * *is* enabled (manifest_contribute) — the tree's content blobs and the branch
- * metadata's tracked directories — and both sides read one content gate
+ * The two sources are the ones the branch's walk shows the view when the profile
+ * *is* enabled (core/branch.h branch_walk) — the tree's content blobs and the
+ * branch metadata's tracked directories — and both sides read one content gate
  * (infra/label.h label_prefixes), so a profile that wins every path it claims
  * counts the same here as its rows do there. The directory side's staleness probe
- * is the one place the two builds read different witnesses: the view contradicts
- * a claim from the blob its own walk met, this count asks the tree (core/profiles.c
+ * is the one place the two read different witnesses: the walk contradicts a claim
+ * from the blob it met, this count asks the tree (core/profiles.c
  * profile_get_tree_stats). They answer alike for every key the grammar admits,
  * and the proof is written where the probe is.
  *
@@ -478,7 +479,7 @@ typedef struct {
  * for — and folds every failure to UNVERIFIED; the count's staleness probe
  * (core/profiles.c profile_get_tree_stats) and export's claim append (cmds/export.c
  * append_claim_dirs) hold the sheet's item and ask whether the tree contradicts
- * it, which is the enumeration's question (core/manifest.c manifest_claim_blob's
+ * it, which is the enumeration's question (core/branch.c branch_walk's
  * contradiction index).
  *
  * The point query, where the enumeration is its sibling: "what does this branch
@@ -624,8 +625,8 @@ error_t profile_needs_target(
 );
 
 /**
- * The name `profile` has for `filesystem_path` in `tree`: the claim standing
- * there, or the name a claim there would take
+ * The name a branch has for `filesystem_path`: the claim standing there, or the
+ * name a claim there would take
  *
  * A filesystem key, and the only one. The resolver answers two and the other is
  * already settled where the argument was read (infra/path.h): a name the user
@@ -635,14 +636,14 @@ error_t profile_needs_target(
  * not keep, is held by the branch and never by its view. What arrives here is
  * the key that needs the branch to answer it.
  *
- * Asked of the profile's own view of `tree` (manifest_build_tree, the sheet loaded
- * strictly), in this order: the row standing there answers with its own name
- * whatever its kind, so home/jail/etc/x under a binding at ~/jail is found by
- * ~/jail/etc/x and the chain above a file captured before the binding answers
- * as the claim it is; else the name the profile would give the path (manifest_name)
- * — the word a history search and a not-found line need, which at a root of the
- * profile's own is that root's label's word. Two arms and no third: naming is
- * total, so every path this is asked about has a name.
+ * Asked of the branch's own view (core/manifest.h manifest_build_branch, its
+ * sheet read strictly), in this order: the row standing there answers with its
+ * own name whatever its kind, so home/jail/etc/x under a binding at ~/jail is
+ * found by ~/jail/etc/x and the chain above a file captured before the binding
+ * answers as the claim it is; else the name the profile would give the path
+ * (manifest_name) — the word a history search and a not-found line need, which
+ * at a root of the profile's own is that root's label's word. Two arms and no
+ * third: naming is total, so every path this is asked about has a name.
  *
  * The row before the namer is the contract, not a shortcut: a derived claim is
  * something the profile holds and nothing it names (manifest_is_derived), so
@@ -658,22 +659,23 @@ error_t profile_needs_target(
  * by strcmp (infra/mount.h). The answer is the arena's — the view's own row string,
  * or the namer's — as the view this call builds is.
  *
- * Cost: one tree walk and one sheet load, every call. Its other face: a profile
- * whose sheet will not load refuses a path where the name its caller answers
- * unaided proceeds — the view is strict, a verb's own read is not
- * (core/manifest.h). A ref or a tree that will not load refuses both.
+ * Cost: one tree walk every call, and the sheet loaded at the branch's first
+ * question (core/branch.h). Its other face: a profile whose sheet will not load
+ * refuses a path where the name its caller answers unaided proceeds — the view
+ * is strict, a verb's own read is not (core/manifest.h). A ref or a tree that
+ * will not load refuses both.
  *
- * Readers: `show -p` and `list -p` over the tree the verb selected (the branch's
- * tip, or the commit the user named, so a name that changed since is found as
- * of then). `export` selects rows instead, `remove` matches its own claims,
- * `revert` reads the claim standing in the tree it edits (cmds/revert.c
- * claim_standing), and `ignore --test` asks manifest_name itself.
+ * Readers: `show -p` and `list -p` over the branch the verb opened at the tree
+ * it selected (the tip, or the commit the user named, so a name that changed
+ * since is found as of then: cmds/show.c cmd_show, cmds/list.c list_file_history).
+ * `export` selects rows instead, `remove` matches its own claims, `revert` reads
+ * the claim standing in the tree it edits (cmds/revert.c claim_standing), and
+ * `ignore --test` asks manifest_name itself.
  *
- * @param repo Repository the tree's blobs (the sheet among them) are read from
- *             (must not be NULL)
- * @param tree The tree the claim is looked for in (must not be NULL)
+ * @param branch The branch the claim is looked for in — its tip, or a commit's,
+ *               so a commit's answers as of then (must not be NULL; its sheet
+ *               read through it)
  * @param mounts The table the rows are placed by (must not be NULL)
- * @param profile Whose claims these are (must not be NULL)
  * @param filesystem_path Where to ask, spelled as the rows are keyed (must not
  *        be NULL)
  * @param arena Arena that owns the answer (must not be NULL)
@@ -682,10 +684,8 @@ error_t profile_needs_target(
  * @return Error or NULL on success
  */
 error_t profile_claim_name(
-    git_repository *repo,
-    const git_tree *tree,
+    branch_t *branch,
     const mount_table_t *mounts,
-    const char *profile,
     const char *filesystem_path,
     arena_t *arena,
     const char **out_storage

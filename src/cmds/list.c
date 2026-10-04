@@ -21,6 +21,7 @@
 #include "base/output.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
+#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -500,8 +501,8 @@ static error_t list_files(
             rc = git_tree_entry_bypath(&entry, tree, storage_path);
             if (rc == 0) {
                 /* The stamp the branch's own claim makes of this entry, read as
-                 * the view projects it: never onto a link, whose bytes are its
-                 * target and never a seal (core/manifest.c manifest_apply_claim).
+                 * the branch decodes it: never onto a link, whose bytes are its
+                 * target and never a seal (core/branch.c branch_step's link rule).
                  * A mark and a number are a screen, so the claim answers and no
                  * content blob is opened — the store made the stamp true for
                  * every file it sealed (infra/content.h content_capture_file),
@@ -714,13 +715,17 @@ static error_t list_file_history(
         return error_git(rc, "Failed to load tree for profile '%s'", profile);
     }
 
+    /* The profile's branch over the tip's tree, held beside it */
+    branch_t *branch = branch_open(repo, profile, tree);
+
     /* A path under a named profile, named by the branch at that tip
      * (core/profiles.h profile_claim_name) */
     if (opts->profile && arg.key == PATH_KEY_FILESYSTEM) {
         err = profile_claim_name(
-            repo, tree, mounts, profile, arg.filesystem_path, ctx->arena, &storage_path
+            branch, mounts, arg.filesystem_path, ctx->arena, &storage_path
         );
         if (err) {
+            branch_free(branch);
             git_tree_free(tree);
             return err;
         }
@@ -737,6 +742,7 @@ static error_t list_file_history(
      * once held there. */
     profile_held_t held;
     err = profile_holds(repo, tree, NULL, profile, storage_path, &held);
+    branch_free(branch);
     git_tree_free(tree);
     if (err) return err;
 

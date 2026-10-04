@@ -230,10 +230,9 @@ typedef enum dotta_verbosity {
  * (`mount_resolve`). Naming a path beneath its roots is the view's own over the
  * table it lends and no verb here (`core/manifest.h` `manifest_name`). Requires
  * `state`. A command declares it when it asks one of the table's verbs: where a
- * claim stands (`mount_resolve`: diff, ignore, remove, revert, update),
- * a view of one branch placed by it (`manifest_build_tree`: diff, export, revert;
- * `manifest_build_branch`: ignore), a claim's ancestors climbed
- * (`metadata_capture_ancestors`: update),
+ * claim stands (`mount_resolve`: diff, ignore, remove, revert, update), a view
+ * of one branch placed by it (`manifest_build_branch`: diff, export, ignore,
+ * revert), a claim's ancestors climbed (`metadata_capture_ancestors`: update),
  * or a claim found by its key (`profile_claim_name`: list, show;
  * `profile_discover_claims`: revert; `profile_build_filesystem_index`: remove).
  * Reading a CLI path is not one of those verbs: an argument's key is the
@@ -492,7 +491,8 @@ typedef struct dotta_run {
  *         environment (`utils/hooks.c` hook_execute, `utils/bootstrap.c` run_live),
  *         a run's own lists (`utils/bootstrap.c` bootstrap_fire), a fetch's
  *         refspecs (`sys/gitops.c` gitops_fetch_branches), a diff's attribution
- *         index (`core/manifest.c` manifest_diff), a listing read to decide
+ *         index (`core/manifest.c` manifest_diff), a branch walk's names a blob
+ *         stands at (`core/branch.c` branch_walk), a listing read to decide
  *         (`sys/filesystem.c` fs_remove_empty_dir, `sys/upstream.c`
  *         upstream_ensure_tracking_branch, `infra/epoch.c` epoch_walk), a printer's
  *         sections (`cmds/status.c` status_print_workspace), and a walk whose

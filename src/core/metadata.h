@@ -12,7 +12,7 @@
  *   here, and the tree's word wins over a stale item's kind (read for one name
  *   by core/profiles.h profile_holds and, for the claim an orphan's record
  *   remembers, by core/workspace.c workspace_orphan_authority; for the whole
- *   branch by core/manifest.c manifest_contribute)
+ *   branch by core/branch.c branch_walk)
  * - permission bits: the sheet's ("mode") — Git's filemode holds one bit of them
  *   (owner-execute), the sheet holds them all
  * - ownership: the sheet's ("owner"/"group"), two names either of which may be
@@ -59,10 +59,10 @@
  * at all: a derivation survives by what stands beneath it, a tracked claim by
  * the word itself (metadata_prune_ancestors).
  *
- * The sheet is sparse and the view completes it: manifest_build resolves an
- * unclaimed mode into an answer at build (the filemode floor for blob rows,
- * DIR_MODE_DEFAULT for directory claims), so no consumer downstream of the view
- * ever meets a hole.
+ * The sheet is sparse and the view completes it: an unclaimed mode is resolved
+ * into an answer at build, by the claim's floor (core/branch.h branch_claim_mode:
+ * the filemode floor for a blob, DIR_MODE_DEFAULT for a directory claim), so no
+ * consumer downstream of the view ever meets a hole.
  *
  * Symlinks claim no mode: symlink(2) takes none, and though lchmod(2) exists on
  * macOS/BSD, the bits it sets govern nothing — non-portable and functionally
@@ -149,8 +149,8 @@ typedef struct state_record state_record_t;
  * A value, never evidence: what a directory claim means is said by its kind and
  * its "tracked" word, never by the bits it carries, so nothing compares a mode
  * against this to read intent back out of it. Readers, each supplying the answer
- * where a claim named none: the view's projection (core/manifest.c
- * manifest_contribute), deploy's creation of a rung no claim covers
+ * where a claim named none: the claim's floor, which the view's rows take
+ * (core/branch.c branch_claim_mode), deploy's creation of a rung no claim covers
  * (core/deploy.c), and export's materialisation (cmds/export.c).
  */
 #define DIR_MODE_DEFAULT 0755
@@ -160,11 +160,16 @@ typedef struct state_record state_record_t;
  *
  * Permission bits run 0000–0777 and 0000 is one of them: `chmod 000` is a real
  * mode a user can mean. Absence therefore needs a value outside the domain, not
- * the domain's floor. Private to the claim sheet: the view resolves absence into
- * an answer at build (the filemode floor for blob rows, DIR_MODE_DEFAULT for
- * directory claims) and a capture's record into none (metadata_item_claim: a
- * link's, the one capture that claims no mode), so no row, record or verdict
- * ever carries it.
+ * the domain's floor. A sheet's item carries it, and so does the claim a branch
+ * decodes from one (core/branch.h branch_claim_t); it ends wherever a mode is
+ * placed — the view's rows take the claim's floor (core/branch.h branch_claim_mode:
+ * the filemode floor for a blob, DIR_MODE_DEFAULT for a directory) and a capture's
+ * record takes none (metadata_item_claim: a link's, the one capture that claims
+ * no mode) — so no row, record or verdict carries it. The commands that read an
+ * item's mode raw test it beside the item: the header show prints and export's
+ * materialised mode, each where a mode is claimed (cmds/show.c print_blob_content,
+ * cmds/export.c export_entry_mode), and the capture lines add and update print
+ * (cmds/add.c add_print_capture, cmds/update.c update_profile).
  */
 #define MODE_UNCLAIMED ((mode_t) -1)
 
@@ -194,14 +199,15 @@ typedef struct state_record state_record_t;
  * list_files (the mark, and the framing taken off the size beside it),
  * core/profiles.c profile_count_entry (the same framing, in the fold that row's
  * total must agree with), cmds/export.c collect_entry and collect_storage (which
- * blobs phase 1 reads) and, through the projection onto the view's rows
- * (core/manifest.h manifest_row_t.encrypted), cmds/export.c entry_from_row,
- * core/workspace.c workspace_analyze_file and cmds/key.c key_status.
+ * blobs phase 1 reads) and, through the claim the branch decodes from it
+ * (core/branch.c branch_step) onto the view's rows (core/manifest.h
+ * manifest_row_t.encrypted), cmds/export.c entry_from_row, core/workspace.c
+ * workspace_analyze_file and cmds/key.c key_status.
  *
  * Each reads it where it stands, off the item: there is no per-field reader to
  * hold the link rule for them, so each spells that rule in its own shape — an
- * arm where the code already branches on the kind (show, export, the projection),
- * a conjunction where the row is flat (list, the fold).
+ * arm where the code already branches on the kind (show, export, the branch's
+ * decode), a conjunction where the row is flat (list, the fold).
  */
 typedef struct {
     path_kind_t kind;   /* FILE: the tree names the path. DIRECTORY: the item is the claim. */
@@ -313,11 +319,11 @@ metadata_item_t *metadata_item_clone(
  *
  * Onto `record`'s claim, the one the path is reconciled against from here on
  * (core/state.h state_record_t): the item's mode, and its owner and group copied
- * into `arena`. MODE_UNCLAIMED does not leave the sheet — the item that claims
- * no mode is a link's, whose record reads none under its kind — so it lands as
- * 0, the don't-care a read of the record gives back. No item claims nothing,
- * and the record's claim is written empty — a link that claims no ownership either.
- * The claim is all this writes: the record's other columns are the caller's.
+ * into `arena`. MODE_UNCLAIMED reaches no record — the item that claims no mode
+ * is a link's, whose record reads none under its kind — so it lands as 0, the
+ * don't-care a read of the record gives back. No item claims nothing, and the
+ * record's claim is written empty — a link that claims no ownership either. The
+ * claim is all this writes: the record's other columns are the caller's.
  *
  * The names are copied, never borrowed: the sheet frees its items with itself,
  * and the record a capture makes outlives the sheet it was made beside — update's
@@ -703,10 +709,11 @@ error_t metadata_load_from_branch(
  * duplicate key) — and a reader that folds one into an empty sheet is reading a
  * corrupt sheet as "no claims".
  *
- * The view holds to that without exception: both builders load the sheet of the
- * tree they read, and one that will not load fails the build (core/manifest.h).
- * So does the branch statistics' count, which is where a listing's question of
- * what a profile holds ends (core/profiles.h profile_get_tree_stats).
+ * The view holds to that without exception: the branch's walk reads the sheet
+ * of the tree it walks, strictly for the view, and one that will not load fails
+ * the build (core/branch.h branch_walk, core/manifest.h). So does the branch
+ * statistics' count, which is where a listing's question of what a profile holds
+ * ends (core/profiles.h profile_get_tree_stats).
  *
  * The readers that deliberately do otherwise are counted across both doors —
  * this one and metadata_load_from_branch above, which is this call — and each
@@ -730,7 +737,7 @@ error_t metadata_load_from_branch(
  * @param out Metadata (must not be NULL, caller must free with metadata_free);
  *            untouched on failure, so the NULL a caller passed is still no sheet
  *            (core/workspace.c workspace_orphan_authority's cache, cmds/list.c
- *            list_files' marks)
+ *            list_files' marks, core/branch.c branch_sheet_failure's handle)
  * @return Error or NULL on success
  */
 error_t metadata_load_from_tree(

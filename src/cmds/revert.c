@@ -19,6 +19,7 @@
 #include "base/output.h"
 #include "base/refspec.h"
 #include "cmds/completion.h"
+#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -130,11 +131,10 @@ static error_t select_profile(
 }
 
 /**
- * The claim `profile` stands at `filesystem_path` in `tree`, or NULL when it
- * stands none
+ * The claim `branch` stands at `filesystem_path`, or NULL when it stands none
  *
- * One contribution of the tree, asked for the row at the path (core/manifest.h
- * manifest_build_tree, manifest_lookup_claim). The row is the arena's, as the
+ * One contribution of the branch, asked for the row at the path (core/manifest.h
+ * manifest_build_branch, manifest_lookup_claim). The row is the arena's, as the
  * view is, so the answer survives this call.
  *
  * The row and not its name, because this file asks it two ways: the read takes
@@ -146,13 +146,13 @@ static error_t select_profile(
  * contract. The third question — may this name be authored at all — is the
  * admission's, and it reads more of one view than a row (refuse_second_name).
  *
- * Strict, like every view: a tree whose sheet will not load refuses the question
+ * Strict, like every view: a branch whose sheet will not load refuses the question
  * rather than answering from the tree alone. cmd_revert loads both sheets strictly
  * already, so no policy is added here.
  *
  * @param ctx Dispatch context (must not be NULL)
- * @param tree The tree the claim is looked for in (must not be NULL)
- * @param profile Whose claims these are (must not be NULL)
+ * @param branch The branch the claim is looked for in — the tip's or the target
+ *               commit's (must not be NULL)
  * @param filesystem_path Where to ask (must not be NULL)
  * @param out_row The claim, or NULL where none stands (must not be NULL; the
  *                command arena's, borrowed)
@@ -160,26 +160,23 @@ static error_t select_profile(
  */
 static error_t claim_standing(
     const dotta_ctx_t *ctx,
-    const git_tree *tree,
-    const char *profile,
+    branch_t *branch,
     const char *filesystem_path,
     const manifest_row_t **out_row
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(tree);
-    CHECK_NULL(profile);
+    CHECK_NULL(branch);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(out_row);
 
     *out_row = NULL;
 
     manifest_t *view = NULL;
-    error_t err = manifest_build_tree(
-        ctx->run.repo, tree, profile, ctx->run.mounts, ctx->arena, &view
-    );
+    error_t err = manifest_build_branch(branch, ctx->run.mounts, ctx->arena, &view);
     if (err) return err;
 
-    *out_row = manifest_lookup_claim(view, profile, filesystem_path);  /* the arena's */
+    /* The profile's own contribution: the row is the arena's */
+    *out_row = manifest_lookup_claim(view, branch_profile(branch), filesystem_path);
 
     return NULL;
 }
@@ -204,29 +201,27 @@ static error_t claim_standing(
  * them.
  *
  * @param ctx Dispatch context (must not be NULL)
- * @param tip The tip's tree, whose claims the name would join (must not be NULL)
- * @param profile Whose claims these are (must not be NULL)
+ * @param branch The branch at its tip, whose claims the name would join (must
+ *               not be NULL)
  * @param filesystem_path Where the typed name resolves (must not be NULL)
  * @param name The typed name (must not be NULL)
  * @return The refusal, or NULL when the name may be authored
  */
 static error_t refuse_second_name(
     const dotta_ctx_t *ctx,
-    const git_tree *tip,
-    const char *profile,
+    branch_t *branch,
     const char *filesystem_path,
     const char *name
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(tip);
-    CHECK_NULL(profile);
+    CHECK_NULL(branch);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(name);
 
+    const char *profile = branch_profile(branch);
+
     manifest_t *view = NULL;
-    error_t err = manifest_build_tree(
-        ctx->run.repo, tip, profile, ctx->run.mounts, ctx->arena, &view
-    );
+    error_t err = manifest_build_branch(branch, ctx->run.mounts, ctx->arena, &view);
     if (err) return err;
 
     const manifest_row_t *row = manifest_lookup_claim(view, profile, filesystem_path);
@@ -283,10 +278,10 @@ static error_t refuse_second_name(
  * and where the place stands is none of it.
  *
  * @param ctx Dispatch context (must not be NULL)
- * @param target_tree The target commit's tree (must not be NULL)
+ * @param target_branch The profile's branch over the target commit's tree (must
+ *                      not be NULL)
  * @param target_sheet The target commit's claim sheet, loaded strictly (must
  *                     not be NULL)
- * @param profile Whose claims these are (must not be NULL)
  * @param arg The argument, in the key it named (must not be NULL)
  * @param filesystem_path Where both trees may be asked about, or NULL for a custom/
  *        name this machine cannot place
@@ -298,9 +293,8 @@ static error_t refuse_second_name(
  */
 static error_t entry_to_restore(
     const dotta_ctx_t *ctx,
-    const git_tree *target_tree,
+    branch_t *target_branch,
     const metadata_t *target_sheet,
-    const char *profile,
     const path_input_t *arg,
     const char *filesystem_path,
     const char *commit,
@@ -308,9 +302,8 @@ static error_t entry_to_restore(
     profile_held_t *out_held
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(target_tree);
+    CHECK_NULL(target_branch);
     CHECK_NULL(target_sheet);
-    CHECK_NULL(profile);
     CHECK_NULL(arg);
     CHECK_NULL(commit);
     CHECK_NULL(out_name);
@@ -319,7 +312,11 @@ static error_t entry_to_restore(
     *out_name = NULL;
     *out_held = (profile_held_t){ 0 };
 
+    /* The commit's two documents are asked of one name by core/profiles.h
+     * profile_holds, over the tree the branch reads and the sheet step 6 read */
     git_repository *repo = ctx->run.repo;
+    const git_tree *target_tree = branch_tree(target_branch);
+    const char *profile = branch_profile(target_branch);
 
     /* A typed name is asked first, as typed; a path has no name until the claim
      * standing there gives it one. */
@@ -336,7 +333,7 @@ static error_t entry_to_restore(
      * construction: the row came from them. */
     if (held.kind == PROFILE_HELD_NOTHING && filesystem_path) {
         const manifest_row_t *row = NULL;
-        err = claim_standing(ctx, target_tree, profile, filesystem_path, &row);
+        err = claim_standing(ctx, target_branch, filesystem_path, &row);
         if (err) return err;
 
         if (row) {
@@ -730,7 +727,9 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     const char *restored_name = NULL;
     git_commit *target_commit = NULL;
     stage_t *stage = NULL;
+    branch_t *standing_branch = NULL;
     git_tree *target_tree = NULL;
+    branch_t *target_branch = NULL;
     git_tree_entry *standing_entry = NULL;
     profile_held_t target_held = { 0 };
     metadata_t *standing_sheet = NULL;
@@ -765,22 +764,24 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * that moves between the preview and the commit is refused at the commit,
      * --force or not: what the user confirmed is what is reverted. It is also
      * the tree the profile's own name for the place is read from (steps 10 and
-     * 12): the tree the revert edits is the tree the claim is looked for in, so
-     * the name and the write cannot disagree. */
+     * 12), through the branch over it: the tree the revert edits is the tree
+     * the claim is looked for in, so the name and the write cannot disagree. */
     char refname[DOTTA_REFNAME_MAX];
     err = gitops_branch_refname(refname, sizeof(refname), profile);
     if (err) goto cleanup;
 
     err = stage_open(repo, refname, &stage);
     if (err) goto cleanup;
+    standing_branch = branch_open(repo, profile, stage_tree(stage));
 
     /* Step 5: the target commit's tree, opened once and lent to everything below
-     * that reads the commit. */
+     * that reads the commit, and the branch over it. */
     int rc = git_commit_tree(&target_tree, target_commit);
     if (rc < 0) {
         err = error_git(rc, "Cannot read the tree of commit '%s'", opts->commit);
         goto cleanup;
     }
+    target_branch = branch_open(repo, profile, target_tree);
 
     /* Step 6: the two sheets — the one the write merges into, read from the tree
      * the stage opened at, and the target commit's, whose claim at the name is
@@ -828,7 +829,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * — while a commit object anywhere in the branch could refuse a revert that
      * needed none of it.) */
     err = entry_to_restore(
-        ctx, target_tree, target_sheet, profile, &arg, filesystem_path, oid_str,
+        ctx, target_branch, target_sheet, &arg, filesystem_path, oid_str,
         &target_name, &target_held
     );
     if (err) goto cleanup;
@@ -871,7 +872,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * roots would choose a deployment contract the user did not. */
     if (arg.key == PATH_KEY_FILESYSTEM) {
         const manifest_row_t *row = NULL;
-        err = claim_standing(ctx, stage_tree(stage), profile, filesystem_path, &row);
+        err = claim_standing(ctx, standing_branch, filesystem_path, &row);
         if (err) goto cleanup;
 
         restored_name = row ? row->storage_path : target_name;
@@ -925,9 +926,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * the claim standing there and can never be a second name, so this arm is
      * the typed one's alone. */
     if (arg.key == PATH_KEY_STORAGE && !standing_entry && filesystem_path) {
-        err = refuse_second_name(
-            ctx, stage_tree(stage), profile, filesystem_path, restored_name
-        );
+        err = refuse_second_name(ctx, standing_branch, filesystem_path, restored_name);
         if (err) goto cleanup;
     }
 
@@ -1237,7 +1236,9 @@ cleanup:
     if (standing_sheet) metadata_free(standing_sheet);
     if (target_sheet) metadata_free(target_sheet);
     if (standing_entry) git_tree_entry_free(standing_entry);
+    branch_free(target_branch);
     if (target_tree) git_tree_free(target_tree);
+    branch_free(standing_branch);
     stage_free(stage);
     if (target_commit) git_commit_free(target_commit);
 

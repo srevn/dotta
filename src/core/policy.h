@@ -110,7 +110,7 @@ typedef enum {
  *   IS encrypted, metadata.encrypted is a byte-derived cache (established at
  *   the write boundary in cmds/add.c, cmds/update.c, and cmds/revert.c's restore),
  *   and a sheet that disagrees with its tree is a state the view tolerates
- *   (core/manifest.c) — here, where a wrong answer publishes a secret.
+ *   (core/branch.c branch_step) — here, where a wrong answer publishes a secret.
  *
  * @param config Configuration (can be NULL; disables priority-4)
  * @param storage_path File path in profile (e.g., "home/.bashrc", must not be NULL)

@@ -413,8 +413,8 @@ const mount_root_t *mount_root_of(
  * where it is read, not only where it was written (infra/label.h
  * label_validate_storage): a sheet's keys at its parse (core/metadata.c
  * metadata_from_json), a tree's entries at their walk (core/profiles.c
- * profile_list_entry and profile_count_entry, core/manifest.c manifest_claim_blob),
- * an argument at its resolver (infra/path.h path_input_resolve), and the state's
+ * profile_list_entry and profile_count_entry, core/branch.c branch_step), an
+ * argument at its resolver (infra/path.h path_input_resolve), and the state's
  * column by its own constraint (core/state.c storage_spelling). One under no
  * label is a caller's bug, and dies.
  *

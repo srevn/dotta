@@ -19,6 +19,7 @@
 #include "base/heap.h"
 #include "base/output.h"
 #include "cmds/completion.h"
+#include "core/branch.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -666,9 +667,10 @@ static error_t ignore_test(
              * view's from here on — the named profile's arm hands in the very
              * table this lends back (core/manifest.h manifest_mounts). */
             if (profile) {
-                err = manifest_build_branch(
-                    repo, profile, mounts, ctx->arena, &view
-                );
+                branch_t *branch = NULL;
+                err = branch_load(repo, profile, &branch);
+                if (!err) err = manifest_build_branch(branch, mounts, ctx->arena, &view);
+                branch_free(branch);
             } else {
                 err = manifest_build(repo, state, ctx->arena, &view);
             }

@@ -1498,9 +1498,9 @@ static orphan_authority_t workspace_orphan_authority(
 
     /* The tree at the name, asked first and for either kind: a blob there is
      * the file claim itself, and the one thing that unbacks a directory claim —
-     * the tree is the content authority, and the view decides in this order too,
-     * its blob walk contradicting an item before its directory pass reads one
-     * (core/manifest.c manifest_contribute). Three answers, not two: a subtree
+     * the tree is the content authority, and the branch's walk decides in this
+     * order too, its blobs contradicting an item before its directory claims
+     * are shown (core/branch.c branch_walk). Three answers, not two: a subtree
      * that will not load on the way is a failure to look, never an absence —
      * and this row's alone, kept by nothing, since another name may have a way
      * past it; its code is read and never worded. */
@@ -1509,8 +1509,8 @@ static orphan_authority_t workspace_orphan_authority(
     if (rc != 0 && rc != GIT_ENOTFOUND) return ORPHAN_AUTHORITY_UNVERIFIED;
 
     /* A blob at the name and only there: one above it reads GIT_ENOTFOUND and
-     * contradicts nothing, as in the view, whose contradiction index is keyed
-     * by the blob's own name. */
+     * contradicts nothing, as in the branch's walk, whose contradiction index
+     * is keyed by the blob's own name. */
     bool blob_at_name = rc == 0 && git_tree_entry_type(entry) == GIT_OBJECT_BLOB;
     git_tree_entry_free(entry);             /* NULL-safe, and NULL unless rc == 0 */
 
@@ -1524,7 +1524,7 @@ static orphan_authority_t workspace_orphan_authority(
 
     if (blob_at_name) {
         /* A DIRECTORY item where the tree holds a blob is stale metadata and
-         * claims nothing (core/manifest.h): the branch holds a file claim here,
+         * claims nothing (core/branch.h): the branch holds a file claim here,
          * not the record's directory, and the sheet need not be read. */
         return ORPHAN_AUTHORITY_LOST;
     }
@@ -2256,7 +2256,7 @@ static void workspace_analyze_orphans(workspace_t *ws) {
  * one before it; the root directory is read and ends the climb, because a claim
  * can stand there — `root` spells it, and `home` or `custom` on a machine whose
  * HOME or target is one (infra/label.h) — and the view places a blob at any of
- * the three as a FILE row at that directory (core/manifest.c manifest_claim_blob).
+ * the three as a FILE row at that directory (core/manifest.c manifest_place_claim).
  * The key is absolute; the copy the climb truncates is the caller's arena's,
  * one per ask, and abandoned.
  *

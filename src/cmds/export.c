@@ -59,17 +59,17 @@
  * Traversal safety is established, not assumed. A tree entry's name is whoever
  * wrote the branch's, and git accepts one called ".." without a murmur, so every
  * path a source dictates is read against the storage grammar where the source
- * is read: label_validate_storage in the walk callback, the same check the view
- * makes for the same reason (core/manifest.c manifest_claim_blob) and therefore
- * already made for every row the path arm reads, and, for the claim sheet, its
- * own loader (core/metadata.c). Every rung is read against the grammar, the branch
- * root's included, and what prunes machinery there is the content gate every
- * walk asks of a name (infra/label.h label_prefixes). So every entry this walk
- * collects carries a validated storage path — the metadata key and the associated
- * data both. The remaining escape vector — a pre-existing symlink at a
- * content-dictated path below the root — is refused in phase 1, which can see
- * every such path because the entry list is completed first: every directory
- * the copy needs is an entry of it.
+ * is read: label_validate_storage in the walk callback, the same check the branch's
+ * walk makes for the same reason (core/branch.c branch_step) and therefore already
+ * made for every row the path arm reads, and, for the claim sheet, its own loader
+ * (core/metadata.c). Every rung is read against the grammar, the branch root's
+ * included, and what prunes machinery there is the content gate every walk asks
+ * of a name (infra/label.h label_prefixes). So every entry this walk collects
+ * carries a validated storage path — the metadata key and the associated data
+ * both. The remaining escape vector — a pre-existing symlink at a content-dictated
+ * path below the root — is refused in phase 1, which can see every such path
+ * because the entry list is completed first: every directory the copy needs is
+ * an entry of it.
  */
 
 #include "cmds/export.h"
@@ -92,6 +92,7 @@
 #include "base/refspec.h"
 #include "base/string.h"
 #include "cmds/completion.h"
+#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -265,9 +266,10 @@ static const char *path_basename(const char *path) {
  * holds none, and the floor is what stands.
  *
  * This rule and `manifest_row_t.mode` are one rule with two spellings — the claim
- * of the matching kind, else the floor (core/manifest.h) — which is what lets
- * the path arm take a row's mode and read no sheet. They agree by contract, not
- * by coincidence: a change to either belongs in both.
+ * of the matching kind, else the floor (core/branch.h branch_claim_mode, which
+ * the view's rows take) — which is what lets the path arm take a row's mode and
+ * read no sheet. They agree by contract, not by coincidence: a change to either
+ * belongs in both.
  */
 static mode_t export_entry_mode(
     const metadata_item_t *item,
@@ -399,10 +401,9 @@ static error_t collect_entry(
      * not at all, and a tree can name a subtree ".." or an entry "home/../x".
      * Asked of trees as much as blobs — an empty malicious subtree has no blob
      * for a blob-only check to meet — of every rung, the branch root's included,
-     * and after the join, because the grammar is the whole path's (core/manifest.c
-     * manifest_claim_blob makes the same check in the same words). A link's target
-     * is the link's own business, copied verbatim, and is not a path of this
-     * copy. */
+     * and after the join, because the grammar is the whole path's (core/branch.c
+     * branch_step makes the same check in the same words). A link's target is
+     * the link's own business, copied verbatim, and is not a path of this copy. */
     error_t err = label_validate_storage(e.storage_path);
     if (err) return err;
 
@@ -750,16 +751,16 @@ static export_entry_t entry_from_row(const manifest_row_t *row) {
  * The path arm: every row the profile places at or beneath the path, laid out
  * beneath it.
  *
- * One profile's view of one tree (core/manifest.h manifest_build_tree), built
- * under the run's table — so a path keys against a row by strcmp, both being
- * spellings (infra/mount.h) — and read for two questions: what stands at the
- * path, and what stands strictly beneath it. Everything the entries carry is
- * the rows': the mode is the claim or the floor the builder already resolved,
- * which is export_entry_mode's rule under another name, so no sheet is read here;
- * the source name is the row's own, which is the name its blob was sealed under
- * (the AAD, infra/content.h). A name the contribution did not keep is no row
- * and is not copied — the copy is what the profile would place, and that is what
- * the view answers.
+ * One profile's view of its branch over the tree (core/manifest.h
+ * manifest_build_branch), built under the run's table — so a path keys against
+ * a row by strcmp, both being spellings (infra/mount.h) — and read for two
+ * questions: what stands at the path, and what stands strictly beneath it.
+ * Everything the entries carry is the rows': the mode is the claim or the floor
+ * the builder already resolved, which is export_entry_mode's rule under another
+ * name, so no sheet is read here; the source name is the row's own, which is
+ * the name its blob was sealed under (the AAD, infra/content.h). A name the
+ * contribution did not keep is no row and is not copied — the copy is what the
+ * profile would place, and that is what the view answers.
  *
  * The row standing at the path decides the shape. A directory row is a claimed
  * root at its mode; no row at all is an unclaimed root at the default, the same
@@ -772,18 +773,16 @@ static export_entry_t entry_from_row(const manifest_row_t *row) {
  */
 static error_t collect_filesystem(
     const dotta_ctx_t *ctx,
-    git_tree *tree,
-    const char *profile,
+    branch_t *branch,
     const char *filesystem_path,
     const char *commit_suffix,
     export_entry_list_t *list
 ) {
     arena_t *arena = ctx->arena;
+    const char *profile = branch_profile(branch);
 
     manifest_t *view = NULL;
-    error_t err = manifest_build_tree(
-        ctx->run.repo, tree, profile, ctx->run.mounts, arena, &view
-    );
+    error_t err = manifest_build_branch(branch, ctx->run.mounts, arena, &view);
     if (err) {
         return error_wrap(
             err, "Failed to read what profile '%s' places at '%s'",
@@ -1372,6 +1371,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     error_t err = NULL;
     git_commit *commit = NULL;
     git_tree *tree = NULL;
+    branch_t *branch = NULL;
     export_entry_list_t list = { 0 };
     char commit_suffix[16] = "";
 
@@ -1407,6 +1407,9 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         if (err) goto cleanup;
     }
 
+    /* The profile's branch over that tree, held beside it */
+    branch = branch_open(repo, opts->profile, tree);
+
     if (opts->file_path) {
         /* Read the argument in the key the user named — a path or a storage path,
          * neither manufactured from the other (infra/path.h) — and hand it to
@@ -1428,7 +1431,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         switch (arg.key) {
             case PATH_KEY_FILESYSTEM:
                 err = collect_filesystem(
-                    ctx, tree, opts->profile, arg.filesystem_path, commit_suffix, &list
+                    ctx, branch, arg.filesystem_path, commit_suffix, &list
                 );
                 break;
 
@@ -1541,6 +1544,7 @@ cleanup:
             buffer_deinit(&list.items[i].content);
         }
     }
+    branch_free(branch);
     if (tree) git_tree_free(tree);
     if (commit) git_commit_free(commit);
 

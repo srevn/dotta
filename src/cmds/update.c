@@ -44,8 +44,8 @@
  * by its own bytes (infra/content.h content_classify), never from the sheet's
  * copy of that fact. The view projects the copy for its screens, and a sheet
  * that disagrees with its tree — a hand edit, another tool's commit, the
- * contradicted claim the view reads as no claim at all (core/manifest.c) — would
- * otherwise have this capture store a secret in the clear.
+ * contradicted claim a branch decodes as no claim at all (core/branch.c
+ * branch_step) — would otherwise have this capture store a secret in the clear.
  *
  * Routed by what the load observed at the path, as add routes by what its listing
  * found there (cmds/add.c add_capture) — every item on this route carries an

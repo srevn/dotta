@@ -17,6 +17,7 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
+#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/state.h"
@@ -436,10 +437,10 @@ static error_t profile_list_entry(
      * (infra/mount.h mount_resolve) on the strength of its having been validated
      * where it was written — which holds for a branch this machine authored and
      * not for one that arrived by clone, sync or foreign push. So the shape is
-     * checked where the tree is read, exactly as the view checks its own
-     * (core/manifest.c manifest_claim_blob). Malformed here is corruption, not
-     * an entry to skip: a walk that dropped it silently would leave the caller
-     * a listing it cannot place and call it complete. */
+     * checked where the tree is read, exactly as the branch's walk checks its
+     * own (core/branch.c branch_step). Malformed here is corruption, not an entry
+     * to skip: a walk that dropped it silently would leave the caller a listing
+     * it cannot place and call it complete. */
     error_t err = label_validate_storage(path);
     if (err) return err;
 
@@ -542,11 +543,11 @@ static error_t profile_count_entry(
     /* The bytes the entry stands for, not the bytes the object database holds:
      * a sealed blob carries the cipher's framing and its file does not, and the
      * file is what a screen names (197 R5). The stamp is the branch's own claim,
-     * read as the view projects it — never onto a link, whose bytes are its target
-     * and never a seal (core/manifest.c manifest_apply_claim) — and this is the
-     * fold of exactly the rows the file listing prints one by one, so the two
-     * read the claim the same way or the two screens disagree by the framing
-     * (cmds/list.c list_files). */
+     * read as the branch decodes it — never onto a link, whose bytes are its
+     * target and never a seal (core/branch.c branch_step's link rule) — and this
+     * is the fold of exactly the rows the file listing prints one by one, so
+     * the two read the claim the same way or the two screens disagree by the
+     * framing (cmds/list.c list_files). */
     const metadata_item_t *claim = metadata_lookup(walk->sheet, path);
     bool encrypted = git_tree_entry_filemode(entry) != GIT_FILEMODE_LINK
         && claim && claim->encrypted;
@@ -579,8 +580,8 @@ error_t profile_get_tree_stats(
     CHECK_NULL(profile);
     CHECK_NULL(out);
 
-    /* The branch's own metadata, the same source the view's claim routine reads,
-     * and read first because both halves below want it: the directories it claims,
+    /* The branch's own metadata, the same source the branch's walk reads, and
+     * read first because both halves below want it: the directories it claims,
      * and the stamp each blob's size is taken through. A tree without a sheet
      * loads as an empty one — no claim, so nothing counted and nothing stamped
      * — and every load error is real and propagates. */
@@ -624,9 +625,8 @@ error_t profile_get_tree_stats(
 
         /* A path is a tree or a blob: a DIRECTORY item where the tree holds a
          * blob is stale metadata, and the tree is the content authority — the
-         * same rule the view's directory pass applies when the profile is enabled
-         * (core/manifest.c manifest_contribute), asked there of the sheet at
-         * the blob its own walk met rather than of the ODB.
+         * same rule the branch's walk applies (core/branch.c branch_walk), asked
+         * there of the sheet at each blob it meets rather than of the ODB.
          *
          * One question, two witnesses, and they answer alike for every key the
          * grammar admits: the gate is asked of the whole name at every rung,
@@ -782,11 +782,14 @@ error_t profile_needs_target(
     arena_t *frame = arena_create(0);
 
     mount_table_t *mounts = NULL;
+    branch_t *branch = NULL;
     manifest_t *view = NULL;
     error_t err = mount_table_build(frame, NULL, 0, &mounts);
-    if (!err) err = manifest_build_branch(repo, profile, mounts, frame, &view);
+    if (!err) err = branch_load(repo, profile, &branch);
+    if (!err) err = manifest_build_branch(branch, mounts, frame, &view);
     if (!err) *needs_target = manifest_unbound(view).count > 0;
 
+    branch_free(branch);
     arena_free(frame);
     return err;
 }
@@ -838,10 +841,11 @@ error_t profile_build_filesystem_index(
     for (size_t i = 0; i < branches.count; i++) {
         if (exclude && strcmp(branches.entries[i], exclude) == 0) continue;
 
+        branch_t *branch = NULL;
         manifest_t *view = NULL;
-        err = manifest_build_branch(
-            repo, branches.entries[i], mounts, arena, &view
-        );
+        err = branch_load(repo, branches.entries[i], &branch);
+        if (!err) err = manifest_build_branch(branch, mounts, arena, &view);
+        branch_free(branch);
         if (err) return err;
 
         manifest_rows_t placed = manifest_rows(view);
@@ -885,29 +889,27 @@ error_t profile_build_filesystem_index(
 }
 
 /**
- * The name `profile` has for `filesystem_path` in `tree`
+ * The name a branch has for `filesystem_path`
  */
 error_t profile_claim_name(
-    git_repository *repo,
-    const git_tree *tree,
+    branch_t *branch,
     const mount_table_t *mounts,
-    const char *profile,
     const char *filesystem_path,
     arena_t *arena,
     const char **out_storage
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(tree);
+    CHECK_NULL(branch);
     CHECK_NULL(mounts);
-    CHECK_NULL(profile);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(arena);
     CHECK_NULL(out_storage);
 
     *out_storage = NULL;
 
+    const char *profile = branch_profile(branch);
+
     manifest_t *view = NULL;
-    error_t err = manifest_build_tree(repo, tree, profile, mounts, arena, &view);
+    error_t err = manifest_build_branch(branch, mounts, arena, &view);
     if (err) return err;
 
     /* The claim standing there, before the name one would take: a derived claim
@@ -922,7 +924,7 @@ error_t profile_claim_name(
 }
 
 /**
- * The claim `branch` stands at `filesystem_path`, or NULL
+ * The claim `profile`'s branch stands at `filesystem_path`, or NULL
  *
  * The branch's own view of its tip under this machine's table, so the name is
  * the branch's — a binding's, or one kept from before the binding — and never
@@ -934,7 +936,7 @@ error_t profile_claim_name(
  */
 static error_t claim_by_filesystem_path(
     git_repository *repo,
-    const char *branch,
+    const char *profile,
     const mount_table_t *mounts,
     const char *filesystem_path,
     arena_t *arena,
@@ -942,18 +944,21 @@ static error_t claim_by_filesystem_path(
 ) {
     *out_storage = NULL;
 
+    branch_t *branch = NULL;
     manifest_t *view = NULL;
-    error_t err = manifest_build_branch(repo, branch, mounts, arena, &view);
+    error_t err = branch_load(repo, profile, &branch);
+    if (!err) err = manifest_build_branch(branch, mounts, arena, &view);
+    branch_free(branch);
     if (err) return err;
 
-    const manifest_row_t *row = manifest_lookup_claim(view, branch, filesystem_path);
+    const manifest_row_t *row = manifest_lookup_claim(view, profile, filesystem_path);
     if (row) *out_storage = row->storage_path;
 
     return NULL;
 }
 
 /**
- * The claim `branch` holds under `storage_path`, or NULL
+ * The claim `profile`'s branch holds under `storage_path`, or NULL
  *
  * A name is Git's key, and one question of the branch's two documents answers
  * it (profile_holds): the tree first — a subtree counts, as a name has always
@@ -966,18 +971,18 @@ static error_t claim_by_filesystem_path(
  */
 static error_t claim_by_name(
     git_repository *repo,
-    const char *branch,
+    const char *profile,
     const char *storage_path,
     const char **out_storage
 ) {
     *out_storage = NULL;
 
     git_tree *tree = NULL;
-    error_t err = gitops_load_branch_tree(repo, branch, &tree);
+    error_t err = gitops_load_branch_tree(repo, profile, &tree);
     if (err) return err;
 
     profile_held_t held;
-    err = profile_holds(repo, tree, NULL, branch, storage_path, &held);
+    err = profile_holds(repo, tree, NULL, profile, storage_path, &held);
     git_tree_free(tree);
     if (err) return err;
 
@@ -1005,7 +1010,7 @@ error_t profile_discover_claims(
     *out = (profile_claims_t){ 0 };
 
     /* The branches, in the arena the claims live in, so a claim borrows its
-     * branch's name from the listing */
+     * profile's name from the listing */
     string_array_t branches;
     error_t err = gitops_list_branches(repo, arena, &branches);
     if (err) return err;
@@ -1018,24 +1023,24 @@ error_t profile_discover_claims(
 
     size_t count = 0;
     for (size_t i = 0; i < branches.count; i++) {
-        const char *branch = branches.entries[i];
+        const char *profile = branches.entries[i];
         const char *storage_path = NULL;
 
         /* Two keys, and each names its own search: the branch's view of its tip,
          * or its two documents asked for the name. */
         if (arg->key == PATH_KEY_FILESYSTEM) {
             err = claim_by_filesystem_path(
-                repo, branch, mounts, arg->filesystem_path, arena, &storage_path
+                repo, profile, mounts, arg->filesystem_path, arena, &storage_path
             );
         } else {
-            err = claim_by_name(repo, branch, arg->storage_path, &storage_path);
+            err = claim_by_name(repo, profile, arg->storage_path, &storage_path);
         }
         if (err) break;
         if (!storage_path) continue;
 
-        /* Both names are the arena's already: the branch's the listing's, the
+        /* Both names are the arena's already: the profile's the listing's, the
          * claim's the row's own or the argument's. */
-        claims[count++] = (profile_claim_t){ branch, storage_path };
+        claims[count++] = (profile_claim_t){ profile, storage_path };
     }
 
     if (err) return err;

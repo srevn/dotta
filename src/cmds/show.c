@@ -17,6 +17,7 @@
 #include "base/refspec.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
+#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -85,11 +86,12 @@ static error_t write_stdout(const buffer_t *content) {
  * Uses content layer for transparent decryption. Password prompt only happens
  * if file is encrypted and key is not cached.
  *
- * The header is the path's claims read the way the view projects them: the type
- * is the tree's word, the mode prints only where the type can carry one and the
- * entry claims one, and ownership prints for every kind that holds it — a link's
- * entry exists to carry exactly that. Symlinks show their target, binary files
- * their size without dumping content, encrypted files that decryption occurred.
+ * The header is the path's claims read as the branch decodes them (core/branch.c
+ * branch_step's link rule): the type is the tree's word, the mode prints only
+ * where the type can carry one and the entry claims one, and ownership prints
+ * for every kind that holds it — a link's entry exists to carry exactly that.
+ * Symlinks show their target, binary files their size without dumping content,
+ * encrypted files that decryption occurred.
  */
 static error_t print_blob_content(
     const dotta_ctx_t *ctx,
@@ -153,7 +155,7 @@ static error_t print_blob_content(
         output_endline(out, OUTPUT_NORMAL);
     }
 
-    /* The entry's claims, by the projection's own rule: mode only where the type
+    /* The entry's claims, by the branch's own rule: mode only where the type
      * can carry one and the entry claims one; ownership for every kind that holds
      * it, as chown(1) spells it — a half the entry does not name is no unknown,
      * the owner being the invoker's and the group no change. */
@@ -572,6 +574,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
     error_t err = NULL;
     git_tree *tree = NULL;
+    branch_t *branch = NULL;
     git_commit *source = NULL;
     const char *profile = opts->profile;
     const char *storage_path = NULL;
@@ -644,6 +647,9 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         err = show_source(ctx, profile, opts->commit, &tree, &source);
         if (err) goto cleanup;
 
+        /* The profile's branch over that tree, held beside it */
+        branch = branch_open(repo, profile, tree);
+
         /* The two keys, and each names its own read. A name the user typed is
          * Git's key already, so show_file's own read of the branch's two documents
          * is what decides whether the profile holds it; a path is the branch's
@@ -652,7 +658,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             storage_path = arg.storage_path;
         } else {
             err = profile_claim_name(
-                repo, tree, mounts, profile, arg.filesystem_path, ctx->arena, &storage_path
+                branch, mounts, arg.filesystem_path, ctx->arena, &storage_path
             );
             if (err) goto cleanup;
         }
@@ -721,6 +727,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
 cleanup:
     git_commit_free(source);
+    branch_free(branch);
     git_tree_free(tree);
 
     return err;

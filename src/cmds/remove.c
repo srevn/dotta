@@ -386,10 +386,10 @@ static error_t remove_resolve(
         if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
         const char *key = items[i]->key;
 
-        /* Same-profile rule as the view's claim routine (manifest.c): a key the
-         * tree holds as a blob cannot also stand as a directory claim — the tree's
-         * blob outranks the stale item. Keeps every claim path unique, so one
-         * argument takes one claim. */
+        /* Same-profile rule as the branch's walk (core/branch.c branch_walk): a
+         * key the tree holds as a blob cannot also stand as a directory claim —
+         * the tree's blob outranks the stale item. Keeps every claim path unique,
+         * so one argument takes one claim. */
         if (string_array_contains(&profile_files, key)) continue;
 
         claims[claim_count++] = (claim_t) {

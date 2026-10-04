@@ -333,7 +333,7 @@ static error_t state_initialize(sqlite3 *db) {
          *   - a mode is permission bits alone, 0000–0777 (511): the claim sheet's
          *     bound (core/metadata.h), which every compare meets as st_mode &
          *     0777, so a mode beyond it — a sticky or setuid bit, MODE_UNCLAIMED
-         *     leaking out of the sheet — would read as moved for ever. A link's
+         *     leaking into a record — would read as moved for ever. A link's
          *     NULL passes it
          *   - a directory has no content confirmation (blob_oid IS NULL)
          *   - ownership implies confirmation for a file (deployed_at > 0 ⇒ blob_oid

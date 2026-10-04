@@ -59,16 +59,17 @@
  * or a fetch that brings the branch back.
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
- *     (later profiles override earlier); manifest_build_tree walks one Git tree
+ *     (later profiles override earlier); manifest_build_branch walks one branch
+ *     the caller opened over a tree it holds or loaded at its tip (core/branch.h)
  *     — the historical diff (cmds/diff.c diff_commit_to_workspace), export's
- *     filesystem arm, and the claim search over whatever tree a verb selected —
- *     and is the same per-profile step applied once, manifest_build_branch being
- *     it over a branch's tip. Each step loads the claim sheet of the tree it
- *     reads: a tree without one holds an empty sheet, and a sheet that will not
- *     load fails the build rather than read as "no claims", so no caller of a
- *     builder chooses a policy for a fact the builder is the authority on. That
- *     is the view's rule and only the view's — a command reading a sheet for
- *     its own screen decides for itself (core/metadata.h). All three produce
+ *     path arm, and the claim search over whatever tree a verb selected — and
+ *     is the same per-profile step applied once. Each step places the claims
+ *     its branch's walk shows (core/branch.h branch_walk), which reads the claim
+ *     sheet of the tree it walks: a tree without one holds an empty sheet, and
+ *     a sheet that will not load fails the build rather than read as "no claims",
+ *     so no caller of a builder chooses a policy for a fact the builder is the
+ *     authority on. That is the view's rule and only the view's — a command reading
+ *     a sheet for its own screen decides for itself (core/metadata.h). Both produce
  *     manifest_row_t rows directly, the one row shape every consumer reads, so
  *     there is no bridge between the build step and its readers. The dispatcher
  *     builds the view once per command for the commands that declare it
@@ -112,10 +113,11 @@
 #include "infra/mount.h"
 
 /* manifest_build reads the enabled set from the state handle and manifest_diff
- * reads the record (core/state.h) by pointer; both are named here and defined
- * there. */
+ * reads the record (core/state.h) by pointer, and manifest_build_branch reads a
+ * profile's branch (core/branch.h); each is named here and defined there. */
 typedef struct state state_t;
 typedef struct state_record state_record_t;
+typedef struct branch branch_t;
 
 /**
  * Manifest row — what should stand at an active path, and from whom
@@ -151,14 +153,15 @@ typedef struct state_record state_record_t;
  *
  * Totality: after build, mode is THE mode for every non-link row — floor or claim,
  * never a hole; consumers compare and apply it without a fallback. A link row's
- * mode and encrypted are both don't-cares, 0 and false: neither is projected
- * onto a link row (manifest_apply_claim), the discriminator being type, the tree's
- * own truth — symlink(2) takes no mode, and a link's bytes are its target rather
- * than content anything could seal. Its owner and group are projected, a link
- * being owned like any path. MODE_UNCLAIMED never leaves the claim sheet.
- * Authority, stated once: the filemode is authoritative for type, the metadata
- * claim for permission bits — a hand-edit that contradicts the x-bit across the
- * two is resolved by that contract, not detected per-read.
+ * mode and encrypted are both don't-cares, 0 and false: neither reaches a link
+ * row (core/branch.c branch_step's link rule), the discriminator being type,
+ * the tree's own truth — symlink(2) takes no mode, and a link's bytes are its
+ * target rather than content anything could seal. Its owner and group are kept,
+ * a link being owned like any path. MODE_UNCLAIMED reaches no row: the claim's
+ * floor resolves it (core/branch.h branch_claim_mode). Authority, stated once:
+ * the filemode is authoritative for type, the metadata claim for permission bits
+ * — a hand-edit that contradicts the x-bit across the two is resolved by that
+ * contract, not detected per-read.
  *
  * Winner or not: `profile` is the profile whose claim the row is, and a row is
  * never rewritten when a higher profile takes its path. A row read through the
@@ -234,9 +237,9 @@ static inline bool manifest_is_claim(
  * a name (manifest_lookup_claim's note). False on every other kind, where `tracked`
  * is false and nothing reads it.
  *
- * Readers: the projection a namer reads a row through, the two claim passes,
- * the layering and the name test (core/manifest.c manifest_row_claim,
- * manifest_claim_blob, manifest_contribute, manifest_layer, manifest_holds_name);
+ * Readers: the projection a namer reads a row through, a claim's placement, the
+ * layering and the name test (core/manifest.c manifest_row_claim,
+ * manifest_place_claim, manifest_layer, manifest_holds_name);
  * the reassignment predicate, the absence rule and the route table's derived
  * arm (core/workspace.h workspace_reassigned, core/workspace.c classify_absent,
  * workspace_item_route); the untracked scan's word at a child, a rung being the
@@ -308,9 +311,9 @@ static inline git_filemode_t path_type_to_git_filemode(path_type_t type) {
  * A value of the arena the builder was given — its rows, their strings and its
  * indexes — and nothing frees one. A view built over the enabled set borrows
  * nothing else — not the state's row cache it was read from — so it stands across
- * the mutations that replace the cache, for the arena's lifetime. A tree view
- * borrows the one thing its caller handed it, the mount table, and lends it back
- * (manifest_mounts).
+ * the mutations that replace the cache, for the arena's lifetime. A branch's
+ * view borrows the one thing its caller handed it beside the branch, the mount
+ * table, and lends it back (manifest_mounts); of the branch it keeps nothing.
  */
 typedef struct manifest manifest_t;
 
@@ -341,8 +344,9 @@ typedef struct manifest manifest_t;
  * lookup and metadata that will not parse — those stay retryable errors, never
  * silent omissions.
  *
- * Per profile, in order: the tree's blobs are placed first, then the DIRECTORY
- * items of its metadata.json, into that profile's own contribution — the
+ * Per profile, in order: the claims its branch's walk shows (core/branch.h
+ * branch_walk) — the tree's blobs first, then the DIRECTORY items of its
+ * metadata.json — are placed into that profile's own contribution — the
  * within-profile rule (the two layers, above): an explicit claim outranks a derived
  * one, a DIRECTORY item whose own name the tree holds a blob at is stale metadata
  * and claims nothing, and two explicit names at one path are decided when the
@@ -384,91 +388,58 @@ error_t manifest_build(
 );
 
 /**
- * Build the manifest from a single Git tree
+ * Build the manifest from one branch
  *
- * One profile's view of one tree: a manifest_row_t row for every blob the tree
- * exposes (sans repository metadata files — .dottaignore, .bootstrap, .git/,
- * .dotta/) and for every DIRECTORY item the tree's own claim sheet carries —
- * the same per-profile step manifest_build runs, applied once, sheet included
- * (the Builders note above: the sheet is loaded here, never handed in, so one
- * rule reads it). Readers that want files only test row->type.
+ * One profile's view of one branch: a manifest_row_t row for every claim the
+ * branch's walk shows (core/branch.h branch_walk) — every blob its tree exposes
+ * (sans repository metadata files — .dottaignore, .bootstrap, .git/, .dotta/)
+ * and every DIRECTORY item its own sheet carries that the tree does not contradict
+ * — the same per-profile step manifest_build runs, applied once, sheet included
+ * (the Builders note above: the walk reads it, strictly, so one rule reads it).
+ * Readers that want files only test row->type.
  *
- * The tree is the caller's to choose — a branch tip, a historical commit's, a
- * stage's — and `profile` names whose claims these are, since a tree carries no
- * name; the mount table is explicit for the same reason, there being no state
- * to derive one from and a past tree deliberately resolved under today's topology.
- * The sheet's claims are applied row-by-row in lockstep with the walk: mode,
- * owner, group and encrypted come from the tree's own metadata.json.
+ * The branch is the caller's to open — over a tree it holds, a historical commit's
+ * or a stage's or the one a verb selected (core/branch.h branch_open), or at
+ * its tip (branch_load) — and it names whose claims these are, a tree carrying
+ * no name. The view keeps nothing of it: every string a row holds is copied, so
+ * the branch may be freed as soon as this returns. The mount table is explicit
+ * too, there being no state to derive one from and a past tree deliberately
+ * resolved under today's topology.
  *
  * Custom-prefix resolution is delegated to `mounts`. A custom/ claim the handle
  * records no binding for contributes no row and is recorded on the view
  * (manifest_unbound) — the same degrade contract as manifest_build, which lets
  * the historical-diff path resolve old trees whose labels today's topology cannot
- * place. Any mount table is acceptable, including one with no binding for
- * `profile`.
+ * place. Any mount table is acceptable, including one with no binding for the
+ * branch's profile.
  *
- * One contribution, settled and layered like any other, so a tree view answers
- * manifest_lookup_claim and manifest_name for `profile` exactly as an enabled
- * view answers them for one of its own.
+ * One contribution, settled and layered like any other, so a branch's view answers
+ * manifest_lookup_claim and manifest_name for its profile exactly as an enabled
+ * view answers them for one of its own. No policy enters here: no raw argument,
+ * no fallback, no enabled-set question, and the branch need not be enabled.
  *
  * Readers: the historical diff (cmds/diff.c diff_commit_to_workspace, whose
- * comparison and coverage answer each read the whole view); export's filesystem
- * arm (cmds/export.c collect_filesystem), which selects the rows one profile
- * places at and beneath a path — the rows, not the Git subtree of whatever name
- * stands there, which is what manifest_lookup_claim's own note is about; the
- * claim search over whatever tree a verb selected (core/profiles.c
- * profile_claim_name); revert's two questions of a tree, the claim standing at
- * a path and the second-name admission (cmds/revert.c claim_standing,
- * refuse_second_name); and add, which builds one over the tree its stage opened
- * at and asks it every naming question for the length of the command (cmds/add.c
- * cmd_add). A caller that has a branch name and no tree reads
- * manifest_build_branch, which loads one and calls this.
+ * comparison and coverage answer each read the whole view); export's path arm
+ * (cmds/export.c collect_filesystem), which selects the rows one profile places
+ * at and beneath a path — the rows, not the Git subtree of whatever name stands
+ * there, which is what manifest_lookup_claim's own note is about; the claim search
+ * over whatever tree a verb selected (core/profiles.c profile_claim_name); revert's
+ * two questions of a tree, the claim standing at a path and the second-name
+ * admission (cmds/revert.c claim_standing, refuse_second_name); add, which builds
+ * one over the tree its stage opened at and asks it every naming question for
+ * the length of the command (cmds/add.c cmd_add); `ignore --test`'s named arm
+ * (cmds/ignore.c ignore_test); the two cross-branch searches, which build one
+ * per local branch (core/profiles.c claim_by_filesystem_path, under
+ * profile_discover_claims, and profile_build_filesystem_index); and the target
+ * producer (core/profiles.c profile_needs_target), which builds one under a table
+ * that binds nothing and reads the health slice alone.
  *
- * Memory: same contract as manifest_build — every allocation produced by the
- * call lives in the caller's arena.
+ * Memory: every allocation produced by the call lives in the caller's arena, as
+ * manifest_build's does, but the sheet the walk reads where no question has yet,
+ * which the branch keeps until branch_free (core/branch.h).
  *
- * @param repo Git repository the tree's blobs (the sheet among them) are read
- *             from (must not be NULL)
- * @param tree Git tree to build from (must not be NULL)
- * @param profile Profile name carried on each row, and the name the sheet is
- *                read under (must not be NULL; duplicated into the arena)
- * @param mounts Per-machine mount table (must not be NULL)
- * @param arena Arena backing every allocation produced by the call (must not be
- *              NULL)
- * @param out Manifest (must not be NULL)
- * @return Error or NULL on success
- */
-error_t manifest_build_tree(
-    git_repository *repo,
-    const git_tree *tree,
-    const char *profile,
-    const mount_table_t *mounts,
-    arena_t *arena,
-    manifest_t **out
-);
-
-/**
- * Build the manifest from a branch's tip
- *
- * manifest_build_tree over the branch's HEAD: the tree is loaded here, walked,
- * and freed before this returns — the view's rows borrow nothing from it. The
- * one shape for a caller that has a branch name and no tree; a caller that holds
- * a tree — a historical commit's (cmds/diff.c diff_commit_to_workspace,
- * cmds/export.c collect_filesystem), the one a verb selected, a tip or a commit's
- * (core/profiles.c profile_claim_name), or a stage's, the tree the verb is about
- * to edit (cmds/revert.c claim_standing, cmds/add.c cmd_add) — reads
- * manifest_build_tree. No policy enters here: no raw argument, no fallback, no
- * enabled-set question, and the branch need not be enabled.
- *
- * Readers: `ignore --test`'s named arm (cmds/ignore.c ignore_test); the two
- * cross-branch searches (core/profiles.c profile_discover_claims,
- * profile_build_filesystem_index), which build one per local branch; and the
- * target producer (core/profiles.c profile_needs_target), which builds one under
- * a table that binds nothing and reads the health slice alone.
- *
- * @param repo Git repository (must not be NULL)
- * @param branch Branch name (must not be NULL); a branch that will not load is
- *               this call's error, named
+ * @param branch The profile's branch (must not be NULL; borrowed for the call,
+ *               its sheet read through it)
  * @param mounts Per-machine mount table (must not be NULL)
  * @param arena Arena backing every allocation produced by the call (must not be
  *              NULL)
@@ -476,8 +447,7 @@ error_t manifest_build_tree(
  * @return Error or NULL on success
  */
 error_t manifest_build_branch(
-    git_repository *repo,
-    const char *branch,
+    branch_t *branch,
     const mount_table_t *mounts,
     arena_t *arena,
     manifest_t **out
@@ -503,7 +473,7 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
  *
  * Every enabled profile whose branch existed at build, lowest precedence first
  * — the set the rows came from, as the enabled set reads once the branches that
- * are gone (and contributed nothing) are left out; for a tree view, the one
+ * are gone (and contributed nothing) are left out; for a branch's view, its one
  * profile. The untracked scan's registration reads it (core/workspace.c
  * workspace_analyze_untracked): a later profile's tracked directory takes a
  * directory an earlier one stands at, the index's own rule read from the same
@@ -522,16 +492,16 @@ const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
  * The table the rows were placed by
  *
  * The one the build made from the rows it read (manifest_build), or the caller's
- * (manifest_build_tree). Borrowed for the view's lifetime — the build's is the
- * arena's, and a tree view's caller keeps its table alive as long as the view.
- * Rule 1, never cache a cache: a consumer that holds the view and needs the
- * topology it was placed by reads it here rather than building a second table
- * from the same rows, so the names it places and the rows it selects read one
- * value. Readers: the dispatcher (`run.mounts` for a command that declares the
- * view, include/runtime.h); a filesystem argument to `ignore --test` and add's
- * label receipt, each of which builds a view of its own and reads the table back
- * from it rather than beside it. Show and list build one too and ask it nothing:
- * their arm reads the view by key alone.
+ * (manifest_build_branch). Borrowed for the view's lifetime — the build's is
+ * the arena's, and the caller of a branch's view keeps its table alive as long
+ * as the view. Rule 1, never cache a cache: a consumer that holds the view and
+ * needs the topology it was placed by reads it here rather than building a second
+ * table from the same rows, so the names it places and the rows it selects read
+ * one value. Readers: the dispatcher (`run.mounts` for a command that declares
+ * the view, include/runtime.h); a filesystem argument to `ignore --test` and
+ * add's label receipt, each of which builds a view of its own and reads the table
+ * back from it rather than beside it. Show and list build one too and ask it
+ * nothing: their arm reads the view by key alone.
  *
  * Pure value return — no allocation, no error path.
  *
@@ -624,13 +594,12 @@ typedef struct {
  *
  * Pure value return — no allocation, no error path. Entries arrive in build order,
  * so one profile's claims are contiguous. Each (profile, storage path) appears
- * once and nothing enforces it: the two passes record disjoint names — the blob
- * pass those the tree holds a blob at, the directory pass those sheet keys it
- * does not, the content-authority rule having contradicted the rest at the blob
- * (a path is a tree or a blob, and the tree is the content authority) — and within
- * a pass a name is its own, a tree holding one blob per path and a sheet one
- * item per key. Empty on every build whose claims all placed — the common case,
- * costing nothing.
+ * once and nothing enforces it: the branch's walk shows a name once (core/branch.h
+ * branch_walk) — a name the tree holds a blob at, or a sheet key it does not,
+ * the content-authority rule having contradicted the rest at the blob (a path
+ * is a tree or a blob, and the tree is the content authority) — a tree holding
+ * one blob per path and a sheet one item per key. Empty on every build whose
+ * claims all placed — the common case, costing nothing.
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded claims, valid for the arena's lifetime
@@ -719,7 +688,7 @@ typedef struct {
  * manifest_unbound and manifest_unkept are its facts about claims. Only Git
  * surgery, or a state write that failed after `remove` deleted the branch, leaves
  * one. Empty on every build whose enabled profiles all have their branches, and
- * on a tree view.
+ * on a branch's view.
  *
  * The screen says **no branch**: the header's word is what the build found of
  * the profile, the screen's is what it lacks — the branch a fetch brings back,

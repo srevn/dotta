@@ -301,7 +301,7 @@ error_t content_get_from_blob_oid(
  * A link is not content and never reaches here: its bytes are a target path,
  * and Git's filemode is the authority on that at every boundary
  * (content_capture_link, every read here — each takes the entry's filemode —
- * core/manifest.c's link row, cmds/revert.c's claim).
+ * core/branch.c branch_step's link rule, cmds/revert.c's claim).
  *
  * The write-boundary invariant content_capture_file states holds here too: what
  * is answered classifies ENCRYPTED, as the source did, so a caller stamping
@@ -408,8 +408,8 @@ error_t content_rebind(
  *   epoch, or a version this build does not read
  * - ERR_GIT: the blob could not be loaded
  * - ERR_PERMISSION / ERR_FS: the disk copy could not be read, by its errno
- *   (base/error.h error_errno_code); a copy that left before its read is
- *   the verdict CMP_MISSING, never an error (infra/compare.h)
+ *   (base/error.h error_errno_code); a copy that left before its read is the
+ *   verdict CMP_MISSING, never an error (infra/compare.h)
  */
 error_t content_compare_blob_to_disk(
     content_cache_t *cache,

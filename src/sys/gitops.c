@@ -576,7 +576,9 @@ error_t gitops_delete_branch(git_repository *repo, const char *name) {
 
     /* A linked worktree's checkout is the one that must be asked (the header):
      * the store itself checks nothing out, so a bare main repository is passed
-     * over by libgit2's walk of the worktrees and only a linked one can answer. */
+     * over by libgit2's walk of the worktrees and only a linked one can answer.
+     * A walk that fails answers "not checked out" (branch.c
+     * git_branch_is_checked_out), so an unreadable worktree refuses nothing. */
     if (git_branch_is_checked_out(ref)) {
         git_reference_free(ref);
         return error_create(

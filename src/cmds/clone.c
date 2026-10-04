@@ -499,10 +499,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      *
      * Seeded once: a ref that already stands is left alone. */
     err = ignore_seed_baseline(repo);
-    if (err) {
-        err = error_wrap(err, "Failed to seed baseline .dottaignore");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Bootstrap detection and execution.
      *

@@ -199,11 +199,7 @@ static error_t ignore_compose(
 
         buffer_t content = BUFFER_INIT;
         err = ignore_blob_text(r->repo, refname, &content);
-        if (err) {
-            return error_wrap(
-                err, "Failed to load .dottaignore for profile '%s'", profile
-            );
-        }
+        if (err) return err;
         if (content.size) {
             gitignore_ruleset_append_file(
                 rs, content.data, (gitignore_origin_t) IGNORE_ORIGIN_PROFILE
@@ -247,10 +243,12 @@ error_t ignore_blob_read(git_repository *repo, const char *refname, buffer_t *ou
         return NULL;
     }
 
+    /* The blob's read names an id alone (sys/gitops.h gitops_blob_view_open):
+     * the file and the ref are what it was not handed */
     gitops_blob_view_t view;
     err = gitops_blob_view_open(repo, git_tree_entry_id(entry), &view);
     git_tree_free(tree);
-    if (err) return err;
+    if (err) return error_wrap(err, "Cannot read .dottaignore at '%s'", refname);
 
     /* The one copy, and the cap asked before it. An empty blob appends nothing,
      * so it reads as absent — nothing to parse, and an empty buffer is the one
@@ -372,9 +370,7 @@ error_t ignore_rules_create(
 
     buffer_t blob = BUFFER_INIT;
     error_t err = ignore_blob_text(repo, BASELINE_REF, &blob);
-    if (err) {
-        return error_wrap(err, "Failed to load baseline .dottaignore");
-    }
+    if (err) return err;
 
     ignore_origin_t origin = blob.size ? IGNORE_ORIGIN_BASELINE : IGNORE_ORIGIN_BUILTIN;
     gitignore_ruleset_append_file(

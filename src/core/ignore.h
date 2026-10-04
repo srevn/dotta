@@ -421,7 +421,9 @@ const char *ignore_verdict_negation(
  *   - The blob is empty
  *
  * Only I/O failures, malformed trees, or the 1 MB size cap produce an error,
- * the cap asked before a byte is copied; on failure `out` is empty too.
+ * the cap asked before a byte is copied; on failure `out` is empty too. Each
+ * names the ref — a reference that will not read in its own words, the rest as
+ * the `.dottaignore` at it — so no reader names the layer again.
  *
  * `out` is written, never read (base/buffer.h): its bytes may hold a NUL of their
  * own, so the size is their length, never strlen. The caller owns them.
@@ -513,6 +515,10 @@ error_t ignore_blob_write(
  * content) and which once silently discarded a customised baseline on every
  * re-init. A ref that appears between the look and the seed's commit — two inits
  * racing — is refused by the stage, not seeded over.
+ *
+ * Every refusal names BASELINE_REF, or the `.dottaignore` the stage puts on it
+ * (sys/stage.h), so its two readers — cmds/init.c cmd_init and cmds/clone.c
+ * cmd_clone — say nothing over one.
  *
  * @param repo Repository (must not be NULL)
  * @return Error or NULL on success

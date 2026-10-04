@@ -322,11 +322,7 @@ static error_t ignore_edit(
      * on, and one buffer from here to the write. */
     buffer_t file = BUFFER_INIT;
     error_t err = ignore_blob_read(repo, dottaignore->refname, &file);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load %s .dottaignore", dottaignore->layer
-        );
-    }
+    if (err) return err;
     if (file.size == 0) {
         buffer_append_string(&file, dottaignore->seed);
     }
@@ -396,11 +392,7 @@ static error_t ignore_modify(
 
     buffer_t text = BUFFER_INIT;
     error_t err = ignore_blob_text(repo, dottaignore->refname, &text);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load %s .dottaignore", dottaignore->layer
-        );
-    }
+    if (err) return err;
 
     /* Nothing to work with: no existing file and no adds to seed one. Wording
      * uses "%s .dottaignore" so it composes naturally for both layers: "No baseline

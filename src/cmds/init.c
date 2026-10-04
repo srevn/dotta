@@ -206,10 +206,7 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     /* Baseline .dottaignore at its own ref. Seeded once: a ref that already stands
      * keeps whatever the user made of it. */
     err = ignore_seed_baseline(repo);
-    if (err) {
-        err = error_wrap(err, "Failed to seed baseline .dottaignore");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Success */
     output_success(out, OUTPUT_NORMAL, "Initialized dotta repository in %s", path);

@@ -131,8 +131,12 @@ error_t refspec_parse(arena_t *arena, const char *input, refspec_t *out) {
         remainder = colon + 1;
     }
 
-    if (rs.commit && remainder == end) {
-        return error_create(ERR_INVALID_ARG, "Empty file path in refspec");
+    /* The file is what a ':' or a commit's '@' sets apart: where either stands
+     * and nothing lies in the file's place, the spelling names no file, and says
+     * which spelling it read. A bare token with neither is its caller's to read
+     * — a path, or export's profile — the empty one among them. */
+    if (remainder == end && (colon || rs.commit)) {
+        return error_create(ERR_INVALID_ARG, "'%s' names no file", input);
     }
     rs.file = arena_strndup(arena, remainder, (size_t) (end - remainder));
 

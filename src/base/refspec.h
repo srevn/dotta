@@ -76,7 +76,8 @@ const char *refspec_head_steps(const char *spelling);
  * String fields point into the arena supplied to refspec_parse, which owns their
  * storage — the caller MUST NOT free them individually. A field is NULL when
  * the corresponding component is absent from the input (except `file`, which is
- * always set on success).
+ * always set on success, and empty only where the input is: a bare token is its
+ * caller's to read).
  */
 typedef struct {
     const char *profile;    /* Profile name, or NULL if not specified */
@@ -97,6 +98,10 @@ typedef struct {
  * (git-check-ref-format). The names this order reads otherwise are a profile's
  * holding an '@' with a commit's shape after it — `x@HEAD@y:home/f`, or one ending
  * in `@HEAD` or `@@` — each read as a file at a commit the resolver then refuses.
+ *
+ * A spelling whose ':' or commit sets a file apart and leaves nothing in its
+ * place — `p:`, `p:@HEAD`, `@HEAD` — names no file, and is refused quoted as it
+ * was read.
  *
  * Output slices are bump-allocated in the provided arena and share its lifetime.
  * On error, *out is left unchanged; callers should only read *out after the

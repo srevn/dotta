@@ -131,9 +131,9 @@ static void hook_env(const hook_context_t *context, arena_t *arena, string_array
  *
  * Builds the hook environment, then delegates fork/exec/timeout/reap to
  * process_run(). Composes a domain-specific error from the result fields (exec
- * failure, timeout, signal, non-zero exit). When the caller passes a non-NULL
- * `result_out`, captured stdout/stderr is transferred into it for downstream
- * printing on failure.
+ * failure, timeout, signal, non-zero exit). The run's result is the caller's,
+ * its stdout/stderr captured whatever the outcome, so the caller prints it beside
+ * a failure (hook_print_output) and disposes it on every path.
  *
  * Returns NULL on success or if the hook is disabled/missing. Returns error if
  * the hook fails (exec, timeout, exit-code, signal) or if the primitive itself
@@ -143,10 +143,11 @@ static error_t hook_execute(
     const config_t *config,
     hook_type_t type,
     const hook_context_t *context,
-    process_result_t *result_out
+    process_result_t *out_result
 ) {
     CHECK_NULL(config);
     CHECK_NULL(context);
+    CHECK_NULL(out_result);
 
     if (!hook_is_enabled(config, type)) {
         return NULL;  /* Disabled - skip silently */
@@ -198,7 +199,7 @@ static error_t hook_execute(
         .argv              = argv,
         .envp              = env.entries,
         .stdin_policy      = PROCESS_STDIN_DEVNULL,
-        .capture           = (result_out != NULL),
+        .capture           = true,
         .stream_fd         = -1,
         .work_dir          = NULL,
         .work_dir_fallback = NULL,
@@ -206,12 +207,8 @@ static error_t hook_execute(
         .pgrp_policy       = PROCESS_PGRP_NEW,
     };
 
-    process_result_t result = { 0 };
-    err = process_run(&spec, &result);
-    if (err) {
-        process_result_deinit(&result);
-        goto cleanup;
-    }
+    err = process_run(&spec, out_result);
+    if (err) goto cleanup;
 
     /* Map result fields to a domain-specific error. exec_failed is checked first
      * because it carries the most specific reason (errno from execve / chdir /
@@ -219,38 +216,27 @@ static error_t hook_execute(
      * intentionally absent: with exec_failed in place, those exit codes only
      * signal the script's own internal failures, which fall through to the generic
      * "exit code N" branch. */
-    if (result.exec_failed) {
+    if (out_result->exec_failed) {
         err = error_create(
             ERR_INTERNAL, "Hook '%s' failed: exec error: %s",
-            hook_type_name(type), strerror(result.exec_errno)
+            hook_type_name(type), strerror(out_result->exec_errno)
         );
-    } else if (result.timed_out) {
+    } else if (out_result->timed_out) {
         err = error_create(
             ERR_INTERNAL, "Hook '%s' exceeded timeout of %d seconds",
             hook_type_name(type), config->hook_timeout
         );
-    } else if (result.signal_num) {
+    } else if (out_result->signal_num) {
         err = error_create(
             ERR_INTERNAL, "Hook '%s' terminated by signal %d",
-            hook_type_name(type), result.signal_num
+            hook_type_name(type), out_result->signal_num
         );
-    } else if (result.exit_code != 0) {
+    } else if (out_result->exit_code != 0) {
         err = error_create(
             ERR_INTERNAL, "Hook '%s' failed with exit code %d",
-            hook_type_name(type), result.exit_code
+            hook_type_name(type), out_result->exit_code
         );
     }
-
-    /* Transfer ownership to caller if requested. Move the whole struct so the
-     * caller observes captured output even on failure (printed via
-     * hook_print_output). The local `result` is disposed afterwards; with output
-     * set NULL, dispose is a no-op on the buffer. */
-    if (result_out) {
-        *result_out = result;
-        result.output = NULL;
-    }
-
-    process_result_deinit(&result);
 
 cleanup:
     arena_free(frame);

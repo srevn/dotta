@@ -786,10 +786,7 @@ static error_t update_profile(
 
     /* The sheet onto the stage (single save for both files and directories) */
     err = metadata_save_to_stage(stage, metadata);
-    if (err) {
-        err = error_wrap(err, "Failed to save metadata");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     if (captured_file_count > 0 || updated_dir_count > 0) {
         output_info(
@@ -836,10 +833,7 @@ static error_t update_profile(
 
     /* Create commit */
     err = stage_commit(stage, commit_message(ctx->arena, ctx->config, &msg_ctx), NULL);
-    if (err) {
-        err = error_wrap(err, "Failed to create commit");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     *out_processed = commit->captured_count + commit->deleted_count;
 
@@ -1140,7 +1134,7 @@ static error_t update_execute(
 
         stage_t *stage = NULL;
         err = stage_open(repo, refname, &stage);
-        if (err) return error_wrap(err, "Failed to open profile '%s'", profile);
+        if (err) return err;
 
         /* Update this profile on its stage */
         commit_t bookkeeping = { 0 };

@@ -829,10 +829,7 @@ static error_t remove_paths(
     if (err) goto cleanup;
 
     err = stage_open(repo, refname, &stage);
-    if (err) {
-        err = error_wrap(err, "Failed to open profile '%s'", opts->profile);
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Resolve the arguments to the claims they remove */
     err = remove_resolve(
@@ -1032,10 +1029,7 @@ static error_t remove_paths(
      * so no rewrite is staged. */
     if (meta_edits + pruned_dirs.count > 0) {
         err = metadata_save_to_stage(stage, metadata);
-        if (err) {
-            err = error_wrap(err, "Failed to save metadata");
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
     /* One atomic commit: the file claims leave the tree, metadata.json follows
@@ -1050,10 +1044,7 @@ static error_t remove_paths(
         .target_commit = NULL
     };
     err = stage_commit(stage, commit_message(ctx->arena, config, &msg_ctx), NULL);
-    if (err) {
-        err = error_wrap(err, "Failed to create commit");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /*
      * Architectural note: no filesystem deletion here. Only apply writes to a
@@ -1502,10 +1493,7 @@ static error_t remove_profile(
 
     /* Delete local branch */
     err = gitops_delete_branch(repo, opts->profile);
-    if (err) {
-        err = error_wrap(err, "Failed to delete profile '%s'", opts->profile);
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Post-deletion: the enabled set and the record, in one transaction — opened
      * only where there is, or can come to be, something to write: a record naming

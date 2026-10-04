@@ -97,9 +97,7 @@ static error_t bootstrap_create_template(
 
     stage_t *stage = NULL;
     err = stage_open(repo, refname, &stage);
-    if (err) {
-        return error_wrap(err, "Failed to open profile '%s'", profile);
-    }
+    if (err) return err;
 
     /* Generate template content */
     char *content = heap_str_format(BOOTSTRAP_TEMPLATE, profile, profile, profile);
@@ -121,11 +119,7 @@ static error_t bootstrap_create_template(
     err = stage_commit(stage, commit_message, NULL);
     free(commit_message);
     stage_free(stage);
-    if (err) {
-        return error_wrap(err, "Failed to commit bootstrap script");
-    }
-
-    return NULL;
+    return err;
 }
 
 /**
@@ -202,10 +196,7 @@ static error_t bootstrap_edit(
     if (err) goto cleanup;
 
     err = stage_open(repo, refname, &stage);
-    if (err) {
-        err = error_wrap(err, "Failed to open profile '%s'", profile);
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     err = stage_put(
         stage, BOOTSTRAP_SCRIPT_NAME, content_buf.data, content_buf.size,
@@ -215,10 +206,7 @@ static error_t bootstrap_edit(
 
     bool was_modified = false;
     err = stage_commit(stage, commit_msg, &was_modified);
-    if (err) {
-        err = error_wrap(err, "Failed to commit bootstrap script");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Inform user */
     if (was_modified) {

@@ -1189,16 +1189,10 @@ static error_t add_commit(
     };
 
     /* Create commit */
-    error_t err = stage_commit(
+    return stage_commit(
         stage, commit_message(walk->ctx->arena, walk->ctx->config, &msg_ctx),
         out_committed
     );
-
-    if (err) {
-        return error_wrap(err, "Failed to create commit");
-    }
-
-    return NULL;
 }
 
 /**
@@ -1697,11 +1691,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         err = stage_orphan(repo, refname, &stage);
         profile_created = true;   /* This add is what brings the branch */
     }
-
-    if (err) {
-        err = error_wrap(err, "Failed to open profile '%s'", opts->profile);
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Resolve the profile-specific ruleset. Safe for both paths: existing profile
      * → loads the profile's `.dottaignore`; new profile → branch doesn't exist
@@ -2456,10 +2446,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* The sheet onto the stage, beside the captures */
     err = metadata_save_to_stage(stage, metadata);
-    if (err) {
-        err = error_wrap(err, "Failed to save metadata");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Verbose summary. Every count from here on is a list's own: each capture
      * loop above is total over its list, so a run that reaches this line captured

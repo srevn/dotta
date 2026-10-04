@@ -567,10 +567,11 @@ error_t gitops_delete_branch(git_repository *repo, const char *name) {
     error_t err = gitops_branch_refname(refname, sizeof(refname), name);
     if (err) return err;
 
+    /* The lookup is the deletion's first step, and its failure is the deletion's */
     git_reference *ref = NULL;
     int rc = git_reference_lookup(&ref, repo, refname);
     if (rc < 0) {
-        return error_git(rc, "Failed to lookup branch '%s'", name);
+        return error_git(rc, "Failed to delete branch '%s'", name);
     }
 
     /* A linked worktree's checkout is the one that must be asked (the header):

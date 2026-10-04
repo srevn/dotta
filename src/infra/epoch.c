@@ -306,9 +306,12 @@ error_t epoch_init(
     }
     stage_free(stage);
 
+    /* The stage names the ref where its refusal is the ref's, and the blob where
+     * it is a blob's — the salt's or the params' — so the mint is said over every
+     * step, the ref never twice */
     if (err) {
         memset(out, 0, sizeof(*out));
-        return error_wrap(err, "Failed to commit the epoch to '%s'", EPOCH_REF);
+        return error_wrap(err, "Cannot mint the repository epoch");
     }
 
     return NULL;

@@ -772,10 +772,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     if (err) goto cleanup;
 
     err = stage_open(repo, refname, &stage);
-    if (err) {
-        err = error_wrap(err, "Failed to open profile '%s'", profile);
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Step 5: the target commit's tree, opened once and lent to everything below
      * that reads the commit. */
@@ -1200,10 +1197,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     }
 
     err = metadata_save_to_stage(stage, standing_sheet);
-    if (err) {
-        err = error_wrap(err, "Failed to save metadata");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     const char *msg = build_revert_commit_message(
         ctx->arena, config, profile, restored_name, git_commit_id(target_commit),

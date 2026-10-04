@@ -2471,7 +2471,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * taken back past the early exit where the store still stands as this commit
      * leaves it, and ended by the record phase (apply_write_record). */
     err = state_save(state);
-    if (err) return error_wrap(err, "Failed to commit state changes");
+    if (err) return err;
 
     /* What the run's reading of the present has to say, in one block: the rows
      * it claimed, the files Git has moved under it, the work its flags withheld

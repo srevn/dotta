@@ -211,9 +211,10 @@ static fs_occupant_t state_kind_from_text(const char *text) {
  */
 #define FOLDED_SPELLING(column) \
     "(instr(" column ", char(0)) = 0 AND (" column " = '/' OR (" \
-    column " GLOB '/?*' AND " column " NOT GLOB '*/[/]*' AND " column " NOT GLOB '*/' AND " \
-    column " NOT GLOB '*/.' AND " column " NOT GLOB '*/.[/]*' AND " \
-    column " NOT GLOB '*/..' AND " column " NOT GLOB '*/..[/]*')))"
+    column " GLOB '/?*' AND " column " NOT GLOB '*/[/]*' AND " \
+    column " NOT GLOB '*/' AND " column " NOT GLOB '*/.' AND " \
+    column " NOT GLOB '*/.[/]*' AND " column " NOT GLOB '*/..' AND " \
+    column " NOT GLOB '*/..[/]*')))"
 
 /**
  * The spelling every storage name the store keeps is held to: a name in the grammar
@@ -228,9 +229,10 @@ static fs_occupant_t state_kind_from_text(const char *text) {
  * and one list of shapes through it and through the grammar's own check.
  */
 #define STORAGE_SPELLING(column) \
-    "(instr(" column ", char(0)) = 0 AND (" column " = 'home' OR " column " = 'root' OR " \
-    column " = 'custom' OR ((" column " GLOB 'home/?*' OR " column " GLOB 'root/?*' OR " \
-    column " GLOB 'custom/?*') AND " column " NOT GLOB '*/[/]*' AND " column " NOT GLOB '*/' AND " \
+    "(instr(" column ", char(0)) = 0 AND (" column " = 'home' OR " \
+    column " = 'root' OR " column " = 'custom' OR ((" column " GLOB 'home/?*' OR " \
+    column " GLOB 'root/?*' OR " column " GLOB 'custom/?*') AND " \
+    column " NOT GLOB '*/[/]*' AND " column " NOT GLOB '*/' AND " \
     column " NOT GLOB '*/.' AND " column " NOT GLOB '*/.[/]*' AND " \
     column " NOT GLOB '*/..' AND " column " NOT GLOB '*/..[/]*')))"
 
@@ -492,7 +494,9 @@ static error_t state_configure(sqlite3 *db) {
      * transaction over 60,000 records took 102 ms under the default and 68 ms
      * under this. */
     if (sqlite3_exec(db, "PRAGMA cache_size=10000;", NULL, NULL, NULL) != SQLITE_OK) {
-        return error_create(ERR_STATE_INVALID, "Failed to set cache size: %s", sqlite3_errmsg(db));
+        return error_create(
+            ERR_STATE_INVALID, "Failed to set cache size: %s", sqlite3_errmsg(db)
+        );
     }
 
     /* 3. Disable persistent WAL */
@@ -692,7 +696,8 @@ static error_t state_read_profiles(state_t *state) {
     int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         return error_create(
-            ERR_STATE_INVALID, "Failed to prepare profile query: %s", sqlite3_errmsg(state->db)
+            ERR_STATE_INVALID, "Cannot read the enabled profiles: %s",
+            sqlite3_errmsg(state->db)
         );
     }
 
@@ -722,7 +727,7 @@ static error_t state_read_profiles(state_t *state) {
         row->name = heap_strdup(name);
         row->target = heap_strdup(target);
         if (!row->name || (target_type != SQLITE_NULL && !row->target)) {
-            err = error_create(ERR_MEMORY, "Failed to read an enabled profile row");
+            err = error_create(ERR_MEMORY, "Cannot read the enabled profiles' columns");
             break;
         }
 
@@ -734,7 +739,8 @@ static error_t state_read_profiles(state_t *state) {
 
     if (!err && rc != SQLITE_DONE) {
         err = error_create(
-            ERR_STATE_INVALID, "Failed to query profiles: %s", sqlite3_errmsg(state->db)
+            ERR_STATE_INVALID, "Cannot read the enabled profiles: %s",
+            sqlite3_errmsg(state->db)
         );
     }
 
@@ -838,7 +844,8 @@ error_t state_enable_profile(
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         return error_create(
-            ERR_STATE_INVALID, "Failed to enable profile: %s", sqlite3_errmsg(state->db)
+            ERR_STATE_INVALID, "Cannot enable profile '%s' in the store's database: %s",
+            profile, sqlite3_errmsg(state->db)
         );
     }
 
@@ -864,7 +871,8 @@ error_t state_disable_profile(
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         return error_create(
-            ERR_STATE_INVALID, "Failed to disable profile: %s", sqlite3_errmsg(state->db)
+            ERR_STATE_INVALID, "Cannot disable profile '%s' in the store's database: %s",
+            profile, sqlite3_errmsg(state->db)
         );
     }
 
@@ -941,7 +949,8 @@ error_t state_reorder_profiles(
      * is unchanged and the cache still matches — safe to return. */
     if (sqlite3_exec(state->db, "DELETE FROM enabled_profiles;", NULL, NULL, NULL) != SQLITE_OK) {
         return error_create(
-            ERR_STATE_INVALID, "Failed to clear profiles: %s", sqlite3_errmsg(state->db)
+            ERR_STATE_INVALID, "Cannot reorder the enabled profiles in the store's database: %s",
+            sqlite3_errmsg(state->db)
         );
     }
 
@@ -972,7 +981,8 @@ error_t state_reorder_profiles(
         if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
         if (rc != SQLITE_DONE) {
             return error_create(
-                ERR_STATE_INVALID, "Failed to insert profile: %s", sqlite3_errmsg(state->db)
+                ERR_STATE_INVALID, "Cannot reorder the enabled profiles in the store's "
+                "database: %s", sqlite3_errmsg(state->db)
             );
         }
     }
@@ -1091,9 +1101,7 @@ fail:
     state_finalize(state);
     sqlite3_close(state->db);
     state->db = NULL;
-    return error_wrap(
-        err, "Cannot open the store's database at: %s", state->db_path
-    );
+    return error_wrap(err, "Cannot open the store's database at '%s'", state->db_path);
 }
 
 /**
@@ -1131,7 +1139,7 @@ static error_t state_create(const char *db_path) {
     if (n < 0 || (size_t) n >= sizeof(temp)) {
         return error_wrap(
             error_create(ERR_STATE_INVALID, "The path is too long"),
-            "Cannot create the store's database at: %s", db_path
+            "Cannot create the store's database at '%s'", db_path
         );
     }
 
@@ -1141,7 +1149,7 @@ static error_t state_create(const char *db_path) {
     if (fd < 0) {
         return error_wrap(
             error_create(ERR_STATE_INVALID, "%s", strerror(errno)),
-            "Cannot create the store's database at: %s", db_path
+            "Cannot create the store's database at '%s'", db_path
         );
     }
     close(fd);
@@ -1153,7 +1161,8 @@ static error_t state_create(const char *db_path) {
     int rc = sqlite3_open_v2(temp, &db, SQLITE_OPEN_READWRITE, NULL);
     if (rc != SQLITE_OK) {
         err = error_create(
-            ERR_STATE_INVALID, "Failed to open the new database: %s", sqlite3_errmsg(db)
+            ERR_STATE_INVALID, "Failed to open the new database: %s",
+            sqlite3_errmsg(db)
         );
         goto done;
     }
@@ -1167,7 +1176,10 @@ static error_t state_create(const char *db_path) {
     rc = sqlite3_prepare_v2(db, "PRAGMA journal_mode=WAL;", -1, &stmt, NULL);
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW) {
-        err = error_create(ERR_STATE_INVALID, "Failed to set WAL mode: %s", sqlite3_errmsg(db));
+        err = error_create(
+            ERR_STATE_INVALID, "Failed to set WAL mode: %s",
+            sqlite3_errmsg(db)
+        );
         goto done;
     }
     const char *mode = (const char *) sqlite3_column_text(stmt, 0);
@@ -1194,7 +1206,7 @@ done:
     sqlite3_finalize(stmt);
     sqlite3_close(db);
     unlink(temp);
-    return error_wrap(err, "Cannot create the store's database at: %s", db_path);
+    return error_wrap(err, "Cannot create the store's database at '%s'", db_path);
 }
 
 /**
@@ -1320,18 +1332,19 @@ error_t state_begin(state_t *state) {
     }
 
     /* The lock. BUSY is another connection holding it past the busy timeout,
-     * and the one failure the second line is true of: a directory that cannot
-     * take the -wal file answers READONLY here, and an I/O error is its own. */
+     * and the one failure the clause is true of: a directory that cannot take
+     * the -wal file answers READONLY here, and an I/O error is its own. */
     int rc = sqlite3_exec(state->db, "BEGIN IMMEDIATE;", NULL, NULL, NULL);
     if (rc == SQLITE_BUSY) {
         return error_create(
-            ERR_CONFLICT, "Failed to acquire write lock: %s; another process holds it",
+            ERR_CONFLICT, "Cannot lock the store's database: %s; another process holds it",
             sqlite3_errmsg(state->db)
         );
     }
     if (rc != SQLITE_OK) {
         return error_create(
-            ERR_STATE_INVALID, "Failed to acquire write lock: %s", sqlite3_errmsg(state->db)
+            ERR_STATE_INVALID, "Cannot lock the store's database: %s",
+            sqlite3_errmsg(state->db)
         );
     }
 
@@ -1376,7 +1389,8 @@ error_t state_commit(state_t *state) {
 
     if (sqlite3_exec(state->db, "COMMIT;", NULL, NULL, NULL) != SQLITE_OK) {
         return error_create(
-            ERR_STATE_INVALID, "Failed to commit transaction: %s", sqlite3_errmsg(state->db)
+            ERR_STATE_INVALID, "Cannot commit to the store's database: %s",
+            sqlite3_errmsg(state->db)
         );
     }
 

@@ -107,10 +107,7 @@ static error_t init_state(git_repository *repo) {
 
     err = state_save(state);
     state_free(state);
-
-    if (err) return error_wrap(err, "Failed to save initial state");
-
-    return NULL;
+    return err;
 }
 
 /**

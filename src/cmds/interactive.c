@@ -400,25 +400,15 @@ static error_t plan_apply(state_t *deploy_state, const plan_t *plan) {
         const item_t *it = plan->new_order_items[i];
 
         error_t err = state_enable_profile(deploy_state, it->name, it->target);
-        if (err) {
-            return error_wrap(err, "Failed to enable profile '%s'", it->name);
-        }
+        if (err) return err;
     }
 
     for (size_t i = 0; i < plan->removal_count; i++) {
         error_t err = state_disable_profile(deploy_state, plan->removal_names[i]);
-        if (err) {
-            return error_wrap(
-                err, "Failed to disable profile '%s'", plan->removal_names[i]
-            );
-        }
+        if (err) return err;
     }
 
-    error_t err = state_reorder_profiles(deploy_state, &plan->new_order);
-    if (err) {
-        return error_wrap(err, "Failed to apply new profile order");
-    }
-    return NULL;
+    return state_reorder_profiles(deploy_state, &plan->new_order);
 }
 
 /* Phase: build the view over the post-mutation binding set — the enabled set as

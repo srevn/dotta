@@ -158,9 +158,7 @@ static error_t initialize_state(
     /* Create state database (with or without profiles) */
     state_t *state = NULL;
     error_t err = state_open(repo, &state);
-    if (err) {
-        return error_wrap(err, "Failed to initialize state database");
-    }
+    if (err) return err;
 
     /* Enable each profile individually, then build the view over the new set once.
      *
@@ -173,34 +171,20 @@ static error_t initialize_state(
      * is discarded. It is the tripwire that keeps clone from landing an enabled
      * set the next load cannot build — a branch that exists but will not load
      * fails here, before state_save, and the repository is left with nothing
-     * enabled. */
-    if (profiles->count > 0) {
-        for (size_t i = 0; i < profiles->count; i++) {
-            err = state_enable_profile(state, profiles->entries[i], NULL);
-            if (err) {
-                state_free(state);
-                return error_wrap(
-                    err, "Failed to enable profile '%s'", profiles->entries[i]
-                );
-            }
-        }
-
+     * enabled. Every step meets the handle's one release: a refusal names its
+     * profile or its store itself. */
+    for (size_t i = 0; !err && i < profiles->count; i++) {
+        err = state_enable_profile(state, profiles->entries[i], NULL);
+    }
+    if (!err && profiles->count > 0) {
         manifest_t *view = NULL;
         err = manifest_build(repo, state, arena, &view);
-        if (err) {
-            state_free(state);
-            return err;
-        }
     }
 
     /* Commit transaction */
-    err = state_save(state);
-    if (err) {
-        state_free(state);
-        return error_wrap(err, "Failed to save state");
-    }
-
+    if (!err) err = state_save(state);
     state_free(state);
+    if (err) return err;
 
     /* The names enabled, when there are any: a run that enabled nothing said
      * why per profile above, and has no list to print. */
@@ -503,10 +487,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     }
 
     err = initialize_state(repo, ctx->arena, &to_enable, out);
-    if (err) {
-        err = error_wrap(err, "Failed to initialize state");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Seed the baseline .dottaignore at its own ref with the default patterns.
      *

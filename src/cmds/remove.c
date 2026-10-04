@@ -1083,72 +1083,60 @@ static error_t remove_paths(
      * (remove_profile). */
     candidate_t *candidates = NULL;
     size_t candidate_count = 0;
-    error_t record_err = remove_paths_candidates(
+    err = remove_paths_candidates(
         ctx, opts->profile, claims, claim_count, &pruned_dirs, &candidates, &candidate_count
     );
 
-    if (record_err) {
-        output_warning(
-            out, OUTPUT_NORMAL, "Record update failed: %s",
-            error_line(record_err)
-        );
-    } else if (candidate_count > 0 || state_enabled(state, opts->profile)) {
-        record_err = state_begin(state);
-        if (record_err) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to open transaction for record update: %s",
-                error_line(record_err)
-            );
-        } else {
-            /* What the settle acts on, read again under the lock: the read above
-             * decided only whether to take it, and another process can write
-             * the record between the two — or while this one waits for it. */
-            record_err = remove_paths_candidates(
+    if (!err && (candidate_count > 0 || state_enabled(state, opts->profile))) {
+        err = state_begin(state);
+
+        /* What the settle acts on, read again under the lock: the read above
+         * decided only whether to take it, and another process can write the
+         * record between the two — or while this one waits for it. */
+        if (!err) {
+            err = remove_paths_candidates(
                 ctx, opts->profile, claims, claim_count, &pruned_dirs,
                 &candidates, &candidate_count
             );
+        }
+        if (!err) {
+            err = remove_settle(
+                ctx, candidates, candidate_count, opts->delete_files, &settlement
+            );
+        }
 
-            if (!record_err) {
-                record_err = remove_settle(
-                    ctx, candidates, candidate_count, opts->delete_files, &settlement
-                );
-            }
+        /* Commit transaction */
+        if (!err) err = state_commit(state);
 
-            if (record_err) {
-                output_warning(
-                    out, OUTPUT_NORMAL, "Record update failed: %s",
-                    error_line(record_err)
-                );
-                state_rollback(state);
-                settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
-            } else {
-                /* Commit transaction */
-                error_t commit_err = state_commit(state);
-                if (commit_err) {
-                    output_warning(
-                        out, OUTPUT_NORMAL, "Failed to save record updates: %s",
-                        error_line(commit_err)
-                    );
-                    state_rollback(state);
-                    settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
-                } else if (settlement.ordered + settlement.released + settlement.fallback > 0) {
-                    if (opts->delete_files) {
-                        output_info(
-                            out, OUTPUT_VERBOSE,
-                            "Record: %zu staged for removal, %zu released, %zu fallback%s",
-                            settlement.ordered, settlement.released, settlement.fallback,
-                            settlement.fallback == 1 ? "" : "s"
-                        );
-                    } else {
-                        output_info(
-                            out, OUTPUT_VERBOSE,
-                            "Record: %zu released, %zu fallback%s",
-                            settlement.released, settlement.fallback,
-                            settlement.fallback == 1 ? "" : "s"
-                        );
-                    }
-                }
-            }
+        /* A step refused, the lock goes back with every write it held */
+        if (err) {
+            state_rollback(state);
+            settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
+        }
+    }
+
+    /* One phase, one sentence, whichever step refused: the record phase's, as
+     * add's, update's and apply's say it — each refusal beneath names its own
+     * step, the read, the lock or the commit. Non-fatal: the commit to Git stands,
+     * so the refusal is warned and the command goes on. */
+    if (err) {
+        output_warning(out, OUTPUT_NORMAL, "Failed to update the record: %s", error_line(err));
+        err = NULL;
+    } else if (settlement.ordered + settlement.released + settlement.fallback > 0) {
+        if (opts->delete_files) {
+            output_info(
+                out, OUTPUT_VERBOSE,
+                "Record: %zu staged for removal, %zu released, %zu fallback%s",
+                settlement.ordered, settlement.released, settlement.fallback,
+                settlement.fallback == 1 ? "" : "s"
+            );
+        } else {
+            output_info(
+                out, OUTPUT_VERBOSE,
+                "Record: %zu released, %zu fallback%s",
+                settlement.released, settlement.fallback,
+                settlement.fallback == 1 ? "" : "s"
+            );
         }
     }
 
@@ -1349,16 +1337,11 @@ static error_t remove_profile(
     size_t candidate_count = 0;
     size_t deployed_count = 0;
     settlement_t settlement = { 0 };
-    {
-        error_t read_err = remove_profile_candidates(
-            ctx, opts->profile, &candidates, &candidate_count
-        );
-        if (read_err) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to read the record: %s",
-                error_line(read_err)
-            );
-        }
+    err = remove_profile_candidates(ctx, opts->profile, &candidates, &candidate_count);
+    if (err) {
+        /* The store's refusal says the read it refused */
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
+        err = NULL;
     }
     for (size_t i = 0; i < candidate_count; i++) {
         if (candidates[i].record->deployed_at > 0) deployed_count++;
@@ -1520,61 +1503,51 @@ static error_t remove_profile(
      * write is an orphan the next apply reads, asks Git about, finds the branch
      * gone, and releases. */
     if (candidate_count > 0 || state_enabled(state, opts->profile)) {
-        error_t delete_err = state_begin(state);
-        if (!delete_err) {
-            /* The row and the record as the lock holds them: state_begin read
-             * the rows inside it, and the candidates are read here */
-            if (state_enabled(state, opts->profile)) {
-                delete_err = state_disable_profile(state, opts->profile);
-            }
+        err = state_begin(state);
 
-            if (!delete_err) {
-                delete_err = remove_profile_candidates(
-                    ctx, opts->profile, &candidates, &candidate_count
-                );
-            }
-
-            if (!delete_err) {
-                delete_err = remove_settle(
-                    ctx, candidates, candidate_count, opts->delete_files, &settlement
-                );
-            }
-
-            /* Commit transaction */
-            if (!delete_err) delete_err = state_commit(state);
-
-            if (delete_err) {
-                output_warning(
-                    out, OUTPUT_NORMAL, "Failed to update state after branch deletion: %s",
-                    error_line(delete_err)
-                );
-                state_rollback(state);
-                settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
-            } else if (settlement.ordered + settlement.released + settlement.fallback > 0) {
-                if (opts->delete_files) {
-                    output_info(
-                        out, OUTPUT_VERBOSE,
-                        "%zu entr%s staged for removal, %zu released, %zu fallback%s",
-                        settlement.ordered, settlement.ordered == 1 ? "y" : "ies",
-                        settlement.released,
-                        settlement.fallback, settlement.fallback == 1 ? "" : "s"
-                    );
-                } else {
-                    output_info(
-                        out, OUTPUT_VERBOSE,
-                        "%zu entr%s released from management, %zu fallback%s",
-                        settlement.released, settlement.released == 1 ? "y" : "ies",
-                        settlement.fallback, settlement.fallback == 1 ? "" : "s"
-                    );
-                }
-            }
-        } else {
-            /* Non-fatal: the next workspace load observes the branch gone and
-             * releases these records conservatively */
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to begin transaction for post-deletion update: %s",
-                error_line(delete_err)
+        /* The row and the record as the lock holds them: state_begin read the
+         * rows inside it, and the candidates are read here */
+        if (!err && state_enabled(state, opts->profile)) {
+            err = state_disable_profile(state, opts->profile);
+        }
+        if (!err) {
+            err = remove_profile_candidates(ctx, opts->profile, &candidates, &candidate_count);
+        }
+        if (!err) {
+            err = remove_settle(
+                ctx, candidates, candidate_count, opts->delete_files, &settlement
             );
+        }
+
+        /* Commit transaction */
+        if (!err) err = state_commit(state);
+
+        /* One phase, one sentence, whichever step refused — the lock, the row,
+         * the read, the settle or the commit, each naming its own — as every
+         * record phase says it; the lock goes back with every write it held.
+         * Non-fatal: the branch is gone and stands. */
+        if (err) {
+            output_warning(out, OUTPUT_NORMAL, "Failed to update the record: %s", error_line(err));
+            state_rollback(state);
+            settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
+            err = NULL;
+        } else if (settlement.ordered + settlement.released + settlement.fallback > 0) {
+            if (opts->delete_files) {
+                output_info(
+                    out, OUTPUT_VERBOSE,
+                    "%zu entr%s staged for removal, %zu released, %zu fallback%s",
+                    settlement.ordered, settlement.ordered == 1 ? "y" : "ies",
+                    settlement.released,
+                    settlement.fallback, settlement.fallback == 1 ? "" : "s"
+                );
+            } else {
+                output_info(
+                    out, OUTPUT_VERBOSE,
+                    "%zu entr%s released from management, %zu fallback%s",
+                    settlement.released, settlement.released == 1 ? "y" : "ies",
+                    settlement.fallback, settlement.fallback == 1 ? "" : "s"
+                );
+            }
         }
     }
 

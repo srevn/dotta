@@ -759,11 +759,7 @@ static error_t profile_enable(
             const char *profile = to_enable_validated.entries[i];
 
             err = state_enable_profile(state, profile, target);
-            if (err) {
-                return error_wrap(
-                    err, "Failed to enable profile '%s' in state", profile
-                );
-            }
+            if (err) return err;
         }
 
         /* Phase 3: The view after, and the diff. The builder reads the rows as
@@ -790,7 +786,7 @@ static error_t profile_enable(
          * where a full disk meets the transaction (core/state.h state_commit),
          * and a line above it would stand over the refusal. */
         err = state_save(state);
-        if (err) return error_wrap(err, "Failed to save state");
+        if (err) return err;
 
         for (size_t i = 0; i < to_enable_validated.count; i++) {
             const char *name = to_enable_validated.entries[i];
@@ -1033,12 +1029,7 @@ static error_t profile_disable(
         /* Phase 3: Write scope to state */
         for (size_t i = 0; i < to_disable_validated.count; i++) {
             err = state_disable_profile(state, to_disable_validated.entries[i]);
-            if (err) {
-                return error_wrap(
-                    err, "Failed to remove profile '%s' from state",
-                    to_disable_validated.entries[i]
-                );
-            }
+            if (err) return err;
         }
 
         /* Phase 4: The view after, and the diff — skipped with `before`, whose
@@ -1068,7 +1059,7 @@ static error_t profile_disable(
          * are. The target the row carried went with it; the line says so and
          * names the command that puts it back. */
         err = state_save(state);
-        if (err) return error_wrap(err, "Failed to save state");
+        if (err) return err;
 
         for (size_t i = 0; i < to_disable_validated.count; i++) {
             const char *name = to_disable_validated.entries[i];
@@ -1207,9 +1198,7 @@ static error_t profile_reorder(
         string_array_push(&order, opts->profiles[i]);
     }
     error_t err = state_reorder_profiles(state, &order);
-    if (err) {
-        return error_wrap(err, "Failed to update state");
-    }
+    if (err) return err;
 
     /* Nothing else to write: the view is computed from the enabled set at every
      * load, so the new precedence is simply what the next status, diff or apply
@@ -1217,9 +1206,7 @@ static error_t profile_reorder(
 
     /* Save state (releases lock automatically) */
     err = state_save(state);
-    if (err) {
-        return error_wrap(err, "Failed to save state");
-    }
+    if (err) return err;
 
     /* Success message */
     output_gap(out, OUTPUT_NORMAL);
@@ -1260,10 +1247,7 @@ static error_t profile_validate(
     /* Promote to a write transaction when we intend to mutate */
     if (opts->fix) {
         err = state_begin(state);
-        if (err) {
-            err = error_wrap(err, "Failed to begin state transaction");
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
     /* The enabled rows, where the handle holds them: read after the promotion,
@@ -1305,20 +1289,11 @@ static error_t profile_validate(
             for (size_t i = 0; i < missing.count; i++) {
                 const char *profile = missing.entries[i];
                 err = state_disable_profile(state, profile);
-                if (err) {
-                    err = error_wrap(
-                        err, "Failed to remove missing profile '%s' from state",
-                        profile
-                    );
-                    goto cleanup;
-                }
+                if (err) goto cleanup;
             }
 
             err = state_commit(state);
-            if (err) {
-                err = error_wrap(err, "Failed to commit state transaction");
-                goto cleanup;
-            }
+            if (err) goto cleanup;
 
             output_success(out, OUTPUT_NORMAL, "Removed missing profiles from state");
             fixed_enabled_profiles = true;

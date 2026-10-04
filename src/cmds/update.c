@@ -144,7 +144,10 @@ static error_t update_capture(
  * entries dropped as redundant — and read back by the commit message and by the
  * record loop (update_write_record), so both follow the commit and nothing else:
  * an item the walk skipped (a directory the race guard refused) lands in no list,
- * is not named, and gets no record write.
+ * is not named, and gets no record write. Whether the commit landed at all is
+ * the stage's own answer (sys/stage.h stage_commit) — a walk whose edits leave
+ * the tree as the stage opened it lands none, whatever its lists hold — and the
+ * executor hands on only the bookkeeping of a commit that landed (update_execute).
  *
  * A capture is kept as the record of what it committed — the node the capture
  * held to, the blob the stage wrote, the triple its bytes were read with (a file's,
@@ -165,6 +168,7 @@ static error_t update_capture(
  */
 typedef struct {
     const char *profile;               /* Borrowed from the enabled set */
+    bool committed;                    /* Whether the commit landed: the stage's own answer */
     state_record_t *captured;          /* What each capture committed, as the record keeps it */
     size_t captured_count;
     const workspace_item_t **deleted;  /* Items whose deletion the commit recorded */
@@ -391,11 +395,13 @@ static void update_partition(
  * each a leaf whose chain is climbed whether or not anything about it diverged.
  * The walk ends with the redundancy prune, one metadata save, and the commit.
  *
- * Success means committed or untouched: a walk that captured nothing and deleted
+ * Success means committed or untouched, and the bookkeeping says which
+ * (commit->committed, the stage's answer): a walk that captured nothing and deleted
  * nothing saves nothing and commits nothing — the stage is freed by the caller
- * as it was opened. A mid-walk failure returns with the stage part-edited: the
- * executor stops the run there, and a stage that is never committed changes nothing
- * in the repository.
+ * as it was opened — and a walk whose captures put back what the branch holds
+ * commits nothing either. A mid-walk failure returns with the stage part-edited:
+ * the executor stops the run there, and a stage that is never committed changes
+ * nothing in the repository.
  *
  * @param ctx Dispatch context (must not be NULL; the capture reads the key and
  *            the encryption policy off it)
@@ -408,9 +414,6 @@ static void update_partition(
  * @param opts Update options (must not be NULL)
  * @param commit The commit's bookkeeping, zero-filled by the caller; the walk
  *               fills it (must not be NULL)
- * @param out_processed Output: number of user items committed — captured plus
- *                      deleted; the derivation's motions are the bookkeeping's,
- *                      never this count's (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t update_profile(
@@ -420,20 +423,17 @@ static error_t update_profile(
     workspace_items_t items,
     manifest_rows_t rows,
     const cmd_update_options_t *opts,
-    commit_t *commit,
-    size_t *out_processed
+    commit_t *commit
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(stage);
     CHECK_NULL(profile);
     CHECK_NULL(opts);
     CHECK_NULL(commit);
-    CHECK_NULL(out_processed);
 
     git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
 
-    *out_processed = 0;
     commit->profile = profile;
     string_array_init(&commit->pruned, ctx->arena);
     string_array_init(&commit->retired, ctx->arena);
@@ -818,11 +818,13 @@ static error_t update_profile(
         .target_commit = NULL
     };
 
-    /* Create commit */
-    err = stage_commit(stage, commit_message(ctx->arena, ctx->config, &msg_ctx), NULL);
-    if (err) goto cleanup;
-
-    *out_processed = commit->captured_count + commit->deleted_count;
+    /* The commit, and whether it landed: the stage's own answer, false for a
+     * tree the walk left as the stage opened it — captures that put back what
+     * the branch holds, which a hook rewriting a file between the decision and
+     * the capture makes */
+    err = stage_commit(
+        stage, commit_message(ctx->arena, ctx->config, &msg_ctx), &commit->committed
+    );
 
 cleanup:
     /* Free resources in reverse order */
@@ -1027,8 +1029,9 @@ cleanup:
  * The commits that landed cross the error boundary: out_commits receives one
  * bookkeeping entry per landed commit, written as the commit lands, so the caller
  * holds it even when a later profile fails and the record write follows what
- * Git shows. A profile that committed nothing — a walk that touched nothing, or
- * a failure before its commit — contributes no entry.
+ * Git shows. A profile whose commit did not land — a walk that touched nothing,
+ * one whose captures put back what the branch holds, or a failure before its
+ * commit — contributes no entry, and its items are neither counted nor said.
  *
  * @param ctx Dispatch context (must not be NULL; the stages are opened on the
  *            run's repository, the capture reads the key and the encryption policy)
@@ -1125,12 +1128,11 @@ static error_t update_execute(
 
         /* Update this profile on its stage */
         commit_t bookkeeping = { 0 };
-        size_t processed = 0;
         err = update_profile(
             ctx, stage, profile,
             (workspace_items_t){ .entries = items, .count = item_count },
             (manifest_rows_t){ .entries = rows, .count = row_count },
-            opts, &bookkeeping, &processed
+            opts, &bookkeeping
         );
         stage_free(stage);
 
@@ -1138,20 +1140,17 @@ static error_t update_execute(
          * the bookkeeping holds */
         if (err) return err;
 
-        /* The commit gate's own sum, read back off the bookkeeping the walk filled:
-         * on a clean return, zero means the gate closed without a commit and
-         * anything else means the walk did its work and committed it — a
-         * derivation-only commit carries no user item, so `processed` alone cannot
-         * say. (A stage whose tree equals the one it opened commits nothing;
-         * only a capture re-read identical inside the load-to-open window makes
-         * one, and the record write is right for it either way.) */
-        size_t landed = bookkeeping.captured_count + bookkeeping.deleted_count +
-            bookkeeping.claimed + bookkeeping.retired.count;
-        if (landed == 0) continue;
+        /* Whether the commit landed is the stage's answer, read off the
+         * bookkeeping: the walk's lists say what it did to the tree, and a tree
+         * it left as the stage opened it is no commit — nothing to report, nothing
+         * to record */
+        if (!bookkeeping.committed) continue;
 
         /* The commit landed: its bookkeeping is the record write's now, the
-         * caller's whatever a later profile meets */
+         * caller's whatever a later profile meets. Its user items are what it
+         * captured and deleted; a derivation-only commit carries none. */
         commits[(*out_commit_count)++] = bookkeeping;
+        size_t processed = bookkeeping.captured_count + bookkeeping.deleted_count;
         *total_updated += processed;
 
         if (!output_is_verbose(out)) {
@@ -1881,7 +1880,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
     } else if (commit_count == 0) {
         /* Every profile committed nothing (the walk's race guard refused what
-         * the plan admitted): say so instead of counting zero */
+         * the plan admitted, or the captures put back what the branch holds):
+         * say so instead of counting zero */
         output_info(out, OUTPUT_NORMAL, "Nothing was committed");
     } else {
         if (total_updated > 0) {

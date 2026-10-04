@@ -353,7 +353,6 @@ static error_t dest_resolve(
  */
 typedef struct {
     const metadata_t *metadata;
-    const char *profile;       /* Named by the refusal a malformed tree earns */
     const char *storage_base;  /* "" for whole profile, else target path */
     export_entry_list_t *list;
     arena_t *arena;
@@ -405,9 +404,7 @@ static error_t collect_entry(
      * is the link's own business, copied verbatim, and is not a path of this
      * copy. */
     error_t err = label_validate_storage(e.storage_path);
-    if (err) {
-        return error_wrap(err, "Invalid path in profile '%s'", walk->profile);
-    }
+    if (err) return err;
 
     /* The claim standing at this name, read once for whichever arm wants it. */
     const metadata_item_t *item = metadata_lookup(walk->metadata, e.storage_path);
@@ -552,15 +549,19 @@ static error_t collect_profile(
 
     append_root(list, arena, NULL, DIR_MODE_DEFAULT, false);
 
+    /* The walk's failures name a path in the tree, and the profile is the where
+     * they do not say */
     collect_walk_t walk = {
         .metadata     = metadata,
-        .profile      = profile,
         .storage_base = "",
         .list         = list,
         .arena        = arena
     };
     error_t err = gitops_tree_walk(tree, collect_entry, &walk);
-    if (err) goto cleanup;
+    if (err) {
+        err = error_wrap(err, "Cannot read profile '%s'%s", profile, commit_suffix);
+        goto cleanup;
+    }
 
     err = append_claim_dirs(list, arena, metadata, tree, NULL);
     if (err) goto cleanup;
@@ -642,19 +643,28 @@ static error_t collect_storage(
             if (held.filemode == GIT_FILEMODE_TREE) {
                 int rc = git_tree_lookup(&subtree, ctx->run.repo, &held.oid);
                 if (rc < 0) {
-                    err = error_git(rc, "Cannot read '%s' in profile '%s'", name, profile);
+                    err = error_git(
+                        rc, "Cannot read '%s' in profile '%s'%s", name, profile,
+                        commit_suffix
+                    );
                     goto cleanup;
                 }
 
+                /* The subtree's walk is said as its lookup is */
                 collect_walk_t walk = {
                     .metadata     = metadata,
-                    .profile      = profile,
                     .storage_base = name,
                     .list         = list,
                     .arena        = arena
                 };
                 err = gitops_tree_walk(subtree, collect_entry, &walk);
-                if (err) goto cleanup;
+                if (err) {
+                    err = error_wrap(
+                        err, "Cannot read '%s' in profile '%s'%s", name, profile,
+                        commit_suffix
+                    );
+                    goto cleanup;
+                }
             }
 
             err = append_claim_dirs(list, arena, metadata, tree, name);

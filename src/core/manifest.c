@@ -788,9 +788,7 @@ static error_t manifest_claim_blob(
      * its own (core/metadata.c). Malformed here is corruption, not a lifecycle
      * stage: it ends the walk rather than taking the unbound note. */
     error_t err = label_validate_storage(path);
-    if (err) {
-        return error_wrap(err, "Invalid path in profile '%s'", walk->profile);
-    }
+    if (err) return err;
 
     /* The walk lends the path for this call alone; the row, the unbound note
      * and the contradicted set keep it past the walk, so it is copied into the
@@ -985,11 +983,12 @@ static error_t manifest_contribute(
         .arena        = arena
     };
 
+    /* The walk's failures name a path in the tree, a name its grammar refused
+     * or a subtree that would not load, and the profile is the where neither
+     * says */
     err = gitops_tree_walk(tree, manifest_claim_blob, &walk);
     if (err) {
-        err = error_wrap(
-            err, "Failed to build manifest for profile '%s'", c->profile
-        );
+        err = error_wrap(err, "Cannot read profile '%s'", c->profile);
         goto cleanup;
     }
 

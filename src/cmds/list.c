@@ -365,12 +365,10 @@ static error_t list_files(
     }
 
     string_array_t files;
-    err = profile_list_tree_files(tree, ctx->arena, &files);
+    err = profile_list_tree_files(tree, opts->profile, ctx->arena, &files);
     if (err) {
         git_tree_free(tree);
-        return error_wrap(
-            err, "Failed to list files in profile '%s'", opts->profile
-        );
+        return err;
     }
 
     if (files.count == 0) {

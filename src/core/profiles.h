@@ -524,15 +524,22 @@ error_t profile_holds(
  * corruption and fails the walk rather than being skipped, since a listing short
  * by a name would still read as complete. A branch this machine authored holds
  * no such entry; one that arrived by clone, sync or foreign push can. A name is
- * never refused for its length: Git's only bound on one is memory.
+ * never refused for its length: Git's only bound on one is memory. Every failure
+ * is said under the profile, since the walk's own name a path in the tree and
+ * never the branch it is, and no reader names it again.
+ *
+ * Readers: cmds/list.c list_files, cmds/remove.c remove_resolve, and
+ * profile_list_files.
  *
  * @param tree Git tree to walk (must not be NULL)
+ * @param profile The profile whose branch the tree is (must not be NULL)
  * @param arena Arena the listing lives in (must not be NULL)
  * @param out The storage paths (must not be NULL; left as it was on a failure)
  * @return Error or NULL on success
  */
 error_t profile_list_tree_files(
     const git_tree *tree,
+    const char *profile,
     arena_t *arena,
     string_array_t *out
 );

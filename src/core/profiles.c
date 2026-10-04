@@ -452,18 +452,22 @@ static error_t profile_list_entry(
  */
 error_t profile_list_tree_files(
     const git_tree *tree,
+    const char *profile,
     arena_t *arena,
     string_array_t *out
 ) {
     CHECK_NULL(tree);
+    CHECK_NULL(profile);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    /* The walk pushes straight onto the listing, handed out once it is whole */
+    /* The walk pushes straight onto the listing, handed out once it is whole.
+     * Its failures name a path in the tree — a name the grammar refused, a subtree
+     * that would not load — and the profile is the where they do not say. */
     string_array_t paths;
     string_array_init(&paths, arena);
     error_t err = gitops_tree_walk(tree, profile_list_entry, &paths);
-    if (err) return err;
+    if (err) return error_wrap(err, "Failed to list files in profile '%s'", profile);
 
     *out = paths;
     return NULL;
@@ -486,7 +490,7 @@ error_t profile_list_files(
     error_t err = gitops_load_branch_tree(repo, profile, &tree);
     if (err) return err;
 
-    err = profile_list_tree_files(tree, arena, out);
+    err = profile_list_tree_files(tree, profile, arena, out);
     git_tree_free(tree);
     return err;
 }

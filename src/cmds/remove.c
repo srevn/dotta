@@ -351,10 +351,8 @@ static error_t remove_resolve(
     /* The branch's claims, off the tree: its blobs, then the metadata's directory
      * claims. */
     string_array_t profile_files;
-    err = profile_list_tree_files(tree, ctx->arena, &profile_files);
-    if (err) {
-        return error_wrap(err, "Failed to list files in profile");
-    }
+    err = profile_list_tree_files(tree, profile, ctx->arena, &profile_files);
+    if (err) return err;
 
     err = metadata_load_from_tree(repo, tree, profile, &metadata);
     if (err) goto cleanup;
@@ -1231,10 +1229,7 @@ static error_t remove_profile(
      * the deletion must not refuse over a count. */
     string_array_t files;
     err = profile_list_files(repo, opts->profile, ctx->arena, &files);
-    if (err) {
-        err = error_wrap(err, "Failed to list files in profile '%s'", opts->profile);
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     char counts[64];
     {

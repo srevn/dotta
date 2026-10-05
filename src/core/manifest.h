@@ -249,11 +249,11 @@ static inline bool manifest_is_claim(
  * on reads [ancestor] (core/workspace.c workspace_item_tags);
  * update's derive-scope slice (cmds/update.c cmd_update); the two refusals of a
  * second name for one path, where a derived claim names nothing and so blocks
- * nothing (cmds/add.c cmd_add, cmds/revert.c refuse_second_name); add's rule
- * question, where it claims nothing either and so is a discovery, meeting every
- * rule (cmds/add.c add_verdict); and the walk that enters such a directory for
- * the claims beneath it (cmds/add.c add_collect). Every other `tracked` read in
- * the tree stands where the kind is already settled and asks the field's own
+ * nothing (cmds/add.c cmd_add, cmds/revert.c revert_refuse_second_name); add's
+ * rule question, where it claims nothing either and so is a discovery, meeting
+ * every rule (cmds/add.c add_verdict); and the walk that enters such a directory
+ * for the claims beneath it (cmds/add.c add_collect). Every other `tracked` read
+ * in the tree stands where the kind is already settled and asks the field's own
  * meaning, not this predicate.
  */
 static inline bool manifest_is_derived(const manifest_row_t *row) {
@@ -430,9 +430,9 @@ error_t manifest_build(
  * path argument of `show -p` and `list -p`, named over whatever tree the verb
  * selected (cmds/show.c cmd_show, cmds/list.c list_file_history, which ask it
  * manifest_claim_name); revert's two questions of a tree, the claim standing at
- * a path and the second-name admission (cmds/revert.c claim_standing,
- * refuse_second_name); add, which builds one over the tree its stage opened at
- * and asks it every naming question for the length of the command (cmds/add.c
+ * a path and the second-name admission (cmds/revert.c revert_claim_standing,
+ * revert_refuse_second_name); add, which builds one over the tree its stage opened
+ * at and asks it every naming question for the length of the command (cmds/add.c
  * cmd_add); `ignore --test`'s named arm (cmds/ignore.c ignore_test); and the
  * two cross-branch searches, which build one per local branch (core/profiles.c
  * claim_by_filesystem_path, under profile_discover_claims, and
@@ -817,15 +817,16 @@ error_t manifest_holder(
  * the branch never held — and the per-branch arm of the search across the local
  * branches (core/profiles.h profile_discover_claims); revert's two questions of
  * a tree, the claim standing at a path and the second-name admission (cmds/revert.c
- * claim_standing, refuse_second_name); add's two questions of a path it names
- * or walks (cmds/add.c cmd_add and add_collect): which rules reach it — a claim
- * meets the -e layer alone, no rule of discovery (add_verdict) — and whether
- * the profile's own claim agrees with what stands there now — the one reading
- * that sees an explicit claim with nothing beneath it for either of the branch's
- * documents to find, and a derived row included, since a profile holding a subtree
- * beneath a path is a statement a path that became a file contradicts; and `ignore
- * --test`'s note beneath a verdict that excludes a path its asker tracks, which
- * add and update re-capture whatever the rules say (cmds/ignore.c ignore_test).
+ * revert_claim_standing, revert_refuse_second_name); add's two questions of a
+ * path it names or walks (cmds/add.c cmd_add and add_collect): which rules reach
+ * it — a claim meets the -e layer alone, no rule of discovery (add_verdict) —
+ * and whether the profile's own claim agrees with what stands there now — the
+ * one reading that sees an explicit claim with nothing beneath it for either of
+ * the branch's documents to find, and a derived row included, since a profile
+ * holding a subtree beneath a path is a statement a path that became a file
+ * contradicts; and `ignore --test`'s note beneath a verdict that excludes a path
+ * its asker tracks, which add and update re-capture whatever the rules say
+ * (cmds/ignore.c ignore_test).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,
@@ -1075,8 +1076,8 @@ const char *manifest_name(
  * (the tip, or the commit the user named, so a name that changed since is found
  * as of then: cmds/show.c cmd_show, cmds/list.c list_file_history). `export`
  * selects rows instead, `remove` matches its own claims, `revert` reads the claim
- * standing in the tree it edits (cmds/revert.c claim_standing), and `ignore --test`
- * asks manifest_name itself.
+ * standing in the tree it edits (cmds/revert.c revert_claim_standing), and `ignore
+ * --test` asks manifest_name itself.
  *
  * @param arena Arena the name lives in (must not be NULL)
  * @param manifest Manifest (must not be NULL)

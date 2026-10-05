@@ -284,11 +284,11 @@ typedef struct {
  * that is left of the strict/tolerant split here. Naming the profile skips the
  * search entirely, and the one caller says so where it refuses.
  *
- * Reader: revert without a profile (cmds/revert.c select_profile), whose question
- * is every local branch and not the enabled set, and which reads the empty set
- * as no profile holding the argument. A caller that wants the owning profile
- * among the enabled set asks the view instead (manifest_lookup, manifest_holder
- * — list, show).
+ * Reader: revert without a profile (cmds/revert.c revert_select_profile), whose
+ * question is every local branch and not the enabled set, and which reads the
+ * empty set as no profile holding the argument. A caller that wants the owning
+ * profile among the enabled set asks the view instead (manifest_lookup,
+ * manifest_holder — list, show).
  *
  * The key is the input here, where the claim name takes a filesystem path outright
  * (core/manifest.h manifest_claim_name): both keys run this one search — the

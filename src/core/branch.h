@@ -176,8 +176,8 @@ void branch_free(branch_t *branch);
  * Readers: core/manifest.c manifest_contribute, which names a contribution's
  * rows by it, and the helpers that hold a branch and ask its view by profile or
  * word a refusal under it (cmds/export.c export_collect_profile,
- * export_collect_storage and export_collect_filesystem,
- * cmds/revert.c claim_standing, refuse_second_name and entry_to_restore);
+ * export_collect_storage and export_collect_filesystem, cmds/revert.c
+ * revert_claim_standing, revert_refuse_second_name and revert_target_entry);
  * core/profiles.c profile_needs_target, which asks a table for the profile's
  * own roots by it; and cmds/show.c show_file, whose bytes the profile's key opens
  * and whose warning names it.
@@ -398,8 +398,8 @@ typedef struct {
  * alone.
  *
  * Readers: the verbs that act on one name — cmds/show.c show_file, cmds/list.c
- * list_file_history (the history's pre-check), cmds/revert.c entry_to_restore —
- * the search by name across the local branches (core/profiles.c claim_by_name),
+ * list_file_history (the history's pre-check), cmds/revert.c revert_target_entry
+ * — the search by name across the local branches (core/profiles.c claim_by_name),
  * and export's name arm, which words a copy with nothing in it by what stands
  * at the name (cmds/export.c export_collect_storage). A reader not on this list
  * is a bug. Two neighbours ask another question and are not readers: revert's

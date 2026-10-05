@@ -845,8 +845,9 @@ static error_t add_refuse_moves(const walk_t *walk) {
         /* The path is the one path in the sentence the user never typed, so it
          * is spelled the way the shell spells it — as the screen that reports
          * this pair already spells it (cmds/status.c's unused-path listing).
-         * The opening is revert.c refuse_second_name's, deliberately: one profile
-         * names one path once, and these are that rule read from its two ends. */
+         * The opening is revert.c revert_refuse_second_name's, deliberately:
+         * one profile names one path once, and these are that rule read from
+         * its two ends. */
         char shown[PATH_MAX];
         output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));
 
@@ -1981,9 +1982,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * claim names nothing and blocks nothing (core/manifest.h
          * manifest_is_derived). The clause spells the re-capture under the name
          * the profile has, because --force on the name typed is refused here as
-         * well: a refusal is not a confirmation. revert.c refuse_second_name is
-         * the same condition for the same rule, said with no clause — its verb
-         * takes the name the profile has as it takes the path. */
+         * well: a refusal is not a confirmation. revert.c revert_refuse_second_name
+         * is the same condition for the same rule, said with no clause — its
+         * verb takes the name the profile has as it takes the path. */
         if (typed && held && !manifest_is_derived(held) &&
             !manifest_holds_name(view, opts->profile, filesystem_path, typed)) {
             char shown[PATH_MAX];

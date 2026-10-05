@@ -53,7 +53,7 @@
  * a list short by one is a falsely unique answer; the refusal's clause names
  * the flag that reads one branch instead of all of them.
  */
-static error_t select_profile(
+static error_t revert_select_profile(
     const dotta_ctx_t *ctx,
     const cmd_revert_options_t *opts,
     const path_input_t *arg,
@@ -144,7 +144,8 @@ static error_t select_profile(
  * over a past tree a name today's roots would compose is one that tree never
  * held, and for a verb that writes, composing a name would choose a deployment
  * contract. The third question — may this name be authored at all — is the
- * admission's, and it reads more of one view than a row (refuse_second_name).
+ * admission's, and it reads more of one view than a row
+ * (revert_refuse_second_name).
  *
  * Strict, like every view: a branch whose sheet will not load refuses the question
  * rather than answering from the tree alone. cmd_revert loads both sheets strictly
@@ -158,7 +159,7 @@ static error_t select_profile(
  *                command arena's, borrowed)
  * @return Error or NULL on success
  */
-static error_t claim_standing(
+static error_t revert_claim_standing(
     const dotta_ctx_t *ctx,
     branch_t *branch,
     const char *filesystem_path,
@@ -207,7 +208,7 @@ static error_t claim_standing(
  * @param name The typed name (must not be NULL)
  * @return The refusal, or NULL when the name may be authored
  */
-static error_t refuse_second_name(
+static error_t revert_refuse_second_name(
     const dotta_ctx_t *ctx,
     branch_t *branch,
     const char *filesystem_path,
@@ -237,7 +238,7 @@ static error_t refuse_second_name(
 
         /* No clause: the way through is in the fact. The name the profile has
          * reverts the file as its path does — a name the commit did not hold
-         * falls through to the path (entry_to_restore) — and giving that name
+         * falls through to the path (revert_target_entry) — and giving that name
          * up is remove's, the verb the fact implies. */
         return error_create(
             ERR_INVALID_ARG, "Profile '%s' names '%s' as '%s', and '%s' would be a "
@@ -290,7 +291,7 @@ static error_t refuse_second_name(
  *                 not be NULL)
  * @return Error or NULL on success
  */
-static error_t entry_to_restore(
+static error_t revert_target_entry(
     const dotta_ctx_t *ctx,
     branch_t *target_branch,
     const path_input_t *arg,
@@ -325,7 +326,7 @@ static error_t entry_to_restore(
      * construction: the row came from them. */
     if (held.kind == BRANCH_HELD_NOTHING && filesystem_path) {
         const manifest_row_t *row = NULL;
-        err = claim_standing(ctx, target_branch, filesystem_path, &row);
+        err = revert_claim_standing(ctx, target_branch, filesystem_path, &row);
         if (err) return err;
 
         if (row) {
@@ -372,7 +373,7 @@ static error_t entry_to_restore(
 }
 
 /**
- * Show diff preview between two blobs
+ * Print the diff preview between two blobs
  *
  * Uses content layer to transparently decrypt encrypted files before diffing,
  * so users see readable plaintext diffs instead of encrypted gibberish. The content
@@ -411,7 +412,7 @@ static error_t entry_to_restore(
  * @param target_mode Its filemode at the commit
  * @return Error or NULL on success
  */
-static error_t show_diff_preview(
+static error_t revert_print_diff(
     const dotta_ctx_t *ctx,
     const char *profile,
     const char *standing_name,
@@ -524,7 +525,7 @@ static error_t show_diff_preview(
 }
 
 /**
- * Build commit message for revert operation
+ * The revert's commit message
  *
  * Uses custom message if provided, otherwise generates from template system.
  * This centralizes message generation logic for reuse across revert operations.
@@ -537,7 +538,7 @@ static error_t show_diff_preview(
  * @param custom_message Custom message (can be NULL for template generation)
  * @return The message, the arena's
  */
-static const char *build_revert_commit_message(
+static const char *revert_commit_message(
     arena_t *arena,
     const config_t *config,
     const char *profile,
@@ -606,7 +607,7 @@ static const char *build_revert_commit_message(
  * @return The claim (caller frees with metadata_item_free), or NULL where the
  *         target records none for a link
  */
-static metadata_item_t *claim_to_restore(
+static metadata_item_t *revert_restored_claim(
     const metadata_item_t *recorded,
     const char *restored_name,
     git_filemode_t restored_mode,
@@ -680,7 +681,7 @@ static metadata_item_t *claim_to_restore(
  *                       records none
  * @return true when nothing about the write would change the branch
  */
-static bool already_at_target(
+static bool revert_already_at_target(
     const git_tree_entry *standing,
     const metadata_item_t *standing_claim,
     const git_oid *restored_blob,
@@ -737,7 +738,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     err = path_input_resolve(opts->file_path, ctx->arena, &arg);
     if (err) goto cleanup;
 
-    err = select_profile(ctx, opts, &arg, &profile);
+    err = revert_select_profile(ctx, opts, &arg, &profile);
     if (err) goto cleanup;
 
     /* Step 3: Resolve target commit */
@@ -820,7 +821,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * and answered a weaker one — a name held at some *other* commit passed it
      * — while a commit object anywhere in the branch could refuse a revert that
      * needed none of it.) */
-    err = entry_to_restore(
+    err = revert_target_entry(
         ctx, target_branch, &arg, filesystem_path, oid_str, &target_name, &target_held
     );
     if (err) goto cleanup;
@@ -863,7 +864,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * roots would choose a deployment contract the user did not. */
     if (arg.key == PATH_KEY_FILESYSTEM) {
         const manifest_row_t *row = NULL;
-        err = claim_standing(ctx, standing_branch, filesystem_path, &row);
+        err = revert_claim_standing(ctx, standing_branch, filesystem_path, &row);
         if (err) goto cleanup;
 
         restored_name = row ? row->storage_path : target_name;
@@ -909,7 +910,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * (infra/mount.h, core/manifest.h): if the profile already names where this
      * name resolves and does not hold this name for it, authoring it would give
      * the profile a second name for one place — the pair the health channel calls
-     * an unused path, and only `remove` can undo (refuse_second_name).
+     * an unused path, and only `remove` can undo (revert_refuse_second_name).
      *
      * The entry test is the authoring question and not a cost guard: a name the
      * tree already holds is not authored, and whether one it lacks is a second
@@ -917,7 +918,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * the claim standing there and can never be a second name, so this arm is
      * the typed one's alone. */
     if (arg.key == PATH_KEY_STORAGE && !standing_entry && filesystem_path) {
-        err = refuse_second_name(ctx, standing_branch, filesystem_path, restored_name);
+        err = revert_refuse_second_name(ctx, standing_branch, filesystem_path, restored_name);
         if (err) goto cleanup;
     }
 
@@ -975,7 +976,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * not be announced. */
     const bool reconstructed = !recorded && restored_mode != GIT_FILEMODE_LINK;
 
-    restored_claim = claim_to_restore(
+    restored_claim = revert_restored_claim(
         recorded, restored_name, restored_mode, target_kind
     );
 
@@ -983,7 +984,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     const metadata_item_t *standing_claim = metadata_lookup(
         standing_sheet, restored_name
     );
-    if (already_at_target(
+    if (revert_already_at_target(
         standing_entry, standing_claim, &restored_blob, restored_mode,
         restored_claim
         )) {
@@ -1113,9 +1114,9 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         /* Detailed diff preview with decryption support. The content layer
          * classifies each blob by its own bytes, as the entry its filemode says
          * it is, so the "current vs target may differ in encryption state" case
-         * is handled inside show_diff_preview without caller-side metadata
+         * is handled inside revert_print_diff without caller-side metadata
          * gymnastics. */
-        err = show_diff_preview(
+        err = revert_print_diff(
             ctx, profile, restored_name, git_tree_entry_id(standing_entry),
             git_tree_entry_filemode(standing_entry), target_name, target_blob,
             restored_mode
@@ -1189,7 +1190,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     err = metadata_save_to_stage(stage, standing_sheet);
     if (err) goto cleanup;
 
-    const char *msg = build_revert_commit_message(
+    const char *msg = revert_commit_message(
         ctx->arena, config, profile, restored_name, git_commit_id(target_commit),
         opts->message
     );

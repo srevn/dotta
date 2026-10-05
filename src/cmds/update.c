@@ -22,7 +22,6 @@
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/policy.h"
-#include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -1428,7 +1427,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Nothing to capture into: refused, in the words that say whether nothing
      * is enabled or no enabled profile has its branch */
-    err = profile_require_enabled(state, scope_enabled(scope), ctx->arena);
+    err = scope_require_enabled(state, scope_enabled(scope), ctx->arena);
     if (err) return err;
 
     /* Load workspace for update analysis

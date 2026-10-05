@@ -1,17 +1,31 @@
 /**
- * scope.h - Operation scope for view-touching commands
+ * scope.h - What a command works on
  *
- * A single typed abstraction for "what subset of the view — every enabled profile
- * at HEAD, precedence resolved — does this invocation touch?". Bundles the three
- * filter dimensions every such command carries:
+ * The enabled set — the enabled rows whose branch is here, in precedence order
+ * — and the filters a command narrows it by. The set is read one of two ways:
+ *
+ *   - off the view: scope_build reads the view's profiles (core/manifest.h
+ *     manifest_profiles) into the scope it builds, and scope_enabled lends them;
+ *   - without it, for a command that builds no scope: scope_resolve_enabled reads
+ *     the state's rows and asks Git which branches stand.
+ *
+ * The questions asked of the set take it as a value, whichever way it was read:
+ * the refusal an empty set earns (scope_require_enabled), and which of the set
+ * holds a commit (scope_resolve_commit, scope_resolve_range). The commands that
+ * build no scope would give one nothing but the set to carry: each one's -p names
+ * any local profile, enabled or not, and never reads the set.
+ *
+ * A scope answers, for a command that holds the view, "what subset of the view
+ * — every enabled profile at its tip, precedence resolved — does this invocation
+ * touch?". It bundles the set with the three filter dimensions every such command
+ * carries:
  *
  *   1. Profile filter     — CLI -p <names> (optional)
  *   2. Path filter        — CLI positional file arguments (optional)
  *   3. Exclude patterns   — CLI -e <patterns>            (optional)
  *
- * Plus the persistent enabled set, read off the view. Constructed once per command
- * via scope_build; consulted many times via predicates that replace the
- * per-iteration triplet of `continue` guards at filter sites.
+ * Constructed once per command via scope_build; consulted many times via predicates
+ * that replace the per-iteration triplet of `continue` guards at filter sites.
  *
  * Vocabulary
  * ----------
@@ -34,11 +48,10 @@
  *              or exclude semantics to honor. In-workspace sites should prefer
  *              scope_accepts_path.
  *
- * The CRITICAL invariant previously expressed as prose comments in apply.c /
- * sync.c — load the enabled set, never the filter — is enforced by construction:
- * the workspace never takes a profile list — the view it joins is built over
- * the state's rows, and its profile set is the view's. A CLI filter narrows what
- * a command touches, never what it loads.
+ * The CRITICAL invariant — load the enabled set, never the filter — is enforced
+ * by construction: the workspace never takes a profile list — the view it joins
+ * is built over the state's rows, and its profile set is the view's. A CLI filter
+ * narrows what a command touches, never what it loads.
  *
  * Lifetime and ownership
  * ----------------------
@@ -49,20 +62,13 @@
  *
  * Empty-enabled policy
  * --------------------
- * scope_build returns success with an empty enabled set — it does NOT translate
- * "no enabled profiles" into an error. The set is the readable one, the enabled
- * rows whose branch is here, so empty it is one of two facts: nothing enabled,
- * or no enabled profile Git holds a branch for. Callers apply their own policy,
- * and those that speak of an empty set take its words from one producer
- * (core/profiles.h profile_require_enabled), which tells the two apart:
- *
- *   apply   — empty is a valid convergence target (an empty view, orphan
- *             cleanup runs). No special handling needed.
- *   status  — empty is a valid degraded mode (everything is an orphan).
- *             No special handling needed.
- *   diff    — nothing to diff: warned, exit 0.
- *   sync    — refused, exit 1.
- *   update
+ * Neither way of reading the set translates "no enabled profiles" into an error:
+ * an empty set is an answer of scope_build and scope_resolve_enabled alike, and
+ * what it means is each command's own. apply converges to it (an empty view,
+ * orphan cleanup running) and status reads it as a degraded mode (everything an
+ * orphan), neither with special handling; a command that speaks of it — refusing
+ * it, or warning it and going on — takes its words from scope_require_enabled,
+ * which says which of two facts the empty set is.
  */
 
 #ifndef DOTTA_SCOPE_H
@@ -74,10 +80,12 @@
 
 #include "infra/pathspec.h"
 
-/* Forward decl: manifest_t's full API lives in core/manifest.h. scope reads the
- * view's profiles alone, so the header stays free of the manifest dependency.
- * C11 §6.7p3 permits typedef-name redeclaration. */
+/* Forward decls: manifest_t's and state_t's full APIs live in core/manifest.h
+ * and core/state.h. scope reads the view's profiles and the state's enabled rows
+ * alone, so the header stays free of both dependencies. C11 §6.7p3 permits
+ * typedef-name redeclaration. */
 typedef struct manifest manifest_t;
+typedef struct state state_t;
 
 /**
  * Opaque scope handle.
@@ -138,6 +146,171 @@ error_t scope_build(
     const scope_inputs_t *in,
     arena_t *arena,
     scope_t **out
+);
+
+/* -------------------------------------------------------------------- */
+/* The enabled set as a value                                           */
+/* -------------------------------------------------------------------- */
+
+/**
+ * The enabled set without a view: each enabled profile whose branch is here
+ *
+ * Lightweight name-only resolution: reads the enabled rows the handle holds
+ * (core/state.h state_profiles), keeps each whose branch is here, and returns
+ * their names in the rows' order. One whose branch is gone is dropped unsaid:
+ * the health commands say it, off the view (core/manifest.h manifest_missing).
+ * None enabled, or none of them here, is an empty answer and not an error: every
+ * reader decides what an empty set means to it, and words it through
+ * scope_require_enabled, which tells the two apart.
+ *
+ * Readers: the commands that read the enabled set and build no scope — cmds/show.c
+ * cmd_show, cmds/ignore.c ignore_test and cmds/bootstrap.c cmd_bootstrap. A command
+ * that builds one reads the same set off the view (core/manifest.h
+ * manifest_profiles, through scope_build).
+ *
+ * Asks each enabled branch whether it is here (sys/gitops.h gitops_branch_exists)
+ * and loads no tree.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param state State handle (must not be NULL; borrowed, not freed). Nothing is
+ *              executed on it — the rows are the handle's own — so a handle in
+ *              any shape serves.
+ * @param arena Arena the answer lives in (must not be NULL)
+ * @param out Validated profile names, possibly none (must not be NULL; left as
+ *            it was on a failure)
+ * @return Error or NULL on success
+ */
+error_t scope_resolve_enabled(
+    git_repository *repo,
+    const state_t *state,
+    arena_t *arena,
+    string_array_t *out
+);
+
+/**
+ * The refusal an empty enabled set earns, or NULL where it holds a profile
+ *
+ * `enabled` is the set a command reads: the enabled rows whose branch is here —
+ * the view's (core/manifest.h manifest_profiles, through scope_enabled) or the
+ * resolver's (scope_resolve_enabled). Empty, it is one of two facts, and the
+ * rows say which: none is enabled, or each one is and Git holds no branch for
+ * it — a row whose branch is here is in the set, since both producers drop a
+ * row only on a proven absence and fail on every other answer.
+ *
+ * Readers: cmds/update.c cmd_update, cmds/sync.c cmd_sync and cmds/show.c cmd_show
+ * refuse with it; cmds/diff.c cmd_diff, cmds/bootstrap.c cmd_bootstrap and
+ * cmds/ignore.c ignore_test warn it and go on.
+ *
+ * @param state State handle (must not be NULL): its enabled rows
+ * @param enabled The set the command reads (must not be NULL)
+ * @param arena Arena the names are joined in (must not be NULL)
+ * @return The refusal (ERR_NOT_FOUND), or NULL where `enabled` holds one
+ */
+error_t scope_require_enabled(
+    const state_t *state,
+    const string_array_t *enabled,
+    arena_t *arena
+);
+
+/**
+ * The enabled profile that holds a commit, and the commit
+ *
+ * The revision is read once, before any profile is asked (sys/revision.h
+ * revision_resolve): a spelling that names no commit refuses there, and no profile
+ * is passed over for it. Then the enabled set is asked from its highest precedence
+ * down — the last enabled first, the profile that wins every path it shares —
+ * so `HEAD` is the tip of the profile the view reads, and a history too short
+ * for `HEAD~N`, or holding no commit `HEAD^{/pattern}` matches, is passed for
+ * the next one down. Each profile's tip is read once and the revision asked of
+ * it (revision_find), and the first profile holding it is the answer: the tip
+ * itself or a commit its history reaches, or for HEAD's steps a history that
+ * takes them. A profile behind that one is never asked: the order has already
+ * decided.
+ *
+ * `filter` narrows the search to the profiles it names — the ones -p named, each
+ * an enabled profile (scope_build refuses any other) — still asked in the enabled
+ * set's order; NULL asks every enabled profile.
+ *
+ * Answered for every profile ahead of the answer, or an error. A profile whose
+ * history does not hold the revision is an answer, and the search moves on; a
+ * tip or a history that will not read is a failure, naming the branch, and it
+ * ends the search where it stands, whatever a later profile would have said.
+ * The asymmetry is the whole of the rule: what comes back is the first holder
+ * *in precedence order*, which is a claim about every profile ahead of it, and
+ * a branch that would not read is one the claim cannot be made over — where a
+ * profile after the holder was never part of the answer. This is the first-match
+ * shape of what the complete searches promise (core/profiles.h
+ * profile_discover_claims: a falsely unique answer is one a verb acts on).
+ *
+ * Absence is every searched profile's: ERR_NOT_FOUND naming the commit and what
+ * was searched — any enabled profile, or the profiles the filter names — with
+ * no cause under it, because one profile's sentence is not this one's. An empty
+ * set is that same absence; both readers refuse an empty enabled set in their
+ * own words before they ask.
+ *
+ * Readers: cmds/diff.c diff_commit_to_workspace (the filter -p's), cmds/show.c
+ * cmd_show (a commit named with no profile, no filter). A range's two ends are
+ * searched for together (scope_resolve_range). A caller that names one profile
+ * resolves in it directly (sys/revision.h revision_load) — the question there
+ * is not which profile.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param enabled The enabled set, in precedence order (must not be NULL)
+ * @param filter The profiles the search may ask, or NULL for all of `enabled`
+ * @param commit_ref Commit reference (must not be NULL)
+ * @param out_commit The resolved commit (must not be NULL, caller must free with
+ *                   git_commit_free); its OID is git_commit_id's
+ * @param out_profile The profile that holds it (must not be NULL; borrowed from
+ *                    `enabled`, valid for as long as it is)
+ * @return Error (ERR_NOT_FOUND when no profile searched holds it) or NULL on
+ *         success
+ */
+error_t scope_resolve_commit(
+    git_repository *repo,
+    const string_array_t *enabled,
+    const string_array_t *filter,
+    const char *commit_ref,
+    git_commit **out_commit,
+    const char **out_profile
+);
+
+/**
+ * The enabled profile that holds both ends of a range, and the two commits
+ *
+ * A range is one profile's history, so its ends are searched for together: both
+ * read once, before any profile is asked, then scope_resolve_commit's order and
+ * failure rule — from the highest precedence down, among what `filter` names, a
+ * tip or a history that will not read ending the search — with each tip read
+ * once and both ends asked of it. The answer is the first profile holding both:
+ * `HEAD~1 HEAD` the first history long enough for both, `<id> HEAD` the id's
+ * own profile, whatever either end alone would have answered.
+ *
+ * An end no profile searched holds is that end's absence, in scope_resolve_commit's
+ * words; ends held only apart are refused naming the first profile holding each,
+ * in the ends' order, a range across two orphan branches being no range.
+ *
+ * Readers: cmds/diff.c diff_commits.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param enabled The enabled set, in precedence order (must not be NULL)
+ * @param filter The profiles the search may ask, or NULL for all of `enabled`
+ * @param commit1_ref The first end, as typed (must not be NULL)
+ * @param commit2_ref The second end, as typed (must not be NULL)
+ * @param out_commit1 The first end's commit (must not be NULL; git_commit_free)
+ * @param out_commit2 The second end's commit (must not be NULL; git_commit_free)
+ * @param out_profile The profile holding both (must not be NULL; borrowed from
+ *                    `enabled`)
+ * @return Error or NULL on success; nothing is written on a failure
+ */
+error_t scope_resolve_range(
+    git_repository *repo,
+    const string_array_t *enabled,
+    const string_array_t *filter,
+    const char *commit1_ref,
+    const char *commit2_ref,
+    git_commit **out_commit1,
+    git_commit **out_commit2,
+    const char **out_profile
 );
 
 /* -------------------------------------------------------------------- */

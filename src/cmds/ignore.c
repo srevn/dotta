@@ -23,6 +23,7 @@
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
+#include "core/scope.h"
 #include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
@@ -699,10 +700,13 @@ static error_t ignore_test(
     string_array_t enabled = { 0 };
 
     if (!profile) {
-        err = profile_resolve_enabled(repo, state, ctx->arena, &enabled);
+        /* The enabled set, resolved for either key: a path's view, built over
+         * the same rows a moment before, holds the same profiles unless a ref
+         * moved between the two reads */
+        err = scope_resolve_enabled(repo, state, ctx->arena, &enabled);
         if (err) return err;
 
-        err = profile_require_enabled(state, &enabled, ctx->arena);
+        err = scope_require_enabled(state, &enabled, ctx->arena);
         if (err) {
             /* None to ask: said as a failure the run goes past, in the words
              * that say whether nothing is enabled or no enabled profile has its

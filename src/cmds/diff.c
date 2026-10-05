@@ -18,7 +18,6 @@
 #include "cmds/completion.h"
 #include "core/branch.h"
 #include "core/manifest.h"
-#include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -876,7 +875,7 @@ static bool validate_filter_paths(
  * commit (the first holder, from the highest precedence down)
  *
  * The commit is looked for in the enabled set, narrowed to the profiles -p names
- * where it names any (core/profiles.h profile_resolve_commit): -p is how a spelling
+ * where it names any (core/scope.h scope_resolve_commit): -p is how a spelling
  * every profile holds — HEAD, HEAD~N — names the profile it means, as `show -p`
  * names it, and a commit of a profile -p left out is not found. The path filter
  * is derived from scope_paths (raw CLI positional args, never narrowed).
@@ -921,8 +920,8 @@ static error_t diff_commit_to_workspace(
     /* Step 1: Resolve commit to find which profile contains it. The search answers
      * for every profile ahead of the holder, so a profile that will not read
      * cancels the diff rather than let a later one answer in its place
-     * (core/profiles.h). */
-    err = profile_resolve_commit(
+     * (core/scope.h scope_resolve_commit). */
+    err = scope_resolve_commit(
         repo, scope_enabled(scope), filter, commit_ref, &commit, &profile
     );
     if (err) goto cleanup;
@@ -1073,13 +1072,13 @@ static int select_delta(
 /**
  * Diff two commits
  *
- * The two commits are one search's (core/profiles.h profile_resolve_range): the
- * first profile holding both, in the enabled set narrowed to the profiles -p
- * names where it names any, as the workspace arm looks for its one. The path
- * filter is derived from scope_paths (raw CLI positional args, never narrowed)
- * and applied delta by delta as the diff is generated (select_delta, each delta
- * by both its names under this machine's table), so the diff printed — names,
- * stats, patch — is the selection and nothing else.
+ * The two commits are one search's (core/scope.h scope_resolve_range): the first
+ * profile holding both, in the enabled set narrowed to the profiles -p names
+ * where it names any, as the workspace arm looks for its one. The path filter
+ * is derived from scope_paths (raw CLI positional args, never narrowed) and applied
+ * delta by delta as the diff is generated (select_delta, each delta by both its
+ * names under this machine's table), so the diff printed — names, stats, patch
+ * — is the selection and nothing else.
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, this
  *            machine's mount table, the command arena and the output)
@@ -1122,10 +1121,10 @@ static error_t diff_commits(
     git_diff *diff = NULL;
 
     /* Both ends in one search: the first profile whose history holds both, each
-     * profile's tip read once for the two (core/profiles.h). A profile that will
-     * not read cancels the range rather than let a later one answer for it, and
-     * ends held only by different profiles are no range. */
-    err = profile_resolve_range(
+     * profile's tip read once for the two (core/scope.h scope_resolve_range). A
+     * profile that will not read cancels the range rather than let a later one
+     * answer for it, and ends held only by different profiles are no range. */
+    err = scope_resolve_range(
         repo, scope_enabled(scope), filter, commit1_ref, commit2_ref, &commit1,
         &commit2, &profile
     );
@@ -1407,7 +1406,7 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
 
     /* Nothing to diff: said as a failure the run goes past, exit 0, in the words
      * that say whether nothing is enabled or no enabled profile has its branch */
-    err = profile_require_enabled(ctx->run.state, scope_enabled(scope), ctx->arena);
+    err = scope_require_enabled(ctx->run.state, scope_enabled(scope), ctx->arena);
     if (err) {
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
         return NULL;

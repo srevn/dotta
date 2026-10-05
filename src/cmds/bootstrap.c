@@ -18,6 +18,7 @@
 #include "base/output.h"
 #include "cmds/completion.h"
 #include "core/profiles.h"
+#include "core/scope.h"
 #include "sys/bootstrap.h"
 #include "sys/editor.h"
 #include "sys/gitops.h"
@@ -395,13 +396,13 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
         profile_order(&profiles);
     } else {
         /* Use enabled profiles from state */
-        err = profile_resolve_enabled(repo, state, ctx->arena, &profiles);
+        err = scope_resolve_enabled(repo, state, ctx->arena, &profiles);
         if (err) return err;
 
         /* No script to run: said as a failure the run goes past, exit 0, in the
          * words that say whether nothing is enabled or no enabled profile has
          * its branch */
-        err = profile_require_enabled(state, &profiles, ctx->arena);
+        err = scope_require_enabled(state, &profiles, ctx->arena);
         if (err) {
             output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
             return NULL;

@@ -21,6 +21,7 @@
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
+#include "core/scope.h"
 #include "core/state.h"
 #include "infra/content.h"
 #include "infra/mount.h"
@@ -408,8 +409,8 @@ static int print_diff_line_cb(
  * Show commit with diff
  *
  * A commit already resolved, and the profile it was resolved in: whichever arm
- * of cmd_show named the profile did the resolving, and the search (core/profiles.h
- * profile_resolve_commit) is over before anything here prints. Both are borrowed
+ * of cmd_show named the profile did the resolving, and the search (core/scope.h
+ * scope_resolve_commit) is over before anything here prints. Both are borrowed
  * — the commit is the caller's to free.
  */
 static error_t show_commit(
@@ -568,7 +569,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
          * settles which branch it is looked for in, and without one the enabled
          * set answers as a whole — the first holder in precedence order, and a
          * profile that will not read ends that search rather than let a later
-         * one answer in its place (core/profiles.h profile_resolve_commit). Either
+         * one answer in its place (core/scope.h scope_resolve_commit). Either
          * way the printer below is handed a commit and a profile, and nothing
          * it does is part of the search. */
         if (profile) {
@@ -579,13 +580,13 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             if (err) goto cleanup;
         } else {
             string_array_t profiles;
-            err = profile_resolve_enabled(repo, state, ctx->arena, &profiles);
+            err = scope_resolve_enabled(repo, state, ctx->arena, &profiles);
             if (err) goto cleanup;
 
             /* Nowhere to search: refused, the fact the set's own words, and the
              * way through this command's — a profile named is searched whatever
              * is enabled */
-            err = profile_require_enabled(state, &profiles, ctx->arena);
+            err = scope_require_enabled(state, &profiles, ctx->arena);
             if (err) {
                 err = error_wrap(
                     err, "Cannot search for '%s'; -p searches a profile by name",
@@ -594,7 +595,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
                 goto cleanup;
             }
 
-            err = profile_resolve_commit(
+            err = scope_resolve_commit(
                 repo, &profiles, NULL, opts->commit, &source, &profile
             );
             if (err) goto cleanup;

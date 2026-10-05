@@ -434,8 +434,8 @@ error_t manifest_build(
  * revert_refuse_second_name); add, which builds one over the tree its stage opened
  * at and asks it every naming question for the length of the command (cmds/add.c
  * cmd_add); `ignore --test`'s named arm (cmds/ignore.c ignore_test); and the
- * two cross-branch searches, which build one per local branch (core/profiles.c
- * claim_by_filesystem_path, under profile_discover_claims, and
+ * two cross-branch searches, which build one per local branch (cmds/revert.c
+ * revert_select_profile, through revert_claim_standing, and core/profiles.c
  * profile_build_filesystem_index).
  *
  * Memory: every allocation produced by the call lives in the caller's arena, as
@@ -814,19 +814,18 @@ error_t manifest_holder(
  * Readers: the name a profile has for a path (manifest_claim_name), which asks
  * this before the namer — a derived claim is something the profile holds and
  * nothing it names, so the namer alone would climb past it and answer a name
- * the branch never held — and the per-branch arm of the search across the local
- * branches (core/profiles.h profile_discover_claims); revert's two questions of
- * a tree, the claim standing at a path and the second-name admission (cmds/revert.c
- * revert_claim_standing, revert_refuse_second_name); add's two questions of a
- * path it names or walks (cmds/add.c cmd_add and add_collect): which rules reach
- * it — a claim meets the -e layer alone, no rule of discovery (add_verdict) —
- * and whether the profile's own claim agrees with what stands there now — the
- * one reading that sees an explicit claim with nothing beneath it for either of
- * the branch's documents to find, and a derived row included, since a profile
- * holding a subtree beneath a path is a statement a path that became a file
- * contradicts; and `ignore --test`'s note beneath a verdict that excludes a path
- * its asker tracks, which add and update re-capture whatever the rules say
- * (cmds/ignore.c ignore_test).
+ * the branch never held; revert's two questions of a tree, the claim standing
+ * at a path and the second-name admission (cmds/revert.c revert_claim_standing,
+ * revert_refuse_second_name), the first asked of every local branch by its search
+ * (revert_select_profile); add's two questions of a path it names or walks
+ * (cmds/add.c cmd_add and add_collect): which rules reach it — a claim meets
+ * the -e layer alone, no rule of discovery (add_verdict) — and whether the
+ * profile's own claim agrees with what stands there now — the one reading that
+ * sees an explicit claim with nothing beneath it for either of the branch's
+ * documents to find, and a derived row included, since a profile holding a subtree
+ * beneath a path is a statement a path that became a file contradicts; and `ignore
+ * --test`'s note beneath a verdict that excludes a path its asker tracks, which
+ * add and update re-capture whatever the rules say (cmds/ignore.c ignore_test).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,

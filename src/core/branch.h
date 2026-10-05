@@ -145,13 +145,14 @@ branch_t *branch_open(git_repository *repo, const char *profile, const git_tree 
  * an answer reads gitops_branch_tree and opens over what it finds (core/manifest.c
  * manifest_build, core/workspace.c workspace_orphan_authority).
  *
- * Readers: core/profiles.c profile_build_filesystem_index, claim_by_filesystem_path
- * and claim_by_name; cmds/ignore.c ignore_test; the questions asked of a tip by
- * name, what it holds and whether it needs a target — cmds/profile.c profile_list
- * and profile_enable, cmds/clone.c cmd_clone, cmds/interactive.c read_targets;
- * what a profile's deletion takes, every claim for its hooks and the count for
- * its preview (cmds/remove.c remove_profile); and the directory claims a completion
- * offers at a profile's tip (cmds/completion.c completion_directories).
+ * Readers: core/profiles.c profile_build_filesystem_index and cmds/revert.c
+ * revert_select_profile, which load every local branch; cmds/ignore.c ignore_test;
+ * the questions asked of a tip by name, what it holds and whether it needs a
+ * target — cmds/profile.c profile_list and profile_enable, cmds/clone.c cmd_clone,
+ * cmds/interactive.c read_targets; what a profile's deletion takes, every claim
+ * for its hooks and the count for its preview (cmds/remove.c remove_profile);
+ * and the directory claims a completion offers at a profile's tip
+ * (cmds/completion.c completion_directories).
  *
  * @param repo Repository (must not be NULL; borrowed)
  * @param profile The branch's name, and whose claims these are (must not be NULL;
@@ -399,18 +400,18 @@ typedef struct {
  *
  * Readers: the verbs that act on one name — cmds/show.c show_file, cmds/list.c
  * list_file_history (the history's pre-check), cmds/revert.c revert_target_entry
- * — the search by name across the local branches (core/profiles.c claim_by_name),
- * and export's name arm, which words a copy with nothing in it by what stands
- * at the name (cmds/export.c export_collect_storage). A reader not on this list
- * is a bug. Two neighbours ask another question and are not readers: revert's
- * read of the tip at the name it writes (cmds/revert.c cmd_revert, step 11) asks
- * Git's one-entry rule, which the sheet must not answer — a directory claim there
- * is retired by the write, not refused; and the orphan probe (core/workspace.c
- * workspace_orphan_authority) asks whether the branch holds the claim a record
- * remembers, which a subtree and a gitlink stand at a name without making —
- * branch_find's directory claim for a directory record, and for a file record
- * the tree alone, Git's one-entry rule again — and folds every failure to
- * UNVERIFIED.
+ * — the search by name across the local branches (cmds/revert.c
+ * revert_select_profile), and export's name arm, which words a copy with nothing
+ * in it by what stands at the name (cmds/export.c export_collect_storage). A
+ * reader not on this list is a bug. Two neighbours ask another question and are
+ * not readers: revert's read of the tip at the name it writes (cmds/revert.c
+ * cmd_revert, step 11) asks Git's one-entry rule, which the sheet must not answer
+ * — a directory claim there is retired by the write, not refused; and the orphan
+ * probe (core/workspace.c workspace_orphan_authority) asks whether the branch
+ * holds the claim a record remembers, which a subtree and a gitlink stand at a
+ * name without making — branch_find's directory claim for a directory record,
+ * and for a file record the tree alone, Git's one-entry rule again — and folds
+ * every failure to UNVERIFIED.
  *
  * @param branch Handle (must not be NULL); its sheet is read only where the tree
  *               is silent

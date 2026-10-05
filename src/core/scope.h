@@ -239,8 +239,8 @@ error_t scope_require_enabled(
  * *in precedence order*, which is a claim about every profile ahead of it, and
  * a branch that would not read is one the claim cannot be made over — where a
  * profile after the holder was never part of the answer. This is the first-match
- * shape of what the complete searches promise (core/profiles.h
- * profile_discover_claims: a falsely unique answer is one a verb acts on).
+ * shape of what the complete searches promise (cmds/revert.c revert_select_profile:
+ * a falsely unique answer is one a verb acts on).
  *
  * Absence is every searched profile's: ERR_NOT_FOUND naming the commit and what
  * was searched — any enabled profile, or the profiles the filter names — with

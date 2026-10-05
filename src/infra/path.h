@@ -183,7 +183,7 @@ bool path_input_announces_path(const char *input);
  *     there.
  *   - show, list and revert (cmds/) take either: a name the user typed is Git's
  *     key already, and a filesystem path is the branch's to name (core/manifest.h
- *     manifest_claim_name, core/profiles.h profile_discover_claims).
+ *     manifest_claim_name, cmds/revert.c revert_claim_standing).
  *   - add's storage head (cmds/add.c) takes the name alone: its own predicate
  *     dispatched on the storage shape, so a filesystem path arriving there is
  *     its bug and says so.

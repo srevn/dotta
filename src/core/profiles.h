@@ -3,8 +3,8 @@
  *
  * Handles profile detection, name resolution, and branch-level queries. The
  * questions asked of one branch, or of every branch, answered from Git and this
- * machine's topology; the searches by path build one branch's view to ask it
- * (core/manifest.h), in the caller's arena, and answer from it, so no manifest
+ * machine's topology; the search by path builds each branch's view to ask it
+ * (core/manifest.h), in the caller's arena, and answers from it, so no manifest
  * type crosses this surface.
  *
  * The layering convention, least specific first:
@@ -52,7 +52,6 @@
 #include "base/hashmap.h"
 #include "core/branch.h"
 #include "infra/mount.h"
-#include "infra/path.h"
 
 /**
  * Detect matching profile names from a list of available branches
@@ -233,8 +232,7 @@ error_t profile_list_tree_files(
 error_t profile_needs_target(branch_t *branch, bool *needs_target);
 
 /* A claim is (profile, name) — the pair that keys within one profile
- * (infra/mount.h). No kind: its readers print a profile and a name, and the one
- * verb that acts on a claim reads the kind from the tree entry it opens. */
+ * (infra/mount.h). No kind: its one reader prints a profile and a name. */
 typedef struct {
     const char *profile;
     const char *storage_path;
@@ -246,75 +244,6 @@ typedef struct {
     const profile_claim_t *entries;
     size_t count;
 } profile_claims_t;
-
-/**
- * Every claim standing at what the user named, across the local branches
- *
- * A STORAGE argument: every branch that holds the name — in its tree, a subtree
- * counting as a name has always counted, or, where the tree is silent, as a
- * directory claim in its sheet (core/branch.h branch_holds); the claim is the
- * name as typed. A LOCATION argument: every branch whose view of its own tip,
- * under this machine's table, holds a row there — the claim being that branch's
- * own name for the place, since a path may be held under a non-canonical name
- * and the caller must not name it again.
- *
- * The table is this machine's, and this machine's table is the enabled set's
- * (core/manifest.h manifest_mount_table): a profile nothing has enabled has no
- * binding here at all, so its custom/ claims stand nowhere and no path reaches
- * them. That is the model being consistent, not a gap — by name they are found
- * as they always were.
- *
- * Complete or an error: a branch that will not load, a lookup that fails for
- * any reason but absence, a claim that could not be recorded — each is the call's
- * failure and never a shorter list, a falsely unique answer being one a verb
- * acts on. None holding it is the empty set, an answer; every error is the
- * search's, a branch the listing named and a delete took before its load among
- * them — the load's own "not found" (sys/gitops.h gitops_load_branch_tree), a
- * branch that could not be read and never one that holds nothing. The branch
- * list is one enumeration, not a snapshot: a ref born between it and the reads
- * is not consulted.
- *
- * Cost, and the asymmetry it carries: a path builds one view per branch — a tree
- * walk and a sheet load each, every branch's rows kept in the arena until the
- * command ends — where a name is one tree lookup per branch and a sheet parse
- * for each branch whose tree is silent about it, which for a name one branch
- * holds is every other branch. So a branch whose sheet will not load refuses
- * `revert <path>` always and `revert <name>` wherever its tree does not hold
- * the name; a name its tree holds is answered without its sheet, which is all
- * that is left of the strict/tolerant split here. Naming the profile skips the
- * search entirely, and the one caller says so where it refuses.
- *
- * Reader: revert without a profile (cmds/revert.c revert_select_profile), whose
- * question is every local branch and not the enabled set, and which reads the
- * empty set as no profile holding the argument. A caller that wants the owning
- * profile among the enabled set asks the view instead (manifest_lookup,
- * manifest_holder — list, show).
- *
- * The key is the input here, where the claim name takes a filesystem path outright
- * (core/manifest.h manifest_claim_name): both keys run this one search — the
- * same enumeration, the same collection, the same answer when nothing holds it
- * — and the tag chooses which probe each branch is asked. Over there the other
- * key is an answer the caller already holds, so nothing is left for the call to
- * do with it. A sum that chooses among a function's own behaviours is its input;
- * one whose arm means "there was nothing to ask" is the caller's question smuggled
- * in.
- *
- * @param repo Repository (must not be NULL)
- * @param mounts This machine's mount table (must not be NULL)
- * @param arg The argument, in the key it named — a filesystem path or a storage
- *        path (must not be NULL)
- * @param arena Arena that owns the claims (must not be NULL)
- * @param out The claims, none where no branch holds it (must not be NULL; zeroed
- *        after an error)
- * @return Error or NULL on success
- */
-error_t profile_discover_claims(
-    git_repository *repo,
-    const mount_table_t *mounts,
-    const path_input_t *arg,
-    arena_t *arena,
-    profile_claims_t *out
-);
 
 /**
  * filesystem path → the claims every local branch but `exclude` places there

@@ -34,6 +34,60 @@
 #include "utils/commit.h"
 
 /**
+ * The claim `branch` stands at `filesystem_path`, or NULL when it stands none
+ *
+ * One contribution of the branch, asked for the row at the path (core/manifest.h
+ * manifest_build_branch, manifest_lookup_claim). The row is the arena's, as the
+ * view is, so the answer survives this call.
+ *
+ * The row and not its name, because this file asks it three ways: the search
+ * takes any claim, for whether a profile holds the path at all; the read takes
+ * any claim; and the write's name takes the claim standing there whatever it is
+ * called. A verb answering a string would have to pick one of them for all three,
+ * which is also why revert no longer asks core/manifest.h manifest_claim_name:
+ * over a past tree a name today's roots would compose is one that tree never
+ * held, and for a verb that writes, composing a name would choose a deployment
+ * contract. A fourth question — may this name be authored at all — is the
+ * admission's, and it reads more of one view than a row
+ * (revert_refuse_second_name).
+ *
+ * Strict, like every view: a branch whose sheet will not load refuses the question
+ * rather than answering from the tree alone. cmd_revert loads both sheets strictly
+ * already, and the search is complete or an error (revert_select_profile), so
+ * no policy is added here.
+ *
+ * @param ctx Dispatch context (must not be NULL)
+ * @param branch The branch the claim is looked for in — the tip's or the target
+ *               commit's (must not be NULL)
+ * @param filesystem_path Where to ask (must not be NULL)
+ * @param out_row The claim, or NULL where none stands and after an error (must
+ *                not be NULL; the command arena's, borrowed)
+ * @return Error or NULL on success
+ */
+static error_t revert_claim_standing(
+    const dotta_ctx_t *ctx,
+    branch_t *branch,
+    const char *filesystem_path,
+    const manifest_row_t **out_row
+) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(branch);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(out_row);
+
+    *out_row = NULL;
+
+    manifest_t *view = NULL;
+    error_t err = manifest_build_branch(branch, ctx->run.mounts, ctx->arena, &view);
+    if (err) return err;
+
+    /* The profile's own contribution: the row is the arena's */
+    *out_row = manifest_lookup_claim(view, branch_profile(branch), filesystem_path);
+
+    return NULL;
+}
+
+/**
  * Which profile the revert acts on
  *
  * The profile question, and only that. What that profile calls the argument is
@@ -42,16 +96,17 @@
  * steps 8 and 10). A branch's tip is its stage's tree, so the search below and
  * the naming there read one source and cannot disagree about a name.
  *
- * With `opts->profile`: the user's word, required to be here. Whether the branch
+ * With `opts->profile`: the user's word, required to be here. Whether the profile
  * holds the argument at its tip is not asked — a revert restores what the *commit*
  * holds, and a path the profile deleted is the case a revert exists for.
  *
- * Without: every local branch is asked what it stands at the argument
- * (profile_discover_claims — enabled or not, revert's question), and an argument
- * two profiles hold is ambiguous, listed with each branch's own name for it and
- * refused. A branch the search cannot read stops it whichever branch it is, since
- * a list short by one is a falsely unique answer; the refusal's clause names
- * the flag that reads one branch instead of all of them.
+ * Without: the search. Every local profile, enabled or not, is asked what it
+ * holds at the argument, in the key the argument named, and the one that holds
+ * it is the answer. None is refused as an absence, whose way through is -p;
+ * several, as ambiguous, each listed beside its own name for the argument. Complete
+ * or an error: a profile the search cannot read stops it whichever profile it
+ * is, since a list short by one is a falsely unique answer, and the refusal's
+ * clause names the flag that reads one profile instead of all of them.
  */
 static error_t revert_select_profile(
     const dotta_ctx_t *ctx,
@@ -80,106 +135,94 @@ static error_t revert_select_profile(
     const char *subject = arg->key == PATH_KEY_FILESYSTEM ? arg->filesystem_path
                                                           : arg->storage_path;
 
-    profile_claims_t claims = { 0 };
-    error_t err = profile_discover_claims(
-        repo, ctx->run.mounts, arg, ctx->arena, &claims
-    );
+    /* Every local branch, listed into the command's arena: the one holder is
+     * answered as the listing's own string, which outlives this call there. One
+     * enumeration, not a snapshot: a ref born between it and the loads is not
+     * consulted. */
+    string_array_t profiles;
+    error_t err = gitops_list_branches(repo, ctx->arena, &profiles);
+
+    /* Each profile loaded once and asked in the key the argument named. The
+     * question is every local profile's, not the enabled set's, whose holder
+     * the view answers (core/manifest.h manifest_holder: show, list). A profile
+     * names a path once and holds a name once, so each answers once at most:
+     * the first holder is kept as itself — the answer, where it is the only one
+     * — and every holder is spelled as found, beside its own name for the argument,
+     * which is all the refusal for several reads. */
+    const char *holder = NULL;
+    string_array_t holders;
+    string_array_init(&holders, ctx->arena);
+    for (size_t i = 0; !err && i < profiles.count; i++) {
+        branch_t *branch = NULL;
+        err = branch_load(repo, profiles.entries[i], &branch);
+        if (err) break;
+
+        const char *storage_path = NULL;
+        if (arg->key == PATH_KEY_FILESYSTEM) {
+            /* A path: the claim standing there in the profile's view, a derived
+             * one included, under the name the profile holds it by — a binding's,
+             * or one kept from before the binding, never one this machine composes.
+             * The view is placed by this machine's table, which is the enabled
+             * set's (core/manifest.h manifest_mount_table): a profile nothing
+             * has enabled is bound nowhere, so no path reaches its custom/ claims,
+             * and their names find them as always. */
+            const manifest_row_t *row = NULL;
+            err = revert_claim_standing(ctx, branch, arg->filesystem_path, &row);
+            if (row) storage_path = row->storage_path;
+        } else {
+            /* A name, as typed: held by either of the profile's two documents
+             * (core/branch.h branch_holds) — the tree first, a subtree counting
+             * as a name has always counted, so a name the tree holds is answered
+             * without the sheet; the sheet where the tree is silent, for a
+             * directory claim with nothing beneath it. */
+            branch_held_t held;
+            err = branch_holds(branch, arg->storage_path, &held);
+            if (!err && held.kind != BRANCH_HELD_NOTHING) storage_path = arg->storage_path;
+        }
+        branch_free(branch);
+
+        if (storage_path) {
+            if (!holder) holder = profiles.entries[i];
+            string_array_pushf(&holders, "%s (%s)", profiles.entries[i], storage_path);
+        }
+    }
     if (err) {
-        /* The search crosses every local branch, so a branch this command has
-         * nothing to do with can stop it — a sheet no loader will parse, an object
-         * the store lost, a branch a delete took mid-search. Whatever the cause,
-         * the way through is the same one: name the profile and one branch is
-         * read instead of all of them. Said here rather than at the search, which
-         * knows the branch that failed and not the flag that names one. */
+        /* The search crosses every local profile, so one this command has nothing
+         * to do with can stop it — a sheet no loader will parse, an object the
+         * store lost, a branch a delete took mid-search, which its load refuses
+         * as not found and never reads as holding nothing. Whatever the cause,
+         * the way through is the same one: name the profile and one is read instead
+         * of all of them. Said once, over whichever profile failed, each failure
+         * naming its own. */
         return error_wrap(
             err, "Cannot search every profile for '%s'; -p reads one instead", subject
         );
     }
 
-    if (claims.count == 0) {
-        /* Held at no tip: a file deleted from its profile is the case a revert
-         * exists for, and naming the profile is what reaches it — a profile named
-         * is not asked what its tip holds (the -p arm above). */
+    if (holders.count == 0) {
+        /* Held at no tip, every profile having answered: a file deleted from
+         * its profile is the case a revert exists for, and naming the profile
+         * is what reaches it — a profile named is not asked what its tip holds
+         * (the -p arm above). */
         return error_create(
             ERR_NOT_FOUND, "'%s' is not held by any profile; -p restores it into a "
             "profile that deleted it", subject
         );
     }
 
-    if (claims.count == 1) {
-        *out_profile = claims.entries[0].profile;
+    /* One holder: the profile the revert acts on */
+    if (holders.count == 1) {
+        *out_profile = holder;
         return NULL;
     }
 
-    /* Several: each branch named beside its own name for the argument. The way
-     * through is the clause, because no key tells them apart here — a path asks
-     * every branch again, and each answers as before. */
-    string_array_t holders;
-    string_array_init(&holders, ctx->arena);
-    for (size_t i = 0; i < claims.count; i++) {
-        string_array_pushf(
-            &holders, "%s (%s)",
-            claims.entries[i].profile,
-            claims.entries[i].storage_path
-        );
-    }
+    /* Several: the way through is the clause, because no key tells them apart
+     * here — a path asks every profile again, and each answers as before. */
     return error_create(
         ERR_INVALID_ARG,
         "'%s' is held by %zu profiles: %s; -p names one", subject,
-        claims.count, string_array_join(ctx->arena, &holders, ", ")
+        holders.count, string_array_join(ctx->arena, &holders, ", ")
     );
-}
-
-/**
- * The claim `branch` stands at `filesystem_path`, or NULL when it stands none
- *
- * One contribution of the branch, asked for the row at the path (core/manifest.h
- * manifest_build_branch, manifest_lookup_claim). The row is the arena's, as the
- * view is, so the answer survives this call.
- *
- * The row and not its name, because this file asks it two ways: the read takes
- * any claim, and the write's name takes the claim standing there whatever it is
- * called. A verb answering a string would have to pick one of them for both,
- * which is also why revert no longer asks core/manifest.h manifest_claim_name:
- * over a past tree a name today's roots would compose is one that tree never
- * held, and for a verb that writes, composing a name would choose a deployment
- * contract. The third question — may this name be authored at all — is the
- * admission's, and it reads more of one view than a row
- * (revert_refuse_second_name).
- *
- * Strict, like every view: a branch whose sheet will not load refuses the question
- * rather than answering from the tree alone. cmd_revert loads both sheets strictly
- * already, so no policy is added here.
- *
- * @param ctx Dispatch context (must not be NULL)
- * @param branch The branch the claim is looked for in — the tip's or the target
- *               commit's (must not be NULL)
- * @param filesystem_path Where to ask (must not be NULL)
- * @param out_row The claim, or NULL where none stands (must not be NULL; the
- *                command arena's, borrowed)
- * @return Error or NULL on success
- */
-static error_t revert_claim_standing(
-    const dotta_ctx_t *ctx,
-    branch_t *branch,
-    const char *filesystem_path,
-    const manifest_row_t **out_row
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(branch);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(out_row);
-
-    *out_row = NULL;
-
-    manifest_t *view = NULL;
-    error_t err = manifest_build_branch(branch, ctx->run.mounts, ctx->arena, &view);
-    if (err) return err;
-
-    /* The profile's own contribution: the row is the arena's */
-    *out_row = manifest_lookup_claim(view, branch_profile(branch), filesystem_path);
-
-    return NULL;
 }
 
 /**

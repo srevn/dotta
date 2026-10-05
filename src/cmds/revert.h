@@ -22,7 +22,7 @@
  */
 typedef struct {
     /* User-facing (read by cmd_revert). */
-    const char *profile;        /* Profile name (NULL = discover via manifest) */
+    const char *profile;        /* Profile name (NULL = search every local profile) */
     const char *file_path;      /* File path within profile (required) */
     const char *commit;         /* Commit reference (required) */
     const char *message;        /* Commit message (NULL = auto-generate) */

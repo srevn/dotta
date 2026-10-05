@@ -8,6 +8,7 @@
 #include <git2.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -23,8 +24,8 @@
 #include "core/branch.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
-#include "core/profiles.h"
 #include "core/state.h"
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
@@ -286,6 +287,100 @@ static error_t remove_profile_candidates(
 }
 
 /**
+ * Walk visitor: one entry of a profile tree, onto the listing where it is content
+ *
+ * A content blob's storage path is pushed onto the listing, the payload; the
+ * branch's machinery is pruned with its subtree, a tree beneath a label is entered
+ * and a gitlink passed; a name the storage grammar refuses is the walk's failure.
+ */
+static error_t remove_list_entry(
+    const char *path,
+    const git_tree_entry *entry,
+    void *payload,
+    gitops_next_t *next
+) {
+    string_array_t *paths = payload;
+
+    /* The content gate: a managed path is a name in the grammar — beneath a label,
+     * or the label's word alone, the namespace's own directory — and everything
+     * else the branch carries is machinery, which no walk of content sees
+     * (infra/label.h label_prefixes). Asked of every entry's whole name, a tree's
+     * included, so a tree of machinery goes with everything beneath it. */
+    if (!label_prefixes(path)) {
+        *next = GITOPS_NEXT_SKIP;
+        return NULL;
+    }
+
+    /* Content is a blob: a tree beneath a label is walked into, and a gitlink
+     * claims nothing. */
+    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
+        return NULL;
+    }
+
+    /* The entry name is Git's, not this machine's. A tree can name a subtree
+     * "..", and every consumer of a path from here joins it onto a root's spelling
+     * (infra/mount.h mount_resolve) on the strength of its having been validated
+     * where it was written — which holds for a branch this machine authored and
+     * not for one that arrived by clone, sync or foreign push. So the shape is
+     * checked where the tree is read, exactly as the branch's walk checks its
+     * own (core/branch.c branch_step). Malformed here is corruption, not an entry
+     * to skip: a walk that dropped it silently would leave the caller a listing
+     * it cannot place and call it complete. */
+    error_t err = label_validate_storage(path);
+    if (err) return err;
+
+    string_array_push(paths, path);
+    return NULL;
+}
+
+/**
+ * List deployable files in a Git tree
+ *
+ * Walks the tree past the branch's machinery (infra/label.h label_prefixes, the
+ * content gate), and returns the storage paths of its content blobs. It takes
+ * the tree its caller holds, so one read of the branch serves the walk and whatever
+ * else the caller does with it.
+ *
+ * Complete or an error: an entry whose name the storage grammar refuses is
+ * corruption and fails the walk rather than being skipped, since a listing short
+ * by a name would still read as complete. A branch this machine authored holds
+ * no such entry; one that arrived by clone, sync or foreign push can. A name is
+ * never refused for its length: Git's only bound on one is memory. Every failure
+ * is said under the profile, since the walk's own name a path in the tree and
+ * never the branch it is, and no reader names it again.
+ *
+ * Reader: remove_resolve.
+ *
+ * @param tree Git tree to walk (must not be NULL)
+ * @param profile The profile whose branch the tree is (must not be NULL)
+ * @param arena Arena the listing lives in (must not be NULL)
+ * @param out The storage paths (must not be NULL; left as it was on a failure)
+ * @return Error or NULL on success
+ */
+static error_t remove_list_tree_files(
+    const git_tree *tree,
+    const char *profile,
+    arena_t *arena,
+    string_array_t *out
+) {
+    CHECK_NULL(tree);
+    CHECK_NULL(profile);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    /* The walk pushes straight onto the listing, handed out once it is whole.
+     * Its failures name a path in the tree — a name the grammar refused, a subtree
+     * that would not load — and the profile is the where they do not say. */
+    string_array_t paths;
+    string_array_init(&paths, arena);
+    error_t err = gitops_tree_walk(tree, remove_list_entry, &paths);
+    if (err) return error_wrap(err, "Failed to list files in profile '%s'", profile);
+
+    *out = paths;
+    return NULL;
+}
+
+/**
  * Resolve the arguments to the claims they remove
  *
  * The claims array starts as everything the branch holds, in branch order (the
@@ -352,7 +447,7 @@ static error_t remove_resolve(
     /* The branch's claims, off the tree: its blobs, then the metadata's directory
      * claims. */
     string_array_t profile_files;
-    err = profile_list_tree_files(tree, profile, ctx->arena, &profile_files);
+    err = remove_list_tree_files(tree, profile, ctx->arena, &profile_files);
     if (err) return err;
 
     err = metadata_load_from_tree(repo, tree, profile, &metadata);
@@ -510,6 +605,127 @@ cleanup:
 }
 
 /**
+ * By filesystem path, then by profile
+ *
+ * Equal paths sort together, so the rows standing at one path form a contiguous
+ * run; the profile breaks the tie, and the order is total because one branch
+ * places one row per path. The name would not be: two branches can hold one name
+ * at one path.
+ */
+static int remove_filesystem_order(const void *a, const void *b) {
+    const manifest_row_t *const *ra = a;
+    const manifest_row_t *const *rb = b;
+
+    int by_path = strcmp((*ra)->filesystem_path, (*rb)->filesystem_path);
+
+    return by_path ? by_path : strcmp((*ra)->profile, (*rb)->profile);
+}
+
+/**
+ * filesystem path → the rows every local branch but `exclude` places there
+ *
+ * Each branch read once through its own view of its tip under this machine's
+ * table, so a claim is keyed by where it stands and never by what it is called:
+ * two profiles bound at two targets holding one name are two paths and meet no
+ * key of each other's, and one profile's two names for one path are one row and
+ * one entry. A claim this machine cannot place stands nowhere and is not indexed.
+ * Directory claims are indexed like any row — the branch claims the directory,
+ * and a caller asking who else is at a place is owed it.
+ *
+ * The map, its keys — each a row's own path string — and its values, each a run
+ * of the rows themselves, are the command's arena's, as the rows are: nothing
+ * frees the index.
+ *
+ * Complete or an error: a short index is an "also in" a user reads as complete.
+ * What a failure means is remove_paths' to say, and it is advisory: it says what
+ * it could not read and drops the section rather than refuse the untrack, since
+ * a local branch nobody enabled must not stop the repair and must not hide a
+ * claim in silence either.
+ *
+ * Cost: one view per branch — a tree walk and a sheet load each — then O(T log
+ * T) over T placed rows for the runs.
+ *
+ * Reader: remove_overlaps.
+ *
+ * @param ctx Dispatch context (must not be NULL): the repository, this machine's
+ *            mount table, and the arena the index, its keys and its runs live in
+ * @param exclude A branch to leave out, or NULL for every one of them
+ * @param out_index filesystem path (const char *) -> manifest_rows_t * (must not
+ *                  be NULL; NULL on a failure)
+ * @return Error or NULL on success
+ */
+static error_t remove_build_filesystem_index(
+    const dotta_ctx_t *ctx,
+    const char *exclude,
+    hashmap_t **out_index
+) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(out_index);
+
+    *out_index = NULL;
+
+    /* The profiles, in the arena the index lives in */
+    string_array_t profiles;
+    error_t err = gitops_list_branches(ctx->run.repo, ctx->arena, &profiles);
+    if (err) return err;
+
+    /* Every placed row of every profile, gathered before any of it is keyed:
+     * each view's rows as it lends them, a slot per listed profile — the excluded
+     * one's left empty — and how many they are, so the list below is allocated
+     * once and typed from its first slot. The rows are the arena's, as the views
+     * they came from are. */
+    manifest_rows_t *placed = arena_calloc(ctx->arena, profiles.count, sizeof(*placed));
+    size_t total = 0;
+    for (size_t i = 0; i < profiles.count; i++) {
+        if (exclude && strcmp(profiles.entries[i], exclude) == 0) continue;
+
+        branch_t *branch = NULL;
+        manifest_t *view = NULL;
+        err = branch_load(ctx->run.repo, profiles.entries[i], &branch);
+        if (!err) err = manifest_build_branch(branch, ctx->run.mounts, ctx->arena, &view);
+        branch_free(branch);
+        if (err) return err;
+
+        placed[i] = manifest_rows(view);
+        total += placed[i].count;
+    }
+
+    /* The runs: every row in the one list, sorted so the rows standing at one
+     * path are adjacent. A list of none is still a place of its own, never the
+     * NULL qsort may not be handed even with nothing to sort (C11 7.22.5). */
+    const manifest_row_t **rows = arena_calloc(ctx->arena, total, sizeof(*rows));
+    size_t row_count = 0;
+    for (size_t i = 0; i < profiles.count; i++) {
+        for (size_t j = 0; j < placed[i].count; j++) rows[row_count++] = placed[i].entries[j];
+    }
+    qsort(rows, row_count, sizeof(*rows), remove_filesystem_order);
+
+    hashmap_t *index = hashmap_borrow(ctx->arena, row_count);
+
+    for (size_t i = 0; i < row_count;) {
+        const char *filesystem_path = rows[i]->filesystem_path;
+
+        size_t n = 0;
+        while (i + n < row_count &&
+            strcmp(rows[i + n]->filesystem_path, filesystem_path) == 0) n++;
+
+        /* The value is the run itself: the rows standing at the path, every other
+         * profile's own, lent in place */
+        manifest_rows_t *run = arena_calloc(ctx->arena, 1, sizeof(*run));
+        *run = (manifest_rows_t){ rows + i, n };
+
+        /* The key is the row's own string — hashmap_borrow keeps the pointer
+         * and compares by content, and the row lives as long as the map. */
+        hashmap_set(index, filesystem_path, run);
+        i += n;
+    }
+
+    *out_index = index;
+
+    return NULL;
+}
+
+/**
  * One path this removal shares with other branches
  *
  * The claim removed there — the first, where a pair of the profile's own names
@@ -518,7 +734,7 @@ cleanup:
 typedef struct {
     const char *filesystem_path;
     const char *storage_path;
-    const profile_claims_t *others;
+    const manifest_rows_t *others;
 } overlap_t;
 
 /**
@@ -537,11 +753,10 @@ typedef struct {
 /**
  * What this removal shares with the other profiles
  *
- * Keyed by path, not by name (core/profiles.h profile_build_filesystem_index):
- * two profiles bound at two targets holding one name are two paths and share
- * nothing, while a portable name and a binding's name at one place do share and
- * used to go unsaid. A claim this machine places nowhere meets nothing and is
- * skipped.
+ * Keyed by path, not by name (remove_build_filesystem_index): two profiles bound
+ * at two targets holding one name are two paths and share nothing, while a portable
+ * name and a binding's name at one place do share and used to go unsaid. A claim
+ * this machine places nowhere meets nothing and is skipped.
  *
  * The index is read once per path and taken out of the map, so a pair of the
  * profile's own names removed at one place is one line and one count — the data
@@ -574,9 +789,7 @@ static error_t remove_overlaps(
     *out = (overlaps_t){ 0 };
 
     hashmap_t *index = NULL;
-    error_t err = profile_build_filesystem_index(
-        ctx->run.repo, ctx->run.mounts, current_profile, ctx->arena, &index
-    );
+    error_t err = remove_build_filesystem_index(ctx, current_profile, &index);
     if (err) return err;
 
     /* Tolerant (the header): a view the builder refuses leaves `view` NULL and
@@ -641,7 +854,7 @@ static void remove_print_overlaps(
             out, OUTPUT_NORMAL, "  {yellow}%s{reset} also in:", overlap->filesystem_path
         );
         for (size_t j = 0; j < overlap->others->count; j++) {
-            const profile_claim_t *other = &overlap->others->entries[j];
+            const manifest_row_t *other = overlap->others->entries[j];
 
             output_print(out, OUTPUT_NORMAL, " {cyan}%s{reset}", other->profile);
             if (strcmp(other->storage_path, overlap->storage_path) != 0) {

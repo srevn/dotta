@@ -1,11 +1,8 @@
 /**
  * profiles.h - Profile name resolution and Git queries
  *
- * Handles profile detection, name resolution, and branch-level queries. The
- * questions asked of one branch, or of every branch, answered from Git and this
- * machine's topology; the search by path builds each branch's view to ask it
- * (core/manifest.h), in the caller's arena, and answers from it, so no manifest
- * type crosses this surface.
+ * Handles profile detection, name resolution, and branch-level queries: the
+ * questions asked of one branch, answered from Git and this machine's topology.
  *
  * The layering convention, least specific first:
  * 1. global
@@ -49,9 +46,7 @@
 #include <git2.h>
 #include <types.h>
 
-#include "base/hashmap.h"
 #include "core/branch.h"
-#include "infra/mount.h"
 
 /**
  * Detect matching profile names from a list of available branches
@@ -132,37 +127,6 @@ void profile_order(string_array_t *names);
 error_t profile_require(git_repository *repo, const char *name);
 
 /**
- * List deployable files in a Git tree
- *
- * Walks the tree past the branch's machinery (infra/label.h label_prefixes, the
- * content gate), and returns the storage paths of its content blobs. It takes
- * the tree its caller holds, so one read of the branch serves the walk and whatever
- * else the caller does with it.
- *
- * Complete or an error: an entry whose name the storage grammar refuses is
- * corruption and fails the walk rather than being skipped, since a listing short
- * by a name would still read as complete. A branch this machine authored holds
- * no such entry; one that arrived by clone, sync or foreign push can. A name is
- * never refused for its length: Git's only bound on one is memory. Every failure
- * is said under the profile, since the walk's own name a path in the tree and
- * never the branch it is, and no reader names it again.
- *
- * Readers: cmds/remove.c remove_resolve.
- *
- * @param tree Git tree to walk (must not be NULL)
- * @param profile The profile whose branch the tree is (must not be NULL)
- * @param arena Arena the listing lives in (must not be NULL)
- * @param out The storage paths (must not be NULL; left as it was on a failure)
- * @return Error or NULL on success
- */
-error_t profile_list_tree_files(
-    const git_tree *tree,
-    const char *profile,
-    arena_t *arena,
-    string_array_t *out
-);
-
-/**
  * Does this profile's branch need a deployment target?
  *
  * Definitional, not a rule of its own: the labels the branch's walk shows claims
@@ -230,60 +194,5 @@ error_t profile_list_tree_files(
  *         under "Cannot read profile '%s'"
  */
 error_t profile_needs_target(branch_t *branch, bool *needs_target);
-
-/* A claim is (profile, name) — the pair that keys within one profile
- * (infra/mount.h). No kind: its one reader prints a profile and a name. */
-typedef struct {
-    const char *profile;
-    const char *storage_path;
-} profile_claim_t;
-
-/* Bound carrier over claims, the manifest_rows_t idiom: the entries and their
- * count, both the producing call's arena's. */
-typedef struct {
-    const profile_claim_t *entries;
-    size_t count;
-} profile_claims_t;
-
-/**
- * filesystem path → the claims every local branch but `exclude` places there
- *
- * Each branch read once through its own view of its tip under this machine's
- * table, so a claim is keyed by where it stands and never by what it is called:
- * two profiles bound at two targets holding one name are two paths and meet no
- * key of each other's, and one profile's two names for one path are one row and
- * one entry. A claim this machine cannot place stands nowhere and is not indexed.
- * Directory claims are indexed like any row — the branch claims the directory,
- * and a caller asking who else is at a place is owed it.
- *
- * The map, its keys — each a row's own path string — and its values are the
- * arena's: nothing frees the index.
- *
- * Complete or an error, like its sibling: a short index is an "also in" a user
- * reads as complete. What a failure means is the caller's, and remove's is advisory
- * — it says what it could not read and drops the section rather than refuse the
- * untrack, since a local branch nobody enabled must not stop the repair and must
- * not hide a claim in silence either.
- *
- * Cost: one view per branch — a tree walk and a sheet load each — then O(T log
- * T) over T placed rows for the runs.
- *
- * Reader: cmds/remove.c remove_overlaps.
- *
- * @param repo Repository (must not be NULL)
- * @param mounts This machine's mount table (must not be NULL)
- * @param exclude A branch to leave out, or NULL for every one of them
- * @param arena Arena the index, its keys and its claims live in (must not be NULL)
- * @param out_index filesystem path (const char *) -> profile_claims_t * (must
- *        not be NULL)
- * @return Error or NULL on success
- */
-error_t profile_build_filesystem_index(
-    git_repository *repo,
-    const mount_table_t *mounts,
-    const char *exclude,
-    arena_t *arena,
-    hashmap_t **out_index
-);
 
 #endif /* DOTTA_PROFILES_H */

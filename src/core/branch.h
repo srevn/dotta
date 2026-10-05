@@ -145,7 +145,7 @@ branch_t *branch_open(git_repository *repo, const char *profile, const git_tree 
  * an answer reads gitops_branch_tree and opens over what it finds (core/manifest.c
  * manifest_build, core/workspace.c workspace_orphan_authority).
  *
- * Readers: core/profiles.c profile_build_filesystem_index and cmds/revert.c
+ * Readers: cmds/remove.c remove_build_filesystem_index and cmds/revert.c
  * revert_select_profile, which load every local branch; cmds/ignore.c ignore_test;
  * the questions asked of a tip by name, what it holds and whether it needs a
  * target — cmds/profile.c profile_list and profile_enable, cmds/clone.c cmd_clone,

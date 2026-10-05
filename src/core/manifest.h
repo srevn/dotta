@@ -435,8 +435,8 @@ error_t manifest_build(
  * at and asks it every naming question for the length of the command (cmds/add.c
  * cmd_add); `ignore --test`'s named arm (cmds/ignore.c ignore_test); and the
  * two cross-branch searches, which build one per local branch (cmds/revert.c
- * revert_select_profile, through revert_claim_standing, and core/profiles.c
- * profile_build_filesystem_index).
+ * revert_select_profile, through revert_claim_standing, and cmds/remove.c
+ * remove_build_filesystem_index).
  *
  * Memory: every allocation produced by the call lives in the caller's arena, as
  * manifest_build's does, but the sheet the walk reads where no question has yet,

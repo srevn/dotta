@@ -15,10 +15,8 @@
 #include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
-#include "base/hashmap.h"
 #include "base/string.h"
 #include "core/branch.h"
-#include "core/manifest.h"
 #include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/gitops.h"
@@ -166,79 +164,6 @@ string_array_t profile_detect(arena_t *arena, const string_array_t *available_br
 }
 
 /**
- * Walk visitor: one entry of a profile tree, onto the listing where it is content
- *
- * A content blob's storage path is pushed onto the listing, the payload; the
- * branch's machinery is pruned with its subtree, a tree beneath a label is entered
- * and a gitlink passed; a name the storage grammar refuses is the walk's failure.
- */
-static error_t profile_list_entry(
-    const char *path,
-    const git_tree_entry *entry,
-    void *payload,
-    gitops_next_t *next
-) {
-    string_array_t *paths = payload;
-
-    /* The content gate: a managed path is a name in the grammar — beneath a label,
-     * or the label's word alone, the namespace's own directory — and everything
-     * else the branch carries is machinery, which no walk of content sees
-     * (infra/label.h label_prefixes). Asked of every entry's whole name, a tree's
-     * included, so a tree of machinery goes with everything beneath it. */
-    if (!label_prefixes(path)) {
-        *next = GITOPS_NEXT_SKIP;
-        return NULL;
-    }
-
-    /* Content is a blob: a tree beneath a label is walked into, and a gitlink
-     * claims nothing. */
-    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-        return NULL;
-    }
-
-    /* The entry name is Git's, not this machine's. A tree can name a subtree
-     * "..", and every consumer of a path from here joins it onto a root's spelling
-     * (infra/mount.h mount_resolve) on the strength of its having been validated
-     * where it was written — which holds for a branch this machine authored and
-     * not for one that arrived by clone, sync or foreign push. So the shape is
-     * checked where the tree is read, exactly as the branch's walk checks its
-     * own (core/branch.c branch_step). Malformed here is corruption, not an entry
-     * to skip: a walk that dropped it silently would leave the caller a listing
-     * it cannot place and call it complete. */
-    error_t err = label_validate_storage(path);
-    if (err) return err;
-
-    string_array_push(paths, path);
-    return NULL;
-}
-
-/**
- * List deployable files in a Git tree
- */
-error_t profile_list_tree_files(
-    const git_tree *tree,
-    const char *profile,
-    arena_t *arena,
-    string_array_t *out
-) {
-    CHECK_NULL(tree);
-    CHECK_NULL(profile);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
-
-    /* The walk pushes straight onto the listing, handed out once it is whole.
-     * Its failures name a path in the tree — a name the grammar refused, a subtree
-     * that would not load — and the profile is the where they do not say. */
-    string_array_t paths;
-    string_array_init(&paths, arena);
-    error_t err = gitops_tree_walk(tree, profile_list_entry, &paths);
-    if (err) return error_wrap(err, "Failed to list files in profile '%s'", profile);
-
-    *out = paths;
-    return NULL;
-}
-
-/**
  * Walk visitor: the label a claim stands under, noted
  *
  * @param claim One claim, decoded (borrowed — valid for the call only)
@@ -291,98 +216,4 @@ error_t profile_needs_target(branch_t *branch, bool *needs_target) {
     arena_free(frame);
 
     return err;
-}
-
-/**
- * By filesystem path, then by profile
- *
- * Equal paths sort together, so the rows standing at one path form a contiguous
- * run; the profile breaks the tie, and the order is total because one branch
- * places one row per path. The name would not be: two branches can hold one name
- * at one path.
- */
-static int index_order(const void *a, const void *b) {
-    const manifest_row_t *const *ra = a;
-    const manifest_row_t *const *rb = b;
-
-    int by_path = strcmp((*ra)->filesystem_path, (*rb)->filesystem_path);
-
-    return by_path ? by_path : strcmp((*ra)->profile, (*rb)->profile);
-}
-
-/**
- * filesystem path → the claims every local branch but `exclude` places there
- */
-error_t profile_build_filesystem_index(
-    git_repository *repo,
-    const mount_table_t *mounts,
-    const char *exclude,
-    arena_t *arena,
-    hashmap_t **out_index
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(mounts);
-    CHECK_NULL(arena);
-    CHECK_NULL(out_index);
-
-    *out_index = NULL;
-
-    /* The branches, in the arena the index lives in */
-    string_array_t branches;
-    error_t err = gitops_list_branches(repo, arena, &branches);
-    if (err) return err;
-
-    /* Every placed row of every branch, gathered before any of it is keyed: the
-     * rows are the arena's, as the views they came from are, and so is the list
-     * of them. */
-    ptr_array_t rows;
-    ptr_array_init(&rows, arena);
-    for (size_t i = 0; i < branches.count; i++) {
-        if (exclude && strcmp(branches.entries[i], exclude) == 0) continue;
-
-        branch_t *branch = NULL;
-        manifest_t *view = NULL;
-        err = branch_load(repo, branches.entries[i], &branch);
-        if (!err) err = manifest_build_branch(branch, mounts, arena, &view);
-        branch_free(branch);
-        if (err) return err;
-
-        manifest_rows_t placed = manifest_rows(view);
-        for (size_t j = 0; j < placed.count; j++) {
-            ptr_array_push(&rows, placed.entries[j]);
-        }
-    }
-
-    /* The runs, typed once: a ptr_array holds void *, and every read below is a
-     * row's path, its profile or its name. */
-    const manifest_row_t **sorted = (const manifest_row_t **) rows.entries;
-    qsort(sorted, rows.count, sizeof(*sorted), index_order);
-
-    hashmap_t *index = hashmap_borrow(arena, rows.count);
-
-    for (size_t i = 0; i < rows.count;) {
-        const char *filesystem_path = sorted[i]->filesystem_path;
-
-        size_t n = 0;
-        while (i + n < rows.count &&
-            strcmp(sorted[i + n]->filesystem_path, filesystem_path) == 0) n++;
-
-        profile_claim_t *entries = arena_calloc(arena, n, sizeof(*entries));
-        profile_claims_t *claims = arena_calloc(arena, 1, sizeof(*claims));
-        for (size_t g = 0; g < n; g++) {
-            entries[g] = (profile_claim_t){
-                sorted[i + g]->profile, sorted[i + g]->storage_path
-            };
-        }
-        *claims = (profile_claims_t){ entries, n };
-
-        /* The key is the row's own string — hashmap_borrow keeps the pointer
-         * and compares by content, and the row lives as long as the map. */
-        hashmap_set(index, filesystem_path, claims);
-        i += n;
-    }
-
-    *out_index = index;
-
-    return NULL;
 }

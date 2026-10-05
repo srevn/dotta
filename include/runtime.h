@@ -232,22 +232,21 @@ typedef enum dotta_verbosity {
  * `state`. A command declares it when it asks one of the table's verbs: where a
  * claim stands (`mount_resolve`: diff, ignore, remove, revert, update), a view
  * of one branch placed by it (`manifest_build_branch`: diff, export, ignore,
- * list, revert, show), a claim's ancestors climbed (`metadata_capture_ancestors`:
- * update), or a claim found by its key (`profile_build_filesystem_index`: remove).
- * Reading a CLI path is not one of those verbs: an argument's key is the
- * normalizer's own string and no root's spelling is read to make it
- * (`infra/path.h`), so apply, whose path filter is those strings, and status
- * and sync, which filter by profile alone and compile none, declare no table.
- * add asks the verbs and declares none: it brings a binding no row need hold
- * (`add --target`) and builds the same table with that binding standing for its
- * profile's row (`core/manifest.h` `manifest_mount_table`), where the dispatcher's
- * would be a second build of the same rows. A command that declares the view as
- * well borrows the view's table — `manifest_mounts`, the one the builder derived
- * from the rows it read — so the names it places and the rows it selects read
- * one value; a command that declares `mounts` alone gets its own build from the
- * same rows. Every filesystem path the run spells — a row's, a record's, an
- * argument's — is a root's spelling and a tail, the binder's or the user's own
- * (`infra/mount.h`).
+ * list, remove, revert, show), or a claim's ancestors climbed
+ * (`metadata_capture_ancestors`: update). Reading a CLI path is not one of those
+ * verbs: an argument's key is the normalizer's own string and no root's spelling
+ * is read to make it (`infra/path.h`), so apply, whose path filter is those
+ * strings, and status and sync, which filter by profile alone and compile none,
+ * declare no table. add asks the verbs and declares none: it brings a binding
+ * no row need hold (`add --target`) and builds the same table with that binding
+ * standing for its profile's row (`core/manifest.h` `manifest_mount_table`),
+ * where the dispatcher's would be a second build of the same rows. A command
+ * that declares the view as well borrows the view's table — `manifest_mounts`,
+ * the one the builder derived from the rows it read — so the names it places
+ * and the rows it selects read one value; a command that declares `mounts` alone
+ * gets its own build from the same rows. Every filesystem path the run spells —
+ * a row's, a record's, an argument's — is a root's spelling and a tail, the
+ * binder's or the user's own (`infra/mount.h`).
  *
  * crypto
  * ------

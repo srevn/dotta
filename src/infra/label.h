@@ -161,7 +161,7 @@ label_split_t label_split(const char *s);
  * the filesystem shapes.
  *
  * Readers: the branch's walk (core/branch.c branch_step), the file listing
- * (core/profiles.c profile_list_entry), the refspec completion (cmds/completion.c
+ * (cmds/remove.c remove_list_entry), the refspec completion (cmds/completion.c
  * refspec_emit), diff's delta selection (cmds/diff.c select_delta), the rule
  * compiler (infra/pathspec.c compile_rule), the resolver's storage arm and the
  * question its neighbour asks of a positional whose slot is undecided (infra/path.c
@@ -249,8 +249,8 @@ const char *label_tail(const char *storage_path);
  * Pure rule check — no filesystem access, no arena, no state.
  *
  * Readers: the three boundaries a name arrives across — a branch's tree at its
- * walk (core/branch.c branch_step) and at the file listing (core/profiles.c
- * profile_list_entry), the sheet's keys (core/metadata.c metadata_from_json) —
+ * walk (core/branch.c branch_step) and at the file listing (cmds/remove.c
+ * remove_list_entry), the sheet's keys (core/metadata.c metadata_from_json) —
  * and the resolver's storage arm, where the name is one the user typed
  * (infra/path.c path_input_resolve). The store holds a record's name to the same
  * checks in its own language (core/state.c STORAGE_SPELLING), and

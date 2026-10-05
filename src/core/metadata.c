@@ -1219,33 +1219,6 @@ cleanup:
 }
 
 /**
- * Load metadata from profile branch
- *
- * Composed: the branch's tree via gitops_load_branch_tree — its tip commit's, a
- * branch that names anything else refused there — then metadata_load_from_tree.
- * A branch without a sheet loads as an empty one, as metadata_load_from_tree
- * says; a missing branch is gitops_load_branch_tree's refusal (ERR_NOT_FOUND),
- * never a sheet with nothing in it.
- */
-error_t metadata_load_from_branch(
-    git_repository *repo,
-    const char *branch_name,
-    metadata_t **out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(out);
-
-    git_tree *tree = NULL;
-    error_t err = gitops_load_branch_tree(repo, branch_name, &tree);
-    if (err) return err;
-
-    err = metadata_load_from_tree(repo, tree, branch_name, out);
-    git_tree_free(tree);
-    return err;
-}
-
-/**
  * Load metadata from a Git tree
  *
  * Loads metadata.json from a specific Git tree — a branch tip or a historical

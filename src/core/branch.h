@@ -24,19 +24,30 @@
  *   group, the seal's stamp — but what a link cannot carry: no mode (symlink(2)
  *   takes none), no stamp (a link's bytes are its target)
  * - a path is a tree or a blob, and the tree is the content authority: a DIRECTORY
- *   item at a blob's name claims nothing, at the blob or as a directory
+ *   item at a blob's name claims nothing, at the blob or as a directory — the
+ *   walk shows no such claim, and branch_contradicted shows each one
+ *
+ * The agreement rests on the tree Git writes, its names sorted, each held once
+ * and none holding a '/' (git fsck's TREE_NOT_SORTED, DUPLICATE_ENTRIES and
+ * FULL_PATHNAME, lib/git/fsck.h): a question at one name finds it by a binary
+ * search over a tree's names (lib/libgit2/src/libgit2/tree.c
+ * git_tree_entry_bypath), and so does the classification of each directory claim,
+ * where the walk's tree half shows every entry as stored. Over a tree a hand
+ * wrote otherwise, both can miss a name the walk shows; the decode states it
+ * rather than repairs it.
  *
  * Failures are worded here, once, naming the profile: a sheet that will not load
  * in the loader's words (core/metadata.h metadata_load_from_tree); the tree's
  * under "Cannot read profile '%s'" for a walk, and "Cannot read '%s' in profile
- * '%s'" for a point question, which names the name it was asked. No reader says
- * the profile again.
+ * '%s'" for a question asked at one name — a point question's, or the
+ * classification's at a directory claim's own — which names the name it was asked.
+ * No reader says the profile again.
  *
  * Memory: a handle's own, made by branch_open or branch_load and released by
  * branch_free. The tree it is opened over is the caller's and outlives it; a
- * tip branch_load read is the handle's. A claim a walk shows is lent for its
- * visit; one branch_find answers, for the handle's life, kept in an arena of
- * the handle's own.
+ * tip branch_load read is the handle's. A claim a visitor is shown is lent for
+ * its visit; one branch_find answers, for the handle's life, kept in an arena
+ * of the handle's own.
  */
 
 #ifndef DOTTA_BRANCH_H
@@ -137,9 +148,10 @@ branch_t *branch_open(git_repository *repo, const char *profile, const git_tree 
  * Readers: core/profiles.c profile_build_filesystem_index, claim_by_filesystem_path
  * and claim_by_name; cmds/ignore.c ignore_test; the questions asked of a tip by
  * name, what it holds and whether it needs a target — cmds/profile.c profile_list
- * and profile_enable, cmds/clone.c cmd_clone, cmds/interactive.c read_targets
- * and cmds/remove.c remove_profile; and the directory claims a completion offers
- * at a profile's tip (cmds/completion.c completion_directories).
+ * and profile_enable, cmds/clone.c cmd_clone, cmds/interactive.c read_targets;
+ * what a profile's deletion takes, every claim for its hooks and the count for
+ * its preview (cmds/remove.c remove_profile); and the directory claims a completion
+ * offers at a profile's tip (cmds/completion.c completion_directories).
  *
  * @param repo Repository (must not be NULL; borrowed)
  * @param profile The branch's name, and whose claims these are (must not be NULL;
@@ -198,14 +210,16 @@ typedef error_t (*branch_visit_fn)(const branch_claim_t *claim, void *payload);
 
 /**
  * The branch's claims, decoded, shown to a visitor — every claim it makes but
- * those its own tree contradicts
+ * those its own tree contradicts, which branch_contradicted shows
  *
  * The blobs first, in the tree's pre-order; then the directory claims no blob
  * stands at the name of, in the sheet's own order — so a reader that keeps the
  * first of two claims at one place keeps the sheet's first, and that order is
  * the document's: the writer sorts by key (core/metadata.c metadata_to_json), a
  * hand may not. A name is shown once: a blob, or a directory claim no blob stands
- * at.
+ * at. Each directory claim is the one branch_find answers at its name, by the
+ * same question asked of it there, so the walk and a question at one name cannot
+ * part.
  *
  * STRICT: a sheet that will not load is the walk's failure, before any claim is
  * shown. TOLERANT: the walk shows the tree's claims at their floors — no mode,
@@ -219,9 +233,11 @@ typedef error_t (*branch_visit_fn)(const branch_claim_t *claim, void *payload);
  * the file listing's rows, read TOLERANT (cmds/list.c list_files, through
  * list_collect_file); export's whole and name arms, read TOLERANT, the second
  * keeping the claims beneath its name (cmds/export.c export_collect_profile and
- * export_collect_storage, through export_collect_claim); and the directory claims
- * a completion offers (cmds/completion.c completion_directories, through
- * completion_offer_directory).
+ * export_collect_storage, through export_collect_claim); the directory claims a
+ * completion offers (cmds/completion.c completion_directories, through
+ * completion_offer_directory); and every claim a profile's deletion hands its
+ * hooks, read TOLERANT before branch_contradicted (cmds/remove.c remove_profile,
+ * through remove_collect_claim).
  *
  * @param branch Handle (must not be NULL); its sheet is read by the first question
  *               that needs it, a walk or branch_sheet_failure
@@ -229,9 +245,45 @@ typedef error_t (*branch_visit_fn)(const branch_claim_t *claim, void *payload);
  * @param visit The visitor (must not be NULL)
  * @param payload Handed to the visitor untouched
  * @return NULL; the sheet's failure (STRICT), in the loader's words; the tree's,
- *         under "Cannot read profile '%s'"; or the visitor's, as it made it
+ *         under "Cannot read profile '%s'" — or, at a directory claim's own name,
+ *         under "Cannot read '%s' in profile '%s'", which needs a store that
+ *         changed beneath the walk; or the visitor's, as it made it
  */
 error_t branch_walk(
+    branch_t *branch,
+    branch_read_t read,
+    branch_visit_fn visit,
+    void *payload
+);
+
+/**
+ * The directory claims the branch's own tree contradicts, decoded, shown to a
+ * visitor — the claims the walk does not show
+ *
+ * Every DIRECTORY item the sheet holds is shown by exactly one of branch_walk
+ * and this, by the one question that classifies it: the directory claim standing
+ * at its name, branch_find's — none where a blob stands there. So a reader asks
+ * for the claims that stand, the walk, or for every claim the branch makes, the
+ * walk and these; where the classification draws its line moves a claim between
+ * the two, never out of the second reader's sight. Each is shown in the sheet's
+ * own order, decoded as the walk would have shown it had no blob stood at its name.
+ *
+ * STRICT: a sheet that will not load is the failure, before any claim is shown.
+ * TOLERANT: none is shown past one, the failure kept (branch_sheet_failure).
+ *
+ * Readers: every claim a profile's deletion hands its hooks, read TOLERANT after
+ * the walk, through the walk's visitor (cmds/remove.c remove_profile, through
+ * remove_collect_claim).
+ *
+ * @param branch Handle (must not be NULL); its sheet read through it
+ * @param read The sheet's policy for this question
+ * @param visit The visitor (must not be NULL)
+ * @param payload Handed to the visitor untouched
+ * @return NULL; the sheet's failure (STRICT), in the loader's words; the tree's,
+ *         under "Cannot read '%s' in profile '%s'", naming the claim's name; or
+ *         the visitor's, as it made it
+ */
+error_t branch_contradicted(
     branch_t *branch,
     branch_read_t read,
     branch_visit_fn visit,
@@ -421,12 +473,14 @@ error_t branch_find(
  * without it can say what its read lost, once. A tree that holds no sheet holds
  * an empty one, which is no failure (core/metadata.h metadata_load_from_tree).
  *
- * Readers: branch_walk and the point questions (branch_holds, branch_find), which
- * read the sheet through it; cmds/show.c show_file, whose header says what its
- * tolerant read lost; cmds/list.c list_files, whose verbose rows say what its
- * tolerant walk lost; and cmds/export.c cmd_export, which says what a tolerant
- * arm's collection lost, once, beside the two arms whose copy came out empty,
- * where the failure is the answer (export_collect_profile, export_collect_storage).
+ * Readers: branch_walk, branch_contradicted and the point questions (branch_holds,
+ * branch_find), which read the sheet through it; cmds/show.c show_file, whose
+ * header says what its tolerant read lost; cmds/list.c list_files, whose verbose
+ * rows say what its tolerant walk lost; cmds/export.c cmd_export, which says
+ * what a tolerant arm's collection lost, once, beside the two arms whose copy
+ * came out empty, where the failure is the answer (export_collect_profile,
+ * export_collect_storage); and cmds/remove.c remove_profile, which says before
+ * its preview what its hooks' tolerant list lost.
  *
  * @param branch Handle (must not be NULL)
  * @return The sheet's failure, in the loader's words, or NULL

@@ -1170,6 +1170,25 @@ cleanup:
 }
 
 /**
+ * Walk visitor: one claim of a profile being deleted, its name onto its hooks' list
+ *
+ * Every claim, whatever its kind: a deletion takes them all, and its hooks are
+ * handed each one, a directory's beside a file's (etc/hooks/README.md).
+ *
+ * @param claim One claim, decoded (borrowed — valid for the call only)
+ * @param payload The hooks' list of names (string_array_t, given its arena)
+ * @return NULL: a collection fails nowhere
+ */
+static error_t remove_collect_claim(const branch_claim_t *claim, void *payload) {
+    string_array_t *names = payload;
+
+    /* The name copied out of the walk's loan, into the list's own arena */
+    string_array_push(names, claim->storage_path);
+
+    return NULL;
+}
+
+/**
  * Delete a profile
  */
 static error_t remove_profile(
@@ -1187,6 +1206,7 @@ static error_t remove_profile(
 
     /* Initialize all resources to NULL */
     error_t err = NULL;
+    branch_t *branch = NULL;
     const char *remote_name = NULL;
     const char *remote_url = NULL;
 
@@ -1221,21 +1241,49 @@ static error_t remove_profile(
         goto cleanup;
     }
 
-    /* The file list rides to the hook universe below; the preview and the
-     * confirmation count what the branch holds instead, both kinds, through its
-     * own count (core/branch.h branch_count): one truth with `dotta list`. */
-    string_array_t files;
-    err = profile_list_files(repo, opts->profile, ctx->arena, &files);
+    /* The branch at its tip, read once for all the deletion says before it acts:
+     * every claim it takes, for its hooks, and what it holds, for the preview
+     * and the confirmation, one commit for both. A tip that will not load refuses
+     * here, in gitops' words, which name the branch. */
+    err = branch_load(repo, opts->profile, &branch);
     if (err) goto cleanup;
 
-    /* The count, over the branch at its tip. Its failure is display-only — the
-     * deletion must not refuse over a count — so it becomes the phrase the preview
-     * prints, its error dropped and err back to the NULL the phase began with */
-    branch_t *branch = NULL;
+    /* Every claim the deletion takes, by name: the claims the walk shows — the
+     * blobs, then the directory claims that stand — and then those the tree
+     * contradicts (core/branch.h branch_contradicted), so the hooks are handed
+     * every claim the profile goes with, one entry each, and a path two claims
+     * stand at once for each. Read tolerantly: a deletion that refused over a
+     * sheet it cannot read would leave the profile undeletable, so it goes on
+     * and says below what its hooks lose. A tree it cannot walk is refused here,
+     * before the preview: no tolerant read loses the tree's half. */
+    string_array_t hook_storage;
+    string_array_init(&hook_storage, ctx->arena);
+    err = branch_walk(branch, BRANCH_READ_TOLERANT, remove_collect_claim, &hook_storage);
+    if (err) goto cleanup;
+    err = branch_contradicted(branch, BRANCH_READ_TOLERANT, remove_collect_claim, &hook_storage);
+    if (err) goto cleanup;
+
+    /* What the tolerant read lost, said where it was read, so the dry run says
+     * it too: the directory claims the hooks are not handed, and the count below,
+     * in the loader's line, which names the profile */
+    err = branch_sheet_failure(branch);
+    if (err) {
+        output_warning(
+            out, OUTPUT_NORMAL, "%s; its hooks are handed its files alone",
+            error_line(err)
+        );
+        err = NULL;
+    }
+
+    /* The count, over the same branch, both kinds (core/branch.h branch_count):
+     * one truth with `dotta list`. Its failure is display-only — the deletion
+     * must not refuse over a count — so it becomes the phrase the preview prints,
+     * its error dropped and err back to the NULL the phase began with. The branch
+     * is read no further: the hooks' list holds its own copies. */
     branch_count_t count = { 0 };
-    err = branch_load(repo, opts->profile, &branch);
-    if (!err) err = branch_count(branch, &count);
+    err = branch_count(branch, &count);
     branch_free(branch);
+    branch = NULL;
 
     char counts[64];
     if (err) {
@@ -1404,32 +1452,6 @@ static error_t remove_profile(
                 opts->profile
             );
             goto cleanup;
-    }
-
-    /* The hook universe: the tree's blobs, then the branch metadata's directory
-     * claims — the same both-kind universe the file-removal subcommand passes
-     * to its hooks. Same-profile rule as the claims universe: a key the tree
-     * holds as a blob is the blob's, the stale item is skipped. A branch without
-     * a sheet has no directory claims; a sheet that will not load degrades to
-     * the files-only universe — the deletion does not refuse over it. */
-    string_array_t hook_storage;
-    string_array_clone(&files, ctx->arena, &hook_storage);
-
-    metadata_t *branch_metadata = NULL;
-    error_t meta_err = metadata_load_from_branch(
-        repo, opts->profile, &branch_metadata
-    );
-    if (!meta_err) {
-        size_t item_count = 0;
-        const metadata_item_t *const *items =
-            metadata_items(branch_metadata, &item_count);
-        for (size_t i = 0; i < item_count; i++) {
-            if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
-            if (!string_array_contains(&files, items[i]->key)) {
-                string_array_push(&hook_storage, items[i]->key);
-            }
-        }
-        metadata_free(branch_metadata);
     }
 
     /* Convert storage paths to filesystem paths for hook consistency. The file
@@ -1609,7 +1631,9 @@ static error_t remove_profile(
 cleanup:
     /* state is borrowed from the dispatcher — do not free it. state_rollback is
      * a no-op if no transaction is active; this safely closes any partially-begun
-     * record-update or post-deletion transaction on an error path. */
+     * record-update or post-deletion transaction on an error path. The branch
+     * is freed once its count is read; here only a refusal before that frees it. */
+    branch_free(branch);
     state_rollback(state);
 
     return err;

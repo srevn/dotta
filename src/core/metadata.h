@@ -674,25 +674,6 @@ error_t metadata_capture_ancestors(
 );
 
 /**
- * Load metadata from profile branch
- *
- * Reads .dotta/metadata.json from the branch's tip, under metadata_load_from_tree's
- * contract: a branch without a sheet loads as an empty one. A branch that cannot
- * be read is gitops_load_branch_tree's error (ERR_GIT), never an empty sheet.
- * Rejects version mismatches with a clear error message (no migration code).
- *
- * @param repo Repository (must not be NULL)
- * @param branch_name Branch name (must not be NULL)
- * @param out Metadata (must not be NULL, caller must free with metadata_free)
- * @return Error or NULL on success
- */
-error_t metadata_load_from_branch(
-    git_repository *repo,
-    const char *branch_name,
-    metadata_t **out
-);
-
-/**
  * Load metadata from a Git tree
  *
  * Loads metadata.json from a specific Git tree — a branch tip or a historical
@@ -714,11 +695,10 @@ error_t metadata_load_from_branch(
  * count, which is where a listing's question of what a profile holds ends
  * (core/branch.h branch_count).
  *
- * The readers that deliberately do otherwise are counted across both doors —
- * this one and metadata_load_from_branch above, which is this call — and each
- * is that command's decision about its own output, never a second answer from
- * here: export's materialisation floor through the branch's tolerant walk and
- * point questions (core/branch.h branch_walk and branch_find, from cmds/export.c
+ * The readers that deliberately do otherwise are counted here, and each is that
+ * command's decision about its own output, never a second answer from here:
+ * export's materialisation floor through the branch's tolerant walk and point
+ * questions (core/branch.h branch_walk and branch_find, from cmds/export.c
  * export_collect_profile and export_collect_storage; the bytes come out of a
  * damaged profile, warned once by cmd_export, and a copy left with nothing in
  * it is refused in the loader's words), the header show prints over a blob it
@@ -729,13 +709,14 @@ error_t metadata_load_from_branch(
  * is the tree's and stands, the marks are the sheet's and do not), the orphan
  * authority's third answer through the branch's strict read (core/branch.h
  * branch_find, from core/workspace.c workspace_orphan_authority, which folds
- * the failure to UNVERIFIED and never to "no claims") and the completion's offer
+ * the failure to UNVERIFIED and never to "no claims"), the completion's offer
  * through the branch's strict walk (core/branch.h branch_walk, from
  * cmds/completion.c completion_directories, which drops the failure as every
- * completion source drops its own: cmds/completion.h). One reader folds without
- * deciding to: the deletion's hook universe (cmds/remove.c remove_profile) drops
- * every directory claim from DOTTA_FILE_n on a sheet it cannot read, where its
- * own sibling a screen up propagates. A further reader would have to argue for one.
+ * completion source drops its own: cmds/completion.h), and the claims a profile's
+ * deletion hands its hooks through the branch's tolerant walk and
+ * branch_contradicted (core/branch.h, from cmds/remove.c remove_profile; the
+ * profile goes all the same, its hooks handed the tree's files alone, warned
+ * before the preview). A further reader would have to argue for one.
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)

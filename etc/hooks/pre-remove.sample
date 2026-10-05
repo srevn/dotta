@@ -12,10 +12,12 @@
 #   DOTTA_REPO_DIR    - Path to dotta repository
 #   DOTTA_COMMAND     - Command being executed ("remove")
 #   DOTTA_PROFILE     - Profile name being modified or deleted
-#   DOTTA_FILE_COUNT  - Number of files (0 when deleting the whole profile)
-#   DOTTA_FILE_0      - First file path (0-indexed)
-#   DOTTA_FILE_1      - Second file path
-#   DOTTA_FILE_N      - Nth file path (where N = 0 to COUNT-1)
+#   DOTTA_FILE_COUNT  - Number of entries: one per claim the removal takes, a
+#                       directory's as well as a file's (every claim the
+#                       profile makes, when it is deleted)
+#   DOTTA_FILE_0      - First entry's path (0-indexed)
+#   DOTTA_FILE_1      - Second entry's path
+#   DOTTA_FILE_N      - Nth entry's path (where N = 0 to COUNT-1)
 #   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
 #
 
@@ -31,7 +33,7 @@ backup_dir="$HOME/.dotta-backups/remove-$(date +%Y%m%d-%H%M%S)-$DOTTA_PROFILE"
 
 if [[ "$DOTTA_FILE_COUNT" -gt 0 ]]; then
     mkdir -p "$backup_dir"
-    echo "Pre-remove: backing up $DOTTA_FILE_COUNT file(s) to $backup_dir"
+    echo "Pre-remove: backing up $DOTTA_FILE_COUNT path(s) to $backup_dir"
 
     for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
         var_name="DOTTA_FILE_$i"
@@ -45,9 +47,9 @@ if [[ "$DOTTA_FILE_COUNT" -gt 0 ]]; then
         fi
     done
 else
-    # Profile deletion: nothing to back up from the filesystem here.
-    # The profile branch itself remains in Git history until pruned.
-    echo "Pre-remove: deleting profile '$DOTTA_PROFILE' (no files to back up)"
+    # Nothing taken: a profile deleted while it claims nothing. Its branch
+    # remains in Git history until pruned.
+    echo "Pre-remove: deleting profile '$DOTTA_PROFILE' (nothing to back up)"
 fi
 
 echo "Pre-remove checks passed. Proceeding with remove..."

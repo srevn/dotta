@@ -4,11 +4,13 @@
  * The handle is a tree and the sheet read from it once, at the first question,
  * its failure kept beside it. The walk is the decode core/branch.h states, in
  * two halves: one walk of the tree for the blobs (branch_step), then the sheet's
- * directory items, with the names the first half found a blob standing at carried
- * to the second. The point questions ask it of one name: a blob's claim through
- * the walk's own decode (branch_decode_blob), and the directory claim standing
- * at a name through one look that both questions read (branch_directory_item).
- * The count is the walk, tallied (branch_count).
+ * directory items, each asked the one question that classifies it, the directory
+ * claim standing at its name (branch_directory_item) — the items it answers none
+ * for are branch_contradicted's. The point questions ask the decode of one name:
+ * a blob's claim through the walk's own decode (branch_decode_blob), and the
+ * directory claim standing at a name through the question the walk asks of each
+ * item, decoded as the walk decodes it (branch_decode_directory). The count is
+ * the walk, tallied (branch_count).
  */
 
 #include "core/branch.h"
@@ -17,7 +19,6 @@
 
 #include "base/arena.h"
 #include "base/error.h"
-#include "base/hashmap.h"
 #include "base/heap.h"
 #include "core/metadata.h"
 #include "infra/label.h"
@@ -33,13 +34,12 @@ struct branch {
     arena_t *arena;         /* The claims the handle lends (branch_find) */
 };
 
-/* One walk: what the tree's half carries to the directory half, and the visitor's
- * failure past the tree walk it stopped */
+/* The walk's tree half: the sheet each blob's item is read from, the visitor,
+ * and the visitor's failure past the tree walk it stopped */
 typedef struct {
     const metadata_t *sheet;    /* NULL: a tolerant walk past a sheet that will not load */
     branch_visit_fn visit;      /* The visitor */
     void *payload;              /* The caller's, untouched */
-    hashmap_t *contradicted;    /* The sheet's DIRECTORY keys a blob stands at; the walk's frame */
     error_t failure;            /* The visitor's: the one that stopped the tree walk */
 } branch_walk_t;
 
@@ -177,6 +177,92 @@ static branch_claim_t branch_decode_blob(
 }
 
 /**
+ * The claim a directory item makes at its name
+ *
+ * The sheet's alone: a tree holds no empty directory, so the item is the claim's
+ * whole footprint, and the claim's strings are the sheet's, which the handle keeps.
+ *
+ * Readers: branch_walk, at each directory claim that stands; branch_contradicted,
+ * at each one a blob contradicts; and branch_find, at the one it is asked — so
+ * the directory claim a point question answers is the walk's.
+ *
+ * @param item A DIRECTORY item (must not be NULL)
+ * @return The claim, by value: a function of its item, which cannot fail
+ */
+static branch_claim_t branch_decode_directory(const metadata_item_t *item) {
+    /* The item's every field but the stamp: the class rides the claim, and a
+     * directory takes no stamp */
+    return (branch_claim_t){
+        .storage_path = item->key,
+        .type = PATH_TYPE_DIRECTORY,
+        .mode = item->mode,
+        .owner = item->owner,
+        .group = item->group,
+        .tracked = item->tracked,
+    };
+}
+
+/**
+ * The sheet's directory claim standing at `name`, or NULL: the DIRECTORY item
+ * there, where no blob stands at the name
+ *
+ * The classification, at one name: the walk's directory half asks it of each
+ * item and shows the claim it answers, branch_contradicted shows each item it
+ * answers none for, and the point questions ask it of the one name they are asked
+ * — one question, so no two of them can part. The tree first, so a name a blob
+ * stands at answers without the sheet; then the sheet, under `read`. The raw
+ * item, which is this module's own: each reader makes of it what it asks.
+ *
+ * Readers: branch_walk and branch_contradicted, at each DIRECTORY item;
+ * branch_holds, where the tree is silent at the name; and branch_find, for a
+ * directory claim.
+ *
+ * @param branch Handle
+ * @param read The sheet's policy for this question
+ * @param name A validated storage path
+ * @param out The item, or NULL where none stands (NULL after an error)
+ * @return Error or NULL on success: the tree's, under "Cannot read '%s' in profile
+ *         '%s'"; the sheet's (STRICT), in the loader's words
+ */
+static error_t branch_directory_item(
+    branch_t *branch,
+    branch_read_t read,
+    const char *name,
+    const metadata_item_t **out
+) {
+    *out = NULL;
+
+    /* A blob at the name contradicts the claim there and is the tree's answer,
+     * the sheet unread: the whole of what the classification asks the tree. The
+     * look reads its three answers as three — a subtree that will not load on
+     * the way is a failure to read, never an absence
+     * (lib/libgit2/src/libgit2/tree.c git_tree_entry_bypath: -1 where a subtree
+     * will not load, GIT_ENOTFOUND for a name absent or reached through a
+     * non-tree) */
+    git_tree_entry *entry = NULL;
+    int rc = git_tree_entry_bypath(&entry, branch->tree, name);
+    if (rc < 0 && rc != GIT_ENOTFOUND) {
+        return error_git(rc, "Cannot read '%s' in profile '%s'", name, branch->profile);
+    }
+    git_object_t type = rc == 0 ? git_tree_entry_type(entry) : GIT_OBJECT_INVALID;
+    git_tree_entry_free(entry);   /* NULL-safe, and NULL unless rc == 0 */
+    if (type == GIT_OBJECT_BLOB) return NULL;
+
+    /* An open question: the sheet, under the reader's policy. A tolerant read
+     * past a sheet that will not load holds no item, since metadata_lookup takes
+     * the NULL sheet the failure leaves (branch_sheet_failure) */
+    error_t err = branch_sheet_failure(branch);
+    if (err && read == BRANCH_READ_STRICT) return err;
+
+    /* The item at the name, where it claims a directory: a FILE item with no
+     * blob claims nothing here, as in the walk */
+    const metadata_item_t *item = metadata_lookup(branch->sheet, name);
+    if (item && item->kind == PATH_KIND_DIRECTORY) *out = item;
+
+    return NULL;
+}
+
+/**
  * Walk visitor: one entry of the branch's tree, shown to branch_walk's visitor
  * where it is a claim
  *
@@ -240,11 +326,11 @@ static error_t branch_step(
     /* This blob's claim, by the name the tree gave it — and, in the same answer,
      * the content authority. A path is a tree or a blob and the tree is the content
      * authority, so a DIRECTORY item standing at a blob's name is stale metadata:
-     * it claims nothing here, not even its owner or group, and nothing as a
-     * directory either, which the second half reads back from this set rather
-     * than asking the tree a second time — keyed by the sheet's own key, which
-     * outlives the walk. Asked by name, and a name needs no path, so the one
-     * rule covers the blob this machine can place and the blob it cannot alike.
+     * it claims nothing here, not even its owner or group — and nothing as a
+     * directory either, which the directory half finds for itself, asking the
+     * tree at the item's own name as a point question does (branch_directory_item).
+     * Asked by name, and a name needs no path, so the one rule covers the blob
+     * this machine can place and the blob it cannot alike.
      *
      * The blob a contradicted item leaves is claimed at its floors and with no
      * stamp, which reads a ciphertext blob through the plaintext comparison and
@@ -252,10 +338,7 @@ static error_t branch_step(
      * the branch's and that is where it gets fixed; the decode states it rather
      * than repairs it. */
     const metadata_item_t *item = metadata_lookup(walk->sheet, path);
-    if (item && item->kind == PATH_KIND_DIRECTORY) {
-        hashmap_set(walk->contradicted, item->key, NULL);
-        item = NULL;
-    }
+    if (item && item->kind == PATH_KIND_DIRECTORY) item = NULL;
 
     /* The claim the blob makes, its identity and the item's claim over it, by
      * the one decode a point question at this name reads too
@@ -286,56 +369,86 @@ error_t branch_walk(
     error_t err = branch_sheet_failure(branch);
     if (err && read == BRANCH_READ_STRICT) return err;
 
-    /* A frame of the walk's own for the one thing its two halves share, the names
-     * a blob stands at: built by the first, read by the second, and nothing after
-     * the walk (include/runtime.h "Memory": no arena in reach). Keyed by the
-     * sheet's own keys, which the handle keeps. */
-    arena_t *frame = arena_create(0);
-    hashmap_t *contradicted = hashmap_borrow(frame, 8);
-    branch_walk_t walk = {
-        .sheet        = branch->sheet,
-        .visit        = visit,
-        .payload      = payload,
-        .contradicted = contradicted,
-    };
-
     /* The blobs, in the tree's pre-order (branch_step). What the tree walk answers
      * is the tree's — a name its grammar refused, a subtree that would not load
      * — and each names a path in the tree, so the profile is the where neither
      * says. The visitor's own failure stopped the walk and comes back as it was
      * made. */
+    branch_walk_t walk = {
+        .sheet   = branch->sheet,
+        .visit   = visit,
+        .payload = payload,
+    };
     err = gitops_tree_walk(branch->tree, branch_step, &walk);
-    if (err) {
-        err = error_wrap(err, "Cannot read profile '%s'", branch->profile);
-    } else {
-        err = walk.failure;
-    }
+    if (err) return error_wrap(err, "Cannot read profile '%s'", branch->profile);
+    if (walk.failure) return walk.failure;
 
-    /* The directory claims: every DIRECTORY item the sheet carries, in its own
-     * order. A tree holds no empty directory, so the item is the claim's whole
-     * footprint; one a blob stands at the name of claims nothing, and the first
-     * half recorded it. The class rides the claim, and a directory takes no
-     * stamp. */
+    /* The directory claims the tree leaves standing: every DIRECTORY item the
+     * sheet carries, in its own order — none past a sheet a tolerant walk went
+     * on without, which holds no item — each asked the question that classifies
+     * it, the directory claim standing at its name, the one a point question
+     * asks there (branch_directory_item). One a blob stands at the name of claims
+     * nothing, and is branch_contradicted's to show. The question reads no tree
+     * the blobs' half did not, so its failure needs a store that changed beneath
+     * the walk. */
     size_t count = 0;
-    const metadata_item_t *const *items = metadata_items(walk.sheet, &count);
-    for (size_t i = 0; !err && i < count; i++) {
-        const metadata_item_t *item = items[i];
-        if (item->kind != PATH_KIND_DIRECTORY) continue;
-        if (hashmap_has(walk.contradicted, item->key)) continue;
+    const metadata_item_t *const *items = metadata_items(branch->sheet, &count);
+    for (size_t i = 0; i < count; i++) {
+        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
 
-        const branch_claim_t claim = {
-            .storage_path = item->key,
-            .type         = PATH_TYPE_DIRECTORY,
-            .mode         = item->mode,
-            .owner        = item->owner,
-            .group        = item->group,
-            .tracked      = item->tracked,
-        };
+        const metadata_item_t *standing = NULL;
+        err = branch_directory_item(branch, read, items[i]->key, &standing);
+        if (err) return err;
+        if (!standing) continue;
+
+        /* The claim the point question answers at that name, by its decode */
+        const branch_claim_t claim = branch_decode_directory(standing);
         err = visit(&claim, payload);
+        if (err) return err;
     }
 
-    arena_free(frame);
-    return err;
+    return NULL;
+}
+
+error_t branch_contradicted(
+    branch_t *branch,
+    branch_read_t read,
+    branch_visit_fn visit,
+    void *payload
+) {
+    CHECK_NULL(branch);
+    CHECK_NULL(visit);
+
+    /* The sheet first, as the walk reads it: a strict question the sheet refuses
+     * shows no claim, and a tolerant one shows none past it, the failure kept
+     * for the reader to say. The failure is the loader's, which names the profile,
+     * and comes back as it is. */
+    error_t err = branch_sheet_failure(branch);
+    if (err && read == BRANCH_READ_STRICT) return err;
+
+    /* The walk's directory half, answered the other way: every DIRECTORY item,
+     * in the sheet's own order, asked the same question (branch_directory_item),
+     * and shown where it answers none — a blob stands at the name. Asked before
+     * any walk read the tree, the question can meet a subtree that will not load
+     * on its way, and says so in its own words, naming the claim's name. */
+    size_t count = 0;
+    const metadata_item_t *const *items = metadata_items(branch->sheet, &count);
+    for (size_t i = 0; i < count; i++) {
+        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
+
+        const metadata_item_t *standing = NULL;
+        err = branch_directory_item(branch, read, items[i]->key, &standing);
+        if (err) return err;
+        if (standing) continue;
+
+        /* The item, decoded as the walk would have shown it had no blob stood
+         * at its name */
+        const branch_claim_t claim = branch_decode_directory(items[i]);
+        err = visit(&claim, payload);
+        if (err) return err;
+    }
+
+    return NULL;
 }
 
 /**
@@ -377,63 +490,6 @@ error_t branch_count(branch_t *branch, branch_count_t *out) {
     return NULL;
 }
 
-/**
- * The sheet's directory claim standing at `name`, or NULL: the DIRECTORY item
- * there, where no blob stands at the name — the item the walk's second half shows,
- * asked of one name
- *
- * The tree first, so a name a blob stands at answers without the sheet; then
- * the sheet, under `read`. The raw item, which is this module's own: each reader
- * makes of it what it asks.
- *
- * Readers: branch_holds, where the tree is silent at the name, and branch_find,
- * for a directory claim.
- *
- * @param branch Handle
- * @param read The sheet's policy for this question
- * @param name A validated storage path
- * @param out The item, or NULL where none stands (NULL after an error)
- * @return Error or NULL on success: the tree's, under "Cannot read '%s' in profile
- *         '%s'"; the sheet's (STRICT), in the loader's words
- */
-static error_t branch_directory_item(
-    branch_t *branch,
-    branch_read_t read,
-    const char *name,
-    const metadata_item_t **out
-) {
-    *out = NULL;
-
-    /* A blob at the name contradicts the claim there and is the tree's answer,
-     * the sheet unread: the walk's contradiction index, asked of one name. The
-     * look reads its three answers as three — a subtree that will not load on
-     * the way is a failure to read, never an absence
-     * (lib/libgit2/src/libgit2/tree.c git_tree_entry_bypath: -1 where a subtree
-     * will not load, GIT_ENOTFOUND for a name absent or reached through a
-     * non-tree) */
-    git_tree_entry *entry = NULL;
-    int rc = git_tree_entry_bypath(&entry, branch->tree, name);
-    if (rc < 0 && rc != GIT_ENOTFOUND) {
-        return error_git(rc, "Cannot read '%s' in profile '%s'", name, branch->profile);
-    }
-    git_object_t type = rc == 0 ? git_tree_entry_type(entry) : GIT_OBJECT_INVALID;
-    git_tree_entry_free(entry);   /* NULL-safe, and NULL unless rc == 0 */
-    if (type == GIT_OBJECT_BLOB) return NULL;
-
-    /* An open question: the sheet, under the reader's policy. A tolerant read
-     * past a sheet that will not load holds no item, since metadata_lookup takes
-     * the NULL sheet the failure leaves (branch_sheet_failure) */
-    error_t err = branch_sheet_failure(branch);
-    if (err && read == BRANCH_READ_STRICT) return err;
-
-    /* The item at the name, where it claims a directory: a FILE item with no
-     * blob claims nothing here, as in the walk */
-    const metadata_item_t *item = metadata_lookup(branch->sheet, name);
-    if (item && item->kind == PATH_KIND_DIRECTORY) *out = item;
-
-    return NULL;
-}
-
 error_t branch_holds(branch_t *branch, const char *name, branch_held_t *out) {
     CHECK_NULL(branch);
     CHECK_NULL(name);
@@ -472,8 +528,8 @@ error_t branch_holds(branch_t *branch, const char *name, branch_held_t *out) {
     /* The tree's silence: the one claim a tree cannot hold, a directory claim
      * with nothing beneath it, standing here and nowhere else. Read strictly —
      * whether the sheet alone holds one is the sheet's question, so a sheet that
-     * will not load is the answer — and by the look the directory question reads
-     * too, so the two cannot part */
+     * will not load is the answer — and by the question the walk and the directory
+     * question ask too, so none of them can part */
     const metadata_item_t *item = NULL;
     error_t err = branch_directory_item(branch, BRANCH_READ_STRICT, name, &item);
     if (err) return err;
@@ -516,8 +572,8 @@ error_t branch_find(
             }
 
             /* Its FILE item, under the reader's policy: a DIRECTORY item at a
-             * blob's name claims nothing at the blob — the walk's at-name rule,
-             * with no set to record the key in */
+             * blob's name claims nothing at the blob — the walk's at-name rule
+             * (branch_step) */
             error_t err = branch_sheet_failure(branch);
             if (err && read == BRANCH_READ_STRICT) {
                 git_tree_entry_free(entry);
@@ -538,23 +594,16 @@ error_t branch_find(
         }
 
         case PATH_KIND_DIRECTORY: {
-            /* The directory claim standing at the name, by the look holds reads */
+            /* The directory claim standing at the name, by the question the walk
+             * asks of each item and holds asks where the tree is silent */
             const metadata_item_t *item = NULL;
             error_t err = branch_directory_item(branch, read, name, &item);
             if (err || !item) return err;
 
-            /* The walk's second half's claim at one name, kept for the handle's
-             * life: its strings are the sheet's, which the handle keeps too.
-             * The class rides the claim, and a directory takes no stamp */
+            /* Decoded as the walk decodes the claim, and kept for the handle's
+             * life: its strings are the sheet's, which the handle keeps too */
             branch_claim_t *kept = arena_alloc(branch->arena, sizeof(*kept));
-            *kept = (branch_claim_t){
-                .storage_path = item->key,
-                .type = PATH_TYPE_DIRECTORY,
-                .mode = item->mode,
-                .owner = item->owner,
-                .group = item->group,
-                .tracked = item->tracked,
-            };
+            *kept = branch_decode_directory(item);
 
             *out = kept;
             return NULL;

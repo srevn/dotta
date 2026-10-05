@@ -133,8 +133,10 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "remove"
 - `DOTTA_PROFILE` - Profile name being modified or deleted
-- `DOTTA_FILE_COUNT` - Number of files (0 for profile deletion)
-- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
+- `DOTTA_FILE_COUNT` - Number of entries: one per claim the removal takes, a
+  directory's as well as a file's — every claim the profile makes, when it is
+  deleted. A path two claims stand at is listed once for each
+- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Each entry's path (0-indexed)
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
 
 **Exit Behavior:**
@@ -156,8 +158,8 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "remove"
 - `DOTTA_PROFILE` - Profile name that was modified or deleted
-- `DOTTA_FILE_COUNT` - Number of files
-- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
+- `DOTTA_FILE_COUNT` - Number of entries: the ones `pre-remove` was handed
+- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Each entry's path (0-indexed)
 - `DOTTA_DRY_RUN` - Always "0" — post-remove does not fire on dry-run
 
 **Exit Behavior:**

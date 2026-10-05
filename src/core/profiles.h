@@ -299,10 +299,9 @@ error_t profile_require(git_repository *repo, const char *name);
  * List deployable files in a Git tree
  *
  * Walks the tree past the branch's machinery (infra/label.h label_prefixes, the
- * content gate), and returns the storage paths of its content blobs. This is
- * the lightweight primitive for "files in a branch" — takes a pre-loaded tree
- * and returns storage paths. For callers that already hold the tree, so one branch
- * read serves the walk and whatever else the caller does with it.
+ * content gate), and returns the storage paths of its content blobs. It takes
+ * the tree its caller holds, so one read of the branch serves the walk and whatever
+ * else the caller does with it.
  *
  * Complete or an error: an entry whose name the storage grammar refuses is
  * corruption and fails the walk rather than being skipped, since a listing short
@@ -312,7 +311,7 @@ error_t profile_require(git_repository *repo, const char *name);
  * is said under the profile, since the walk's own name a path in the tree and
  * never the branch it is, and no reader names it again.
  *
- * Readers: cmds/remove.c remove_resolve, and profile_list_files.
+ * Readers: cmds/remove.c remove_resolve.
  *
  * @param tree Git tree to walk (must not be NULL)
  * @param profile The profile whose branch the tree is (must not be NULL)
@@ -322,26 +321,6 @@ error_t profile_require(git_repository *repo, const char *name);
  */
 error_t profile_list_tree_files(
     const git_tree *tree,
-    const char *profile,
-    arena_t *arena,
-    string_array_t *out
-);
-
-/**
- * List files in profile
- *
- * Loads the profile's Git tree internally and walks it to collect storage paths.
- * Tree is freed before return. The walk is profile_list_tree_files', and so is
- * its answer to a malformed entry.
- *
- * @param repo Repository (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @param arena Arena the listing lives in (must not be NULL)
- * @param out The storage paths (must not be NULL; left as it was on a failure)
- * @return Error or NULL on success
- */
-error_t profile_list_files(
-    git_repository *repo,
     const char *profile,
     arena_t *arena,
     string_array_t *out

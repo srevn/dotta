@@ -491,8 +491,7 @@ typedef struct dotta_run {
  *         environment (`utils/hooks.c` hook_execute, `utils/bootstrap.c` run_live),
  *         a run's own lists (`utils/bootstrap.c` bootstrap_fire), a fetch's
  *         refspecs (`sys/gitops.c` gitops_fetch_branches), a diff's attribution
- *         index (`core/manifest.c` manifest_diff), a branch walk's names a blob
- *         stands at (`core/branch.c` branch_walk), the table with no binding a
+ *         index (`core/manifest.c` manifest_diff), the table with no binding a
  *         branch's need of a target is asked of (`core/profiles.c`
  *         profile_needs_target), a listing read to decide (`sys/filesystem.c`
  *         fs_remove_empty_dir, `sys/upstream.c` upstream_ensure_tracking_branch,

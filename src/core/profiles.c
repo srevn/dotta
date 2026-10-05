@@ -472,28 +472,6 @@ error_t profile_list_tree_files(
 }
 
 /**
- * List files in profile
- */
-error_t profile_list_files(
-    git_repository *repo,
-    const char *profile,
-    arena_t *arena,
-    string_array_t *out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profile);
-    CHECK_NULL(out);
-
-    git_tree *tree = NULL;
-    error_t err = gitops_load_branch_tree(repo, profile, &tree);
-    if (err) return err;
-
-    err = profile_list_tree_files(tree, profile, arena, out);
-    git_tree_free(tree);
-    return err;
-}
-
-/**
  * Walk visitor: the label a claim stands under, noted
  *
  * @param claim One claim, decoded (borrowed — valid for the call only)

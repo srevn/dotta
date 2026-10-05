@@ -190,12 +190,12 @@ static error_t show_print_blob(
 /**
  * The tree `show` reads, and the commit it came from
  *
- * The branch's tip, or the tree of the commit the user named — resolved in the
+ * The branch's head, or the tree of the commit the user named — resolved in the
  * branch, so a ref that means something elsewhere means nothing here. A resolved
  * commit is always in hand (sys/revision.h), and the handle is the tree's source
  * and the header's alike: it comes back beside the tree rather than being spent
  * here, because what it captions is printed once the argument has an answer
- * (show_provenance). `*out_commit` is NULL where the tip was read — a tip is
+ * (show_provenance). `*out_commit` is NULL where the head was read — a head is
  * what the profile holds now and has no provenance to announce. Both are the
  * caller's to free.
  */
@@ -618,7 +618,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
     if (opts->profile) {
         /* The profile named must be here before its tree is opened. Then the
-         * tree the profile selected — its tip, or the commit's — which is both
+         * tree the profile selected — its head, or the commit's — which is both
          * where the claim is looked for and what its bytes come from, so a name
          * that changed since the commit is found as of then (core/manifest.h
          * manifest_claim_name). */
@@ -650,7 +650,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         }
 
         /* The argument is answered, so the commit it was read from can caption
-         * the answer. A tip named none and captions nothing. */
+         * the answer. A head named none and captions nothing. */
         if (source) {
             show_provenance(out, source);
         }
@@ -659,7 +659,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    /* No profile specified - resolve owning profile via manifest, at the tips:
+    /* No profile specified - resolve owning profile via manifest, at the heads:
      * a file at a commit names its profile (show_post_parse) */
     CHECK_ARG(opts->commit == NULL, "a file at a commit names its profile");
 
@@ -703,7 +703,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         storage_path
     );
 
-    /* The tip, which this arm is always about: the view is HEAD's, so the row
+    /* The head, which this arm is always about: the view is HEAD's, so the row
      * that answered names no commit and there is no provenance to announce. The
      * winning profile at it, held beside it as the -p arm holds its own, so either
      * arm's header is the claim that profile decodes. */
@@ -814,7 +814,7 @@ static error_t show_post_parse(
     }
 
     /* A file at a commit is read from one profile's history: the view that would
-     * find a file's owner is the tips' alone (cmd_show), so the profile is the
+     * find a file's owner is the heads' alone (cmd_show), so the profile is the
      * line's to name. A commit alone is searched across the enabled set. */
     return o->mode == SHOW_FILE && o->commit && !o->profile
         ? error_create(ERR_INVALID_ARG, "Showing a file at a specific commit requires a profile")

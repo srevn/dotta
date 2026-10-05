@@ -48,7 +48,7 @@ bool bootstrap_exists(git_repository *repo, const char *profile);
  * The tree is the caller's, read where its decision is made: the edit's, the
  * tree its stage opened at, so the script it opens is the one its commit lands
  * on (cmds/bootstrap.c bootstrap_edit); the show's and the dry run's, the branch's
- * tip, loaded first (cmds/bootstrap.c bootstrap_show, utils/bootstrap.c run_dry).
+ * head, loaded first (cmds/bootstrap.c bootstrap_show, utils/bootstrap.c run_dry).
  *
  * On success, ownership of *out_content transfers to the caller, who must
  * buffer_deinit() it. On failure, *out_content is left in the zero-initialized

@@ -1221,7 +1221,7 @@ cleanup:
 /**
  * Load metadata from a Git tree
  *
- * Loads metadata.json from a specific Git tree — a branch tip or a historical
+ * Loads metadata.json from a specific Git tree — a branch head or a historical
  * commit's tree alike. A tree without the sheet — no .dotta, or a .dotta directory
  * without the file — holds an empty sheet: the absence's arm is the one producer
  * of that answer, so no reader folds a not-found into a collection of its own,

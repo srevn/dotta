@@ -8,7 +8,7 @@
  * theirs could hold one. Git's revision spellings are read here and in no lower
  * module — a commit reference's shape, and where HEAD's steps begin; resolving
  * one against a store is sys/revision's, HEAD's steps walked back from a branch's
- * tip.
+ * head.
  */
 
 #ifndef DOTTA_REFSPEC_H
@@ -47,11 +47,11 @@
 bool refspec_looks_like_commit(const char *token);
 
 /**
- * The steps a HEAD spelling takes from a branch's tip
+ * The steps a HEAD spelling takes from a branch's head
  *
- * dotta's HEAD is a branch's tip, whichever branch a verb reads (sys/revision.h
+ * dotta's HEAD is a branch's head, whichever branch a verb reads (sys/revision.h
  * revision_t), and `@` is HEAD wherever it stands for it, as git reads it. So
- * `HEAD` and `@` answer "", the tip itself, and either with a modifier right
+ * `HEAD` and `@` answer "", the head itself, and either with a modifier right
  * after it answers the modifier on: `HEAD~3^2` is "~3^2", `@~1` is "~1", `HEAD@{1}`
  * is "@{1}", `@{1}` is "{1}" and `HEAD:x` is ":x". Every other spelling answers
  * NULL, a word that merely begins with the four letters among them — `HEADER`
@@ -65,7 +65,7 @@ bool refspec_looks_like_commit(const char *token);
  * and sys/revision.c revision_resolve, which reads the steps and walks them.
  *
  * @param spelling The spelling to read (may be NULL, which is nobody's HEAD)
- * @return The steps after HEAD, borrowed from `spelling` ("" for the tip), or
+ * @return The steps after HEAD, borrowed from `spelling` ("" for the head), or
  *         NULL for a spelling that is not HEAD's
  */
 const char *refspec_head_steps(const char *spelling);

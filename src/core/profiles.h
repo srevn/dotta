@@ -54,7 +54,7 @@
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name
- * and every claim profile_find answers; the sheet it read; and a tip profile_load
+ * and every claim profile_find answers; the sheet it read; and a head profile_load
  * read. Any other tree it is opened at is the caller's, and outlives it. A claim
  * a visitor is shown is lent for its visit; one profile_find answers, for the
  * handle's life.
@@ -211,19 +211,19 @@ typedef struct profile profile_t;
 /**
  * A profile at a tree the caller holds
  *
- * Any tree, and it outlives the handle: a tip, a commit's, a stage's, Git's empty
- * tree. `name` says whose claims these are, since a tree carries no name; the
- * sheet is read through the repository the tree was read from. Reads nothing —
- * the sheet waits for the first question that needs it — so the open cannot fail.
+ * Any tree, and it outlives the handle: a head, a commit's, a stage's, Git's
+ * empty tree. `name` says whose claims these are, since a tree carries no name;
+ * the sheet is read through the repository the tree was read from. Reads nothing
+ * — the sheet waits for the first question that needs it — so the open cannot fail.
  *
- * Readers: core/manifest.c manifest_build (each enabled tip gitops_branch_tree
+ * Readers: core/manifest.c manifest_build (each enabled head gitops_branch_tree
  * found) and core/workspace.c workspace_orphan_authority (each orphan's profile's
- * tip, found the same way), cmds/add.c cmd_add and cmds/revert.c cmd_revert (the
- * tree a stage opened at, and revert's target commit's), cmds/diff.c
+ * head, found the same way), cmds/add.c cmd_add and cmds/revert.c cmd_revert
+ * (the tree a stage opened at, and revert's target commit's), cmds/diff.c
  * diff_commit_to_workspace (the commit's), cmds/export.c cmd_export, cmds/show.c
  * cmd_show and cmds/list.c list_file_history (the tree the verb selected),
- * cmds/list.c list_profiles and list_files (the tree of the tip each listing
- * read, so what each prints is that commit's); and profile_load, at the tip it
+ * cmds/list.c list_profiles and list_files (the tree of the head each listing
+ * read, so what each prints is that commit's); and profile_load, at the head it
  * read.
  *
  * @param name Whose claims these are (must not be NULL; copied)
@@ -233,9 +233,9 @@ typedef struct profile profile_t;
 profile_t *profile_open(const char *name, const git_tree *tree);
 
 /**
- * A profile at its tip, where the reader needs its branch to stand
+ * A profile at its head, where the reader needs its branch to stand
  *
- * profile_open at the tip gitops_load_branch_tree reads, the tree the handle's
+ * profile_open at the head gitops_load_branch_tree reads, the tree the handle's
  * own. A branch that does not stand is refused in gitops' words (sys/gitops.h,
  * ERR_NOT_FOUND naming the reference), never answered empty; nothing is said
  * over them, the reference naming the branch. A reader for whom the absence is
@@ -244,11 +244,11 @@ profile_t *profile_open(const char *name, const git_tree *tree);
  *
  * Readers: cmds/remove.c remove_build_filesystem_index and cmds/revert.c
  * revert_select_profile, which load every local profile; cmds/ignore.c ignore_test;
- * the questions asked of a tip by name, what it holds and whether it needs a
+ * the questions asked of a head by name, what it holds and whether it needs a
  * target — cmds/profile.c profile_list and profile_enable, cmds/clone.c cmd_clone,
  * cmds/interactive.c read_targets; what a profile's deletion takes, every claim
  * for its hooks and the counts for its preview (cmds/remove.c remove_profile);
- * and the directory claims a completion offers at a profile's tip
+ * and the directory claims a completion offers at a profile's head
  * (cmds/completion.c completion_directories).
  *
  * @param repo Repository (must not be NULL; borrowed)
@@ -262,7 +262,7 @@ error_t profile_load(git_repository *repo, const char *name, profile_t **out);
 
 /**
  * Release a handle: its arena — the handle, its name and the claims it lent —
- * its sheet, and a tip it loaded
+ * its sheet, and a head it loaded
  *
  * @param profile Handle (NULL is a no-op)
  */
@@ -518,7 +518,7 @@ error_t profile_counts(profile_t *profile, profile_counts_t *out);
  * "Memory", no arena in reach). Measured at 0.165.12, a walk past the parse costs
  * about 0.13 µs a claim; the view built here before cost 2.5 ms per 1,000 paths.
  *
- * @param profile Handle, at its tip as every reader loads it (must not be NULL;
+ * @param profile Handle, at its head as every reader loads it (must not be NULL;
  *                its sheet read through it)
  * @param needs_target Output flag: the profile holds a claim under a label the
  *                     binding-less table has no root of (must not be NULL; false
@@ -590,7 +590,7 @@ typedef struct {
  * revert_select_profile), and export's name arm, which words a copy with nothing
  * in it by what stands at the name (cmds/export.c export_collect_storage). A
  * reader not on this list is a bug. Two neighbours ask another question and are
- * not readers: revert's read of the tip at the name it writes (cmds/revert.c
+ * not readers: revert's read of the head at the name it writes (cmds/revert.c
  * cmd_revert, step 11) asks Git's one-entry rule, which the sheet must not answer
  * — a directory claim there is retired by the write, not refused; and the orphan
  * probe (core/workspace.c workspace_orphan_authority) asks whether the profile

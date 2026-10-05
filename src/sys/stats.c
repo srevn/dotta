@@ -83,23 +83,23 @@ commit_info_t stats_commit_info(arena_t *arena, const git_commit *commit) {
  */
 static error_t stats_walk(
     git_repository *repo,
-    const git_oid *tip_oid,
+    const git_oid *head_oid,
     walk_t *walk
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(tip_oid);
+    CHECK_NULL(head_oid);
     CHECK_NULL(walk);
 
     git_revwalk *walker = NULL;
     error_t err = NULL;
 
     /* The history from the caller's commit, and no reference read here: the caller
-     * read its tip once, beside everything else it read off that commit.
+     * read its head once, beside everything else it read off that commit.
      * git_revwalk_push copies the id it is given. */
     int rc = git_revwalk_new(&walker, repo);
     if (rc < 0) return error_git(rc, "Cannot walk the history");
 
-    rc = git_revwalk_push(walker, tip_oid);
+    rc = git_revwalk_push(walker, head_oid);
     if (rc < 0) {
         err = error_git(rc, "Cannot walk the history");
         goto cleanup;
@@ -300,13 +300,13 @@ error_t stats_blob_size_with_odb(
  */
 error_t stats_build_file_commit_map(
     git_repository *repo,
-    const git_oid *tip_oid,
+    const git_oid *head_oid,
     const string_array_t *paths,
     arena_t *arena,
     file_commit_map_t **out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(tip_oid);
+    CHECK_NULL(head_oid);
     CHECK_NULL(paths);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -336,7 +336,7 @@ error_t stats_build_file_commit_map(
     };
 
     /* Walk commits to build map */
-    error_t err = stats_walk(repo, tip_oid, &walk);
+    error_t err = stats_walk(repo, head_oid, &walk);
     if (err) return err;
 
     file_commit_map_t *commit_map = arena_calloc(arena, 1, sizeof(*commit_map));
@@ -351,13 +351,13 @@ error_t stats_build_file_commit_map(
  */
 error_t stats_file_history(
     git_repository *repo,
-    const git_oid *tip_oid,
+    const git_oid *head_oid,
     const char *file_path,
     arena_t *arena,
     file_history_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(tip_oid);
+    CHECK_NULL(head_oid);
     CHECK_NULL(file_path);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -377,7 +377,7 @@ error_t stats_file_history(
 
     /* Walk commits to collect history: what a failed walk collected is the arena's
      * bytes, and a walk that found none answers so — its words are the caller's */
-    error_t err = stats_walk(repo, tip_oid, &walk);
+    error_t err = stats_walk(repo, head_oid, &walk);
     if (err) return err;
 
     *out = (file_history_t){ walk.commits, walk.commits_count };

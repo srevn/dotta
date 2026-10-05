@@ -67,10 +67,10 @@ const char *refspec_head_steps(const char *spelling) {
         return NULL;
     }
 
-    /* `@` is HEAD wherever it stands for it, as git reads it: alone the tip itself
-     * — the empty string the spelling ends with — or with a modifier right after
-     * it (@~1, @^, @~3^2, @{1}, @:path), the reflog's `{` in the place HEAD's
-     * `@{` takes. */
+    /* `@` is HEAD wherever it stands for it, as git reads it: alone the head
+     * itself — the empty string the spelling ends with — or with a modifier right
+     * after it (@~1, @^, @~3^2, @{1}, @:path), the reflog's `{` in the place
+     * HEAD's `@{` takes. */
     if (spelling[0] == '@') {
         const char *steps = spelling + 1;
         if (steps[0] == '\0' || steps[0] == '~' || steps[0] == '^' || steps[0] == '{' ||

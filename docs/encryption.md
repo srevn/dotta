@@ -179,7 +179,7 @@ Error: Failed to get file content
 
 There is no rotation command, and there is no way to keep existing ciphertext: every blob is sealed under the current passphrase, so changing it means re-sealing every one of them.
 
-A new passphrase cannot be installed while old ciphertext stands: `dotta key set` verifies against the repository — inspecting every profile branch and its **full Git history** — and refuses a passphrase that opens nothing. Removing a file from a profile's tip is not enough, because its blob remains reachable through historical commits. Moving to a new passphrase means dropping the branches holding that history:
+A new passphrase cannot be installed while old ciphertext stands: `dotta key set` verifies against the repository — inspecting every profile branch and its **full Git history** — and refuses a passphrase that opens nothing. Removing a file from a profile's head is not enough, because its blob remains reachable through historical commits. Moving to a new passphrase means dropping the branches holding that history:
 
 ```bash
 dotta apply                                # last chance under the OLD passphrase:

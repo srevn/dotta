@@ -1393,22 +1393,22 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
  * which are the tree's to answer. The pass is the retry boundary, as a source
  * filter is (sys/source.h): the next load reads afresh.
  *
- * The tip is read at the profile's first row, and the profile is opened at it
+ * The head is read at the profile's first row, and the profile is opened at it
  * there, wherever it stands. The sheet is the profile's: read at the first
  * directory question the tree leaves open (a blob at the name answers one alone),
- * and kept by the handle with its failure (core/profiles.h profile_find). A tip
+ * and kept by the handle with its failure (core/profiles.h profile_find). A head
  * without metadata.json holds an empty sheet, so a profile that never wrote one
  * backs no directory — an answer, never a failure.
  */
 typedef struct {
-    git_tree *tree;             /* The branch's tip; NULL where it is gone, or on a failure */
-    error_t tree_failure;       /* Why the tip could not be read; NULL where it was */
-    profile_t *profile;         /* The profile at the tip; NULL beside a NULL tip */
+    git_tree *tree;             /* The branch's head; NULL where it is gone, or on a failure */
+    error_t tree_failure;       /* Why the head could not be read; NULL where it was */
+    profile_t *profile;         /* The profile at the head; NULL beside a NULL head */
 } workspace_authority_cache_t;
 
 /**
  * Free an authority cache entry (hashmap value callback): the profile, then the
- * tip it borrows
+ * head it borrows
  */
 static void workspace_authority_cache_free(void *value) {
     workspace_authority_cache_t *cached = value;
@@ -1465,7 +1465,7 @@ typedef enum {
  * No failure is raised: each one says only that the probe could not answer, which
  * UNVERIFIED already says — the orphan's hold, never the load's, the rule every
  * failed look in this file takes. A read's failure is kept for the pass and answers
- * every later row that needs the read — the tip's on the profile's entry, the
+ * every later row that needs the read — the head's on the profile's entry, the
  * sheet's on its profile — and the next load asks afresh
  * (workspace_authority_cache_t).
  *
@@ -1482,18 +1482,18 @@ static orphan_authority_t workspace_orphan_authority(
 ) {
     workspace_authority_cache_t *cached = hashmap_get(cache, item->profile);
     if (!cached) {
-        /* First row of this profile: its branch's tip, or none where the branch
-         * is gone, and the profile at a tip that stands — one read and one open,
+        /* First row of this profile: its branch's head, or none where the branch
+         * is gone, and the profile at a head that stands — one read and one open,
          * and every later row reads their answers, or the failure. The entry is
          * made first, so a failure has a place to be kept; the read leaves the
-         * tip NULL on one. */
+         * head NULL on one. */
         cached = heap_calloc(1, sizeof(*cached));
         hashmap_set(cache, item->profile, cached);
         cached->tree_failure = gitops_branch_tree(repo, item->profile, &cached->tree);
         if (cached->tree) cached->profile = profile_open(item->profile, cached->tree);
     }
 
-    /* A tip that could not be read answers no row of the profile */
+    /* A head that could not be read answers no row of the profile */
     if (cached->tree_failure) return ORPHAN_AUTHORITY_UNVERIFIED;
 
     if (!cached->tree) {
@@ -2058,15 +2058,15 @@ static void workspace_analyze_orphans(workspace_t *ws) {
 
     /* profile → workspace_authority_cache_t for this pass, in the workspace's
      * arena. Keys borrow the records' arena-backed profile strings; each value
-     * holds a tip and the profile at it, and is released whole when the pass is
-     * done. */
+     * holds a head and the profile at it, and is released whole when the pass
+     * is done. */
     hashmap_t *authority_cache = hashmap_borrow(ws->arena, 8);
 
     /* The walk cannot fail: a folded error is not the walk's — the probe's failures
-     * are the orphan's hold, a read's kept for the pass (the tip's on its profile's
-     * entry, the sheet's on the entry's profile) and a subtree's on the way to
-     * one name that row's alone, and the measure's are its bit, dropped at the
-     * call that raised it; none is carried out of the walk. */
+     * are the orphan's hold, a read's kept for the pass (the head's on its
+     * profile's entry, the sheet's on the entry's profile) and a subtree's on
+     * the way to one name that row's alone, and the measure's are its bit, dropped
+     * at the call that raised it; none is carried out of the walk. */
     for (size_t i = 0; i < ws->orphan_count; i++) {
         workspace_item_t *item = ws->orphans[i];
         const state_record_t *record = item->record;

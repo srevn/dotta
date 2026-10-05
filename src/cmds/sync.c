@@ -124,7 +124,7 @@ static error_t pull_branch_ff(
     if (rc < 0) return error_git(rc, "Cannot fast-forward '%s'", branch_name);
     const git_oid *local_oid = git_reference_target(local_ref);
 
-    /* The remote-tracking tip, or its absence proven (sys/gitops.h
+    /* The remote-tracking head, or its absence proven (sys/gitops.h
      * gitops_reference_oid): nothing fetched for the branch is nothing to do,
      * and a packed-refs that will not parse is the failure it is, never a remote
      * branch that is not there. */
@@ -336,7 +336,7 @@ static sync_results_t sync_analyze_phase(
 }
 
 /**
- * Roll a resolution back to the tip the branch stood at before it
+ * Roll a resolution back to the head the branch stood at before it
  *
  * A rollback that succeeds is the profile's row. One that fails leaves the branch
  * where the resolution put it and ends the run, its error told once, by the run's
@@ -350,13 +350,13 @@ static error_t sync_rollback(
 ) {
     error_t err = resolve_rollback(resolve);
     if (err) {
-        /* The error names the tip, the one fact a repair starts from: whole, as
-         * git's own ref refusals spell an id (lib/git/refs/packed-backend.c,
+        /* The error names the head, the one fact a repair starts from: whole,
+         * as git's own ref refusals spell an id (lib/git/refs/packed-backend.c,
          * oid_to_hex), where an abbreviation could name two commits. */
         char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
         git_oid_tostr(oid_str, sizeof(oid_str), &resolve->saved_oid);
         return error_wrap(
-            err, "Failed to roll back branch '%s' to %s, its tip before the sync, "
+            err, "Failed to roll back branch '%s' to %s, its head before the sync, "
             "after the %s", profile, oid_str, failure_reason
         );
     }
@@ -1229,7 +1229,7 @@ static error_t sync_failure(const sync_results_t *results) {
 
 /*
  * Render one of the two refusals: the local epoch reads, differs from the remote's
- * canonical epoch, and keys reachable ciphertext (tip or history, any branch).
+ * canonical epoch, and keys reachable ciphertext (head or history, any branch).
  * Two independent encryption roots, and every hint below is licensed by the census
  * having attributed a blob to the one that stands here. Warn loudly and continue
  * — plaintext profiles still sync.

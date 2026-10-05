@@ -153,14 +153,14 @@ static error_t resolve_merge_trees(
     int rc = git_commit_lookup(&local_commit, ctx->repo, &ctx->saved_oid);
     if (rc < 0) {
         git_index_free(merged_index);
-        return error_git(rc, "Cannot read the tip of branch '%s'", ctx->branch_name);
+        return error_git(rc, "Cannot read the head of branch '%s'", ctx->branch_name);
     }
 
     rc = git_commit_lookup(&remote_commit, ctx->repo, &remote_oid);
     if (rc < 0) {
         git_commit_free(local_commit);
         git_index_free(merged_index);
-        return error_git(rc, "Cannot read the remote tip of branch '%s'", ctx->branch_name);
+        return error_git(rc, "Cannot read the remote head of branch '%s'", ctx->branch_name);
     }
 
     /* Create merge commit */

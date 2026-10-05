@@ -1,18 +1,18 @@
 /**
  * stage.c - One ref's next tree, staged in memory: implementation
  *
- * See stage.h. The stage composes four primitives: the ref read once to its tip,
+ * See stage.h. The stage composes four primitives: the ref read once to its head,
  * its absence proven (sys/gitops.h gitops_load_reference_commit,
- * gitops_reference_exists), an ownerless index seeded from the tip's tree
+ * gitops_reference_exists), an ownerless index seeded from the head's tree
  * (git_index_new + git_index_read_tree — never git_repository_index, the
  * checked-out branch's staging area), the tree written straight to the ODB
  * (git_index_write_tree_to — never git_index_write, which wants a backing file),
- * and git_commit_create with `update_ref`, which reads the ref's current tip
+ * and git_commit_create with `update_ref`, which reads the ref's current head
  * and refuses unless it is the first parent handed in — for a root commit, unless
  * the ref is still absent (commit.c) — then moves the ref under its lock against
  * the value it just read (refdb_fs.c). That check is the last inch of the
  * atomicity, and libgit2 is the right owner of it: the stage classifies its two
- * refusals (GIT_EMODIFIED for a tip that moved or a ref that appeared before
+ * refusals (GIT_EMODIFIED for a head that moved or a ref that appeared before
  * the commit looked, GIT_EEXISTS for one that appeared between the look and the
  * lock) and states the rest.
  */
@@ -30,7 +30,7 @@
 struct stage {
     git_repository *repo;   /* borrowed */
     char *refname;          /* owned */
-    git_commit *parent;     /* the tip at open; NULL for an orphan's stage */
+    git_commit *parent;     /* the head at open; NULL for an orphan's stage */
     git_tree *tree;         /* the parent's tree, or the empty tree */
     git_index *index;       /* ownerless, seeded from tree */
 };
@@ -62,7 +62,7 @@ static error_t stage_seed(
         rc = git_commit_tree(&st->tree, parent);
         if (rc < 0) {
             stage_free(st);
-            return error_git(rc, "Failed to read the tip of '%s'", refname);
+            return error_git(rc, "Failed to read the head of '%s'", refname);
         }
     } else {
         /* The empty tree: Git's own "nothing", the tree every orphan's stage
@@ -103,8 +103,8 @@ error_t stage_open(git_repository *repo, const char *refname, stage_t **out) {
     CHECK_NULL(out);
     *out = NULL;
 
-    /* The tip, the parent-to-be: the commit the ref names, read as every tip is
-     * (sys/gitops.h gitops_reference_commit) — the ref's absence proven and
+    /* The head, the parent-to-be: the commit the ref names, read as every head
+     * is (sys/gitops.h gitops_reference_commit) — the ref's absence proven and
      * refused, a packed-refs that will not parse its own failure, and a ref at
      * anything but a commit refused, a tag never peeled: libgit2 moves the ref
      * only from the target it reads there (commit.c validate_tree_and_parents),
@@ -436,8 +436,8 @@ error_t stage_commit(stage_t *st, const char *message, bool *out_committed) {
         return err;
     }
 
-    /* The parent is the tip the open read, and libgit2 moves the ref only if
-     * that is still its tip — for a root commit, only if the ref is still
+    /* The parent is the head the open read, and libgit2 moves the ref only if
+     * that is still its head — for a root commit, only if the ref is still
      * absent. */
     const git_commit *parents[] = { st->parent };
     git_oid commit_oid;

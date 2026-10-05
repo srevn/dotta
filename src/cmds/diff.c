@@ -1121,9 +1121,9 @@ static error_t diff_commits(
     git_diff *diff = NULL;
 
     /* Both ends in one search: the first profile whose history holds both, each
-     * profile's tip read once for the two (core/scope.h scope_resolve_range). A
-     * profile that will not read cancels the range rather than let a later one
-     * answer for it, and ends held only by different profiles are no range. */
+     * profile's head read once for the two (core/scope.h scope_resolve_range).
+     * A profile that will not read cancels the range rather than let a later
+     * one answer for it, and ends held only by different profiles are no range. */
     err = scope_resolve_range(
         repo, scope_enabled(scope), filter, commit1_ref, commit2_ref, &commit1,
         &commit2, &profile

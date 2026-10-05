@@ -216,7 +216,7 @@ static void read_targets(git_repository *repo, state_t *deploy_state, view_t *vi
             it->target = arena_strdup(view->arena, bound);
         }
 
-        /* The need, absorbed (above), asked of the profile at its tip: the error
+        /* The need, absorbed (above), asked of the profile at its head: the error
          * is dropped, one per row whose profile will not read. */
         profile_t *profile = NULL;
         error_t err = profile_load(repo, it->name, &profile);

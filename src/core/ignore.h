@@ -430,8 +430,8 @@ const char *ignore_verdict_negation(
  * own, so the size is their length, never strlen. The caller owns them.
  *
  * @param repo    Repository (must not be NULL)
- * @param tree    The tree a ref's tip holds — a stage's (sys/stage.h stage_tree),
- *                or a tip read by the ref (must not be NULL)
+ * @param tree    The tree a ref's head holds — a stage's (sys/stage.h stage_tree),
+ *                or a head read by the ref (must not be NULL)
  * @param refname The ref the tree was read from, named by every refusal —
  *                BASELINE_REF, or a profile's through gitops_branch_refname (must
  *                not be NULL or empty)
@@ -453,7 +453,7 @@ error_t ignore_blob_read(
  * compiles, the lines `dotta ignore --add` and `--remove` rewrite — and whatever
  * stood behind it would be lost without a word. Its readers: ignore_rules_create
  * (the baseline) and the per-profile composition behind ignore_ruleset, each of
- * a ref's tip read by the ref, where a ref that does not stand reads as no file;
+ * a ref's head read by the ref, where a ref that does not stand reads as no file;
  * and cmds/ignore.c ignore_modify, of the tree its stage opened at. The editor
  * reads the bytes, so a file refused here is mended by `dotta ignore`.
  *
@@ -461,7 +461,7 @@ error_t ignore_blob_read(
  * On failure `out` is empty too.
  *
  * @param repo    Repository (must not be NULL)
- * @param tree    The tree a ref's tip holds (must not be NULL)
+ * @param tree    The tree a ref's head holds (must not be NULL)
  * @param refname The ref the tree was read from, named by every refusal (must
  *                not be NULL or empty)
  * @param out     The text, NUL-terminated and owned by the caller; empty when the

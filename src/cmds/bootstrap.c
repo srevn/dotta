@@ -187,9 +187,9 @@ static error_t bootstrap_show(
     CHECK_NULL(repo);
     CHECK_NULL(profile);
 
-    /* The script at the branch's tip, read off its tree: the read refuses a profile
-     * with no script, and a branch it cannot load is that failure, never no script
-     * (bootstrap_exists folds the two, sys/bootstrap.h) */
+    /* The script at the branch's head, read off its tree: the read refuses a
+     * profile with no script, and a branch it cannot load is that failure, never
+     * no script (bootstrap_exists folds the two, sys/bootstrap.h) */
     git_tree *tree = NULL;
     error_t err = gitops_load_branch_tree(repo, profile, &tree);
     if (err) return err;

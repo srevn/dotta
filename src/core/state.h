@@ -207,16 +207,17 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     advance only after disk-matches-blob verification — an ownership event,
  *     which writes all three from what it established (apply's from the row it
  *     deployed or found standing, a capture's from what it read and committed:
- *     the one blob the stage wrote, never a later tip's), and a learning of the
- *     content (the slow-path CMP_EQUAL), which keeps the node: it is made only
- *     onto a record of the row's kind, since a record of another node, the look
- *     having found the row's in its place, gives way to the row's first observation
- *     before anything is learned onto it (core/workspace.c workspace_flush) — a
- *     whole write, never a learning onto the gone node's record. No node is
- *     executable: the bit is the claim's mode, and Git's filemode the row's alone.
- *     Zero blob_oid is no content confirmation — a directory, whose whole
- *     confirmed-disk record is that it was observed (a directory has no content
- *     confirmation, schema-enforced), or a file observed but never confirmed.
+ *     the one blob the stage wrote, never a later head's), and a learning of
+ *     the content (the slow-path CMP_EQUAL), which keeps the node: it is made
+ *     only onto a record of the row's kind, since a record of another node, the
+ *     look having found the row's in its place, gives way to the row's first
+ *     observation before anything is learned onto it (core/workspace.c
+ *     workspace_flush) — a whole write, never a learning onto the gone node's
+ *     record. No node is executable: the bit is the claim's mode, and Git's
+ *     filemode the row's alone. Zero blob_oid is no content confirmation — a
+ *     directory, whose whole confirmed-disk record is that it was observed (a
+ *     directory has no content confirmation, schema-enforced), or a file observed
+ *     but never confirmed.
  *   - the claim (mode, owner, group): the claim dotta last reconciled the path
  *     against, and so the base a difference on a claim axis is read from — disk
  *     off it the user's move, the row off it Git's claim still to bring

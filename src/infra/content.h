@@ -334,7 +334,7 @@ error_t content_get_from_blob_oid(
  *   no key
  * - ERR_GIT: the blob could not be loaded
  *
- * Reader: a revert whose name changed between the commit and the branch's tip
+ * Reader: a revert whose name changed between the commit and the branch's head
  * (cmds/revert.c).
  */
 error_t content_rebind(

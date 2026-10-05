@@ -88,11 +88,11 @@ static void print_upstream_state(
 /**
  * One verbose profile line's facts
  *
- * Read off the branch's tip before anything prints: what it holds and what that
+ * Read off the branch's head before anything prints: what it holds and what that
  * weighs, whose two phrases set columns measured across every profile, the way
- * the name column already is, and its last commit. One tip, read once, so the
+ * the name column already is, and its last commit. One head, read once, so the
  * line is one snapshot's. Empty phrases are a profile whose count or size could
- * not be read, a commit with no summary one whose tip could not — its line still
+ * not be read, a commit with no summary one whose head could not — its line still
  * prints, without them.
  *
  * Buffer sizes are the minimums output_format_counts and output_format_size state.
@@ -100,7 +100,7 @@ static void print_upstream_state(
 typedef struct {
     char counts[64];
     char size[32];
-    commit_info_t commit;    /* the tip's; no summary where it did not read */
+    commit_info_t commit;    /* the head's; no summary where it did not read */
 } list_line_t;
 
 /**
@@ -238,11 +238,11 @@ static error_t list_profiles(
         for (size_t i = 0; i < profiles.count; i++) {
             const char *name = profiles.entries[i];
 
-            /* The branch read once, at its tip: what it holds and its last commit
-             * are that one commit's. A tip that will not read leaves the line
+            /* The branch read once, at its head: what it holds and its last commit
+             * are that one commit's. A head that will not read leaves the line
              * neither, its error warned and dropped, one per such branch. */
-            git_commit *tip = NULL;
-            err = gitops_load_branch_commit(repo, name, &tip);
+            git_commit *head = NULL;
+            err = gitops_load_branch_commit(repo, name, &head);
             if (err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
@@ -252,17 +252,17 @@ static error_t list_profiles(
             }
 
             /* Its last commit, kept for the line's tail */
-            lines[i].commit = stats_commit_info(ctx->arena, tip);
+            lines[i].commit = stats_commit_info(ctx->arena, head);
 
             /* What it holds, counted over the same commit's tree (core/profiles.h
              * profile_counts); a tree or a count that will not read leaves the
              * line its commit, its error warned and dropped */
             git_tree *tree = NULL;
-            int rc = git_commit_tree(&tree, tip);
-            git_commit_free(tip);
+            int rc = git_commit_tree(&tree, head);
+            git_commit_free(head);
             profile_t *profile = rc < 0 ? NULL : profile_open(name, tree);
             profile_counts_t count = { 0 };
-            err = rc < 0 ? error_git(rc, "Cannot read the tip's tree")
+            err = rc < 0 ? error_git(rc, "Cannot read the head's tree")
                          : profile_counts(profile, &count);
 
             /* And what that weighs, folded over the same profile through one
@@ -337,7 +337,7 @@ static error_t list_profiles(
             );
         }
 
-        /* Verbose: its last commit, read off the tip its counts were, printed
+        /* Verbose: its last commit, read off the head its counts were, printed
          * as a file row prints its own */
         if (lines && lines[i].commit.summary) {
             const commit_info_t *last = &lines[i].commit;
@@ -475,7 +475,7 @@ static error_t list_files(
 
     bool verbose = output_is_verbose(out);
 
-    /* One branch read serves the whole listing: its tip, read once, and every
+    /* One branch read serves the whole listing: its head, read once, and every
      * fact the listing prints taken off that commit — the rows and the count
      * (what else the profile holds, when it holds no file) from the profile at
      * that commit's tree, the history behind each row from its id — so a branch
@@ -485,15 +485,15 @@ static error_t list_files(
     error_t err = profile_require(repo, opts->profile);
     if (err) return err;
 
-    git_commit *tip = NULL;
-    err = gitops_load_branch_commit(repo, opts->profile, &tip);
+    git_commit *head = NULL;
+    err = gitops_load_branch_commit(repo, opts->profile, &head);
     if (err) return err;
 
-    git_oid tip_oid;
-    git_oid_cpy(&tip_oid, git_commit_id(tip));
+    git_oid head_oid;
+    git_oid_cpy(&head_oid, git_commit_id(head));
     git_tree *tree = NULL;
-    int rc = git_commit_tree(&tree, tip);
-    git_commit_free(tip);
+    int rc = git_commit_tree(&tree, head);
+    git_commit_free(head);
     if (rc < 0) {
         /* In the words the walk below says of a tree it cannot read
          * (core/profiles.h profile_walk): the listing says one thing of its tree */
@@ -593,7 +593,7 @@ static error_t list_files(
             err = NULL;
         }
 
-        /* The history behind each row, sought for the rows alone, from the tip
+        /* The history behind each row, sought for the rows alone, from the head
          * they were listed at. The map seeks names (sys/stats.h), so the rows
          * hand it theirs, in their order */
         string_array_t names;
@@ -602,7 +602,7 @@ static error_t list_files(
             string_array_push(&names, walk.files[i].storage_path);
         }
         err = stats_build_file_commit_map(
-            repo, &tip_oid, &names, ctx->arena, &commit_map
+            repo, &head_oid, &names, ctx->arena, &commit_map
         );
         if (err) {
             /* Non-fatal: continue without commit info */
@@ -795,7 +795,7 @@ static error_t list_file_history(
         /* The profile named must be here before anything is read under it. Of
          * the two keys, a name the user typed is Git's key already, so the
          * pre-check below is what decides whether the profile holds it; a path
-         * is the profile's to name, at its tip (below). */
+         * is the profile's to name, at its head (below). */
         err = profile_require(repo, name);
         if (err) return err;
 
@@ -833,27 +833,27 @@ static error_t list_file_history(
         storage_path = row->storage_path;
     }
 
-    /* The branch read once, at its tip: where a path is named, what the pre-check
+    /* The branch read once, at its head: where a path is named, what the pre-check
      * below reads and where the history behind the name starts are all that one
      * commit's, so a branch another writer moves meanwhile lends the history no
      * other snapshot. The id is kept and the commit let go. */
-    git_commit *tip = NULL;
-    err = gitops_load_branch_commit(repo, name, &tip);
+    git_commit *head = NULL;
+    err = gitops_load_branch_commit(repo, name, &head);
     if (err) return err;
 
-    git_oid tip_oid;
-    git_oid_cpy(&tip_oid, git_commit_id(tip));
+    git_oid head_oid;
+    git_oid_cpy(&head_oid, git_commit_id(head));
     git_tree *tree = NULL;
-    int rc = git_commit_tree(&tree, tip);
-    git_commit_free(tip);
+    int rc = git_commit_tree(&tree, head);
+    git_commit_free(head);
     if (rc < 0) {
         return error_git(rc, "Cannot read profile '%s'", name);
     }
 
-    /* The profile at the tip's tree, held beside it */
+    /* The profile at the head's tree, held beside it */
     profile_t *profile = profile_open(name, tree);
 
-    /* A path under a named profile, named by the profile's own view of that tip
+    /* A path under a named profile, named by the profile's own view of that head
      * (core/manifest.h manifest_claim_name) */
     if (opts->profile && arg.key == PATH_KEY_FILESYSTEM) {
         manifest_t *view = NULL;
@@ -865,12 +865,12 @@ static error_t list_file_history(
         }
     }
 
-    /* What the tip holds at the name, asked of the profile's two documents at
+    /* What the head holds at the name, asked of the profile's two documents at
      * once (core/profiles.h profile_holds), and only a file has a history to
      * list: a directory is refused as one whichever document holds it, a submodule
      * as one, and a name neither holds is a deleted file — given its word before
      * the O(total_commits) walk, which is the search's own. The profile reads
-     * its sheet only where the tip is silent, strictly, and a path's view above
+     * its sheet only where the head is silent, strictly, and a path's view above
      * has already read it. The history is one name's — a path's former names
      * under another contract are the user's to type, a prospective name proving
      * nothing about what the profile once held there. */
@@ -897,11 +897,11 @@ static error_t list_file_history(
             break;
     }
 
-    /* The history, from the tip the name was asked of. None is a name the tip
+    /* The history, from the head the name was asked of. None is a name the head
      * does not hold that no commit touched either — the search announced above,
      * which found nothing. */
     file_history_t history;
-    err = stats_file_history(repo, &tip_oid, storage_path, ctx->arena, &history);
+    err = stats_file_history(repo, &head_oid, storage_path, ctx->arena, &history);
     if (err) {
         return error_wrap(
             err, "Failed to get history for '%s' in profile '%s'",

@@ -359,10 +359,10 @@ error_t gitops_delete_branch(git_repository *repo, const char *name);
  * else anywhere — so a reference that stands at a tree, a blob or a tag is refused,
  * naming what it found. A tag is not peeled: the stage commits on a branch only
  * from the target libgit2 reads there (commit.c validate_tree_and_parents), and
- * a tip read through a tag is one no commit can be made on. NULL is the reference's
- * absence, proven.
+ * a head read through a tag is one no commit can be made on. NULL is the
+ * reference's absence, proven.
  *
- * The one way a reference becomes a tip. Readers: gitops_reference_tree, and
+ * The one way a reference becomes a head. Readers: gitops_reference_tree, and
  * the readers of a tree through it (its header); gitops_load_reference_commit,
  * which refuses the absence; infra/epoch.c epoch_walk, the census, at each branch
  * it lists, one gone since the listing holding nothing, one that will not read
@@ -572,7 +572,7 @@ error_t gitops_read_blob_content(
  * gitops_reference_commit for a reader that needs the reference: its absence,
  * proven, is refused (ERR_NOT_FOUND, naming the reference). Readers: sys/stage.c
  * stage_open (the parent-to-be), cmds/status.c status_print_remote (the
- * remote-tracking branch's tip), and gitops_load_branch_commit.
+ * remote-tracking branch's head), and gitops_load_branch_commit.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (must not be NULL or empty)
@@ -587,19 +587,20 @@ error_t gitops_load_reference_commit(
 );
 
 /**
- * Load the commit at a branch's tip
+ * Load the commit at a branch's head
  *
  * gitops_load_reference_commit of refs/heads/<branch>, the name through the branch
  * rule (gitops_branch_refname) on the way, and every failure names the reference.
  * Readers: the revision's three askers, sys/revision.c revision_load and
  * core/scope.c scope_resolve_commit and scope_resolve_range, which read a branch's
- * tip once and ask it; cmds/list.c list_profiles, list_files and list_file_history,
- * which read every fact a screen prints off it; cmds/status.c status_print_remote,
- * which prints it; cmds/completion.c commits_walk, which walks back from it.
+ * head once and ask it; cmds/list.c list_profiles, list_files and
+ * list_file_history, which read every fact a screen prints off it; cmds/status.c
+ * status_print_remote, which prints it; cmds/completion.c commits_walk, which
+ * walks back from it.
  *
  * @param repo Repository (must not be NULL)
  * @param branch Branch name (must not be NULL)
- * @param out The tip (must not be NULL, caller must free with git_commit_free)
+ * @param out The head (must not be NULL, caller must free with git_commit_free)
  * @return Error or NULL on success
  */
 error_t gitops_load_branch_commit(
@@ -876,7 +877,7 @@ error_t gitops_resolve_reference_oid(
 );
 
 /**
- * Resolve a branch's tip to its id
+ * Resolve a branch's head to its id
  *
  * gitops_resolve_reference_oid of `refs/heads/<branch_name>`, the name through
  * the branch rule (gitops_branch_refname) on the way.

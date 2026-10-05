@@ -61,7 +61,7 @@
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_profile walks one profile
- *     the caller opened at a tree it holds or loaded at its tip (core/profiles.h)
+ *     the caller opened at a tree it holds or loaded at its head (core/profiles.h)
  *     — the historical diff (cmds/diff.c diff_commit_to_workspace), export's
  *     path arm, and the path argument of `show -p` and `list -p`, named over
  *     whatever tree the verb selected — and is the same per-profile step applied
@@ -404,7 +404,7 @@ error_t manifest_build(
  *
  * The profile is the caller's to open — at a tree it holds, a historical commit's
  * or a stage's or the one a verb selected (core/profiles.h profile_open), or at
- * its tip (profile_load) — and it names whose claims these are, a tree carrying
+ * its head (profile_load) — and it names whose claims these are, a tree carrying
  * no name. The view keeps nothing of it: every string a row holds is copied, so
  * the profile may be freed as soon as this returns. The mount table is explicit
  * too, there being no state to derive one from and a past tree deliberately
@@ -1073,7 +1073,7 @@ const char *manifest_name(
  * a verb's own read is not. A ref or a tree that will not load refuses both.
  *
  * Readers: `show -p` and `list -p`, over the view of the tree the verb selected
- * (the tip, or the commit the user named, so a name that changed since is found
+ * (the head, or the commit the user named, so a name that changed since is found
  * as of then: cmds/show.c cmd_show, cmds/list.c list_file_history). `export`
  * selects rows instead, `remove` matches its own claims, `revert` reads the claim
  * standing in the tree it edits (cmds/revert.c revert_claim_standing), and `ignore

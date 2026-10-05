@@ -158,7 +158,7 @@ cleanup:
 }
 
 /**
- * Dry-run: read the script at the branch's tip into memory, validate its shebang,
+ * Dry-run: read the script at the branch's head into memory, validate its shebang,
  * free. No temp file, no subprocess, no environment build.
  */
 static error_t run_dry(git_repository *repo, const char *profile) {

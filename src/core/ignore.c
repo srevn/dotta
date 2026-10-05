@@ -169,7 +169,7 @@ struct ignore_rules {
 };
 
 /**
- * The text of the `.dottaignore` at a ref's tip, read by the ref
+ * The text of the `.dottaignore` at a ref's head, read by the ref
  *
  * The rule builders' read (ignore_rules_create, ignore_compose), which ask a
  * ref by its name where the editor sessions ask the tree their stage opened at:

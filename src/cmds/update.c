@@ -153,7 +153,7 @@ static error_t update_capture(
  * the fstat of the descriptor it read; a link's, the lstat before its target;
  * none for a directory, which confirms no content), and the claim the sheet took
  * — so the record loop writes what this commit put there, never what a later
- * tip of the branch says should be. Its names are the item's (workspace lifetime)
+ * head of the branch says should be. Its names are the item's (workspace lifetime)
  * and the arena's (the claim's, copied before the sheet that held them is freed).
  * Deleted items are borrowed; the pruned and retired keys are storage paths their
  * writers copy out, resolved through the mount table by the record loop — the
@@ -1012,7 +1012,7 @@ cleanup:
 /**
  * Execute profile updates, in enabled-set order
  *
- * One stage per profile visited: opened at the branch's tip, edited by the walk,
+ * One stage per profile visited: opened at the branch's head, edited by the walk,
  * committed once, freed — nothing is checked out anywhere.
  *
  * Profiles are walked in enabled-set order — the model's one canonical profile

@@ -179,7 +179,7 @@ The epoch structure guarantees that every input to key derivation except the pas
 
 `EQUAL` is that OID comparison and nothing more, not a claim that the epoch can be read: a repository whose epoch objects are gone still names the remote's commit, so sync has nothing to reconcile while every command that must *read* the epoch fails at dispatch.
 
-The census walks the **full history** of every local branch, not just the tips — `dotta show` and `dotta revert` open blobs at any `@commit`, so history-reachable ciphertext pins the epoch exactly as tip ciphertext does. What it is asked depends on what the local ref yields, because the question is about the **bytes at the ref**, not about the epoch derived from them:
+The census walks the **full history** of every local branch, not just the heads — `dotta show` and `dotta revert` open blobs at any `@commit`, so history-reachable ciphertext pins the epoch exactly as head ciphertext does. What it is asked depends on what the local ref yields, because the question is about the **bytes at the ref**, not about the epoch derived from them:
 
 - **The ref yields an epoch.** Attribution is by fingerprint: only ciphertext that epoch keys argues against replacing it; foreign-keyed blobs (pulled from a remote under its own epoch) argue *for* converging. Found → `CONFLICT`, clean → `ADOPT`.
 - **The ref stands and yields no epoch.** Its salt blob may be intact and may be the only copy of what keys this repository — but with the pair unreadable no fingerprint can be matched against anything, so the census asks for *any* ciphertext, any fingerprint, any version. Found → `DAMAGED`, clean → `ADOPT`. This is the same census `epoch_init` runs over the identical state, and on the found side it reaches the same verdict and prints the same remedy: restore the ref, do not replace it.
@@ -524,7 +524,7 @@ typedef struct keymgr_witness {
 
 Two sources, in order:
 1. **The blob in hand**: For a decrypt, the very blob the caller requested. A cold decrypt verifies on its own row.
-2. **The witness source**: `infra/epoch::epoch_find_ciphertext` presents every ciphertext of this epoch the repository holds — walking every local branch and its full Git history, **tips first** — to a predicate of the keymgr until one opens. One object at two paths or under two branches is presented under each candidate binding. Blobs belonging to other epochs or unsupported cipher versions are skipped.
+2. **The witness source**: `infra/epoch::epoch_find_ciphertext` presents every ciphertext of this epoch the repository holds — walking every local branch and its full Git history, **heads first** — to a predicate of the keymgr until one opens. One object at two paths or under two branches is presented under each candidate binding. Blobs belonging to other epochs or unsupported cipher versions are skipped.
 
 A master that opens nothing is wiped and never kept. Tampered or relocated blobs cost nothing but their own row — the witness walk moves on.
 

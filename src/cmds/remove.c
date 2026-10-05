@@ -385,7 +385,7 @@ static error_t remove_list_tree_files(
  *
  * The claims array starts as everything the profile holds, in its own order (the
  * tree's blobs, then the directory items) — read from `tree`, the one the caller's
- * stage opened at, so the claims, the sheet and the commit describe one tip;
+ * stage opened at, so the claims, the sheet and the commit describe one head;
  * the arguments mark what they take, and the array compacts to just that.
  *
  * Where each claim stands is established before the match, not after it, because
@@ -624,7 +624,7 @@ static int remove_filesystem_order(const void *a, const void *b) {
 /**
  * filesystem path → the rows every local profile but `exclude` places there
  *
- * Each profile read once through its own view of its tip under this machine's
+ * Each profile read once through its own view of its head under this machine's
  * table, so a claim is keyed by where it stands and never by what it is called:
  * two profiles bound at two targets holding one name are two paths and meet no
  * key of each other's, and one profile's two names for one path are one row and
@@ -1022,13 +1022,13 @@ static error_t remove_paths(
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t err = NULL;
-    stage_t *stage = NULL;              /* the branch's tip, tree and index; the commit's */
+    stage_t *stage = NULL;              /* the branch's head, tree and index; the commit's */
     claim_t *claims = NULL;             /* arena — the resolver's */
     size_t claim_count = 0;
     metadata_t *metadata = NULL;        /* the profile's, from the resolver (owned) */
     overlaps_t overlaps = { 0 };        /* arena — the analysis's */
 
-    /* The branch's stage: the tip everything below reads — the claims, the sheet,
+    /* The branch's stage: the head everything below reads — the claims, the sheet,
      * the judge — and the parent the commit will have. The removal is pure tree
      * surgery, so the stage is the whole of its Git side. */
     char refname[DOTTA_REFNAME_MAX];
@@ -1454,9 +1454,9 @@ static error_t remove_profile(
         goto cleanup;
     }
 
-    /* The profile at its tip, read once for all the deletion says before it acts:
-     * every claim it takes, for its hooks, and what it holds, for the preview
-     * and the confirmation, one commit for both. A tip that will not load refuses
+    /* The profile at its head, read once for all the deletion says before it
+     * acts: every claim it takes, for its hooks, and what it holds, for the preview
+     * and the confirmation, one commit for both. A head that will not load refuses
      * here, in gitops' words, which name the branch. */
     err = profile_load(repo, opts->profile, &profile);
     if (err) goto cleanup;

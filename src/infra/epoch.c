@@ -21,7 +21,7 @@
  * refspecs internally, and "abstract over arbitrary refspec sync" is not yet a
  * recurring need (this is the only consumer). The acquisition side differs in
  * kind and not only in refspec: gitops fetches with `git_remote_fetch`, which
- * updates the tips a branch fetch is *for*, while `epoch_fetch` downloads the
+ * updates the heads a branch fetch is *for*, while `epoch_fetch` downloads the
  * objects and stores no ref, because it installs one only after judging them. A
  * second non-branch consumer would be the moment to extract a helper — of whichever
  * of the two shapes it turns out to want.
@@ -460,7 +460,7 @@ error_t epoch_fetch(
 
     /* A refspec with no destination means "want these objects, store no ref for
      * them", and `git_remote_download` — unlike `git_remote_fetch` — never updates
-     * tips, so it writes no FETCH_HEAD either. The remote epoch's bytes become
+     * heads, so it writes no FETCH_HEAD either. The remote epoch's bytes become
      * readable at `advertised` while refs/dotta/epoch still holds whatever it
      * held. */
     char *refspecs[] = { EPOCH_REF };
@@ -544,19 +544,19 @@ error_t epoch_fetch(
  * census — "does the repository hold ciphertext keyed by a given epoch?", which
  * gates the divergent-epoch decision, because replacing an epoch that keys
  * reachable ciphertext bricks it (deterministic SIV), and *reachable* means the
- * full history, not the tips: `dotta show`/`revert`/`diff` decrypt blobs at any
- * `@commit`, every one of them under the current epoch — and the keymgr's witness
- * source, "is there a ciphertext of this epoch a fresh master opens?" Two sites
- * answering one question — what ciphertext of this epoch does the repository
- * hold — get one walker, so neither can skip a branch or forget an object the
- * other remembers.
+ * full history, not the heads: `dotta show`/`revert`/`diff` decrypt blobs at
+ * any `@commit`, every one of them under the current epoch — and the keymgr's
+ * witness source, "is there a ciphertext of this epoch a fresh master opens?"
+ * Two sites answering one question — what ciphertext of this epoch does the
+ * repository hold — get one walker, so neither can skip a branch or forget an
+ * object the other remembers.
  *
  * One rule serves both, since a yes needs one look and a no needs every look:
  * an answer the asker stops on stands, whatever the walk could not read on the
  * way; a walk that ends without one fails on the first thing it could not read.
- * So the walk passes over what will not read — a branch's tip, a history, a tree,
- * a blob — keeps the first of them, and goes on: the census still fails closed,
- * its absence unproven, and a witness beyond a broken object still opens.
+ * So the walk passes over what will not read — a branch's head, a history, a
+ * tree, a blob — keeps the first of them, and goes on: the census still fails
+ * closed, its absence unproven, and a witness beyond a broken object still opens.
  */
 
 /* One ciphertext the walk met: the binding it stands under, what its header says,
@@ -774,24 +774,24 @@ static error_t epoch_walk(
          * two shapes a reference can hold (HEAD, a leading '-'): the census walks
          * what Git holds, and a ref it refused would refuse every unlock and
          * every mint beside it. The name is spelled as long as Git made it, and
-         * its tip is read as every tip is (sys/gitops.h gitops_reference_commit),
+         * its head is read as every head is (sys/gitops.h gitops_reference_commit),
          * its failure naming the reference: a branch gone since the listing holds
-         * nothing now, and one whose tip will not read is kept and passed over. */
+         * nothing now, and one whose head will not read is kept and passed over. */
         const char *refname = arena_str_format(frame, "refs/heads/%s", walk.branch);
-        git_commit *tip = NULL;
-        error_t err = gitops_reference_commit(repo, refname, &tip);
+        git_commit *head = NULL;
+        error_t err = gitops_reference_commit(repo, refname, &head);
         if (!walk.failure) walk.failure = err;
-        if (!tip) continue;
+        if (!head) continue;
 
-        /* The history from that tip, in no order of its own: the push copies
-         * the tip's id, so the tip is freed once it is taken */
+        /* The history from that head, in no order of its own: the push copies
+         * the head's id, so the head is freed once it is taken */
         git_revwalk *walker = NULL;
         int rc = git_revwalk_new(&walker, repo);
         if (rc == 0) {
             git_revwalk_sorting(walker, GIT_SORT_NONE);
-            rc = git_revwalk_push(walker, git_commit_id(tip));
+            rc = git_revwalk_push(walker, git_commit_id(head));
         }
-        git_commit_free(tip);
+        git_commit_free(head);
 
         /* Each commit until the history ends, the asker answers or the history
          * will not go on. Classified, not compared: GIT_ITEROVER is the branch

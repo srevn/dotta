@@ -25,7 +25,7 @@
  * refuses it or the operation holds no blob (an encrypt, `key set`), a ciphertext
  * of this epoch the repository holds. The keymgr finds the latter through the
  * witness source it was created with: the source presents every ciphertext of
- * the epoch, tips first, to a predicate of the keymgr's until one opens, so a
+ * the epoch, heads first, to a predicate of the keymgr's until one opens, so a
  * tampered or relocated blob costs nothing but its own row. A master that opens
  * nothing is wiped and never kept, and the row that asked reads the refusal.
  * With no ciphertext in the repository there is nothing to open: a typed passphrase
@@ -177,7 +177,7 @@ typedef bool (*keymgr_opens_fn)(void *self, const keymgr_witness_t *witness);
 /**
  * Where the keymgr finds witnesses: whoever holds the repository.
  *
- * Presents every ciphertext of `epoch` the repository holds — tips first, so
+ * Presents every ciphertext of `epoch` the repository holds — heads first, so
  * the first presented is usually a live file; one object at two paths, or at
  * one path under two branches, is presented under each binding, since only one
  * of them can be the one it was sealed under — to `accept` until one is accepted,

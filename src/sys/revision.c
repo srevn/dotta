@@ -25,7 +25,7 @@
 /*
  * What a walk that could not load a commit says: the revision, and the branch
  * it was walked in where there is one — HEAD's steps are walked at a branch's
- * tip, a name's once, in none.
+ * head, a name's once, in none.
  */
 static error_t revision_unwalked(int rc, const char *spelling, const char *branch) {
     return branch
@@ -265,12 +265,12 @@ error_t revision_resolve(
     CHECK_NULL(out);
 
     /* HEAD's steps are read whole now, so one that is no step refuses before
-     * any branch is read: walked from no commit, each is only read — the tip
+     * any branch is read: walked from no commit, each is only read — the head
      * they are walked from is each branch's, at revision_find. */
     const char *steps = refspec_head_steps(spelling);
     if (steps) {
-        git_commit *tip = NULL;
-        error_t err = revision_walk(repo, spelling, NULL, steps, &tip);
+        git_commit *head = NULL;
+        error_t err = revision_walk(repo, spelling, NULL, steps, &head);
         if (err) return err;
 
         *out = (revision_t){ .spelling = spelling, .steps = steps };
@@ -323,12 +323,12 @@ error_t revision_resolve(
 
 error_t revision_find(
     git_repository *repo, const revision_t *rev, const char *branch,
-    git_commit *tip, git_commit **out
+    git_commit *head, git_commit **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(rev);
     CHECK_NULL(branch);
-    CHECK_NULL(tip);
+    CHECK_NULL(head);
     CHECK_NULL(out);
 
     *out = NULL;
@@ -336,12 +336,12 @@ error_t revision_find(
     if (!rev->steps) {
         /* A commit resolved repository-wide may be any branch's, and read as
          * this one's without asking it would be misattributed. It is the branch's
-         * where the tip is that commit or reaches it through its parents — the
-         * graph answers the tip itself as reachable, which descendant_of does
+         * where the head is that commit or reaches it through its parents — the
+         * graph answers the head itself as reachable, which descendant_of does
          * not (graph.c). A history it cannot read is the failure, as `git
          * merge-base --is-ancestor` fails it: an unread object below the commit
          * decides nothing. */
-        int rc = git_graph_reachable_from_any(repo, &rev->commit, git_commit_id(tip), 1);
+        int rc = git_graph_reachable_from_any(repo, &rev->commit, git_commit_id(head), 1);
         if (rc < 0) {
             return error_git(
                 rc, "Cannot tell whether commit '%s' is reachable from branch '%s'",
@@ -357,10 +357,10 @@ error_t revision_find(
         return NULL;
     }
 
-    /* HEAD's steps, walked from the tip this branch was read at. The walk holds
-     * its own reference from the start — the tip is the answer to HEAD itself —
-     * and git_commit_dup's one answer is 0 (a count taken, nothing made). */
-    (void) git_commit_dup(out, tip);
+    /* HEAD's steps, walked from the head this branch was read at. The walk holds
+     * its own reference from the start — the head is the answer to HEAD itself
+     * — and git_commit_dup's one answer is 0 (a count taken, nothing made). */
+    (void) git_commit_dup(out, head);
     return revision_walk(repo, rev->spelling, branch, rev->steps, out);
 }
 
@@ -381,15 +381,15 @@ error_t revision_load(
     error_t err = revision_resolve(repo, spelling, &rev);
     if (err) return err;
 
-    /* The tip, read once, and the revision asked of it: HEAD's steps and the
-     * membership of a commit are one tip's answers, never two reads of a ref
+    /* The head, read once, and the revision asked of it: HEAD's steps and the
+     * membership of a commit are one head's answers, never two reads of a ref
      * that may move between them. */
-    git_commit *tip = NULL;
-    err = gitops_load_branch_commit(repo, branch, &tip);
+    git_commit *head = NULL;
+    err = gitops_load_branch_commit(repo, branch, &head);
     if (err) return err;
 
-    err = revision_find(repo, &rev, branch, tip, out);
-    git_commit_free(tip);
+    err = revision_find(repo, &rev, branch, head, out);
+    git_commit_free(head);
     if (err || *out) return err;
 
     /* The branch has no commit for it: HEAD's steps reach past its history or

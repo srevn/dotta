@@ -321,9 +321,9 @@ typedef enum {
  * Connects and lists the remote (commit-OID compare, zero object transfer). A
  * divergence is then decided from two things and nothing else — what the local
  * ref yields, and what a key-free census over the *full history* of every local
- * branch finds. The history and not the tips: `dotta show`/`revert` decrypt blobs
- * at any `@commit`, so history-reachable ciphertext pins the epoch exactly as
- * tip ciphertext does.
+ * branch finds. The history and not the heads: `dotta show`/`revert` decrypt
+ * blobs at any `@commit`, so history-reachable ciphertext pins the epoch exactly
+ * as head ciphertext does.
  *
  *   ref absent             nothing to lose, nothing to attribute   ADOPT
  *   ref yields no epoch    + any ciphertext at all                 DAMAGED
@@ -382,7 +382,7 @@ error_t epoch_resolve(
  * of `epoch` the master on trial opens.
  *
  * Presents every ciphertext of `epoch` the repository holds — the census's walk
- * over every local branch and its full history, tips first, so the first presented
+ * over every local branch and its full history, heads first, so the first presented
  * is usually a live file — to `accept` with the binding it stands under (the
  * branch, and the tree path), until one is accepted. One object at two paths,
  * or at one path under two branches, is presented under each: only one of them
@@ -393,12 +393,12 @@ error_t epoch_resolve(
  * exists (an `accept` that takes the first) and whether a fresh master opens
  * one (an `accept` that asks the cipher, crypto/cipher.h cipher_opens).
  *
- * The full history and not the tips, for the reason at the head of this file:
- * an absence here is a licence, and a walk that stopped at the tips would report
+ * The full history and not the heads, for the reason at the head of this file:
+ * an absence here is a licence, and a walk that stopped at the heads would report
  * one over ciphertext the repository still holds — which for this asker means
  * taking a wrong passphrase as given (crypto/keymgr.h).
  *
- * What the walk cannot read — a branch that will not list, a tip, a history or
+ * What the walk cannot read — a branch that will not list, a head, a history or
  * a tree that will not load, a blob it cannot judge — it passes over, so a witness
  * accepted beyond it stands. Where none is accepted, the first of them is returned,
  * named by where it stands, with `*out_accepted` false: an absence the walk could

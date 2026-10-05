@@ -56,7 +56,7 @@
  * no policy is added here.
  *
  * @param ctx Dispatch context (must not be NULL)
- * @param profile The profile the claim is looked for in — at the tip's tree or
+ * @param profile The profile the claim is looked for in — at the head's tree or
  *                the target commit's (must not be NULL)
  * @param filesystem_path Where to ask (must not be NULL)
  * @param out_row The claim, or NULL where none stands and after an error (must
@@ -92,11 +92,11 @@ static error_t revert_claim_standing(
  * The profile question, and only that. What that profile calls the argument is
  * read afterwards, and twice: from the commit's tree for the bytes to restore
  * and from the tree the revert edits for the name to write them under (cmd_revert
- * steps 8 and 10). A branch's tip is its stage's tree, so the search below and
+ * steps 8 and 10). A branch's head is its stage's tree, so the search below and
  * the naming there read one source and cannot disagree about a name.
  *
  * With `opts->profile`: the user's word, required to be here. Whether the profile
- * holds the argument at its tip is not asked — a revert restores what the *commit*
+ * holds the argument at its head is not asked — a revert restores what the *commit*
  * holds, and a path the profile deleted is the case a revert exists for.
  *
  * Without: the search. Every local profile, enabled or not, is asked what it
@@ -199,9 +199,9 @@ static error_t revert_select_profile(
     }
 
     if (holders.count == 0) {
-        /* Held at no tip, every profile having answered: a file deleted from
+        /* Held at no head, every profile having answered: a file deleted from
          * its profile is the case a revert exists for, and naming the profile
-         * is what reaches it — a profile named is not asked what its tip holds
+         * is what reaches it — a profile named is not asked what its head holds
          * (the -p arm above). */
         return error_create(
             ERR_NOT_FOUND, "'%s' is not held by any profile; -p restores it into a "
@@ -227,8 +227,8 @@ static error_t revert_select_profile(
 /**
  * Refuse a typed name that would give the profile a second name for one path
  *
- * The tip's own contribution, asked two questions: the claim standing where the
- * name resolves, and whether the profile holds the typed name at all
+ * The head's own contribution, asked two questions: the claim standing where
+ * the name resolves, and whether the profile holds the typed name at all
  * (core/manifest.h manifest_holds_name). Both readings are the contribution's,
  * so they are asked of one build rather than of a row alone — the second reads
  * the names the settle recorded against the standing one, which no row carries.
@@ -244,7 +244,7 @@ static error_t revert_select_profile(
  * them.
  *
  * @param ctx Dispatch context (must not be NULL)
- * @param profile The profile at its tip, whose claims the name would join (must
+ * @param profile The profile at its head, whose claims the name would join (must
  *                not be NULL)
  * @param filesystem_path Where the typed name resolves (must not be NULL)
  * @param name The typed name (must not be NULL)
@@ -293,7 +293,7 @@ static error_t revert_refuse_second_name(
  * The entry the target commit holds for this file, and the name it stands under
  *
  * Asked in the key the user named (cmds/revert.h, the two names), and it never
- * sees the tip: the read's name is the commit's alone.
+ * sees the head: the read's name is the commit's alone.
  *
  *   a FILESYSTEM — the claim standing at the path, whatever it is called; the
  *                  commit's two documents then say whether that claim is one file.
@@ -435,17 +435,17 @@ static error_t revert_target_entry(
  * says so, and the arm beside it is what a copy with the same bytes and a different
  * mode gets.
  *
- * That arm is also why the caller hands its `restored_name` in here: the tip's
+ * That arm is also why the caller hands its `restored_name` in here: the head's
  * entry is looked up at the name the revert writes, so wherever there is an entry
- * to diff against, the write's name is the tip's binding and the two words name
+ * to diff against, the write's name is the head's binding and the two words name
  * one string.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param profile Profile name, for key derivation (must not be NULL)
- * @param standing_name The tip's binding, and the label on both sides (must not
- *                     be NULL)
- * @param standing_oid The blob standing at the tip (must not be NULL)
- * @param standing_mode Its filemode at the tip
+ * @param standing_name The head's binding, and the label on both sides (must
+ *                     not be NULL)
+ * @param standing_oid The blob standing at the head (must not be NULL)
+ * @param standing_mode Its filemode at the head
  * @param target_name The commit's binding: how its bytes open (must not be NULL)
  * @param target_oid The committed object (must not be NULL)
  * @param target_mode Its filemode at the commit
@@ -697,7 +697,7 @@ static metadata_item_t *revert_restored_claim(
  * owner-execute bit (infra/content), so the sheet cannot be read off the entry
  * and is asked for itself.
  *
- * `standing` is NULL where the branch's tip has no entry at the name — a path
+ * `standing` is NULL where the branch's head has no entry at the name — a path
  * the profile deleted, which is never already at the target. The restored side
  * is an id and a mode rather than an entry, because it may belong to no tree
  * entry at all: bytes resealed under a new name are an object the repository
@@ -712,7 +712,7 @@ static metadata_item_t *revert_restored_claim(
  * accepts and the serializer normalizes, and nothing here uses it: the true arm
  * exits before anything is staged.
  *
- * @param standing The entry at the branch tip, or NULL for none
+ * @param standing The entry at the branch head, or NULL for none
  * @param standing_claim The sheet's claim at the name there, or NULL for none
  * @param restored_blob The blob the write would store (must not be NULL)
  * @param restored_mode The filemode it would carry
@@ -750,9 +750,9 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* Three prefixes, one per column, and no local needs a comment to say which
      * it is in: `target_` is the commit — what is read — `standing_` is the branch
-     * tip, and `restored_` is the write, which is neither of them. A restore
+     * head, and `restored_` is the write, which is neither of them. A restore
      * lands on the claim standing at the path, so the standing side has no name
-     * of its own here: wherever the tip holds anything, its name is the write's,
+     * of its own here: wherever the head holds anything, its name is the write's,
      * and where it holds nothing there is no name to have. */
     error_t err = NULL;
     const char *profile = NULL;
@@ -792,7 +792,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     char oid_str[8];
     git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(target_commit));
 
-    /* Step 4: The branch's stage — its tip is the current state the preview
+    /* Step 4: The branch's stage — its head is the current state the preview
      * compares against and the parent the revert's commit will have, so a branch
      * that moves between the preview and the commit is refused at the commit,
      * --force or not: what the user confirmed is what is reverted. It is also
@@ -897,7 +897,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * place that choice is made). A path is answered by the claim standing there,
      * whatever its name and whatever its kind — home/jail/etc/x under a binding
      * at ~/jail is found by ~/jail/etc/x, and a chain the profile names nothing
-     * by is answered as the claim it is, so the tip's own tree refuses a file
+     * by is answered as the claim it is, so the head's own tree refuses a file
      * where it holds a subtree (step 11). Where none stands, the commit's own
      * name is what comes back: a revert restores, and a name composed from today's
      * roots would choose a deployment contract the user did not. */
@@ -916,7 +916,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         profile
     );
 
-    /* Step 11: what stands at that name in the tip. It may be absent — a path
+    /* Step 11: what stands at that name in the head. It may be absent — a path
      * the profile deleted is exactly what a revert brings back — and wherever
      * it stands it is a blob, because a revert restores one file's bytes.
      *
@@ -944,7 +944,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         }
     }
 
-    /* Step 12: the admission. A typed name the tip's tree does not hold is a
+    /* Step 12: the admission. A typed name the head's tree does not hold is a
      * name this command would author, and a profile names a path once
      * (infra/mount.h, core/manifest.h): if the profile already names where this
      * name resolves and does not hold this name for it, authoring it would give
@@ -1038,14 +1038,14 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * this revert that can be refused, and refused before the preview promises
      * it. stage_put_blob is the producer of that refusal and it reads the private
      * index alone: the mode, the path's shape, a proper prefix that names an
-     * entry, any entry beneath the path. A destination beneath a blob the tip
+     * entry, any entry beneath the path. A destination beneath a blob the head
      * holds used to pass the dry run and fail after the prompt, with what the
      * dry run should have said.
      *
      * It writes no object — the id is one the commit already holds, or one the
      * reseal computed and step 20 will store — so a dry run or a declined prompt
      * frees the stage and leaves the object database as it found it. stage_tree()
-     * is still the tree the stage opened at, so every read below is the tip's.
+     * is still the tree the stage opened at, so every read below is the head's.
      *
      * The index answers for the tree alone, and the tree is only half of what
      * the commit carries: an empty directory the profile claims has no entry to
@@ -1202,10 +1202,10 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Reverting file...\n");
 
-    /* Step 20: the write, on the stage opened at the preview's tip — the entry
+    /* Step 20: the write, on the stage opened at the preview's head — the entry
      * put at step 16 and the merged sheet beside it, in one commit, all of it
      * decided above. A branch another writer moved since is refused by the commit
-     * itself rather than by a second look at the tip.
+     * itself rather than by a second look at the head.
      *
      * The resealed bytes only now: the entry was admitted at its id before the
      * preview, and this is the object that id names. Materialising it earlier
@@ -1468,7 +1468,7 @@ const args_command_t spec_revert = {
         "Execution Order:\n"
         "  1. Find the profile that holds the argument (--profile if ambiguous).\n"
         "  2. Resolve the commit in that profile's history.\n"
-        "  3. Read what the commit holds and what stands at the branch tip. A\n"
+        "  3. Read what the commit holds and what stands at the branch head. A\n"
         "     file the profile has renamed since is found either way, and comes\n"
         "     back under the name the profile uses now.\n"
         "  4. Refuse a storage path that would be the profile's second name\n"

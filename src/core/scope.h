@@ -16,7 +16,7 @@
  * any local profile, enabled or not, and never reads the set.
  *
  * A scope answers, for a command that holds the view, "what subset of the view
- * — every enabled profile at its tip, precedence resolved — does this invocation
+ * — every enabled profile at its head, precedence resolved — does this invocation
  * touch?". It bundles the set with the three filter dimensions every such command
  * carries:
  *
@@ -219,10 +219,10 @@ error_t scope_require_enabled(
  * revision_resolve): a spelling that names no commit refuses there, and no profile
  * is passed over for it. Then the enabled set is asked from its highest precedence
  * down — the last enabled first, the profile that wins every path it shares —
- * so `HEAD` is the tip of the profile the view reads, and a history too short
+ * so `HEAD` is the head of the profile the view reads, and a history too short
  * for `HEAD~N`, or holding no commit `HEAD^{/pattern}` matches, is passed for
- * the next one down. Each profile's tip is read once and the revision asked of
- * it (revision_find), and the first profile holding it is the answer: the tip
+ * the next one down. Each profile's head is read once and the revision asked of
+ * it (revision_find), and the first profile holding it is the answer: the head
  * itself or a commit its history reaches, or for HEAD's steps a history that
  * takes them. A profile behind that one is never asked: the order has already
  * decided.
@@ -233,7 +233,7 @@ error_t scope_require_enabled(
  *
  * Answered for every profile ahead of the answer, or an error. A profile whose
  * history does not hold the revision is an answer, and the search moves on; a
- * tip or a history that will not read is a failure, naming the branch, and it
+ * head or a history that will not read is a failure, naming the branch, and it
  * ends the search where it stands, whatever a later profile would have said.
  * The asymmetry is the whole of the rule: what comes back is the first holder
  * *in precedence order*, which is a claim about every profile ahead of it, and
@@ -280,7 +280,7 @@ error_t scope_resolve_commit(
  * A range is one profile's history, so its ends are searched for together: both
  * read once, before any profile is asked, then scope_resolve_commit's order and
  * failure rule — from the highest precedence down, among what `filter` names, a
- * tip or a history that will not read ending the search — with each tip read
+ * head or a history that will not read ending the search — with each head read
  * once and both ends asked of it. The answer is the first profile holding both:
  * `HEAD~1 HEAD` the first history long enough for both, `<id> HEAD` the id's
  * own profile, whatever either end alone would have answered.

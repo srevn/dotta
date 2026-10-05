@@ -50,13 +50,13 @@ typedef struct {
  * moved between the preview and the commit, a repository that will not write.
  *
  * The two names. A revert restores what the commit held into the name the profile
- * holds at its tip, and the key the user named is the key both trees are asked
+ * holds at its head, and the key the user named is the key both trees are asked
  * in. A filesystem path asks each tree what claim stood there; a name asks each
  * tree for that name. Only a name a tree holds in neither of its two documents
  * falls back to that tree's claim at its path — never the reverse, because a
  * path is always answerable and a name may simply not exist:
  *
- *              the write's name (the tip)      the read's name (the commit)
+ *              the write's name (the head)      the read's name (the commit)
  *   LOCATION   the claim standing at L,        the claim standing at L
  *              else the read's own name
  *   STORAGE    the name as typed               that name in either document,
@@ -64,7 +64,7 @@ typedef struct {
  *
  * Reading across names is safe: a name the commit held is a fact, and following
  * it is how a revert survives a contract change. Writing across them is not — a
- * name is where a claim lands on every machine — so where the tip holds nothing
+ * name is where a claim lands on every machine — so where the head holds nothing
  * the restore takes the name the commit held it by, never one composed from today's
  * roots, and a typed name is refused where authoring it would give the profile
  * a second name for one path — a name the profile already holds there is a
@@ -77,7 +77,7 @@ typedef struct {
  * 1. Discovers which profile holds the argument (requires --profile if ambiguous)
  * 2. Resolves commit reference in profile branch history
  * 3. Reads both entries — the commit's, which must be a blob, and the branch
- *    tip's, which may be absent — the restored blob's own bytes, and the claims
+ *    head's, which may be absent — the restored blob's own bytes, and the claims
  *    both sheets record at the two names
  * 4. Refuses a typed name that would be the profile's second for one path
  * 5. Answers "nothing to do" when that whole write already stands

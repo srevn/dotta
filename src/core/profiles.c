@@ -48,9 +48,7 @@
  * @param out Where the matches are appended
  */
 static void profile_match_hierarchical(
-    const string_array_t *available,
-    const char *prefix,
-    string_array_t *out
+    const string_array_t *available, const char *prefix, string_array_t *out
 ) {
     size_t prefix_len = strlen(prefix);
 
@@ -58,12 +56,9 @@ static void profile_match_hierarchical(
         const char *profile = available->entries[i];
 
         /* A name of the layer starts with its base */
-        if (!str_starts_with(profile, prefix)) {
-            continue;
-        }
+        if (!str_starts_with(profile, prefix)) continue;
 
         const char *suffix = profile + prefix_len;
-
         if (suffix[0] == '\0') {
             /* The base itself */
             string_array_push(out, profile);
@@ -131,6 +126,7 @@ string_array_t profile_detect(arena_t *arena, const string_array_t *available) {
 static int profile_rank(const char *name) {
     if (strcmp(name, "global") == 0) return 0;
     if (str_starts_with(name, "hosts/")) return 2;
+
     return 1;
 }
 
@@ -209,7 +205,7 @@ struct profile {
     arena_t *arena;         /* The handle's own: the handle, its name, the claims it lends */
     const char *name;       /* Whose claims these are, named over every failure */
     const git_tree *tree;   /* The caller's, or `own` */
-    git_tree *own;          /* The tip profile_load read; NULL at a caller's tree */
+    git_tree *own;          /* The head profile_load read; NULL at a caller's tree */
     metadata_t *sheet;      /* NULL until a question loads it, and beside a failure */
     error_t sheet_failure;  /* Why it would not load; NULL where it did or is not asked yet */
 };
@@ -238,15 +234,15 @@ error_t profile_load(git_repository *repo, const char *name, profile_t **out) {
 
     *out = NULL;
 
-    /* The tip, its absence refused in gitops' words, which name the reference:
+    /* The head, its absence refused in gitops' words, which name the reference:
      * nothing to say over them */
-    git_tree *tip = NULL;
-    error_t err = gitops_load_branch_tree(repo, name, &tip);
+    git_tree *head = NULL;
+    error_t err = gitops_load_branch_tree(repo, name, &head);
     if (err) return err;
 
-    /* The profile at it, and the tip the handle's own, released with it */
-    profile_t *profile = profile_open(name, tip);
-    profile->own = tip;
+    /* The profile at it, and the head the handle's own, released with it */
+    profile_t *profile = profile_open(name, head);
+    profile->own = head;
 
     *out = profile;
     return NULL;
@@ -264,6 +260,7 @@ void profile_free(profile_t *profile) {
 
 const char *profile_name(const profile_t *profile) {
     CHECK_NULL(profile);
+
     return profile->name;
 }
 
@@ -278,7 +275,10 @@ error_t profile_load_sheet(profile_t *profile) {
      * (lib/libgit2/src/libgit2/object.c git_object_owner) */
     if (!profile->sheet && !profile->sheet_failure) {
         profile->sheet_failure = metadata_load_from_tree(
-            git_tree_owner(profile->tree), profile->tree, profile->name, &profile->sheet
+            git_tree_owner(profile->tree),
+            profile->tree,
+            profile->name,
+            &profile->sheet
         );
     }
 
@@ -539,10 +539,7 @@ static error_t profile_step(
 }
 
 error_t profile_walk(
-    profile_t *profile,
-    profile_read_t read,
-    profile_visit_fn visit,
-    void *payload
+    profile_t *profile, profile_read_t read, profile_visit_fn visit, void *payload
 ) {
     CHECK_NULL(profile);
     CHECK_NULL(visit);
@@ -595,10 +592,7 @@ error_t profile_walk(
 }
 
 error_t profile_contradicted(
-    profile_t *profile,
-    profile_read_t read,
-    profile_visit_fn visit,
-    void *payload
+    profile_t *profile, profile_read_t read, profile_visit_fn visit, void *payload
 ) {
     CHECK_NULL(profile);
     CHECK_NULL(visit);
@@ -667,7 +661,9 @@ error_t profile_counts(profile_t *profile, profile_counts_t *out) {
      * words for the sheet, "Cannot read profile" over the tree's — so nothing
      * is said over them. */
     profile_counts_t counts = { 0 };
-    error_t err = profile_walk(profile, PROFILE_READ_STRICT, profile_count_claim, &counts);
+    error_t err = profile_walk(
+        profile, PROFILE_READ_STRICT, profile_count_claim, &counts
+    );
     if (err) return err;
 
     *out = counts;
@@ -702,7 +698,9 @@ error_t profile_needs_target(profile_t *profile, bool *needs_target) {
      * them: one strict walk, so a sheet that will not load and a tree the walk
      * refuses are the answer's failure here, as they are the view build's */
     bool claimed[LABEL_COUNT] = { false };
-    error_t err = profile_walk(profile, PROFILE_READ_STRICT, profile_note_label, claimed);
+    error_t err = profile_walk(
+        profile, PROFILE_READ_STRICT, profile_note_label, claimed
+    );
     if (err) return err;
 
     /* Each asked of the table no state row can produce — HOME and the sentinel
@@ -724,7 +722,9 @@ error_t profile_needs_target(profile_t *profile, bool *needs_target) {
     return err;
 }
 
-error_t profile_holds(profile_t *profile, const char *storage_path, profile_held_t *out) {
+error_t profile_holds(
+    profile_t *profile, const char *storage_path, profile_held_t *out
+) {
     CHECK_NULL(profile);
     CHECK_NULL(storage_path);
     CHECK_NULL(out);
@@ -757,7 +757,8 @@ error_t profile_holds(profile_t *profile, const char *storage_path, profile_held
     }
     if (rc != GIT_ENOTFOUND) {
         return error_git(
-            rc, "Cannot read '%s' in profile '%s'", storage_path, profile->name
+            rc, "Cannot read '%s' in profile '%s'",
+            storage_path, profile->name
         );
     }
 
@@ -767,7 +768,9 @@ error_t profile_holds(profile_t *profile, const char *storage_path, profile_held
      * will not load is the answer — and by the question the walk and the directory
      * question ask too, so none of them can part */
     const metadata_item_t *item = NULL;
-    error_t err = profile_directory_item(profile, PROFILE_READ_STRICT, storage_path, &item);
+    error_t err = profile_directory_item(
+        profile, PROFILE_READ_STRICT, storage_path, &item
+    );
     if (err) return err;
 
     *out = (profile_held_t){
@@ -778,11 +781,8 @@ error_t profile_holds(profile_t *profile, const char *storage_path, profile_held
 }
 
 error_t profile_find(
-    profile_t *profile,
-    profile_read_t read,
-    path_kind_t kind,
-    const char *storage_path,
-    const profile_claim_t **out
+    profile_t *profile, profile_read_t read, path_kind_t kind,
+    const char *storage_path, const profile_claim_t **out
 ) {
     CHECK_NULL(profile);
     CHECK_NULL(storage_path);

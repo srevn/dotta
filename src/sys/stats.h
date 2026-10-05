@@ -65,7 +65,7 @@ typedef struct {
  *
  * The summary is the message's first line with its trailing whitespace trimmed,
  * and empty for a commit with no message. The one producer of a commit_info_t:
- * every commit the history walks keep, and each branch tip a verbose profile
+ * every commit the history walks keep, and each branch head a verbose profile
  * row prints (cmds/list.c list_profiles), so a row's commit and a file's read
  * alike.
  *
@@ -116,12 +116,12 @@ error_t stats_blob_size_with_odb(
 /**
  * Build file→commit mapping
  *
- * Walks the history from `tip_oid` back, newest to oldest, mapping each of `paths`
+ * Walks the history from `head_oid` back, newest to oldest, mapping each of `paths`
  * to the most recent commit that touched it. The names are the caller's: which
  * of a tree's blobs a screen reads is knowledge this layer does not have (the
  * header), so the reader hands in the listing it prints — the profile's content,
  * never its machinery (cmds/list.c list_files) — and the map holds those names
- * and no other. So is the tip: the commit the names were listed at, read once
+ * and no other. So is the head: the commit the names were listed at, read once
  * by the caller, so the map and the listing are one snapshot's whatever the branch
  * says by the time the map is built — no branch is read here.
  *
@@ -136,7 +136,7 @@ error_t stats_blob_size_with_odb(
  * Note: This is expensive (history walk). Use only in verbose mode.
  *
  * @param repo Repository (required)
- * @param tip_oid The tip the names were listed at (required)
+ * @param head_oid The head the names were listed at (required)
  * @param paths The names to map: storage paths that commit's tree holds (required)
  * @param arena Arena the map, its keys and its commits live in (required)
  * @param out File→commit map (required; left as it was on a failure)
@@ -144,7 +144,7 @@ error_t stats_blob_size_with_odb(
  */
 error_t stats_build_file_commit_map(
     git_repository *repo,
-    const git_oid *tip_oid,
+    const git_oid *head_oid,
     const string_array_t *paths,
     arena_t *arena,
     file_commit_map_t **out
@@ -153,8 +153,8 @@ error_t stats_build_file_commit_map(
 /**
  * The commits that touched one file
  *
- * Returns every commit from `tip_oid` back that modified the specified file, in
- * reverse chronological order (newest first). None is an answer — `out->count`
+ * Returns every commit from `head_oid` back that modified the specified file,
+ * in reverse chronological order (newest first). None is an answer — `out->count`
  * 0 — whose words are the caller's (cmds/list.c list_file_history).
  *
  * Performance: O(total_commits) - walks entire branch history Memory:
@@ -164,7 +164,7 @@ error_t stats_build_file_commit_map(
  *       (e.g., `dotta list -p <profile> <file>`).
  *
  * @param repo Repository (required)
- * @param tip_oid The tip the history is read back from, read once by the caller
+ * @param head_oid The head the history is read back from, read once by the caller
  *                (required)
  * @param file_path File path within tree (required)
  * @param arena Arena the commits and their summaries live in (required)
@@ -173,7 +173,7 @@ error_t stats_build_file_commit_map(
  */
 error_t stats_file_history(
     git_repository *repo,
-    const git_oid *tip_oid,
+    const git_oid *head_oid,
     const char *file_path,
     arena_t *arena,
     file_history_t *out

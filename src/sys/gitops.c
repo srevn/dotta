@@ -611,15 +611,15 @@ error_t gitops_reference_tree(
 
     *out = NULL;
 
-    /* The tip, or its absence proven: a packed-refs that will not parse is a
+    /* The head, or its absence proven: a packed-refs that will not parse is a
      * failure, never a tree that is not there, and so is a reference that names
      * no commit (gitops_reference_commit) */
-    git_commit *tip = NULL;
-    error_t err = gitops_reference_commit(repo, ref_name, &tip);
-    if (err || !tip) return err;
+    git_commit *head = NULL;
+    error_t err = gitops_reference_commit(repo, ref_name, &head);
+    if (err || !head) return err;
 
-    int rc = git_commit_tree(out, tip);
-    git_commit_free(tip);
+    int rc = git_commit_tree(out, head);
+    git_commit_free(head);
     if (rc < 0) {
         return error_git(rc, "Cannot read the tree at '%s'", ref_name);
     }
@@ -752,13 +752,13 @@ error_t gitops_reference_commit(
     error_t err = gitops_reference_oid(repo, ref_name, &id);
     if (err || git_oid_is_zero(&id)) return err;
 
-    /* The object the reference names, which is a commit or nothing a tip can be
-     * (the header): a tag is refused as a tree is, never peeled to the commit
-     * it names, so no reader holds a tip the stage cannot commit on. */
+    /* The object the reference names, which is a commit or nothing a head can
+     * be (the header): a tag is refused as a tree is, never peeled to the commit
+     * it names, so no reader holds a head the stage cannot commit on. */
     git_object *object = NULL;
     int rc = git_object_lookup(&object, repo, &id, GIT_OBJECT_ANY);
     if (rc < 0) {
-        return error_git(rc, "Cannot read the tip of '%s'", ref_name);
+        return error_git(rc, "Cannot read the head of '%s'", ref_name);
     }
 
     git_object_t type = git_object_type(object);

@@ -105,7 +105,7 @@ error_t bootstrap_extract_to_temp(
     char *path = NULL;
     int fd = -1;
 
-    /* The script at the branch's tip: the tree loaded by the profile's name,
+    /* The script at the branch's head: the tree loaded by the profile's name,
      * the script read off it — a branch that is not there refused in the load's
      * words, naming the reference (sys/gitops.h gitops_load_branch_tree) */
     git_tree *tree = NULL;

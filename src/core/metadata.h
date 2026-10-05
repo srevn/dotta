@@ -678,7 +678,7 @@ error_t metadata_capture_ancestors(
 /**
  * Load metadata from a Git tree
  *
- * Loads metadata.json from a specific Git tree — a branch tip or a historical
+ * Loads metadata.json from a specific Git tree — a branch head or a historical
  * commit's tree alike.
  *
  * A tree without a sheet holds an empty sheet: no .dotta, or a .dotta directory

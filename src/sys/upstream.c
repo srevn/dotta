@@ -44,7 +44,7 @@ error_t upstream_analyze_profile(
     );
     if (err) return err;
 
-    /* Each side's tip, or its absence proven (sys/gitops.h gitops_reference_oid):
+    /* Each side's head, or its absence proven (sys/gitops.h gitops_reference_oid):
      * a packed-refs that will not parse is the analysis's failure, never a branch
      * or a remote branch that is not there. A symbolic branch is read through
      * to the one it names. */

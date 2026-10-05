@@ -205,7 +205,7 @@ static error_t profile_list(
             const state_profile_entry_t *entry = &enabled_profiles.entries[i];
             const char *name = entry->name;
 
-            /* What the profile holds, counted over its tip (core/profiles.h
+            /* What the profile holds, counted over its head (core/profiles.h
              * profile_counts) */
             profile_t *profile = NULL;
             profile_counts_t count = { 0 };
@@ -247,7 +247,7 @@ static error_t profile_list(
      * such a profile is enabled only with one, so this is the mark on exactly
      * the profile clone and --all left here, and the answer is the profile's
      * own (core/profiles.h profile_needs_target). One handle serves both: the
-     * count and the mark walk one tip and parse its sheet once, and a row that
+     * count and the mark walk one head and parse its sheet once, and a row that
      * would not count says so rather than marking nothing in silence. */
     if (available.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Available (disabled)");
@@ -255,7 +255,7 @@ static error_t profile_list(
             const char *name = available.entries[i];
 
             /* What the profile holds, and whether it needs a target, both asked
-             * of the one handle loaded at its tip */
+             * of the one handle loaded at its head */
             profile_t *profile = NULL;
             profile_counts_t count = { 0 };
             bool needs_target = false;

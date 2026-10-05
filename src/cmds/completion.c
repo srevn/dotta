@@ -199,7 +199,7 @@ void completion_directories(
     git_repository *repo = ctx->run.repo;
     if (repo == NULL || pinned == NULL) return;
 
-    /* The profile at its tip: not a branch, or a tip that will not read, offers
+    /* The profile at its head: not a branch, or a head that will not read, offers
      * nothing */
     profile_t *profile = NULL;
     error_t err = profile_load(repo, pinned, &profile);
@@ -299,7 +299,7 @@ void completion_refspecs(
 }
 
 /**
- * Walk each branch's history from its tip, newest first, up to the per-branch
+ * Walk each branch's history from its head, newest first, up to the per-branch
  * limit; a name that resolves to no branch contributes nothing. When more than
  * one history is listed, the description carries the branch so the interleaved
  * hashes stay attributable. `prefix`, when given, is printed before every token
@@ -317,20 +317,20 @@ static size_t commits_walk(
     for (size_t b = 0; b < profile_count; b++) {
         const char *profile = profiles[b];
 
-        /* The branch's tip, as every verb that takes one of these commits reads
+        /* The branch's head, as every verb that takes one of these commits reads
          * it (sys/gitops.h gitops_load_branch_commit) — never a DWIM, whose tag
          * of the same name would win and offer commits no branch holds. A name
-         * that is no branch, or a tip that will not read, offers nothing. */
-        git_commit *tip = NULL;
-        error_t err = gitops_load_branch_commit(repo, profile, &tip);
+         * that is no branch, or a head that will not read, offers nothing. */
+        git_commit *head = NULL;
+        error_t err = gitops_load_branch_commit(repo, profile, &head);
         if (err) continue;
 
         git_revwalk *walker = NULL;
         if (git_revwalk_new(&walker, repo) != 0) {
-            git_commit_free(tip);
+            git_commit_free(head);
             continue;
         }
-        git_revwalk_push(walker, git_commit_id(tip));
+        git_revwalk_push(walker, git_commit_id(head));
         git_revwalk_sorting(walker, GIT_SORT_TIME);
 
         git_oid oid;
@@ -372,7 +372,7 @@ static size_t commits_walk(
         }
 
         git_revwalk_free(walker);
-        git_commit_free(tip);
+        git_commit_free(head);
     }
 
     return emitted;

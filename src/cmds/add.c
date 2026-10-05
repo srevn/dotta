@@ -67,7 +67,7 @@
  * confirms no content), and the claim the sheet took. Set by the capture, empty
  * until it lands, and written by the record phase wherever the claim still stands
  * (add_write_record) — every column but the stamp the capture's, so the record
- * says what dotta put there, never what a later tip of the branch says should be.
+ * says what dotta put there, never what a later head of the branch says should be.
  */
 typedef struct {
     const char *filesystem_path;  /* Where the claim stands (arena) */
@@ -1674,7 +1674,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (err) goto cleanup;
 
     /* The profile's stage, as the pre-flight above resolved it: the branch's
-     * tip and tree when it exists, the empty tree and a root commit-to-be when
+     * head and tree when it exists, the empty tree and a root commit-to-be when
      * it does not. A branch that appeared or vanished since the pre-flight is
      * refused by the open rather than silently taken the other way. */
     char refname[DOTTA_REFNAME_MAX];

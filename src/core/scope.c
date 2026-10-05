@@ -214,23 +214,23 @@ error_t scope_resolve_commit(
     if (err) return err;
 
     /* From the highest precedence down: the last enabled wins every path it shares,
-     * so its tip is the HEAD the view reads. */
+     * so its head is the HEAD the view reads. */
     for (size_t i = enabled->count; i-- > 0;) {
         const char *profile = enabled->entries[i];
         if (filter && !string_array_contains(filter, profile)) continue;
 
-        /* The profile's tip, read once, and the revision asked of it. A tip or
-         * a history that will not read ends the search where it stands, whatever
+        /* The profile's head, read once, and the revision asked of it. A head
+         * or a history that will not read ends the search where it stands, whatever
          * a later profile would have said: what comes back is the first holder
          * in precedence order, a claim about every profile ahead of it, and a
          * branch that would not read is one the claim cannot be made over. */
-        git_commit *tip = NULL;
-        err = gitops_load_branch_commit(repo, profile, &tip);
+        git_commit *head = NULL;
+        err = gitops_load_branch_commit(repo, profile, &head);
         if (err) return err;
 
         git_commit *commit = NULL;
-        err = revision_find(repo, &rev, profile, tip, &commit);
-        git_commit_free(tip);
+        err = revision_find(repo, &rev, profile, head, &commit);
+        git_commit_free(head);
         if (err) return err;
 
         /* Nothing is published until a profile answers. */
@@ -277,18 +277,18 @@ error_t scope_resolve_range(
         const char *profile = enabled->entries[i];
         if (filter && !string_array_contains(filter, profile)) continue;
 
-        /* The tip read once and both ends asked of it, so a range is one tip's
-         * history. A tip or a history that will not read ends the search, as
+        /* The head read once and both ends asked of it, so a range is one head's
+         * history. A head or a history that will not read ends the search, as
          * the single search's does. */
-        git_commit *tip = NULL;
-        err = gitops_load_branch_commit(repo, profile, &tip);
+        git_commit *head = NULL;
+        err = gitops_load_branch_commit(repo, profile, &head);
         if (err) return err;
 
         git_commit *commit1 = NULL;
         git_commit *commit2 = NULL;
-        err = revision_find(repo, &rev1, profile, tip, &commit1);
-        if (!err) err = revision_find(repo, &rev2, profile, tip, &commit2);
-        git_commit_free(tip);
+        err = revision_find(repo, &rev1, profile, head, &commit1);
+        if (!err) err = revision_find(repo, &rev2, profile, head, &commit2);
+        git_commit_free(head);
 
         /* Nothing is published until a profile holds both. */
         if (commit1 && commit2) {

@@ -106,11 +106,12 @@ typedef struct branch branch_t;
  * open cannot fail.
  *
  * Readers: core/manifest.c manifest_build (each enabled tip gitops_branch_tree
- * found), cmds/add.c cmd_add and cmds/revert.c cmd_revert (the tree a stage opened
- * at, and revert's target commit's), cmds/diff.c diff_commit_to_workspace (the
- * commit's), cmds/export.c cmd_export, cmds/show.c cmd_show and cmds/list.c
- * list_file_history (the tree the verb selected); and branch_load, over the tip
- * it read.
+ * found) and core/workspace.c workspace_orphan_authority (each orphan's profile's
+ * tip, found the same way), cmds/add.c cmd_add and cmds/revert.c cmd_revert (the
+ * tree a stage opened at, and revert's target commit's), cmds/diff.c
+ * diff_commit_to_workspace (the commit's), cmds/export.c cmd_export, cmds/show.c
+ * cmd_show and cmds/list.c list_file_history (the tree the verb selected); and
+ * branch_load, over the tip it read.
  *
  * @param repo The repository the sheet's blob is read through (must not be NULL;
  *             borrowed)
@@ -128,7 +129,7 @@ branch_t *branch_open(git_repository *repo, const char *profile, const git_tree 
  * ERR_NOT_FOUND naming the reference), never answered empty; nothing is said
  * over them, the reference naming the branch. A reader for whom the absence is
  * an answer reads gitops_branch_tree and opens over what it finds (core/manifest.c
- * manifest_build).
+ * manifest_build, core/workspace.c workspace_orphan_authority).
  *
  * Readers: core/profiles.c profile_needs_target, profile_build_filesystem_index,
  * claim_by_filesystem_path and claim_by_name; cmds/ignore.c ignore_test.
@@ -286,12 +287,13 @@ typedef struct {
  * the sheet must not answer — a directory claim there is retired by the write,
  * not refused; the orphan probe (core/workspace.c workspace_orphan_authority)
  * asks whether the branch holds the claim a record remembers, which a subtree
- * and a gitlink stand at a name without making — the tree first, as here, and
- * the sheet only for a directory the tree holds no blob for — and folds every
- * failure to UNVERIFIED; and the count's staleness probe and export's claim append
- * (core/profiles.c profile_get_tree_stats, cmds/export.c append_claim_dirs) hold
- * the sheet's item and ask whether the tree contradicts it, which is the
- * enumeration's question (core/branch.c branch_walk's contradiction index).
+ * and a gitlink stand at a name without making — branch_find's directory claim
+ * for a directory record, and for a file record the tree alone, Git's one-entry
+ * rule again — and folds every failure to UNVERIFIED; and the count's staleness
+ * probe and export's claim append (core/profiles.c profile_get_tree_stats,
+ * cmds/export.c append_claim_dirs) hold the sheet's item and ask whether the
+ * tree contradicts it, which is the enumeration's question (core/branch.c
+ * branch_walk's contradiction index).
  *
  * @param branch Handle (must not be NULL); its sheet is read only where the tree
  *               is silent
@@ -317,12 +319,15 @@ error_t branch_holds(branch_t *branch, const char *name, branch_held_t *out);
  *
  * `name` is a validated storage path. The walk checks the shape of every name
  * it meets, because Git's names arrive unchecked; a point question trusts the
- * one it is handed, checked where it was read (infra/path.h path_input_resolve).
+ * one it is handed, checked where it was read (infra/path.h path_input_resolve)
+ * or kept (a record's, which the store holds to the grammar: core/state.h).
  *
  * Lent for the handle's life, kept in an arena of the handle's own; its strings
  * are the sheet's, or the handle's copy of the name.
  *
- * Readers: cmds/show.c show_file (a file claim, TOLERANT: the header).
+ * Readers: cmds/show.c show_file (a file claim, TOLERANT: the header) and
+ * core/workspace.c workspace_orphan_authority (a directory claim, STRICT: whether
+ * the branch still backs an orphan's directory).
  *
  * @param branch Handle (must not be NULL)
  * @param read The sheet's policy for this question

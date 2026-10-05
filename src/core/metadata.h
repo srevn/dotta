@@ -12,8 +12,8 @@
  *   here, and the tree's word wins over a stale item's kind (read for one name
  *   by core/branch.h branch_holds and branch_find — and by core/profiles.h
  *   profile_holds, export's name arm's — and, for the claim an orphan's record
- *   remembers, by core/workspace.c workspace_orphan_authority; for the whole
- *   branch by core/branch.c branch_walk)
+ *   remembers, by core/workspace.c workspace_orphan_authority, through branch_find
+ *   for a directory; for the whole branch by core/branch.c branch_walk)
  * - permission bits: the sheet's ("mode") — Git's filemode holds one bit of them
  *   (owner-execute), the sheet holds them all
  * - ownership: the sheet's ("owner"/"group"), two names either of which may be
@@ -726,12 +726,14 @@ error_t metadata_load_from_branch(
  * the branch's tolerant read (core/branch.h branch_find, from cmds/show.c
  * show_file), the file listing's verbose marks (cmds/list.c list_files, warned;
  * the listing is the tree's and stands, the marks are the sheet's and do not),
- * the orphan authority's third answer (core/workspace.c workspace_orphan_authority,
- * which folds to UNVERIFIED and never to "no claims") and the completion's offer
- * (cmds/completion.c completion_directories). One reader folds without deciding
- * to: the deletion's hook universe (cmds/remove.c remove_profile) drops every
- * directory claim from DOTTA_FILE_n on a sheet it cannot read, where its own
- * sibling a screen up propagates. A further reader would have to argue for one.
+ * the orphan authority's third answer through the branch's strict read
+ * (core/branch.h branch_find, from core/workspace.c workspace_orphan_authority,
+ * which folds the failure to UNVERIFIED and never to "no claims") and the
+ * completion's offer (cmds/completion.c completion_directories). One reader folds
+ * without deciding to: the deletion's hook universe (cmds/remove.c remove_profile)
+ * drops every directory claim from DOTTA_FILE_n on a sheet it cannot read, where
+ * its own sibling a screen up propagates. A further reader would have to argue
+ * for one.
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)
@@ -739,8 +741,8 @@ error_t metadata_load_from_branch(
  *                its callers name it nowhere (must not be NULL)
  * @param out Metadata (must not be NULL, caller must free with metadata_free);
  *            untouched on failure, so the NULL a caller passed is still no sheet
- *            (core/workspace.c workspace_orphan_authority's cache, cmds/list.c
- *            list_files' marks, core/branch.c branch_sheet_failure's handle)
+ *            (cmds/list.c list_files' marks, core/branch.c branch_sheet_failure's
+ *            handle)
  * @return Error or NULL on success
  */
 error_t metadata_load_from_tree(

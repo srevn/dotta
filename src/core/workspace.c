@@ -53,6 +53,7 @@
 #include "base/hashmap.h"
 #include "base/heap.h"
 #include "base/string.h"
+#include "core/branch.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
@@ -1392,25 +1393,26 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
  * which are the tree's to answer. The pass is the retry boundary, as a source
  * filter is (sys/source.h): the next load reads afresh.
  *
- * The tree is read at the profile's first row, the sheet lazily, at the first
- * directory question the tree leaves open (a blob at the name answers one alone).
- * A tree without metadata.json loads as an empty sheet — a profile without metadata
- * backs no directory, and the lookup says so — so a NULL sheet with no failure
- * beside it is one not loaded yet, never one that is absent.
+ * The tip is read at the profile's first row, and the branch is opened over it
+ * there, wherever it stands. The sheet is the branch's: read at the first directory
+ * question the tree leaves open (a blob at the name answers one alone), and kept
+ * by the handle with its failure (core/branch.h branch_find). A tip without
+ * metadata.json holds an empty sheet, so a profile that never wrote one backs
+ * no directory — an answer, never a failure.
  */
 typedef struct {
-    git_tree *tree;             /* The branch's tree; NULL where the branch is gone, or on a failure */
-    error_t tree_failure;       /* Why the tree could not be read; NULL where it was */
-    metadata_t *sheet;          /* The tree's metadata.json; NULL until loaded, or on a failure */
-    error_t sheet_failure;      /* Why the sheet could not be loaded; NULL where it was, or is yet to be */
-} authority_cache_t;
+    git_tree *tree;             /* The branch's tip; NULL where it is gone, or on a failure */
+    error_t tree_failure;       /* Why the tip could not be read; NULL where it was */
+    branch_t *branch;           /* The branch over the tip; NULL beside a NULL tip */
+} workspace_authority_cache_t;
 
 /**
- * Free an authority cache entry (hashmap value callback)
+ * Free an authority cache entry (hashmap value callback): the branch, then the
+ * tip it borrows
  */
-static void authority_cache_free(void *value) {
-    authority_cache_t *cached = value;
-    metadata_free(cached->sheet);      /* NULL-safe */
+static void workspace_authority_cache_free(void *value) {
+    workspace_authority_cache_t *cached = value;
+    branch_free(cached->branch);       /* NULL-safe */
     git_tree_free(cached->tree);       /* NULL-safe */
     free(cached);
 }
@@ -1430,10 +1432,11 @@ typedef enum {
  * "Does the profile that deployed this path still hold the claim its record
  * remembers?" — at the record's storage name, a claim of the record's kind: a
  * blob of any filemode for a file, a DIRECTORY item no blob stands at for a
- * directory. That is the view's contribution rule asked of one name before anything
- * is placed (core/manifest.h, "Within one profile, at one path"), so the probe
- * and the view agree on every name — a disabled profile's custom/ name among
- * them, which has no binding to be placed by.
+ * directory. That is the branch's walk asked of one name before anything is placed
+ * — the file claim a blob makes, which the tree alone holds, and the directory
+ * claim core/branch.h branch_find answers — so the probe and the view agree on
+ * every name, a disabled profile's custom/ name among them, which has no binding
+ * to be placed by.
  *
  * One kind of row reaches this probe — a record whose path the view lacks — and
  * three reasons it may be there are what the probe tells apart:
@@ -1461,12 +1464,13 @@ typedef enum {
  *
  * No failure is raised: each one says only that the probe could not answer, which
  * UNVERIFIED already says — the orphan's hold, never the load's, the rule every
- * failed look in this file takes. A read's failure is kept on the profile's entry
- * and answers every later row that needs the read; the next load asks afresh
- * (authority_cache_t).
+ * failed look in this file takes. A read's failure is kept for the pass and answers
+ * every later row that needs the read — the tip's on the profile's entry, the
+ * sheet's on its branch — and the next load asks afresh
+ * (workspace_authority_cache_t).
  *
  * @param repo Repository (must not be NULL)
- * @param cache profile → authority_cache_t (borrowed keys, owned values)
+ * @param cache profile → workspace_authority_cache_t (borrowed keys, owned values)
  * @param item The orphan: its record's profile, storage path and kind — whose
  *        branch, which name, and the kind of claim to find there (must not be NULL)
  * @return The answer
@@ -1476,18 +1480,20 @@ static orphan_authority_t workspace_orphan_authority(
     hashmap_t *cache,
     const workspace_item_t *item
 ) {
-    authority_cache_t *cached = hashmap_get(cache, item->profile);
+    workspace_authority_cache_t *cached = hashmap_get(cache, item->profile);
     if (!cached) {
-        /* First row of this profile: its branch's tree, or none where the branch
-         * is gone — one read, and every later row reads its answer, or its failure.
-         * The entry is made first, so a failure has a place to be kept; the read
-         * leaves the tree NULL on one. */
+        /* First row of this profile: its branch's tip, or none where the branch
+         * is gone, and the branch over a tip that stands — one read and one open,
+         * and every later row reads their answers, or the failure. The entry is
+         * made first, so a failure has a place to be kept; the read leaves the
+         * tip NULL on one. */
         cached = heap_calloc(1, sizeof(*cached));
         hashmap_set(cache, item->profile, cached);
         cached->tree_failure = gitops_branch_tree(repo, item->profile, &cached->tree);
+        if (cached->tree) cached->branch = branch_open(repo, item->profile, cached->tree);
     }
 
-    /* A tree that could not be read answers no row of the profile */
+    /* A tip that could not be read answers no row of the profile */
     if (cached->tree_failure) return ORPHAN_AUTHORITY_UNVERIFIED;
 
     if (!cached->tree) {
@@ -1496,57 +1502,49 @@ static orphan_authority_t workspace_orphan_authority(
         return ORPHAN_AUTHORITY_LOST;
     }
 
-    /* The tree at the name, asked first and for either kind: a blob there is
-     * the file claim itself, and the one thing that unbacks a directory claim —
-     * the tree is the content authority, and the branch's walk decides in this
-     * order too, its blobs contradicting an item before its directory claims
-     * are shown (core/branch.c branch_walk). Three answers, not two: a subtree
-     * that will not load on the way is a failure to look, never an absence —
-     * and this row's alone, kept by nothing, since another name may have a way
-     * past it; its code is read and never worded. */
-    git_tree_entry *entry = NULL;
-    int rc = git_tree_entry_bypath(&entry, cached->tree, item->storage_path);
-    if (rc != 0 && rc != GIT_ENOTFOUND) return ORPHAN_AUTHORITY_UNVERIFIED;
-
-    /* A blob at the name and only there: one above it reads GIT_ENOTFOUND and
-     * contradicts nothing, as in the branch's walk, whose contradiction index
-     * is keyed by the blob's own name. */
-    bool blob_at_name = rc == 0 && git_tree_entry_type(entry) == GIT_OBJECT_BLOB;
-    git_tree_entry_free(entry);             /* NULL-safe, and NULL unless rc == 0 */
-
     if (item->item_kind == PATH_KIND_FILE) {
+        /* The tree at the name, and the tree alone: Git's one-entry rule, which
+         * the sheet must not answer — one that will not load never holds a copy
+         * the tree releases. Three answers, not two: a subtree that will not
+         * load on the way is a failure to look, never an absence — and this row's
+         * alone, kept by nothing, since another name may have a way past it;
+         * its code is read and never worded. */
+        git_tree_entry *entry = NULL;
+        int rc = git_tree_entry_bypath(&entry, cached->tree, item->storage_path);
+        if (rc != 0 && rc != GIT_ENOTFOUND) return ORPHAN_AUTHORITY_UNVERIFIED;
+        git_object_t type = rc == 0 ? git_tree_entry_type(entry) : GIT_OBJECT_INVALID;
+        git_tree_entry_free(entry);             /* NULL-safe, and NULL unless rc == 0 */
+
         /* A file claim is a blob of any filemode — bytes, an executable, a link's
          * target — and nothing else at the name is one: a subtree is the way to
          * what lies beneath it and a gitlink is nothing dotta writes, so neither
-         * holds a byte of the copy on disk. */
-        return blob_at_name ? ORPHAN_AUTHORITY_BACKED : ORPHAN_AUTHORITY_LOST;
+         * holds a byte of the copy on disk. A blob or a gitlink above the name
+         * leaves nothing there to find (lib/libgit2/src/libgit2/tree.c
+         * git_tree_entry_bypath), so this is the walk's answer at every rung. */
+        return type == GIT_OBJECT_BLOB ? ORPHAN_AUTHORITY_BACKED : ORPHAN_AUTHORITY_LOST;
     }
-
-    if (blob_at_name) {
-        /* A DIRECTORY item where the tree holds a blob is stale metadata and
-         * claims nothing (core/branch.h): the branch holds a file claim here,
-         * not the record's directory, and the sheet need not be read. */
-        return ORPHAN_AUTHORITY_LOST;
-    }
-
-    /* The sheet, on the first directory question the tree left open, kept like
-     * the tree — with its failure: the read leaves the sheet NULL on one, so a
-     * sheet neither loaded nor failed is one not asked yet. A tree without one
-     * loads as an empty sheet — a settled "no claims", not a failure — so every
-     * error here is a failure to look. */
-    if (!cached->sheet && !cached->sheet_failure) {
-        cached->sheet_failure = metadata_load_from_tree(
-            repo, cached->tree, item->profile, &cached->sheet
-        );
-    }
-    if (cached->sheet_failure) return ORPHAN_AUTHORITY_UNVERIFIED;
 
     /* A directory claim lives in the sheet alone — a tree holds no empty directory
-     * — so the item decides, and a subtree or a gitlink at the name vetoes nothing.
-     * A FILE item standing where no blob does claims nothing. */
-    const metadata_item_t *claim = metadata_lookup(cached->sheet, item->storage_path);
-    return claim && claim->kind == PATH_KIND_DIRECTORY ? ORPHAN_AUTHORITY_BACKED
-                                                       : ORPHAN_AUTHORITY_LOST;
+     * — and the one a record remembers is the claim the branch's walk shows at
+     * the name (core/branch.h branch_find): a blob there contradicts it and answers
+     * without the sheet, which the handle reads once and keeps with its failure;
+     * a subtree or a gitlink vetoes nothing, and a FILE item claims no directory.
+     * Read strictly: whether the claim stands is the sheet's question, so one
+     * that will not load holds the copy. */
+    const branch_claim_t *claim = NULL;
+    error_t err = branch_find(
+        cached->branch, BRANCH_READ_STRICT, PATH_KIND_DIRECTORY, item->storage_path, &claim
+    );
+
+    /* A failure is one the probe cannot answer, which UNVERIFIED already says,
+     * and is dropped: the sheet's is the handle's, minted once; the tree's is
+     * worded by branch_find for this row, one per directory record beneath a
+     * subtree the store lacks — the bound of what this loop keeps (base/error.h
+     * "Lifetime"). */
+    if (err) return ORPHAN_AUTHORITY_UNVERIFIED;
+
+    /* The claim the walk shows backs the copy; none lets it go */
+    return claim ? ORPHAN_AUTHORITY_BACKED : ORPHAN_AUTHORITY_LOST;
 }
 
 /**
@@ -2058,15 +2056,17 @@ static void workspace_analyze_orphans(workspace_t *ws) {
         return;
     }
 
-    /* profile → authority_cache_t for this pass, in the workspace's arena. Keys
-     * borrow the records' arena-backed profile strings; each value holds a tree
-     * and a sheet, and is released whole when the pass is done. */
+    /* profile → workspace_authority_cache_t for this pass, in the workspace's
+     * arena. Keys borrow the records' arena-backed profile strings; each value
+     * holds a tip and the branch over it, and is released whole when the pass
+     * is done. */
     hashmap_t *authority_cache = hashmap_borrow(ws->arena, 8);
 
     /* The walk cannot fail: a folded error is not the walk's — the probe's failures
-     * are the orphan's hold, each kept on its profile's entry for the pass, and
-     * the measure's are its bit, dropped at the call that raised it; neither is
-     * carried out of the walk. */
+     * are the orphan's hold, a read's kept for the pass (the tip's on its profile's
+     * entry, the sheet's on the entry's branch) and a subtree's on the way to
+     * one name that row's alone, and the measure's are its bit, dropped at the
+     * call that raised it; none is carried out of the walk. */
     for (size_t i = 0; i < ws->orphan_count; i++) {
         workspace_item_t *item = ws->orphans[i];
         const state_record_t *record = item->record;
@@ -2229,7 +2229,7 @@ static void workspace_analyze_orphans(workspace_t *ws) {
         workspace_measure(ws, item);
     }
 
-    hashmap_clear(authority_cache, authority_cache_free);
+    hashmap_clear(authority_cache, workspace_authority_cache_free);
 
     /* Every orphan analyzed, by a walk that cannot fail: the diverged items list
      * them from here (workspace_list). */

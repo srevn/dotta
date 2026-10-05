@@ -140,7 +140,7 @@ static error_t select_profile(
  * The row and not its name, because this file asks it two ways: the read takes
  * any claim, and the write's name takes the claim standing there whatever it is
  * called. A verb answering a string would have to pick one of them for both,
- * which is also why revert no longer asks core/profiles.h profile_claim_name:
+ * which is also why revert no longer asks core/manifest.h manifest_claim_name:
  * over a past tree a name today's roots would compose is one that tree never
  * held, and for a verb that writes, composing a name would choose a deployment
  * contract. The third question — may this name be authored at all — is the

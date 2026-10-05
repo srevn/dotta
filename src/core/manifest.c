@@ -1,8 +1,8 @@
 /**
- * manifest.c - Manifest module implementation
+ * manifest.c - The view: implementation
  *
- * The precedence oracle: manifest_build (every enabled profile, in precedence
- * order) and manifest_build_branch (one branch) share one per-profile step,
+ * Two builders, manifest_build (every enabled profile, in precedence order) and
+ * manifest_build_branch (one branch), share one per-profile step,
  * manifest_contribute, that places the claims a branch's walk shows (core/branch.h)
  * as manifest_row_t rows directly. There is no persistence step and no bridge
  * type: the view is computed into the caller's arena and read through the accessors
@@ -87,7 +87,7 @@ typedef struct {
 } contribution_t;
 
 /**
- * Manifest — the precedence oracle's product
+ * Manifest — the view
  *
  * The contributions, in precedence order, and the index precedence leaves over
  * them. Rows are allocated one by one from the caller's arena and are stable
@@ -1276,6 +1276,30 @@ const char *manifest_name(
     if (here.storage_path) return arena_strdup(arena, here.storage_path);
 
     return manifest_ascend(&n, filesystem_path);
+}
+
+/**
+ * The name `profile` has for `filesystem_path` under this view
+ */
+const char *manifest_claim_name(
+    arena_t *arena,
+    const manifest_t *manifest,
+    const char *profile,
+    const char *filesystem_path
+) {
+    CHECK_NULL(arena);
+    CHECK_NULL(manifest);
+    CHECK_NULL(filesystem_path);
+
+    /* The claim standing there, before the name one would take: a derived claim
+     * is held and names nothing, so the ascent climbs past it and would answer
+     * a name the branch never held. Else the name the profile would give the
+     * place — its label's word at a root of its own. Either answer is the arena's:
+     * the row's name is copied, as the namer's own leaf clause copies. */
+    const manifest_row_t *row = manifest_lookup_claim(manifest, profile, filesystem_path);
+
+    return row ? arena_strdup(arena, row->storage_path)
+               : manifest_name(arena, manifest, profile, filesystem_path, NULL);
 }
 
 /**

@@ -853,12 +853,16 @@ static error_t list_file_history(
     /* The profile's branch over the tip's tree, held beside it */
     branch_t *branch = branch_open(repo, profile, tree);
 
-    /* A path under a named profile, named by the branch at that tip
-     * (core/profiles.h profile_claim_name) */
+    /* A path under a named profile, named by the branch's own view of that tip
+     * (core/manifest.h manifest_claim_name) */
     if (opts->profile && arg.key == PATH_KEY_FILESYSTEM) {
-        err = profile_claim_name(
-            branch, mounts, arg.filesystem_path, ctx->arena, &storage_path
-        );
+        manifest_t *view = NULL;
+        err = manifest_build_branch(branch, mounts, ctx->arena, &view);
+        if (!err) {
+            storage_path = manifest_claim_name(
+                ctx->arena, view, profile, arg.filesystem_path
+            );
+        }
     }
 
     /* What the tip holds at the name, asked of the branch's two documents at

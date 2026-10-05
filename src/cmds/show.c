@@ -621,8 +621,8 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         /* The profile named must be here before its tree is opened. Then the
          * tree the profile selected — its tip, or the commit's — which is both
          * where the claim is looked for and what its bytes come from, so a name
-         * that changed since the commit is found as of then (core/profiles.h
-         * profile_claim_name). */
+         * that changed since the commit is found as of then (core/manifest.h
+         * manifest_claim_name). */
         err = profile_require(repo, profile);
         if (err) goto cleanup;
 
@@ -639,10 +639,15 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         if (arg.key == PATH_KEY_STORAGE) {
             storage_path = arg.storage_path;
         } else {
-            err = profile_claim_name(
-                branch, mounts, arg.filesystem_path, ctx->arena, &storage_path
-            );
+            /* The branch's own view of that tree, strict about its sheet, names
+             * the path: the claim standing there, else the name one would take */
+            manifest_t *view = NULL;
+            err = manifest_build_branch(branch, mounts, ctx->arena, &view);
             if (err) goto cleanup;
+
+            storage_path = manifest_claim_name(
+                ctx->arena, view, profile, arg.filesystem_path
+            );
         }
 
         /* The argument is answered, so the commit it was read from can caption

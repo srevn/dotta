@@ -175,8 +175,8 @@ void branch_free(branch_t *branch);
  *
  * Readers: core/manifest.c manifest_contribute, which names a contribution's
  * rows by it, and the helpers that hold a branch and ask its view by profile or
- * word a refusal under it (core/profiles.c profile_claim_name, cmds/export.c
- * export_collect_profile, export_collect_storage and export_collect_filesystem,
+ * word a refusal under it (cmds/export.c export_collect_profile,
+ * export_collect_storage and export_collect_filesystem,
  * cmds/revert.c claim_standing, refuse_second_name and entry_to_restore);
  * core/profiles.c profile_needs_target, which asks a table for the profile's
  * own roots by it; and cmds/show.c show_file, whose bytes the profile's key opens

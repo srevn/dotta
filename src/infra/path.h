@@ -4,11 +4,10 @@
  * A filesystem path keys across profiles — the view's rows, the record, every
  * screen — and a storage path keys within one (infra/label.h). The resolver answers
  * in the one the user named and manufactures neither from the other: what a profile
- * calls a filesystem path is a claim standing in a branch, and a
- * command asks the branch (core/manifest.h, the view by filesystem path;
- * core/profiles.h profile_claim_name, one profile's own). There is no exception
- * left: nothing here manufactures one key from the other, and no surface below
- * offers to.
+ * calls a filesystem path is a claim standing in a branch, and a command asks
+ * the branch (core/manifest.h: the view by filesystem path, and
+ * manifest_claim_name, one profile's own). There is no exception left: nothing
+ * here manufactures one key from the other, and no surface below offers to.
  *
  * Each key is named for its medium wherever it is held — `filesystem_path` and
  * `storage_path`, parameter, field or local, at every layer. A function marked
@@ -183,8 +182,8 @@ bool path_input_announces_path(const char *input);
  *     the branch claims at and beneath it, a filesystem path the profile's rows
  *     there.
  *   - show, list and revert (cmds/) take either: a name the user typed is Git's
- *     key already, and a filesystem path is the branch's to name (core/profiles.h
- *     profile_claim_name, profile_discover_claims).
+ *     key already, and a filesystem path is the branch's to name (core/manifest.h
+ *     manifest_claim_name, core/profiles.h profile_discover_claims).
  *   - add's storage head (cmds/add.c) takes the name alone: its own predicate
  *     dispatched on the storage shape, so a filesystem path arriving there is
  *     its bug and says so.

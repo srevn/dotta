@@ -1,5 +1,5 @@
 /**
- * manifest.h - The precedence oracle
+ * manifest.h - The view: every enabled profile's claims, placed and layered
  *
  * The manifest is the precedence-resolved view of every enabled profile at HEAD:
  * one row per active filesystem path, both kinds, the winning profile's claim
@@ -26,7 +26,8 @@
  * manifest_lookup_storage, manifest_holder, manifest_diff: deployment, the record's
  * join, the workspace, every screen. Everything that asks *what does this profile
  * call this path* reads that profile's own contribution — manifest_lookup_claim,
- * manifest_name: a path P lost to a higher profile is still named by what P holds.
+ * manifest_name, manifest_claim_name: a path P lost to a higher profile is still
+ * named by what P holds.
  *
  * Within one profile, at one path: an explicit claim (a blob of any type, a
  * `tracked` directory item) outranks a derived one whichever arrives first, and
@@ -62,29 +63,30 @@
  *     (later profiles override earlier); manifest_build_branch walks one branch
  *     the caller opened over a tree it holds or loaded at its tip (core/branch.h)
  *     — the historical diff (cmds/diff.c diff_commit_to_workspace), export's
- *     path arm, and the claim search over whatever tree a verb selected — and
- *     is the same per-profile step applied once. Each step places the claims
- *     its branch's walk shows (core/branch.h branch_walk), which reads the claim
- *     sheet of the tree it walks: a tree without one holds an empty sheet, and
- *     a sheet that will not load fails the build rather than read as "no claims",
- *     so no caller of a builder chooses a policy for a fact the builder is the
- *     authority on. That is the view's rule and only the view's — a command reading
- *     a sheet for its own screen decides for itself (core/metadata.h). Both produce
- *     manifest_row_t rows directly, the one row shape every consumer reads, so
- *     there is no bridge between the build step and its readers. The dispatcher
- *     builds the view once per command for the commands that declare it
- *     (ctx->run.manifest, include/runtime.h); a command that moves Git or the
- *     enabled set builds the post-mutation view itself.
+ *     path arm, and the path argument of `show -p` and `list -p`, named over
+ *     whatever tree the verb selected — and is the same per-profile step applied
+ *     once. Each step places the claims its branch's walk shows (core/branch.h
+ *     branch_walk), which reads the claim sheet of the tree it walks: a tree
+ *     without one holds an empty sheet, and a sheet that will not load fails
+ *     the build rather than read as "no claims", so no caller of a builder chooses
+ *     a policy for a fact the builder is the authority on. That is the view's
+ *     rule and only the view's — a command reading a sheet for its own screen
+ *     decides for itself (core/metadata.h). Both produce manifest_row_t rows
+ *     directly, the one row shape every consumer reads, so there is no bridge
+ *     between the build step and its readers. The dispatcher builds the view
+ *     once per command for the commands that declare it (ctx->run.manifest,
+ *     include/runtime.h); a command that moves Git or the enabled set builds
+ *     the post-mutation view itself.
  *
  *   - Readers: manifest_rows (every winning row, both kinds, unordered),
  *     manifest_profiles (the profiles the rows came from, in precedence order),
  *     manifest_mounts (the table the rows were placed by, lent), manifest_lookup
  *     (by filesystem path, O(1)), manifest_lookup_storage (by claim — a storage
  *     path under one profile, linear), manifest_holder (the one row holding a
- *     name, or a refusal naming each), manifest_lookup_claim, manifest_name and
- *     manifest_holds_name (one profile's own contribution, whoever won the path);
- *     and manifest_diff, the per-profile delta between two views that the
- *     scope-changing verbs and sync print their receipts from.
+ *     name, or a refusal naming each), manifest_lookup_claim, manifest_name,
+ *     manifest_claim_name and manifest_holds_name (one profile's own contribution,
+ *     whoever won the path); and manifest_diff, the per-profile delta between
+ *     two views that the scope-changing verbs and sync print their receipts from.
  *
  * Core Principles:
  *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
@@ -169,9 +171,8 @@ typedef struct branch branch_t;
  * profile's claim at a path whether or not it stands.
  *
  * Strings are arena-backed by the producer; rows are read through `const
- * manifest_row_t *` and live for the producer's arena. The precedence oracle
- * below produces rows, the workspace partitions them, deploy and cleanup plan
- * over them.
+ * manifest_row_t *` and live for the producer's arena. The builders below produce
+ * rows, the workspace partitions them, deploy and cleanup plan over them.
  */
 typedef struct manifest_row {
     /* Identity */
@@ -426,8 +427,9 @@ error_t manifest_build(
  * (cmds/export.c export_collect_filesystem), which selects the rows one profile
  * places at and beneath a path — the rows, not the Git subtree of whatever name
  * stands there, which is what manifest_lookup_claim's own note is about; the
- * claim search over whatever tree a verb selected (core/profiles.c
- * profile_claim_name); revert's two questions of a tree, the claim standing at
+ * path argument of `show -p` and `list -p`, named over whatever tree the verb
+ * selected (cmds/show.c cmd_show, cmds/list.c list_file_history, which ask it
+ * manifest_claim_name); revert's two questions of a tree, the claim standing at
  * a path and the second-name admission (cmds/revert.c claim_standing,
  * refuse_second_name); add, which builds one over the tree its stage opened at
  * and asks it every naming question for the length of the command (cmds/add.c
@@ -809,15 +811,17 @@ error_t manifest_holder(
  * one for the shape the profile's claims give the path and the other for the
  * name it is about to author.
  *
- * Readers: the claim search a profile-scoped verb makes (core/profiles.h
- * profile_claim_name, and the per-branch arm of profile_discover_claims), which
- * asks this before the namer — a derived claim is something the profile holds
- * and nothing it names, so the namer alone would climb past it and answer a name
- * the branch never held; and add's two questions of a path it names or walks
- * (cmds/add.c cmd_add and add_collect): which rules reach it — a claim meets
- * the -e layer alone, no rule of discovery (add_verdict) — and whether the
- * profile's own claim agrees with what stands there now — the one reading that
- * sees an explicit claim with nothing beneath it for either of the branch's
+ * Readers: the name a profile has for a path (manifest_claim_name), which asks
+ * this before the namer — a derived claim is something the profile holds and
+ * nothing it names, so the namer alone would climb past it and answer a name
+ * the branch never held — and the per-branch arm of the search across the local
+ * branches (core/profiles.h profile_discover_claims); revert's two questions of
+ * a tree, the claim standing at a path and the second-name admission (cmds/revert.c
+ * claim_standing, refuse_second_name); add's two questions of a path it names
+ * or walks (cmds/add.c cmd_add and add_collect): which rules reach it — a claim
+ * meets the -e layer alone, no rule of discovery (add_verdict) — and whether
+ * the profile's own claim agrees with what stands there now — the one reading
+ * that sees an explicit claim with nothing beneath it for either of the branch's
  * documents to find, and a derived row included, since a profile holding a subtree
  * beneath a path is a statement a path that became a file contradicts; and `ignore
  * --test`'s note beneath a verdict that excludes a path its asker tracks, which
@@ -1000,15 +1004,15 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  * a second authority what one would have meant.
  *
  * Readers: `ignore --test`'s subject, one per asker (cmds/ignore.c ignore_test);
- * the prospective name a claim search falls through to (core/profiles.c
- * profile_claim_name); the name every capture lands under — add's argument arm,
- * its walk, and the one refusal its completed selection owes, all over the
- * command's own listing (cmds/add.c cmd_add, add_collect, add_refuse_moves),
- * and the frame a walk's refusal offers to leave out, named as the walk named
- * it (add_refuse_unjudged); and the name the untracked scan offers a new path
- * under, one per entry its guards let through, with no pending layer — the scan
- * admits nothing (core/workspace.c workspace_scan). The settle of a contribution's
- * collisions asks the same rule (core/manifest.c manifest_settle).
+ * the prospective name the claim name falls through to (manifest_claim_name);
+ * the name every capture lands under — add's argument arm, its walk, and the
+ * one refusal its completed selection owes, all over the command's own listing
+ * (cmds/add.c cmd_add, add_collect, add_refuse_moves), and the frame a walk's
+ * refusal offers to leave out, named as the walk named it (add_refuse_unjudged);
+ * and the name the untracked scan offers a new path under, one per entry its
+ * guards let through, with no pending layer — the scan admits nothing
+ * (core/workspace.c workspace_scan). The settle of a contribution's collisions
+ * asks the same rule (core/manifest.c manifest_settle).
  *
  * @param arena Arena the name lives in (must not be NULL)
  * @param manifest Manifest (must not be NULL)
@@ -1024,6 +1028,68 @@ const char *manifest_name(
     const char *profile,
     const char *filesystem_path,
     const hashmap_t *pending
+);
+
+/**
+ * The name `profile` has for `filesystem_path` under this view: the claim standing
+ * there, or the name a claim there would take
+ *
+ * A filesystem key, and the only one. The resolver answers two and the other is
+ * already settled where the argument was read (infra/path.h): a name the user
+ * typed is Git's key, so the caller's own question of the branch decides whether
+ * the profile holds it (core/branch.h branch_holds) and there is nothing here
+ * to ask — a name no claim sheet mentions, a bare subtree, a name the view did
+ * not keep, is held by the branch and never by its view. What arrives here is
+ * the key that needs the profile's view to answer it.
+ *
+ * Asked of the profile's own contribution, in this order: the row standing there
+ * (manifest_lookup_claim) answers with its own name whatever its kind, so
+ * home/jail/etc/x under a binding at ~/jail is found by ~/jail/etc/x and the
+ * chain above a file captured before the binding answers as the claim it is;
+ * else the name the profile would give the path (manifest_name) — the word a
+ * history search and a not-found line need, which at a root of the profile's
+ * own is that root's label's word. Two arms and no third: naming is total, so
+ * every path this is asked about has a name.
+ *
+ * The row before the namer is the contract, not a shortcut: a derived claim is
+ * something the profile holds and nothing it names (manifest_is_derived), so
+ * the namer alone would climb past it and answer a name the branch never held.
+ * Search first, name second.
+ *
+ * A name, never an enumeration. A DIRECTORY claim names its path and says nothing
+ * about what stands beneath it (manifest_lookup_claim); a verb that means
+ * everything at a place selects rows by path (cmds/export.c) and never walks
+ * this answer's subtree.
+ *
+ * The path keys against the rows by strcmp (infra/mount.h). The answer is the
+ * caller's arena's whichever arm produced it, as manifest_name's is.
+ *
+ * Its readers build the view for it, one branch's (manifest_build_branch) over
+ * the tree the verb selected, and that build is the whole of what a path costs:
+ * one tree walk, and the sheet loaded at the branch's first question
+ * (core/branch.h). Its other face: a profile whose sheet will not load refuses
+ * a path where the name its caller answers unaided proceeds — the view is strict,
+ * a verb's own read is not. A ref or a tree that will not load refuses both.
+ *
+ * Readers: `show -p` and `list -p`, over the view of the tree the verb selected
+ * (the tip, or the commit the user named, so a name that changed since is found
+ * as of then: cmds/show.c cmd_show, cmds/list.c list_file_history). `export`
+ * selects rows instead, `remove` matches its own claims, `revert` reads the claim
+ * standing in the tree it edits (cmds/revert.c claim_standing), and `ignore --test`
+ * asks manifest_name itself.
+ *
+ * @param arena Arena the name lives in (must not be NULL)
+ * @param manifest Manifest (must not be NULL)
+ * @param profile The asker, or NULL for the shared roots alone (manifest_name)
+ * @param filesystem_path Where to ask, spelled as the rows are keyed (must not
+ *        be NULL)
+ * @return The name; never NULL
+ */
+const char *manifest_claim_name(
+    arena_t *arena,
+    const manifest_t *manifest,
+    const char *profile,
+    const char *filesystem_path
 );
 
 /**

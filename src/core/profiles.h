@@ -232,73 +232,6 @@ error_t profile_list_tree_files(
  */
 error_t profile_needs_target(branch_t *branch, bool *needs_target);
 
-/**
- * The name a branch has for `filesystem_path`: the claim standing there, or the
- * name a claim there would take
- *
- * A filesystem key, and the only one. The resolver answers two and the other is
- * already settled where the argument was read (infra/path.h): a name the user
- * typed is Git's key, so the caller's own question of the branch decides whether
- * the profile holds it (core/branch.h branch_holds) and there is nothing here
- * to ask — a name no claim sheet mentions, a bare subtree, a name the view did
- * not keep, is held by the branch and never by its view. What arrives here is
- * the key that needs the branch to answer it.
- *
- * Asked of the branch's own view (core/manifest.h manifest_build_branch, its
- * sheet read strictly), in this order: the row standing there answers with its
- * own name whatever its kind, so home/jail/etc/x under a binding at ~/jail is
- * found by ~/jail/etc/x and the chain above a file captured before the binding
- * answers as the claim it is; else the name the profile would give the path
- * (manifest_name) — the word a history search and a not-found line need, which
- * at a root of the profile's own is that root's label's word. Two arms and no
- * third: naming is total, so every path this is asked about has a name.
- *
- * The row before the namer is the contract, not a shortcut: a derived claim is
- * something the profile holds and nothing it names (manifest_is_derived), so
- * the namer alone would climb past it and answer a name the branch never held.
- * Search first, name second.
- *
- * A name, never an enumeration. A DIRECTORY claim names its path and says
- * nothing about what stands beneath it (core/manifest.h manifest_lookup_claim);
- * a verb that means everything at a place selects rows by path (cmds/export.c)
- * and never walks this answer's subtree.
- *
- * `mounts` is the table the rows are placed by, and the path keys against them
- * by strcmp (infra/mount.h). The answer is the arena's — the view's own row string,
- * or the namer's — as the view this call builds is.
- *
- * Cost: one tree walk every call, and the sheet loaded at the branch's first
- * question (core/branch.h). Its other face: a profile whose sheet will not load
- * refuses a path where the name its caller answers unaided proceeds — the view
- * is strict, a verb's own read is not (core/manifest.h). A ref or a tree that
- * will not load refuses both.
- *
- * Readers: `show -p` and `list -p` over the branch the verb opened at the tree
- * it selected (the tip, or the commit the user named, so a name that changed
- * since is found as of then: cmds/show.c cmd_show, cmds/list.c list_file_history).
- * `export` selects rows instead, `remove` matches its own claims, `revert` reads
- * the claim standing in the tree it edits (cmds/revert.c claim_standing), and
- * `ignore --test` asks manifest_name itself.
- *
- * @param branch The branch the claim is looked for in — its tip, or a commit's,
- *               so a commit's answers as of then (must not be NULL; its sheet
- *               read through it)
- * @param mounts The table the rows are placed by (must not be NULL)
- * @param filesystem_path Where to ask, spelled as the rows are keyed (must not
- *        be NULL)
- * @param arena Arena that owns the answer (must not be NULL)
- * @param out_storage Arena-borrowed storage path; NULL after an error (must not
- *                    be NULL)
- * @return Error or NULL on success
- */
-error_t profile_claim_name(
-    branch_t *branch,
-    const mount_table_t *mounts,
-    const char *filesystem_path,
-    arena_t *arena,
-    const char **out_storage
-);
-
 /* A claim is (profile, name) — the pair that keys within one profile
  * (infra/mount.h). No kind: its readers print a profile and a name, and the one
  * verb that acts on a claim reads the kind from the tree entry it opens. */
@@ -357,13 +290,14 @@ typedef struct {
  * among the enabled set asks the view instead (manifest_lookup, manifest_holder
  * — list, show).
  *
- * The key is the input here, where its sibling takes a filesystem path outright
- * (profile_claim_name): both keys run this one search — the same enumeration,
- * the same collection, the same answer when nothing holds it — and the tag chooses
- * which probe each branch is asked. Over there the other key is an answer the
- * caller already holds, so nothing is left for the call to do with it. A sum
- * that chooses among a function's own behaviours is its input; one whose arm
- * means "there was nothing to ask" is the caller's question smuggled in.
+ * The key is the input here, where the claim name takes a filesystem path outright
+ * (core/manifest.h manifest_claim_name): both keys run this one search — the
+ * same enumeration, the same collection, the same answer when nothing holds it
+ * — and the tag chooses which probe each branch is asked. Over there the other
+ * key is an answer the caller already holds, so nothing is left for the call to
+ * do with it. A sum that chooses among a function's own behaviours is its input;
+ * one whose arm means "there was nothing to ask" is the caller's question smuggled
+ * in.
  *
  * @param repo Repository (must not be NULL)
  * @param mounts This machine's mount table (must not be NULL)

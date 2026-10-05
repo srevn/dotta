@@ -389,41 +389,6 @@ error_t profile_build_filesystem_index(
 }
 
 /**
- * The name a branch has for `filesystem_path`
- */
-error_t profile_claim_name(
-    branch_t *branch,
-    const mount_table_t *mounts,
-    const char *filesystem_path,
-    arena_t *arena,
-    const char **out_storage
-) {
-    CHECK_NULL(branch);
-    CHECK_NULL(mounts);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(arena);
-    CHECK_NULL(out_storage);
-
-    *out_storage = NULL;
-
-    const char *profile = branch_profile(branch);
-
-    manifest_t *view = NULL;
-    error_t err = manifest_build_branch(branch, mounts, arena, &view);
-    if (err) return err;
-
-    /* The claim standing there, before the name one would take: a derived claim
-     * is held and names nothing, so the ascent climbs past it and would answer
-     * a name the branch never held. Else the name the profile would give the
-     * place — its label's word at a root of its own. Either answer is the arena's,
-     * as the view is. */
-    const manifest_row_t *row = manifest_lookup_claim(view, profile, filesystem_path);
-    *out_storage = row ? row->storage_path
-                       : manifest_name(arena, view, profile, filesystem_path, NULL);
-    return NULL;
-}
-
-/**
  * The claim `profile`'s branch stands at `filesystem_path`, or NULL
  *
  * The branch's own view of its tip under this machine's table, so the name is

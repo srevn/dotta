@@ -859,11 +859,6 @@ static error_t list_file_history(
         err = profile_claim_name(
             branch, mounts, arg.filesystem_path, ctx->arena, &storage_path
         );
-        if (err) {
-            branch_free(branch);
-            git_tree_free(tree);
-            return err;
-        }
     }
 
     /* What the tip holds at the name, asked of the branch's two documents at
@@ -876,7 +871,7 @@ static error_t list_file_history(
      * under another contract are the user's to type, a prospective name proving
      * nothing about what the profile once held there. */
     branch_held_t held;
-    err = branch_holds(branch, storage_path, &held);
+    if (!err) err = branch_holds(branch, storage_path, &held);
     branch_free(branch);
     git_tree_free(tree);
     if (err) return err;

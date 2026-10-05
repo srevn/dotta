@@ -10,10 +10,9 @@
  * Authority, per fact:
  * - content and type: the tree's (a blob, a link, an executable) — never restated
  *   here, and the tree's word wins over a stale item's kind (read for one name
- *   by core/branch.h branch_holds and branch_find — and by core/profiles.h
- *   profile_holds, export's name arm's — and, for the claim an orphan's record
- *   remembers, by core/workspace.c workspace_orphan_authority, through branch_find
- *   for a directory; for the whole branch by core/branch.c branch_walk)
+ *   by core/branch.h branch_holds and branch_find — and, for the claim an orphan's
+ *   record remembers, by core/workspace.c workspace_orphan_authority, through
+ *   branch_find for a directory; for the whole branch by core/branch.c branch_walk)
  * - permission bits: the sheet's ("mode") — Git's filemode holds one bit of them
  *   (owner-execute), the sheet holds them all
  * - ownership: the sheet's ("owner"/"group"), two names either of which may be
@@ -163,15 +162,14 @@ typedef struct state_record state_record_t;
  * mode a user can mean. Absence therefore needs a value outside the domain, not
  * the domain's floor. A sheet's item carries it, and so does the claim a branch
  * decodes from one (core/branch.h branch_claim_t); it ends wherever a mode is
- * placed — the view's rows take the claim's floor (core/branch.h branch_claim_mode:
- * the filemode floor for a blob, DIR_MODE_DEFAULT for a directory) and a capture's
- * record takes none (metadata_item_claim: a link's, the one capture that claims
- * no mode) — so no row, record or verdict carries it. The header show prints
- * tests it on the decoded claim, where a mode is claimed (cmds/show.c
- * show_print_blob). The commands that read an item's mode raw test it beside
- * the item: export's materialised mode, where a mode is claimed (cmds/export.c
- * export_entry_mode), and the capture lines add and update print (cmds/add.c
- * add_print_capture, cmds/update.c update_profile).
+ * placed — the view's rows and export's copy take the claim's floor (core/branch.h
+ * branch_claim_mode: the filemode floor for a blob, DIR_MODE_DEFAULT for a
+ * directory) and a capture's record takes none (metadata_item_claim: a link's,
+ * the one capture that claims no mode) — so no row, record, entry or verdict
+ * carries it. The header show prints tests it on the decoded claim, where a mode
+ * is claimed (cmds/show.c show_print_blob). The commands that read an item's
+ * mode raw test it beside the item: the capture lines add and update print
+ * (cmds/add.c add_print_capture, cmds/update.c update_profile).
  */
 #define MODE_UNCLAIMED ((mode_t) -1)
 
@@ -197,18 +195,18 @@ typedef struct state_record state_record_t;
  * cross-checked nowhere: the content reader classifies the blob's own bytes and
  * consults no claim (infra/content.h content_get_from_blob_oid), so the stamp
  * answers "was it sealed when it was written" — a screen's question, or a
- * schedule's. Readers: cmds/export.c collect_entry and collect_storage (which
- * blobs phase 1 reads) and, through the claim the branch decodes from it
- * (core/branch.c branch_decode_blob), cmds/list.c list_files (the mark, and the
- * framing taken off the size beside it) and list_size_claim (the same framing,
- * in the fold the rows' total must agree with), cmds/show.c show_print_blob (the
- * annotation) and, onto the view's rows (core/manifest.h manifest_row_t.encrypted),
- * cmds/export.c entry_from_row, core/workspace.c workspace_analyze_file and
- * cmds/key.c key_status.
+ * schedule's. Readers, each through the claim the branch decodes from it
+ * (core/branch.c branch_decode_blob): cmds/export.c export_entry_from_claim (which
+ * blobs phase 1 reads), cmds/list.c list_files (the mark, and the framing taken
+ * off the size beside it) and list_size_claim (the same framing, in the fold
+ * the rows' total must agree with), cmds/show.c show_print_blob (the annotation)
+ * and, onto the view's rows (core/manifest.h manifest_row_t.encrypted),
+ * cmds/export.c export_entry_from_row, core/workspace.c workspace_analyze_file
+ * and cmds/key.c key_status.
  *
- * Each reader of the item reads it where it stands: there is no per-field reader
- * to hold the link rule for them, so each spells that rule itself, in an arm
- * where the code already branches on the kind (export, the branch's decode).
+ * So the link rule is the decode's alone, spelled in the arm where it already
+ * branches on the type (core/branch.c branch_decode_blob): there is no per-field
+ * reader here to hold it, and no reader of a branch's stamp reads the item.
  */
 typedef struct {
     path_kind_t kind;   /* FILE: the tree names the path. DIRECTORY: the item is the claim. */
@@ -719,10 +717,13 @@ error_t metadata_load_from_branch(
  * The readers that deliberately do otherwise are counted across both doors —
  * this one and metadata_load_from_branch above, which is this call — and each
  * is that command's decision about its own output, never a second answer from
- * here: export's materialisation floor (cmds/export.c load_sheet; the bytes come
- * out of a damaged profile, warned), the header show prints over a blob it can
- * read anyway — the mode, the ownership and the annotation alike, warned — through
- * the branch's tolerant read (core/branch.h branch_find, from cmds/show.c
+ * here: export's materialisation floor through the branch's tolerant walk and
+ * point questions (core/branch.h branch_walk and branch_find, from cmds/export.c
+ * export_collect_profile and export_collect_storage; the bytes come out of a
+ * damaged profile, warned once by cmd_export, and a copy left with nothing in
+ * it is refused in the loader's words), the header show prints over a blob it
+ * can read anyway — the mode, the ownership and the annotation alike, warned —
+ * through the branch's tolerant read (core/branch.h branch_find, from cmds/show.c
  * show_file), the file listing's verbose marks through the branch's tolerant
  * walk (core/branch.h branch_walk, from cmds/list.c list_files, warned; the listing
  * is the tree's and stands, the marks are the sheet's and do not), the orphan

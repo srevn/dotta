@@ -179,8 +179,9 @@ bool path_input_announces_path(const char *input);
  *   - remove (cmds/remove.c) takes either: the claims beneath the subject, matched
  *     by name or by place, the name being the one form that reaches a profile
  *     with no binding here.
- *   - export (cmds/export.c) takes either, one arm each: a name is a key in the
- *     branch's own tree, a filesystem path a selection of the profile's rows.
+ *   - export (cmds/export.c) takes either, one arm each: a name selects what
+ *     the branch claims at and beneath it, a filesystem path the profile's rows
+ *     there.
  *   - show, list and revert (cmds/) take either: a name the user typed is Git's
  *     key already, and a filesystem path is the branch's to name (core/profiles.h
  *     profile_claim_name, profile_discover_claims).

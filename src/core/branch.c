@@ -218,9 +218,10 @@ static error_t branch_step(
      * the same line, a gitlink, which is neither, is passed. dotta never writes
      * one (sys/stage refuses the mode), but `dotta git` and a foreign push can,
      * and the branch's answer is that it claims nothing: no claim, no path, nothing
-     * beneath it composed through it. Stated rather than incidental, because a
-     * selection of the view's rows is what export copies (cmds/export.c
-     * collect_filesystem) and it copies around such an entry in silence. */
+     * beneath it composed through it. Stated rather than incidental, because
+     * what this walk shows is what export copies — its claims, or the view's
+     * rows placed from them (cmds/export.c) — so every copy goes around such an
+     * entry in silence. */
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
         return NULL;
     }

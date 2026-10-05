@@ -51,7 +51,6 @@
 
 #include "base/hashmap.h"
 #include "core/branch.h"
-#include "core/metadata.h"
 #include "core/state.h"
 #include "infra/mount.h"
 #include "infra/path.h"
@@ -295,41 +294,6 @@ error_t profile_resolve_range(
  * @return NULL when the branch is here; else the refusal, or Git's error
  */
 error_t profile_require(git_repository *repo, const char *name);
-
-/**
- * What `profile` holds at `name` in `tree`, read with the caller's sheet
- *
- * The four answers of core/branch.h branch_holds, asked of a tree and a sheet
- * the caller already holds: the tree first, so an entry is the whole answer;
- * the caller's sheet on the tree's silence alone, read as the caller read it.
- *
- * Its one reader is export's name arm (cmds/export.c collect_storage), which
- * hands in the sheet it read tolerantly and warned over (cmds/export.c load_sheet),
- * so a damaged sheet costs the copy its claims and never the tree's answer. A
- * name the tree is silent about is then read against that sheet as export folded
- * it, empty where the load failed, so a claim only the sheet holds reads as absent
- * there. Every other reader asks the branch, whose sheet is the handle's own
- * and whose read of it is strict.
- *
- * `out` is written on success alone; on any error it is left as the caller supplied
- * it.
- *
- * @param tree The tree the name is asked of — a tip's or a commit's (must not
- *             be NULL)
- * @param sheet The caller's sheet of that tree (must not be NULL)
- * @param profile Whose branch it is, for the refusals (must not be NULL)
- * @param name A validated storage path (must not be NULL)
- * @param out The answer (must not be NULL; written on success alone)
- * @return Error or NULL on success: the tree's, under "Cannot read '%s' in profile
- *         '%s'"
- */
-error_t profile_holds(
-    const git_tree *tree,
-    const metadata_t *sheet,
-    const char *profile,
-    const char *name,
-    branch_held_t *out
-);
 
 /**
  * List deployable files in a Git tree

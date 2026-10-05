@@ -19,7 +19,6 @@
 #include "base/string.h"
 #include "core/branch.h"
 #include "core/manifest.h"
-#include "core/metadata.h"
 #include "core/state.h"
 #include "infra/label.h"
 #include "infra/mount.h"
@@ -492,64 +491,6 @@ error_t profile_list_files(
     err = profile_list_tree_files(tree, profile, arena, out);
     git_tree_free(tree);
     return err;
-}
-
-/**
- * What `profile` holds at `name` in `tree`, read with the caller's sheet
- */
-error_t profile_holds(
-    const git_tree *tree,
-    const metadata_t *sheet,
-    const char *profile,
-    const char *name,
-    branch_held_t *out
-) {
-    CHECK_NULL(tree);
-    CHECK_NULL(sheet);
-    CHECK_NULL(profile);
-    CHECK_NULL(name);
-    CHECK_NULL(out);
-
-    /* The tree first: a name is Git's key, and the tree is the content authority
-     * (core/metadata.h), so an entry here is the whole answer whatever the sheet
-     * says at the name. Three answers read as three: an intermediate object that
-     * will not load is a failure to read, never an absence. */
-    git_tree_entry *entry = NULL;
-    int rc = git_tree_entry_bypath(&entry, tree, name);
-    if (rc == 0) {
-        /* Three kinds and no fourth: git_tree_entry_type reads the entry's mode
-         * word, which is a gitlink, a directory, or a blob — so the last arm is
-         * the gitlink and not a shrug. */
-        branch_held_kind_t kind;
-        switch (git_tree_entry_type(entry)) {
-            case GIT_OBJECT_BLOB: kind = BRANCH_HELD_FILE; break;
-            case GIT_OBJECT_TREE: kind = BRANCH_HELD_DIRECTORY; break;
-            default:              kind = BRANCH_HELD_SUBMODULE; break;
-        }
-
-        *out = (branch_held_t){
-            .kind = kind,
-            .oid = *git_tree_entry_id(entry),
-            .filemode = git_tree_entry_filemode(entry),
-        };
-        git_tree_entry_free(entry);
-
-        return NULL;
-    }
-    if (rc != GIT_ENOTFOUND) {
-        return error_git(rc, "Cannot read '%s' in profile '%s'", name, profile);
-    }
-
-    /* The caller's sheet, and only on the tree's silence: a directory claim with
-     * nothing beneath it stands here and nowhere else, read as the caller read
-     * the sheet. */
-    const metadata_item_t *item = metadata_lookup(sheet, name);
-    *out = (branch_held_t){
-        .kind = item && item->kind == PATH_KIND_DIRECTORY ? BRANCH_HELD_DIRECTORY
-                                                          : BRANCH_HELD_NOTHING,
-    };
-
-    return NULL;
 }
 
 /**

@@ -30,8 +30,7 @@
  * in the loader's words (core/metadata.h metadata_load_from_tree); the tree's
  * under "Cannot read profile '%s'" for a walk, and "Cannot read '%s' in profile
  * '%s'" for a point question, which names the name it was asked. No reader says
- * the profile again but one: export's path arm, whose wrap over the view's failure
- * names it in its own words (cmds/export.c collect_filesystem).
+ * the profile again.
  *
  * Memory: a handle's own, made by branch_open or branch_load and released by
  * branch_free. The tree it is opened over is the caller's and outlives it; a
@@ -80,8 +79,10 @@ typedef struct {
  * row's don't-care. A claimed 0000 is a claim. The one producer of the floor
  * the view's rows carry (core/manifest.h manifest_row_t, "Totality").
  *
- * Readers: core/manifest.c manifest_place_claim. cmds/export.c export_entry_mode
- * spells the same rule a second time over a raw item, and says so.
+ * Readers: core/manifest.c manifest_place_claim; and export's projection of a
+ * claim and the root its name arm makes (cmds/export.c export_entry_from_claim,
+ * export_collect_storage), so the mode an export copies off a claim is the one
+ * a row would place.
  *
  * @param claim A decoded claim (must not be NULL)
  * @return The mode the claim stands for
@@ -163,10 +164,11 @@ void branch_free(branch_t *branch);
  * Readers: core/manifest.c manifest_contribute, which names a contribution's
  * rows by it, and the helpers that hold a branch and ask its view by profile or
  * word a refusal under it (core/profiles.c profile_claim_name, cmds/export.c
- * collect_filesystem, cmds/revert.c claim_standing, refuse_second_name and
- * entry_to_restore); core/profiles.c profile_needs_target, which asks a table
- * for the profile's own roots by it; and cmds/show.c show_file, whose bytes the
- * profile's key opens and whose warning names it.
+ * export_collect_profile, export_collect_storage and export_collect_filesystem,
+ * cmds/revert.c claim_standing, refuse_second_name and entry_to_restore);
+ * core/profiles.c profile_needs_target, which asks a table for the profile's
+ * own roots by it; and cmds/show.c show_file, whose bytes the profile's key opens
+ * and whose warning names it.
  *
  * @param branch Handle (must not be NULL)
  * @return The handle's copy; valid until branch_free
@@ -215,8 +217,11 @@ typedef error_t (*branch_visit_fn)(const branch_claim_t *claim, void *payload);
  * labels a branch claims under (core/profiles.c profile_needs_target); the bytes
  * a profile line weighs (cmds/list.c list_profiles, through list_size_claim);
  * the file listing's rows, read TOLERANT (cmds/list.c list_files, through
- * list_collect_file); and the directory claims a completion offers
- * (cmds/completion.c completion_directories, through completion_offer_directory).
+ * list_collect_file); export's whole and name arms, read TOLERANT, the second
+ * keeping the claims beneath its name (cmds/export.c export_collect_profile and
+ * export_collect_storage, through export_collect_claim); and the directory claims
+ * a completion offers (cmds/completion.c completion_directories, through
+ * completion_offer_directory).
  *
  * @param branch Handle (must not be NULL); its sheet is read by the first question
  *               that needs it, a walk or branch_sheet_failure
@@ -335,28 +340,25 @@ typedef struct {
  *
  * The payload is the tree's entry and only the tree's: `oid` and `filemode` are
  * that entry's for the three answers the tree gives, and both are zero exactly
- * where the sheet alone answered. That convention has one reader, export's name
- * arm, which tells a subtree from a claim the sheet alone holds by it
- * (core/profiles.h profile_holds, cmds/export.c collect_storage); revert's restore
- * reads the entry of a FILE answer, which the tree always gave (cmds/revert.c
- * cmd_revert, step 8). `out` is written on success alone.
+ * where the sheet alone answered. Its one reader is revert's restore, which reads
+ * the entry of a FILE answer, which the tree always gave (cmds/revert.c cmd_revert,
+ * step 8); every other reader reads the kind alone. `out` is written on success
+ * alone.
  *
  * Readers: the verbs that act on one name — cmds/show.c show_file, cmds/list.c
  * list_file_history (the history's pre-check), cmds/revert.c entry_to_restore —
- * and the search by name across the local branches (core/profiles.c claim_by_name).
- * Export's name arm asks core/profiles.h profile_holds instead, over the sheet
- * it read tolerantly. A reader not on this list is a bug. Three neighbours ask
- * another question and are not readers: revert's read of the tip at the name it
- * writes (cmds/revert.c cmd_revert, step 11) asks Git's one-entry rule, which
- * the sheet must not answer — a directory claim there is retired by the write,
- * not refused; the orphan probe (core/workspace.c workspace_orphan_authority)
- * asks whether the branch holds the claim a record remembers, which a subtree
- * and a gitlink stand at a name without making — branch_find's directory claim
- * for a directory record, and for a file record the tree alone, Git's one-entry
- * rule again — and folds every failure to UNVERIFIED; and export's claim append
- * (cmds/export.c append_claim_dirs) holds the sheet's item and asks whether the
- * tree contradicts it, which is the enumeration's question (core/branch.c
- * branch_walk's contradiction index).
+ * the search by name across the local branches (core/profiles.c claim_by_name),
+ * and export's name arm, which words a copy with nothing in it by what stands
+ * at the name (cmds/export.c export_collect_storage). A reader not on this list
+ * is a bug. Two neighbours ask another question and are not readers: revert's
+ * read of the tip at the name it writes (cmds/revert.c cmd_revert, step 11) asks
+ * Git's one-entry rule, which the sheet must not answer — a directory claim there
+ * is retired by the write, not refused; and the orphan probe (core/workspace.c
+ * workspace_orphan_authority) asks whether the branch holds the claim a record
+ * remembers, which a subtree and a gitlink stand at a name without making —
+ * branch_find's directory claim for a directory record, and for a file record
+ * the tree alone, Git's one-entry rule again — and folds every failure to
+ * UNVERIFIED.
  *
  * @param branch Handle (must not be NULL); its sheet is read only where the tree
  *               is silent
@@ -388,9 +390,11 @@ error_t branch_holds(branch_t *branch, const char *name, branch_held_t *out);
  * Lent for the handle's life, kept in an arena of the handle's own; its strings
  * are the sheet's, or the handle's copy of the name.
  *
- * Readers: cmds/show.c show_file (a file claim, TOLERANT: the header) and
- * core/workspace.c workspace_orphan_authority (a directory claim, STRICT: whether
- * the branch still backs an orphan's directory).
+ * Readers: cmds/show.c show_file (a file claim, TOLERANT: the header),
+ * cmds/export.c export_collect_storage (a file claim and a directory claim, both
+ * TOLERANT: the single-file copy, or the copy's root) and core/workspace.c
+ * workspace_orphan_authority (a directory claim, STRICT: whether the branch still
+ * backs an orphan's directory).
  *
  * @param branch Handle (must not be NULL)
  * @param read The sheet's policy for this question
@@ -419,8 +423,10 @@ error_t branch_find(
  *
  * Readers: branch_walk and the point questions (branch_holds, branch_find), which
  * read the sheet through it; cmds/show.c show_file, whose header says what its
- * tolerant read lost; and cmds/list.c list_files, whose verbose rows say what
- * its tolerant walk lost.
+ * tolerant read lost; cmds/list.c list_files, whose verbose rows say what its
+ * tolerant walk lost; and cmds/export.c cmd_export, which says what a tolerant
+ * arm's collection lost, once, beside the two arms whose copy came out empty,
+ * where the failure is the answer (export_collect_profile, export_collect_storage).
  *
  * @param branch Handle (must not be NULL)
  * @return The sheet's failure, in the loader's words, or NULL

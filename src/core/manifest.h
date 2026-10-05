@@ -423,17 +423,18 @@ error_t manifest_build(
  *
  * Readers: the historical diff (cmds/diff.c diff_commit_to_workspace, whose
  * comparison and coverage answer each read the whole view); export's path arm
- * (cmds/export.c collect_filesystem), which selects the rows one profile places
- * at and beneath a path — the rows, not the Git subtree of whatever name stands
- * there, which is what manifest_lookup_claim's own note is about; the claim search
- * over whatever tree a verb selected (core/profiles.c profile_claim_name); revert's
- * two questions of a tree, the claim standing at a path and the second-name
- * admission (cmds/revert.c claim_standing, refuse_second_name); add, which builds
- * one over the tree its stage opened at and asks it every naming question for
- * the length of the command (cmds/add.c cmd_add); `ignore --test`'s named arm
- * (cmds/ignore.c ignore_test); and the two cross-branch searches, which build
- * one per local branch (core/profiles.c claim_by_filesystem_path, under
- * profile_discover_claims, and profile_build_filesystem_index).
+ * (cmds/export.c export_collect_filesystem), which selects the rows one profile
+ * places at and beneath a path — the rows, not the Git subtree of whatever name
+ * stands there, which is what manifest_lookup_claim's own note is about; the
+ * claim search over whatever tree a verb selected (core/profiles.c
+ * profile_claim_name); revert's two questions of a tree, the claim standing at
+ * a path and the second-name admission (cmds/revert.c claim_standing,
+ * refuse_second_name); add, which builds one over the tree its stage opened at
+ * and asks it every naming question for the length of the command (cmds/add.c
+ * cmd_add); `ignore --test`'s named arm (cmds/ignore.c ignore_test); and the
+ * two cross-branch searches, which build one per local branch (core/profiles.c
+ * claim_by_filesystem_path, under profile_discover_claims, and
+ * profile_build_filesystem_index).
  *
  * Memory: every allocation produced by the call lives in the caller's arena, as
  * manifest_build's does, but the sheet the walk reads where no question has yet,

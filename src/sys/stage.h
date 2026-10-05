@@ -4,15 +4,15 @@
  * The one way dotta turns a tree edit into a commit. Open a ref: its head is
  * the parent the commit will have, and its tree seeds a private index. Put and
  * remove entries. Commit: the index is written as a tree; a tree equal to the
- * opened
- * one is not committed (no writer wants an empty commit, so none can make one);
- * otherwise one commit with the opened head as its parent, and the ref moved
- * only if it still is that head — libgit2 refuses the move when another writer
- * got there first. Four spellings of this answer lived in the tree before (a
- * temp worktree, an index primitive, a recursive treebuilder, the epoch's own
- * mint), and every one looked the parent up at commit time, so a tree built from
- * one head could be committed on top of another and discard its change; only
- * one of the four declined an empty commit. Both properties are the stage's, once.
+ * opened one is not committed (no writer wants an empty commit, so none can make
+ * one); otherwise one commit with the opened head as its parent, and the ref
+ * moved only if it still is that head — libgit2 refuses the move when another
+ * writer got there first. Four spellings of this answer lived in the tree before
+ * (a temp worktree, an index primitive, a recursive treebuilder, the epoch's
+ * own mint), and every one looked the parent up at commit time, so a tree built
+ * from one head could be committed on top of another and discard its change;
+ * only one of the four declined an empty commit. Both properties are the stage's,
+ * once.
  *
  * A writer says what it expects of the ref, and the open refuses the other state:
  * stage_open wants the ref (a profile the view listed, the branch a command

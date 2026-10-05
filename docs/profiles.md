@@ -1,6 +1,6 @@
 # Profiles
 
-Profiles are the central organizing unit in dotta. Each profile is a Git orphan branch containing configuration files. This guide covers how to manage them.
+Profiles are the central organizing unit in dotta. Each profile is built on a Git orphan branch of the same name, which holds its configuration files. This guide covers how to manage them.
 
 ## Profile States
 

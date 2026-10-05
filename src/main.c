@@ -1,7 +1,7 @@
 /**
  * main.c - Dotta entry point
  *
- * Dotfile manager using git branches as profiles.
+ * Dotfile manager whose profiles are built on Git branches.
  */
 
 #include <cJSON.h>

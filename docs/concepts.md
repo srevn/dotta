@@ -4,7 +4,7 @@ This document explains the core ideas behind dotta's design.
 
 ## Profile-Based Architecture
 
-A **profile** is a Git orphan branch containing configuration files. Each profile has its own independent commit history and can be enabled or disabled on any machine.
+A **profile** is a set of configuration files built on a Git orphan branch of the same name: Git keeps the branch, and dotta reads the profile from it — the files its tree holds, and what the profile claims of them beyond the bytes (a mode, an owner, a directory). Each profile has its own independent commit history and can be enabled or disabled on any machine.
 
 Typical profiles map to OS, role, or host:
 

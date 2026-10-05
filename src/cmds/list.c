@@ -89,11 +89,12 @@ static void print_upstream_state(
 /**
  * One verbose profile line's facts
  *
- * Read off the branch's tip before anything prints: what it holds, whose two
- * phrases set columns measured across every branch, the way the name column already
- * is, and its last commit. One tip, read once, so the line is one snapshot's.
- * An empty phrase is a branch whose statistics could not be read, a commit with
- * no summary one whose tip could not — its line still prints, without them.
+ * Read off the branch's tip before anything prints: what it holds and what that
+ * weighs, whose two phrases set columns measured across every branch, the way
+ * the name column already is, and its last commit. One tip, read once, so the
+ * line is one snapshot's. Empty phrases are a branch whose count or size could
+ * not be read, a commit with no summary one whose tip could not — its line still
+ * prints, without them.
  *
  * Buffer sizes are the minimums output_format_counts and output_format_size state.
  */
@@ -101,7 +102,62 @@ typedef struct {
     char counts[64];
     char size[32];
     commit_info_t commit;    /* the tip's; no summary where it did not read */
-} profile_line_t;
+} list_profile_line_t;
+
+/**
+ * What a branch's files weigh, folded over its walk: the handle the headers are
+ * read through, and the sum so far
+ *
+ * The size a profile line prints, and the fold of exactly the rows the file listing
+ * prints one by one (list_files): the same blobs, each the bytes its file stands
+ * for. The file listing's `Total:` is then not a second answer but the same one
+ * by the other route — the rows it prints, summed as it prints them, which is
+ * what a total under a table has to be. What makes the two routes meet is that
+ * both take the framing off the same claim; nothing structural does, and a raw
+ * sum disagreed with those rows by it on every profile holding a sealed file
+ * until 228 C2c, so the agreement is pinned by a scenario (tests/test-encrypt.sh).
+ */
+typedef struct {
+    git_odb *odb;    /* Held for the walk: one handle, a header read per file */
+    size_t total;    /* The bytes the files stand for, the seal's framing off */
+} list_size_t;
+
+/**
+ * Walk visitor: one file claim's bytes, added to the fold
+ *
+ * @param claim One claim, decoded (borrowed — valid for the call only)
+ * @param payload The fold (list_size_t)
+ * @return NULL, or the failure that ends the walk: a header that will not read,
+ *         or a total past what a size_t holds
+ */
+static error_t list_size_claim(const branch_claim_t *claim, void *payload) {
+    list_size_t *size = payload;
+
+    /* A directory claim holds no bytes of its own */
+    if (claim->type == PATH_TYPE_DIRECTORY) return NULL;
+
+    /* The size from the object's header: nothing inflated */
+    size_t bytes = 0;
+    error_t err = stats_blob_size_with_odb(size->odb, &claim->blob_oid, &bytes);
+    if (err) return err;
+
+    /* The bytes the file stands for, not the bytes the store holds: a sealed
+     * blob carries the cipher's framing and its file does not, and the file is
+     * what a screen names (197 R5). The stamp is the branch's own claim as it
+     * decodes it, never on a link, whose bytes are its target and never a seal
+     * (core/branch.c branch_decode_blob) — the same subtraction, off the same
+     * claim, the file listing's rows make (list_files) */
+    bytes = content_estimated_plaintext_size(bytes, claim->encrypted);
+
+    if (size->total > SIZE_MAX - bytes) {
+        return error_create(
+            ERR_INTERNAL, "Profile size exceeds maximum representable value"
+        );
+    }
+    size->total += bytes;
+
+    return NULL;
+}
 
 /**
  * List profiles - Level 1
@@ -165,15 +221,16 @@ static error_t list_profiles(
         }
     }
 
-    /* Read what each branch holds, and measure the columns it needs. Both are
-     * as wide as the branches make them — the counts phrase names only the kinds
-     * a branch actually has, and a size runs from "0 B" to four digits and a
-     * unit — so neither is guessed. One count per branch, the expensive part of
-     * a verbose line, runs here rather than again at render time; a branch that
-     * cannot be read is warned about and left with an empty phrase, in the words
-     * the other screen of this file uses for the same producer's refusal: what
-     * failed is the count, however far down the read it failed. */
-    profile_line_t *lines = NULL;
+    /* Read what each branch holds and what that weighs, and measure the columns
+     * they need. Both are as wide as the branches make them — the counts phrase
+     * names only the kinds a branch actually has, and a size runs from "0 B" to
+     * four digits and a unit — so neither is guessed. The size, a header read
+     * per file, is the expensive part of a verbose line, and runs here rather
+     * than again at render time; a branch that cannot be read is warned about
+     * and left with empty phrases, in the words the other screen of this file
+     * uses for the count's refusal: what failed is the line's account of what
+     * the branch holds, however far down the read it failed. */
+    list_profile_line_t *lines = NULL;
     size_t max_counts_len = 0;
     size_t max_size_len = 0;
     if (verbose) {
@@ -198,14 +255,28 @@ static error_t list_profiles(
             /* Its last commit, kept for the line's tail */
             lines[i].commit = stats_commit_info(ctx->arena, tip);
 
-            /* What it holds, counted over the same commit's tree; a count that
-             * fails leaves the line its commit, its error warned and dropped */
+            /* What it holds, counted over the same commit's tree (core/branch.h
+             * branch_count); a tree or a count that will not read leaves the
+             * line its commit, its error warned and dropped */
             git_tree *tree = NULL;
             int rc = git_commit_tree(&tree, tip);
             git_commit_free(tip);
-            profile_stats_t stats = { 0 };
+            branch_t *branch = rc < 0 ? NULL : branch_open(repo, bname, tree);
+            branch_count_t count = { 0 };
             err = rc < 0 ? error_git(rc, "Cannot read the tip's tree")
-                         : profile_get_tree_stats(repo, tree, bname, &stats);
+                         : branch_count(branch, &count);
+
+            /* And what that weighs, folded over the same branch through one handle
+             * on the object database (list_size_claim): the line's two phrases
+             * are one snapshot's, so a size that will not read leaves it neither */
+            list_size_t size = { 0 };
+            if (!err) {
+                rc = git_repository_odb(&size.odb, repo);
+                err = rc < 0 ? error_git(rc, "Cannot open the object database")
+                             : branch_walk(branch, BRANCH_READ_STRICT, list_size_claim, &size);
+            }
+            git_odb_free(size.odb);
+            branch_free(branch);
             git_tree_free(tree);
             if (err) {
                 output_warning(
@@ -216,12 +287,10 @@ static error_t list_profiles(
             }
 
             output_format_counts(
-                stats.file_count, stats.directory_count,
+                count.file_count, count.directory_count,
                 lines[i].counts, sizeof(lines[i].counts)
             );
-            output_format_size(
-                stats.total_size, lines[i].size, sizeof(lines[i].size)
-            );
+            output_format_size(size.total, lines[i].size, sizeof(lines[i].size));
 
             size_t len = strlen(lines[i].counts);
             if (len > max_counts_len) {
@@ -344,11 +413,11 @@ static error_t list_files(
 
     /* One branch read serves the whole listing: its tip, read once, and every
      * fact the listing prints taken off that commit — the file walk, the verbose
-     * per-entry lookups and the statistics (what else the branch holds, when
-     * the file list is empty) from its tree, the history behind each row from
-     * its id — so a branch another writer moves under the listing lends no row
-     * another snapshot's history. The id is kept and the commit let go: the tree
-     * and the id are all the listing reads of it. */
+     * per-entry lookups and the count (what else the branch holds, when the file
+     * list is empty) from its tree, the history behind each row from its id —
+     * so a branch another writer moves under the listing lends no row another
+     * snapshot's history. The id is kept and the commit let go: the tree and
+     * the id are all the listing reads of it. */
     error_t err = profile_require(repo, opts->profile);
     if (err) return err;
 
@@ -376,22 +445,24 @@ static error_t list_files(
         /* Directory claims are not listed — no size, no history — but the count
          * of them keeps "nothing" honest for a branch whose whole content is
          * its claims. It is what the branch holds less the files, so it comes
-         * from the one producer of that number (core/profiles.h
-         * profile_get_tree_stats), over the tree already open: an ancestor claim
-         * excluded there, the tree-versus-blob rule asked there, and no second
-         * reading of the sheet to drift from it.
+         * from the one producer of that number (core/branch.h branch_count),
+         * over a branch opened on the tree already open, for the count alone:
+         * an ancestor claim excluded there, the tree-versus-blob rule asked there,
+         * and no second reading of the sheet to drift from it.
          *
          * A branch that will not read says so. Silence would spell an unreadable
          * sheet exactly as it spells an empty branch, and the count exists to
          * tell those apart. The sheet is the whole of what can refuse here: the
-         * walk above and the count's own read one gate, spelled alike in each
-         * (core/profiles.c profile_list_entry, profile_count_entry), so a file
-         * list that came back empty is an empty one there too and no blob header
-         * is read. Which is why the refusal is rendered from its root — between
-         * it and here the loader names the profile once more and nothing else,
-         * and this line names it already (base/error.h error_root). */
-        profile_stats_t stats = { 0 };
-        err = profile_get_tree_stats(repo, tree, opts->profile, &stats);
+         * walk above and the count's own read one gate and one shape check, spelled
+         * alike in each (core/profiles.c profile_list_entry, core/branch.c
+         * branch_step), so a tree the walk above read whole the count reads whole
+         * too. Which is why the refusal is rendered from its root — between it
+         * and here the loader names the profile once more and nothing else, and
+         * this line names it already (base/error.h error_root). */
+        branch_t *branch = branch_open(repo, opts->profile, tree);
+        branch_count_t count = { 0 };
+        err = branch_count(branch, &count);
+        branch_free(branch);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
@@ -399,12 +470,12 @@ static error_t list_files(
             );
         }
 
-        /* Either the count stands or the statistics wrote nothing at all (their
-         * all-or-nothing `out`), so a sheet that would not read counts as no
-         * claim and the warning above is what says which of the two this is. */
-        if (stats.directory_count > 0) {
+        /* Either the count stands or it wrote nothing at all (its all-or-nothing
+         * `out`), so a sheet that would not read counts as no claim and the warning
+         * above is what says which of the two this is. */
+        if (count.directory_count > 0) {
             char counts[64];
-            output_format_counts(0, stats.directory_count, counts, sizeof(counts));
+            output_format_counts(0, count.directory_count, counts, sizeof(counts));
             output_info(
                 out, OUTPUT_NORMAL, "No files in profile '%s' (%s)",
                 opts->profile, counts
@@ -529,9 +600,9 @@ static error_t list_files(
                  * it could not read at all. A total short by a row is then short
                  * where the reader can see it, which is the whole of what this
                  * screen can honestly say: the object is missing or corrupt,
-                 * and the count of what the branch holds refuses outright over
-                 * the same failure (core/profiles.h profile_get_tree_stats).
-                 * The header's error is dropped, one per unreadable blob. */
+                 * and the profile's line at level 1, which weighs what it counts,
+                 * refuses outright over the same failure (list_size_claim). The
+                 * header's error is dropped, one per unreadable blob. */
                 size_t size = 0;
                 err = stats_blob_size(
                     repo, git_tree_entry_id(entry), &size

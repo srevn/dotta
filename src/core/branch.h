@@ -110,8 +110,9 @@ typedef struct branch branch_t;
  * tip, found the same way), cmds/add.c cmd_add and cmds/revert.c cmd_revert (the
  * tree a stage opened at, and revert's target commit's), cmds/diff.c
  * diff_commit_to_workspace (the commit's), cmds/export.c cmd_export, cmds/show.c
- * cmd_show and cmds/list.c list_file_history (the tree the verb selected); and
- * branch_load, over the tip it read.
+ * cmd_show and cmds/list.c list_file_history (the tree the verb selected),
+ * cmds/list.c list_profiles and list_files (the tree of the tip each listing
+ * read, so its count is that commit's); and branch_load, over the tip it read.
  *
  * @param repo The repository the sheet's blob is read through (must not be NULL;
  *             borrowed)
@@ -131,8 +132,11 @@ branch_t *branch_open(git_repository *repo, const char *profile, const git_tree 
  * an answer reads gitops_branch_tree and opens over what it finds (core/manifest.c
  * manifest_build, core/workspace.c workspace_orphan_authority).
  *
- * Readers: core/profiles.c profile_needs_target, profile_build_filesystem_index,
- * claim_by_filesystem_path and claim_by_name; cmds/ignore.c ignore_test.
+ * Readers: core/profiles.c profile_build_filesystem_index, claim_by_filesystem_path
+ * and claim_by_name; cmds/ignore.c ignore_test; and the questions asked of a
+ * tip by name, what it holds and whether it needs a target — cmds/profile.c
+ * profile_list and profile_enable, cmds/clone.c cmd_clone, cmds/interactive.c
+ * read_targets and cmds/remove.c remove_profile.
  *
  * @param repo Repository (must not be NULL; borrowed)
  * @param profile The branch's name, and whose claims these are (must not be NULL;
@@ -158,8 +162,9 @@ void branch_free(branch_t *branch);
  * rows by it, and the helpers that hold a branch and ask its view by profile or
  * word a refusal under it (core/profiles.c profile_claim_name, cmds/export.c
  * collect_filesystem, cmds/revert.c claim_standing, refuse_second_name and
- * entry_to_restore); and cmds/show.c show_file, whose bytes the profile's key
- * opens and whose warning names it.
+ * entry_to_restore); core/profiles.c profile_needs_target, which asks a table
+ * for the profile's own roots by it; and cmds/show.c show_file, whose bytes the
+ * profile's key opens and whose warning names it.
  *
  * @param branch Handle (must not be NULL)
  * @return The handle's copy; valid until branch_free
@@ -204,7 +209,9 @@ typedef error_t (*branch_visit_fn)(const branch_claim_t *claim, void *payload);
  * and branch_sheet_failure says why. A tree that will not read is the walk's
  * failure under either.
  *
- * Readers: core/manifest.c manifest_contribute.
+ * Readers: core/manifest.c manifest_contribute; branch_count, its tally; the
+ * labels a branch claims under (core/profiles.c profile_needs_target); and the
+ * bytes a profile line weighs (cmds/list.c list_profiles, through list_size_claim).
  *
  * @param branch Handle (must not be NULL); its sheet is read by the first question
  *               that needs it, a walk or branch_sheet_failure
@@ -220,6 +227,58 @@ error_t branch_walk(
     branch_visit_fn visit,
     void *payload
 );
+
+/**
+ * What a branch holds, counted: the claims its walk shows, by kind
+ *
+ * Every blob a file, and every tracked directory claim the walk shows a directory.
+ * An ancestor claim is the way to content, never content, and counting the spine
+ * would inflate the number the screens call "directories" past anything the user
+ * named.
+ *
+ * Counted from the branch, not from the view: the listings that print it name
+ * available profiles too, and a profile nothing has enabled owns no rows. Shown
+ * the walk's claims, a profile that wins every path it claims counts here as
+ * its rows do there. `status -v` counts something else, the view's rows a profile
+ * wins (cmds/status.c status_print_profiles): the holds/wins split, and the two
+ * are free to disagree (docs/profiles.md).
+ *
+ * A count reads no blob. The bytes the files stand for are a listing's to fold,
+ * beside the rows that must sum to them (cmds/list.c list_size_claim).
+ */
+typedef struct {
+    size_t file_count;        /* The blob claims the walk shows */
+    size_t directory_count;   /* The tracked directory claims it shows */
+} branch_count_t;
+
+/**
+ * Count what the branch holds, in one walk of its claims
+ *
+ * Strict, with no policy to spell: whether a branch holds directories is a question
+ * only its sheet answers, so a sheet that will not load is the count's failure
+ * and never a branch claiming none — branch_holds spells none for the same reason.
+ * A tree that holds no sheet claims no directory, which is no failure
+ * (core/metadata.h metadata_load_from_tree). A tree the walk refuses is the count's
+ * failure too, a name outside the grammar among it, never one skipped past. A
+ * screen that would rather print than refuse decides that on its own line, as
+ * each reader below does.
+ *
+ * `out` is written once, on success alone: a walk that stopped short leaves it
+ * as the caller supplied it, so no screen prints half a count.
+ *
+ * Readers: the screens that name what a branch holds — `dotta list -v`'s profile
+ * rows and the file listing's no-files arm (cmds/list.c list_profiles, list_files),
+ * `profile list`'s enabled and available rows (cmds/profile.c profile_list),
+ * and the deletion's preview and confirmation (cmds/remove.c remove_profile). A
+ * reader not on this list is a bug, and a screen that counts what a branch holds
+ * beside this one is the second producer this count exists to prevent.
+ *
+ * @param branch Handle (must not be NULL); its sheet read through it
+ * @param out The count (must not be NULL; written on success alone)
+ * @return Error or NULL on success: the sheet's, in the loader's words; the tree's,
+ *         under "Cannot read profile '%s'"
+ */
+error_t branch_count(branch_t *branch, branch_count_t *out);
 
 /**
  * What stands at one name: the four things a branch can hold there
@@ -289,9 +348,8 @@ typedef struct {
  * asks whether the branch holds the claim a record remembers, which a subtree
  * and a gitlink stand at a name without making — branch_find's directory claim
  * for a directory record, and for a file record the tree alone, Git's one-entry
- * rule again — and folds every failure to UNVERIFIED; and the count's staleness
- * probe and export's claim append (core/profiles.c profile_get_tree_stats,
- * cmds/export.c append_claim_dirs) hold the sheet's item and ask whether the
+ * rule again — and folds every failure to UNVERIFIED; and export's claim append
+ * (cmds/export.c append_claim_dirs) holds the sheet's item and asks whether the
  * tree contradicts it, which is the enumeration's question (core/branch.c
  * branch_walk's contradiction index).
  *

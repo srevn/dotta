@@ -24,6 +24,7 @@
 #include "base/output.h"
 #include "base/string.h"
 #include "base/terminal.h"
+#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -216,9 +217,12 @@ static void read_targets(git_repository *repo, state_t *deploy_state, view_t *vi
             it->target = arena_strdup(view->arena, bound);
         }
 
-        /* The need, absorbed (above): the error is dropped, one per row whose
-         * branch will not read. */
-        error_t err = profile_needs_target(repo, it->name, &it->needs_target);
+        /* The need, absorbed (above), asked of the branch at its tip: the error
+         * is dropped, one per row whose branch will not read. */
+        branch_t *branch = NULL;
+        error_t err = branch_load(repo, it->name, &branch);
+        if (!err) err = profile_needs_target(branch, &it->needs_target);
+        branch_free(branch);
         if (err) {
             it->unreadable = true;
         }
@@ -422,9 +426,8 @@ static error_t plan_apply(state_t *deploy_state, const plan_t *plan) {
  *
  * Built only to learn that it can be, in a frame of the check's own, freed before
  * the answer: a session of N saves holds no view, where the view's arena would
- * hold one per save — profile_needs_target's shape (core/profiles.c). The error
- * outlives the frame: it lives in the errors' own arena (base/error.h
- * "Lifetime"). */
+ * hold one per save. The error outlives the frame: it lives in the errors' own
+ * arena (base/error.h "Lifetime"). */
 static error_t plan_check(git_repository *repo, state_t *deploy_state) {
     arena_t *frame = arena_create(0);
     manifest_t *view = NULL;

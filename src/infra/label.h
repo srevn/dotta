@@ -160,16 +160,15 @@ label_split_t label_split(const char *s);
  * And it is the shape dispatch on an argument, which reads a storage shape before
  * the filesystem shapes.
  *
- * Readers: the branch's walk (core/branch.c branch_step), the file listing and
- * the branch statistics (core/profiles.c profile_list_entry, profile_count_entry),
- * the refspec completion (cmds/completion.c refspec_emit), export's walk
- * (cmds/export.c collect_entry), diff's delta selection (cmds/diff.c select_delta),
- * the rule compiler (infra/pathspec.c compile_rule), the resolver's storage arm
- * and the question its neighbour asks of a positional whose slot is undecided
- * (infra/path.c path_input_resolve, path_input_announces_path), the two input
- * heads that dispatch on shape before reading it (cmds/add.c cmd_add, cmds/ignore.c
- * ignore_test) and export's profile slot's own grammar (cmds/export.c
- * export_post_parse).
+ * Readers: the branch's walk (core/branch.c branch_step), the file listing
+ * (core/profiles.c profile_list_entry), the refspec completion (cmds/completion.c
+ * refspec_emit), export's walk (cmds/export.c collect_entry), diff's delta
+ * selection (cmds/diff.c select_delta), the rule compiler (infra/pathspec.c
+ * compile_rule), the resolver's storage arm and the question its neighbour asks
+ * of a positional whose slot is undecided (infra/path.c path_input_resolve,
+ * path_input_announces_path), the two input heads that dispatch on shape before
+ * reading it (cmds/add.c cmd_add, cmds/ignore.c ignore_test) and export's profile
+ * slot's own grammar (cmds/export.c export_post_parse).
  */
 bool label_prefixes(const char *s);
 
@@ -190,8 +189,9 @@ bool label_prefixes(const char *s);
  * home/ always does and root/ and custom/ do unless the invoker is root
  * (core/metadata.c metadata_capture_ownership), and which rule placed the root
  * a relocated claim lands under (core/workspace.c workspace_analyze_orphans) —
- * and one that only indexes by it, add's receipt counting names by their label
- * (cmds/add.c add_print_labels).
+ * and two that only index by it: add's receipt counting names by their label
+ * (cmds/add.c add_print_labels), and a branch's need of a target noting the labels
+ * it claims under (core/profiles.c profile_note_label).
  */
 label_t label_of(const char *storage_path);
 
@@ -250,13 +250,12 @@ const char *label_tail(const char *storage_path);
  * Pure rule check — no filesystem access, no arena, no state.
  *
  * Readers: the four boundaries a name arrives across — a branch's tree at its
- * walk (core/branch.c branch_step) and at the file listing and the branch
- * statistics (core/profiles.c profile_list_entry, profile_count_entry), the sheet's
- * keys (core/metadata.c metadata_from_json), export's walk (cmds/export.c
- * collect_entry) — and the resolver's storage arm, where the name is one the
- * user typed (infra/path.c path_input_resolve). The store holds a record's name
- * to the same checks in its own language (core/state.c STORAGE_SPELLING), and
- * tests/test-state.c drives one list of shapes through both.
+ * walk (core/branch.c branch_step) and at the file listing (core/profiles.c
+ * profile_list_entry), the sheet's keys (core/metadata.c metadata_from_json),
+ * export's walk (cmds/export.c collect_entry) — and the resolver's storage arm,
+ * where the name is one the user typed (infra/path.c path_input_resolve). The
+ * store holds a record's name to the same checks in its own language (core/state.c
+ * STORAGE_SPELLING), and tests/test-state.c drives one list of shapes through both.
  *
  * @param storage_path Path to validate (must not be NULL)
  * @return Error or NULL when valid

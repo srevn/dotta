@@ -21,13 +21,11 @@
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/state.h"
-#include "infra/content.h"
 #include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
 #include "sys/revision.h"
-#include "sys/stats.h"
 
 /**
  * Is there a profile of this name here, or refuse
@@ -497,203 +495,6 @@ error_t profile_list_files(
 }
 
 /**
- * The branch statistics' walk: what the count reads through, and the count so far
- */
-typedef struct {
-    git_odb *odb;              /* Held for the walk: one handle, N header reads */
-    const metadata_t *sheet;   /* The branch's claims: what the sizes are read through */
-    size_t file_count;
-    size_t total_size;
-} count_walk_t;
-
-/**
- * Walk visitor: one entry of a profile tree, counted where it is content
- *
- * A content blob is counted, with the bytes it stands for; the branch's machinery
- * is pruned with its subtree, a tree beneath a label is entered and a gitlink
- * passed; a name the storage grammar refuses, a size that will not read and a
- * total past what a size_t holds are the walk's failure.
- */
-static error_t profile_count_entry(
-    const char *path,
-    const git_tree_entry *entry,
-    void *payload,
-    gitops_next_t *next
-) {
-    count_walk_t *walk = payload;
-
-    /* The content gate and the shape, asked as the file listing asks them
-     * (profile_list_entry): this is the fold of the rows that listing prints,
-     * so the two admit one set of names or the two screens disagree by a file. */
-    if (!label_prefixes(path)) {
-        *next = GITOPS_NEXT_SKIP;
-        return NULL;
-    }
-    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-        return NULL;
-    }
-    error_t err = label_validate_storage(path);
-    if (err) return err;
-
-    /* The size from the object's header: nothing inflated */
-    size_t size = 0;
-    err = stats_blob_size_with_odb(walk->odb, git_tree_entry_id(entry), &size);
-    if (err) return err;
-
-    /* The bytes the entry stands for, not the bytes the object database holds:
-     * a sealed blob carries the cipher's framing and its file does not, and the
-     * file is what a screen names (197 R5). The stamp is the branch's own claim,
-     * read as the branch decodes it — never onto a link, whose bytes are its
-     * target and never a seal (core/branch.c branch_decode_blob's link rule) —
-     * and this is the fold of exactly the rows the file listing prints one by
-     * one, so the two read the claim the same way or the two screens disagree
-     * by the framing (cmds/list.c list_files). */
-    const metadata_item_t *claim = metadata_lookup(walk->sheet, path);
-    bool encrypted = git_tree_entry_filemode(entry) != GIT_FILEMODE_LINK
-        && claim && claim->encrypted;
-
-    size = content_estimated_plaintext_size(size, encrypted);
-
-    if (walk->total_size > SIZE_MAX - size) {
-        return error_create(
-            ERR_INTERNAL, "Profile size exceeds maximum representable value"
-        );
-    }
-
-    walk->file_count++;
-    walk->total_size += size;
-
-    return NULL;
-}
-
-/**
- * Count what a profile branch holds, in a tree already open
- */
-error_t profile_get_tree_stats(
-    git_repository *repo,
-    const git_tree *tree,
-    const char *profile,
-    profile_stats_t *out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(tree);
-    CHECK_NULL(profile);
-    CHECK_NULL(out);
-
-    /* The branch's own metadata, the same source the branch's walk reads, and
-     * read first because both halves below want it: the directories it claims,
-     * and the stamp each blob's size is taken through. A tree without a sheet
-     * loads as an empty one — no claim, so nothing counted and nothing stamped
-     * — and every load error is real and propagates. */
-    metadata_t *metadata = NULL;
-    error_t err = metadata_load_from_tree(repo, tree, profile, &metadata);
-    if (err) return err;
-
-    /* The files: one walk, one ODB handle, sizes read from the object headers. */
-    git_odb *odb = NULL;
-    int rc = git_repository_odb(&odb, repo);
-    if (rc < 0) {
-        err = error_git(rc, "Cannot open the object database");
-        goto cleanup;
-    }
-
-    count_walk_t walk = {
-        .odb        = odb,
-        .sheet      = metadata,
-        .file_count = 0,
-        .total_size = 0
-    };
-
-    err = gitops_tree_walk(tree, profile_count_entry, &walk);
-    git_odb_free(odb);
-
-    if (err) {
-        err = error_wrap(
-            err, "Failed to read statistics for profile '%s'", profile
-        );
-        goto cleanup;
-    }
-
-    size_t directory_count = 0;
-    size_t item_count = 0;
-    const metadata_item_t *const *items = metadata_items(metadata, &item_count);
-    for (size_t i = 0; i < item_count; i++) {
-        /* The tracked set alone: an ancestor claim is the way to content, not
-         * content the profile tracks, and counting the spine would inflate the
-         * number the screens call "directories" past anything the user named. */
-        if (items[i]->kind != PATH_KIND_DIRECTORY || !items[i]->tracked) continue;
-
-        /* A path is a tree or a blob: a DIRECTORY item where the tree holds a
-         * blob is stale metadata, and the tree is the content authority — the
-         * same rule the branch's walk applies (core/branch.c branch_walk), asked
-         * there of the sheet at each blob it meets rather than of the ODB.
-         *
-         * One question, two witnesses, and they answer alike for every key the
-         * grammar admits: the gate is asked of the whole name at every rung,
-         * the branch root's included (profile_count_entry), so a blob standing
-         * at a label's own word is a blob to both witnesses as one standing beneath
-         * the word is.
-         *
-         * Three answers, not two: the entry is there, it is absent, or the tree
-         * will not read — and an object that will not load is corruption, never
-         * an absence, so the count refuses rather than counts a directory the
-         * branch may not hold. */
-        git_tree_entry *entry = NULL;
-        rc = git_tree_entry_bypath(&entry, tree, items[i]->key);
-        if (rc == 0) {
-            bool is_blob = git_tree_entry_type(entry) == GIT_OBJECT_BLOB;
-            git_tree_entry_free(entry);
-            if (is_blob) continue;
-        } else if (rc != GIT_ENOTFOUND) {
-            err = error_git(rc, "Failed to read '%s' in profile '%s'", items[i]->key, profile);
-            goto cleanup;
-        }
-
-        directory_count++;
-    }
-
-    metadata_free(metadata);
-
-    /* Both sides at once, and only here: a walk that stopped short or a probe
-     * that refused has jumped to the label below, so what the caller supplied
-     * is either replaced whole or never touched. The success path frees the sheet
-     * itself rather than falling into that label, which is what keeps that true
-     * structurally: nothing reaches this write except the path that earned it. */
-    *out = (profile_stats_t){
-        .file_count = walk.file_count,
-        .directory_count = directory_count,
-        .total_size = walk.total_size,
-    };
-
-    return NULL;
-
-cleanup:
-    metadata_free(metadata);
-    return err;
-}
-
-/**
- * Count what a profile branch holds
- */
-error_t profile_get_stats(
-    git_repository *repo,
-    const char *profile,
-    profile_stats_t *out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profile);
-    CHECK_NULL(out);
-
-    git_tree *tree = NULL;
-    error_t err = gitops_load_branch_tree(repo, profile, &tree);
-    if (err) return err;
-
-    err = profile_get_tree_stats(repo, tree, profile, out);
-    git_tree_free(tree);
-    return err;
-}
-
-/**
  * What `profile` holds at `name` in `tree`, read with the caller's sheet
  */
 error_t profile_holds(
@@ -752,35 +553,57 @@ error_t profile_holds(
 }
 
 /**
+ * Walk visitor: the label a claim stands under, noted
+ *
+ * @param claim One claim, decoded (borrowed — valid for the call only)
+ * @param payload The labels noted so far (bool[LABEL_COUNT])
+ * @return NULL: noting a label fails nowhere
+ */
+static error_t profile_note_label(const branch_claim_t *claim, void *payload) {
+    bool *claimed = payload;
+
+    /* Every name the walk shows is under a label: a blob's passed the walk's
+     * own gate and shape check, a directory claim's key the sheet's parse
+     * (core/branch.h) */
+    claimed[label_of(claim->storage_path)] = true;
+
+    return NULL;
+}
+
+/**
  * Does this profile's branch need a deployment target?
  *
- * The table binds nothing on purpose — HOME and the sentinel alone — so a custom/
- * claim has nowhere to go and is recorded, which is the answer. The view is a
- * frame's, built to read one count off it.
+ * The labels its walk shows, each asked of a table that binds nothing — HOME
+ * and the sentinel alone — in a frame of the call's own: a label with no root
+ * there is one only a binding places, and the product is a bool.
  */
-error_t profile_needs_target(
-    git_repository *repo,
-    const char *profile,
-    bool *needs_target
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profile);
+error_t profile_needs_target(branch_t *branch, bool *needs_target) {
+    CHECK_NULL(branch);
     CHECK_NULL(needs_target);
 
     *needs_target = false;
 
+    /* The labels the branch claims anything under, read as the view is shown
+     * them: one strict walk, so a sheet that will not load and a tree the walk
+     * refuses are the answer's failure here, as they are the view build's */
+    bool claimed[LABEL_COUNT] = { false };
+    error_t err = branch_walk(branch, BRANCH_READ_STRICT, profile_note_label, claimed);
+    if (err) return err;
+
+    /* Each asked of the table no state row can produce, for the profile's own
+     * root of it: one with none there is placed by a binding alone, and which
+     * labels a binding places is the table's to say (infra/mount.h
+     * mount_table_build), so no label is named here */
     arena_t *frame = arena_create(0);
-
     mount_table_t *mounts = NULL;
-    branch_t *branch = NULL;
-    manifest_t *view = NULL;
-    error_t err = mount_table_build(frame, NULL, 0, &mounts);
-    if (!err) err = branch_load(repo, profile, &branch);
-    if (!err) err = manifest_build_branch(branch, mounts, frame, &view);
-    if (!err) *needs_target = manifest_unbound(view).count > 0;
-
-    branch_free(branch);
+    err = mount_table_build(frame, NULL, 0, &mounts);
+    for (label_t label = LABEL_HOME; !err && label < LABEL_COUNT; label++) {
+        if (claimed[label] && !mount_root_of(mounts, branch_profile(branch), label)) {
+            *needs_target = true;
+        }
+    }
     arena_free(frame);
+
     return err;
 }
 

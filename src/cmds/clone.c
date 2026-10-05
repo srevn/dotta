@@ -25,6 +25,7 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "base/string.h"
+#include "core/branch.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -454,17 +455,20 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * place. A profile that needs a target is enabled only with one, and clone
      * cannot take one (enable's --target names a single profile): it is left
      * fetched and disabled, named here with the command that enables it. The
-     * answer is the view's over the branch alone (core/profiles.h
-     * profile_needs_target), and its failures are the clone's: a tree Git cannot
-     * read, or a sheet this build cannot, fails the clone whole and rolls the
-     * store back — as the build in initialize_state already did for a portable
-     * branch, and now for every fetched one. */
+     * answer is the branch's own — the labels its walk shows, asked of a table
+     * with no binding (core/profiles.h profile_needs_target) — and its failures
+     * are the clone's: a tree Git cannot read, or a sheet this build cannot,
+     * fails the clone whole and rolls the store back, as the build in
+     * initialize_state did for a portable branch and now does for every one. */
     string_array_t to_enable;
     string_array_init(&to_enable, ctx->arena);
     for (size_t i = 0; i < fetched_profiles.count; i++) {
         const char *profile = fetched_profiles.entries[i];
+        branch_t *branch = NULL;
         bool needs_target = false;
-        err = profile_needs_target(repo, profile, &needs_target);
+        err = branch_load(repo, profile, &branch);
+        if (!err) err = profile_needs_target(branch, &needs_target);
+        branch_free(branch);
         if (err) goto cleanup;
         if (needs_target) {
             output_warning(

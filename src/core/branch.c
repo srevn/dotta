@@ -8,6 +8,7 @@
  * to the second. The point questions ask it of one name: a blob's claim through
  * the walk's own decode (branch_decode_blob), and the directory claim standing
  * at a name through one look that both questions read (branch_directory_item).
+ * The count is the walk, tallied (branch_count).
  */
 
 #include "core/branch.h"
@@ -334,6 +335,45 @@ error_t branch_walk(
 
     arena_free(frame);
     return err;
+}
+
+/**
+ * Walk visitor: one claim, tallied by its kind
+ *
+ * A blob is a file, whatever its type; a directory claim counts where the profile
+ * tracks it, and an ancestor claim not at all (branch_count_t).
+ *
+ * @param claim One claim, decoded (borrowed — valid for the call only)
+ * @param payload The count so far (branch_count_t)
+ * @return NULL: a tally fails nowhere
+ */
+static error_t branch_count_claim(const branch_claim_t *claim, void *payload) {
+    branch_count_t *count = payload;
+
+    if (claim->type != PATH_TYPE_DIRECTORY) {
+        count->file_count++;
+    } else if (claim->tracked) {
+        count->directory_count++;
+    }
+
+    return NULL;
+}
+
+error_t branch_count(branch_t *branch, branch_count_t *out) {
+    CHECK_NULL(branch);
+    CHECK_NULL(out);
+
+    /* The claims the walk shows, read strictly, tallied in a value of the call's
+     * own and handed out whole: a walk that stopped short leaves the caller's
+     * as it was. The walk's failures name the profile already — the loader's
+     * words for the sheet, "Cannot read profile" over the tree's — so nothing
+     * is said over them. */
+    branch_count_t count = { 0 };
+    error_t err = branch_walk(branch, BRANCH_READ_STRICT, branch_count_claim, &count);
+    if (err) return err;
+
+    *out = count;
+    return NULL;
 }
 
 /**

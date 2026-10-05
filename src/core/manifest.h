@@ -431,11 +431,9 @@ error_t manifest_build(
  * admission (cmds/revert.c claim_standing, refuse_second_name); add, which builds
  * one over the tree its stage opened at and asks it every naming question for
  * the length of the command (cmds/add.c cmd_add); `ignore --test`'s named arm
- * (cmds/ignore.c ignore_test); the two cross-branch searches, which build one
- * per local branch (core/profiles.c claim_by_filesystem_path, under
- * profile_discover_claims, and profile_build_filesystem_index); and the target
- * producer (core/profiles.c profile_needs_target), which builds one under a table
- * that binds nothing and reads the health slice alone.
+ * (cmds/ignore.c ignore_test); and the two cross-branch searches, which build
+ * one per local branch (core/profiles.c claim_by_filesystem_path, under
+ * profile_discover_claims, and profile_build_filesystem_index).
  *
  * Memory: every allocation produced by the call lives in the caller's arena, as
  * manifest_build's does, but the sheet the walk reads where no question has yet,
@@ -570,13 +568,11 @@ error_t manifest_mount_table(
  * this machine. Recorded, never dropped in silence — the health consumers (status,
  * apply, sync) surface these; export reads the count alone, for the reason its
  * refusal gives, and so does add's enable hint over its own opened tree
- * (cmds/add.c); and the count under a table that binds nothing is the answer to
- * whether a branch needs a target at all (core/profiles.h profile_needs_target).
- * The repair is one command (`profile enable <p> --target /path`), the untracking
- * another (`remove`). The screen says **no target** or **needs a target**, never
- * "unbound": the header's word is what the build could not do, the screen's is
- * what the user must give. Strings are the build arena's, same lifetime as the
- * rows.
+ * (cmds/add.c). The repair is one command (`profile enable <p> --target /path`),
+ * the untracking another (`remove`). The screen says **no target** or **needs a
+ * target**, never "unbound": the header's word is what the build could not do,
+ * the screen's is what the user must give. Strings are the build arena's, same
+ * lifetime as the rows.
  */
 typedef struct {
     const char *profile;

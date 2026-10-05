@@ -96,7 +96,8 @@
  *     the table hands out what it found and composes nothing, one reader being
  *     no reason to own the sentence.
  *   - Where the asker's root of a label stands: mount_root_of, by label rather
- *     than by place — the view's contribution and add's receipt.
+ *     than by place — the view's contribution, add's receipt, and whether a branch
+ *     needs a target.
  *   - Where a profile's claim stands (profile + storage -> filesystem):
  *     mount_resolve — that second find, then the join. A name is composed beneath
  *     a root, so resolving one places it back at the very path it was composed
@@ -372,7 +373,9 @@ const mount_root_t *mount_root_above(
  * gives the binding the tie. Never fails, allocates nothing.
  *
  * Readers: add's receipt, which names the place the custom/ names it captured
- * went under (cmds/add.c add_print_labels).
+ * went under (cmds/add.c add_print_labels); and the target mark, which asks the
+ * table no state row can produce for each label a branch claims under
+ * (core/profiles.c profile_needs_target).
  */
 const mount_root_t *mount_root_of(
     const mount_table_t *table,
@@ -412,11 +415,11 @@ const mount_root_t *mount_root_of(
  * Nothing else can happen, so nothing here fails. A storage path is validated
  * where it is read, not only where it was written (infra/label.h
  * label_validate_storage): a sheet's keys at its parse (core/metadata.c
- * metadata_from_json), a tree's entries at their walk (core/profiles.c
- * profile_list_entry and profile_count_entry, core/branch.c branch_step), an
- * argument at its resolver (infra/path.h path_input_resolve), and the state's
- * column by its own constraint (core/state.c storage_spelling). One under no
- * label is a caller's bug, and dies.
+ * metadata_from_json), a tree's entries at their walk (core/branch.c branch_step,
+ * core/profiles.c profile_list_entry, cmds/export.c collect_entry), an argument
+ * at its resolver (infra/path.h path_input_resolve), and the state's column by
+ * its own constraint (core/state.c storage_spelling). One under no label is a
+ * caller's bug, and dies.
  *
  * @param arena        Arena the answer is spelled in (must not be NULL)
  * @param table        Mount table (must not be NULL)

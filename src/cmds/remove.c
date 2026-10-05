@@ -20,6 +20,7 @@
 #include "base/output.h"
 #include "base/string.h"
 #include "cmds/completion.h"
+#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -1221,24 +1222,29 @@ static error_t remove_profile(
     }
 
     /* The file list rides to the hook universe below; the preview and the
-     * confirmation count through the count family instead — what the branch holds,
-     * both kinds, one truth with `dotta list`. A stats failure is display-only:
-     * the deletion must not refuse over a count. */
+     * confirmation count what the branch holds instead, both kinds, through its
+     * own count (core/branch.h branch_count): one truth with `dotta list`. */
     string_array_t files;
     err = profile_list_files(repo, opts->profile, ctx->arena, &files);
     if (err) goto cleanup;
 
+    /* The count, over the branch at its tip. Its failure is display-only — the
+     * deletion must not refuse over a count — so it becomes the phrase the preview
+     * prints, its error dropped and err back to the NULL the phase began with */
+    branch_t *branch = NULL;
+    branch_count_t count = { 0 };
+    err = branch_load(repo, opts->profile, &branch);
+    if (!err) err = branch_count(branch, &count);
+    branch_free(branch);
+
     char counts[64];
-    {
-        profile_stats_t stats = { 0 };
-        error_t stats_err = profile_get_stats(repo, opts->profile, &stats);
-        if (stats_err) {
-            snprintf(counts, sizeof(counts), "counts unavailable");
-        } else {
-            output_format_counts(
-                stats.file_count, stats.directory_count, counts, sizeof(counts)
-            );
-        }
+    if (err) {
+        snprintf(counts, sizeof(counts), "counts unavailable");
+        err = NULL;
+    } else {
+        output_format_counts(
+            count.file_count, count.directory_count, counts, sizeof(counts)
+        );
     }
 
     /* Dry run */

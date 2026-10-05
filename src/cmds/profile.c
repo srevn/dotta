@@ -19,6 +19,7 @@
 #include "base/hashmap.h"
 #include "base/output.h"
 #include "cmds/completion.h"
+#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -204,8 +205,14 @@ static error_t profile_list(
         for (size_t i = 0; i < enabled_profiles.count; i++) {
             const state_profile_entry_t *entry = &enabled_profiles.entries[i];
             const char *profile = entry->name;
-            profile_stats_t stats = { 0 };
-            error_t row_err = profile_get_stats(repo, profile, &stats);
+
+            /* What the branch holds, counted over its tip (core/branch.h
+             * branch_count) */
+            branch_t *branch = NULL;
+            branch_count_t count = { 0 };
+            error_t row_err = branch_load(repo, profile, &branch);
+            if (!row_err) row_err = branch_count(branch, &count);
+            branch_free(branch);
 
             /* Name what the branch holds where it reads, otherwise say so: the
              * row's error is dropped, one per unreadable branch */
@@ -217,7 +224,7 @@ static error_t profile_list(
             } else {
                 char counts[64];
                 output_format_counts(
-                    stats.file_count, stats.directory_count, counts, sizeof(counts)
+                    count.file_count, count.directory_count, counts, sizeof(counts)
                 );
                 output_print(
                     out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (%s)",
@@ -239,18 +246,24 @@ static error_t profile_list(
 
     /* Print available (disabled) profiles, marking the ones that need a target:
      * such a profile is enabled only with one, so this is the mark on exactly
-     * the profile clone and --all left here, and the answer is the view's over
-     * the branch alone (core/profiles.h profile_needs_target). Two reads of one
-     * branch, one failure arm: both open the same tree first, and a row that
-     * would not count says so rather than marking nothing in silence. */
+     * the profile clone and --all left here, and the answer is the branch's own
+     * (core/profiles.h profile_needs_target). One handle serves both: the count
+     * and the mark walk one tip and parse its sheet once, and a row that would
+     * not count says so rather than marking nothing in silence. */
     if (available.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Available (disabled)");
         for (size_t i = 0; i < available.count; i++) {
             const char *profile = available.entries[i];
-            profile_stats_t stats = { 0 };
+
+            /* What the branch holds, and whether it needs a target, both asked
+             * of the one handle loaded at its tip */
+            branch_t *branch = NULL;
+            branch_count_t count = { 0 };
             bool needs_target = false;
-            error_t row_err = profile_get_stats(repo, profile, &stats);
-            if (!row_err) row_err = profile_needs_target(repo, profile, &needs_target);
+            error_t row_err = branch_load(repo, profile, &branch);
+            if (!row_err) row_err = branch_count(branch, &count);
+            if (!row_err) row_err = profile_needs_target(branch, &needs_target);
+            branch_free(branch);
 
             /* Name what the branch holds where it reads, otherwise say so: the
              * row's error is dropped, one per unreadable branch */
@@ -262,7 +275,7 @@ static error_t profile_list(
             } else {
                 char counts[64];
                 output_format_counts(
-                    stats.file_count, stats.directory_count, counts, sizeof(counts)
+                    count.file_count, count.directory_count, counts, sizeof(counts)
                 );
                 output_print(
                     out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%s)", profile, counts
@@ -663,14 +676,18 @@ static error_t profile_enable(
         /* A profile that needs a target is enabled only with one: the binding
          * is part of the enablement, and a row without one would hold every custom/
          * claim while the screens said "enabled". Whether it needs one is the
-         * view's answer over the branch alone (core/profiles.h
-         * profile_needs_target), asked whatever the flag says, so the branch is
-         * the earlier question: a tree Git cannot read, or a sheet this build
-         * cannot, is the error here and not one phase later, after the row was
-         * written. Skipped and named with the flag, whatever the request shape;
-         * a run that enabled nothing ends in the error below. */
+         * branch's own answer, the labels its walk shows asked of a table with
+         * no binding (core/profiles.h profile_needs_target), asked whatever the
+         * flag says, so the branch is the earlier question: a tree Git cannot
+         * read, or a sheet this build cannot, is the error here and not one phase
+         * later, after the row was written. Skipped and named with the flag,
+         * whatever the request shape; a run that enabled nothing ends in the
+         * error below. */
+        branch_t *branch = NULL;
         bool needs_target = false;
-        err = profile_needs_target(repo, profile, &needs_target);
+        err = branch_load(repo, profile, &branch);
+        if (!err) err = profile_needs_target(branch, &needs_target);
+        branch_free(branch);
         if (err) return err;
         if (needs_target && !target) {
             output_warning(

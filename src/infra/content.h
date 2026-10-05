@@ -193,8 +193,8 @@ error_t content_classify(
  * constant, but the screens that size a branch's content want the file's number,
  * not the framing's. Centralising the subtraction here keeps crypto/cipher.h
  * imports out of the layers that ask — `cmds/list.c list_files` (the row) and
- * `core/profiles.c profile_count_entry` (the fold the row's total must agree
- * with). A reader not on this list is a bug.
+ * `list_size_claim` (the fold of a profile's line, which the rows' total must
+ * agree with). A reader not on this list is a bug.
  *
  * Returns:
  *   plaintext → blob_size unchanged

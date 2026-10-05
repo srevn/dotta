@@ -4,8 +4,9 @@
  * Provides efficient statistics gathering over blobs and commit history. What a
  * *profile* holds is a different question — which tree paths are content and
  * which are dotta's own bookkeeping is knowledge this layer does not have — and
- * is answered by profile_get_stats (core/profiles.h), which reads blob sizes
- * through the primitive below.
+ * is answered by the branch's count (core/branch.h branch_count), which reads
+ * no blob; the bytes a listing names are read through the primitive below by
+ * the listing itself (cmds/list.c list_size_claim, list_files).
  *
  * Design principles:
  * - Minimize expensive operations (commit walking deferred to verbose mode)

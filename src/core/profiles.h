@@ -297,109 +297,6 @@ error_t profile_resolve_range(
 error_t profile_require(git_repository *repo, const char *name);
 
 /**
- * What a profile branch holds
- *
- * Counted from the branch, not from the view: the listings that report these
- * name available profiles too, and a profile nothing has enabled owns no rows.
- * The two sources are the ones the branch's walk shows the view when the profile
- * *is* enabled (core/branch.h branch_walk) — the tree's content blobs and the
- * branch metadata's tracked directories — and both sides read one content gate
- * (infra/label.h label_prefixes), so a profile that wins every path it claims
- * counts the same here as its rows do there. The directory side's staleness probe
- * is the one place the two read different witnesses: the walk contradicts a claim
- * from the blob it met, this count asks the tree (core/profiles.c
- * profile_get_tree_stats). They answer alike for every key the grammar admits,
- * and the proof is written where the probe is.
- *
- * Readers: the screens that name what a branch holds — `dotta list`'s profile
- * rows and its no-files arm (cmds/list.c list_profiles, cmds/list.c list_files),
- * `profile list`'s enabled and available rows (cmds/profile.c profile_list),
- * and the deletion's preview and confirmation (cmds/remove.c remove_profile). A
- * reader not on this list is a bug, and a screen that counts what a branch holds
- * beside this one is the second producer this count exists to be: list_files
- * kept its own directory fold until it took this one. The verbose file listing's
- * `Total:` is the one that remains, and it is not a second answer but the same
- * one by the other route — the rows it prints, summed as it prints them, which
- * is what a total under a table has to be. What makes the two routes meet is
- * that both take the framing off the same claim; nothing structural does, and
- * the raw sum here disagreed with those rows by it on every profile holding a
- * sealed file until 228 C2c. `status -v` is no such screen — it counts the view's
- * rows a profile wins (cmds/status.c status_print_profiles), the other half of
- * the holds/wins split above, and the two are free to disagree (docs/profiles.md).
- */
-typedef struct {
-    size_t file_count;       /* Blobs standing under a storage label */
-    size_t directory_count;  /* Tracked directories the branch metadata claims */
-    size_t total_size;       /* Bytes those blobs stand for, the seal's framing off */
-} profile_stats_t;
-
-/**
- * Count what a profile branch holds, in a tree already open
- *
- * The branch's metadata first, then one walk of the tree — each content blob
- * counted and its size taken from the object header, nothing inflated — then
- * the metadata's DIRECTORY items. A branch with no metadata.json claims no
- * directories; that absence is not a failure. For callers that already hold the
- * tree, so one branch read serves the count and whatever else the caller does
- * with it; the tree is borrowed and never freed here.
- *
- * The sheet is read before the walk because the size half wants it too. What a
- * screen calls a file's size is the bytes the file stands for, so the cipher's
- * framing comes off a blob the branch stamps sealed (infra/content.h
- * content_estimated_plaintext_size) — the same subtraction, off the same claim,
- * that the file listing makes row by row (cmds/list.c list_files). The two are
- * a fold and its elements and must agree: a total that names one number while
- * the rows beneath it sum to another is one screen of `dotta list` contradicting
- * the next, which is what the raw sum did for every profile holding a sealed
- * file. Nothing structural holds them together — each reads the claim where it
- * stands, as every reader of that field does (core/metadata.h metadata_item_t)
- * — so the agreement is pinned by a scenario instead (tests/test-encrypt.sh).
- *
- * Complete or an error on both sides: an entry whose name the storage grammar
- * refuses fails the count rather than being skipped past, and a sheet that will
- * not load fails it rather than reading as a branch with no claims (core/metadata.h
- * metadata_load_from_tree). A caller that would rather print than refuse decides
- * that on its own screen, as the listings do.
- *
- * `out` is written once, at the end and on success alone: a walk that stopped
- * short or a probe that refused leaves it as the caller supplied it, so no screen
- * can print half a count.
- *
- * Performance: O(files + directories), one tree walk and one metadata load.
- *
- * @param repo Repository (must not be NULL) — the object database the blob sizes
- *             and the sheet are read through
- * @param tree Git tree to count over (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @param out Statistics (must not be NULL; written on success, untouched otherwise)
- * @return Error or NULL on success
- */
-error_t profile_get_tree_stats(
-    git_repository *repo,
-    const git_tree *tree,
-    const char *profile,
-    profile_stats_t *out
-);
-
-/**
- * Count what a profile branch holds
- *
- * Loads the profile's Git tree internally and counts over it. Tree is freed before
- * return. The count is profile_get_tree_stats', and so are its answer to a branch
- * that will not read and its all-or-nothing write of `out`.
- *
- * @param repo Repository (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @param out Statistics (must not be NULL; written on success, untouched otherwise)
- * @return Error or NULL on success
- */
-error_t profile_get_stats(
-    git_repository *repo,
-    const char *profile,
-    profile_stats_t *out
-);
-
-/**
  * What `profile` holds at `name` in `tree`, read with the caller's sheet
  *
  * The four answers of core/branch.h branch_holds, asked of a tree and a sheet
@@ -415,7 +312,7 @@ error_t profile_get_stats(
  * and whose read of it is strict.
  *
  * `out` is written on success alone; on any error it is left as the caller supplied
- * it, as profile_get_tree_stats leaves its own.
+ * it.
  *
  * @param tree The tree the name is asked of — a tip's or a commit's (must not
  *             be NULL)
@@ -490,61 +387,71 @@ error_t profile_list_files(
 /**
  * Does this profile's branch need a deployment target?
  *
- * Definitional, not a rule of its own: the branch's contribution is built under
- * the one table no state row can produce — HOME and the root sentinel, no binding
- * — and the answer is whether it left anything unplaced (core/manifest.h
- * manifest_unbound). Every home/ and root/ claim places there; a custom/ claim
- * — a blob under custom/, a custom/ item of the sheet, tracked or derived — cannot,
- * so a non-zero count is the answer, and a claim the contribution learns to place
- * or to record moves the answer with it, no clause here having to follow. An
- * empty custom tree needs none, by the same reading: a binding would place nothing
- * for it.
+ * Definitional, not a rule of its own: the labels the branch's walk shows claims
+ * under (core/branch.h branch_walk), each asked of the one table no state row
+ * can produce — HOME and the root sentinel, no binding — for the profile's root
+ * of it (infra/mount.h mount_root_of). A label with no root there is one only a
+ * binding places, so a claim under it is the answer. Every home/ and root/ claim
+ * has its root; a custom/ claim — a blob under custom/ or at the word itself, a
+ * custom/ item of the sheet, tracked or derived — has none. Which labels a binding
+ * places is the table's to say (mount_table_build), so a label it learns to bind
+ * moves the answer with it, no clause here having to follow. An empty custom
+ * tree needs none, by the same reading: the walk shows no claim in it, and a
+ * binding would place nothing for it.
+ *
+ * It is the view's own answer by another route, and agrees with it by construction:
+ * the view's contribution places every claim the same walk shows, and records
+ * on the health slice exactly the claims whose label the table has no root of
+ * (core/manifest.c manifest_place_claim, through mount_resolve, whose absence
+ * is mount_root_of's). So a view built over the branch under that table holds
+ * an unbound claim exactly where this says yes (tests/test-profiles.c holds the
+ * two together), and none is built here.
  *
  * The branch's fact and not this machine's: asked under a table with no binding
  * so that what the branch needs and what this machine binds are two facts, the
  * first answerable where the second is not in scope (clone holds no state at
  * its skip), and unchanged by a row this machine writes.
  *
- * Complete or an error: a branch that will not load, a sheet this build cannot
- * read, and a tree entry no mount can place all fail here — the three the next
- * view build over the same branch would fail on, one phase earlier than `profile
- * enable` failed until now, before the row was written. A caller that must not
- * fail whole on one branch absorbs the error and renders the row as unreadable
+ * Complete or an error: a sheet this build cannot read, and a tree the walk refuses
+ * — a name outside the storage grammar, a subtree the store lacks — fail here,
+ * the failures the next view build over the same branch would fail on, met before
+ * `profile enable` writes the row. A branch that will not load is its caller's,
+ * which loads it (core/branch.h branch_load). A caller that must not fail whole
+ * on one branch absorbs the error and renders the row as unreadable
  * (cmds/interactive.c read_targets), as cmds/profile.c's listing already does
- * for a statistics error.
+ * for a count's error.
  *
- * Readers: the three enablers' skip — `profile enable` (cmds/profile.c), clone
- * (cmds/clone.c), the editor's OFF→ON gate (cmds/interactive.c) — the two marks,
- * the listing's available rows (cmds/profile.c) and the editor's, and the editor's
- * `t`, live only on a row that can be bound. The rule these keep is "a profile
- * that needs a target is not enabled without one", and its scope is theirs alone,
- * not an invariant of the rows: the editor prompts and lets a row be saved unbound
- * (cmds/interactive.c plan_classify says why), add's implicit enable authors no
- * such row (a created profile's custom/ claim requires --target, which the row
- * takes), sync and a re-bind can leave an enabled row needing one, and `profile
- * validate` does not ask — an enabled row with no binding is a lifecycle stage
- * the health channel names, not an inconsistency. add asks no producer: it holds
- * a view over its own opened tree under its own table and reads the slice on
- * that (cmds/add.c add_print_enable).
+ * Readers: the three enablers' skip — `profile enable` (cmds/profile.c
+ * profile_enable), clone (cmds/clone.c cmd_clone), the editor's OFF→ON gate —
+ * the two marks, the listing's available rows and the editor's, and the editor's
+ * `t`, live only on a row that can be bound. The listing asks it of the handle
+ * its row counted over (cmds/profile.c profile_list); the editor's three read
+ * the one answer its rows keep (cmds/interactive.c read_targets). The rule these
+ * keep is "a profile that needs a target is not enabled without one", and its
+ * scope is theirs alone, not an invariant of the rows: the editor prompts and
+ * lets a row be saved unbound (cmds/interactive.c plan_classify says why), add's
+ * implicit enable authors no such row (a created profile's custom/ claim requires
+ * --target, which the row takes), sync and a re-bind can leave an enabled row
+ * needing one, and `profile validate` does not ask — an enabled row with no binding
+ * is a lifecycle stage the health channel names, not an inconsistency. add asks
+ * no producer: it holds a view over its own opened tree under its own table and
+ * reads the slice on that (cmds/add.c add_print_enable).
  *
- * Cost: one tree walk and one sheet load, in an arena of the call's own — the
- * product is a bool and nothing outlives the call (include/runtime.h "Memory",
- * a frame's). Measured at 0.144.2 on a 1,000-path branch: 2.5 ms, against 31 ms
- * for the statistics beside it, whose object-header read per blob is the larger
- * half.
+ * Cost: one walk of the branch — whose sheet a question before it may have parsed
+ * already, the handle keeping it — and a two-root table in a frame of the call's
+ * own: the product is a bool and nothing outlives the call (include/runtime.h
+ * "Memory", no arena in reach). Measured at 0.165.12, a walk past the parse costs
+ * about 0.13 µs a claim; the view built here before cost 2.5 ms per 1,000 paths.
  *
- * @param repo Repository (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @param needs_target Output flag: the branch holds a claim no binding-less table
- *                     places — the view's own unbound count, non-zero (must not
- *                     be NULL)
- * @return Error or NULL on success
+ * @param branch The profile's branch, at its tip as every reader loads it (must
+ *               not be NULL; its sheet read through it)
+ * @param needs_target Output flag: the branch holds a claim under a label the
+ *                     binding-less table has no root of (must not be NULL; false
+ *                     after an error)
+ * @return Error or NULL on success: the sheet's, in the loader's words; the tree's,
+ *         under "Cannot read profile '%s'"
  */
-error_t profile_needs_target(
-    git_repository *repo,
-    const char *profile,
-    bool *needs_target
-);
+error_t profile_needs_target(branch_t *branch, bool *needs_target);
 
 /**
  * The name a branch has for `filesystem_path`: the claim standing there, or the

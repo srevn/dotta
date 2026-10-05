@@ -480,9 +480,6 @@ typedef struct dotta_run {
  *         `ctx->arena` and 7.3 MB with one; what outlives an entry is copied at
  *         the one door it leaves through (workspace_add_untracked, add_list). A
  *         view built to read one answer off it is built in one too:
- *         `core/profiles.c`'s profile_needs_target reads one bool off a branch's
- *         view, where the editor would keep a view per local branch for its session
- *         — 1.8 MB of heap at six branches of 1,000 paths, for six bools — and
  *         `cmds/interactive.c`'s plan_check learns only that the saved set's
  *         view builds, where a session kept one per save — 50 saves over a
  *         5,000-file profile measured 120.7 MB of peak RSS against the command
@@ -495,11 +492,13 @@ typedef struct dotta_run {
  *         a run's own lists (`utils/bootstrap.c` bootstrap_fire), a fetch's
  *         refspecs (`sys/gitops.c` gitops_fetch_branches), a diff's attribution
  *         index (`core/manifest.c` manifest_diff), a branch walk's names a blob
- *         stands at (`core/branch.c` branch_walk), a listing read to decide
- *         (`sys/filesystem.c` fs_remove_empty_dir, `sys/upstream.c`
- *         upstream_ensure_tracking_branch, `infra/epoch.c` epoch_walk), a printer's
- *         sections (`cmds/status.c` status_print_workspace), and a walk whose
- *         answer is an error (`sys/filesystem.c` fs_remove_dir).
+ *         stands at (`core/branch.c` branch_walk), the table with no binding a
+ *         branch's need of a target is asked of (`core/profiles.c`
+ *         profile_needs_target), a listing read to decide (`sys/filesystem.c`
+ *         fs_remove_empty_dir, `sys/upstream.c` upstream_ensure_tracking_branch,
+ *         `infra/epoch.c` epoch_walk), a printer's sections (`cmds/status.c`
+ *         status_print_workspace), and a walk whose answer is an error
+ *         (`sys/filesystem.c` fs_remove_dir).
  *
  *       - A handle's own. Made by its opener and freed by its closer: the sheet
  *         (core/metadata.h), a printer's list (base/output.h output_list_t), a

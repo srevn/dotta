@@ -198,10 +198,10 @@ typedef struct state_record state_record_t;
  * consults no claim (infra/content.h content_get_from_blob_oid), so the stamp
  * answers "was it sealed when it was written" — a screen's question, or a
  * schedule's. Readers: cmds/list.c list_files (the mark, and the framing taken
- * off the size beside it), core/profiles.c profile_count_entry (the same framing,
- * in the fold that row's total must agree with), cmds/export.c collect_entry
- * and collect_storage (which blobs phase 1 reads) and, through the claim the
- * branch decodes from it (core/branch.c branch_decode_blob), cmds/show.c
+ * off the size beside it), cmds/export.c collect_entry and collect_storage (which
+ * blobs phase 1 reads) and, through the claim the branch decodes from it
+ * (core/branch.c branch_decode_blob), cmds/list.c list_size_claim (the same
+ * framing, in the fold that row's total must agree with), cmds/show.c
  * show_print_blob (the annotation) and, onto the view's rows (core/manifest.h
  * manifest_row_t.encrypted), cmds/export.c entry_from_row, core/workspace.c
  * workspace_analyze_file and cmds/key.c key_status.
@@ -209,7 +209,7 @@ typedef struct state_record state_record_t;
  * Each reads it where it stands, off the item: there is no per-field reader to
  * hold the link rule for them, so each spells that rule in its own shape — an
  * arm where the code already branches on the kind (export, the branch's decode),
- * a conjunction where the row is flat (list, the fold).
+ * a conjunction where the row is flat (list).
  */
 typedef struct {
     path_kind_t kind;   /* FILE: the tree names the path. DIRECTORY: the item is the claim. */
@@ -713,9 +713,9 @@ error_t metadata_load_from_branch(
  *
  * The view holds to that without exception: the branch's walk reads the sheet
  * of the tree it walks, strictly for the view, and one that will not load fails
- * the build (core/branch.h branch_walk, core/manifest.h). So does the branch
- * statistics' count, which is where a listing's question of what a profile holds
- * ends (core/profiles.h profile_get_tree_stats).
+ * the build (core/branch.h branch_walk, core/manifest.h). So does the branch's
+ * count, which is where a listing's question of what a profile holds ends
+ * (core/branch.h branch_count).
  *
  * The readers that deliberately do otherwise are counted across both doors —
  * this one and metadata_load_from_branch above, which is this call — and each

@@ -437,7 +437,10 @@ typedef struct dotta_run {
  *   - An arena, for what lives until a scope ends. Nothing in one is freed alone,
  *     and a container lives in the arena it was made in (base/array.h,
  *     base/hashmap.h). A function whose answer is memory takes the arena its
- *     answer lives in, first; a callee that fills a caller's container takes none.
+ *     answer lives in — first, or just before the out parameter it answers through
+ *     (core/manifest.h manifest_build) — unless a handle it reads lends the answer
+ *     from its own (core/branch.h branch_find); a callee that fills a caller's
+ *     container takes none.
  *
  *       - The process's. `main`'s, made before the command's line is parsed and
  *         freed after everything, on every exit: the line as parsed — the options
@@ -499,7 +502,8 @@ typedef struct dotta_run {
  *         answer is an error (`sys/filesystem.c` fs_remove_dir).
  *
  *       - A handle's own. Made by its opener and freed by its closer: the sheet
- *         (core/metadata.h), a printer's list (base/output.h output_list_t).
+ *         (core/metadata.h), a printer's list (base/output.h output_list_t), a
+ *         branch's answers (core/branch.h branch_find).
  *
  *   - The heap, for what dies before any scope does: a payload sized by its data
  *     (base/buffer.h — a file's bytes, a blob's, a diff's text), freed with the

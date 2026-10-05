@@ -10,7 +10,8 @@
  * Authority, per fact:
  * - content and type: the tree's (a blob, a link, an executable) — never restated
  *   here, and the tree's word wins over a stale item's kind (read for one name
- *   by core/profiles.h profile_holds and, for the claim an orphan's record
+ *   by core/branch.h branch_holds and branch_find — and by core/profiles.h
+ *   profile_holds, export's name arm's — and, for the claim an orphan's record
  *   remembers, by core/workspace.c workspace_orphan_authority; for the whole
  *   branch by core/branch.c branch_walk)
  * - permission bits: the sheet's ("mode") — Git's filemode holds one bit of them
@@ -165,11 +166,12 @@ typedef struct state_record state_record_t;
  * placed — the view's rows take the claim's floor (core/branch.h branch_claim_mode:
  * the filemode floor for a blob, DIR_MODE_DEFAULT for a directory) and a capture's
  * record takes none (metadata_item_claim: a link's, the one capture that claims
- * no mode) — so no row, record or verdict carries it. The commands that read an
- * item's mode raw test it beside the item: the header show prints and export's
- * materialised mode, each where a mode is claimed (cmds/show.c print_blob_content,
- * cmds/export.c export_entry_mode), and the capture lines add and update print
- * (cmds/add.c add_print_capture, cmds/update.c update_profile).
+ * no mode) — so no row, record or verdict carries it. The header show prints
+ * tests it on the decoded claim, where a mode is claimed (cmds/show.c
+ * show_print_blob). The commands that read an item's mode raw test it beside
+ * the item: export's materialised mode, where a mode is claimed (cmds/export.c
+ * export_entry_mode), and the capture lines add and update print (cmds/add.c
+ * add_print_capture, cmds/update.c update_profile).
  */
 #define MODE_UNCLAIMED ((mode_t) -1)
 
@@ -195,19 +197,19 @@ typedef struct state_record state_record_t;
  * cross-checked nowhere: the content reader classifies the blob's own bytes and
  * consults no claim (infra/content.h content_get_from_blob_oid), so the stamp
  * answers "was it sealed when it was written" — a screen's question, or a
- * schedule's. Readers: cmds/show.c print_blob_content (the annotation), cmds/list.c
- * list_files (the mark, and the framing taken off the size beside it),
- * core/profiles.c profile_count_entry (the same framing, in the fold that row's
- * total must agree with), cmds/export.c collect_entry and collect_storage (which
- * blobs phase 1 reads) and, through the claim the branch decodes from it
- * (core/branch.c branch_step) onto the view's rows (core/manifest.h
+ * schedule's. Readers: cmds/list.c list_files (the mark, and the framing taken
+ * off the size beside it), core/profiles.c profile_count_entry (the same framing,
+ * in the fold that row's total must agree with), cmds/export.c collect_entry
+ * and collect_storage (which blobs phase 1 reads) and, through the claim the
+ * branch decodes from it (core/branch.c branch_decode_blob), cmds/show.c
+ * show_print_blob (the annotation) and, onto the view's rows (core/manifest.h
  * manifest_row_t.encrypted), cmds/export.c entry_from_row, core/workspace.c
  * workspace_analyze_file and cmds/key.c key_status.
  *
  * Each reads it where it stands, off the item: there is no per-field reader to
  * hold the link rule for them, so each spells that rule in its own shape — an
- * arm where the code already branches on the kind (show, export, the branch's
- * decode), a conjunction where the row is flat (list, the fold).
+ * arm where the code already branches on the kind (export, the branch's decode),
+ * a conjunction where the row is flat (list, the fold).
  */
 typedef struct {
     path_kind_t kind;   /* FILE: the tree names the path. DIRECTORY: the item is the claim. */
@@ -720,10 +722,11 @@ error_t metadata_load_from_branch(
  * is that command's decision about its own output, never a second answer from
  * here: export's materialisation floor (cmds/export.c load_sheet; the bytes come
  * out of a damaged profile, warned), the header show prints over a blob it can
- * read anyway (cmds/show.c show_file — the mode, the ownership and the annotation
- * alike), the file listing's verbose marks (cmds/list.c list_files, warned; the
- * listing is the tree's and stands, the marks are the sheet's and do not), the
- * orphan authority's third answer (core/workspace.c workspace_orphan_authority,
+ * read anyway — the mode, the ownership and the annotation alike, warned — through
+ * the branch's tolerant read (core/branch.h branch_find, from cmds/show.c
+ * show_file), the file listing's verbose marks (cmds/list.c list_files, warned;
+ * the listing is the tree's and stands, the marks are the sheet's and do not),
+ * the orphan authority's third answer (core/workspace.c workspace_orphan_authority,
  * which folds to UNVERIFIED and never to "no claims") and the completion's offer
  * (cmds/completion.c completion_directories). One reader folds without deciding
  * to: the deletion's hook universe (cmds/remove.c remove_profile) drops every

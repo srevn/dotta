@@ -5,7 +5,9 @@
  * its failure kept beside it. The walk is the decode core/branch.h states, in
  * two halves: one walk of the tree for the blobs (branch_step), then the sheet's
  * directory items, with the names the first half found a blob standing at carried
- * to the second.
+ * to the second. The point questions ask it of one name: a blob's claim through
+ * the walk's own decode (branch_decode_blob), and the directory claim standing
+ * at a name through one look that both questions read (branch_directory_item).
  */
 
 #include "core/branch.h"
@@ -27,6 +29,7 @@ struct branch {
     git_tree *own;          /* The tip branch_load read; NULL over a caller's tree */
     metadata_t *sheet;      /* NULL until a question loads it, and beside a failure */
     error_t sheet_failure;  /* Why it would not load; NULL where it did or is not asked yet */
+    arena_t *arena;         /* The claims the handle lends (branch_find) */
 };
 
 /* One walk: what the tree's half carries to the directory half, and the visitor's
@@ -45,11 +48,13 @@ branch_t *branch_open(git_repository *repo, const char *profile, const git_tree 
     CHECK_NULL(tree);
 
     /* The name copied and the tree borrowed, and nothing read: the sheet waits
-     * for the first question that needs it (branch_sheet_failure) */
+     * for the first question that needs it (branch_sheet_failure). The arena is
+     * the handle's own, made here and freed with it, for the claims it lends */
     branch_t *branch = heap_calloc(1, sizeof(*branch));
     branch->repo = repo;
     branch->profile = heap_strdup(profile);
     branch->tree = tree;
+    branch->arena = arena_create(0);
 
     return branch;
 }
@@ -78,6 +83,7 @@ error_t branch_load(git_repository *repo, const char *profile, branch_t **out) {
 void branch_free(branch_t *branch) {
     if (!branch) return;
 
+    arena_free(branch->arena);
     metadata_free(branch->sheet);
     git_tree_free(branch->own);
     free(branch->profile);
@@ -87,11 +93,6 @@ void branch_free(branch_t *branch) {
 const char *branch_profile(const branch_t *branch) {
     CHECK_NULL(branch);
     return branch->profile;
-}
-
-const git_tree *branch_tree(const branch_t *branch) {
-    CHECK_NULL(branch);
-    return branch->tree;
 }
 
 error_t branch_sheet_failure(branch_t *branch) {
@@ -111,6 +112,70 @@ error_t branch_sheet_failure(branch_t *branch) {
 }
 
 /**
+ * The claim a blob makes at its name: its identity, and the item's claim over it
+ *
+ * Identity — the blob's id and the type its filemode says — is read off the entry
+ * here, at the one boundary where the entry is valid (borrowed for the walk's
+ * visit, or a point question's own copy), so no claim carries an opaque handle
+ * and nothing is duplicated to outlive the walk.
+ *
+ * Readers: branch_step, at every blob the walk meets, and branch_find, at the
+ * one it is asked — so the file claim a point question answers is the walk's.
+ *
+ * @param path The claim's name, which the claim keeps (must not be NULL)
+ * @param entry The blob's tree entry (must not be NULL)
+ * @param item The FILE item at the name, or NULL: none, or one the caller voided
+ * @return The claim, by value: a function of its three inputs, which cannot fail
+ */
+static branch_claim_t branch_decode_blob(
+    const char *path,
+    const git_tree_entry *entry,
+    const metadata_item_t *item
+) {
+    /* The blob's identity: its id, and the type its filemode says — libgit2
+     * normalizes the mode it hands back (lib/libgit2/src/libgit2/tree.c
+     * normalize_filemode), so a blob's is one of three. No mode is claimed until
+     * the item says one. */
+    branch_claim_t claim = {
+        .storage_path = path,
+        .mode         = MODE_UNCLAIMED,
+    };
+    git_oid_cpy(&claim.blob_oid, git_tree_entry_id(entry));
+    switch (git_tree_entry_filemode(entry)) {
+        case GIT_FILEMODE_BLOB_EXECUTABLE:
+            claim.type = PATH_TYPE_EXECUTABLE;
+            break;
+        case GIT_FILEMODE_LINK:
+            claim.type = PATH_TYPE_SYMLINK;
+            break;
+        default:
+            /* A blob (the callers pass blobs alone) */
+            claim.type = PATH_TYPE_FILE;
+            break;
+    }
+
+    /* The item's claim over the blob, where the sheet makes one. Owner and group
+     * ride every blob, links included: the ownership claim is true regardless
+     * of what the path became, and a name the item does not make stays NULL. */
+    if (item) {
+        claim.owner = item->owner;
+        claim.group = item->group;
+
+        /* Mode and stamp only where a mode can stand — the tree's word (the type),
+         * never the item's kind: symlink(2) takes no mode, and a link's bytes
+         * are its target rather than content anything could seal. A mode the
+         * item does not claim stays unclaimed, for the reader to floor
+         * (branch_claim_mode). */
+        if (claim.type != PATH_TYPE_SYMLINK) {
+            claim.mode = item->mode;
+            claim.encrypted = item->encrypted;
+        }
+    }
+
+    return claim;
+}
+
+/**
  * Walk visitor: one entry of the branch's tree, shown to branch_walk's visitor
  * where it is a claim
  *
@@ -118,10 +183,6 @@ error_t branch_sheet_failure(branch_t *branch) {
  * joined (a name in the grammar, and nothing else), the kind, the shape, the
  * sheet's item at the name — and, in the same answer, the content authority —
  * the claim, and the visitor's turn.
- *
- * Identity — the blob's id and the type its filemode says — is read off the
- * borrowed entry here, at the one boundary where the entry is valid, so no claim
- * carries an opaque handle and nothing is duplicated to outlive the walk.
  *
  * @param path The entry's path within the tree, joined by the walk (borrowed —
  *             valid for the call only)
@@ -194,45 +255,10 @@ static error_t branch_step(
         item = NULL;
     }
 
-    /* The blob's identity: its id, and the type its filemode says — libgit2
-     * normalizes the mode it hands back (lib/libgit2/src/libgit2/tree.c
-     * normalize_filemode), so a blob's is one of three. No mode is claimed until
-     * the item says one. */
-    branch_claim_t claim = {
-        .storage_path = path,
-        .mode         = MODE_UNCLAIMED,
-    };
-    git_oid_cpy(&claim.blob_oid, git_tree_entry_id(entry));
-    switch (git_tree_entry_filemode(entry)) {
-        case GIT_FILEMODE_BLOB_EXECUTABLE:
-            claim.type = PATH_TYPE_EXECUTABLE;
-            break;
-        case GIT_FILEMODE_LINK:
-            claim.type = PATH_TYPE_SYMLINK;
-            break;
-        default:
-            /* A blob (filtered to blobs above) */
-            claim.type = PATH_TYPE_FILE;
-            break;
-    }
-
-    /* The item's claim over the blob, where the sheet makes one. Owner and group
-     * ride every blob, links included: the ownership claim is true regardless
-     * of what the path became, and a name the item does not make stays NULL. */
-    if (item) {
-        claim.owner = item->owner;
-        claim.group = item->group;
-
-        /* Mode and stamp only where a mode can stand — the tree's word (the type),
-         * never the item's kind: symlink(2) takes no mode, and a link's bytes
-         * are its target rather than content anything could seal. A mode the
-         * item does not claim stays unclaimed, for the reader to floor
-         * (branch_claim_mode). */
-        if (claim.type != PATH_TYPE_SYMLINK) {
-            claim.mode = item->mode;
-            claim.encrypted = item->encrypted;
-        }
-    }
+    /* The claim the blob makes, its identity and the item's claim over it, by
+     * the one decode a point question at this name reads too
+     * (branch_decode_blob) */
+    const branch_claim_t claim = branch_decode_blob(path, entry, item);
 
     /* The visitor's turn. Its failure ends the walk and is kept, so every failure
      * the tree walk answers is the tree's (branch_walk), and the visitor's comes
@@ -308,6 +334,193 @@ error_t branch_walk(
 
     arena_free(frame);
     return err;
+}
+
+/**
+ * The sheet's directory claim standing at `name`, or NULL: the DIRECTORY item
+ * there, where no blob stands at the name — the item the walk's second half shows,
+ * asked of one name
+ *
+ * The tree first, so a name a blob stands at answers without the sheet; then
+ * the sheet, under `read`. The raw item, which is this module's own: each reader
+ * makes of it what it asks.
+ *
+ * Readers: branch_holds, where the tree is silent at the name, and branch_find,
+ * for a directory claim.
+ *
+ * @param branch Handle
+ * @param read The sheet's policy for this question
+ * @param name A validated storage path
+ * @param out The item, or NULL where none stands (NULL after an error)
+ * @return Error or NULL on success: the tree's, under "Cannot read '%s' in profile
+ *         '%s'"; the sheet's (STRICT), in the loader's words
+ */
+static error_t branch_directory_item(
+    branch_t *branch,
+    branch_read_t read,
+    const char *name,
+    const metadata_item_t **out
+) {
+    *out = NULL;
+
+    /* A blob at the name contradicts the claim there and is the tree's answer,
+     * the sheet unread: the walk's contradiction index, asked of one name. The
+     * look reads its three answers as three — a subtree that will not load on
+     * the way is a failure to read, never an absence
+     * (lib/libgit2/src/libgit2/tree.c git_tree_entry_bypath: -1 where a subtree
+     * will not load, GIT_ENOTFOUND for a name absent or reached through a
+     * non-tree) */
+    git_tree_entry *entry = NULL;
+    int rc = git_tree_entry_bypath(&entry, branch->tree, name);
+    if (rc < 0 && rc != GIT_ENOTFOUND) {
+        return error_git(rc, "Cannot read '%s' in profile '%s'", name, branch->profile);
+    }
+    git_object_t type = rc == 0 ? git_tree_entry_type(entry) : GIT_OBJECT_INVALID;
+    git_tree_entry_free(entry);   /* NULL-safe, and NULL unless rc == 0 */
+    if (type == GIT_OBJECT_BLOB) return NULL;
+
+    /* An open question: the sheet, under the reader's policy. A tolerant read
+     * past a sheet that will not load holds no item, since metadata_lookup takes
+     * the NULL sheet the failure leaves (branch_sheet_failure) */
+    error_t err = branch_sheet_failure(branch);
+    if (err && read == BRANCH_READ_STRICT) return err;
+
+    /* The item at the name, where it claims a directory: a FILE item with no
+     * blob claims nothing here, as in the walk */
+    const metadata_item_t *item = metadata_lookup(branch->sheet, name);
+    if (item && item->kind == PATH_KIND_DIRECTORY) *out = item;
+
+    return NULL;
+}
+
+error_t branch_holds(branch_t *branch, const char *name, branch_held_t *out) {
+    CHECK_NULL(branch);
+    CHECK_NULL(name);
+    CHECK_NULL(out);
+
+    /* The tree first: a name is Git's key, and the tree is the content authority
+     * (core/metadata.h), so an entry here is the whole answer whatever the sheet
+     * says at the name. Three answers read as three: an intermediate object that
+     * will not load is a failure to read, never an absence. */
+    git_tree_entry *entry = NULL;
+    int rc = git_tree_entry_bypath(&entry, branch->tree, name);
+    if (rc == 0) {
+        /* Three kinds and no fourth: git_tree_entry_type reads the entry's mode
+         * word, which is a gitlink, a directory, or a blob — so the last arm is
+         * the gitlink and not a shrug. */
+        branch_held_kind_t kind;
+        switch (git_tree_entry_type(entry)) {
+            case GIT_OBJECT_BLOB: kind = BRANCH_HELD_FILE; break;
+            case GIT_OBJECT_TREE: kind = BRANCH_HELD_DIRECTORY; break;
+            default:              kind = BRANCH_HELD_SUBMODULE; break;
+        }
+
+        *out = (branch_held_t){
+            .kind = kind,
+            .oid = *git_tree_entry_id(entry),
+            .filemode = git_tree_entry_filemode(entry),
+        };
+        git_tree_entry_free(entry);
+
+        return NULL;
+    }
+    if (rc != GIT_ENOTFOUND) {
+        return error_git(rc, "Cannot read '%s' in profile '%s'", name, branch->profile);
+    }
+
+    /* The tree's silence: the one claim a tree cannot hold, a directory claim
+     * with nothing beneath it, standing here and nowhere else. Read strictly —
+     * whether the sheet alone holds one is the sheet's question, so a sheet that
+     * will not load is the answer — and by the look the directory question reads
+     * too, so the two cannot part */
+    const metadata_item_t *item = NULL;
+    error_t err = branch_directory_item(branch, BRANCH_READ_STRICT, name, &item);
+    if (err) return err;
+
+    *out = (branch_held_t){
+        .kind = item ? BRANCH_HELD_DIRECTORY : BRANCH_HELD_NOTHING,
+    };
+
+    return NULL;
+}
+
+error_t branch_find(
+    branch_t *branch,
+    branch_read_t read,
+    path_kind_t kind,
+    const char *name,
+    const branch_claim_t **out
+) {
+    CHECK_NULL(branch);
+    CHECK_NULL(name);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    switch (kind) {
+        case PATH_KIND_FILE: {
+            /* The blob at the name, or no file claim: the tree's answer, the
+             * sheet unread where it gives one. The look reads three answers as
+             * three, as every look here does (branch_directory_item) */
+            git_tree_entry *entry = NULL;
+            int rc = git_tree_entry_bypath(&entry, branch->tree, name);
+            if (rc < 0 && rc != GIT_ENOTFOUND) {
+                return error_git(
+                    rc, "Cannot read '%s' in profile '%s'", name, branch->profile
+                );
+            }
+            if (rc != 0 || git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
+                git_tree_entry_free(entry);   /* NULL-safe */
+                return NULL;
+            }
+
+            /* Its FILE item, under the reader's policy: a DIRECTORY item at a
+             * blob's name claims nothing at the blob — the walk's at-name rule,
+             * with no set to record the key in */
+            error_t err = branch_sheet_failure(branch);
+            if (err && read == BRANCH_READ_STRICT) {
+                git_tree_entry_free(entry);
+                return err;
+            }
+            const metadata_item_t *item = metadata_lookup(branch->sheet, name);
+            if (item && item->kind == PATH_KIND_DIRECTORY) item = NULL;
+
+            /* Decoded as the walk decodes the blob, and kept for the handle's
+             * life, its name copied beside it: an answer outlives the caller's
+             * argument */
+            branch_claim_t *kept = arena_alloc(branch->arena, sizeof(*kept));
+            *kept = branch_decode_blob(arena_strdup(branch->arena, name), entry, item);
+            git_tree_entry_free(entry);
+
+            *out = kept;
+            return NULL;
+        }
+
+        case PATH_KIND_DIRECTORY: {
+            /* The directory claim standing at the name, by the look holds reads */
+            const metadata_item_t *item = NULL;
+            error_t err = branch_directory_item(branch, read, name, &item);
+            if (err || !item) return err;
+
+            /* The walk's second half's claim at one name, kept for the handle's
+             * life: its strings are the sheet's, which the handle keeps too.
+             * The class rides the claim, and a directory takes no stamp */
+            branch_claim_t *kept = arena_alloc(branch->arena, sizeof(*kept));
+            *kept = (branch_claim_t){
+                .storage_path = item->key,
+                .type = PATH_TYPE_DIRECTORY,
+                .mode = item->mode,
+                .owner = item->owner,
+                .group = item->group,
+                .tracked = item->tracked,
+            };
+
+            *out = kept;
+            return NULL;
+        }
+    }
+
+    CHECK_ARG(false, "a path kind no enumerator names");
 }
 
 mode_t branch_claim_mode(const branch_claim_t *claim) {

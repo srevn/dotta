@@ -612,25 +612,25 @@ static error_t collect_storage(
     /* The name, answered from both documents at once (core/profiles.h
      * profile_holds) — the sheet as this verb read it, tolerantly (load_sheet),
      * so a damaged sheet costs the copy a claim and never the tree's answer. */
-    profile_held_t held;
-    error_t err = profile_holds(ctx->run.repo, tree, metadata, profile, name, &held);
+    branch_held_t held;
+    error_t err = profile_holds(tree, metadata, profile, name, &held);
     if (err) goto cleanup;
 
     switch (held.kind) {
-        case PROFILE_HELD_NOTHING:
+        case BRANCH_HELD_NOTHING:
             err = error_create(
                 ERR_NOT_FOUND, "'%s' not found in profile '%s'%s",
                 name, profile, commit_suffix
             );
             goto cleanup;
 
-        case PROFILE_HELD_DIRECTORY: {
+        case BRANCH_HELD_DIRECTORY: {
             /* Directory export: the target is the copy's root, and beneath it
              * the subtree is walked — or, where the sheet alone holds the claim,
              * there is no subtree to walk and any children are claims themselves,
              * collected by the append below. An empty tracked directory has no
              * tree entry, so the read answers it with no mode word at all
-             * (core/profiles.h profile_held_t) and the export is then the claim
+             * (core/branch.h branch_held_t) and the export is then the claim
              * itself: the directory, at its stored mode. */
             const metadata_item_t *root_item = metadata_lookup(metadata, name);
             mode_t root_mode = export_entry_mode(
@@ -672,7 +672,7 @@ static error_t collect_storage(
             goto cleanup;
         }
 
-        case PROFILE_HELD_FILE: {
+        case BRANCH_HELD_FILE: {
             /* Single-entry export: degenerate case of the walk. */
             export_entry_t e;
             memset(&e, 0, sizeof(e));
@@ -692,7 +692,7 @@ static error_t collect_storage(
             goto cleanup;
         }
 
-        case PROFILE_HELD_SUBMODULE:
+        case BRANCH_HELD_SUBMODULE:
             err = error_create(
                 ERR_INVALID_ARG, "Unsupported entry type for '%s'", name
             );

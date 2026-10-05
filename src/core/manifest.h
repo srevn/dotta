@@ -154,14 +154,14 @@ typedef struct branch branch_t;
  * Totality: after build, mode is THE mode for every non-link row — floor or claim,
  * never a hole; consumers compare and apply it without a fallback. A link row's
  * mode and encrypted are both don't-cares, 0 and false: neither reaches a link
- * row (core/branch.c branch_step's link rule), the discriminator being type,
- * the tree's own truth — symlink(2) takes no mode, and a link's bytes are its
- * target rather than content anything could seal. Its owner and group are kept,
- * a link being owned like any path. MODE_UNCLAIMED reaches no row: the claim's
- * floor resolves it (core/branch.h branch_claim_mode). Authority, stated once:
- * the filemode is authoritative for type, the metadata claim for permission bits
- * — a hand-edit that contradicts the x-bit across the two is resolved by that
- * contract, not detected per-read.
+ * row (core/branch.c branch_decode_blob's link rule), the discriminator being
+ * type, the tree's own truth — symlink(2) takes no mode, and a link's bytes are
+ * its target rather than content anything could seal. Its owner and group are
+ * kept, a link being owned like any path. MODE_UNCLAIMED reaches no row: the
+ * claim's floor resolves it (core/branch.h branch_claim_mode). Authority, stated
+ * once: the filemode is authoritative for type, the metadata claim for permission
+ * bits — a hand-edit that contradicts the x-bit across the two is resolved by
+ * that contract, not detected per-read.
  *
  * Winner or not: `profile` is the profile whose claim the row is, and a row is
  * never rewritten when a higher profile takes its path. A row read through the
@@ -278,8 +278,11 @@ typedef struct {
 /**
  * Convert a path type to its git filemode
  *
- * The canonical conversion used by workspace divergence analysis and the
- * historical-diff path.
+ * The canonical conversion, a type back to the filemode the content layer and
+ * the comparisons read. Readers: core/workspace.c workspace_analyze_file,
+ * core/deploy.c deploy_file, cmds/diff.c show_file_diff_from_workspace and
+ * compare_tree_files_to_filesystem, and cmds/show.c show_print_blob (a decoded
+ * claim's type, which the branch read off one of a blob's three filemodes).
  *
  * Mapping:
  *   PATH_TYPE_SYMLINK    -> GIT_FILEMODE_LINK (0120000)

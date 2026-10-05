@@ -400,116 +400,38 @@ error_t profile_get_stats(
 );
 
 /**
- * What a profile holds at one name
+ * What `profile` holds at `name` in `tree`, read with the caller's sheet
  *
- * The four things that can stand at a storage name, from the tree's three entry
- * kinds and the one claim a tree cannot hold. FILE is any blob — bytes, an
- * executable, a link's target — the filemode beside it saying which; DIRECTORY
- * is a subtree, or a directory claim the sheet alone holds (a tracked directory
- * with nothing beneath it, an ancestor chain the tree no longer has); SUBMODULE
- * is a gitlink, which dotta never writes (sys/stage.c put_entry refuses the mode)
- * and every verb refuses by its noun; NOTHING is neither document holding the name.
- */
-typedef enum {
-    PROFILE_HELD_NOTHING,       /* neither document holds the name */
-    PROFILE_HELD_FILE,          /* the tree: a blob, of any filemode */
-    PROFILE_HELD_DIRECTORY,     /* the tree: a subtree, or the sheet alone: a claim */
-    PROFILE_HELD_SUBMODULE,     /* the tree: a gitlink */
-} profile_held_kind_t;
-
-/**
- * The answer whole: which of the four, and for the tree's entries the two facts
- * a verb reads off one, by value — so no entry outlives the call that read it.
- */
-typedef struct {
-    profile_held_kind_t kind;   /* which of the four stands at the name */
-    git_oid oid;                /* the entry's id, zero where the sheet answered */
-    git_filemode_t filemode;    /* the entry's mode word, 0 where the sheet answered */
-} profile_held_t;
-
-/**
- * What `profile` holds at `name` in `tree`
+ * The four answers of core/branch.h branch_holds, asked of a tree and a sheet
+ * the caller already holds: the tree first, so an entry is the whole answer;
+ * the caller's sheet on the tree's silence alone, read as the caller read it.
  *
- * A name is asked of the branch's two documents in the order the authority rule
- * reads them (core/metadata.h): the tree first, because a name is Git's key and
- * the tree is the content authority; the sheet on the tree's silence alone, because
- * a directory claim with nothing beneath it stands there and nowhere else, and
- * because an item standing at a name the tree holds a blob for is stale and cannot
- * change the tree's answer. A FILE item without a blob claims nothing and answers
- * NOTHING.
- *
- * Three answers from the tree read as three: an intermediate object that will
- * not load is a failure to read, never an absence. The sheet is read strictly —
- * a branch whose sheet will not load refuses a name its tree is silent about,
- * and says so, since dotta cannot then say whether the branch holds it. A tree
- * without a sheet holds an empty one (metadata_load_from_tree), so a branch that
- * never wrote one answers NOTHING there, not an error.
- *
- * `sheet` is the caller's where it holds one — read as the caller read it, so a
- * verb's own sheet policy is its own here too: show hands in the sheet it loaded
- * tolerantly for its header (cmds/show.c show_file), export the one it warned
- * over (cmds/export.c load_sheet), revert the commit's, loaded strictly
- * (cmds/revert.c cmd_revert). NULL where the caller holds none, and the sheet
- * is then loaded here on the tree's silence alone and freed before the return.
- * No caller pays a parse the tree has already answered for, and none pays one
- * twice.
- *
- * The payload is the tree's entry and only the tree's: `oid` and `filemode` are
- * that entry's for the three answers the tree gives, and both are zero exactly
- * where the sheet alone answered — the one convention this contract asks a reader
- * to know, and the one reader that needs it is export's name arm, which walks a
- * subtree where the tree held one (cmds/export.c collect_storage reads `filemode
- * == GIT_FILEMODE_TREE`). No other reader looks past `kind`.
+ * Its one reader is export's name arm (cmds/export.c collect_storage), which
+ * hands in the sheet it read tolerantly and warned over (cmds/export.c load_sheet),
+ * so a damaged sheet costs the copy its claims and never the tree's answer. A
+ * name the tree is silent about is then read against that sheet as export folded
+ * it, empty where the load failed, so a claim only the sheet holds reads as absent
+ * there. Every other reader asks the branch, whose sheet is the handle's own
+ * and whose read of it is strict.
  *
  * `out` is written on success alone; on any error it is left as the caller supplied
  * it, as profile_get_tree_stats leaves its own.
  *
- * Readers: the four verbs that act on one name — `show -p` (cmds/show.c show_file),
- * the entry a revert restores (cmds/revert.c entry_to_restore), the history's
- * pre-check (cmds/list.c list_file_history), export's name arm (cmds/export.c
- * collect_storage) — and the search by name across the local branches
- * (core/profiles.c claim_by_name). A reader not on this list is a bug. Three
- * neighbours ask a different question and are not readers: revert's read of the
- * tip at the name it writes (cmds/revert.c cmd_revert, step 11) asks Git's
- * one-entry rule, which the sheet must not answer — a directory claim there is
- * retired by the write, not refused; the orphan probe (core/workspace.c
- * workspace_orphan_authority) asks whether the branch holds the claim a record
- * remembers, which a subtree and a gitlink stand at a name without making — the
- * tree first, as here, and the sheet only for a directory the tree holds no blob
- * for — and folds every failure to UNVERIFIED; the count's staleness probe
- * (core/profiles.c profile_get_tree_stats) and export's claim append (cmds/export.c
- * append_claim_dirs) hold the sheet's item and ask whether the tree contradicts
- * it, which is the enumeration's question (core/branch.c branch_walk's
- * contradiction index).
- *
- * The point query, where the enumeration is its sibling: "what does this branch
- * hold" is asked of one name here and of the whole branch at the sites the
- * contradiction index serves. A producer of the second would answer the first
- * from a list it already holds, and `sheet` is the parameter that would go with
- * it — so it is the seam to re-cut, not a settled part of this shape.
- *
- * Cost: one tree lookup; one sheet parse where the tree is silent and the caller
- * handed none.
- *
- * @param repo Repository the tree's blobs, the sheet among them, are read from
- *             (must not be NULL)
  * @param tree The tree the name is asked of — a tip's or a commit's (must not
  *             be NULL)
- * @param sheet The caller's sheet of that tree, or NULL to read it here on the
- *              tree's silence
- * @param profile Whose branch it is, for the sheet's load and the refusals (must
- *                not be NULL)
+ * @param sheet The caller's sheet of that tree (must not be NULL)
+ * @param profile Whose branch it is, for the refusals (must not be NULL)
  * @param name A validated storage path (must not be NULL)
  * @param out The answer (must not be NULL; written on success alone)
- * @return Error or NULL on success
+ * @return Error or NULL on success: the tree's, under "Cannot read '%s' in profile
+ *         '%s'"
  */
 error_t profile_holds(
-    git_repository *repo,
     const git_tree *tree,
     const metadata_t *sheet,
     const char *profile,
     const char *name,
-    profile_held_t *out
+    branch_held_t *out
 );
 
 /**
@@ -630,8 +552,8 @@ error_t profile_needs_target(
  *
  * A filesystem key, and the only one. The resolver answers two and the other is
  * already settled where the argument was read (infra/path.h): a name the user
- * typed is Git's key, so the caller's own read of the branch's two documents
- * decides whether the profile holds it (profile_holds) and there is nothing here
+ * typed is Git's key, so the caller's own question of the branch decides whether
+ * the profile holds it (core/branch.h branch_holds) and there is nothing here
  * to ask — a name no claim sheet mentions, a bare subtree, a name the view did
  * not keep, is held by the branch and never by its view. What arrives here is
  * the key that needs the branch to answer it.
@@ -711,11 +633,11 @@ typedef struct {
  *
  * A STORAGE argument: every branch that holds the name — in its tree, a subtree
  * counting as a name has always counted, or, where the tree is silent, as a
- * directory claim in its sheet (profile_holds); the claim is the name as typed.
- * A LOCATION argument: every branch whose view of its own tip, under this machine's
- * table, holds a row there — the claim being that branch's own name for the place,
- * since a path may be held under a non-canonical name and the caller must not
- * name it again.
+ * directory claim in its sheet (core/branch.h branch_holds); the claim is the
+ * name as typed. A LOCATION argument: every branch whose view of its own tip,
+ * under this machine's table, holds a row there — the claim being that branch's
+ * own name for the place, since a path may be held under a non-canonical name
+ * and the caller must not name it again.
  *
  * The table is this machine's, and this machine's table is the enabled set's
  * (core/manifest.h manifest_mount_table): a profile nothing has enabled has no

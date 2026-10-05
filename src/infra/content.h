@@ -301,7 +301,7 @@ error_t content_get_from_blob_oid(
  * A link is not content and never reaches here: its bytes are a target path,
  * and Git's filemode is the authority on that at every boundary
  * (content_capture_link, every read here — each takes the entry's filemode —
- * core/branch.c branch_step's link rule, cmds/revert.c's claim).
+ * core/branch.c branch_decode_blob's link rule, cmds/revert.c's claim).
  *
  * The write-boundary invariant content_capture_file states holds here too: what
  * is answered classifies ENCRYPTED, as the source did, so a caller stamping

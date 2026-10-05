@@ -502,13 +502,13 @@ static error_t list_files(
             if (rc == 0) {
                 /* The stamp the branch's own claim makes of this entry, read as
                  * the branch decodes it: never onto a link, whose bytes are its
-                 * target and never a seal (core/branch.c branch_step's link rule).
-                 * A mark and a number are a screen, so the claim answers and no
-                 * content blob is opened — the store made the stamp true for
-                 * every file it sealed (infra/content.h content_capture_file),
-                 * and a hand-written one is the sheet's word, honoured here as
-                 * its mode and its owner are on every other screen (core/metadata.h
-                 * metadata_item_t). */
+                 * target and never a seal (core/branch.c branch_decode_blob's
+                 * link rule). A mark and a number are a screen, so the claim
+                 * answers and no content blob is opened — the store made the
+                 * stamp true for every file it sealed (infra/content.h
+                 * content_capture_file), and a hand-written one is the sheet's
+                 * word, honoured here as its mode and its owner are on every
+                 * other screen (core/metadata.h metadata_item_t). */
                 const metadata_item_t *item = metadata_lookup(metadata, storage_path);
                 bool encrypted = git_tree_entry_filemode(entry) != GIT_FILEMODE_LINK
                     && item && item->encrypted;
@@ -731,34 +731,34 @@ static error_t list_file_history(
         }
     }
 
-    /* What the tip holds at the name, asked of both documents at once
-     * (core/profiles.h profile_holds), and only a file has a history to list: a
-     * directory is refused as one whichever document holds it, a submodule as
+    /* What the tip holds at the name, asked of the branch's two documents at
+     * once (core/branch.h branch_holds), and only a file has a history to list:
+     * a directory is refused as one whichever document holds it, a submodule as
      * one, and a name neither holds is a deleted file — given its word before
-     * the O(total_commits) walk, which is the search's own. No sheet is handed
-     * in: this verb holds none and reads one only where the tip is silent. The
-     * history is one name's — a path's former names under another contract are
-     * the user's to type, a prospective name proving nothing about what the profile
-     * once held there. */
-    profile_held_t held;
-    err = profile_holds(repo, tree, NULL, profile, storage_path, &held);
+     * the O(total_commits) walk, which is the search's own. The branch reads
+     * its sheet only where the tip is silent, strictly, and a path's view above
+     * has already read it. The history is one name's — a path's former names
+     * under another contract are the user's to type, a prospective name proving
+     * nothing about what the profile once held there. */
+    branch_held_t held;
+    err = branch_holds(branch, storage_path, &held);
     branch_free(branch);
     git_tree_free(tree);
     if (err) return err;
 
     switch (held.kind) {
-        case PROFILE_HELD_FILE:
+        case BRANCH_HELD_FILE:
             break;
 
-        case PROFILE_HELD_DIRECTORY:
-        case PROFILE_HELD_SUBMODULE:
+        case BRANCH_HELD_DIRECTORY:
+        case BRANCH_HELD_SUBMODULE:
             return error_create(
                 ERR_INVALID_ARG, "'%s' is %s; list shows one file's history",
                 storage_path,
-                held.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule"
+                held.kind == BRANCH_HELD_DIRECTORY ? "a directory" : "a submodule"
             );
 
-        case PROFILE_HELD_NOTHING:
+        case BRANCH_HELD_NOTHING:
             output_info(out, OUTPUT_NORMAL, "File not in current tree, searching history...");
             break;
     }

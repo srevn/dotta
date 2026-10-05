@@ -544,10 +544,10 @@ static error_t profile_count_entry(
      * a sealed blob carries the cipher's framing and its file does not, and the
      * file is what a screen names (197 R5). The stamp is the branch's own claim,
      * read as the branch decodes it — never onto a link, whose bytes are its
-     * target and never a seal (core/branch.c branch_step's link rule) — and this
-     * is the fold of exactly the rows the file listing prints one by one, so
-     * the two read the claim the same way or the two screens disagree by the
-     * framing (cmds/list.c list_files). */
+     * target and never a seal (core/branch.c branch_decode_blob's link rule) —
+     * and this is the fold of exactly the rows the file listing prints one by
+     * one, so the two read the claim the same way or the two screens disagree
+     * by the framing (cmds/list.c list_files). */
     const metadata_item_t *claim = metadata_lookup(walk->sheet, path);
     bool encrypted = git_tree_entry_filemode(entry) != GIT_FILEMODE_LINK
         && claim && claim->encrypted;
@@ -694,18 +694,17 @@ error_t profile_get_stats(
 }
 
 /**
- * What `profile` holds at `name` in `tree`
+ * What `profile` holds at `name` in `tree`, read with the caller's sheet
  */
 error_t profile_holds(
-    git_repository *repo,
     const git_tree *tree,
     const metadata_t *sheet,
     const char *profile,
     const char *name,
-    profile_held_t *out
+    branch_held_t *out
 ) {
-    CHECK_NULL(repo);
     CHECK_NULL(tree);
+    CHECK_NULL(sheet);
     CHECK_NULL(profile);
     CHECK_NULL(name);
     CHECK_NULL(out);
@@ -720,14 +719,14 @@ error_t profile_holds(
         /* Three kinds and no fourth: git_tree_entry_type reads the entry's mode
          * word, which is a gitlink, a directory, or a blob — so the last arm is
          * the gitlink and not a shrug. */
-        profile_held_kind_t kind;
+        branch_held_kind_t kind;
         switch (git_tree_entry_type(entry)) {
-            case GIT_OBJECT_BLOB: kind = PROFILE_HELD_FILE; break;
-            case GIT_OBJECT_TREE: kind = PROFILE_HELD_DIRECTORY; break;
-            default:              kind = PROFILE_HELD_SUBMODULE; break;
+            case GIT_OBJECT_BLOB: kind = BRANCH_HELD_FILE; break;
+            case GIT_OBJECT_TREE: kind = BRANCH_HELD_DIRECTORY; break;
+            default:              kind = BRANCH_HELD_SUBMODULE; break;
         }
 
-        *out = (profile_held_t){
+        *out = (branch_held_t){
             .kind = kind,
             .oid = *git_tree_entry_id(entry),
             .filemode = git_tree_entry_filemode(entry),
@@ -737,26 +736,17 @@ error_t profile_holds(
         return NULL;
     }
     if (rc != GIT_ENOTFOUND) {
-        return error_git(rc, "Failed to read '%s' in profile '%s'", name, profile);
+        return error_git(rc, "Cannot read '%s' in profile '%s'", name, profile);
     }
 
-    /* The sheet, and only on the tree's silence: a directory claim with nothing
-     * beneath it stands here and nowhere else. The caller's sheet where it holds
-     * one, read as the caller read it; else the tree's own, read strictly and
-     * freed below — `own` marks whose it is, and metadata_free takes a NULL. */
-    metadata_t *own = NULL;
-    if (!sheet) {
-        error_t err = metadata_load_from_tree(repo, tree, profile, &own);
-        if (err) return err;
-        sheet = own;
-    }
-
+    /* The caller's sheet, and only on the tree's silence: a directory claim with
+     * nothing beneath it stands here and nowhere else, read as the caller read
+     * the sheet. */
     const metadata_item_t *item = metadata_lookup(sheet, name);
-    *out = (profile_held_t){
-        .kind = item && item->kind == PATH_KIND_DIRECTORY ? PROFILE_HELD_DIRECTORY
-                                                          : PROFILE_HELD_NOTHING,
+    *out = (branch_held_t){
+        .kind = item && item->kind == PATH_KIND_DIRECTORY ? BRANCH_HELD_DIRECTORY
+                                                          : BRANCH_HELD_NOTHING,
     };
-    metadata_free(own);
 
     return NULL;
 }
@@ -960,14 +950,14 @@ static error_t claim_by_filesystem_path(
 /**
  * The claim `profile`'s branch holds under `storage_path`, or NULL
  *
- * A name is Git's key, and one question of the branch's two documents answers
- * it (profile_holds): the tree first — a subtree counts, as a name has always
- * counted — and the sheet where the tree is silent, because a directory claim
- * with nothing beneath it stands there alone, held by the branch as surely as a
- * blob is. Complete or an error on both documents: an object that will not load
- * and a sheet that will not parse are each this branch's failure, never an absence
- * — and the sheet is opened only where the tree did not answer, which is the
- * whole of what a name still costs less than a path.
+ * A name is Git's key, and one question of the branch answers it (core/branch.h
+ * branch_holds): the tree first — a subtree counts, as a name has always counted
+ * — and the sheet where the tree is silent, because a directory claim with nothing
+ * beneath it stands there alone, held by the branch as surely as a blob is.
+ * Complete or an error on both documents: an object that will not load and a
+ * sheet that will not parse are each this branch's failure, never an absence —
+ * and the sheet is opened only where the tree did not answer, which is the whole
+ * of what a name still costs less than a path.
  */
 static error_t claim_by_name(
     git_repository *repo,
@@ -977,16 +967,14 @@ static error_t claim_by_name(
 ) {
     *out_storage = NULL;
 
-    git_tree *tree = NULL;
-    error_t err = gitops_load_branch_tree(repo, profile, &tree);
+    branch_t *branch = NULL;
+    branch_held_t held = { 0 };
+    error_t err = branch_load(repo, profile, &branch);
+    if (!err) err = branch_holds(branch, storage_path, &held);
+    branch_free(branch);
     if (err) return err;
 
-    profile_held_t held;
-    err = profile_holds(repo, tree, NULL, profile, storage_path, &held);
-    git_tree_free(tree);
-    if (err) return err;
-
-    if (held.kind != PROFILE_HELD_NOTHING) *out_storage = storage_path;
+    if (held.kind != BRANCH_HELD_NOTHING) *out_storage = storage_path;
 
     return NULL;
 }

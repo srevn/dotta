@@ -29,26 +29,14 @@
 #include "sys/revision.h"
 
 /**
- * Check if content appears to be binary
+ * Whether content appears to be binary
  *
  * Scans for NUL bytes in the first 8000 bytes, matching Git's heuristic. Must
  * be called on plaintext content (after decryption).
  */
-static bool content_is_binary(const unsigned char *data, size_t size) {
+static bool show_binary(const unsigned char *data, size_t size) {
     size_t check_len = size < 8000 ? size : 8000;
     return memchr(data, '\0', check_len) != NULL;
-}
-
-/**
- * Get human-readable file type from git filemode
- */
-static const char *filemode_type_str(git_filemode_t mode) {
-    switch (mode) {
-        case GIT_FILEMODE_BLOB_EXECUTABLE: return "executable";
-        case GIT_FILEMODE_LINK:            return "symlink";
-        case GIT_FILEMODE_BLOB:            return "regular file";
-        default:                           return "file";
-    }
 }
 
 /**
@@ -59,7 +47,7 @@ static const char *filemode_type_str(git_filemode_t mode) {
  * closed pipe with SIGPIPE ignored) surface as a non-zero exit instead of vanishing
  * at process teardown.
  */
-static error_t write_stdout(const buffer_t *content) {
+static error_t show_write(const buffer_t *content) {
     if (content->size > 0 &&
         fwrite(content->data, 1, content->size, stdout) != content->size) {
         return error_create(ERR_FS, "Failed to write content to stdout");
@@ -81,59 +69,54 @@ static error_t write_stdout(const buffer_t *content) {
 }
 
 /**
- * Print blob content with metadata header
+ * Print a blob's bytes under the header of the claim the branch makes there
  *
  * Uses content layer for transparent decryption. Password prompt only happens
  * if file is encrypted and key is not cached.
  *
- * The header is the path's claims read as the branch decodes them (core/branch.c
- * branch_step's link rule): the type is the tree's word, the mode prints only
- * where the type can carry one and the entry claims one, and ownership prints
- * for every kind that holds it — a link's entry exists to carry exactly that.
- * Symlinks show their target, binary files their size without dumping content,
- * encrypted files that decryption occurred.
+ * The header is the claim as the branch decodes it (core/branch.h branch_find,
+ * by core/branch.c branch_decode_blob's link rule): the type is the tree's word,
+ * the mode prints only where the claim makes one — never on a link, which carries
+ * none — and ownership prints for every kind that holds it — a link's entry exists
+ * to carry exactly that. Symlinks show their target, binary files their size
+ * without dumping content, encrypted files that decryption occurred.
  */
-static error_t print_blob_content(
+static error_t show_print_blob(
     const dotta_ctx_t *ctx,
-    const git_oid *blob_oid,
-    const char *storage_path,
     const char *profile,
-    const metadata_t *metadata,
-    git_filemode_t filemode
+    const branch_claim_t *claim
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(blob_oid);
-    CHECK_NULL(storage_path);
     CHECK_NULL(profile);
-    CHECK_NULL(metadata);
+    CHECK_NULL(claim);
 
     git_repository *repo = ctx->run.repo;
     keymgr *keymgr = ctx->run.keymgr;
     output_t *out = ctx->out;
 
-    /* The claim standing at this name, read once: its stamp for the annotation
-     * below, its mode and ownership for the header further down.
+    /* The bytes, decrypted where they are ciphertext: the name is the one the
+     * blob was sealed under (the AAD, infra/content.h), and the profile derives
+     * the key. The claim show_file hands in is the whole header beside them:
+     * its stamp for the annotation below, its mode and ownership further down.
      *
      * The stamp is read for display alone. It is byte-truth via the write-time
      * invariant in `content_capture_file`, but nothing here routes on it: the
      * content layer classifies by the blob's own bytes, taking no caller-supplied
      * flag, and by the filemode, which says a link's bytes are its target — they
      * are read as they stand. */
-    const metadata_item_t *item = metadata_lookup(metadata, storage_path);
-    bool encrypted = item && item->encrypted;
-
     buffer_t content = BUFFER_INIT;
     error_t err = content_get_from_blob_oid(
-        repo, blob_oid, filemode, storage_path, profile, keymgr, &content
+        repo, &claim->blob_oid, path_type_to_git_filemode(claim->type),
+        claim->storage_path, profile, keymgr, &content
     );
     if (err) return err;
 
-    bool is_link = (filemode == GIT_FILEMODE_LINK);
+    bool is_link = claim->type == PATH_TYPE_SYMLINK;
 
     /* Binary detection (on plaintext, after decryption; a link's content is its
      * target path, text by nature) */
     bool is_binary = !is_link && content.size > 0 &&
-        content_is_binary((const unsigned char *) content.data, content.size);
+        show_binary((const unsigned char *) content.data, content.size);
 
     /* Type — the tree's word — and, for a link, the target it stores */
     if (is_link) {
@@ -147,32 +130,33 @@ static error_t print_blob_content(
     } else {
         output_print(
             out, OUTPUT_NORMAL, "{dim}# Type:{reset}    %s",
-            is_binary ? "binary file" : filemode_type_str(filemode)
+            is_binary
+              ? "binary file"
+              : claim->type == PATH_TYPE_EXECUTABLE ? "executable"
+              : "regular file"
         );
-        if (encrypted) {
+        if (claim->encrypted) {
             output_print(out, OUTPUT_NORMAL, " (encrypted)");
         }
         output_endline(out, OUTPUT_NORMAL);
     }
 
-    /* The entry's claims, by the branch's own rule: mode only where the type
-     * can carry one and the entry claims one; ownership for every kind that holds
-     * it, as chown(1) spells it — a half the entry does not name is no unknown,
-     * the owner being the invoker's and the group no change. */
-    if (item) {
-        if (!is_link && item->mode != MODE_UNCLAIMED) {
-            output_print(
-                out, OUTPUT_NORMAL, "{dim}# Mode:{reset}    %04o\n",
-                (unsigned) item->mode
-            );
-        }
-        if (item->owner || item->group) {
-            output_print(
-                out, OUTPUT_NORMAL, "{dim}# Owner:{reset}   %s%s%s\n",
-                item->owner ? item->owner : "", item->group ? ":" : "",
-                item->group ? item->group : ""
-            );
-        }
+    /* The claim's own lines, by the branch's rule: a mode where the claim makes
+     * one, which the decode never lets a link do; ownership for every kind that
+     * holds it, as chown(1) spells it — a half the claim does not name is no
+     * unknown, the owner being the invoker's and the group no change. */
+    if (claim->mode != MODE_UNCLAIMED) {
+        output_print(
+            out, OUTPUT_NORMAL, "{dim}# Mode:{reset}    %04o\n",
+            (unsigned) claim->mode
+        );
+    }
+    if (claim->owner || claim->group) {
+        output_print(
+            out, OUTPUT_NORMAL, "{dim}# Owner:{reset}   %s%s%s\n",
+            claim->owner ? claim->owner : "", claim->group ? ":" : "",
+            claim->group ? claim->group : ""
+        );
     }
 
     /* Size — for the kinds whose content is bytes, not a target */
@@ -197,7 +181,7 @@ static error_t print_blob_content(
     );
 
     /* Write content to stdout (trailing newline normalized) */
-    err = write_stdout(&content);
+    err = show_write(&content);
     buffer_deinit(&content);
 
     return err;
@@ -302,73 +286,70 @@ static void show_provenance(output_t *out, const git_commit *commit) {
 }
 
 /**
- * Print one claim of a profile, from the tree the caller opened
+ * Print one claim of a profile, from the branch the caller opened
  *
- * The tree is the authority on what stands at the name; the sheet beside it is
- * read for the encryption state the content layer validates against, tolerantly
- * — a tree without one holds an empty sheet, and one that will not load is folded
- * into an empty sheet too, which then says nothing about anything.
+ * The name is asked of the branch (core/branch.h branch_holds), and answered
+ * four ways. A blob is printed. A subtree and a gitlink are each refused by their
+ * own noun. A directory claim the sheet alone holds — a tracked directory the
+ * branch holds no blob beneath — is refused as the directory it is, because the
+ * profile does hold it and "not found" would be the wrong word. Only a name neither
+ * document holds is not found.
  *
- * The name is asked of both documents at once, the sheet as this verb read it
- * (core/profiles.h profile_holds), and answered four ways. A blob is printed. A
- * subtree and a gitlink are each refused by their own noun. A directory claim
- * the sheet alone holds — a tracked directory the branch holds no blob beneath
- * — is refused as the directory it is, because the profile does hold it and "not
- * found" would be the wrong word. Only a name neither document holds is not found.
+ * The blob's header is the claim the branch makes there (core/branch.h
+ * branch_find), read tolerantly: a sheet that will not load costs the header
+ * its claim, never the bytes, and is said once.
  */
 static error_t show_file(
     const dotta_ctx_t *ctx,
-    const char *profile,
-    const char *storage_path,
-    const git_tree *tree
+    branch_t *branch,
+    const char *storage_path
 ) {
-    git_repository *repo = ctx->run.repo;
-
-    metadata_t *metadata = NULL;
-
-    /* The sheet of the same tree, for the encryption state print_blob_content
-     * validates against. A tree without one loads as an empty sheet; one that
-     * would not load is folded into an empty sheet too, and then says nothing —
-     * about the encryption state, and about a directory claim below. Handed to
-     * the read below, so the name is answered from the sheet as this verb read
-     * it, and the sheet is read once. */
-    error_t err = metadata_load_from_tree(repo, tree, profile, &metadata);
-    if (err) {
-        metadata = metadata_create_empty();
-    }
-
-    profile_held_t held;
-    err = profile_holds(repo, tree, metadata, profile, storage_path, &held);
-    if (err) goto cleanup;
+    /* What stands at the name, asked of the branch's two documents at once and
+     * strictly: a sheet that will not load refuses a name the tree is silent
+     * about, in the loader's words — the profile may hold a directory there,
+     * and "not found" would be a guess */
+    branch_held_t held;
+    error_t err = branch_holds(branch, storage_path, &held);
+    if (err) return err;
 
     switch (held.kind) {
-        case PROFILE_HELD_FILE:
-            /* The bytes, decrypted where they are ciphertext: the name is the
-             * one the blob was sealed under (the AAD, infra/content.h), the profile
-             * derives the key, and the sheet says what state to expect. */
-            err = print_blob_content(
-                ctx, &held.oid, storage_path, profile, metadata, held.filemode
+        case BRANCH_HELD_FILE: {
+            /* The claim the branch makes at the name, for the header: decoded
+             * as the walk decodes it, read tolerantly. A blob stands there, so
+             * a file claim does; a sheet that will not load leaves it at its
+             * floors, and is said once, in the listing's words over the loader's
+             * root (cmds/list.c list_files) */
+            const branch_claim_t *claim = NULL;
+            err = branch_find(
+                branch, BRANCH_READ_TOLERANT, PATH_KIND_FILE, storage_path, &claim
             );
-            break;
+            if (err) return err;
 
-        case PROFILE_HELD_DIRECTORY:
-        case PROFILE_HELD_SUBMODULE:
-            err = error_create(
+            err = branch_sheet_failure(branch);
+            if (err) {
+                output_warning(
+                    ctx->out, OUTPUT_NORMAL,
+                    "Failed to read what profile '%s' claims: %s",
+                    branch_profile(branch), error_message(error_root(err))
+                );
+            }
+
+            return show_print_blob(ctx, branch_profile(branch), claim);
+        }
+
+        case BRANCH_HELD_DIRECTORY:
+        case BRANCH_HELD_SUBMODULE:
+            return error_create(
                 ERR_INVALID_ARG, "'%s' is %s; show prints one file's bytes",
-                storage_path, held.kind == PROFILE_HELD_DIRECTORY
+                storage_path, held.kind == BRANCH_HELD_DIRECTORY
                 ? "a directory" : "a submodule"
             );
-            break;
 
-        case PROFILE_HELD_NOTHING:
-            err = error_create(ERR_NOT_FOUND, "File '%s' not found", storage_path);
-            break;
+        case BRANCH_HELD_NOTHING:
+            return error_create(ERR_NOT_FOUND, "File '%s' not found", storage_path);
     }
 
-cleanup:
-    metadata_free(metadata);
-
-    return err;
+    CHECK_ARG(false, "a held kind no enumerator names");
 }
 
 /**
@@ -651,9 +632,9 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         branch = branch_open(repo, profile, tree);
 
         /* The two keys, and each names its own read. A name the user typed is
-         * Git's key already, so show_file's own read of the branch's two documents
-         * is what decides whether the profile holds it; a path is the branch's
-         * to name. */
+         * Git's key already, so show_file's own question of the branch
+         * (core/branch.h branch_holds) is what decides whether the profile holds
+         * it; a path is the branch's to name. */
         if (arg.key == PATH_KEY_STORAGE) {
             storage_path = arg.storage_path;
         } else {
@@ -669,7 +650,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             show_provenance(out, source);
         }
 
-        err = show_file(ctx, profile, storage_path, tree);
+        err = show_file(ctx, branch, storage_path);
         goto cleanup;
     }
 
@@ -719,11 +700,14 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     );
 
     /* The tip, which this arm is always about: the view is HEAD's, so the row
-     * that answered names no commit and there is no provenance to announce. */
+     * that answered names no commit and there is no provenance to announce. The
+     * winner's branch over it, held beside it as the -p arm holds its own, so
+     * either arm's header is the claim that branch decodes. */
     err = show_source(ctx, profile, NULL, &tree, &source);
     if (err) goto cleanup;
+    branch = branch_open(repo, profile, tree);
 
-    err = show_file(ctx, profile, storage_path, tree);
+    err = show_file(ctx, branch, storage_path);
 
 cleanup:
     git_commit_free(source);

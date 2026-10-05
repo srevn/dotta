@@ -112,7 +112,8 @@ typedef struct branch branch_t;
  * diff_commit_to_workspace (the commit's), cmds/export.c cmd_export, cmds/show.c
  * cmd_show and cmds/list.c list_file_history (the tree the verb selected),
  * cmds/list.c list_profiles and list_files (the tree of the tip each listing
- * read, so its count is that commit's); and branch_load, over the tip it read.
+ * read, so what each prints is that commit's); and branch_load, over the tip it
+ * read.
  *
  * @param repo The repository the sheet's blob is read through (must not be NULL;
  *             borrowed)
@@ -210,8 +211,10 @@ typedef error_t (*branch_visit_fn)(const branch_claim_t *claim, void *payload);
  * failure under either.
  *
  * Readers: core/manifest.c manifest_contribute; branch_count, its tally; the
- * labels a branch claims under (core/profiles.c profile_needs_target); and the
- * bytes a profile line weighs (cmds/list.c list_profiles, through list_size_claim).
+ * labels a branch claims under (core/profiles.c profile_needs_target); the bytes
+ * a profile line weighs (cmds/list.c list_profiles, through list_size_claim);
+ * and the file listing's rows, read TOLERANT (cmds/list.c list_files, through
+ * list_collect_file).
  *
  * @param branch Handle (must not be NULL); its sheet is read by the first question
  *               that needs it, a walk or branch_sheet_failure
@@ -413,8 +416,9 @@ error_t branch_find(
  * an empty one, which is no failure (core/metadata.h metadata_load_from_tree).
  *
  * Readers: branch_walk and the point questions (branch_holds, branch_find), which
- * read the sheet through it; and cmds/show.c show_file, whose header says what
- * its tolerant read lost.
+ * read the sheet through it; cmds/show.c show_file, whose header says what its
+ * tolerant read lost; and cmds/list.c list_files, whose verbose rows say what
+ * its tolerant walk lost.
  *
  * @param branch Handle (must not be NULL)
  * @return The sheet's failure, in the loader's words, or NULL

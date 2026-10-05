@@ -348,8 +348,7 @@ error_t profile_holds(
  * is said under the profile, since the walk's own name a path in the tree and
  * never the branch it is, and no reader names it again.
  *
- * Readers: cmds/list.c list_files, cmds/remove.c remove_resolve, and
- * profile_list_files.
+ * Readers: cmds/remove.c remove_resolve, and profile_list_files.
  *
  * @param tree Git tree to walk (must not be NULL)
  * @param profile The profile whose branch the tree is (must not be NULL)

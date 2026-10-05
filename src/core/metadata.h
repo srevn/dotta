@@ -197,19 +197,18 @@ typedef struct state_record state_record_t;
  * cross-checked nowhere: the content reader classifies the blob's own bytes and
  * consults no claim (infra/content.h content_get_from_blob_oid), so the stamp
  * answers "was it sealed when it was written" — a screen's question, or a
- * schedule's. Readers: cmds/list.c list_files (the mark, and the framing taken
- * off the size beside it), cmds/export.c collect_entry and collect_storage (which
+ * schedule's. Readers: cmds/export.c collect_entry and collect_storage (which
  * blobs phase 1 reads) and, through the claim the branch decodes from it
- * (core/branch.c branch_decode_blob), cmds/list.c list_size_claim (the same
- * framing, in the fold that row's total must agree with), cmds/show.c
- * show_print_blob (the annotation) and, onto the view's rows (core/manifest.h
- * manifest_row_t.encrypted), cmds/export.c entry_from_row, core/workspace.c
- * workspace_analyze_file and cmds/key.c key_status.
+ * (core/branch.c branch_decode_blob), cmds/list.c list_files (the mark, and the
+ * framing taken off the size beside it) and list_size_claim (the same framing,
+ * in the fold the rows' total must agree with), cmds/show.c show_print_blob (the
+ * annotation) and, onto the view's rows (core/manifest.h manifest_row_t.encrypted),
+ * cmds/export.c entry_from_row, core/workspace.c workspace_analyze_file and
+ * cmds/key.c key_status.
  *
- * Each reads it where it stands, off the item: there is no per-field reader to
- * hold the link rule for them, so each spells that rule in its own shape — an
- * arm where the code already branches on the kind (export, the branch's decode),
- * a conjunction where the row is flat (list).
+ * Each reader of the item reads it where it stands: there is no per-field reader
+ * to hold the link rule for them, so each spells that rule itself, in an arm
+ * where the code already branches on the kind (export, the branch's decode).
  */
 typedef struct {
     path_kind_t kind;   /* FILE: the tree names the path. DIRECTORY: the item is the claim. */
@@ -724,16 +723,16 @@ error_t metadata_load_from_branch(
  * out of a damaged profile, warned), the header show prints over a blob it can
  * read anyway — the mode, the ownership and the annotation alike, warned — through
  * the branch's tolerant read (core/branch.h branch_find, from cmds/show.c
- * show_file), the file listing's verbose marks (cmds/list.c list_files, warned;
- * the listing is the tree's and stands, the marks are the sheet's and do not),
- * the orphan authority's third answer through the branch's strict read
- * (core/branch.h branch_find, from core/workspace.c workspace_orphan_authority,
- * which folds the failure to UNVERIFIED and never to "no claims") and the
- * completion's offer (cmds/completion.c completion_directories). One reader folds
- * without deciding to: the deletion's hook universe (cmds/remove.c remove_profile)
- * drops every directory claim from DOTTA_FILE_n on a sheet it cannot read, where
- * its own sibling a screen up propagates. A further reader would have to argue
- * for one.
+ * show_file), the file listing's verbose marks through the branch's tolerant
+ * walk (core/branch.h branch_walk, from cmds/list.c list_files, warned; the listing
+ * is the tree's and stands, the marks are the sheet's and do not), the orphan
+ * authority's third answer through the branch's strict read (core/branch.h
+ * branch_find, from core/workspace.c workspace_orphan_authority, which folds
+ * the failure to UNVERIFIED and never to "no claims") and the completion's offer
+ * (cmds/completion.c completion_directories). One reader folds without deciding
+ * to: the deletion's hook universe (cmds/remove.c remove_profile) drops every
+ * directory claim from DOTTA_FILE_n on a sheet it cannot read, where its own
+ * sibling a screen up propagates. A further reader would have to argue for one.
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)
@@ -741,8 +740,7 @@ error_t metadata_load_from_branch(
  *                its callers name it nowhere (must not be NULL)
  * @param out Metadata (must not be NULL, caller must free with metadata_free);
  *            untouched on failure, so the NULL a caller passed is still no sheet
- *            (cmds/list.c list_files' marks, core/branch.c branch_sheet_failure's
- *            handle)
+ *            (core/branch.c branch_sheet_failure's handle)
  * @return Error or NULL on success
  */
 error_t metadata_load_from_tree(

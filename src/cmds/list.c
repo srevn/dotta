@@ -11,6 +11,7 @@
 
 #include <git2.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -23,7 +24,6 @@
 #include "cmds/completion.h"
 #include "core/branch.h"
 #include "core/manifest.h"
-#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/content.h"
@@ -394,6 +394,70 @@ static error_t list_profiles(
 }
 
 /**
+ * A file the file listing prints: its name, and what a verbose row reads off
+ * its claim
+ *
+ * Copied out of the claim the walk lends (core/branch.h branch_visit_fn): a row
+ * outlives the visit that showed it, and the walk joins each blob's name in a
+ * buffer the next entry takes. The blob and the stamp are the claim's, as the
+ * branch decodes them, so no row asks the tree again.
+ */
+typedef struct {
+    const char *storage_path;   /* The name, in the listing's arena */
+    git_oid blob_oid;           /* The blob whose header sizes the row */
+    bool encrypted;             /* The claim's stamp: the mark, and the framing off the size */
+} list_file_t;
+
+/**
+ * The file listing's walk: every file claim the branch shows, collected
+ */
+typedef struct {
+    arena_t *arena;             /* The listing's: the rows, and each row's name */
+    list_file_t *files;
+    size_t file_count;
+    size_t file_capacity;
+} list_walk_t;
+
+/**
+ * Walk visitor: one claim, onto the listing where it is a file's
+ *
+ * @param claim One claim, decoded (borrowed — valid for the call only)
+ * @param payload The walk (list_walk_t)
+ * @return NULL: a collection fails nowhere
+ */
+static error_t list_collect_file(const branch_claim_t *claim, void *payload) {
+    list_walk_t *walk = payload;
+
+    /* A directory claim is no row: it has no size and no history of its own,
+     * and what else the branch holds is the count's to say (the no-files arm,
+     * and level 1's line) */
+    if (claim->type == PATH_TYPE_DIRECTORY) return NULL;
+
+    /* The row: the name copied out of the walk's loan, the blob and the stamp
+     * taken by value */
+    walk->files = arena_grow(
+        walk->arena, walk->files, &walk->file_capacity, walk->file_count + 1,
+        sizeof(*walk->files)
+    );
+    walk->files[walk->file_count++] = (list_file_t){
+        .storage_path = arena_strdup(walk->arena, claim->storage_path),
+        .blob_oid = claim->blob_oid,
+        .encrypted = claim->encrypted,
+    };
+
+    return NULL;
+}
+
+/* qsort's: two rows by their storage paths (strcmp), the order base/array.h
+ * string_array_sort gives names */
+static int list_path_order(const void *a, const void *b) {
+    const list_file_t *fa = a;
+    const list_file_t *fb = b;
+
+    return strcmp(fa->storage_path, fb->storage_path);
+}
+
+/**
  * List files - Level 2
  *
  * Default: Just file paths Verbose: Add sizes and per-file last commit
@@ -412,12 +476,12 @@ static error_t list_files(
     bool verbose = output_is_verbose(out);
 
     /* One branch read serves the whole listing: its tip, read once, and every
-     * fact the listing prints taken off that commit — the file walk, the verbose
-     * per-entry lookups and the count (what else the branch holds, when the file
-     * list is empty) from its tree, the history behind each row from its id —
-     * so a branch another writer moves under the listing lends no row another
-     * snapshot's history. The id is kept and the commit let go: the tree and
-     * the id are all the listing reads of it. */
+     * fact the listing prints taken off that commit — the rows and the count
+     * (what else the branch holds, when it holds no file) from the branch over
+     * its tree, the history behind each row from its id — so a branch another
+     * writer moves under the listing lends no row another snapshot's history.
+     * The id is kept and the commit let go: the tree and the id are all the listing
+     * reads of it. */
     error_t err = profile_require(repo, opts->profile);
     if (err) return err;
 
@@ -431,43 +495,50 @@ static error_t list_files(
     int rc = git_commit_tree(&tree, tip);
     git_commit_free(tip);
     if (rc < 0) {
-        return error_git(rc, "Failed to list files in profile '%s'", opts->profile);
+        /* In the words the walk below says of a tree it cannot read (core/branch.h
+         * branch_walk): the listing says one thing of its tree */
+        return error_git(rc, "Cannot read profile '%s'", opts->profile);
     }
 
-    string_array_t files;
-    err = profile_list_tree_files(tree, opts->profile, ctx->arena, &files);
-    if (err) {
-        git_tree_free(tree);
-        return err;
-    }
+    /* The profile's branch over that tree, held beside it, and every file it
+     * claims, collected in one walk: each row's name, blob and stamp as the branch
+     * decodes them, so no row asks the tree again (list_collect_file). Read
+     * tolerantly — the listing is the tree's and stands, the marks are the sheet's
+     * and do not — so a sheet that will not load costs the rows their marks alone,
+     * said where the marks would print. What the walk cannot read of the tree
+     * is its failure, in the branch's words. */
+    branch_t *branch = branch_open(repo, opts->profile, tree);
+    list_walk_t walk = { .arena = ctx->arena };
+    err = branch_walk(branch, BRANCH_READ_TOLERANT, list_collect_file, &walk);
+    if (err) goto cleanup;
 
-    if (files.count == 0) {
+    if (walk.file_count == 0) {
         /* Directory claims are not listed — no size, no history — but the count
          * of them keeps "nothing" honest for a branch whose whole content is
          * its claims. It is what the branch holds less the files, so it comes
          * from the one producer of that number (core/branch.h branch_count),
-         * over a branch opened on the tree already open, for the count alone:
-         * an ancestor claim excluded there, the tree-versus-blob rule asked there,
-         * and no second reading of the sheet to drift from it.
+         * over the branch the rows were walked from: an ancestor claim excluded
+         * there, the tree-versus-blob rule asked there, and the sheet the walk
+         * read, parsed once for both.
          *
          * A branch that will not read says so. Silence would spell an unreadable
          * sheet exactly as it spells an empty branch, and the count exists to
          * tell those apart. The sheet is the whole of what can refuse here: the
-         * walk above and the count's own read one gate and one shape check, spelled
-         * alike in each (core/profiles.c profile_list_entry, core/branch.c
-         * branch_step), so a tree the walk above read whole the count reads whole
-         * too. Which is why the refusal is rendered from its root — between it
-         * and here the loader names the profile once more and nothing else, and
-         * this line names it already (base/error.h error_root). */
-        branch_t *branch = branch_open(repo, opts->profile, tree);
+         * count walks the tree the walk above read whole, through the same visitor
+         * (core/branch.c branch_step), and reads strictly the sheet the walk
+         * above read tolerantly, its failure the one the handle kept (core/branch.h
+         * branch_sheet_failure). Which is why the refusal is rendered from its
+         * root — between it and here the loader names the profile once more and
+         * nothing else, and this line names it already (base/error.h
+         * error_root). */
         branch_count_t count = { 0 };
         err = branch_count(branch, &count);
-        branch_free(branch);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
                 opts->profile, error_message(error_root(err))
             );
+            err = NULL;
         }
 
         /* Either the count stands or it wrote nothing at all (its all-or-nothing
@@ -485,45 +556,53 @@ static error_t list_files(
                 out, OUTPUT_NORMAL, "No files in profile '%s'", opts->profile
             );
         }
-        git_tree_free(tree);
-        return NULL;
+        goto cleanup;
     }
 
     /* Print header */
     output_section(out, OUTPUT_NORMAL, "Files in profile '{cyan}%s{reset}'", opts->profile);
     output_gap(out, OUTPUT_NORMAL);
 
-    /* Sort for consistent output */
-    string_array_sort(&files);
+    /* Sort for consistent output: the rows by name. A tree Git wrote walks in
+     * that order already, but libgit2 keeps a tree's entries as they are stored
+     * (lib/libgit2/src/libgit2/tree.c git_tree__parse_raw), and a hand can store
+     * them in another */
+    qsort(walk.files, walk.file_count, sizeof(*walk.files), list_path_order);
 
-    /* What a verbose row reads beyond the name: the branch's claims, the history
-     * behind each name, and the width the names need. All three are the whole
-     * listing's, read once before any row prints, the way the profile listing
-     * above reads and measures before its own.
+    /* What a verbose row reads beyond its claim: the history behind each name,
+     * and the width the names need. Both are the whole listing's, read once before
+     * any row prints, the way the profile listing above reads and measures before
+     * its own.
      *
-     * A sheet that will not read costs the rows their marks and leaves their
+     * A sheet the walk could not read costs the rows their marks and leaves their
      * sizes the stored blobs' own — the listing itself is the tree's and stands
-     * either way — so it is warned about and folded, and rendered from the root,
-     * where this document's refusals say what is wrong with it. The count's
-     * sentence (list_profiles, and the empty-branch arm above) names what it
-     * failed to do; this one names what it failed to read, which is the other
-     * question about the same document. */
-    metadata_t *metadata = NULL;
+     * either way — so it is warned about once, before the rows that print the
+     * marks, and rendered from the root, where this document's refusals say what
+     * is wrong with it. The count's sentence (list_profiles, and the empty-branch
+     * arm above) names what it failed to do; this one names what it failed to
+     * read, which is the other question about the same document. */
     file_commit_map_t *commit_map = NULL;
     size_t max_path_len = 0;
     if (verbose) {
-        err = metadata_load_from_tree(repo, tree, opts->profile, &metadata);
+        err = branch_sheet_failure(branch);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to read what profile '%s' claims: %s",
                 opts->profile, error_message(error_root(err))
             );
+            err = NULL;
         }
 
         /* The history behind each row, sought for the rows alone, from the tip
-         * they were listed at */
+         * they were listed at. The map seeks names (sys/stats.h), so the rows
+         * hand it theirs, in their order */
+        string_array_t names;
+        string_array_init_cap(&names, ctx->arena, walk.file_count);
+        for (size_t i = 0; i < walk.file_count; i++) {
+            string_array_push(&names, walk.files[i].storage_path);
+        }
         err = stats_build_file_commit_map(
-            repo, &tip_oid, &files, ctx->arena, &commit_map
+            repo, &tip_oid, &names, ctx->arena, &commit_map
         );
         if (err) {
             /* Non-fatal: continue without commit info */
@@ -531,10 +610,11 @@ static error_t list_files(
                 out, OUTPUT_NORMAL, "Failed to load commit history: %s",
                 error_line(err)
             );
+            err = NULL;
         }
 
-        for (size_t i = 0; i < files.count; i++) {
-            size_t len = strlen(files.entries[i]);
+        for (size_t i = 0; i < walk.file_count; i++) {
+            size_t len = strlen(walk.files[i].storage_path);
             if (len > max_path_len) {
                 max_path_len = len;
             }
@@ -547,102 +627,86 @@ static error_t list_files(
 
     /* List files */
     size_t total_size = 0;
-    for (size_t i = 0; i < files.count; i++) {
-        const char *storage_path = files.entries[i];
+    for (size_t i = 0; i < walk.file_count; i++) {
+        const list_file_t *file = &walk.files[i];
 
         /* Print file path (with alignment in verbose mode) */
         if (verbose) {
             /* Verbose: Left-align with padding for column alignment */
             output_print(
                 out, OUTPUT_VERBOSE, "  {cyan}%-*s{reset}",
-                (int) max_path_len, storage_path
+                (int) max_path_len, file->storage_path
             );
         } else {
             /* Simple: No alignment needed */
             output_print(
                 out, OUTPUT_NORMAL, "  {cyan}%s{reset}",
-                storage_path
+                file->storage_path
             );
         }
 
         /* Verbose: Add size and last commit */
         if (verbose) {
-            /* Get file stats */
-            git_tree_entry *entry = NULL;
-            rc = git_tree_entry_bypath(&entry, tree, storage_path);
-            if (rc == 0) {
-                /* The stamp the branch's own claim makes of this entry, read as
-                 * the branch decodes it: never onto a link, whose bytes are its
-                 * target and never a seal (core/branch.c branch_decode_blob's
-                 * link rule). A mark and a number are a screen, so the claim
-                 * answers and no content blob is opened — the store made the
-                 * stamp true for every file it sealed (infra/content.h
-                 * content_capture_file), and a hand-written one is the sheet's
-                 * word, honoured here as its mode and its owner are on every
-                 * other screen (core/metadata.h metadata_item_t). */
-                const metadata_item_t *item = metadata_lookup(metadata, storage_path);
-                bool encrypted = git_tree_entry_filemode(entry) != GIT_FILEMODE_LINK
-                    && item && item->encrypted;
-
-                if (encrypted) {
-                    output_print(out, OUTPUT_VERBOSE, "  {yellow}[E]{reset} ");
-                } else {
-                    /* Space padding to maintain alignment */
-                    output_print(out, OUTPUT_VERBOSE, "      ");
-                }
-
-                /* The size is the stored blob's own header, the cipher's framing
-                 * taken off a stamped one through the helper that keeps
-                 * crypto/cipher.h out of the command layer. The mark above needed
-                 * no read at all, so a header that will not read costs this row
-                 * its number and nothing else — and says so where the number
-                 * would have stood, in the word the row above uses for an entry
-                 * it could not read at all. A total short by a row is then short
-                 * where the reader can see it, which is the whole of what this
-                 * screen can honestly say: the object is missing or corrupt,
-                 * and the profile's line at level 1, which weighs what it counts,
-                 * refuses outright over the same failure (list_size_claim). The
-                 * header's error is dropped, one per unreadable blob. */
-                size_t size = 0;
-                err = stats_blob_size(
-                    repo, git_tree_entry_id(entry), &size
-                );
-                if (!err) {
-                    size_t display_size = content_estimated_plaintext_size(size, encrypted);
-
-                    char size_str[32];
-                    output_format_size(display_size, size_str, sizeof(size_str));
-                    output_print(out, OUTPUT_VERBOSE, " %8s", size_str);
-                    total_size += display_size;
-                } else {
-                    output_print(out, OUTPUT_VERBOSE, " {dim}%8s{reset}", "[?]");
-                }
-
-                /* Get last commit for this file */
-                if (commit_map) {
-                    const commit_info_t *commit_info = stats_file_commit_map_get(
-                        commit_map, storage_path
-                    );
-                    if (commit_info) {
-                        char oid_str[LIST_SHORT_OID_BUF_SIZE];
-                        git_oid_tostr(oid_str, sizeof(oid_str), &commit_info->oid);
-
-                        char time_str[64];
-                        timeutil_relative(commit_info->time, time_str, sizeof(time_str));
-
-                        size_t summary_len = strlen(commit_info->summary);
-                        if (summary_len > 40) summary_len = 40;
-
-                        output_print(
-                            out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
-                            oid_str, (int) summary_len, commit_info->summary, time_str
-                        );
-                    }
-                }
-                git_tree_entry_free(entry);
+            /* The stamp the branch's own claim makes of this file, as the branch
+             * decodes it: never onto a link, whose bytes are its target and never
+             * a seal (core/branch.c branch_decode_blob's link rule). A mark and
+             * a number are a screen, so the claim answers and no content blob
+             * is opened — the store made the stamp true for every file it sealed
+             * (infra/content.h content_capture_file), and a hand-written one is
+             * the sheet's word, honoured here as its mode and its owner are on
+             * every other screen (core/metadata.h metadata_item_t). */
+            if (file->encrypted) {
+                output_print(out, OUTPUT_VERBOSE, "  {yellow}[E]{reset} ");
             } else {
-                /* Tree entry lookup failed unexpectedly */
-                output_print(out, OUTPUT_VERBOSE, "  {dim}[?]{reset}");
+                /* Space padding to maintain alignment */
+                output_print(out, OUTPUT_VERBOSE, "      ");
+            }
+
+            /* The size is the stored blob's own header, the cipher's framing
+             * taken off a stamped one through the helper that keeps crypto/cipher.h
+             * out of the command layer. The mark above needed no read at all,
+             * so a header that will not read costs this row its number and nothing
+             * else — and says so where the number would have stood. A total short
+             * by a row is then short where the reader can see it, which is the
+             * whole of what this screen can honestly say: the object is missing
+             * or corrupt, and the profile's line at level 1, which weighs what
+             * it counts, refuses outright over the same failure (list_size_claim).
+             * The header's error is dropped where the row says so, one per
+             * unreadable blob. */
+            size_t size = 0;
+            err = stats_blob_size(repo, &file->blob_oid, &size);
+            if (!err) {
+                size_t display_size = content_estimated_plaintext_size(size, file->encrypted);
+
+                char size_str[32];
+                output_format_size(display_size, size_str, sizeof(size_str));
+                output_print(out, OUTPUT_VERBOSE, " %8s", size_str);
+                total_size += display_size;
+            } else {
+                output_print(out, OUTPUT_VERBOSE, " {dim}%8s{reset}", "[?]");
+                err = NULL;
+            }
+
+            /* Get last commit for this file */
+            if (commit_map) {
+                const commit_info_t *commit_info = stats_file_commit_map_get(
+                    commit_map, file->storage_path
+                );
+                if (commit_info) {
+                    char oid_str[LIST_SHORT_OID_BUF_SIZE];
+                    git_oid_tostr(oid_str, sizeof(oid_str), &commit_info->oid);
+
+                    char time_str[64];
+                    timeutil_relative(commit_info->time, time_str, sizeof(time_str));
+
+                    size_t summary_len = strlen(commit_info->summary);
+                    if (summary_len > 40) summary_len = 40;
+
+                    output_print(
+                        out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
+                        oid_str, (int) summary_len, commit_info->summary, time_str
+                    );
+                }
             }
         }
 
@@ -656,22 +720,22 @@ static error_t list_files(
         output_format_size(total_size, size_str, sizeof(size_str));
         output_print(
             out, OUTPUT_VERBOSE, "Total: %zu file%s, %s\n",
-            files.count,
-            files.count == 1 ? "" : "s", size_str
+            walk.file_count,
+            walk.file_count == 1 ? "" : "s", size_str
         );
     } else {
         output_print(
             out, OUTPUT_NORMAL, "Total: %zu file%s\n",
-            files.count,
-            files.count == 1 ? "" : "s"
+            walk.file_count,
+            walk.file_count == 1 ? "" : "s"
         );
     }
 
-    /* Cleanup */
-    metadata_free(metadata);
+cleanup:
+    branch_free(branch);
     git_tree_free(tree);
 
-    return NULL;
+    return err;
 }
 
 /**
@@ -783,7 +847,7 @@ static error_t list_file_history(
     int rc = git_commit_tree(&tree, tip);
     git_commit_free(tip);
     if (rc < 0) {
-        return error_git(rc, "Failed to load tree for profile '%s'", profile);
+        return error_git(rc, "Cannot read profile '%s'", profile);
     }
 
     /* The profile's branch over the tip's tree, held beside it */

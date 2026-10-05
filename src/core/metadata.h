@@ -729,10 +729,12 @@ error_t metadata_load_from_branch(
  * authority's third answer through the branch's strict read (core/branch.h
  * branch_find, from core/workspace.c workspace_orphan_authority, which folds
  * the failure to UNVERIFIED and never to "no claims") and the completion's offer
- * (cmds/completion.c completion_directories). One reader folds without deciding
- * to: the deletion's hook universe (cmds/remove.c remove_profile) drops every
- * directory claim from DOTTA_FILE_n on a sheet it cannot read, where its own
- * sibling a screen up propagates. A further reader would have to argue for one.
+ * through the branch's strict walk (core/branch.h branch_walk, from
+ * cmds/completion.c completion_directories, which drops the failure as every
+ * completion source drops its own: cmds/completion.h). One reader folds without
+ * deciding to: the deletion's hook universe (cmds/remove.c remove_profile) drops
+ * every directory claim from DOTTA_FILE_n on a sheet it cannot read, where its
+ * own sibling a screen up propagates. A further reader would have to argue for one.
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)

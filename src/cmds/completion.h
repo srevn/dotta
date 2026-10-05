@@ -75,14 +75,16 @@ void completion_files(
 );
 
 /**
- * A branch's directory claims, from its metadata rather than the view — the
- * companion of completion_refspecs' pinned form for the verbs that act on a
- * branch's claims (remove untracks them, export materializes them): bare
- * slash-marked paths, the branch as description. An empty tracked directory (no
- * tree entry) is exactly as offerable as the rest.
+ * A profile's directory claims, as its branch's walk decodes them rather than
+ * as the view places them — the companion of completion_refspecs' pinned form
+ * for the verbs that act on a branch's claims (remove untracks them, export
+ * materializes them): bare slash-marked paths, the profile as description. An
+ * empty tracked directory (no tree entry) is exactly as offerable as the rest;
+ * a claim a blob contradicts at its own name is none (core/branch.h branch_walk),
+ * and is not offered.
  */
 void completion_directories(
-    const dotta_ctx_t *ctx, FILE *out, const char *branch
+    const dotta_ctx_t *ctx, FILE *out, const char *profile
 );
 
 /**

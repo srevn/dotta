@@ -134,10 +134,11 @@ branch_t *branch_open(git_repository *repo, const char *profile, const git_tree 
  * manifest_build, core/workspace.c workspace_orphan_authority).
  *
  * Readers: core/profiles.c profile_build_filesystem_index, claim_by_filesystem_path
- * and claim_by_name; cmds/ignore.c ignore_test; and the questions asked of a
- * tip by name, what it holds and whether it needs a target — cmds/profile.c
- * profile_list and profile_enable, cmds/clone.c cmd_clone, cmds/interactive.c
- * read_targets and cmds/remove.c remove_profile.
+ * and claim_by_name; cmds/ignore.c ignore_test; the questions asked of a tip by
+ * name, what it holds and whether it needs a target — cmds/profile.c profile_list
+ * and profile_enable, cmds/clone.c cmd_clone, cmds/interactive.c read_targets
+ * and cmds/remove.c remove_profile; and the directory claims a completion offers
+ * at a profile's tip (cmds/completion.c completion_directories).
  *
  * @param repo Repository (must not be NULL; borrowed)
  * @param profile The branch's name, and whose claims these are (must not be NULL;
@@ -213,8 +214,9 @@ typedef error_t (*branch_visit_fn)(const branch_claim_t *claim, void *payload);
  * Readers: core/manifest.c manifest_contribute; branch_count, its tally; the
  * labels a branch claims under (core/profiles.c profile_needs_target); the bytes
  * a profile line weighs (cmds/list.c list_profiles, through list_size_claim);
- * and the file listing's rows, read TOLERANT (cmds/list.c list_files, through
- * list_collect_file).
+ * the file listing's rows, read TOLERANT (cmds/list.c list_files, through
+ * list_collect_file); and the directory claims a completion offers
+ * (cmds/completion.c completion_directories, through completion_offer_directory).
  *
  * @param branch Handle (must not be NULL); its sheet is read by the first question
  *               that needs it, a walk or branch_sheet_failure

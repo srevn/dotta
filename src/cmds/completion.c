@@ -26,8 +26,8 @@
 #include "base/error.h"
 #include "base/refspec.h"
 #include "base/string.h"
+#include "core/branch.h"
 #include "core/manifest.h"
-#include "core/metadata.h"
 #include "core/state.h"
 #include "infra/label.h"
 #include "infra/mount.h"
@@ -162,28 +162,58 @@ void completion_files(
 }
 
 /**
- * A branch's directory claims, read from its metadata rather than the view
+ * What a directory offer prints beside each claim: where the candidates go, and
+ * the profile they are offered from
+ */
+typedef struct {
+    FILE *out;
+    const char *profile;   /* Each candidate's description */
+} completion_offer_t;
+
+/**
+ * Walk visitor: one claim, offered slash-marked where it is a directory's — a
+ * file claim is the refspecs' to offer (completion_refspecs)
+ *
+ * @param claim One claim, decoded (borrowed — valid for the call only)
+ * @param payload The offer (completion_offer_t)
+ * @return NULL: an offer fails nowhere
+ */
+static error_t completion_offer_directory(const branch_claim_t *claim, void *payload) {
+    const completion_offer_t *offer = payload;
+
+    if (claim->type == PATH_TYPE_DIRECTORY) {
+        fprintf(offer->out, "%s/\t%s\n", claim->storage_path, offer->profile);
+    }
+
+    return NULL;
+}
+
+/**
+ * A profile's directory claims, read from its branch's walk rather than the view
  *
  * Either class, deliberately — see completion_files.
  */
 void completion_directories(
-    const dotta_ctx_t *ctx, FILE *out, const char *branch
+    const dotta_ctx_t *ctx, FILE *out, const char *profile
 ) {
     git_repository *repo = ctx->run.repo;
-    if (repo == NULL || branch == NULL) return;
+    if (repo == NULL || profile == NULL) return;
 
-    metadata_t *metadata = NULL;
-    error_t err = metadata_load_from_branch(repo, branch, &metadata);
-    if (err) return;  /* not a branch, or an unreadable sheet: nothing to offer */
+    /* The profile's branch at its tip: not a branch, or a tip that will not read,
+     * offers nothing */
+    branch_t *branch = NULL;
+    error_t err = branch_load(repo, profile, &branch);
+    if (err) return;
 
-    size_t count = 0;
-    const metadata_item_t *const *items = metadata_items(metadata, &count);
-    for (size_t i = 0; i < count; i++) {
-        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
-        fprintf(out, "%s/\t%s\n", items[i]->key, branch);
-    }
-
-    metadata_free(metadata);
+    /* The directory claims the walk shows, so a claim a blob contradicts at its
+     * own name is none, and is not offered. Read strictly: the claims are the
+     * sheet's alone, so a sheet that will not load offers none either way, and
+     * a strict walk spares the tree. They come after the tree's blobs, so a walk
+     * that fails offers none of them; its failure is dropped, as the load's above,
+     * at most one per offer */
+    completion_offer_t offer = { .out = out, .profile = profile };
+    (void) branch_walk(branch, BRANCH_READ_STRICT, completion_offer_directory, &offer);
+    branch_free(branch);
 }
 
 /* The refspec walk: where the tokens go, and how many went. */

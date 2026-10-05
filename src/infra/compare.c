@@ -83,8 +83,8 @@ static error_t judge(
  * dies in both ladders before either touches the disk: read as a blob, a directory
  * would be opened and judged, and mode_stands below would ask a regular file's
  * question about it. Every caller maps a file row's type, and a tree entry's
- * filemode reaches none: the branch keys a blob's type off its entry (core/branch.c
- * branch_decode_blob) and a gitlink claims nothing there.
+ * filemode reaches none: the profile keys a blob's type off its entry
+ * (core/profiles.c profile_decode_blob) and a gitlink claims nothing there.
  *
  * Asked first in both ladders, so one caller error has one answer wherever it
  * is made. It used to sit after the pair's own stat, where an unsupported mode

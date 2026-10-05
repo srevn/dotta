@@ -21,11 +21,11 @@
 #include "base/output.h"
 #include "base/string.h"
 #include "cmds/completion.h"
-#include "core/branch.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/policy.h"
+#include "core/profiles.h"
 #include "core/state.h"
 #include "infra/content.h"
 #include "infra/label.h"
@@ -33,8 +33,8 @@
 #include "infra/path.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
-#include "sys/stage.h"
 #include "sys/identity.h"
+#include "sys/stage.h"
 #include "utils/commit.h"
 #include "utils/hooks.h"
 
@@ -92,7 +92,7 @@ typedef struct {
  * the path around it are two, as two claims through and around it are two claims
  * (infra/mount.h). Keys and values borrow the arena the items live in.
  *
- * `view` is the branch as this command opened it: this profile's contribution
+ * `view` is the profile as this command opened it: this profile's contribution
  * alone, from the tree the stage opened at, under this command's table. Every
  * name comes from it (core/manifest.h manifest_name, over `listing`), so does
  * the claim standing at a path (manifest_lookup_claim) — which rules reach the
@@ -105,19 +105,19 @@ typedef struct {
  * every blob this command listed before), and the sheet holds the directories a
  * tree cannot — an empty one has no entry, so a claim the index cannot see is
  * the sheet's to answer for (core/metadata.h metadata_directory_beneath). The
- * admission grows with every blob listed; the sheet is the branch's and holds
+ * admission grows with every blob listed; the sheet is the profile's and holds
  * no directory this command lists, so those are read once more with the selection
  * complete (cmd_add).
  */
 typedef struct {
     const dotta_ctx_t *ctx;              /* The arena the paths live in, and the output */
     const char *profile;                 /* The asker: whose claims name what is found */
-    const manifest_t *view;              /* The branch as this command opened it */
+    const manifest_t *view;              /* The profile as this command opened it */
     const gitignore_ruleset_t *rules;    /* The profile's .dottaignore layers */
     const gitignore_ruleset_t *excludes; /* The -e layer alone, what a claim meets; NULL: none */
     source_filter_t *source;             /* The source layer, the builder's; NULL: turned off */
     stage_admission_t *admission;        /* The branch's tree, and every blob listed since */
-    const metadata_t *sheet;             /* The branch's claims, asked with it */
+    const metadata_t *sheet;             /* The profile's claims, asked with it */
     hashmap_t *listing;                  /* filesystem path -> &item->claim (borrowed both) */
     ptr_array_t files;                   /* path_t *: every non-directory listed */
     ptr_array_t directories;             /* path_t *: every directory walked into */
@@ -145,13 +145,12 @@ typedef struct {
  *
  * The four counts partition the capture exactly: a claim whose own row took the
  * event, one a higher-precedence profile's row holds, one another name of this
- * profile holds — a second name of one profile being a thing a branch can hold
- * and a sync can bring here (core/manifest.h manifest_unkept, whose screen word
- * is "unused path"), whose repair is the health channel's on the same screen,
- * not this receipt's — and one whose name the profile no longer holds at the
- * path at all. Nothing falls through, which is what makes the sum total and each
- * cause checked where the row that says it is in hand rather than read off a
- * difference.
+ * profile holds — a second name of one profile being a thing it can hold and a
+ * sync can bring here (core/manifest.h manifest_unkept, whose screen word is
+ * "unused path"), whose repair is the health channel's on the same screen, not
+ * this receipt's — and one whose name the profile no longer holds at the path
+ * at all. Nothing falls through, which is what makes the sum total and each cause
+ * checked where the row that says it is in hand rather than read off a difference.
  *
  * `unkept` is one thing only. This command cannot author a second name, and a
  * capture at a contested path lands on the name the next settle will keep —
@@ -453,7 +452,7 @@ static void add_list(
  * another being ordinary.
  *
  * The subject is the commit as this command has chosen it so far: the admission
- * — the branch's tree and every blob listed before this one — and the branch's
+ * — the branch's tree and every blob listed before this one — and the profile's
  * sheet. A directory this command listed is in neither until its capture, so a
  * blob chosen above one is asked about once more, with the selection complete
  * (cmd_add).
@@ -540,7 +539,7 @@ static error_t add_refuse_unjudged(
  * the argument arm before it descends and the recursion below before it recurses.
  *
  * Every directory walked into is listed — the walk is the sole source of directory
- * tracking — and so is every regular file and symlink child a branch can hold.
+ * tracking — and so is every regular file and symlink child a profile can hold.
  * Symlinks are never followed: a symlink to a directory is an entry like any
  * other, and a special file is no entry at all. One directory is walked into
  * and never listed: one the profile only passes through, which a rule of discovery
@@ -603,7 +602,7 @@ static error_t add_collect(
          * and this look are two moments, and a path that left between them is
          * not this command's failure — while a path that cannot be read is the
          * same refusal the enumeration itself would have raised, and is fatal
-         * with it. What no branch can hold, a device or a socket or a FIFO, is
+         * with it. What no profile can hold, a device or a socket or a FIFO, is
          * skipped by its noun rather than carried to a capture that would refuse
          * it and take every sibling with it. */
         struct stat st;
@@ -639,7 +638,7 @@ static error_t add_collect(
         if (hashmap_has(walk->listing, child_fs)) continue;
 
         /* The crossing: what this profile calls the child — the claim standing
-         * there, this command's own or the branch's, else the composition beneath
+         * there, this command's own or the profile's, else the composition beneath
          * the nearest claim above it, else the label of the root it lies under,
          * the word alone where the child is one of this profile's own roots. */
         const char *child_storage = manifest_name(
@@ -651,7 +650,7 @@ static error_t add_collect(
          * The row is the path's own authority on kind too, a derived one included
          * — it says the profile holds a subtree beneath the path, which a path
          * that became a file cannot carry — and it is the one reading that sees
-         * a claim with nothing beneath it for either of the branch's documents
+         * a claim with nothing beneath it for either of the profile's documents
          * to find, where add_admit below covers the rest, by the name. */
         const manifest_row_t *held = manifest_lookup_claim(
             walk->view, walk->profile, child_fs
@@ -795,7 +794,7 @@ static error_t add_refuse_excluded(
 /**
  * Refuse a selection that moves a name without capturing the one it moves to
  *
- * A path this branch names twice is decided by the settle, and this command's
+ * A path this profile names twice is decided by the settle, and this command's
  * own claims can change that decision: a directory claim admitted above such a
  * path changes what its ascent composes, and with it which of the profile's names
  * stands there (core/manifest.h manifest_name, "what the next settle will keep").
@@ -805,7 +804,7 @@ static error_t add_refuse_excluded(
  *
  * The subject is exactly manifest_unkept's slice: no verb can give a profile a
  * second name for a path it already names (manifest_holds_name), and a listing
- * that is not typed takes the namer's own answer — so the groups are the branch's,
+ * that is not typed takes the namer's own answer — so the groups are the profile's,
  * and only which member stands can move. Asked once, with the selection complete,
  * because naming is a snapshot taken when a path is listed and a later argument
  * can change what an earlier one composed.
@@ -911,17 +910,17 @@ static void add_print_capture(
  * the receipt's, where the record phase found no row, and the preview's, where
  * the rows it read say the same. Enable is the verb, and what it must bring is
  * one of three things. The target as the user typed it, when the run brought
- * one — "here" is where they typed it. Else a target, when the branch as this
+ * one — "here" is where they typed it. Else a target, when the profile as this
  * command opened it holds a claim no binding places (core/manifest.h
  * manifest_unbound): the reading `profile enable` refuses on, so the hint never
- * names a command that refuses — the branch's custom/ paths were there before
+ * names a command that refuses — the profile's custom/ paths were there before
  * this add and are there after it, whatever this add captured beside them. Else
  * enable alone.
  *
  * @param out     Output context (must not be NULL)
  * @param profile The profile (must not be NULL)
  * @param target  The --target the run brought, as typed; NULL without one
- * @param view    The branch as this command opened it, under its table (must
+ * @param view    The profile as this command opened it, under its table (must
  *                not be NULL)
  */
 static void add_print_enable(
@@ -1220,9 +1219,9 @@ static error_t add_commit(
  * row holds the target. Atomicity is the transaction's: the enable and the record
  * commit together or not at all.
  *
- * A new branch's enabled_profiles row can pre-exist only as a leftover of a branch
- * deleted behind it. state_enable_profile is an UPSERT — the row keeps its
- * position, takes this add's target when it brings one and keeps the leftover's
+ * A new profile's enabled_profiles row can pre-exist only as a leftover of a
+ * branch deleted behind it. state_enable_profile is an UPSERT — the row keeps
+ * its position, takes this add's target when it brings one and keeps the leftover's
  * otherwise — and whatever records the old branch left are orphans the next load
  * reads, since the new HEAD does not have them.
  *
@@ -1525,7 +1524,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const gitignore_ruleset_t *profile_rules = NULL;
     stage_t *stage = NULL;
     stage_admission_t *admission = NULL; /* The tree as its names are chosen: see below */
-    manifest_t *view = NULL;         /* The branch as the stage opened it: see below */
+    manifest_t *view = NULL;         /* The profile as the stage opened it: see below */
     walk_t walk = { .ctx = ctx };    /* Filled once the table and the rules are known */
     bool profile_exists = false;     /* The pre-flight's question, read by both modes */
     bool profile_created = false;    /* The orphan open's answer, read below the commit */
@@ -1697,27 +1696,27 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     err = ignore_ruleset(ignore_rules, opts->profile, &profile_rules);
     if (err) goto cleanup;
 
-    /* The profile's sheet, from the tree the stage opened at: the branch's own
+    /* The profile's sheet, from the tree the stage opened at: the profile's own
      * bytes, an empty sheet for a new profile (the loader's contract). Read before
-     * the walk, which asks it what the branch already claims beneath a name
+     * the walk, which asks it what the profile already claims beneath a name
      * (add_admit). The decide phase gives up a claim a listed file takes the
      * place of, the captures write the rest, and it is saved once. A sheet that
      * will not load refuses the add here rather than after the arguments have
-     * been diagnosed — the branch's own state is the earlier question.
+     * been diagnosed — the profile's own state is the earlier question.
      */
     err = metadata_load_from_tree(repo, stage_tree(stage), opts->profile, &metadata);
     if (err) goto cleanup;
 
-    /* The branch as this command found it, under this command's table: one
-     * contribution, this profile's, from the branch over the tree the stage opened
-     * at, let go once its view is built. Built after the sheet load so a sheet
-     * that will not load is still the earlier refusal — the branch loads it again
-     * and would say the same thing later. Every naming question below reads it,
-     * so does the kind question, and so does the refusal the completed selection
+    /* The profile as this command found it, under this command's table: one
+     * contribution, its own, from the tree the stage opened at, the handle let
+     * go once its view is built. Built after the sheet load so a sheet that will
+     * not load is still the earlier refusal — the profile loads it again and
+     * would say the same thing later. Every naming question below reads it, so
+     * does the kind question, and so does the refusal the completed selection
      * owes; the command's arena's, as every view is. */
-    branch_t *branch = branch_open(repo, opts->profile, stage_tree(stage));
-    err = manifest_build_branch(branch, mounts, ctx->arena, &view);
-    branch_free(branch);
+    profile_t *profile = profile_open(opts->profile, stage_tree(stage));
+    err = manifest_build_profile(profile, mounts, ctx->arena, &view);
+    profile_free(profile);
     if (err) goto cleanup;
 
     /* The tree this commit will write, as its names are chosen: the branch's
@@ -1744,7 +1743,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* Process each input path. Two parsing heads — a storage shape and a filesystem
      * shape — and one ladder beneath them: what stands at the path, this command's
      * own listing, the name, the rules, the claim the profile holds at the path,
-     * the branch's shape, and the listing itself. `typed` is the whole of what
+     * the profile's shape, and the listing itself. `typed` is the whole of what
      * the user's choice of shape means, and it discriminates at exactly four
      * places: the absent path's clause, the three sentences the dedup gate owes,
      * the choice of name, and the membership gate that is the one place a second
@@ -1907,7 +1906,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
         /* The name the capture lands under: the user's own where they typed one,
          * and otherwise what this profile calls the path — the claim standing
-         * there, this command's own or the branch's, else the composition beneath
+         * there, this command's own or the profile's, else the composition beneath
          * the nearest claim above it, else the label of the root it lies under,
          * which at the root itself is the word alone. */
         const char *storage_path = typed ? typed : manifest_name(
@@ -2058,15 +2057,15 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      *
      * Every listing met both documents as the command stood when it was made
      * (add_admit): the admission held the branch's entries and every blob listed
-     * before, and the sheet held the branch's claims. Two readings remain, and
+     * before, and the sheet held the profile's claims. Two readings remain, and
      * they are this pass's two loops:
-     *   - the branch's own claims, against every name the tree will hold. A blob
-     *     this command chose above one was refused at its name, and a file listed
-     *     at one's own name has just taken its place, so what refuses here is a
-     *     contradiction the branch arrived with. Nothing repairs it silently,
-     *     and its remedies are two — `dotta remove` gives up a claim beneath a
-     *     blob, and a forced re-capture of the file takes the place of one at
-     *     the blob's own name — so no one line names them;
+     *   - the profile's own claims, against every name the tree will hold. A
+     *     blob this command chose above one was refused at its name, and a file
+     *     listed at one's own name has just taken its place, so what refuses
+     *     here is a contradiction the branch arrived with. Nothing repairs it
+     *     silently, and its remedies are two — `dotta remove` gives up a claim
+     *     beneath a blob, and a forced re-capture of the file takes the place
+     *     of one at the blob's own name — so no one line names them;
      *   - this command's own directories, against the blobs chosen after them.
      *     The sheet holds them only once they are captured, so no listing could
      *     see them.
@@ -2122,7 +2121,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     err = add_refuse_moves(&walk);
     if (err) goto cleanup;
 
-    /* What the branch already holds under a name this command chose. Asked over
+    /* What the profile already holds under a name this command chose. Asked over
      * the whole listing before a byte is read, so a refusal at the last file
      * does not leave the first four in the object database. Keyed by the name
      * and not by the path: at a path the profile names twice, a typed re-capture
@@ -2149,11 +2148,11 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* The encryption decision, taken with the name and never with a source byte.
      * Its inputs are the config, the name this command chose, the request, and
-     * the entry the branch holds at that name — judged by its mode and its header
-     * through the index the stage opened on, never by a claim, with no key and
-     * no source file (infra/content.h content_classify) — so it is a decision
-     * and is made with the others, before any capture runs. The capture is told
-     * (add_capture).
+     * the entry the profile's stage holds at that name — judged by its mode and
+     * its header through the index the stage opened on, never by a claim, with
+     * no key and no source file (infra/content.h content_classify) — so it is a
+     * decision and is made with the others, before any capture runs. The capture
+     * is told (add_capture).
      *
      * A regular file alone: a link's entry is its target and carries no seal
      * (core/policy.h), so the policy is never asked about one; and the capture
@@ -2210,9 +2209,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * So a preview answers what the selection answers — every name, admitted
      * together against the tree and the sheet the commit would carry (sys/stage.h,
      * the admission); the name a directory claim would abandon; the entries the
-     * branch holds under a chosen name; and each file's encryption verdict, with
-     * whether this run could seal at all — and a run refused over any of them
-     * is a preview refused in the same words. What only a source, or a later
+     * profile holds under a chosen name; and each file's encryption verdict,
+     * with whether this run could seal at all — and a run refused over any of
+     * them is a preview refused in the same words. What only a source, or a later
      * writer, can say is below: bytes that cannot be read, a plaintext that would
      * read as ciphertext, the key a seal needs, an owner a claim cannot name, a
      * kind that changes before its capture, the chain above each path, whether
@@ -2651,7 +2650,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * the run here — the tree is shaped and enable is what gives it a place
      * (add_print_enable, which the preview's screen reads too). A row that does
      * hold it leaves only a failure to answer, and the retry is this add again
-     * with --force over a branch that now holds the bytes: an apply re-earns
+     * with --force over a profile that now holds the bytes: an apply re-earns
      * the event for the files it adopts and never for a directory, and an unowned
      * directory is released at scope exit where an owned one is pruned. */
     if (!state_enabled(state, opts->profile)) {

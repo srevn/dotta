@@ -6,18 +6,18 @@
  * never the enabled set: no layer composition, plaintext bytes with stored
  * permission modes. A directory claim is content too, whatever the tree holds
  * at its name (an empty tracked directory's whole Git footprint is its sheet
- * item): materialized with its stored mode, as the branch's walk shows it.
+ * item): materialized with its stored mode, as the profile's walk shows it.
  *
  * Three ways to name what is copied, and each lays the copy out in the key it
- * was named in. A profile alone mirrors its branch (dest/home/..., dest/root/...).
- * A storage path copies what the branch claims at and beneath that name, laid
+ * was named in. A profile alone mirrors its claims (dest/home/..., dest/root/...).
+ * A storage path copies what the profile claims at and beneath that name, laid
  * out beneath it. A filesystem path copies what the profile *places* there on
- * this machine — every row its branch and this machine's roots put at and beneath
+ * this machine — every row its claims and this machine's roots put at and beneath
  * the path, whatever label each is stored under, laid out beneath the path. Only
  * the third reads the mount table, and it is the only one that can answer a place
- * a branch spells under two labels: a file captured before a binding stands beside
- * one captured after, and a name reaches under one label alone. Single files
- * are the degenerate case of each.
+ * a profile spells under two labels: a file captured before a binding stands
+ * beside one captured after, and a name reaches under one label alone. Single
+ * files are the degenerate case of each.
  *
  * Directory modes come off the claim without asking which kind of claim stands
  * there, and that is right rather than incidental: every directory an export
@@ -29,18 +29,18 @@
  * create what it passes through — has no counterpart where nothing pre-exists.
  *
  * Two sheet policies, one per key, and the split is the view's rather than this
- * file's: an arm that reads the branch's walk itself reads it tolerantly, so a
+ * file's: an arm that reads the profile's walk itself reads it tolerantly, so a
  * sheet that will not load costs the copy its modes, its stamps and the claims
  * the sheet alone holds — said once, by the command (cmd_export) — and never
  * the tree's bytes; while the path arm asks the profile's view, which is strict
- * about the sheet by contract (core/manifest.h). So on a branch whose sheet will
- * not load `export p home/x` proceeds with a warning and `export p ~/x` refuses
- * — and that refusal is not "use the name instead": a name is a different selection
- * wherever the path spans two labels, which is the partial copy this arm exists
- * to stop offering. A copy with nothing in it is the one question the tolerant
- * arms ask strictly: the sheet may hold the claims that would have filled it,
- * so where it will not load its failure is the answer, never "no exportable
- * content" and never "not found".
+ * about the sheet by contract (core/manifest.h). So on a profile whose sheet
+ * will not load `export p home/x` proceeds with a warning and `export p ~/x`
+ * refuses — and that refusal is not "use the name instead": a name is a different
+ * selection wherever the path spans two labels, which is the partial copy this
+ * arm exists to stop offering. A copy with nothing in it is the one question
+ * the tolerant arms ask strictly: the sheet may hold the claims that would have
+ * filled it, so where it will not load its failure is the answer, never "no
+ * exportable content" and never "not found".
  *
  * Two-phase execution model:
  *
@@ -50,8 +50,8 @@
  *   blob the sheet stamps sealed into memory, as plaintext. Every crypto refusal
  *   those blobs can raise lands before the first byte is written: the passphrase
  *   prompt, a wrong key, a corrupt ciphertext, a version this build does not
- *   read. A sheet dotta wrote stamps every sealed blob its branch holds
- *   (core/metadata.h), so on such a branch that is all of them. --dry-run is
+ *   read. A sheet dotta wrote stamps every sealed blob its profile holds
+ *   (core/metadata.h), so on such a profile that is all of them. --dry-run is
  *   phase 1 alone.
  *
  *   Phase 2 (write): create directories, write blobs, recreate symlinks. A blob
@@ -59,26 +59,26 @@
  *   it correctly whatever the sheet said — so a stamp costs a late prompt and
  *   never wrong content. Fail fast on first error; the failure window is filesystem
  *   errors, repository corruption, and the crypto that a sheet speaking for no
- *   blob of its branch leaves late — a sheet a tolerant arm went past among them.
+ *   blob of its profile leaves late — a sheet a tolerant arm went past among them.
  *
  * Traversal safety is established, not assumed. A tree entry's name is whoever
  * wrote the branch's, and git accepts one called ".." without a murmur, so every
  * path a source dictates is read against the storage grammar where the source
- * is read: a blob's whole name at the branch's walk (core/branch.c branch_step),
- * whether an arm copies the walk's claims or the view's rows placed from them,
- * and a directory claim's key at the sheet's own loader (core/metadata.c). A
- * name is read whole, every rung it is reached through among it, the branch root's
- * included, and what prunes machinery there is the content gate every walk asks
- * of a name (infra/label.h label_prefixes). A tree is no claim, so one whose
- * name breaks the grammar creates nothing — a blob beneath it fails the walk at
- * its joined name, and one holding no blob leads nowhere — since every directory
- * the copy makes is its root, a claim, or a rung between the two
- * (complete_directories), each a prefix of a validated name. So every entry carries
- * a validated storage path — the metadata key and the associated data both. A
- * link's target is the link's own business, copied verbatim, and is not a path
- * of this copy. The remaining escape vector — a pre-existing symlink at a
- * content-dictated path below the root — is refused in phase 1, which can see
- * every such path because the entry list is completed first: every directory
+ * is read: a blob's whole name at the profile's walk (core/profiles.c
+ * profile_step), whether an arm copies the walk's claims or the view's rows placed
+ * from them, and a directory claim's key at the sheet's own loader
+ * (core/metadata.c). A name is read whole, every rung it is reached through among
+ * it, the branch root's included, and what prunes machinery there is the content
+ * gate every walk asks of a name (infra/label.h label_prefixes). A tree is no
+ * claim, so one whose name breaks the grammar creates nothing — a blob beneath
+ * it fails the walk at its joined name, and one holding no blob leads nowhere —
+ * since every directory the copy makes is its root, a claim, or a rung between
+ * the two (complete_directories), each a prefix of a validated name. So every
+ * entry carries a validated storage path — the metadata key and the associated
+ * data both. A link's target is the link's own business, copied verbatim, and
+ * is not a path of this copy. The remaining escape vector — a pre-existing symlink
+ * at a content-dictated path below the root — is refused in phase 1, which can
+ * see every such path because the entry list is completed first: every directory
  * the copy needs is an entry of it.
  */
 
@@ -102,7 +102,6 @@
 #include "base/refspec.h"
 #include "base/string.h"
 #include "cmds/completion.h"
-#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -125,7 +124,7 @@
  * header already names.
  *
  * `encrypted` is a copy of the claim's word rather than a borrow of it, because
- * the branch whose claim it is does not outlive the collection (cmd_export frees
+ * the profile whose claim it is does not outlive the collection (cmd_export frees
  * it once the collection is whole) while the entry list lives in the arena into
  * phase 2. The mode beside it is copied for the same reason, and so is the name
  * a claim lends (export_collect_claim).
@@ -184,8 +183,8 @@ typedef struct {
                                 * directory destination nests the copy under. Every
                                 * arm sets it, and a single-file copy's leaf borrows
                                 * this very pointer as its relative path, so the two
-                                * cannot drift. Never the branch's string: the list
-                                * names the copy past the branch's free. */
+                                * cannot drift. Never the profile's string: the list
+                                * names the copy past the profile's free. */
 } export_entry_list_t;
 
 /**
@@ -208,7 +207,7 @@ static void entry_list_append(
  *
  * `storage_path` and `claimed` are the source's word about the directory standing
  * there — a sheet item, a row — or NULL and false where nothing names it: a whole
- * profile, whose root is the destination and not a path of the branch.
+ * profile, whose root is the destination and not a path of the profile.
  */
 static void append_root(
     export_entry_list_t *list,
@@ -314,23 +313,23 @@ static int export_entry_cmp(const void *a, const void *b) {
  * The projection the whole and name arms read a claim through, the twin of the
  * row's (export_entry_from_row): every directory claim a claim, derived or tracked
  * alike — the file header's own argument — at its own mode or the floor; a blob
- * at its mode and stamp as the branch decodes them; a link with neither, its
- * bytes its target. The mode is the claim's one rule (core/branch.h
- * branch_claim_mode), the one the view resolved its rows' by, so the two
+ * at its mode and stamp as the profile decodes them; a link with neither, its
+ * bytes its target. The mode is the claim's one rule (core/profiles.h
+ * profile_claim_mode), the one the view resolved its rows' by, so the two
  * projections cannot part over a mode.
  *
  * The name is the caller's to set: a claim's is lent — the walk's for its visit,
- * a point question's for the handle's life — and the copy is read after the branch
- * is gone, so each caller names the entry with a string that outlives it.
+ * a point question's for the handle's life — and the copy is read after the handle
+ * is freed, so each caller names the entry with a string that outlives it.
  */
-static export_entry_t export_entry_from_claim(const branch_claim_t *claim) {
+static export_entry_t export_entry_from_claim(const profile_claim_t *claim) {
     export_entry_t e;
     memset(&e, 0, sizeof(e));
 
     switch (claim->type) {
         case PATH_TYPE_DIRECTORY:
             e.kind = EXPORT_ENTRY_DIRECTORY;
-            e.mode = branch_claim_mode(claim);
+            e.mode = profile_claim_mode(claim);
             e.claimed = true;
             break;
 
@@ -342,7 +341,7 @@ static export_entry_t export_entry_from_claim(const branch_claim_t *claim) {
         case PATH_TYPE_FILE:
         case PATH_TYPE_EXECUTABLE:
             e.kind = EXPORT_ENTRY_FILE;
-            e.mode = branch_claim_mode(claim);
+            e.mode = profile_claim_mode(claim);
             e.encrypted = claim->encrypted;
             git_oid_cpy(&e.blob_oid, &claim->blob_oid);
             break;
@@ -362,18 +361,18 @@ typedef struct {
 } export_walk_t;
 
 /**
- * Walk visitor: one claim of the branch, collected where it stands in the copy
+ * Walk visitor: one claim of the profile, collected where it stands in the copy
  *
  * For the whole profile every claim the walk shows, at its own name; for a name,
  * every claim strictly beneath it, at its path within the copy. The claim at
  * the name is the copy's own shape — its single file, or its root — which the
- * arm asked of the branch before the walk (export_collect_storage).
+ * arm asked of the profile before the walk (export_collect_storage).
  *
  * @param claim One claim, decoded (borrowed — valid for the call only)
  * @param payload The walk (export_walk_t)
  * @return NULL: a collection fails nowhere
  */
-static error_t export_collect_claim(const branch_claim_t *claim, void *payload) {
+static error_t export_collect_claim(const profile_claim_t *claim, void *payload) {
     export_walk_t *walk = payload;
 
     /* Where the claim stands in the copy: at its own name in the whole profile,
@@ -399,11 +398,11 @@ static error_t export_collect_claim(const branch_claim_t *claim, void *payload) 
 }
 
 /**
- * The whole-profile arm: the branch's own layout, mirrored.
+ * The whole-profile arm: the profile's own layout, mirrored.
  *
- * The root is the destination and no path of the branch names it (dest/home/...,
+ * The root is the destination and no path of the profile names it (dest/home/...,
  * dest/root/...), so the list opens with a root claiming nothing, and every claim
- * the branch's walk shows follows it at its own name: each blob past the content
+ * the profile's walk shows follows it at its own name: each blob past the content
  * gate that prunes the machinery beside the labels, then each directory claim,
  * those with nothing beneath them among them. Read tolerantly, as the file header
  * says.
@@ -414,38 +413,37 @@ static error_t export_collect_claim(const branch_claim_t *claim, void *payload) 
  */
 static error_t export_collect_profile(
     const dotta_ctx_t *ctx,
-    branch_t *branch,
+    profile_t *profile,
     const char *commit_suffix,
     export_entry_list_t *list
 ) {
     arena_t *arena = ctx->arena;
-    const char *profile = branch_profile(branch);
 
     /* Under a directory destination the copy takes the profile's last segment
-     * (hosts/mbp -> mbp) — copied, since the list names the copy past the branch,
+     * (hosts/mbp -> mbp) — copied, since the list names the copy past the profile,
      * which cmd_export frees once the collection is whole */
-    list->basename = arena_strdup(arena, path_basename(profile));
+    list->basename = arena_strdup(arena, path_basename(profile_name(profile)));
 
     append_root(list, arena, NULL, DIR_MODE_DEFAULT, false);
 
-    /* The branch's claims, tolerantly: a sheet that will not load costs the copy
-     * its modes, its stamps and the claims the sheet alone holds, which cmd_export
-     * says once, and never the tree's bytes. The walk's failures already name
-     * the profile, so nothing is said over them */
+    /* The profile's claims, tolerantly: a sheet that will not load costs the
+     * copy its modes, its stamps and the claims the sheet alone holds, which
+     * cmd_export says once, and never the tree's bytes. The walk's failures already
+     * name the profile, so nothing is said over them */
     export_walk_t walk = { .list = list, .arena = arena };
-    error_t err = branch_walk(branch, BRANCH_READ_TOLERANT, export_collect_claim, &walk);
+    error_t err = profile_walk(profile, PROFILE_READ_TOLERANT, export_collect_claim, &walk);
     if (err) return err;
 
     /* A copy with nothing in it. Whether a profile holds nothing is a question
      * the sheet answers too — it may hold directory claims alone — so where the
      * sheet would not load, its failure is the answer and the emptiness is not */
     if (list->count == 1) {
-        err = branch_sheet_failure(branch);
+        err = profile_load_sheet(profile);
         if (err) return err;
 
         return error_create(
             ERR_NOT_FOUND, "Profile '%s'%s has no exportable content",
-            profile, commit_suffix
+            profile_name(profile), commit_suffix
         );
     }
 
@@ -453,42 +451,41 @@ static error_t export_collect_profile(
 }
 
 /**
- * The name arm: what the branch claims at and beneath the name, laid out beneath
+ * The name arm: what the profile claims at and beneath the name, laid out beneath
  * it.
  *
- * `name` is a key in the branch's own namespace, validated where the argument
- * was read (infra/path.h) — a name beneath a label, or the label's word alone,
- * which is the namespace's own directory and a key like any other.
+ * `storage_path` is a key in the profile's own namespace, validated where the
+ * argument was read (infra/path.h) — a name beneath a label, or the label's word
+ * alone, which is the namespace's own directory and a key like any other.
  *
  * A blob at the name is the single-entry copy, its destination the user's own
  * path (cp semantics). Anything else is a directory's shape: the copy's root is
  * the directory claim standing at the name, or a root claiming nothing, and beneath
- * it stands every claim the branch's walk shows there — the selection the path
+ * it stands every claim the profile's walk shows there — the selection the path
  * arm makes by place and remove makes by name. Read tolerantly, as the whole
  * arm is; a copy with nothing in it is refused, in the words of why.
  */
 static error_t export_collect_storage(
     const dotta_ctx_t *ctx,
-    branch_t *branch,
-    const char *name,
+    profile_t *profile,
+    const char *storage_path,
     const char *commit_suffix,
     export_entry_list_t *list
 ) {
     arena_t *arena = ctx->arena;
-    const char *profile = branch_profile(branch);
 
     /* The argument's last segment: the resolver's string, the command's arena */
-    list->basename = path_basename(name);
+    list->basename = path_basename(storage_path);
 
     /* A blob at the name is the single-entry copy, its claim as the walk decodes
      * it: the tree's answer, the sheet read for the claim alone and tolerantly.
      * No blob, no file claim, and no sheet read */
-    const branch_claim_t *file = NULL;
-    error_t err = branch_find(branch, BRANCH_READ_TOLERANT, PATH_KIND_FILE, name, &file);
+    const profile_claim_t *file = NULL;
+    error_t err = profile_find(profile, PROFILE_READ_TOLERANT, PATH_KIND_FILE, storage_path, &file);
     if (err) return err;
     if (file) {
         export_entry_t e = export_entry_from_claim(file);
-        e.storage_path = name;
+        e.storage_path = storage_path;
         e.rel_path = list->basename;
         entry_list_append(list, arena, &e);
         return NULL;
@@ -497,22 +494,22 @@ static error_t export_collect_storage(
     /* Anything else is a directory's shape, its root the directory claim standing
      * at the name — or a root claiming nothing, where a subtree, a gitlink or
      * no entry stands there and the sheet claims nothing at it */
-    const branch_claim_t *root = NULL;
-    err = branch_find(branch, BRANCH_READ_TOLERANT, PATH_KIND_DIRECTORY, name, &root);
+    const profile_claim_t *root = NULL;
+    err = profile_find(profile, PROFILE_READ_TOLERANT, PATH_KIND_DIRECTORY, storage_path, &root);
     if (err) return err;
     append_root(
-        list, arena, name, root ? branch_claim_mode(root) : DIR_MODE_DEFAULT,
+        list, arena, storage_path, root ? profile_claim_mode(root) : DIR_MODE_DEFAULT,
         root != NULL
     );
 
     /* Every claim the walk shows beneath the name: a subtree's, a claim the sheet
      * alone holds, the claims beneath a name nothing stands at (a capture through
-     * a link). The whole branch is walked for them, so a name the grammar refuses
+     * a link). The whole profile is walked for them, so a name the grammar refuses
      * anywhere in it refuses this copy too, in the walk's words */
     export_walk_t walk = {
-        .list = list, .arena = arena, .base = name, .base_len = strlen(name),
+        .list = list, .arena = arena, .base = storage_path, .base_len = strlen(storage_path),
     };
-    err = branch_walk(branch, BRANCH_READ_TOLERANT, export_collect_claim, &walk);
+    err = profile_walk(profile, PROFILE_READ_TOLERANT, export_collect_claim, &walk);
     if (err) return err;
 
     /* A copy with nothing in it — no claim at the name and none beneath — is
@@ -522,22 +519,22 @@ static error_t export_collect_storage(
      * what stands at the name says which: nothing at all is not found, and a
      * subtree holding no blob or a gitlink is nothing the profile claims there */
     if (!root && list->count == 1) {
-        err = branch_sheet_failure(branch);
+        err = profile_load_sheet(profile);
         if (err) return err;
 
-        branch_held_t held;
-        err = branch_holds(branch, name, &held);
+        profile_held_t held;
+        err = profile_holds(profile, storage_path, &held);
         if (err) return err;
 
-        if (held.kind == BRANCH_HELD_NOTHING) {
+        if (held.kind == PROFILE_HELD_NOTHING) {
             return error_create(
                 ERR_NOT_FOUND, "'%s' not found in profile '%s'%s",
-                name, profile, commit_suffix
+                storage_path, profile_name(profile), commit_suffix
             );
         }
         return error_create(
             ERR_NOT_FOUND, "'%s' in profile '%s'%s has no exportable content",
-            name, profile, commit_suffix
+            storage_path, profile_name(profile), commit_suffix
         );
     }
 
@@ -590,43 +587,41 @@ static export_entry_t export_entry_from_row(const manifest_row_t *row) {
  * The path arm: every row the profile places at or beneath the path, laid out
  * beneath it.
  *
- * One profile's view of its branch over the tree (core/manifest.h
- * manifest_build_branch), built under the run's table — so a path keys against
- * a row by strcmp, both being spellings (infra/mount.h) — and read for two
- * questions: what stands at the path, and what stands strictly beneath it.
- * Everything the entries carry is the rows': the mode is the claim or the floor,
- * which the builder resolved by the claim's one rule (core/branch.h
- * branch_claim_mode) as the other arms' projection does, so no sheet is read
- * here; the source name is the row's own, which is the name its blob was sealed
- * under (the AAD, infra/content.h). A name the contribution did not keep is no
- * row and is not copied — the copy is what the profile would place, and that is
- * what the view answers.
+ * One profile's view at the tree (core/manifest.h manifest_build_profile), built
+ * under the run's table — so a path keys against a row by strcmp, both being
+ * spellings (infra/mount.h) — and read for two questions: what stands at the
+ * path, and what stands strictly beneath it. Everything the entries carry is
+ * the rows': the mode is the claim or the floor, which the builder resolved by
+ * the claim's one rule (core/profiles.h profile_claim_mode) as the other arms'
+ * projection does, so no sheet is read here; the source name is the row's own,
+ * which is the name its blob was sealed under (the AAD, infra/content.h). A name
+ * the contribution did not keep is no row and is not copied — the copy is what
+ * the profile would place, and that is what the view answers.
  *
  * The row standing at the path decides the shape. A directory row is a claimed
  * root at its mode; no row at all is an unclaimed root at the default, the same
  * rung complete_directories supplies. A blob is the single-entry copy — and a
  * blob with rows beneath it refuses the copy, one filesystem being unable to
- * hold both where a branch can, two of its names reaching one chain
+ * hold both where a profile can, two of its names reaching one chain
  * (core/manifest.h manifest_lookup_claim). A root of this machine's topology is
  * a path like any other here: rows beneath it, and nothing standing at it unless
  * a claim does. The rungs between the rows are complete_directories'.
  */
 static error_t export_collect_filesystem(
     const dotta_ctx_t *ctx,
-    branch_t *branch,
+    profile_t *profile,
     const char *filesystem_path,
     const char *commit_suffix,
     export_entry_list_t *list
 ) {
     arena_t *arena = ctx->arena;
-    const char *profile = branch_profile(branch);
 
     /* The view's failure names the profile already, in the loader's words or
-     * the walk's (core/branch.h); what the build was not handed is the path,
+     * the walk's (core/profiles.h); what the build was not handed is the path,
      * which the refusal names in export's own lead for an argument it cannot
      * copy */
     manifest_t *view = NULL;
-    error_t err = manifest_build_branch(branch, ctx->run.mounts, arena, &view);
+    error_t err = manifest_build_profile(profile, ctx->run.mounts, arena, &view);
     if (err) {
         return error_wrap(err, "Cannot export '%s'", filesystem_path);
     }
@@ -663,12 +658,12 @@ static error_t export_collect_filesystem(
             return error_create(
                 ERR_NOT_FOUND, "Profile '%s'%s places nothing at '%s'; some of its "
                 "paths have no target on this machine, and only their storage paths "
-                "name them", profile, commit_suffix, filesystem_path
+                "name them", profile_name(profile), commit_suffix, filesystem_path
             );
         }
         return error_create(
             ERR_NOT_FOUND, "Profile '%s'%s places nothing at '%s'",
-            profile, commit_suffix, filesystem_path
+            profile_name(profile), commit_suffix, filesystem_path
         );
     }
 
@@ -689,7 +684,7 @@ static error_t export_collect_filesystem(
                 "beneath it — one filesystem cannot hold both",
                 filesystem_path, at->storage_path,
                 at->type == PATH_TYPE_SYMLINK ? "symlink" : "file",
-                profile, first->storage_path
+                profile_name(profile), first->storage_path
             );
         }
 
@@ -726,11 +721,11 @@ static error_t export_collect_filesystem(
  * every rung must be a directory entry: one no entry names is supplied at the
  * default mode claiming nothing (core/deploy's own rule for an ancestor no verdict
  * covers), and one a file or a link stands at refuses the copy, a filesystem
- * being unable to hold both a file and paths beneath it where a branch can, two
- * of its names reaching one chain. Run after any collector, because every one
- * collects claims and never the rungs between them: the branch's walk shows blobs
- * and directory claims, never a subtree that only leads to them, and a selection
- * of rows the same.
+ * being unable to hold both a file and paths beneath it where a profile can,
+ * two of its names reaching one chain. Run after any collector, because every
+ * one collects claims and never the rungs between them: the profile's walk shows
+ * blobs and directory claims, never a subtree that only leads to them, and a
+ * selection of rows the same.
  *
  * What it establishes is what phase 1 goes on to trust — an lstat of every entry
  * covers every content-dictated component beneath the root, so a symlink standing
@@ -773,8 +768,8 @@ static error_t complete_directories(export_entry_list_t *list, arena_t *arena) {
                 continue;
             }
 
-            /* Both subjects in the branch's own names, because the contradiction
-             * is the branch's and that is where it gets fixed. Every entry that
+            /* Both subjects in the profile's own names, because the contradiction
+             * is the profile's and that is where it gets fixed. Every entry that
              * climbs carries one: a leaf comes from a source that named it, and
              * the root — the only collected entry without a name — holds no slash
              * to climb. */
@@ -1212,7 +1207,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     error_t err = NULL;
     git_commit *commit = NULL;
     git_tree *tree = NULL;
-    branch_t *branch = NULL;
+    profile_t *profile = NULL;
     export_entry_list_t list = { 0 };
     char commit_suffix[16] = "";
 
@@ -1248,9 +1243,9 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         if (err) goto cleanup;
     }
 
-    /* The profile's branch over that tree, which every arm reads and nothing
-     * after the collection does */
-    branch = branch_open(repo, opts->profile, tree);
+    /* The profile at that tree, which every arm reads and nothing after the
+     * collection does */
+    profile = profile_open(opts->profile, tree);
 
     if (opts->file_path) {
         /* Read the argument in the key the user named — a path or a storage path,
@@ -1273,19 +1268,19 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         switch (arg.key) {
             case PATH_KEY_FILESYSTEM:
                 err = export_collect_filesystem(
-                    ctx, branch, arg.filesystem_path, commit_suffix, &list
+                    ctx, profile, arg.filesystem_path, commit_suffix, &list
                 );
                 break;
 
             case PATH_KEY_STORAGE:
                 err = export_collect_storage(
-                    ctx, branch, arg.storage_path, commit_suffix, &list
+                    ctx, profile, arg.storage_path, commit_suffix, &list
                 );
                 break;
         }
         if (err) goto cleanup;
     } else {
-        err = export_collect_profile(ctx, branch, commit_suffix, &list);
+        err = export_collect_profile(ctx, profile, commit_suffix, &list);
         if (err) goto cleanup;
     }
 
@@ -1298,7 +1293,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
      * them. The bytes are the tree's own and an export is often the repair, so
      * the copy goes on at Git's floors and says what it lost, in the loader's
      * line, which names the profile */
-    err = branch_sheet_failure(branch);
+    err = profile_load_sheet(profile);
     if (err) {
         output_warning(
             out, OUTPUT_NORMAL, "%s; falling back to git filemodes", error_line(err)
@@ -1306,11 +1301,11 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         err = NULL;
     }
 
-    /* The branch is the collection's: the copy holds its own names and the list
+    /* The profile is the collection's: the copy holds its own names and the list
      * its basename, so the sheet's parse goes before the copy is completed,
      * resolved and read */
-    branch_free(branch);
-    branch = NULL;
+    profile_free(profile);
+    profile = NULL;
 
     /* Which shape the copy is, asked of the list rather than remembered by the
      * arms: a tree-shaped one opens with its root, a single-file one is its
@@ -1408,7 +1403,7 @@ cleanup:
             buffer_deinit(&list.items[i].content);
         }
     }
-    branch_free(branch);
+    profile_free(profile);
     if (tree) git_tree_free(tree);
     if (commit) git_commit_free(commit);
 
@@ -1444,7 +1439,7 @@ static error_t export_post_parse(
     /* A path in the profile slot is the one predictable misuse — refused here,
      * the usage the engine prints beneath naming the form, instead of as a
      * branch-lookup error. Alone, a name in the grammar — beneath a label or
-     * the label's word itself — is content and never a branch; with a second
+     * the label's word itself — is content and never a profile; with a second
      * positional the first word is the profile, whatever it looks like. */
     const char *first = args[0];
     if (first[0] == '~' || first[0] == '/' ||
@@ -1556,9 +1551,9 @@ static error_t export_post_parse(
 /**
  * What can stand at the cursor, by the shapes export_post_parse reads: a local
  * profile or a refspec first. After `profile:path` the destination, a filesystem
- * path; after a bare profile a file or directory claim of its branch, or a commit;
- * then the commit. An `@` in the token being typed completes its commit part
- * from the profile's history; -o takes a path.
+ * path; after a bare profile a file or directory claim of that profile, or a
+ * commit; then the commit. An `@` in the token being typed completes its commit
+ * part from the profile's history; -o takes a path.
  */
 static args_want_t export_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out

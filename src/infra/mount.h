@@ -96,7 +96,7 @@
  *     the table hands out what it found and composes nothing, one reader being
  *     no reason to own the sentence.
  *   - Where the asker's root of a label stands: mount_root_of, by label rather
- *     than by place — the view's contribution, add's receipt, and whether a branch
+ *     than by place — the view's contribution, add's receipt, and whether a profile
  *     needs a target.
  *   - Where a profile's claim stands (profile + storage -> filesystem):
  *     mount_resolve — that second find, then the join. A name is composed beneath
@@ -109,10 +109,10 @@
  * here has nothing to recover: it holds the name (core/manifest.h manifest_name).
  *
  * Traversal is refused or folded away at the boundary and trusted below it: a
- * storage path refused where a branch, a sheet or an argument is read
- * (infra/label.h label_validate_storage), a target folded where a binding is
- * written (infra/path.h path_input_target). The verbs over the table join a tail
- * on that strength and validate nothing themselves.
+ * storage path refused where a tree, a sheet or an argument is read (infra/label.h
+ * label_validate_storage), a target folded where a binding is written (infra/path.h
+ * path_input_target). The verbs over the table join a tail on that strength and
+ * validate nothing themselves.
  */
 
 #ifndef DOTTA_MOUNT_H
@@ -258,7 +258,7 @@ typedef struct {
  * because the rows a command's table is built from are the rows the view it later
  * joins by is built from (cmds/add.c). core/profiles.c's profile_needs_target
  * builds the table no state can produce — no mounts at all, HOME and the sentinel
- * alone — to ask a branch what it needs apart from what this machine binds.
+ * alone — to ask a profile what it needs apart from what this machine binds.
  *
  * @param arena       Arena for the table and its internal storage
  * @param mounts      Caller-declared mounts (may be NULL when count is 0)
@@ -374,7 +374,7 @@ const mount_root_t *mount_root_above(
  *
  * Readers: add's receipt, which names the place the custom/ names it captured
  * went under (cmds/add.c add_print_labels); and the target mark, which asks the
- * table no state row can produce for each label a branch claims under
+ * table no state row can produce for each label a profile claims under
  * (core/profiles.c profile_needs_target).
  */
 const mount_root_t *mount_root_of(
@@ -415,10 +415,10 @@ const mount_root_t *mount_root_of(
  * Nothing else can happen, so nothing here fails. A storage path is validated
  * where it is read, not only where it was written (infra/label.h
  * label_validate_storage): a sheet's keys at its parse (core/metadata.c
- * metadata_from_json), a tree's entries at their walk (core/branch.c branch_step,
- * cmds/remove.c remove_list_entry), an argument at its resolver (infra/path.h
- * path_input_resolve), and the state's column by its own constraint (core/state.c
- * storage_spelling). One under no label is a caller's bug, and dies.
+ * metadata_from_json), a tree's entries at their walk (core/profiles.c
+ * profile_step, cmds/remove.c remove_list_entry), an argument at its resolver
+ * (infra/path.h path_input_resolve), and the state's column by its own constraint
+ * (core/state.c storage_spelling). One under no label is a caller's bug, and dies.
  *
  * @param arena        Arena the answer is spelled in (must not be NULL)
  * @param table        Mount table (must not be NULL)

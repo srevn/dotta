@@ -2011,8 +2011,8 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         }
 
         /* The import's health, in the receipt's own shape and apply's: the paths
-         * a branch carries that this machine will not land, a section each. The
-         * Manifest block above cannot say either — neither kind is in either
+         * a profile carries that this machine will not land, a section each.
+         * The Manifest block above cannot say either — neither kind is in either
          * view's rows — so this is the import moment's only signal, and the moment
          * the paths are worth naming rather than counting, an import being what
          * brought them. Both repairs are generic: the (from P) beside every path
@@ -2046,8 +2046,8 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             );
         }
 
-        /* Its sibling: a path the profile did not keep is in the branch and in
-         * no row either. `--dry-run` is the safety on the way out — dropping a
+        /* Its sibling: a name the view did not keep is in the profile and in no
+         * row either. `--dry-run` is the safety on the way out — dropping a
          * directory name takes every claim beneath it, and the preview shows
          * that rather than asserting it. */
         manifest_unkept_t unkept = manifest_unkept(after);

@@ -19,7 +19,6 @@
 #include "base/heap.h"
 #include "base/output.h"
 #include "cmds/completion.h"
-#include "core/branch.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -573,10 +572,10 @@ static path_kind_t ignore_kind(
  * the rules on the asker's name for it, and, where no `.dottaignore` layer excludes
  * it, the source tree's on the path, when the asker places it.
  *
- * The view is the named profile's branch at HEAD — which need not be enabled,
- * and answers when some *other* enabled profile's branch will not build — or
- * the enabled set's. Neither is declared: `ignore` is an editing command whose
- * other four surfaces must build nothing.
+ * The view is the named profile's at HEAD — which need not be enabled, and answers
+ * when some *other* enabled profile will not build — or the enabled set's. Neither
+ * is declared: `ignore` is an editing command whose other four surfaces must
+ * build nothing.
  *
  * Every asker gets a subject, so every turn casts a verdict: a name's own tail,
  * or the tail of the name the asker gives the path — `""` at a root of its own,
@@ -602,11 +601,11 @@ static path_kind_t ignore_kind(
  */
 static error_t ignore_test(
     const dotta_ctx_t *ctx,
-    const char *test_path,
-    const char *profile
+    const cmd_ignore_options_t *opts
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(test_path);
+    CHECK_NULL(opts);
+    CHECK_NULL(opts->test_path);
 
     git_repository *repo = ctx->run.repo;
     const state_t *state = ctx->run.state;
@@ -620,13 +619,13 @@ static error_t ignore_test(
      * the dispatch is what used to read `home/` as the working directory's `home`.
      * It is the kind the argument alone gives, which stands wherever nothing
      * can be looked at (ignore_kind). */
-    size_t len = strlen(test_path);
-    const path_kind_t hint = len > 1 && test_path[len - 1] == '/'
+    size_t len = strlen(opts->test_path);
+    const path_kind_t hint = len > 1 && opts->test_path[len - 1] == '/'
         ? PATH_KIND_DIRECTORY : PATH_KIND_FILE;
 
     /* The profile named must be here before anything is read under it: the view
-     * below is its branch, and the refusal names both ways out. */
-    error_t err = profile ? profile_require(repo, profile) : NULL;
+     * below is its own, and the refusal names both ways out. */
+    error_t err = opts->profile ? profile_require(repo, opts->profile) : NULL;
     if (err) return err;
 
     /* The key the user named, fixed for every asker: the resolver's sum, its
@@ -637,13 +636,13 @@ static error_t ignore_test(
     path_input_t arg;                         /* the key: a name or a path */
     manifest_t *view = NULL;                  /* a path's: where each asker names it */
 
-    if (label_prefixes(test_path)) {
+    if (label_prefixes(opts->test_path)) {
         /* A storage shape, read by the one resolver that reads input shapes — a
          * name and never a path, since the same predicate dispatched here
          * (cmds/add.c's storage head is the other). A bare name that is none of
          * the three words never arrives: that is this command's own filesystem
          * grammar, and the predicate above let it past. */
-        err = path_input_resolve(test_path, ctx->arena, &arg);
+        err = path_input_resolve(opts->test_path, ctx->arena, &arg);
         if (err) return err;
     } else {
         /* The key as the argument's door spells it: absolute, folded, nothing
@@ -651,7 +650,7 @@ static error_t ignore_test(
          * the resolver refuses the bare name this grammar reads (infra/path.h
          * path_input_filesystem_path). */
         arg.key = PATH_KEY_FILESYSTEM;
-        err = path_input_filesystem_path(test_path, ctx->arena, &arg.filesystem_path);
+        err = path_input_filesystem_path(opts->test_path, ctx->arena, &arg.filesystem_path);
         if (err) return err;
     }
 
@@ -667,11 +666,11 @@ static error_t ignore_test(
              * so a view is built and the table the rows were placed by is the
              * view's from here on — the named profile's arm hands in the very
              * table this lends back (core/manifest.h manifest_mounts). */
-            if (profile) {
-                branch_t *branch = NULL;
-                err = branch_load(repo, profile, &branch);
-                if (!err) err = manifest_build_branch(branch, mounts, ctx->arena, &view);
-                branch_free(branch);
+            if (opts->profile) {
+                profile_t *profile = NULL;
+                err = profile_load(repo, opts->profile, &profile);
+                if (!err) err = manifest_build_profile(profile, mounts, ctx->arena, &view);
+                profile_free(profile);
             } else {
                 err = manifest_build(repo, state, ctx->arena, &view);
             }
@@ -691,15 +690,15 @@ static error_t ignore_test(
 
     /* The askers: the profile named, the enabled set, or the one asker that is
      * no profile — which names through the shared roots and meets the baseline,
-     * the config's layer and Git's rules. `askers` starts at the parameter itself,
+     * the config's layer and Git's rules. `askers` starts at the option itself,
      * an array of one that is both the named-profile and the nothing-enabled
      * case; the enabled set replaces it when it holds any, and so does what the
      * preamble keys on. */
-    const char *const *askers = &profile;
+    const char *const *askers = &opts->profile;
     size_t asker_count = 1;
     string_array_t enabled = { 0 };
 
-    if (!profile) {
+    if (!opts->profile) {
         /* The enabled set, resolved for either key: a path's view, built over
          * the same rows a moment before, holds the same profiles unless a ref
          * moved between the two reads */
@@ -727,7 +726,7 @@ static error_t ignore_test(
              * none of them */
             askers = (const char *const *) enabled.entries;
             asker_count = enabled.count;
-            output_info(out, OUTPUT_NORMAL, "Testing path: %s", test_path);
+            output_info(out, OUTPUT_NORMAL, "Testing path: %s", opts->test_path);
             output_info(
                 out, OUTPUT_NORMAL, "Enabled profiles with a branch: %zu", asker_count
             );
@@ -743,7 +742,7 @@ static error_t ignore_test(
      * the per-asker notes of a storage name stand under — one command saying
      * one thing in one order. */
     const path_kind_t argument_kind = arg.key == PATH_KEY_FILESYSTEM
-        ? ignore_kind("", test_path, arg.filesystem_path, hint, out) : hint;
+        ? ignore_kind("", opts->test_path, arg.filesystem_path, hint, out) : hint;
 
     for (size_t i = 0; i < asker_count; i++) {
         const char *asker = askers[i];
@@ -765,7 +764,7 @@ static error_t ignore_test(
                  * only under a profile with a target. */
                 name = arg.storage_path;
                 filesystem_path = mount_resolve(ctx->arena, mounts, asker, name);
-                kind = ignore_kind(who, test_path, filesystem_path, argument_kind, out);
+                kind = ignore_kind(who, opts->test_path, filesystem_path, argument_kind, out);
                 break;
 
             case PATH_KEY_FILESYSTEM:
@@ -780,7 +779,7 @@ static error_t ignore_test(
         }
 
         output_info(
-            out, OUTPUT_VERBOSE, "%sMatching '%s' as '%s'%s", who, test_path,
+            out, OUTPUT_VERBOSE, "%sMatching '%s' as '%s'%s", who, opts->test_path,
             label_tail(name), kind == PATH_KIND_DIRECTORY ? " (a directory)" : ""
         );
 
@@ -853,7 +852,7 @@ error_t cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         }
 
         case IGNORE_MODE_TEST:
-            return ignore_test(ctx, opts->test_path, opts->profile);
+            return ignore_test(ctx, opts);
 
         case IGNORE_MODE_EDIT:
         case IGNORE_MODE_MODIFY:

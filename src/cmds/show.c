@@ -17,7 +17,6 @@
 #include "base/refspec.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
-#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -70,22 +69,22 @@ static error_t show_write(const buffer_t *content) {
 }
 
 /**
- * Print a blob's bytes under the header of the claim the branch makes there
+ * Print a blob's bytes under the header of the claim the profile makes there
  *
  * Uses content layer for transparent decryption. Password prompt only happens
  * if file is encrypted and key is not cached.
  *
- * The header is the claim as the branch decodes it (core/branch.h branch_find,
- * by core/branch.c branch_decode_blob's link rule): the type is the tree's word,
- * the mode prints only where the claim makes one — never on a link, which carries
- * none — and ownership prints for every kind that holds it — a link's entry exists
- * to carry exactly that. Symlinks show their target, binary files their size
- * without dumping content, encrypted files that decryption occurred.
+ * The header is the claim as the profile decodes it (core/profiles.h profile_find,
+ * by core/profiles.c profile_decode_blob's link rule): the type is the tree's
+ * word, the mode prints only where the claim makes one — never on a link, which
+ * carries none — and ownership prints for every kind that holds it — a link's
+ * entry exists to carry exactly that. Symlinks show their target, binary files
+ * their size without dumping content, encrypted files that decryption occurred.
  */
 static error_t show_print_blob(
     const dotta_ctx_t *ctx,
     const char *profile,
-    const branch_claim_t *claim
+    const profile_claim_t *claim
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(profile);
@@ -142,7 +141,7 @@ static error_t show_print_blob(
         output_endline(out, OUTPUT_NORMAL);
     }
 
-    /* The claim's own lines, by the branch's rule: a mode where the claim makes
+    /* The claim's own lines, by the profile's rule: a mode where the claim makes
      * one, which the decode never lets a link do; ownership for every kind that
      * holds it, as chown(1) spells it — a half the claim does not name is no
      * unknown, the owner being the invoker's and the group no change. */
@@ -241,7 +240,7 @@ static error_t show_source(
  *
  * The commit's own header lines, from the handle show_source kept. A caption
  * stands over what it captions, so this is said only once the verb has an answer:
- * an argument the branch refuses by its own noun — a label, a root with no claim
+ * an argument the profile refuses by its own noun — a label, a root with no claim
  * on it — leaves nothing of the commit on screen, and the usage under a refusal
  * that asks for a profile cannot be followed into a second refusal under a header.
  * Past that point the header is what says which tree the bytes, or the absence
@@ -287,66 +286,66 @@ static void show_provenance(output_t *out, const git_commit *commit) {
 }
 
 /**
- * Print one claim of a profile, from the branch the caller opened
+ * Print one claim of the profile the caller opened
  *
- * The name is asked of the branch (core/branch.h branch_holds), and answered
+ * The name is asked of the profile (core/profiles.h profile_holds), and answered
  * four ways. A blob is printed. A subtree and a gitlink are each refused by their
  * own noun. A directory claim the sheet alone holds — a tracked directory the
- * branch holds no blob beneath — is refused as the directory it is, because the
- * profile does hold it and "not found" would be the wrong word. Only a name neither
- * document holds is not found.
+ * profile holds no blob beneath — is refused as the directory it is, because
+ * the profile does hold it and "not found" would be the wrong word. Only a name
+ * neither document holds is not found.
  *
- * The blob's header is the claim the branch makes there (core/branch.h
- * branch_find), read tolerantly: a sheet that will not load costs the header
+ * The blob's header is the claim the profile makes there (core/profiles.h
+ * profile_find), read tolerantly: a sheet that will not load costs the header
  * its claim, never the bytes, and is said once.
  */
 static error_t show_file(
     const dotta_ctx_t *ctx,
-    branch_t *branch,
+    profile_t *profile,
     const char *storage_path
 ) {
-    /* What stands at the name, asked of the branch's two documents at once and
+    /* What stands at the name, asked of the profile's two documents at once and
      * strictly: a sheet that will not load refuses a name the tree is silent
      * about, in the loader's words — the profile may hold a directory there,
      * and "not found" would be a guess */
-    branch_held_t held;
-    error_t err = branch_holds(branch, storage_path, &held);
+    profile_held_t held;
+    error_t err = profile_holds(profile, storage_path, &held);
     if (err) return err;
 
     switch (held.kind) {
-        case BRANCH_HELD_FILE: {
-            /* The claim the branch makes at the name, for the header: decoded
+        case PROFILE_HELD_FILE: {
+            /* The claim the profile makes at the name, for the header: decoded
              * as the walk decodes it, read tolerantly. A blob stands there, so
              * a file claim does; a sheet that will not load leaves it at its
              * floors, and is said once, in the listing's words over the loader's
              * root (cmds/list.c list_files) */
-            const branch_claim_t *claim = NULL;
-            err = branch_find(
-                branch, BRANCH_READ_TOLERANT, PATH_KIND_FILE, storage_path, &claim
+            const profile_claim_t *claim = NULL;
+            err = profile_find(
+                profile, PROFILE_READ_TOLERANT, PATH_KIND_FILE, storage_path, &claim
             );
             if (err) return err;
 
-            err = branch_sheet_failure(branch);
+            err = profile_load_sheet(profile);
             if (err) {
                 output_warning(
                     ctx->out, OUTPUT_NORMAL,
                     "Failed to read what profile '%s' claims: %s",
-                    branch_profile(branch), error_message(error_root(err))
+                    profile_name(profile), error_message(error_root(err))
                 );
             }
 
-            return show_print_blob(ctx, branch_profile(branch), claim);
+            return show_print_blob(ctx, profile_name(profile), claim);
         }
 
-        case BRANCH_HELD_DIRECTORY:
-        case BRANCH_HELD_SUBMODULE:
+        case PROFILE_HELD_DIRECTORY:
+        case PROFILE_HELD_SUBMODULE:
             return error_create(
                 ERR_INVALID_ARG, "'%s' is %s; show prints one file's bytes",
-                storage_path, held.kind == BRANCH_HELD_DIRECTORY
+                storage_path, held.kind == PROFILE_HELD_DIRECTORY
                 ? "a directory" : "a submodule"
             );
 
-        case BRANCH_HELD_NOTHING:
+        case PROFILE_HELD_NOTHING:
             return error_create(ERR_NOT_FOUND, "File '%s' not found", storage_path);
     }
 
@@ -556,9 +555,8 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
     error_t err = NULL;
     git_tree *tree = NULL;
-    branch_t *branch = NULL;
+    profile_t *profile = NULL;
     git_commit *source = NULL;
-    const char *profile = opts->profile;
     const char *storage_path = NULL;
 
     /* Handle SHOW_COMMIT mode */
@@ -572,11 +570,12 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
          * one answer in its place (core/scope.h scope_resolve_commit). Either
          * way the printer below is handed a commit and a profile, and nothing
          * it does is part of the search. */
-        if (profile) {
-            err = profile_require(repo, profile);
+        const char *name = opts->profile;
+        if (name) {
+            err = profile_require(repo, name);
             if (err) goto cleanup;
 
-            err = revision_load(repo, profile, opts->commit, &source);
+            err = revision_load(repo, name, opts->commit, &source);
             if (err) goto cleanup;
         } else {
             string_array_t profiles;
@@ -596,12 +595,12 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             }
 
             err = scope_resolve_commit(
-                repo, &profiles, NULL, opts->commit, &source, &profile
+                repo, &profiles, NULL, opts->commit, &source, &name
             );
             if (err) goto cleanup;
         }
 
-        err = show_commit(repo, source, profile, out);
+        err = show_commit(repo, source, name, out);
         goto cleanup;
     }
 
@@ -617,36 +616,36 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     err = path_input_resolve(opts->file_path, ctx->arena, &arg);
     if (err) goto cleanup;
 
-    if (profile) {
+    if (opts->profile) {
         /* The profile named must be here before its tree is opened. Then the
          * tree the profile selected — its tip, or the commit's — which is both
          * where the claim is looked for and what its bytes come from, so a name
          * that changed since the commit is found as of then (core/manifest.h
          * manifest_claim_name). */
-        err = profile_require(repo, profile);
+        err = profile_require(repo, opts->profile);
         if (err) goto cleanup;
 
-        err = show_source(ctx, profile, opts->commit, &tree, &source);
+        err = show_source(ctx, opts->profile, opts->commit, &tree, &source);
         if (err) goto cleanup;
 
-        /* The profile's branch over that tree, held beside it */
-        branch = branch_open(repo, profile, tree);
+        /* The profile at that tree, held beside it */
+        profile = profile_open(opts->profile, tree);
 
         /* The two keys, and each names its own read. A name the user typed is
-         * Git's key already, so show_file's own question of the branch
-         * (core/branch.h branch_holds) is what decides whether the profile holds
-         * it; a path is the branch's to name. */
+         * Git's key already, so show_file's own question of the profile
+         * (core/profiles.h profile_holds) is what decides whether the profile
+         * holds it; a path is the profile's to name. */
         if (arg.key == PATH_KEY_STORAGE) {
             storage_path = arg.storage_path;
         } else {
-            /* The branch's own view of that tree, strict about its sheet, names
+            /* The profile's own view of that tree, strict about its sheet, names
              * the path: the claim standing there, else the name one would take */
             manifest_t *view = NULL;
-            err = manifest_build_branch(branch, mounts, ctx->arena, &view);
+            err = manifest_build_profile(profile, mounts, ctx->arena, &view);
             if (err) goto cleanup;
 
             storage_path = manifest_claim_name(
-                ctx->arena, view, profile, arg.filesystem_path
+                ctx->arena, view, opts->profile, arg.filesystem_path
             );
         }
 
@@ -656,7 +655,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             show_provenance(out, source);
         }
 
-        err = show_file(ctx, branch, storage_path);
+        err = show_file(ctx, profile, storage_path);
         goto cleanup;
     }
 
@@ -692,13 +691,12 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
     /* The winner names both halves: whose claim stands there, and what it is
      * called — the row is that profile's own, so there is nothing to look up
-     * again in its branch. */
-    profile = row->profile;
+     * again in the profile. */
     storage_path = row->storage_path;
 
     output_print(
         out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
-        profile
+        row->profile
     );
     output_print(
         out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
@@ -707,17 +705,17 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
     /* The tip, which this arm is always about: the view is HEAD's, so the row
      * that answered names no commit and there is no provenance to announce. The
-     * winner's branch over it, held beside it as the -p arm holds its own, so
-     * either arm's header is the claim that branch decodes. */
-    err = show_source(ctx, profile, NULL, &tree, &source);
+     * winning profile at it, held beside it as the -p arm holds its own, so either
+     * arm's header is the claim that profile decodes. */
+    err = show_source(ctx, row->profile, NULL, &tree, &source);
     if (err) goto cleanup;
-    branch = branch_open(repo, profile, tree);
+    profile = profile_open(row->profile, tree);
 
-    err = show_file(ctx, branch, storage_path);
+    err = show_file(ctx, profile, storage_path);
 
 cleanup:
     git_commit_free(source);
-    branch_free(branch);
+    profile_free(profile);
     git_tree_free(tree);
 
     return err;
@@ -825,7 +823,7 @@ static error_t show_post_parse(
 
 /**
  * What can stand at the cursor, by the shapes show_post_parse reads. First: a
- * file of any branch as `profile:path` — bare once -p pins one — or a commit.
+ * file of any profile as `profile:path` — bare once -p pins one — or a commit.
  * After one positional, the grammar decides by the next token whether it was a
  * profile (`<profile> <file>`) or a file (`<file> <commit>`), so both are offered
  * — the files of the profile it pins, and that profile's history. After two:

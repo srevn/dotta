@@ -1,7 +1,7 @@
 /**
  * apply.h - Apply profiles to filesystem
  *
- * Deploys files from profile branches to the filesystem.
+ * Deploys files from profiles to the filesystem.
  */
 
 #ifndef DOTTA_CMD_APPLY_H

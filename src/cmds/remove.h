@@ -2,7 +2,7 @@
  * remove.h - Remove files from profiles or delete profiles
  *
  * Provides two main operations:
- * 1. Remove specific files/directories from a profile branch
+ * 1. Remove specific files/directories from a profile
  * 2. Delete an entire profile branch
  *
  * Architectural principle: This command modifies the Git repository only.

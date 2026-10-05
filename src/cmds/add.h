@@ -45,7 +45,7 @@ typedef struct {
  * nothing and says so.
  *
  * What the walk lists: every regular file and symlink it finds, and every directory
- * it enters. A special file — a FIFO, a socket, a device — is no entry a branch
+ * it enters. A special file — a FIFO, a socket, a device — is no entry a profile
  * can hold, so a walked one is skipped and a named one refused by its noun. A
  * path the walk cannot look at — a directory that will not list, an entry past
  * the kernel's PATH_MAX — refuses the command, since collection precedes capture
@@ -107,7 +107,7 @@ typedef struct {
  * one has no entry — and a blob leaves no room for a directory at its name or
  * for anything beneath it. Every path is tested against both as it is listed —
  * the tree as this command has chosen it so far (sys/stage.h, the admission)
- * and the branch's claims — so a walked entry the commit has no room for, or
+ * and the profile's claims — so a walked entry the commit has no room for, or
  * whose name Git will not hold, is skipped with its subtree and a named one is
  * refused; and with the selection complete, before a byte is read, every directory
  * the commit will claim is read against every name its tree will hold. That covers
@@ -146,7 +146,7 @@ typedef struct {
  * are Git's move past the capture, which the next load reads as [stale] — never
  * as bytes dotta put there. The record phase is not the command: a failure leaves
  * Git's commit standing, leaves the record exactly as it was, says so, and names
- * the retry — `--force`, over a branch that now holds the name, because an apply
+ * the retry — `--force`, over a profile that now holds the name, because an apply
  * re-earns the event for a file it adopts and never for a directory.
  *
  * **-n previews the add and writes nothing of dotta's.** Every decision this

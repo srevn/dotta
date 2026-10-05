@@ -25,7 +25,6 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "base/string.h"
-#include "core/branch.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -455,34 +454,34 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * place. A profile that needs a target is enabled only with one, and clone
      * cannot take one (enable's --target names a single profile): it is left
      * fetched and disabled, named here with the command that enables it. The
-     * answer is the branch's own — the labels its walk shows, asked of a table
+     * answer is the profile's own — the labels its walk shows, asked of a table
      * with no binding (core/profiles.h profile_needs_target) — and its failures
      * are the clone's: a tree Git cannot read, or a sheet this build cannot,
      * fails the clone whole and rolls the store back, as the build in
-     * initialize_state did for a portable branch and now does for every one. */
+     * initialize_state did for a portable profile and now does for every one. */
     string_array_t to_enable;
     string_array_init(&to_enable, ctx->arena);
     for (size_t i = 0; i < fetched_profiles.count; i++) {
-        const char *profile = fetched_profiles.entries[i];
-        branch_t *branch = NULL;
+        const char *name = fetched_profiles.entries[i];
+        profile_t *profile = NULL;
         bool needs_target = false;
-        err = branch_load(repo, profile, &branch);
-        if (!err) err = profile_needs_target(branch, &needs_target);
-        branch_free(branch);
+        err = profile_load(repo, name, &profile);
+        if (!err) err = profile_needs_target(profile, &needs_target);
+        profile_free(profile);
         if (err) goto cleanup;
         if (needs_target) {
             output_warning(
                 out, OUTPUT_NORMAL,
                 "Profile '%s' holds custom/ paths and needs a target here; "
-                "not enabled", profile
+                "not enabled", name
             );
             output_hint(
                 out, OUTPUT_NORMAL,
-                "Run 'dotta profile enable %s --target /path' after setup", profile
+                "Run 'dotta profile enable %s --target /path' after setup", name
             );
             continue;
         }
-        string_array_push(&to_enable, profile);
+        string_array_push(&to_enable, name);
     }
 
     if (fetched_profiles.count == 0) {

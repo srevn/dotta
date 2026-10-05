@@ -40,8 +40,8 @@ typedef struct {
 /**
  * Show file content or commit details
  *
- * In SHOW_FILE mode, displays the content of a file from a profile branch. In
- * SHOW_COMMIT mode, displays a commit with its diff.
+ * In SHOW_FILE mode, displays the content of a file from a profile. In SHOW_COMMIT
+ * mode, displays a commit with its diff.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

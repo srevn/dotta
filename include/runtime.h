@@ -231,7 +231,7 @@ typedef enum dotta_verbosity {
  * table it lends and no verb here (`core/manifest.h` `manifest_name`). Requires
  * `state`. A command declares it when it asks one of the table's verbs: where a
  * claim stands (`mount_resolve`: diff, ignore, remove, revert, update), a view
- * of one branch placed by it (`manifest_build_branch`: diff, export, ignore,
+ * of one profile placed by it (`manifest_build_profile`: diff, export, ignore,
  * list, remove, revert, show), or a claim's ancestors climbed
  * (`metadata_capture_ancestors`: update). Reading a CLI path is not one of those
  * verbs: an argument's key is the normalizer's own string and no root's spelling
@@ -306,8 +306,8 @@ typedef enum dotta_verbosity {
  *
  * Who does not: a command for which the view is incidental (one lookup or one
  * count on one of its paths — `show`, `list`, `key status`, `completion`, `export`
- * and `ignore --test`, the last two reading one branch's own view where the enabled
- * set is not the subject, and `ignore`'s other four surfaces building
+ * and `ignore --test`, the last two reading one profile's own view where the
+ * enabled set is not the subject, and `ignore`'s other four surfaces building
  * nothing) or that must run on a set the build refuses (`profile disable`;
  * `remove` — its warning bit and its record phase each build a view where needed
  * and degrade when the build fails) builds its own where it needs it, with the
@@ -437,7 +437,7 @@ typedef struct dotta_run {
  *     base/hashmap.h). A function whose answer is memory takes the arena its
  *     answer lives in — first, or just before the out parameter it answers through
  *     (core/manifest.h manifest_build) — unless a handle it reads lends the answer
- *     from its own (core/branch.h branch_find); a callee that fills a caller's
+ *     from its own (core/profiles.h profile_find); a callee that fills a caller's
  *     container takes none.
  *
  *       - The process's. `main`'s, made before the command's line is parsed and
@@ -490,7 +490,7 @@ typedef struct dotta_run {
  *         a run's own lists (`utils/bootstrap.c` bootstrap_fire), a fetch's
  *         refspecs (`sys/gitops.c` gitops_fetch_branches), a diff's attribution
  *         index (`core/manifest.c` manifest_diff), the table with no binding a
- *         branch's need of a target is asked of (`core/profiles.c`
+ *         profile's need of a target is asked of (`core/profiles.c`
  *         profile_needs_target), a listing read to decide (`sys/filesystem.c`
  *         fs_remove_empty_dir, `sys/upstream.c` upstream_ensure_tracking_branch,
  *         `infra/epoch.c` epoch_walk), a printer's sections (`cmds/status.c`
@@ -499,7 +499,8 @@ typedef struct dotta_run {
  *
  *       - A handle's own. Made by its opener and freed by its closer: the sheet
  *         (core/metadata.h), a printer's list (base/output.h output_list_t), a
- *         branch's answers (core/branch.h branch_find).
+ *         profile at a tree (core/profiles.h profile_open): itself, its name
+ *         and the claims it lends.
  *
  *   - The heap, for what dies before any scope does: a payload sized by its data
  *     (base/buffer.h — a file's bytes, a blob's, a diff's text), freed with the

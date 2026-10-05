@@ -719,11 +719,11 @@ static error_t capture_ancestor(
      * the walk's own word about a directory the profile tracks, and nothing derived
      * refreshes or retires it. A FILE item is the tree's business: a path is a
      * blob or a tree, so an item of that kind at a directory's key is stale
-     * metadata, and the tree is its authority — the branch reads a FILE item
+     * metadata, and the tree is its authority — the profile reads a FILE item
      * only at a blob, one its walk meets or the one a point question is asked
-     * (core/branch.c branch_step, branch_find), and a capture at that key replaces
-     * it. The prune is no authority over it: it takes derivations, and this item
-     * is not one. */
+     * (core/profiles.c profile_step, profile_find), and a capture at that key
+     * replaces it. The prune is no authority over it: it takes derivations, and
+     * this item is not one. */
     const metadata_item_t *held = metadata_lookup(metadata, storage_path);
     if (held && (held->kind != PATH_KIND_DIRECTORY || held->tracked)) {
         return NULL;
@@ -1013,7 +1013,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
          * failed, so printing that pointer prints the whole remainder of the
          * document — a 50 KB sheet with an early syntax error yields a 50 KB
          * message. The offset is the fact; the excerpt beside it is a courtesy
-         * and is bounded, a sheet being as long as a branch is wide.
+         * and is bounded, a sheet being as long as a profile is wide.
          *
          * The pointer is inside json_str, so the subtraction is defined: the
          * parse that just failed set the position from the value it was handed

@@ -22,7 +22,6 @@
 #include "base/output.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
-#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -90,9 +89,9 @@ static void print_upstream_state(
  * One verbose profile line's facts
  *
  * Read off the branch's tip before anything prints: what it holds and what that
- * weighs, whose two phrases set columns measured across every branch, the way
+ * weighs, whose two phrases set columns measured across every profile, the way
  * the name column already is, and its last commit. One tip, read once, so the
- * line is one snapshot's. Empty phrases are a branch whose count or size could
+ * line is one snapshot's. Empty phrases are a profile whose count or size could
  * not be read, a commit with no summary one whose tip could not — its line still
  * prints, without them.
  *
@@ -102,11 +101,11 @@ typedef struct {
     char counts[64];
     char size[32];
     commit_info_t commit;    /* the tip's; no summary where it did not read */
-} list_profile_line_t;
+} list_line_t;
 
 /**
- * What a branch's files weigh, folded over its walk: the handle the headers are
- * read through, and the sum so far
+ * What a profile's files weigh, folded over its walk: the object database the
+ * headers are read through, and the sum so far
  *
  * The size a profile line prints, and the fold of exactly the rows the file listing
  * prints one by one (list_files): the same blobs, each the bytes its file stands
@@ -130,7 +129,7 @@ typedef struct {
  * @return NULL, or the failure that ends the walk: a header that will not read,
  *         or a total past what a size_t holds
  */
-static error_t list_size_claim(const branch_claim_t *claim, void *payload) {
+static error_t list_size_claim(const profile_claim_t *claim, void *payload) {
     list_size_t *size = payload;
 
     /* A directory claim holds no bytes of its own */
@@ -143,9 +142,9 @@ static error_t list_size_claim(const branch_claim_t *claim, void *payload) {
 
     /* The bytes the file stands for, not the bytes the store holds: a sealed
      * blob carries the cipher's framing and its file does not, and the file is
-     * what a screen names (197 R5). The stamp is the branch's own claim as it
+     * what a screen names (197 R5). The stamp is the profile's own claim as it
      * decodes it, never on a link, whose bytes are its target and never a seal
-     * (core/branch.c branch_decode_blob) — the same subtraction, off the same
+     * (core/profiles.c profile_decode_blob) — the same subtraction, off the same
      * claim, the file listing's rows make (list_files) */
     bytes = content_estimated_plaintext_size(bytes, claim->encrypted);
 
@@ -179,11 +178,11 @@ static error_t list_profiles(
     bool verbose = output_is_verbose(out);
 
     /* Every profile here */
-    string_array_t branches;
-    error_t err = gitops_list_branches(repo, ctx->arena, &branches);
+    string_array_t profiles;
+    error_t err = gitops_list_branches(repo, ctx->arena, &profiles);
     if (err) return err;
 
-    if (branches.count == 0) {
+    if (profiles.count == 0) {
         output_info(out, OUTPUT_NORMAL, "No profiles found");
         return NULL;
     }
@@ -203,12 +202,12 @@ static error_t list_profiles(
         }
     }
 
-    /* Calculate max branch name length for column alignment */
+    /* Calculate max profile name length for column alignment */
     size_t max_name_len = 0;
     if (verbose || show_remote) {
-        for (size_t i = 0; i < branches.count; i++) {
-            const char *bname = branches.entries[i];
-            size_t len = strlen(bname);
+        for (size_t i = 0; i < profiles.count; i++) {
+            const char *name = profiles.entries[i];
+            size_t len = strlen(name);
             if (len > max_name_len) {
                 max_name_len = len;
             }
@@ -221,33 +220,33 @@ static error_t list_profiles(
         }
     }
 
-    /* Read what each branch holds and what that weighs, and measure the columns
-     * they need. Both are as wide as the branches make them — the counts phrase
-     * names only the kinds a branch actually has, and a size runs from "0 B" to
-     * four digits and a unit — so neither is guessed. The size, a header read
+    /* Read what each profile holds and what that weighs, and measure the columns
+     * they need. Both are as wide as the profiles make them — the counts phrase
+     * names only the kinds a profile actually has, and a size runs from "0 B"
+     * to four digits and a unit — so neither is guessed. The size, a header read
      * per file, is the expensive part of a verbose line, and runs here rather
-     * than again at render time; a branch that cannot be read is warned about
+     * than again at render time; a profile that cannot be read is warned about
      * and left with empty phrases, in the words the other screen of this file
      * uses for the count's refusal: what failed is the line's account of what
-     * the branch holds, however far down the read it failed. */
-    list_profile_line_t *lines = NULL;
+     * the profile holds, however far down the read it failed. */
+    list_line_t *lines = NULL;
     size_t max_counts_len = 0;
     size_t max_size_len = 0;
     if (verbose) {
-        lines = arena_calloc(ctx->arena, branches.count, sizeof(*lines));
+        lines = arena_calloc(ctx->arena, profiles.count, sizeof(*lines));
 
-        for (size_t i = 0; i < branches.count; i++) {
-            const char *bname = branches.entries[i];
+        for (size_t i = 0; i < profiles.count; i++) {
+            const char *name = profiles.entries[i];
 
             /* The branch read once, at its tip: what it holds and its last commit
              * are that one commit's. A tip that will not read leaves the line
              * neither, its error warned and dropped, one per such branch. */
             git_commit *tip = NULL;
-            err = gitops_load_branch_commit(repo, bname, &tip);
+            err = gitops_load_branch_commit(repo, name, &tip);
             if (err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
-                    bname, error_message(error_root(err))
+                    name, error_message(error_root(err))
                 );
                 continue;
             }
@@ -255,33 +254,34 @@ static error_t list_profiles(
             /* Its last commit, kept for the line's tail */
             lines[i].commit = stats_commit_info(ctx->arena, tip);
 
-            /* What it holds, counted over the same commit's tree (core/branch.h
-             * branch_count); a tree or a count that will not read leaves the
+            /* What it holds, counted over the same commit's tree (core/profiles.h
+             * profile_counts); a tree or a count that will not read leaves the
              * line its commit, its error warned and dropped */
             git_tree *tree = NULL;
             int rc = git_commit_tree(&tree, tip);
             git_commit_free(tip);
-            branch_t *branch = rc < 0 ? NULL : branch_open(repo, bname, tree);
-            branch_count_t count = { 0 };
+            profile_t *profile = rc < 0 ? NULL : profile_open(name, tree);
+            profile_counts_t count = { 0 };
             err = rc < 0 ? error_git(rc, "Cannot read the tip's tree")
-                         : branch_count(branch, &count);
+                         : profile_counts(profile, &count);
 
-            /* And what that weighs, folded over the same branch through one handle
-             * on the object database (list_size_claim): the line's two phrases
-             * are one snapshot's, so a size that will not read leaves it neither */
+            /* And what that weighs, folded over the same profile through one
+             * handle on the object database (list_size_claim): the line's two
+             * phrases are one snapshot's, so a size that will not read leaves
+             * it neither */
             list_size_t size = { 0 };
             if (!err) {
                 rc = git_repository_odb(&size.odb, repo);
                 err = rc < 0 ? error_git(rc, "Cannot open the object database")
-                             : branch_walk(branch, BRANCH_READ_STRICT, list_size_claim, &size);
+                             : profile_walk(profile, PROFILE_READ_STRICT, list_size_claim, &size);
             }
             git_odb_free(size.odb);
-            branch_free(branch);
+            profile_free(profile);
             git_tree_free(tree);
             if (err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
-                    bname, error_message(error_root(err))
+                    name, error_message(error_root(err))
                 );
                 continue;
             }
@@ -307,8 +307,8 @@ static error_t list_profiles(
     output_section(out, OUTPUT_NORMAL, "Available profiles");
 
     /* List profiles */
-    for (size_t i = 0; i < branches.count; i++) {
-        const char *profile = branches.entries[i];
+    for (size_t i = 0; i < profiles.count; i++) {
+        const char *profile = profiles.entries[i];
 
         bool is_enabled = state_enabled(state, profile);
         const char *indicator = is_enabled ? "* " : "  ";
@@ -328,7 +328,7 @@ static error_t list_profiles(
             indicator, (int) max_name_len, profile
         );
 
-        /* Verbose: what the branch holds, in the column measured for it */
+        /* Verbose: what the profile holds, in the column measured for it */
         if (lines && lines[i].counts[0] != '\0') {
             output_print(
                 out, OUTPUT_VERBOSE, " %-*s %*s",
@@ -397,10 +397,10 @@ static error_t list_profiles(
  * A file the file listing prints: its name, and what a verbose row reads off
  * its claim
  *
- * Copied out of the claim the walk lends (core/branch.h branch_visit_fn): a row
- * outlives the visit that showed it, and the walk joins each blob's name in a
- * buffer the next entry takes. The blob and the stamp are the claim's, as the
- * branch decodes them, so no row asks the tree again.
+ * Copied out of the claim the walk lends (core/profiles.h profile_visit_fn): a
+ * row outlives the visit that showed it, and the walk joins each blob's name in
+ * a buffer the next entry takes. The blob and the stamp are the claim's, as the
+ * profile decodes them, so no row asks the tree again.
  */
 typedef struct {
     const char *storage_path;   /* The name, in the listing's arena */
@@ -409,7 +409,7 @@ typedef struct {
 } list_file_t;
 
 /**
- * The file listing's walk: every file claim the branch shows, collected
+ * The file listing's walk: every file claim the profile shows, collected
  */
 typedef struct {
     arena_t *arena;             /* The listing's: the rows, and each row's name */
@@ -425,11 +425,11 @@ typedef struct {
  * @param payload The walk (list_walk_t)
  * @return NULL: a collection fails nowhere
  */
-static error_t list_collect_file(const branch_claim_t *claim, void *payload) {
+static error_t list_collect_file(const profile_claim_t *claim, void *payload) {
     list_walk_t *walk = payload;
 
     /* A directory claim is no row: it has no size and no history of its own,
-     * and what else the branch holds is the count's to say (the no-files arm,
+     * and what else the profile holds is the count's to say (the no-files arm,
      * and level 1's line) */
     if (claim->type == PATH_TYPE_DIRECTORY) return NULL;
 
@@ -477,11 +477,11 @@ static error_t list_files(
 
     /* One branch read serves the whole listing: its tip, read once, and every
      * fact the listing prints taken off that commit — the rows and the count
-     * (what else the branch holds, when it holds no file) from the branch over
-     * its tree, the history behind each row from its id — so a branch another
-     * writer moves under the listing lends no row another snapshot's history.
-     * The id is kept and the commit let go: the tree and the id are all the listing
-     * reads of it. */
+     * (what else the profile holds, when it holds no file) from the profile at
+     * that commit's tree, the history behind each row from its id — so a branch
+     * another writer moves under the listing lends no row another snapshot's
+     * history. The id is kept and the commit let go: the tree and the id are
+     * all the listing reads of it. */
     error_t err = profile_require(repo, opts->profile);
     if (err) return err;
 
@@ -495,44 +495,44 @@ static error_t list_files(
     int rc = git_commit_tree(&tree, tip);
     git_commit_free(tip);
     if (rc < 0) {
-        /* In the words the walk below says of a tree it cannot read (core/branch.h
-         * branch_walk): the listing says one thing of its tree */
+        /* In the words the walk below says of a tree it cannot read
+         * (core/profiles.h profile_walk): the listing says one thing of its tree */
         return error_git(rc, "Cannot read profile '%s'", opts->profile);
     }
 
-    /* The profile's branch over that tree, held beside it, and every file it
-     * claims, collected in one walk: each row's name, blob and stamp as the branch
-     * decodes them, so no row asks the tree again (list_collect_file). Read
-     * tolerantly — the listing is the tree's and stands, the marks are the sheet's
-     * and do not — so a sheet that will not load costs the rows their marks alone,
-     * said where the marks would print. What the walk cannot read of the tree
-     * is its failure, in the branch's words. */
-    branch_t *branch = branch_open(repo, opts->profile, tree);
+    /* The profile at that tree, held beside it, and every file it claims, collected
+     * in one walk: each row's name, blob and stamp as the profile decodes them,
+     * so no row asks the tree again (list_collect_file). Read tolerantly — the
+     * listing is the tree's and stands, the marks are the sheet's and do not —
+     * so a sheet that will not load costs the rows their marks alone, said where
+     * the marks would print. What the walk cannot read of the tree is its failure,
+     * in the profile's words. */
+    profile_t *profile = profile_open(opts->profile, tree);
     list_walk_t walk = { .arena = ctx->arena };
-    err = branch_walk(branch, BRANCH_READ_TOLERANT, list_collect_file, &walk);
+    err = profile_walk(profile, PROFILE_READ_TOLERANT, list_collect_file, &walk);
     if (err) goto cleanup;
 
     if (walk.file_count == 0) {
         /* Directory claims are not listed — no size, no history — but the count
-         * of them keeps "nothing" honest for a branch whose whole content is
-         * its claims. It is what the branch holds less the files, so it comes
-         * from the one producer of that number (core/branch.h branch_count),
-         * over the branch the rows were walked from: an ancestor claim excluded
+         * of them keeps "nothing" honest for a profile whose whole content is
+         * its claims. It is what the profile holds less the files, so it comes
+         * from the one producer of that number (core/profiles.h profile_counts),
+         * over the profile the rows were walked from: an ancestor claim excluded
          * there, the tree-versus-blob rule asked there, and the sheet the walk
          * read, parsed once for both.
          *
-         * A branch that will not read says so. Silence would spell an unreadable
-         * sheet exactly as it spells an empty branch, and the count exists to
+         * A profile that will not read says so. Silence would spell an unreadable
+         * sheet exactly as it spells an empty profile, and the count exists to
          * tell those apart. The sheet is the whole of what can refuse here: the
          * count walks the tree the walk above read whole, through the same visitor
-         * (core/branch.c branch_step), and reads strictly the sheet the walk
-         * above read tolerantly, its failure the one the handle kept (core/branch.h
-         * branch_sheet_failure). Which is why the refusal is rendered from its
-         * root — between it and here the loader names the profile once more and
-         * nothing else, and this line names it already (base/error.h
+         * (core/profiles.c profile_step), and reads strictly the sheet the walk
+         * above read tolerantly, its failure the one the handle kept
+         * (core/profiles.h profile_load_sheet). Which is why the refusal is
+         * rendered from its root — between it and here the loader names the profile
+         * once more and nothing else, and this line names it already (base/error.h
          * error_root). */
-        branch_count_t count = { 0 };
-        err = branch_count(branch, &count);
+        profile_counts_t count = { 0 };
+        err = profile_counts(profile, &count);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
@@ -578,13 +578,13 @@ static error_t list_files(
      * sizes the stored blobs' own — the listing itself is the tree's and stands
      * either way — so it is warned about once, before the rows that print the
      * marks, and rendered from the root, where this document's refusals say what
-     * is wrong with it. The count's sentence (list_profiles, and the empty-branch
+     * is wrong with it. The count's sentence (list_profiles, and the empty-profile
      * arm above) names what it failed to do; this one names what it failed to
      * read, which is the other question about the same document. */
     file_commit_map_t *commit_map = NULL;
     size_t max_path_len = 0;
     if (verbose) {
-        err = branch_sheet_failure(branch);
+        err = profile_load_sheet(profile);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to read what profile '%s' claims: %s",
@@ -647,14 +647,14 @@ static error_t list_files(
 
         /* Verbose: Add size and last commit */
         if (verbose) {
-            /* The stamp the branch's own claim makes of this file, as the branch
+            /* The stamp the profile's own claim makes of this file, as the profile
              * decodes it: never onto a link, whose bytes are its target and never
-             * a seal (core/branch.c branch_decode_blob's link rule). A mark and
-             * a number are a screen, so the claim answers and no content blob
-             * is opened — the store made the stamp true for every file it sealed
-             * (infra/content.h content_capture_file), and a hand-written one is
-             * the sheet's word, honoured here as its mode and its owner are on
-             * every other screen (core/metadata.h metadata_item_t). */
+             * a seal (core/profiles.c profile_decode_blob's link rule). A mark
+             * and a number are a screen, so the claim answers and no content
+             * blob is opened — the store made the stamp true for every file it
+             * sealed (infra/content.h content_capture_file), and a hand-written
+             * one is the sheet's word, honoured here as its mode and its owner
+             * are on every other screen (core/metadata.h metadata_item_t). */
             if (file->encrypted) {
                 output_print(out, OUTPUT_VERBOSE, "  {yellow}[E]{reset} ");
             } else {
@@ -732,7 +732,7 @@ static error_t list_files(
     }
 
 cleanup:
-    branch_free(branch);
+    profile_free(profile);
     git_tree_free(tree);
 
     return err;
@@ -778,25 +778,25 @@ static error_t list_file_history(
 
     /* The claim to list: the profile and the storage path, from the argument.
      * The file need not exist on disk. */
-    const char *profile = opts->profile;
+    const char *name = opts->profile;
     const char *storage_path = NULL;
     error_t err = NULL;
 
     /* The argument first, above the profile question and above anything read
      * under either: reading one asks no topology (infra/path.h), so every refusal
-     * it earns is said before a branch is opened or a view built. Read once for
-     * both arms, which differ in where each key's answer comes from and not in
-     * which keys they take. */
+     * it earns is said before a profile is opened or a view built. Read once
+     * for both arms, which differ in where each key's answer comes from and not
+     * in which keys they take. */
     path_input_t arg;
     err = path_input_resolve(opts->file_path, ctx->arena, &arg);
     if (err) return err;
 
-    if (profile) {
+    if (name) {
         /* The profile named must be here before anything is read under it. Of
          * the two keys, a name the user typed is Git's key already, so the
          * pre-check below is what decides whether the profile holds it; a path
-         * is the branch's to name, at its tip (below). */
-        err = profile_require(repo, profile);
+         * is the profile's to name, at its tip (below). */
+        err = profile_require(repo, name);
         if (err) return err;
 
         if (arg.key == PATH_KEY_STORAGE) {
@@ -828,8 +828,8 @@ static error_t list_file_history(
         }
         /* The winner names both halves: whose claim stands there, and what it
          * is called — the row is that profile's own, so there is nothing to look
-         * up again in its branch. */
-        profile = row->profile;
+         * up again in the profile. */
+        name = row->profile;
         storage_path = row->storage_path;
     }
 
@@ -838,7 +838,7 @@ static error_t list_file_history(
      * commit's, so a branch another writer moves meanwhile lends the history no
      * other snapshot. The id is kept and the commit let go. */
     git_commit *tip = NULL;
-    err = gitops_load_branch_commit(repo, profile, &tip);
+    err = gitops_load_branch_commit(repo, name, &tip);
     if (err) return err;
 
     git_oid tip_oid;
@@ -847,52 +847,52 @@ static error_t list_file_history(
     int rc = git_commit_tree(&tree, tip);
     git_commit_free(tip);
     if (rc < 0) {
-        return error_git(rc, "Cannot read profile '%s'", profile);
+        return error_git(rc, "Cannot read profile '%s'", name);
     }
 
-    /* The profile's branch over the tip's tree, held beside it */
-    branch_t *branch = branch_open(repo, profile, tree);
+    /* The profile at the tip's tree, held beside it */
+    profile_t *profile = profile_open(name, tree);
 
-    /* A path under a named profile, named by the branch's own view of that tip
+    /* A path under a named profile, named by the profile's own view of that tip
      * (core/manifest.h manifest_claim_name) */
     if (opts->profile && arg.key == PATH_KEY_FILESYSTEM) {
         manifest_t *view = NULL;
-        err = manifest_build_branch(branch, mounts, ctx->arena, &view);
+        err = manifest_build_profile(profile, mounts, ctx->arena, &view);
         if (!err) {
             storage_path = manifest_claim_name(
-                ctx->arena, view, profile, arg.filesystem_path
+                ctx->arena, view, name, arg.filesystem_path
             );
         }
     }
 
-    /* What the tip holds at the name, asked of the branch's two documents at
-     * once (core/branch.h branch_holds), and only a file has a history to list:
-     * a directory is refused as one whichever document holds it, a submodule as
-     * one, and a name neither holds is a deleted file — given its word before
-     * the O(total_commits) walk, which is the search's own. The branch reads
+    /* What the tip holds at the name, asked of the profile's two documents at
+     * once (core/profiles.h profile_holds), and only a file has a history to
+     * list: a directory is refused as one whichever document holds it, a submodule
+     * as one, and a name neither holds is a deleted file — given its word before
+     * the O(total_commits) walk, which is the search's own. The profile reads
      * its sheet only where the tip is silent, strictly, and a path's view above
      * has already read it. The history is one name's — a path's former names
      * under another contract are the user's to type, a prospective name proving
      * nothing about what the profile once held there. */
-    branch_held_t held;
-    if (!err) err = branch_holds(branch, storage_path, &held);
-    branch_free(branch);
+    profile_held_t held;
+    if (!err) err = profile_holds(profile, storage_path, &held);
+    profile_free(profile);
     git_tree_free(tree);
     if (err) return err;
 
     switch (held.kind) {
-        case BRANCH_HELD_FILE:
+        case PROFILE_HELD_FILE:
             break;
 
-        case BRANCH_HELD_DIRECTORY:
-        case BRANCH_HELD_SUBMODULE:
+        case PROFILE_HELD_DIRECTORY:
+        case PROFILE_HELD_SUBMODULE:
             return error_create(
                 ERR_INVALID_ARG, "'%s' is %s; list shows one file's history",
                 storage_path,
-                held.kind == BRANCH_HELD_DIRECTORY ? "a directory" : "a submodule"
+                held.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule"
             );
 
-        case BRANCH_HELD_NOTHING:
+        case PROFILE_HELD_NOTHING:
             output_info(out, OUTPUT_NORMAL, "File not in current tree, searching history...");
             break;
     }
@@ -905,20 +905,20 @@ static error_t list_file_history(
     if (err) {
         return error_wrap(
             err, "Failed to get history for '%s' in profile '%s'",
-            storage_path, profile
+            storage_path, name
         );
     }
     if (history.count == 0) {
         return error_create(
             ERR_NOT_FOUND, "No history found for '%s' in profile '%s'", storage_path,
-            profile
+            name
         );
     }
 
     /* Print header */
     output_section(
         out, OUTPUT_NORMAL, "History of '{cyan}%s{reset}' in profile '{cyan}%s{reset}'",
-        storage_path, profile
+        storage_path, name
     );
     output_gap(out, OUTPUT_NORMAL);
 
@@ -1083,10 +1083,9 @@ static error_t list_post_parse(
 
 /**
  * What can stand at the cursor, by the rule list_post_parse routes with: under
- * -p, a file of that profile's branch as the one positional; without, a local
- * profile or a file of the view first, then — under a profile — a file of its
- * branch, shadowed ones included. A path in the first slot was the file: nothing
- * follows it.
+ * -p, a file of that profile as the one positional; without, a local profile or
+ * a file of the view first, then — under a profile — a file of its own, shadowed
+ * ones included. A path in the first slot was the file: nothing follows it.
  */
 static args_want_t list_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out

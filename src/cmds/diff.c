@@ -16,8 +16,8 @@
 #include "base/refspec.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
-#include "core/branch.h"
 #include "core/manifest.h"
+#include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -595,10 +595,10 @@ static int print_diff_line_cb(
  * Compare a commit's view against the current filesystem
  *
  * The commit-to-workspace comparison: every file row of the view
- * manifest_build_branch computed from the profile's branch at the commit, compared
- * against what stands at its path now. A directory row — a claim of the tree's
- * own metadata.json — has no content to diff and is passed over by its type,
- * the test core/manifest.h leaves to a reader that wants files. Each row carries
+ * manifest_build_profile computed from the profile at the commit, compared against
+ * what stands at its path now. A directory row — a claim of the tree's own
+ * metadata.json — has no content to diff and is passed over by its type, the
+ * test core/manifest.h leaves to a reader that wants files. Each row carries
  * the profile whose claim it is, the commit's, and its blob opens under the row's
  * own binding.
  *
@@ -773,7 +773,7 @@ static error_t compare_tree_files_to_filesystem(
  * "matches nothing" (pathspec_entry_matches_at).
  *
  * One implementation serves both arms that compare against a view: the commit
- * arm's is the one manifest_build_branch computes from the branch at the commit,
+ * arm's is the one manifest_build_profile computes from the profile at the commit,
  * the workspace arm's the one the dispatcher built and the workspace joins.
  * Coverage is a question about the view alone — nothing here takes a look — so
  * each arm asks it before anything is compared: an entry is answered beside a
@@ -914,7 +914,7 @@ static error_t diff_commit_to_workspace(
 
     error_t err = NULL;
     git_commit *commit = NULL;
-    const char *profile = NULL;  /* borrowed from the enabled set */
+    const char *name = NULL;  /* borrowed from the enabled set */
     git_tree *tree = NULL;
 
     /* Step 1: Resolve commit to find which profile contains it. The search answers
@@ -922,7 +922,7 @@ static error_t diff_commit_to_workspace(
      * cancels the diff rather than let a later one answer in its place
      * (core/scope.h scope_resolve_commit). */
     err = scope_resolve_commit(
-        repo, scope_enabled(scope), filter, commit_ref, &commit, &profile
+        repo, scope_enabled(scope), filter, commit_ref, &commit, &name
     );
     if (err) goto cleanup;
 
@@ -935,7 +935,7 @@ static error_t diff_commit_to_workspace(
     if (searched->count > 1) {
         output_info(
             out, OUTPUT_NORMAL, "Note: comparing commit against profile '%s' only "
-            "(commit-to-workspace compares one profile at a time)", profile
+            "(commit-to-workspace compares one profile at a time)", name
         );
         output_gap(out, OUTPUT_NORMAL);
     }
@@ -946,7 +946,7 @@ static error_t diff_commit_to_workspace(
     );
     output_gap(out, OUTPUT_NORMAL);
 
-    print_commit_header(out, commit, profile);
+    print_commit_header(out, commit, name);
 
     /* Step 3: Get tree from THE HISTORICAL COMMIT (not HEAD!) — from the commit
      * in hand, the OID helper beside it being a second lookup of what is here. */
@@ -956,10 +956,10 @@ static error_t diff_commit_to_workspace(
         goto cleanup;
     }
 
-    /* Step 4: Build the historical view: the profile's branch over the commit's
-     * tree, built into a view and let go.
+    /* Step 4: Build the historical view: the profile at the commit's tree, built
+     * into a view and let go.
      *
-     * The tree's own claim sheet is the branch's to read (core/branch.h), so
+     * The tree's own claim sheet is the profile's to read (core/profiles.h), so
      * the historical rows carry the modes and stamps that commit claimed, and a
      * sheet that will not load refuses the diff instead of showing Git's defaults
      * as though nothing had been claimed.
@@ -967,9 +967,9 @@ static error_t diff_commit_to_workspace(
      * The view is allocated into the borrowed command arena; it outlives every
      * reader below, then lives until command end. */
     manifest_t *historical = NULL;
-    branch_t *branch = branch_open(repo, profile, tree);
-    err = manifest_build_branch(branch, mounts, arena, &historical);
-    branch_free(branch);
+    profile_t *profile = profile_open(name, tree);
+    err = manifest_build_profile(profile, mounts, arena, &historical);
+    profile_free(profile);
     if (err) goto cleanup;
 
     /* Step 5: The filter's coverage over the commit's view, answered before
@@ -1012,7 +1012,7 @@ cleanup:
  * The filter, and what a delta's path is resolved through — the profile the range
  * belongs to and this machine's table, under which a past tree's names are placed
  * where the binding stands now, as the commit-to-workspace arm places them
- * (manifest_build_branch).
+ * (manifest_build_profile).
  */
 typedef struct {
     const pathspec_t *filter;       /* never NULL: the callback is installed under a filter alone */

@@ -24,7 +24,6 @@
 #include "base/output.h"
 #include "base/string.h"
 #include "base/terminal.h"
-#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -58,8 +57,8 @@ typedef struct {
     const char *name;      /* Profile name, the listing's */
     const char *target;    /* The store's spelling, or text this session typed */
     bool enabled;          /* Selected for save; toggled by space, persisted by view_save */
-    bool needs_target;     /* A claim of the branch needs a binding (core/profiles.h) */
-    bool unreadable;       /* The branch would not read: the seed absorbed it, the row says so */
+    bool needs_target;     /* A claim of the profile needs a binding (core/profiles.h) */
+    bool unreadable;       /* The profile would not read: the seed absorbed it, the row says so */
 } item_t;
 
 typedef struct {
@@ -188,20 +187,20 @@ static error_t build_items(git_repository *repo, state_t *deploy_state, view_t *
 }
 
 /* Pass two, the target column of every row: the binding an enabled row holds
- * (its arrow), and whether its branch needs one (its mark, and the OFF→ON gate)
+ * (its arrow), and whether its profile needs one (its mark, and the OFF→ON gate)
  * — both read up front so a keystroke never reads Git: the gate is a field test,
  * where a lazy probe would be a tree read inside a raw-mode handler, visible
  * latency on the first space.
  *
  * The binding first, and it cannot fail: the row's target is the store's fact
- * whatever the branch says, so a branch that will not read keeps its arrow. It
- * borrows from state_target's row cache, whose lifetime ends at the next
+ * whatever the profile says, so a profile that will not read keeps its arrow.
+ * It borrows from state_target's row cache, whose lifetime ends at the next
  * state_enable/disable/reorder; save runs those much later, so the copy — the
  * view's arena's — crosses the boundary now.
  *
  * The need is absorbed, not propagated: the editor is the way out of an enabled
- * set the next load cannot build. A sheet this build refuses on one enabled branch
- * kills status; here SPACE disables the branch and `w` saves, plan_check building
+ * set the next load cannot build. A sheet this build refuses on one enabled profile
+ * kills status; here SPACE disables the profile and `w` saves, plan_check building
  * over the post-mutation set — the door tests/test-claims.sh pins for `profile
  * disable`, and a strict seed would close it. The row says what the seed could
  * not, and is not gated: we do not know, so we do not prompt. */
@@ -217,12 +216,12 @@ static void read_targets(git_repository *repo, state_t *deploy_state, view_t *vi
             it->target = arena_strdup(view->arena, bound);
         }
 
-        /* The need, absorbed (above), asked of the branch at its tip: the error
-         * is dropped, one per row whose branch will not read. */
-        branch_t *branch = NULL;
-        error_t err = branch_load(repo, it->name, &branch);
-        if (!err) err = profile_needs_target(branch, &it->needs_target);
-        branch_free(branch);
+        /* The need, absorbed (above), asked of the profile at its tip: the error
+         * is dropped, one per row whose profile will not read. */
+        profile_t *profile = NULL;
+        error_t err = profile_load(repo, it->name, &profile);
+        if (!err) err = profile_needs_target(profile, &it->needs_target);
+        profile_free(profile);
         if (err) {
             it->unreadable = true;
         }
@@ -545,7 +544,7 @@ static void row_render(const view_t *view, size_t i) {
      * this session's? Shown wherever one is held: on a home-only row bound on
      * purpose, as profile list and status show it; and on a disabled row, where
      * it is what the next toggle-on writes (view_save releases it if no save
-     * takes it). Could the seed not say? Does the branch need a binding it has
+     * takes it). Could the seed not say? Does the profile need a binding it has
      * not got — the same answer status prints for an enabled row, and here `t`
      * is the remedy. */
     if (it->target) {
@@ -586,7 +585,7 @@ static void render_footer(const view_t *view) {
         return;
     }
 
-    /* `t` is named where it is live: on a row whose branch needs a target
+    /* `t` is named where it is live: on a row whose profile needs a target
      * (handle_key_normal). */
     const char *target_hint =
         (view->item_count > 0 && view->items[view->cursor].needs_target)
@@ -726,7 +725,7 @@ static interactive_result_t handle_key_normal(view_t *view, int key) {
             item_t *it = &view->items[view->cursor];
             bool toggling_on = !it->enabled;
 
-            /* Three-gate trigger: prompt opens iff (1) the branch needs a target,
+            /* Three-gate trigger: prompt opens iff (1) the profile needs a target,
              * (2) toggle is OFF→ON, (3) no target captured or seeded yet. The
              * captured target survives transient toggle-off / toggle-on cycles
              * within a session, so a re-enable skips the prompt naturally via
@@ -745,11 +744,11 @@ static interactive_result_t handle_key_normal(view_t *view, int key) {
 
         case 't':
         case 'T': {
-            /* Set or edit the target on a row whose branch needs one: the same
+            /* Set or edit the target on a row whose profile needs one: the same
              * prompt as space, with enable cleared so committing only sets the
              * string. No-op on a row that needs none — a binding places custom/
-             * claims, and a branch with none has nothing for one to place. On a
-             * disabled row the target is what the next toggle-on writes. */
+             * claims, and a profile with none has nothing for one to place. On
+             * a disabled row the target is what the next toggle-on writes. */
             if (view->cursor >= view->item_count) {
                 return INTERACTIVE_CONTINUE;
             }

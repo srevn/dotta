@@ -1,7 +1,7 @@
 /**
  * revert.h - Revert file to previous commit state
  *
- * Restores a file in a profile branch to its state at a specific commit, optionally
+ * Restores a file in a profile to its state at a specific commit, optionally
  * deploying the reverted file to the filesystem.
  */
 
@@ -38,9 +38,9 @@ typedef struct {
 /**
  * Execute revert command
  *
- * Reverts a file in a profile branch to its state at the specified commit. This
- * command modifies the Git repository only - deployed files remain unchanged
- * until 'dotta apply' is run.
+ * Reverts a file in a profile to its state at the specified commit. This command
+ * modifies the Git repository only - deployed files remain unchanged until 'dotta
+ * apply' is run.
  *
  * Everything the revert writes is decided before any of it is shown, and shown
  * before it is asked: a dry run and a real run reach the same verdict on the
@@ -49,12 +49,12 @@ typedef struct {
  * the commit. What no preview can foresee is what is left: a ref another writer
  * moved between the preview and the commit, a repository that will not write.
  *
- * The two names. A revert restores what the commit held into the name the branch
- * tip holds, and the key the user named is the key both trees are asked in. A
- * filesystem path asks each tree what claim stood there; a name asks each tree
- * for that name. Only a name a tree holds in neither of its two documents falls
- * back to that tree's claim at its path — never the reverse, because a path is
- * always answerable and a name may simply not exist:
+ * The two names. A revert restores what the commit held into the name the profile
+ * holds at its tip, and the key the user named is the key both trees are asked
+ * in. A filesystem path asks each tree what claim stood there; a name asks each
+ * tree for that name. Only a name a tree holds in neither of its two documents
+ * falls back to that tree's claim at its path — never the reverse, because a
+ * path is always answerable and a name may simply not exist:
  *
  *              the write's name (the tip)      the read's name (the commit)
  *   LOCATION   the claim standing at L,        the claim standing at L

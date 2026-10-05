@@ -43,8 +43,8 @@
  * by its own bytes (infra/content.h content_classify), never from the sheet's
  * copy of that fact. The view projects the copy for its screens, and a sheet
  * that disagrees with its tree — a hand edit, another tool's commit, the
- * contradicted claim a branch decodes as no claim at all (core/branch.c
- * branch_step) — would otherwise have this capture store a secret in the clear.
+ * contradicted claim a profile decodes as no claim at all (core/profiles.c
+ * profile_step) — would otherwise have this capture store a secret in the clear.
  *
  * Routed by what the load observed at the path, as add routes by what its listing
  * found there (cmds/add.c add_capture) — every item on this route carries an
@@ -385,7 +385,7 @@ static void update_partition(
  * Update a single profile with workspace items
  *
  * One walk, one writer per item, over one metadata load (the sheet in the tree
- * the stage opened at — the branch's own bytes). Each arm does its item's work
+ * the stage opened at — the profile's own bytes). Each arm does its item's work
  * and fills the commit's bookkeeping beside it: the capture onto the stage for
  * a file, the claim capture for a directory, the entry removal for a deletion.
  * The chain rides the capture: after the walk, every captured leaf's ancestry
@@ -397,7 +397,7 @@ static void update_partition(
  * Success means committed or untouched, and the bookkeeping says which
  * (commit->committed, the stage's answer): a walk that captured nothing and deleted
  * nothing saves nothing and commits nothing — the stage is freed by the caller
- * as it was opened — and a walk whose captures put back what the branch holds
+ * as it was opened — and a walk whose captures put back what the profile holds
  * commits nothing either. A mid-walk failure returns with the stage part-edited:
  * the executor stops the run there, and a stage that is never committed changes
  * nothing in the repository.
@@ -442,7 +442,7 @@ static error_t update_profile(
     error_t err = NULL;
 
     /* The one metadata load: the sheet in the tree the stage opened at — the
-     * branch's own bytes — mutated as the walk goes, saved once. */
+     * profile's own bytes — mutated as the walk goes, saved once. */
     err = metadata_load_from_tree(repo, stage_tree(stage), profile, &metadata);
     if (err) return err;
 
@@ -819,7 +819,7 @@ static error_t update_profile(
 
     /* The commit, and whether it landed: the stage's own answer, false for a
      * tree the walk left as the stage opened it — captures that put back what
-     * the branch holds, which a hook rewriting a file between the decision and
+     * the profile holds, which a hook rewriting a file between the decision and
      * the capture makes */
     err = stage_commit(
         stage, commit_message(ctx->arena, ctx->config, &msg_ctx), &commit->committed
@@ -1029,7 +1029,7 @@ cleanup:
  * bookkeeping entry per landed commit, written as the commit lands, so the caller
  * holds it even when a later profile fails and the record write follows what
  * Git shows. A profile whose commit did not land — a walk that touched nothing,
- * one whose captures put back what the branch holds, or a failure before its
+ * one whose captures put back what the profile holds, or a failure before its
  * commit — contributes no entry, and its items are neither counted nor said.
  *
  * @param ctx Dispatch context (must not be NULL; the stages are opened on the
@@ -1879,7 +1879,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
     } else if (commit_count == 0) {
         /* Every profile committed nothing (the walk's race guard refused what
-         * the plan admitted, or the captures put back what the branch holds):
+         * the plan admitted, or the captures put back what the profile holds):
          * say so instead of counting zero */
         output_info(out, OUTPUT_NORMAL, "Nothing was committed");
     } else {

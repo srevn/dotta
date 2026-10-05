@@ -21,9 +21,9 @@
 #include "base/output.h"
 #include "base/string.h"
 #include "cmds/completion.h"
-#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
+#include "core/profiles.h"
 #include "core/state.h"
 #include "infra/label.h"
 #include "infra/mount.h"
@@ -36,13 +36,13 @@
 #include "utils/hooks.h"
 
 /**
- * One claim of the profile branch: a tracked path in storage terms, either kind
- * — a tree blob (FILE) or a metadata directory item (DIRECTORY).
+ * One claim of the profile: a tracked path in storage terms, either kind — a
+ * tree blob (FILE) or a metadata directory item (DIRECTORY).
  *
- * The branch's claims are the argument universe of a removal — never the view:
+ * The profile's claims are the argument universe of a removal — never the view:
  * a disabled profile's paths must stay removable (the view holds only enabled
  * profiles), an unbound custom claim too (the view refuses it), and a shadowed
- * claim is still the branch's to remove (the view is precedence-resolved).
+ * claim is still the profile's to remove (the view is precedence-resolved).
  */
 typedef struct {
     const char *storage_path;      /* arena */
@@ -322,10 +322,10 @@ static error_t remove_list_entry(
      * (infra/mount.h mount_resolve) on the strength of its having been validated
      * where it was written — which holds for a branch this machine authored and
      * not for one that arrived by clone, sync or foreign push. So the shape is
-     * checked where the tree is read, exactly as the branch's walk checks its
-     * own (core/branch.c branch_step). Malformed here is corruption, not an entry
-     * to skip: a walk that dropped it silently would leave the caller a listing
-     * it cannot place and call it complete. */
+     * checked where the tree is read, exactly as the profile's walk checks its
+     * own (core/profiles.c profile_step). Malformed here is corruption, not an
+     * entry to skip: a walk that dropped it silently would leave the caller a
+     * listing it cannot place and call it complete. */
     error_t err = label_validate_storage(path);
     if (err) return err;
 
@@ -347,7 +347,7 @@ static error_t remove_list_entry(
  * no such entry; one that arrived by clone, sync or foreign push can. A name is
  * never refused for its length: Git's only bound on one is memory. Every failure
  * is said under the profile, since the walk's own name a path in the tree and
- * never the branch it is, and no reader names it again.
+ * never the profile whose branch it is, and no reader names it again.
  *
  * Reader: remove_resolve.
  *
@@ -383,7 +383,7 @@ static error_t remove_list_tree_files(
 /**
  * Resolve the arguments to the claims they remove
  *
- * The claims array starts as everything the branch holds, in branch order (the
+ * The claims array starts as everything the profile holds, in its own order (the
  * tree's blobs, then the directory items) — read from `tree`, the one the caller's
  * stage opened at, so the claims, the sheet and the commit describe one tip;
  * the arguments mark what they take, and the array compacts to just that.
@@ -405,13 +405,13 @@ static error_t remove_list_tree_files(
  * hand over, and the overlap analysis and the record read the NULL as the fact
  * it is.
  *
- * The branch's metadata rides out through `metadata_out` for the commit's edit
+ * The profile's metadata rides out through `metadata_out` for the commit's edit
  * — loaded once, where the directory claims are enumerated; an empty sheet when
- * the branch carries none (the loader's contract). Caller frees.
+ * the profile carries none (the loader's contract). Caller frees.
  *
  * @param ctx Dispatch context (must not be NULL). ctx->run.mounts covers HOME,
  *            ROOT, and every enabled profile's binding.
- * @param tree The branch's tree as the stage opened it — the universe of claims
+ * @param tree The profile's tree as the stage opened it — the universe of claims
  *            (must not be NULL)
  * @param claims_out The claims the arguments took, borrowed from ctx->arena (do
  *            not free)
@@ -444,7 +444,7 @@ static error_t remove_resolve(
     error_t err = NULL;
     metadata_t *metadata = NULL;
 
-    /* The branch's claims, off the tree: its blobs, then the metadata's directory
+    /* The profile's claims, off the tree: its blobs, then the metadata's directory
      * claims. */
     string_array_t profile_files;
     err = remove_list_tree_files(tree, profile, ctx->arena, &profile_files);
@@ -482,9 +482,9 @@ static error_t remove_resolve(
         if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
         const char *key = items[i]->key;
 
-        /* Same-profile rule as the branch's walk (core/branch.c branch_walk): a
-         * key the tree holds as a blob cannot also stand as a directory claim —
-         * the tree's blob outranks the stale item. Keeps every claim path unique,
+        /* Same-profile rule as the profile's walk (core/profiles.c profile_walk):
+         * a key the tree holds as a blob cannot also stand as a directory claim
+         * — the tree's blob outranks the stale item. Keeps every claim path unique,
          * so one argument takes one claim. */
         if (string_array_contains(&profile_files, key)) continue;
 
@@ -608,8 +608,8 @@ cleanup:
  * By filesystem path, then by profile
  *
  * Equal paths sort together, so the rows standing at one path form a contiguous
- * run; the profile breaks the tie, and the order is total because one branch
- * places one row per path. The name would not be: two branches can hold one name
+ * run; the profile breaks the tie, and the order is total because one profile
+ * places one row per path. The name would not be: two profiles can hold one name
  * at one path.
  */
 static int remove_filesystem_order(const void *a, const void *b) {
@@ -622,14 +622,14 @@ static int remove_filesystem_order(const void *a, const void *b) {
 }
 
 /**
- * filesystem path → the rows every local branch but `exclude` places there
+ * filesystem path → the rows every local profile but `exclude` places there
  *
- * Each branch read once through its own view of its tip under this machine's
+ * Each profile read once through its own view of its tip under this machine's
  * table, so a claim is keyed by where it stands and never by what it is called:
  * two profiles bound at two targets holding one name are two paths and meet no
  * key of each other's, and one profile's two names for one path are one row and
  * one entry. A claim this machine cannot place stands nowhere and is not indexed.
- * Directory claims are indexed like any row — the branch claims the directory,
+ * Directory claims are indexed like any row — the profile claims the directory,
  * and a caller asking who else is at a place is owed it.
  *
  * The map, its keys — each a row's own path string — and its values, each a run
@@ -639,17 +639,17 @@ static int remove_filesystem_order(const void *a, const void *b) {
  * Complete or an error: a short index is an "also in" a user reads as complete.
  * What a failure means is remove_paths' to say, and it is advisory: it says what
  * it could not read and drops the section rather than refuse the untrack, since
- * a local branch nobody enabled must not stop the repair and must not hide a
+ * a local profile nobody enabled must not stop the repair and must not hide a
  * claim in silence either.
  *
- * Cost: one view per branch — a tree walk and a sheet load each — then O(T log
+ * Cost: one view per profile — a tree walk and a sheet load each — then O(T log
  * T) over T placed rows for the runs.
  *
  * Reader: remove_overlaps.
  *
  * @param ctx Dispatch context (must not be NULL): the repository, this machine's
  *            mount table, and the arena the index, its keys and its runs live in
- * @param exclude A branch to leave out, or NULL for every one of them
+ * @param exclude A profile to leave out, or NULL for every one of them
  * @param out_index filesystem path (const char *) -> manifest_rows_t * (must not
  *                  be NULL; NULL on a failure)
  * @return Error or NULL on success
@@ -679,11 +679,11 @@ static error_t remove_build_filesystem_index(
     for (size_t i = 0; i < profiles.count; i++) {
         if (exclude && strcmp(profiles.entries[i], exclude) == 0) continue;
 
-        branch_t *branch = NULL;
+        profile_t *profile = NULL;
         manifest_t *view = NULL;
-        err = branch_load(ctx->run.repo, profiles.entries[i], &branch);
-        if (!err) err = manifest_build_branch(branch, ctx->run.mounts, ctx->arena, &view);
-        branch_free(branch);
+        err = profile_load(ctx->run.repo, profiles.entries[i], &profile);
+        if (!err) err = manifest_build_profile(profile, ctx->run.mounts, ctx->arena, &view);
+        profile_free(profile);
         if (err) return err;
 
         placed[i] = manifest_rows(view);
@@ -726,7 +726,7 @@ static error_t remove_build_filesystem_index(
 }
 
 /**
- * One path this removal shares with other branches
+ * One path this removal shares with other profiles
  *
  * The claim removed there — the first, where a pair of the profile's own names
  * is removed at one place — and who else stands there under what name.
@@ -740,7 +740,7 @@ typedef struct {
 /**
  * The multi-profile section, as data
  *
- * One entry per path this removal shares with another branch, and the one fact
+ * One entry per path this removal shares with another profile, and the one fact
  * its closing line reads: whether the view's winner at any of those paths is a
  * different enabled profile, which is what makes a removal change nothing on disk.
  */
@@ -765,7 +765,7 @@ typedef struct {
  * `provided_by_other` is the view's fact, not the record's: the winner at the
  * path is another enabled profile, so the path stays as it is. It is asked only
  * where the index answered, which is sound — a winner other than this profile
- * holds a row at the path and is therefore in the index, the excluded branch
+ * holds a row at the path and is therefore in the index, the excluded profile
  * being this profile itself.
  *
  * The view is built here, tolerantly: remove must run on an enabled set the builder
@@ -971,7 +971,7 @@ static output_answer_t remove_ask_paths(
 /**
  * Ask whether to delete a profile — or answer yes where --force gave the answer
  *
- * `counts` is the branch-holdings phrase from the count family
+ * `counts` is the profile-holdings phrase from the count family
  * (output_format_counts, or its "counts unavailable" stand-in). The warning says
  * what the deletion takes whether or not the configuration asks.
  */
@@ -1025,7 +1025,7 @@ static error_t remove_paths(
     stage_t *stage = NULL;              /* the branch's tip, tree and index; the commit's */
     claim_t *claims = NULL;             /* arena — the resolver's */
     size_t claim_count = 0;
-    metadata_t *metadata = NULL;        /* the branch's, from the resolver (owned) */
+    metadata_t *metadata = NULL;        /* the profile's, from the resolver (owned) */
     overlaps_t overlaps = { 0 };        /* arena — the analysis's */
 
     /* The branch's stage: the tip everything below reads — the claims, the sheet,
@@ -1045,9 +1045,9 @@ static error_t remove_paths(
     );
     if (err) goto cleanup;
 
-    /* What the removal shares with the other branches (critical safety check).
+    /* What the removal shares with the other profiles (critical safety check).
      * Advisory: the untrack proceeds without the section and says why, since a
-     * local branch nobody enabled must not stop the repair — and must not hide
+     * local profile nobody enabled must not stop the repair — and must not hide
      * a claim in silence either, an absent section reading as "no overlap". */
     err = remove_overlaps(ctx, claims, claim_count, opts->profile, &overlaps);
     if (err) {
@@ -1229,7 +1229,7 @@ static error_t remove_paths(
     }
 
     /* The sheet, only when the collection actually changed — a removal that touched
-     * no items and pruned nothing keeps the branch's metadata.json byte-identical,
+     * no items and pruned nothing keeps the profile's metadata.json byte-identical,
      * so no rewrite is staged. */
     if (meta_edits + pruned_dirs.count > 0) {
         err = metadata_save_to_stage(stage, metadata);
@@ -1392,7 +1392,7 @@ cleanup:
  * @param payload The hooks' list of names (string_array_t, given its arena)
  * @return NULL: a collection fails nowhere
  */
-static error_t remove_collect_claim(const branch_claim_t *claim, void *payload) {
+static error_t remove_collect_claim(const profile_claim_t *claim, void *payload) {
     string_array_t *names = payload;
 
     /* The name copied out of the walk's loan, into the list's own arena */
@@ -1419,7 +1419,7 @@ static error_t remove_profile(
 
     /* Initialize all resources to NULL */
     error_t err = NULL;
-    branch_t *branch = NULL;
+    profile_t *profile = NULL;
     const char *remote_name = NULL;
     const char *remote_url = NULL;
 
@@ -1454,16 +1454,16 @@ static error_t remove_profile(
         goto cleanup;
     }
 
-    /* The branch at its tip, read once for all the deletion says before it acts:
+    /* The profile at its tip, read once for all the deletion says before it acts:
      * every claim it takes, for its hooks, and what it holds, for the preview
      * and the confirmation, one commit for both. A tip that will not load refuses
      * here, in gitops' words, which name the branch. */
-    err = branch_load(repo, opts->profile, &branch);
+    err = profile_load(repo, opts->profile, &profile);
     if (err) goto cleanup;
 
     /* Every claim the deletion takes, by name: the claims the walk shows — the
      * blobs, then the directory claims that stand — and then those the tree
-     * contradicts (core/branch.h branch_contradicted), so the hooks are handed
+     * contradicts (core/profiles.h profile_contradicted), so the hooks are handed
      * every claim the profile goes with, one entry each, and a path two claims
      * stand at once for each. Read tolerantly: a deletion that refused over a
      * sheet it cannot read would leave the profile undeletable, so it goes on
@@ -1471,15 +1471,15 @@ static error_t remove_profile(
      * before the preview: no tolerant read loses the tree's half. */
     string_array_t hook_storage;
     string_array_init(&hook_storage, ctx->arena);
-    err = branch_walk(branch, BRANCH_READ_TOLERANT, remove_collect_claim, &hook_storage);
+    err = profile_walk(profile, PROFILE_READ_TOLERANT, remove_collect_claim, &hook_storage);
     if (err) goto cleanup;
-    err = branch_contradicted(branch, BRANCH_READ_TOLERANT, remove_collect_claim, &hook_storage);
+    err = profile_contradicted(profile, PROFILE_READ_TOLERANT, remove_collect_claim, &hook_storage);
     if (err) goto cleanup;
 
     /* What the tolerant read lost, said where it was read, so the dry run says
      * it too: the directory claims the hooks are not handed, and the count below,
      * in the loader's line, which names the profile */
-    err = branch_sheet_failure(branch);
+    err = profile_load_sheet(profile);
     if (err) {
         output_warning(
             out, OUTPUT_NORMAL, "%s; its hooks are handed its files alone",
@@ -1488,15 +1488,16 @@ static error_t remove_profile(
         err = NULL;
     }
 
-    /* The count, over the same branch, both kinds (core/branch.h branch_count):
-     * one truth with `dotta list`. Its failure is display-only — the deletion
-     * must not refuse over a count — so it becomes the phrase the preview prints,
-     * its error dropped and err back to the NULL the phase began with. The branch
-     * is read no further: the hooks' list holds its own copies. */
-    branch_count_t count = { 0 };
-    err = branch_count(branch, &count);
-    branch_free(branch);
-    branch = NULL;
+    /* The count, over the same profile, both kinds (core/profiles.h
+     * profile_counts): one truth with `dotta list`. Its failure is display-only
+     * — the deletion must not refuse over a count — so it becomes the phrase
+     * the preview prints, its error dropped and err back to the NULL the phase
+     * began with. The profile is read no further: the hooks' list holds its own
+     * copies. */
+    profile_counts_t count = { 0 };
+    err = profile_counts(profile, &count);
+    profile_free(profile);
+    profile = NULL;
 
     char counts[64];
     if (err) {
@@ -1844,9 +1845,9 @@ static error_t remove_profile(
 cleanup:
     /* state is borrowed from the dispatcher — do not free it. state_rollback is
      * a no-op if no transaction is active; this safely closes any partially-begun
-     * record-update or post-deletion transaction on an error path. The branch
+     * record-update or post-deletion transaction on an error path. The profile
      * is freed once its count is read; here only a refusal before that frees it. */
-    branch_free(branch);
+    profile_free(profile);
     state_rollback(state);
 
     return err;
@@ -1919,8 +1920,8 @@ static error_t remove_post_parse(
 /**
  * What can stand at the cursor, read off the buckets remove_post_parse routes:
  * a local profile in the profile slot — the first positional, unless -p took it
- * — then the claims of that profile's branch, shadowed and disabled ones included:
- * its files, and its directory claims slash-marked; nothing after --delete-profile,
+ * — then the claims of that profile, shadowed and disabled ones included: its
+ * files, and its directory claims slash-marked; nothing after --delete-profile,
  * which takes no path.
  */
 static args_want_t remove_complete(

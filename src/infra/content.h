@@ -19,7 +19,7 @@
  *   all: a link's are its target, never a seal, whatever they begin with. The
  *   one function here that is handed the answer rather than reading it —
  *   content_estimated_plaintext_size, the framing taken off a size for a screen
- *   — opens nothing and routes nothing, and what it is handed is the branch's
+ *   — opens nothing and routes nothing, and what it is handed is the profile's
  *   own stamp (core/metadata.h metadata_item_t), never a cross-check of these
  *   bytes.
  *
@@ -134,7 +134,7 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  *
  * Asked where the answer is a decision or a key, never where it is a screen or
  * a schedule: the store's refusal of a plaintext that reads as ciphertext makes
- * the branch's stamp true for every file dotta seals, and a screen reads that
+ * the profile's stamp true for every file dotta seals, and a screen reads that
  * stamp instead (core/metadata.h metadata_item_t). Readers: `cmds/add.c cmd_add`
  * and `cmds/update.c update_capture` (policy priority 3, where a wrong answer
  * commits a secret in the clear), `cmds/revert.c cmd_revert` (the stamp it writes,
@@ -190,7 +190,7 @@ error_t content_classify(
  * The bytes an entry stands for, as a screen names them.
  *
  * Wire-format containment helper: the cipher's framing overhead is a crypto-layer
- * constant, but the screens that size a branch's content want the file's number,
+ * constant, but the screens that size a profile's content want the file's number,
  * not the framing's. Centralising the subtraction here keeps crypto/cipher.h
  * imports out of the layers that ask — `cmds/list.c list_files` (the row) and
  * `list_size_claim` (the fold of a profile's line, which the rows' total must
@@ -204,7 +204,7 @@ error_t content_classify(
  *               it — and keeps its raw size
  *
  * An estimate twice over. The stream cipher pads nothing, so for a well-formed
- * blob the body is exactly the plaintext's length; but `encrypted` is the branch's
+ * blob the body is exactly the plaintext's length; but `encrypted` is the profile's
  * own stamp rather than a reading of these bytes (core/metadata.h metadata_item_t),
  * and nothing here opens the blob to check. A hand-written sheet therefore moves
  * this number by the framing, which is a screen's worth of wrong and no more —
@@ -301,7 +301,7 @@ error_t content_get_from_blob_oid(
  * A link is not content and never reaches here: its bytes are a target path,
  * and Git's filemode is the authority on that at every boundary
  * (content_capture_link, every read here — each takes the entry's filemode —
- * core/branch.c branch_decode_blob's link rule, cmds/revert.c's claim).
+ * core/profiles.c profile_decode_blob's link rule, cmds/revert.c's claim).
  *
  * The write-boundary invariant content_capture_file states holds here too: what
  * is answered classifies ENCRYPTED, as the source did, so a caller stamping
@@ -645,7 +645,7 @@ error_t content_capture_file(
  *
  * The capture's other half: a link's bytes are its target, taken as read and
  * never sealed — deploy's symlink(2) and every readlink expose the target whatever
- * the branch holds, so a secret target belongs in an encrypted regular file
+ * the profile holds, so a secret target belongs in an encrypted regular file
  * (core/policy.h) — under GIT_FILEMODE_LINK, with `encrypted` false. It takes
  * no name, no profile and no key: everything a seal needs is a seal's, and a
  * link has no seal.

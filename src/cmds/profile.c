@@ -19,7 +19,6 @@
 #include "base/hashmap.h"
 #include "base/output.h"
 #include "cmds/completion.h"
-#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -183,43 +182,43 @@ static error_t profile_list(
     state_profiles_t enabled_profiles = state_profiles(state);
 
     /* Every profile here */
-    string_array_t all_branches;
-    err = gitops_list_branches(repo, ctx->arena, &all_branches);
+    string_array_t profiles;
+    err = gitops_list_branches(repo, ctx->arena, &profiles);
     if (err) goto cleanup;
 
     /* Separate into enabled and available */
     string_array_t available;
     string_array_init(&available, ctx->arena);
-    for (size_t i = 0; i < all_branches.count; i++) {
-        const char *profile = all_branches.entries[i];
+    for (size_t i = 0; i < profiles.count; i++) {
+        const char *profile = profiles.entries[i];
         if (state_enabled(state, profile)) continue;
 
         string_array_push(&available, profile);
     }
 
-    /* Print enabled profiles: the name, what the branch holds, and the binding
+    /* Print enabled profiles: the name, what the profile holds, and the binding
      * beside the name when the row has one — the thing is never printed without
      * the where. */
     if (enabled_profiles.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Enabled profiles (in layering order)");
         for (size_t i = 0; i < enabled_profiles.count; i++) {
             const state_profile_entry_t *entry = &enabled_profiles.entries[i];
-            const char *profile = entry->name;
+            const char *name = entry->name;
 
-            /* What the branch holds, counted over its tip (core/branch.h
-             * branch_count) */
-            branch_t *branch = NULL;
-            branch_count_t count = { 0 };
-            error_t row_err = branch_load(repo, profile, &branch);
-            if (!row_err) row_err = branch_count(branch, &count);
-            branch_free(branch);
+            /* What the profile holds, counted over its tip (core/profiles.h
+             * profile_counts) */
+            profile_t *profile = NULL;
+            profile_counts_t count = { 0 };
+            error_t row_err = profile_load(repo, name, &profile);
+            if (!row_err) row_err = profile_counts(profile, &count);
+            profile_free(profile);
 
-            /* Name what the branch holds where it reads, otherwise say so: the
-             * row's error is dropped, one per unreadable branch */
+            /* Name what the profile holds where it reads, otherwise say so: the
+             * row's error is dropped, one per unreadable profile */
             if (row_err) {
                 output_print(
                     out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (counts unavailable)",
-                    i + 1, profile
+                    i + 1, name
                 );
             } else {
                 char counts[64];
@@ -228,7 +227,7 @@ static error_t profile_list(
                 );
                 output_print(
                     out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (%s)",
-                    i + 1, profile, counts
+                    i + 1, name, counts
                 );
             }
 
@@ -246,31 +245,31 @@ static error_t profile_list(
 
     /* Print available (disabled) profiles, marking the ones that need a target:
      * such a profile is enabled only with one, so this is the mark on exactly
-     * the profile clone and --all left here, and the answer is the branch's own
-     * (core/profiles.h profile_needs_target). One handle serves both: the count
-     * and the mark walk one tip and parse its sheet once, and a row that would
-     * not count says so rather than marking nothing in silence. */
+     * the profile clone and --all left here, and the answer is the profile's
+     * own (core/profiles.h profile_needs_target). One handle serves both: the
+     * count and the mark walk one tip and parse its sheet once, and a row that
+     * would not count says so rather than marking nothing in silence. */
     if (available.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Available (disabled)");
         for (size_t i = 0; i < available.count; i++) {
-            const char *profile = available.entries[i];
+            const char *name = available.entries[i];
 
-            /* What the branch holds, and whether it needs a target, both asked
+            /* What the profile holds, and whether it needs a target, both asked
              * of the one handle loaded at its tip */
-            branch_t *branch = NULL;
-            branch_count_t count = { 0 };
+            profile_t *profile = NULL;
+            profile_counts_t count = { 0 };
             bool needs_target = false;
-            error_t row_err = branch_load(repo, profile, &branch);
-            if (!row_err) row_err = branch_count(branch, &count);
-            if (!row_err) row_err = profile_needs_target(branch, &needs_target);
-            branch_free(branch);
+            error_t row_err = profile_load(repo, name, &profile);
+            if (!row_err) row_err = profile_counts(profile, &count);
+            if (!row_err) row_err = profile_needs_target(profile, &needs_target);
+            profile_free(profile);
 
-            /* Name what the branch holds where it reads, otherwise say so: the
-             * row's error is dropped, one per unreadable branch */
+            /* Name what the profile holds where it reads, otherwise say so: the
+             * row's error is dropped, one per unreadable profile */
             if (row_err) {
                 output_print(
                     out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (counts unavailable)",
-                    profile
+                    name
                 );
             } else {
                 char counts[64];
@@ -278,7 +277,7 @@ static error_t profile_list(
                     count.file_count, count.directory_count, counts, sizeof(counts)
                 );
                 output_print(
-                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%s)", profile, counts
+                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%s)", name, counts
                 );
                 if (needs_target) {
                     output_print(out, OUTPUT_NORMAL, " {dim}(needs a target){reset}");
@@ -322,7 +321,7 @@ static error_t profile_list(
                 string_array_t remote_only;
                 string_array_init_cap(&remote_only, ctx->arena, remote_branches.count);
                 for (size_t ri = 0; ri < remote_branches.count; ri++) {
-                    if (!string_array_contains(&all_branches, remote_branches.entries[ri])) {
+                    if (!string_array_contains(&profiles, remote_branches.entries[ri])) {
                         string_array_push(&remote_only, remote_branches.entries[ri]);
                     }
                 }
@@ -617,22 +616,22 @@ static error_t profile_enable(
     string_array_init(&to_enable_validated, ctx->arena);
 
     for (size_t i = 0; i < to_enable.count; i++) {
-        const char *profile = to_enable.entries[i];
+        const char *name = to_enable.entries[i];
 
         /* Silently dedupe duplicate args — decided about earlier in this pass */
-        if (!hashmap_add(seen_set, profile, NULL)) continue;
+        if (!hashmap_add(seen_set, name, NULL)) continue;
 
-        if (state_enabled(state, profile)) {
+        if (state_enabled(state, name)) {
             /* --target on an enabled profile is a retarget: the binding is the
              * verb's subject, and state_enable_profile's UPSERT arm updates it
              * in place. Only another directory is work — the row's own, under
              * its spelling or another (mount_same_target), is an idempotent re-run
              * and stays the skip below, the row's spelling kept. */
             if (target) {
-                const char *current = state_target(state, profile);
+                const char *current = state_target(state, name);
                 if (!current || !mount_same_target(current, target)) {
-                    retarget = profile;
-                    string_array_push(&to_enable_validated, profile);
+                    retarget = name;
+                    string_array_push(&to_enable_validated, name);
                     continue;
                 }
                 /* The row's own directory, spelled another way: the binding stands
@@ -645,11 +644,11 @@ static error_t profile_enable(
                     output_info(
                         out, OUTPUT_NORMAL,
                         "  %s is already bound at %s — the same directory, "
-                        "spelled another way", profile, current
+                        "spelled another way", name, current
                     );
                 }
             }
-            output_info(out, OUTPUT_VERBOSE, "  %s already enabled", profile);
+            output_info(out, OUTPUT_VERBOSE, "  %s already enabled", name);
             already_enabled++;
             continue;
         }
@@ -658,16 +657,16 @@ static error_t profile_enable(
          * is not an absence, and read as one it sent the user to fetch a profile
          * that was here. */
         bool exists = false;
-        err = gitops_branch_exists(repo, profile, &exists);
+        err = gitops_branch_exists(repo, name, &exists);
         if (err) return err;
         if (!exists) {
             output_warning(
-                out, OUTPUT_NORMAL, "Profile '%s' doesn't exist locally", profile
+                out, OUTPUT_NORMAL, "Profile '%s' doesn't exist locally", name
             );
             output_hint(
                 out, OUTPUT_NORMAL, "Run 'dotta profile list' for the local "
                 "profiles, or 'dotta profile fetch %s' to bring it from the remote",
-                profile
+                name
             );
             not_found++;
             continue;
@@ -676,32 +675,32 @@ static error_t profile_enable(
         /* A profile that needs a target is enabled only with one: the binding
          * is part of the enablement, and a row without one would hold every custom/
          * claim while the screens said "enabled". Whether it needs one is the
-         * branch's own answer, the labels its walk shows asked of a table with
+         * profile's own answer, the labels its walk shows asked of a table with
          * no binding (core/profiles.h profile_needs_target), asked whatever the
-         * flag says, so the branch is the earlier question: a tree Git cannot
+         * flag says, so the profile is the earlier question: a tree Git cannot
          * read, or a sheet this build cannot, is the error here and not one phase
          * later, after the row was written. Skipped and named with the flag,
          * whatever the request shape; a run that enabled nothing ends in the
          * error below. */
-        branch_t *branch = NULL;
+        profile_t *profile = NULL;
         bool needs_target = false;
-        err = branch_load(repo, profile, &branch);
-        if (!err) err = profile_needs_target(branch, &needs_target);
-        branch_free(branch);
+        err = profile_load(repo, name, &profile);
+        if (!err) err = profile_needs_target(profile, &needs_target);
+        profile_free(profile);
         if (err) return err;
         if (needs_target && !target) {
             output_warning(
                 out, OUTPUT_NORMAL,
-                "Profile '%s' holds custom/ paths and needs a target here", profile
+                "Profile '%s' holds custom/ paths and needs a target here", name
             );
             output_hint(
-                out, OUTPUT_NORMAL, "dotta profile enable %s --target /path", profile
+                out, OUTPUT_NORMAL, "dotta profile enable %s --target /path", name
             );
             no_target++;
             continue;
         }
 
-        string_array_push(&to_enable_validated, profile);
+        string_array_push(&to_enable_validated, name);
     }
 
     /* Dry-run: preview what a live run would do, skip every state mutation. Dry-run

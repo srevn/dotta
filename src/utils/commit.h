@@ -32,7 +32,7 @@ typedef enum {
  *
  * `paths` is what this commit is about, in the caller's own order and both kinds:
  * the paths it took, and, for a verb that lets paths go, the ones it let go
- * (cmds/remove.c, cmds/update.c). A claim is named as the branch spells it —
+ * (cmds/remove.c, cmds/update.c). A claim is named as the profile spells it —
  * the storage path, so a name read out of a log is the key the tree and the sheet
  * hold and the key `remove` takes back, but for a byte no terminal may be handed,
  * which the message spells (commit_message) — and a claim no verb named is none

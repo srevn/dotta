@@ -2,11 +2,11 @@
  * manifest.c - The view: implementation
  *
  * Two builders, manifest_build (every enabled profile, in precedence order) and
- * manifest_build_branch (one branch), share one per-profile step,
- * manifest_contribute, that places the claims a branch's walk shows (core/branch.h)
- * as manifest_row_t rows directly. There is no persistence step and no bridge
- * type: the view is computed into the caller's arena and read through the accessors
- * below.
+ * manifest_build_profile (one profile), share one per-profile step,
+ * manifest_contribute, that places the claims a profile's walk shows
+ * (core/profiles.h) as manifest_row_t rows directly. There is no persistence
+ * step and no bridge type: the view is computed into the caller's arena and read
+ * through the accessors below.
  *
  * Key patterns:
  *   - Two layers, built in two moves (core/manifest.h): manifest_contribute places
@@ -18,8 +18,8 @@
  *     what lets a lower profile's claim be read after a higher one wins
  *     (manifest_lookup_claim) and what makes an index the one thing that says
  *     who stands where.
- *   - One decode, placed: the per-profile step walks the branch it is handed
- *     (core/branch.h branch_walk), which reads its own tree's sheet — no caller
+ *   - One decode, placed: the per-profile step walks the profile it is handed
+ *     (core/profiles.h profile_walk), which reads its own tree's sheet — no caller
  *     supplies one — and shows each claim decoded, the blob's identity read off
  *     the borrowed tree entry, its blobs first and its directory claims after;
  *     the step places each as it arrives (single profile per row, no cross-profile
@@ -49,7 +49,7 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
-#include "core/branch.h"
+#include "core/profiles.h"
 #include "core/state.h"
 #include "infra/label.h"
 #include "infra/mount.h"
@@ -74,11 +74,11 @@ typedef struct {
 
     /* Every name the profile holds at a path it names more than once: the settle's
      * own group, NULL-terminated, in name order. NULL until a settle happens —
-     * which is never, on a branch whose profile names each of its paths once.
-     * The group outlives the contest because the decision does: manifest_standing
-     * re-asks it wherever a name is read, an asker's own claims being able to
-     * change which name the next settle keeps, and manifest_holds_name reads it
-     * to answer whether a name is one the profile already holds.
+     * which is never, on a profile that names each of its paths once. The group
+     * outlives the contest because the decision does: manifest_standing re-asks
+     * it wherever a name is read, an asker's own claims being able to change
+     * which name the next settle keeps, and manifest_holds_name reads it to answer
+     * whether a name is one the profile already holds.
      *
      * Every member is an explicit row. A contender is pushed only against a held
      * explicit claim — manifest_place_claim states that placement rule once,
@@ -116,7 +116,8 @@ struct manifest {
     hashmap_t *index;                            /* Arena; path → the winning row */
 
     /* The table the rows were placed by, lent back by manifest_mounts: the build's
-     * own, derived from the rows it read, or, for a branch's view, the caller's. */
+     * own, derived from the rows it read, or, for one profile's view, the
+     * caller's. */
     const mount_table_t *mounts;                 /* The build's, or the caller's */
 
     /* The claims the build could not place: no target binding here (manifest_unbound) */
@@ -136,11 +137,11 @@ struct manifest {
 };
 
 /**
- * The claim walk: what one walk of one branch carries to place its claims
+ * The claim walk: what one walk of one profile carries to place its claims
  *
  * Everything the walk's visitor needs to place one profile's claims where they
  * stand: the view and the contribution being filled, and the two lists the step
- * spends. Handed to the branch's walk once per profile and read at O(1) per claim.
+ * spends. Handed to each profile's walk once and read at O(1) per claim.
  *
  * Memory ownership:
  * - manifest: borrowed, caller retains ownership — the mount table and the unbound
@@ -154,8 +155,8 @@ struct manifest {
  *             named. Both are spent when manifest_contribute returns.
  * - arena: borrowed, must not be NULL; per-row strings are abandoned to it
  *
- * The claims arrive decoded and lent for the visit (core/branch.h branch_walk),
- * so the walk carries no sheet: the branch read it.
+ * The claims arrive decoded and lent for the visit (core/profiles.h profile_walk),
+ * so the walk carries no sheet: the profile read it.
  */
 typedef struct {
     manifest_t *manifest;         /* Target view (modified by the visitor) */
@@ -205,8 +206,8 @@ static manifest_row_t *manifest_place(
  *
  * The health primitive a claim the placement cannot resolve is spent through:
  * appends (profile, storage_path, kind) to the view's health slice. No dedup,
- * and none possible — the branch's walk shows a name once (core/branch.h
- * branch_walk): a name the tree holds a blob at, or a sheet key it does not,
+ * and none possible — the profile's walk shows a name once (core/profiles.h
+ * profile_walk): a name the tree holds a blob at, or a sheet key it does not,
  * the content-authority rule having contradicted the rest before anything was
  * resolved. And a tree holds one blob per path, a sheet one item per key.
  *
@@ -409,7 +410,7 @@ static manifest_row_t *manifest_decide(
  * reads answer, nearest first. A claim the command has admitted and not yet
  * committed answers alone, whatever its kind: it is the nearer statement about
  * the place, so a staged FILE names its own path and nothing under it, shadowing
- * a tracked directory the branch holds at the same path exactly as it will once
+ * a tracked directory the profile holds at the same path exactly as it will once
  * committed. Where the command claimed nothing the profile's own committed row
  * speaks, projected into the same pair.
  *
@@ -613,7 +614,7 @@ static void manifest_settle(
     c->contested = hashmap_borrow(arena, 8);
 
     /* What every question below is asked under: this contribution, and no claim
-     * beyond it — the settle reads the branch as it arrived. */
+     * beyond it — the settle reads the profile as it arrived. */
     const naming_t n = {
         .c       = c,
         .mounts  = manifest->mounts,
@@ -665,10 +666,10 @@ static void manifest_settle(
 }
 
 /**
- * Walk visitor that places one of the branch's claims into the contribution
+ * Walk visitor that places one of the profile's claims into the contribution
  *
- * The whole of the per-profile step the branch's walk drives (core/branch.h
- * branch_walk): one decoded claim at a time — its blobs first, then its directory
+ * The whole of the per-profile step the profile's walk drives (core/profiles.h
+ * profile_walk): one decoded claim at a time — its blobs first, then its directory
  * claims — a finished manifest_row_t or nothing. In order: the name kept, the
  * path it resolves to, a derived claim's yield to a held path, the row, and the
  * within-profile placement rule that says whether it stands or contends.
@@ -677,7 +678,7 @@ static void manifest_settle(
  * @param payload The claim walk (claim_walk_t)
  * @return NULL: placing a claim fails nowhere
  */
-static error_t manifest_place_claim(const branch_claim_t *claim, void *payload) {
+static error_t manifest_place_claim(const profile_claim_t *claim, void *payload) {
     claim_walk_t *walk = payload;
     contribution_t *c = walk->contribution;
 
@@ -698,8 +699,8 @@ static error_t manifest_place_claim(const branch_claim_t *claim, void *payload) 
      * dropped in silence, and both kinds hold under that one UNBOUND policy.
      * Record-safe by construction: a record can only exist where a binding existed
      * at write time, so no record ever joins a skipped claim and no orphan can
-     * be manufactured here. The shape was checked where the branch read the name
-     * — a blob's at its walk, an item's at its parse — so the label is one. */
+     * be manufactured here. The shape was checked where the profile read the
+     * name — a blob's at its walk, an item's at its parse — so the label is one. */
     const char *filesystem_path = mount_resolve(
         walk->arena, walk->manifest->mounts, c->profile, storage_path
     );
@@ -727,19 +728,19 @@ static error_t manifest_place_claim(const branch_claim_t *claim, void *payload) 
      * runs through.
      *
      * The first placed is the sheet's first key (the walk shows directory claims
-     * in the sheet's own order, core/branch.h branch_walk, and the writer sorts,
-     * core/metadata.c), and the tie-break settles more than a name: a derived
-     * claim carries the mode, owner and group dotta creates the directory with,
-     * and two chains captured at different moments can disagree about them —
-     * 0700 under home/jail/etc, 0755 under custom/etc, one path. Neither is the
-     * truer statement, both being what disk held when a walk passed through, so
-     * the tie is stated here rather than decided. Nothing is recorded either:
+     * in the sheet's own order, core/profiles.h profile_walk, and the writer
+     * sorts, core/metadata.c), and the tie-break settles more than a name: a
+     * derived claim carries the mode, owner and group dotta creates the directory
+     * with, and two chains captured at different moments can disagree about them
+     * — 0700 under home/jail/etc, 0755 under custom/etc, one path. Neither is
+     * the truer statement, both being what disk held when a walk passed through,
+     * so the tie is stated here rather than decided. Nothing is recorded either:
      * manifest_unkept is names, and a derived claim named nothing. */
     if (held && claim->type == PATH_TYPE_DIRECTORY && !claim->tracked) return NULL;
 
     /* The row is the claim, placed: one profile's, and fresh — nothing is reset
      * or rewritten any more, so each field is written once, from the claim. Its
-     * mode is the claim's or its type's floor (core/branch.h branch_claim_mode),
+     * mode is the claim's or its type's floor (core/profiles.h profile_claim_mode),
      * so the row leaves the build total; the strings it keeps are the arena's,
      * the profile's being the name the step duplicated. A contender is a finished
      * row and takes its own claim like any other. */
@@ -748,7 +749,7 @@ static error_t manifest_place_claim(const branch_claim_t *claim, void *payload) 
     row->profile = c->profile;
     row->type = claim->type;
     git_oid_cpy(&row->blob_oid, &claim->blob_oid);
-    row->mode = branch_claim_mode(claim);
+    row->mode = profile_claim_mode(claim);
     row->owner = arena_strdup(walk->arena, claim->owner);
     row->group = arena_strdup(walk->arena, claim->group);
     row->encrypted = claim->encrypted;
@@ -759,7 +760,7 @@ static error_t manifest_place_claim(const branch_claim_t *claim, void *payload) 
      * stands here" and the second exactly "a second name of this profile", for
      * the settle to decide; a directory claim after them takes a derived row's
      * slot or contends with an explicit one. A directory claim at a blob's own
-     * name never arrives — the branch drops it — which is what keeps the settle's
+     * name never arrives — the profile drops it — which is what keeps the settle's
      * group free of two rows under one name. The sibling rule across profiles
      * is manifest_layer's, where an explicit claim takes a held path outright:
      * that is the whole difference between precedence and a profile naming one
@@ -774,50 +775,50 @@ static error_t manifest_place_claim(const branch_claim_t *claim, void *payload) 
 }
 
 /**
- * One profile's contribution: the claims its branch's walk shows, placed
+ * One profile's contribution: the claims its walk shows, placed
  *
  * The per-profile step both builders run, and the whole of the within-profile
  * rule. The contribution is registered here — its arena-backed name (every row
  * of it borrows the pointer), its own path index, and its slot in the view's
  * parallel arrays — so one function owns one profile's claims from the name to
- * the settled spine, and the builders hand over a branch.
+ * the settled spine, and the builders hand over a profile.
  *
- * The branch's walk shows every claim the branch makes, decoded (core/branch.h
- * branch_walk) — its blobs, then the directory claims its own tree does not
+ * The profile's walk shows every claim the profile makes, decoded (core/profiles.h
+ * profile_walk) — its blobs, then the directory claims its own tree does not
  * contradict — and each is placed as it arrives (manifest_place_claim): resolved
  * against the mount table, recorded where this machine cannot place it
  * (manifest_note_unbound), and standing or contending. The settle then decides
  * every path this profile named twice, and the tail cuts the spine to what stands.
  *
- * The walk reads the branch's own sheet, strictly: a sheet that will not load
+ * The walk reads the profile's own sheet, strictly: a sheet that will not load
  * fails the build rather than read as "no claims", so no caller of a builder
  * chooses a policy for a fact this step is the authority on.
  *
  * Memory: every allocation lands in `arena`, the step's two lists included, which
  * stay there past the call, but the sheet the walk reads where no question has
- * yet, which the branch keeps (core/branch.h); no row borrows the branch — each
- * takes an arena copy. On error, rows already placed are left as they are — the
- * build fails whole, and nothing frees a view.
+ * yet, which the profile keeps (core/profiles.h); no row borrows the profile —
+ * each takes an arena copy. On error, rows already placed are left as they are
+ * — the build fails whole, and nothing frees a view.
  *
  * @param manifest Target view (must not be NULL; its mount table is what places
  *                 rows)
- * @param branch The profile's branch (must not be NULL; its name is copied, and
- *               its sheet read through it)
+ * @param profile The profile (must not be NULL; its name is copied, and its sheet
+ *                read through it)
  * @param arena Arena backing the contribution (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t manifest_contribute(
     manifest_t *manifest,
-    branch_t *branch,
+    profile_t *profile,
     arena_t *arena
 ) {
     /* Register the contribution before anything can fail into it: the name is
-     * arena-backed so the view never depends on the branch or on the state's
+     * arena-backed so the view never depends on the profile or on the state's
      * row cache, and the index is the arena's too, so a build that stops partway
      * leaves nothing behind but the arena's bytes. */
     contribution_t *c = &manifest->contributions[manifest->profile_count];
 
-    c->profile = arena_strdup(arena, branch_profile(branch));
+    c->profile = arena_strdup(arena, profile_name(profile));
     c->index = hashmap_borrow(arena, 128);
     manifest->profiles[manifest->profile_count++] = c->profile;
 
@@ -839,14 +840,14 @@ static error_t manifest_contribute(
         .arena        = arena
     };
 
-    /* The branch's claims, decoded once and read strictly, each placed as it
+    /* The profile's claims, decoded once and read strictly, each placed as it
      * arrives (manifest_place_claim). Per-profile is the correctness boundary
      * for attribution — each profile places its own files and directories via
      * its own branch, never via a cross-profile merge — and the table is the
      * view's, its bindings keyed by profile, so a custom/ claim of this profile
      * places under this profile's target and no other's. The walk names the profile
-     * over its own failures (core/branch.h), so nothing here says it again. */
-    error_t err = branch_walk(branch, BRANCH_READ_STRICT, manifest_place_claim, &walk);
+     * over its own failures (core/profiles.h), so nothing here says it again. */
+    error_t err = profile_walk(profile, PROFILE_READ_STRICT, manifest_place_claim, &walk);
     if (err) return err;
 
     /* Every path this profile named twice, decided once. */
@@ -1020,7 +1021,7 @@ error_t manifest_build(
     /* The enabled set, in position order. Borrowed from the row cache for the
      * loop only: every name a row keeps is duplicated below, so the view never
      * depends on the cache's lifetime. */
-    state_profiles_t profiles = state_profiles(state);
+    state_profiles_t enabled_profiles = state_profiles(state);
 
     /* The topology the same rows describe — each profile's target, and this
      * machine's $HOME — built here, from the rows of this instant, so a custom/
@@ -1029,13 +1030,13 @@ error_t manifest_build(
     error_t err = manifest_mount_table(state, NULL, arena, &mounts);
     if (err) return err;
 
-    manifest_t *manifest = manifest_allocate(arena, 128, profiles.count);
+    manifest_t *manifest = manifest_allocate(arena, 128, enabled_profiles.count);
     manifest->mounts = mounts;
 
     /* One contribution per profile, in order; precedence runs over them once
      * every one of them is settled. */
-    for (size_t i = 0; i < profiles.count; i++) {
-        const char *profile = profiles.entries[i].name;
+    for (size_t i = 0; i < enabled_profiles.count; i++) {
+        const char *name = enabled_profiles.entries[i].name;
 
         /* The profile's tree, scoped to the iteration, or none where its branch
          * is gone — and "missing" is not "broken": missing is an observation —
@@ -1043,21 +1044,21 @@ error_t manifest_build(
          * (manifest_missing) and not among the view's profiles, and the workspace
          * reads its records as orphans — broken is an error that must propagate. */
         git_tree *tree = NULL;
-        err = gitops_branch_tree(repo, profile, &tree);
+        err = gitops_branch_tree(repo, name, &tree);
         if (err) return err;
         if (!tree) {
-            manifest_note_missing(manifest, arena_strdup(arena, profile), arena);
+            manifest_note_missing(manifest, arena_strdup(arena, name), arena);
             continue;
         }
 
-        /* The profile's claims: its branch over the tree just opened, its sheet
-         * read by the branch's walk from that tree, under the name whose claims
-         * they are. One view, many branches. The name the step copies is what
+        /* The profile's claims: the profile at the tree just opened, its sheet
+         * read by the profile's walk from that tree, under the name whose claims
+         * they are. One view, many profiles. The name the step copies is what
          * every row of it borrows, so the view never depends on the state's row
-         * cache, and the branch goes with the tree. */
-        branch_t *branch = branch_open(repo, profile, tree);
-        err = manifest_contribute(manifest, branch, arena);
-        branch_free(branch);
+         * cache, and the profile goes with the tree. */
+        profile_t *profile = profile_open(name, tree);
+        err = manifest_contribute(manifest, profile, arena);
+        profile_free(profile);
         git_tree_free(tree);
 
         if (err) return err;
@@ -1070,15 +1071,15 @@ error_t manifest_build(
 }
 
 /**
- * Build the manifest from one branch
+ * Build the manifest from one profile
  */
-error_t manifest_build_branch(
-    branch_t *branch,
+error_t manifest_build_profile(
+    profile_t *profile,
     const mount_table_t *mounts,
     arena_t *arena,
     manifest_t **out
 ) {
-    CHECK_NULL(branch);
+    CHECK_NULL(profile);
     CHECK_NULL(mounts);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -1087,15 +1088,15 @@ error_t manifest_build_branch(
 
     manifest_t *manifest = manifest_allocate(arena, 128, 1);
 
-    /* mounts borrows from a function parameter — it outlives the branch's walk,
-     * and the table outlives the view (manifest_mounts lends it). The branch is
-     * the caller's, and the view keeps nothing of it. */
+    /* mounts borrows from a function parameter — it outlives the profile's walk,
+     * and the table outlives the view (manifest_mounts lends it). The profile
+     * is the caller's, and the view keeps nothing of it. */
     manifest->mounts = mounts;
 
-    /* One contribution, settled and layered like any other, so a branch's view
-     * answers manifest_lookup_claim and manifest_name exactly as an enabled view
-     * does. */
-    error_t err = manifest_contribute(manifest, branch, arena);
+    /* One contribution, settled and layered like any other, so one profile's
+     * view answers manifest_lookup_claim and manifest_name exactly as an enabled
+     * view does. */
+    error_t err = manifest_contribute(manifest, profile, arena);
     if (err) return err;
 
     manifest_layer(manifest, arena);
@@ -1293,7 +1294,7 @@ const char *manifest_claim_name(
 
     /* The claim standing there, before the name one would take: a derived claim
      * is held and names nothing, so the ascent climbs past it and would answer
-     * a name the branch never held. Else the name the profile would give the
+     * a name the profile never held. Else the name the profile would give the
      * place — its label's word at a root of its own. Either answer is the arena's:
      * the row's name is copied, as the namer's own leaf clause copies. */
     const manifest_row_t *row = manifest_lookup_claim(manifest, profile, filesystem_path);

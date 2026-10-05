@@ -19,7 +19,6 @@
 #include "base/output.h"
 #include "base/refspec.h"
 #include "cmds/completion.h"
-#include "core/branch.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -28,17 +27,17 @@
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
-#include "sys/revision.h"
 #include "sys/identity.h"
+#include "sys/revision.h"
 #include "sys/stage.h"
 #include "utils/commit.h"
 
 /**
- * The claim `branch` stands at `filesystem_path`, or NULL when it stands none
+ * The claim `profile` stands at `filesystem_path`, or NULL when it stands none
  *
- * One contribution of the branch, asked for the row at the path (core/manifest.h
- * manifest_build_branch, manifest_lookup_claim). The row is the arena's, as the
- * view is, so the answer survives this call.
+ * One contribution of the profile, asked for the row at the path (core/manifest.h
+ * manifest_build_profile, manifest_lookup_claim). The row is the arena's, as
+ * the view is, so the answer survives this call.
  *
  * The row and not its name, because this file asks it three ways: the search
  * takes any claim, for whether a profile holds the path at all; the read takes
@@ -51,14 +50,14 @@
  * admission's, and it reads more of one view than a row
  * (revert_refuse_second_name).
  *
- * Strict, like every view: a branch whose sheet will not load refuses the question
+ * Strict, like every view: a profile whose sheet will not load refuses the question
  * rather than answering from the tree alone. cmd_revert loads both sheets strictly
  * already, and the search is complete or an error (revert_select_profile), so
  * no policy is added here.
  *
  * @param ctx Dispatch context (must not be NULL)
- * @param branch The branch the claim is looked for in — the tip's or the target
- *               commit's (must not be NULL)
+ * @param profile The profile the claim is looked for in — at the tip's tree or
+ *                the target commit's (must not be NULL)
  * @param filesystem_path Where to ask (must not be NULL)
  * @param out_row The claim, or NULL where none stands and after an error (must
  *                not be NULL; the command arena's, borrowed)
@@ -66,23 +65,23 @@
  */
 static error_t revert_claim_standing(
     const dotta_ctx_t *ctx,
-    branch_t *branch,
+    profile_t *profile,
     const char *filesystem_path,
     const manifest_row_t **out_row
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(branch);
+    CHECK_NULL(profile);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(out_row);
 
     *out_row = NULL;
 
     manifest_t *view = NULL;
-    error_t err = manifest_build_branch(branch, ctx->run.mounts, ctx->arena, &view);
+    error_t err = manifest_build_profile(profile, ctx->run.mounts, ctx->arena, &view);
     if (err) return err;
 
     /* The profile's own contribution: the row is the arena's */
-    *out_row = manifest_lookup_claim(view, branch_profile(branch), filesystem_path);
+    *out_row = manifest_lookup_claim(view, profile_name(profile), filesystem_path);
 
     return NULL;
 }
@@ -153,8 +152,8 @@ static error_t revert_select_profile(
     string_array_t holders;
     string_array_init(&holders, ctx->arena);
     for (size_t i = 0; !err && i < profiles.count; i++) {
-        branch_t *branch = NULL;
-        err = branch_load(repo, profiles.entries[i], &branch);
+        profile_t *profile = NULL;
+        err = profile_load(repo, profiles.entries[i], &profile);
         if (err) break;
 
         const char *storage_path = NULL;
@@ -167,19 +166,19 @@ static error_t revert_select_profile(
              * has enabled is bound nowhere, so no path reaches its custom/ claims,
              * and their names find them as always. */
             const manifest_row_t *row = NULL;
-            err = revert_claim_standing(ctx, branch, arg->filesystem_path, &row);
+            err = revert_claim_standing(ctx, profile, arg->filesystem_path, &row);
             if (row) storage_path = row->storage_path;
         } else {
             /* A name, as typed: held by either of the profile's two documents
-             * (core/branch.h branch_holds) — the tree first, a subtree counting
+             * (core/profiles.h profile_holds) — the tree first, a subtree counting
              * as a name has always counted, so a name the tree holds is answered
              * without the sheet; the sheet where the tree is silent, for a
              * directory claim with nothing beneath it. */
-            branch_held_t held;
-            err = branch_holds(branch, arg->storage_path, &held);
-            if (!err && held.kind != BRANCH_HELD_NOTHING) storage_path = arg->storage_path;
+            profile_held_t held;
+            err = profile_holds(profile, arg->storage_path, &held);
+            if (!err && held.kind != PROFILE_HELD_NOTHING) storage_path = arg->storage_path;
         }
-        branch_free(branch);
+        profile_free(profile);
 
         if (storage_path) {
             if (!holder) holder = profiles.entries[i];
@@ -245,32 +244,30 @@ static error_t revert_select_profile(
  * them.
  *
  * @param ctx Dispatch context (must not be NULL)
- * @param branch The branch at its tip, whose claims the name would join (must
- *               not be NULL)
+ * @param profile The profile at its tip, whose claims the name would join (must
+ *                not be NULL)
  * @param filesystem_path Where the typed name resolves (must not be NULL)
  * @param name The typed name (must not be NULL)
  * @return The refusal, or NULL when the name may be authored
  */
 static error_t revert_refuse_second_name(
     const dotta_ctx_t *ctx,
-    branch_t *branch,
+    profile_t *profile,
     const char *filesystem_path,
     const char *name
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(branch);
+    CHECK_NULL(profile);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(name);
 
-    const char *profile = branch_profile(branch);
-
     manifest_t *view = NULL;
-    error_t err = manifest_build_branch(branch, ctx->run.mounts, ctx->arena, &view);
+    error_t err = manifest_build_profile(profile, ctx->run.mounts, ctx->arena, &view);
     if (err) return err;
 
-    const manifest_row_t *row = manifest_lookup_claim(view, profile, filesystem_path);
+    const manifest_row_t *row = manifest_lookup_claim(view, profile_name(profile), filesystem_path);
     if (row && !manifest_is_derived(row) &&
-        !manifest_holds_name(view, profile, filesystem_path, name)) {
+        !manifest_holds_name(view, profile_name(profile), filesystem_path, name)) {
         /* The path is the shared term of three paths in one sentence, and the
          * one path here the user never typed — so it is spelled the way the shell
          * spells it, as the screen that reports the pair this refuses already
@@ -285,7 +282,7 @@ static error_t revert_refuse_second_name(
          * up is remove's, the verb the fact implies. */
         return error_create(
             ERR_INVALID_ARG, "Profile '%s' names '%s' as '%s', and '%s' would be a "
-            "second name for it", profile, shown, row->storage_path, name
+            "second name for it", profile_name(profile), shown, row->storage_path, name
         );
     }
 
@@ -305,7 +302,7 @@ static error_t revert_refuse_second_name(
  *                  in its sheet is a contract change to find, and then the path
  *                  is the key.
  *
- * A name is answered by both documents at once (core/branch.h branch_holds),
+ * A name is answered by both documents at once (core/profiles.h profile_holds),
  * and that is what keeps the fallback honest: a DIRECTORY claim standing at the
  * typed name with no tree entry — a tracked directory with nothing inside it,
  * an ancestor chain the tree no longer has — answers as the directory it is,
@@ -322,9 +319,9 @@ static error_t revert_refuse_second_name(
  * and where the place stands is none of it.
  *
  * @param ctx Dispatch context (must not be NULL)
- * @param target_branch The profile's branch over the target commit's tree, which
- *                      reads the commit's sheet strictly where its tree is silent
- *                      (must not be NULL)
+ * @param target_profile The profile at the target commit's tree, which reads
+ *                       the commit's sheet strictly where its tree is silent
+ *                       (must not be NULL)
  * @param arg The argument, in the key it named (must not be NULL)
  * @param filesystem_path Where both trees may be asked about, or NULL for a custom/
  *        name this machine cannot place
@@ -336,82 +333,81 @@ static error_t revert_refuse_second_name(
  */
 static error_t revert_target_entry(
     const dotta_ctx_t *ctx,
-    branch_t *target_branch,
+    profile_t *target_profile,
     const path_input_t *arg,
     const char *filesystem_path,
     const char *commit,
     const char **out_name,
-    branch_held_t *out_held
+    profile_held_t *out_held
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(target_branch);
+    CHECK_NULL(target_profile);
     CHECK_NULL(arg);
     CHECK_NULL(commit);
     CHECK_NULL(out_name);
     CHECK_NULL(out_held);
 
     *out_name = NULL;
-    *out_held = (branch_held_t){ 0 };
+    *out_held = (profile_held_t){ 0 };
 
     /* A typed name is asked first, as typed; a path has no name until the claim
      * standing there gives it one. The commit's two documents answer a name through
-     * the branch over its tree (core/branch.h branch_holds), which reads the
+     * the profile at its tree (core/profiles.h profile_holds), which reads the
      * commit's sheet where the tree is silent. */
     const char *name = arg->key == PATH_KEY_STORAGE ? arg->storage_path : NULL;
-    branch_held_t held = { .kind = BRANCH_HELD_NOTHING };
+    profile_held_t held = { .kind = PROFILE_HELD_NOTHING };
 
-    error_t err = name ? branch_holds(target_branch, name, &held) : NULL;
+    error_t err = name ? profile_holds(target_profile, name, &held) : NULL;
     if (err) return err;
 
     /* Only a name the commit holds in neither document falls back to the claim
      * standing at the path, and a path argument starts here. The claim is asked
      * by its own name, which the commit holds in one document or the other by
      * construction: the row came from them. */
-    if (held.kind == BRANCH_HELD_NOTHING && filesystem_path) {
+    if (held.kind == PROFILE_HELD_NOTHING && filesystem_path) {
         const manifest_row_t *row = NULL;
-        err = revert_claim_standing(ctx, target_branch, filesystem_path, &row);
+        err = revert_claim_standing(ctx, target_profile, filesystem_path, &row);
         if (err) return err;
 
         if (row) {
             name = row->storage_path;
-            err = branch_holds(target_branch, name, &held);
+            err = profile_holds(target_profile, name, &held);
             if (err) return err;
         }
     }
 
     switch (held.kind) {
-        case BRANCH_HELD_FILE:
+        case PROFILE_HELD_FILE:
             *out_name = name;
             *out_held = held;
             return NULL;
 
-        case BRANCH_HELD_DIRECTORY:
-        case BRANCH_HELD_SUBMODULE:
+        case PROFILE_HELD_DIRECTORY:
+        case PROFILE_HELD_SUBMODULE:
             return error_create(
                 ERR_INVALID_ARG, "'%s' is %s at commit %s; revert restores one file",
                 name,
-                held.kind == BRANCH_HELD_DIRECTORY ? "a directory" : "a submodule",
+                held.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule",
                 commit
             );
 
-        case BRANCH_HELD_NOTHING:
+        case PROFILE_HELD_NOTHING:
             break;
     }
 
     /* Nothing, in the key the user named. A row found above is held in one document
      * or the other and cannot reach here; if it ever did, this block is honest
      * for it too. */
-    const char *profile = branch_profile(target_branch);
     if (arg->key == PATH_KEY_FILESYSTEM) {
         return error_create(
             ERR_NOT_FOUND, "Profile '%s' held nothing at '%s' at commit %s",
-            profile, arg->filesystem_path, commit
+            profile_name(target_profile), arg->filesystem_path, commit
         );
     }
 
     return error_create(
         ERR_NOT_FOUND, "File '%s' not found at commit %s in profile '%s'",
-        arg->storage_path, commit, profile
+        arg->storage_path, commit, profile_name(target_profile)
     );
 }
 
@@ -631,7 +627,7 @@ static const char *revert_commit_message(
  *
  * The name is the one the revert writes, because a claim outlives the name it
  * was recorded under: the target commit records it at one, and the revert writes
- * it at the name the branch holds now (cmd_revert, the two names). Every
+ * it at the name the profile holds now (cmd_revert, the two names). Every
  * construction takes the second — the sheet's own key is what metadata_same_claim
  * compares, so a claim built under the commit's name would answer "different"
  * against every standing one.
@@ -764,11 +760,11 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     const char *restored_name = NULL;
     git_commit *target_commit = NULL;
     stage_t *stage = NULL;
-    branch_t *standing_branch = NULL;
+    profile_t *standing_profile = NULL;
     git_tree *target_tree = NULL;
-    branch_t *target_branch = NULL;
+    profile_t *target_profile = NULL;
     git_tree_entry *standing_entry = NULL;
-    branch_held_t target_held = { 0 };
+    profile_held_t target_held = { 0 };
     metadata_t *standing_sheet = NULL;
     metadata_t *target_sheet = NULL;
     metadata_item_t *restored_claim = NULL;
@@ -801,24 +797,24 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * that moves between the preview and the commit is refused at the commit,
      * --force or not: what the user confirmed is what is reverted. It is also
      * the tree the profile's own name for the place is read from (steps 10 and
-     * 12), through the branch over it: the tree the revert edits is the tree
-     * the claim is looked for in, so the name and the write cannot disagree. */
+     * 12), through the profile at it: the tree the revert edits is the tree the
+     * claim is looked for in, so the name and the write cannot disagree. */
     char refname[DOTTA_REFNAME_MAX];
     err = gitops_branch_refname(refname, sizeof(refname), profile);
     if (err) goto cleanup;
 
     err = stage_open(repo, refname, &stage);
     if (err) goto cleanup;
-    standing_branch = branch_open(repo, profile, stage_tree(stage));
+    standing_profile = profile_open(profile, stage_tree(stage));
 
     /* Step 5: the target commit's tree, opened once and lent to everything below
-     * that reads the commit, and the branch over it. */
+     * that reads the commit, and the profile at it. */
     int rc = git_commit_tree(&target_tree, target_commit);
     if (rc < 0) {
         err = error_git(rc, "Cannot read the tree of commit '%s'", opts->commit);
         goto cleanup;
     }
-    target_branch = branch_open(repo, profile, target_tree);
+    target_profile = profile_open(profile, target_tree);
 
     /* Step 6: the two sheets — the one the write merges into, read from the tree
      * the stage opened at, and the target commit's, whose claim at the name is
@@ -865,13 +861,13 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * — while a commit object anywhere in the branch could refuse a revert that
      * needed none of it.) */
     err = revert_target_entry(
-        ctx, target_branch, &arg, filesystem_path, oid_str, &target_name, &target_held
+        ctx, target_profile, &arg, filesystem_path, oid_str, &target_name, &target_held
     );
     if (err) goto cleanup;
 
     /* The blob the commit holds and the mode Git records for it, by value already
-     * (core/branch.h branch_held_t). `restored_blob` is its own copy because a
-     * reseal under another name (step 13) names an object no tree holds yet —
+     * (core/profiles.h profile_held_t). `restored_blob` is its own copy because
+     * a reseal under another name (step 13) names an object no tree holds yet —
      * and it is that object the preview describes, the gate compares and the
      * write stores. */
     const git_oid *target_blob = &target_held.oid;
@@ -907,7 +903,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * roots would choose a deployment contract the user did not. */
     if (arg.key == PATH_KEY_FILESYSTEM) {
         const manifest_row_t *row = NULL;
-        err = revert_claim_standing(ctx, standing_branch, filesystem_path, &row);
+        err = revert_claim_standing(ctx, standing_profile, filesystem_path, &row);
         if (err) goto cleanup;
 
         restored_name = row ? row->storage_path : target_name;
@@ -927,8 +923,8 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * The tree alone, on purpose: this asks Git's one-entry rule about the name
      * the write uses, and a directory claim the sheet holds there is retired by
      * the write (step 14) rather than standing in its way. So the sheet must
-     * not answer here, which is why core/branch.h branch_holds names this read
-     * as one of its non-readers. */
+     * not answer here, which is why core/profiles.h profile_holds names this
+     * read as one of its non-readers. */
     rc = git_tree_entry_bypath(&standing_entry, stage_tree(stage), restored_name);
     if (rc < 0 && rc != GIT_ENOTFOUND) {
         err = error_git(rc, "Cannot read '%s' in profile '%s'", restored_name, profile);
@@ -961,7 +957,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * the claim standing there and can never be a second name, so this arm is
      * the typed one's alone. */
     if (arg.key == PATH_KEY_STORAGE && !standing_entry && filesystem_path) {
-        err = revert_refuse_second_name(ctx, standing_branch, filesystem_path, restored_name);
+        err = revert_refuse_second_name(ctx, standing_profile, filesystem_path, restored_name);
         if (err) goto cleanup;
     }
 
@@ -1053,7 +1049,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      *
      * The index answers for the tree alone, and the tree is only half of what
      * the commit carries: an empty directory the profile claims has no entry to
-     * find, so a blob standing above one leaves it nowhere to stand and the branch
+     * find, so a blob standing above one leaves it nowhere to stand and the profile
      * names a directory it cannot hold. The sheet answers for those
      * (core/metadata.h), and it answers here, where every other refusal of this
      * revert already stands. */
@@ -1104,7 +1100,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     );
 
     /* The other name, said once and only where there is one: the write lands on
-     * the claim the branch holds now, and this is where the bytes come from. */
+     * the claim the profile holds now, and this is where the bytes come from. */
     if (strcmp(target_name, restored_name) != 0) {
         output_print(
             out, OUTPUT_NORMAL, "  Named at the commit: {cyan}%s{reset}\n",
@@ -1271,9 +1267,9 @@ cleanup:
     if (standing_sheet) metadata_free(standing_sheet);
     if (target_sheet) metadata_free(target_sheet);
     if (standing_entry) git_tree_entry_free(standing_entry);
-    branch_free(target_branch);
+    profile_free(target_profile);
     if (target_tree) git_tree_free(target_tree);
-    branch_free(standing_branch);
+    profile_free(standing_profile);
     stage_free(stage);
     if (target_commit) git_commit_free(target_commit);
 
@@ -1376,7 +1372,7 @@ static error_t revert_post_parse(
 
 /**
  * What can stand at the cursor, by the shapes revert_post_parse reads — as show,
- * without the bare-commit form: first a file of any branch as `profile:path`,
+ * without the bare-commit form: first a file of any profile as `profile:path`,
  * bare once -p pins one; after one positional the files of the profile it pins
  * or that profile's history, the grammar deciding by the next token; after two,
  * the commit. An `@` in the token being typed completes its commit part from

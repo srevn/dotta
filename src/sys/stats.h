@@ -4,9 +4,9 @@
  * Provides efficient statistics gathering over blobs and commit history. What a
  * *profile* holds is a different question — which tree paths are content and
  * which are dotta's own bookkeeping is knowledge this layer does not have — and
- * is answered by the branch's count (core/branch.h branch_count), which reads
- * no blob; the bytes a listing names are read through the primitive below by
- * the listing itself (cmds/list.c list_size_claim, list_files).
+ * is answered by the profile's counts (core/profiles.h profile_counts), which
+ * read no blob; the bytes a listing names are read through the primitive below
+ * by the listing itself (cmds/list.c list_size_claim, list_files).
  *
  * Design principles:
  * - Minimize expensive operations (commit walking deferred to verbose mode)
@@ -119,7 +119,7 @@ error_t stats_blob_size_with_odb(
  * Walks the history from `tip_oid` back, newest to oldest, mapping each of `paths`
  * to the most recent commit that touched it. The names are the caller's: which
  * of a tree's blobs a screen reads is knowledge this layer does not have (the
- * header), so the reader hands in the listing it prints — the branch's content,
+ * header), so the reader hands in the listing it prints — the profile's content,
  * never its machinery (cmds/list.c list_files) — and the map holds those names
  * and no other. So is the tip: the commit the names were listed at, read once
  * by the caller, so the map and the listing are one snapshot's whatever the branch

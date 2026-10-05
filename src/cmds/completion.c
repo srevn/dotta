@@ -26,8 +26,8 @@
 #include "base/error.h"
 #include "base/refspec.h"
 #include "base/string.h"
-#include "core/branch.h"
 #include "core/manifest.h"
+#include "core/profiles.h"
 #include "core/state.h"
 #include "infra/label.h"
 #include "infra/mount.h"
@@ -62,14 +62,14 @@ void completion_profiles(
 
     /* A listing that failed offers no local name, and the remote's may still; a
      * state the tolerant open could not load marks none of them enabled */
-    string_array_t branches;
-    error_t err = gitops_list_branches(repo, ctx->arena, &branches);
+    string_array_t profiles;
+    error_t err = gitops_list_branches(repo, ctx->arena, &profiles);
     if (!err) {
-        for (size_t i = 0; i < branches.count; i++) {
-            const char *branch = branches.entries[i];
+        for (size_t i = 0; i < profiles.count; i++) {
+            const char *profile = profiles.entries[i];
             fprintf(
-                out, "%s\t%s\n", branch,
-                state && state_enabled(state, branch) ? "Enabled profile"
+                out, "%s\t%s\n", profile,
+                state && state_enabled(state, profile) ? "Enabled profile"
                                                       : "Available profile"
             );
         }
@@ -178,7 +178,7 @@ typedef struct {
  * @param payload The offer (completion_offer_t)
  * @return NULL: an offer fails nowhere
  */
-static error_t completion_offer_directory(const branch_claim_t *claim, void *payload) {
+static error_t completion_offer_directory(const profile_claim_t *claim, void *payload) {
     const completion_offer_t *offer = payload;
 
     if (claim->type == PATH_TYPE_DIRECTORY) {
@@ -189,20 +189,20 @@ static error_t completion_offer_directory(const branch_claim_t *claim, void *pay
 }
 
 /**
- * A profile's directory claims, read from its branch's walk rather than the view
+ * A profile's directory claims, read from its walk rather than the view
  *
  * Either class, deliberately — see completion_files.
  */
 void completion_directories(
-    const dotta_ctx_t *ctx, FILE *out, const char *profile
+    const dotta_ctx_t *ctx, FILE *out, const char *pinned
 ) {
     git_repository *repo = ctx->run.repo;
-    if (repo == NULL || profile == NULL) return;
+    if (repo == NULL || pinned == NULL) return;
 
-    /* The profile's branch at its tip: not a branch, or a tip that will not read,
-     * offers nothing */
-    branch_t *branch = NULL;
-    error_t err = branch_load(repo, profile, &branch);
+    /* The profile at its tip: not a branch, or a tip that will not read, offers
+     * nothing */
+    profile_t *profile = NULL;
+    error_t err = profile_load(repo, pinned, &profile);
     if (err) return;
 
     /* The directory claims the walk shows, so a claim a blob contradicts at its
@@ -211,17 +211,17 @@ void completion_directories(
      * a strict walk spares the tree. They come after the tree's blobs, so a walk
      * that fails offers none of them; its failure is dropped, as the load's above,
      * at most one per offer */
-    completion_offer_t offer = { .out = out, .profile = profile };
-    (void) branch_walk(branch, BRANCH_READ_STRICT, completion_offer_directory, &offer);
-    branch_free(branch);
+    completion_offer_t offer = { .out = out, .profile = pinned };
+    (void) profile_walk(profile, PROFILE_READ_STRICT, completion_offer_directory, &offer);
+    profile_free(profile);
 }
 
 /* The refspec walk: where the tokens go, and how many went. */
 typedef struct {
     FILE *out;
-    const char *branch;   /* current branch (source of the "<branch>:" prefix) */
-    bool prefix;          /* prefix "<branch>:" (all branches) vs bare path (pinned) */
-    size_t emitted;       /* tokens printed so far, every branch's */
+    const char *profile;  /* current profile (source of the "<profile>:" prefix) */
+    bool prefix;          /* prefix "<profile>:" (every profile) vs bare path (pinned) */
+    size_t emitted;       /* tokens printed so far, every profile's */
 } refspec_walk_t;
 
 /**
@@ -231,7 +231,7 @@ typedef struct {
  * of every entry's whole name: a name in the grammar is content, and whatever
  * else a branch holds — a top-level blob under no label, .dotta/, whatever a
  * hand left beside them — is its machinery, pruned with its subtree and no token.
- * The walk stops at the cap, and the loop over the branches reads the count.
+ * The walk stops at the cap, and the loop over the profiles reads the count.
  */
 static error_t refspec_emit(
     const char *path, const git_tree_entry *entry, void *payload,
@@ -246,9 +246,9 @@ static error_t refspec_emit(
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) return NULL;  /* descend trees */
 
     if (walk->prefix) {
-        fprintf(walk->out, "%s:%s\n", walk->branch, path);
+        fprintf(walk->out, "%s:%s\n", walk->profile, path);
     } else {
-        fprintf(walk->out, "%s\t%s\n", path, walk->branch);
+        fprintf(walk->out, "%s\t%s\n", path, walk->profile);
     }
 
     if (++walk->emitted >= COMPLETE_REFSPEC_FILES_MAX) {
@@ -258,7 +258,7 @@ static error_t refspec_emit(
 }
 
 /**
- * A branch's files, read from Git rather than the view
+ * A profile's files, read from Git rather than the view
  */
 void completion_refspecs(
     const dotta_ctx_t *ctx, FILE *out, const char *pinned
@@ -266,14 +266,14 @@ void completion_refspecs(
     git_repository *repo = ctx->run.repo;
     if (repo == NULL) return;
 
-    string_array_t branches;
+    string_array_t profiles;
     if (pinned) {
-        string_array_init(&branches, ctx->arena);
-        string_array_push(&branches, pinned);
+        string_array_init(&profiles, ctx->arena);
+        string_array_push(&profiles, pinned);
     } else {
-        error_t err = gitops_list_branches(repo, ctx->arena, &branches);
+        error_t err = gitops_list_branches(repo, ctx->arena, &profiles);
         if (err) return;              /* silent-failure model */
-        string_array_sort(&branches); /* deterministic order under the cap */
+        string_array_sort(&profiles); /* deterministic order under the cap */
     }
 
     refspec_walk_t walk = {
@@ -281,18 +281,18 @@ void completion_refspecs(
         .prefix = (pinned == NULL)
     };
 
-    /* Every branch until the cap is reached: the walk that reached it stopped
+    /* Every profile until the cap is reached: the walk that reached it stopped
      * there */
-    for (size_t i = 0; i < branches.count && walk.emitted < COMPLETE_REFSPEC_FILES_MAX; i++) {
-        const char *branch = branches.entries[i];
+    for (size_t i = 0; i < profiles.count && walk.emitted < COMPLETE_REFSPEC_FILES_MAX; i++) {
+        const char *profile = profiles.entries[i];
 
         git_tree *tree = NULL;
-        error_t err = gitops_load_branch_tree(repo, branch, &tree);
+        error_t err = gitops_load_branch_tree(repo, profile, &tree);
         if (err) continue;  /* not a branch, or unloadable: silent */
 
-        walk.branch = branch;
+        walk.profile = profile;
         /* A walk's failure is silent here, as the load's above: at most one per
-         * branch is dropped */
+         * profile is dropped */
         (void) gitops_tree_walk(tree, refspec_emit, &walk);
         git_tree_free(tree);
     }
@@ -309,20 +309,20 @@ void completion_refspecs(
  */
 static size_t commits_walk(
     git_repository *repo, FILE *out, const char *prefix,
-    const char *const *branches, size_t branch_count
+    const char *const *profiles, size_t profile_count
 ) {
-    bool label = branch_count > 1;
+    bool label = profile_count > 1;
     size_t emitted = 0;
 
-    for (size_t b = 0; b < branch_count; b++) {
-        const char *branch = branches[b];
+    for (size_t b = 0; b < profile_count; b++) {
+        const char *profile = profiles[b];
 
         /* The branch's tip, as every verb that takes one of these commits reads
          * it (sys/gitops.h gitops_load_branch_commit) — never a DWIM, whose tag
          * of the same name would win and offer commits no branch holds. A name
          * that is no branch, or a tip that will not read, offers nothing. */
         git_commit *tip = NULL;
-        error_t err = gitops_load_branch_commit(repo, branch, &tip);
+        error_t err = gitops_load_branch_commit(repo, profile, &tip);
         if (err) continue;
 
         git_revwalk *walker = NULL;
@@ -361,7 +361,7 @@ static size_t commits_walk(
 
             if (prefix) fprintf(out, "%s@", prefix);
             if (label) {
-                fprintf(out, "%s\t%s: %.*s\n", oid_str, branch, (int) msg_len, message);
+                fprintf(out, "%s\t%s: %.*s\n", oid_str, profile, (int) msg_len, message);
             } else {
                 fprintf(out, "%s\t%.*s\n", oid_str, (int) msg_len, message);
             }
@@ -384,7 +384,7 @@ static size_t commits_walk(
  */
 static void commits_emit(
     const dotta_ctx_t *ctx, FILE *out, const char *prefix,
-    const char *const *branches, size_t branch_count
+    const char *const *profiles, size_t profile_count
 ) {
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;
@@ -404,8 +404,8 @@ static void commits_emit(
         fprintf(out, "%s\t%s\n", references[i].ref, references[i].summary);
     }
 
-    if (branch_count > 0 &&
-        commits_walk(repo, out, prefix, branches, branch_count) > 0) {
+    if (profile_count > 0 &&
+        commits_walk(repo, out, prefix, profiles, profile_count) > 0) {
         return;
     }
 
@@ -436,11 +436,11 @@ const char *completion_profile_of(const dotta_ctx_t *ctx, const char *token) {
  */
 void completion_commits(
     const dotta_ctx_t *ctx, FILE *out,
-    char *const *branches, size_t branch_count
+    char *const *profiles, size_t profile_count
 ) {
     /* The hooks hold `char **` buckets; the walk reads them. C has no implicit
      * widening to a pointer to const pointer to const. */
-    commits_emit(ctx, out, NULL, (const char *const *) branches, branch_count);
+    commits_emit(ctx, out, NULL, (const char *const *) profiles, profile_count);
 }
 
 /**
@@ -464,8 +464,8 @@ bool completion_commits_at(
 
     char *prefix = arena_strndup(ctx->arena, current, (size_t) (at - current));
 
-    const char *branch = pinned ? pinned : completion_profile_of(ctx, prefix);
-    commits_emit(ctx, out, prefix, &branch, 1);
+    const char *profile = pinned ? pinned : completion_profile_of(ctx, prefix);
+    commits_emit(ctx, out, prefix, &profile, 1);
     return true;
 }
 

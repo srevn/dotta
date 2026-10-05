@@ -38,7 +38,7 @@ typedef struct {
  * never applied, and dotta makes no ongoing claim over the destination. One
  * profile, never the enabled set — layering is not composed. What is copied is
  * named three ways, each laying the copy out in its own key: a profile mirrors
- * its branch, a storage path copies what the branch claims at and beneath that
+ * its claims, a storage path copies what the profile claims at and beneath that
  * name, and a filesystem path copies what the profile places at and beneath that
  * path on this machine.
  *

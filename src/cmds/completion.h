@@ -41,8 +41,8 @@
  */
 typedef enum {
     COMPLETION_ENABLED,   /* The enabled set, in precedence order */
-    COMPLETION_LOCAL,     /* Every local branch, the enabled ones marked */
-    COMPLETION_ALL        /* Local branches, then the remote-tracking ones not yet local */
+    COMPLETION_LOCAL,     /* Every local profile, the enabled ones marked */
+    COMPLETION_ALL        /* Local profiles, then the remote-tracking branches not yet local */
 } completion_profiles_t;
 
 /**
@@ -75,24 +75,24 @@ void completion_files(
 );
 
 /**
- * A profile's directory claims, as its branch's walk decodes them rather than
- * as the view places them — the companion of completion_refspecs' pinned form
- * for the verbs that act on a branch's claims (remove untracks them, export
- * materializes them): bare slash-marked paths, the profile as description. An
+ * A profile's directory claims, as its walk decodes them rather than as the view
+ * places them — the companion of completion_refspecs' pinned form for the verbs
+ * that act on a profile's claims (remove untracks them, export materializes them):
+ * bare slash-marked paths, the profile as description. An
  * empty tracked directory (no tree entry) is exactly as offerable as the rest;
- * a claim a blob contradicts at its own name is none (core/branch.h branch_walk),
- * and is not offered.
+ * a claim a blob contradicts at its own name is none (core/profiles.h
+ * profile_walk), and is not offered.
  */
 void completion_directories(
-    const dotta_ctx_t *ctx, FILE *out, const char *profile
+    const dotta_ctx_t *ctx, FILE *out, const char *pinned
 );
 
 /**
- * A branch's files, from Git rather than the view, so the verbs that name a profile
- * — remove, list, show, revert, export — reach every file the branch holds:
- * shadowed by a higher profile, or in a profile not enabled here.
+ * A profile's files, from Git rather than the view, so the verbs that name a
+ * profile — remove, list, show, revert, export — reach every file the profile
+ * holds: shadowed by a higher profile, or in a profile not enabled here.
  *
- * @param pinned NULL: every local branch, as `<profile>:<path>`. Else that branch
+ * @param pinned NULL: every local profile, as `<profile>:<path>`. Else that profile
  *               only, as bare `<path>` (the profile is pinned).
  */
 void completion_refspecs(
@@ -117,7 +117,7 @@ const char *completion_profile_of(const dotta_ctx_t *ctx, const char *token);
  */
 void completion_commits(
     const dotta_ctx_t *ctx, FILE *out,
-    char *const *branches, size_t branch_count
+    char *const *profiles, size_t profile_count
 );
 
 /**

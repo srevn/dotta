@@ -1,7 +1,7 @@
 /**
  * metadata.h - The claim sheet
  *
- * Each profile branch carries one document, .dotta/metadata.json: the claims
+ * Beside its tree, each profile carries a sheet, .dotta/metadata.json: the claims
  * the profile makes about its paths beyond what its tree can say. An item exists
  * iff it claims something — every field beyond the key is a claim (or the one
  * cache), a capture whose answer claims nothing authors no item, and one that
@@ -10,9 +10,10 @@
  * Authority, per fact:
  * - content and type: the tree's (a blob, a link, an executable) — never restated
  *   here, and the tree's word wins over a stale item's kind (read for one name
- *   by core/branch.h branch_holds and branch_find — and, for the claim an orphan's
- *   record remembers, by core/workspace.c workspace_orphan_authority, through
- *   branch_find for a directory; for the whole branch by core/branch.c branch_walk)
+ *   by core/profiles.h profile_holds and profile_find — and, for the claim an
+ *   orphan's record remembers, by core/workspace.c workspace_orphan_authority,
+ *   through profile_find for a directory; for the whole profile by core/profiles.c
+ *   profile_walk)
  * - permission bits: the sheet's ("mode") — Git's filemode holds one bit of them
  *   (owner-execute), the sheet holds them all
  * - ownership: the sheet's ("owner"/"group"), two names either of which may be
@@ -60,9 +61,9 @@
  * the word itself (metadata_prune_ancestors).
  *
  * The sheet is sparse and the view completes it: an unclaimed mode is resolved
- * into an answer at build, by the claim's floor (core/branch.h branch_claim_mode:
- * the filemode floor for a blob, DIR_MODE_DEFAULT for a directory claim), so no
- * consumer downstream of the view ever meets a hole.
+ * into an answer at build, by the claim's floor (core/profiles.h
+ * profile_claim_mode: the filemode floor for a blob, DIR_MODE_DEFAULT for a
+ * directory claim), so no consumer downstream of the view ever meets a hole.
  *
  * Symlinks claim no mode: symlink(2) takes none, and though lchmod(2) exists on
  * macOS/BSD, the bits it sets govern nothing — non-portable and functionally
@@ -150,8 +151,8 @@ typedef struct state_record state_record_t;
  * its "tracked" word, never by the bits it carries, so nothing compares a mode
  * against this to read intent back out of it. Readers, each supplying the answer
  * where a claim named none: the claim's floor, which the view's rows take
- * (core/branch.c branch_claim_mode), deploy's creation of a rung no claim covers
- * (core/deploy.c), and export's materialisation (cmds/export.c).
+ * (core/profiles.c profile_claim_mode), deploy's creation of a rung no claim
+ * covers (core/deploy.c), and export's materialisation (cmds/export.c).
  */
 #define DIR_MODE_DEFAULT 0755
 
@@ -160,16 +161,17 @@ typedef struct state_record state_record_t;
  *
  * Permission bits run 0000–0777 and 0000 is one of them: `chmod 000` is a real
  * mode a user can mean. Absence therefore needs a value outside the domain, not
- * the domain's floor. A sheet's item carries it, and so does the claim a branch
- * decodes from one (core/branch.h branch_claim_t); it ends wherever a mode is
- * placed — the view's rows and export's copy take the claim's floor (core/branch.h
- * branch_claim_mode: the filemode floor for a blob, DIR_MODE_DEFAULT for a
- * directory) and a capture's record takes none (metadata_item_claim: a link's,
- * the one capture that claims no mode) — so no row, record, entry or verdict
- * carries it. The header show prints tests it on the decoded claim, where a mode
- * is claimed (cmds/show.c show_print_blob). The commands that read an item's
- * mode raw test it beside the item: the capture lines add and update print
- * (cmds/add.c add_print_capture, cmds/update.c update_profile).
+ * the domain's floor. A sheet's item carries it, and so does the claim a profile
+ * decodes from one (core/profiles.h profile_claim_t); it ends wherever a mode
+ * is placed — the view's rows and export's copy take the claim's floor
+ * (core/profiles.h profile_claim_mode: the filemode floor for a blob,
+ * DIR_MODE_DEFAULT for a directory) and a capture's record takes none
+ * (metadata_item_claim: a link's, the one capture that claims no mode) — so no
+ * row, record, entry or verdict carries it. The header show prints tests it on
+ * the decoded claim, where a mode is claimed (cmds/show.c show_print_blob). The
+ * commands that read an item's mode raw test it beside the item: the capture
+ * lines add and update print (cmds/add.c add_print_capture, cmds/update.c
+ * update_profile).
  */
 #define MODE_UNCLAIMED ((mode_t) -1)
 
@@ -195,18 +197,18 @@ typedef struct state_record state_record_t;
  * cross-checked nowhere: the content reader classifies the blob's own bytes and
  * consults no claim (infra/content.h content_get_from_blob_oid), so the stamp
  * answers "was it sealed when it was written" — a screen's question, or a
- * schedule's. Readers, each through the claim the branch decodes from it
- * (core/branch.c branch_decode_blob): cmds/export.c export_entry_from_claim (which
- * blobs phase 1 reads), cmds/list.c list_files (the mark, and the framing taken
- * off the size beside it) and list_size_claim (the same framing, in the fold
- * the rows' total must agree with), cmds/show.c show_print_blob (the annotation)
- * and, onto the view's rows (core/manifest.h manifest_row_t.encrypted),
+ * schedule's. Readers, each through the claim the profile decodes from it
+ * (core/profiles.c profile_decode_blob): cmds/export.c export_entry_from_claim
+ * (which blobs phase 1 reads), cmds/list.c list_files (the mark, and the framing
+ * taken off the size beside it) and list_size_claim (the same framing, in the
+ * fold the rows' total must agree with), cmds/show.c show_print_blob (the
+ * annotation) and, onto the view's rows (core/manifest.h manifest_row_t.encrypted),
  * cmds/export.c export_entry_from_row, core/workspace.c workspace_analyze_file
  * and cmds/key.c key_status.
  *
  * So the link rule is the decode's alone, spelled in the arm where it already
- * branches on the type (core/branch.c branch_decode_blob): there is no per-field
- * reader here to hold it, and no reader of a branch's stamp reads the item.
+ * branches on the type (core/profiles.c profile_decode_blob): there is no per-field
+ * reader here to hold it, and no reader of a profile's stamp reads the item.
  */
 typedef struct {
     path_kind_t kind;   /* FILE: the tree names the path. DIRECTORY: the item is the claim. */
@@ -301,7 +303,7 @@ void metadata_item_free(metadata_item_t *item);
  *
  * Every field but the key travels: kind, mode, ownership, and the two flags.
  * The key is a parameter because a claim outlives the name it was recorded under
- * — a revert restores a commit's claim into the name the branch holds now
+ * — a revert restores a commit's claim into the name the profile holds now
  * (cmds/revert.c) — and passing `source->key` is the identity copy.
  *
  * @param source Source item to clone (must not be NULL)
@@ -689,32 +691,32 @@ error_t metadata_capture_ancestors(
  * duplicate key) — and a reader that folds one into an empty sheet is reading a
  * corrupt sheet as "no claims".
  *
- * The view holds to that without exception: the branch's walk reads the sheet
+ * The view holds to that without exception: the profile's walk reads the sheet
  * of the tree it walks, strictly for the view, and one that will not load fails
- * the build (core/branch.h branch_walk, core/manifest.h). So does the branch's
- * count, which is where a listing's question of what a profile holds ends
- * (core/branch.h branch_count).
+ * the build (core/profiles.h profile_walk, core/manifest.h). So do the profile's
+ * counts, which are where a listing's question of what a profile holds ends
+ * (core/profiles.h profile_counts).
  *
  * The readers that deliberately do otherwise are counted here, and each is that
  * command's decision about its own output, never a second answer from here:
- * export's materialisation floor through the branch's tolerant walk and point
- * questions (core/branch.h branch_walk and branch_find, from cmds/export.c
+ * export's materialisation floor through the profile's tolerant walk and point
+ * questions (core/profiles.h profile_walk and profile_find, from cmds/export.c
  * export_collect_profile and export_collect_storage; the bytes come out of a
  * damaged profile, warned once by cmd_export, and a copy left with nothing in
  * it is refused in the loader's words), the header show prints over a blob it
  * can read anyway — the mode, the ownership and the annotation alike, warned —
- * through the branch's tolerant read (core/branch.h branch_find, from cmds/show.c
- * show_file), the file listing's verbose marks through the branch's tolerant
- * walk (core/branch.h branch_walk, from cmds/list.c list_files, warned; the listing
- * is the tree's and stands, the marks are the sheet's and do not), the orphan
- * authority's third answer through the branch's strict read (core/branch.h
- * branch_find, from core/workspace.c workspace_orphan_authority, which folds
- * the failure to UNVERIFIED and never to "no claims"), the completion's offer
- * through the branch's strict walk (core/branch.h branch_walk, from
+ * through the profile's tolerant read (core/profiles.h profile_find, from
+ * cmds/show.c show_file), the file listing's verbose marks through the profile's
+ * tolerant walk (core/profiles.h profile_walk, from cmds/list.c list_files, warned;
+ * the listing is the tree's and stands, the marks are the sheet's and do not),
+ * the orphan authority's third answer through the profile's strict read
+ * (core/profiles.h profile_find, from core/workspace.c workspace_orphan_authority,
+ * which folds the failure to UNVERIFIED and never to "no claims"), the completion's
+ * offer through the profile's strict walk (core/profiles.h profile_walk, from
  * cmds/completion.c completion_directories, which drops the failure as every
  * completion source drops its own: cmds/completion.h), and the claims a profile's
- * deletion hands its hooks through the branch's tolerant walk and
- * branch_contradicted (core/branch.h, from cmds/remove.c remove_profile; the
+ * deletion hands its hooks through the profile's tolerant walk and
+ * profile_contradicted (core/profiles.h, from cmds/remove.c remove_profile; the
  * profile goes all the same, its hooks handed the tree's files alone, warned
  * before the preview). A further reader would have to argue for one.
  *
@@ -724,7 +726,7 @@ error_t metadata_capture_ancestors(
  *                its callers name it nowhere (must not be NULL)
  * @param out Metadata (must not be NULL, caller must free with metadata_free);
  *            untouched on failure, so the NULL a caller passed is still no sheet
- *            (core/branch.c branch_sheet_failure's handle)
+ *            (core/profiles.c profile_load_sheet's handle)
  * @return Error or NULL on success
  */
 error_t metadata_load_from_tree(

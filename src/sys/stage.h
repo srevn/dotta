@@ -128,10 +128,10 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out);
 /**
  * The tree the stage opened at — the ref's own bytes at open
  *
- * Readers: the sheet loader (add, update, revert); the branch add and revert
- * open over it (cmds/add.c cmd_add, cmds/revert.c cmd_revert, through core/branch.h
- * branch_open); the questions revert and remove ask of the branch as it stood —
- * the claim at a path, the entry at a name, a second name, the claims an argument
+ * Readers: the sheet loader (add, update, revert); the profile add and revert
+ * open at it (cmds/add.c cmd_add, cmds/revert.c cmd_revert, through core/profiles.h
+ * profile_open); the questions revert and remove ask of the branch as it stood
+ * — the claim at a path, the entry at a name, a second name, the claims an argument
  * removes; and the file an edit session opens on (cmds/ignore.c ignore_edit,
  * ignore_modify), read from the tree the session commits on. Never NULL: an
  * orphan's stage stands on the empty tree, and add — the one reader that opens

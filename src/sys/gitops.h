@@ -443,8 +443,8 @@ error_t gitops_load_branch_tree(
  *
  * Readers: the walks over a profile's content, which SKIP machinery at their
  * gate — a name under no label, a tree of it with everything beneath (infra/label.h
- * label_prefixes) — core/branch.c branch_step, which also STOPs where its own
- * visitor fails, cmds/remove.c remove_list_entry, and cmds/completion.c
+ * label_prefixes) — core/profiles.c profile_step, which also STOPs where its
+ * own visitor fails, cmds/remove.c remove_list_entry, and cmds/completion.c
  * refspec_emit, which also STOPs at its cap; and the ciphertext census, which
  * SKIPs a binding it has met and a subtree it cannot load, and STOPs where its
  * asker has an answer (infra/epoch.c epoch_present_blob).

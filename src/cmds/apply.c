@@ -2035,7 +2035,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Its sibling: the paths a profile holds for a path it also names otherwise.
      * These stand somewhere and are in no bucket either — one name of the group
-     * stands there and deploys, and the rest are in the branch and in no row.
+     * stands there and deploys, and the rest are in the profile and in no row.
      * `--dry-run` is the safety on the way out: dropping a directory name takes
      * every claim beneath it, and the preview shows that rather than asserting
      * it. */

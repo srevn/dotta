@@ -160,7 +160,7 @@ label_split_t label_split(const char *s);
  * And it is the shape dispatch on an argument, which reads a storage shape before
  * the filesystem shapes.
  *
- * Readers: the branch's walk (core/branch.c branch_step), the file listing
+ * Readers: the profile's walk (core/profiles.c profile_step), the file listing
  * (cmds/remove.c remove_list_entry), the refspec completion (cmds/completion.c
  * refspec_emit), diff's delta selection (cmds/diff.c select_delta), the rule
  * compiler (infra/pathspec.c compile_rule), the resolver's storage arm and the
@@ -177,7 +177,7 @@ bool label_prefixes(const char *s);
  * `storage_path` stands under a label (label_prefixes) — the whole precondition,
  * and every reader holds a path that does: a name the namer composed beneath a
  * root's label (core/manifest.h manifest_name), a row's, validated where the
- * branch or the sheet was read (label_validate_storage), a record's, which the
+ * tree or the sheet was read (label_validate_storage), a record's, which the
  * store refuses to keep otherwise (core/state.c STORAGE_SPELLING), or an argument
  * the resolver's first arm dispatched on that very test (infra/path.c
  * path_input_resolve). Checked, never answered: a path under no label is a caller's
@@ -189,8 +189,8 @@ bool label_prefixes(const char *s);
  * (core/metadata.c metadata_capture_ownership), and which rule placed the root
  * a relocated claim lands under (core/workspace.c workspace_analyze_orphans) —
  * and two that only index by it: add's receipt counting names by their label
- * (cmds/add.c add_print_labels), and a branch's need of a target noting the labels
- * it claims under (core/profiles.c profile_note_label).
+ * (cmds/add.c add_print_labels), and a profile's need of a target noting the
+ * labels it claims under (core/profiles.c profile_note_label).
  */
 label_t label_of(const char *storage_path);
 
@@ -248,8 +248,8 @@ const char *label_tail(const char *storage_path);
  *
  * Pure rule check — no filesystem access, no arena, no state.
  *
- * Readers: the three boundaries a name arrives across — a branch's tree at its
- * walk (core/branch.c branch_step) and at the file listing (cmds/remove.c
+ * Readers: the three boundaries a name arrives across — a profile's tree at its
+ * walk (core/profiles.c profile_step) and at the file listing (cmds/remove.c
  * remove_list_entry), the sheet's keys (core/metadata.c metadata_from_json) —
  * and the resolver's storage arm, where the name is one the user typed
  * (infra/path.c path_input_resolve). The store holds a record's name to the same

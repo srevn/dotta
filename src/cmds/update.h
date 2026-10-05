@@ -1,7 +1,7 @@
 /**
  * update.h - Update profiles with modified files
  *
- * Syncs filesystem changes back into profile branches.
+ * Syncs filesystem changes back into profiles.
  * The reverse operation of apply (filesystem -> repo instead of repo -> filesystem).
  */
 

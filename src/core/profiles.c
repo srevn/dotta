@@ -947,7 +947,7 @@ error_t profile_find(
 }
 
 struct profile_stage {
-    arena_t *arena;         /* Its own: the struct, and the names the climb spells */
+    arena_t *arena;         /* Its own: the struct, and the names the climb and the prune spell */
     stage_t *stage;         /* The next tree, on the profile's branch */
     profile_t *base;        /* The profile at the tree it opened: never edited */
     metadata_t *sheet;      /* The base's sheet, copied: what the commit carries */
@@ -1354,6 +1354,127 @@ error_t profile_stage_changed(const profile_stage_t *stage, bool *out) {
     return stage_changed(stage->stage, out);
 }
 
+/**
+ * Does a tracked claim stand beneath this key?
+ *
+ * The sheet's half of the tracked set. An empty directory is named by its own
+ * claim and by nothing else, so a tracked claim is the one thing beneath a
+ * derivation that no index can name. A derivation anchors nothing — it survives
+ * by being anchored itself, and letting one anchor another would hold a doomed
+ * chain alive a rung per command. The word that decides the prune's subject decides
+ * this too, so the two readings cannot drift: they are one field.
+ *
+ * Strictly beneath, at a component boundary: a claim AT the key is the key, and
+ * one above it is the ancestry every path has.
+ *
+ * Reader: profile_stage_prune_ancestors.
+ *
+ * @param directories The copy's directory claims, borrowed — the caller's own
+ *                    snapshot (an empty one answers false)
+ * @param key The derivation's key
+ * @return true iff a tracked directory claim stands strictly beneath it
+ */
+static bool profile_stage_tracked_beneath(metadata_items_t directories, const char *key) {
+    const size_t len = strlen(key);
+
+    for (size_t i = 0; i < directories.count; i++) {
+        const metadata_item_t *dir = directories.entries[i];
+        if (dir->tracked && str_path_beneath(dir->key, key, len)) return true;
+    }
+
+    return false;
+}
+
+/**
+ * Prune the derivations nothing stands beneath
+ *
+ * The ancestors' third edit (profile_stage_t): the climb and the way author a
+ * derived claim at a rung because something beneath it stands, and this removes
+ * one the moment nothing does. A tracked claim is not this pass's subject at
+ * all — the walk's own word stands with nothing beneath it and at any attributes,
+ * and it is retracted where it was made (core/metadata.h) — so the pass reads
+ * one field and asks one question of what is left:
+ *
+ *   Is anything tracked beneath it? The profile's tracked set is the index's
+ *   paths and the copy's own tracked claims together. The index names every path
+ *   a tree can hold and is the sole authority for those — deliberately not the
+ *   sheet's items, which are sparse by design (a symlink carries an item only
+ *   where its owner is one absence would misstate), so a directory whose only
+ *   tracked content is an item-less symlink is anchored by the index and survives.
+ *   What no index can name is an empty directory, and only a tracked claim names
+ *   one — a derivation cannot anchor, since it survives solely by being anchored
+ *   itself and would otherwise hold a doomed chain alive one command per rung.
+ *
+ * Anchoring is judged against the stage's index past every edit — the tree the
+ * commit will record — so the prune sees the commit's exact tracked set and lands
+ * in the same commit as the removals that left a derivation nothing beneath it.
+ * Such a derivation has no role in any downstream pipeline: the view would claim
+ * it as an [ancestor] row over an emptied subtree, and divergence detection has
+ * nothing to compare against — typically the tail of an ancestry whose leaf has
+ * just gone (`dotta add ~/dir/f.conf`, then `dotta remove` of that file). One
+ * forward pass decides each derivation where it meets it and removes it there:
+ * a decision reads the index and the tracked claims alone, and the prune moves
+ * neither, so a removal changes no later decision, and the keys come back in
+ * the directory claims' order.
+ *
+ * Reader: profile_stage_commit, past its gate.
+ *
+ * @param stage The stage
+ * @param pruned Receives the keys pruned, appended as copies in the array's arena;
+ *               NULL where the writer keeps none, one with no record phase
+ * @return Error or NULL on success: a failed look at the index, which must not
+ *         prune
+ */
+static error_t profile_stage_prune_ancestors(profile_stage_t *stage, string_array_t *pruned) {
+    git_index *index = stage_index(stage->stage);
+
+    metadata_items_t directories = metadata_items(stage->sheet, PATH_KIND_DIRECTORY);
+    for (size_t d = 0; d < directories.count;) {
+        const metadata_item_t *dir = directories.entries[d];
+
+        /* The subject: a derivation, which exists because something beneath it
+         * does. A tracked claim is the walk's own word that the profile tracks
+         * the directory — it stands with nothing beneath it and at any attributes,
+         * and it leaves the sheet where a verb takes it, never by inference
+         * (core/metadata.h). The field core/metadata.c metadata_capture_rung
+         * reads to leave a standing claim alone, asked here for the same reason. */
+        if (dir->tracked) {
+            d++;
+            continue;
+        }
+
+        /* Half of what stands beneath: any path under the directory that a tree
+         * can hold. The sheet's items are not the universe there — a symlink
+         * tracked without elevation carries no item, yet still anchors its parent
+         * — so the index is the authority. It is sorted, so one prefix probe
+         * answers, the prefix spelled into the stage's arena; a failed look must
+         * not prune. */
+        int rc = git_index_find_prefix(
+            NULL, index, arena_str_format(stage->arena, "%s/", dir->key)
+        );
+        if (rc != 0 && rc != GIT_ENOTFOUND) {
+            return error_git(rc, "Cannot search the tree beneath '%s'", dir->key);
+        }
+
+        /* And the other half: the one path a tree cannot hold. Anchored by either,
+         * the derivation stands, and the cursor moves past it. */
+        if (rc == 0 || profile_stage_tracked_beneath(directories, dir->key)) {
+            d++;
+            continue;
+        }
+
+        /* Nothing stands beneath it: its key handed back where the caller keeps
+         * them, copied before the removal frees it; then the derivation goes,
+         * and the slice is read again, the removal having moved the entries behind
+         * the cursor up to it */
+        if (pruned) string_array_push(pruned, dir->key);
+        metadata_remove_item(stage->sheet, PATH_KIND_DIRECTORY, dir->key);
+        directories = metadata_items(stage->sheet, PATH_KIND_DIRECTORY);
+    }
+
+    return NULL;
+}
+
 error_t profile_stage_commit(
     profile_stage_t *stage, const char *message, bool *out_committed,
     string_array_t *pruned
@@ -1373,13 +1494,13 @@ error_t profile_stage_commit(
 
     /* The prune, against the stage's index — the tree the commit will record,
      * the removed file claims gone from it (the judge's own contract,
-     * core/metadata.h metadata_prune_ancestors): removing a file may leave the
-     * derived claim above it with nothing tracked beneath. The index answers
-     * that for every path a tree can hold — never the sheet's items, which omit
-     * unelevated symlinks — and the copy's own tracked claims answer it for the
-     * one path it cannot, an empty directory. Its keys are handed back where
-     * the writer keeps them, for its record phase. */
-    err = metadata_prune_ancestors(stage->sheet, stage_index(stage->stage), pruned);
+     * profile_stage_prune_ancestors): removing a file may leave the derived claim
+     * above it with nothing tracked beneath. The index answers that for every
+     * path a tree can hold — never the sheet's items, which omit unelevated
+     * symlinks — and the copy's own tracked claims answer it for the one path
+     * it cannot, an empty directory. Its keys are handed back where the writer
+     * keeps them, for its record phase. */
+    err = profile_stage_prune_ancestors(stage, pruned);
     if (err) return err;
 
     /* The sheet, saved only where its claims are no longer the base's: a commit

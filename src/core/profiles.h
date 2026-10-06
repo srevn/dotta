@@ -773,11 +773,10 @@ error_t profile_find(
  *     its commit, brought back at each rung the base holds nothing at, with no
  *     disk read (profile_stage_restore_file); and the prune, at the commit, of
  *     every derived claim nothing tracked stands beneath any longer
- *     (core/metadata.h metadata_prune_ancestors), its key handed to the writer's
- *     record phase where it has one. Revert has none, so a record a rung its
- *     commit pruned stood on is released by the next load, which finds the claim
- *     gone
- *     (core/workspace.c workspace_orphan_authority);
+ *     (core/profiles.c profile_stage_prune_ancestors), its key handed to the
+ *     writer's record phase where it has one. Revert has none, so a record a
+ *     rung its commit pruned stood on is released by the next load, which finds
+ *     the claim gone (core/workspace.c workspace_orphan_authority);
  *   - the gate, each document held against the one the stage opened: a commit
  *     no edit of which moved the tree or the sheet makes nothing — no prune, no
  *     save, no commit — so imported redundancy rides a commit and never drives
@@ -786,10 +785,10 @@ error_t profile_find(
  *     tree equal to the one opened is no commit (sys/stage.h stage_commit).
  *
  * Memory: a handle's own — an arena made by profile_stage_open, holding the struct
- * and the names the climb spells — released by profile_stage_free with the copy,
- * the base and the stage; the base borrows the stage's tree, and goes first.
- * What a capture answers is the caller's (profile_claim_t), so the claim outlives
- * the stage that wrote it.
+ * and the names the climb and the prune spell — released by profile_stage_free
+ * with the copy, the base and the stage; the base borrows the stage's tree, and
+ * goes first. What a capture answers is the caller's (profile_claim_t), so the
+ * claim outlives the stage that wrote it.
  */
 typedef struct profile_stage profile_stage_t;
 

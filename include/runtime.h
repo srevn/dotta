@@ -501,7 +501,7 @@ typedef struct dotta_run {
  *         (core/metadata.h), a printer's list (base/output.h output_list_t), a
  *         profile at a tree (core/profiles.h profile_open): itself, its name
  *         and the claims it lends; a profile's next commit (core/profiles.h
- *         profile_stage_open): itself, and the names its climb spells.
+ *         profile_stage_open): itself, and the names its climb and its prune spell.
  *
  *   - The heap, for what dies before any scope does: a payload sized by its data
  *     (base/buffer.h — a file's bytes, a blob's, a diff's text), freed with the

@@ -71,7 +71,7 @@
  * not say alone — an unclaimed directory mode projects as DIR_MODE_DEFAULT, which
  * is what an unclaimed path would have got anyway. The prune weighs no attribute
  * at all: a derivation survives by what stands beneath it, a tracked claim by
- * the word itself (metadata_prune_ancestors).
+ * the word itself (core/profiles.c profile_stage_prune_ancestors).
  *
  * The sheet is sparse and the view completes it: an unclaimed mode is resolved
  * into an answer at build, by the claim's floor (core/profiles.h
@@ -485,59 +485,6 @@ bool metadata_remove_item(
     metadata_t *metadata,
     path_kind_t kind,
     const char *key
-);
-
-/**
- * Prune the derivations nothing stands beneath
- *
- * The ancestor rule's other half. metadata_capture_ancestors authors a derived
- * claim at every rung above a captured leaf, because something beneath it does;
- * this removes one the moment nothing does. A tracked claim is not this pass's
- * subject at all — the walk's own word stands with nothing beneath it and at
- * any attributes, and it is retracted where it was made (the module header) —
- * so the pass reads one field and asks one question of what is left:
- *
- *   Is anything tracked beneath it? The profile's tracked set is the index's
- *   paths and the sheet's own tracked claims together. The index names every
- *   path a tree can hold and is the sole authority for those — deliberately not
- *   the metadata items, which are sparse by design (a symlink carries an item
- *   only where its owner is one absence would misstate), so a directory whose
- *   only tracked content is an item-less symlink is anchored by the index and
- *   survives. What no index can name is an empty directory, and only a tracked
- *   claim names one — a derivation cannot anchor, since it survives solely by
- *   being anchored itself and would otherwise hold a doomed chain alive one command
- *   per rung.
- *
- * Anchoring is judged against the post-edit index (the tree the impending commit
- * will record). A derivation nothing stands beneath has no role in any downstream
- * pipeline: the view would claim it as an [ancestor] row over an emptied subtree,
- * and divergence detection has nothing to compare against. Typically it is the
- * tail of an ancestry whose leaf has just gone (e.g., `dotta add ~/dir/f.conf`
- * followed by `dotta remove` of that file). Without this prune, the view would
- * keep claiming the entry indefinitely.
- *
- * Caller pattern: invoke after every edit of the stage for the impending commit
- * (additions put, deletions removed) and before the sheet is saved onto it, so
- * the prune sees the commit's exact tracked set and lands in the same commit as
- * the triggering removals — a profile's next commit prunes so at its commit,
- * its one reader (core/profiles.c profile_stage_commit). The keys pruned are
- * appended to `pruned` where the writer keeps them, in the directory claims'
- * order: the entry leaves the view by the verb's own commit, so a verb with a
- * record phase retires its record the way it does a path it removed. Nothing
- * appended means nothing was pruned.
- *
- * @param metadata The sheet (must not be NULL; mutated in place)
- * @param index Post-edit index — the stage's, after every put and removal (must
- *              not be NULL)
- * @param pruned Receives the keys pruned, appended as copies in the array's arena
- *               (given its arena by string_array_init); NULL where the writer
- *               keeps none, as revert's commit does
- * @return Error or NULL on success
- */
-error_t metadata_prune_ancestors(
-    metadata_t *metadata,
-    git_index *index,
-    string_array_t *pruned
 );
 
 /**

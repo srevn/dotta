@@ -52,6 +52,89 @@ typedef struct {
 } remove_claim_t;
 
 /**
+ * A walk of a profile's claims: each one collected, placed where this machine
+ * puts it
+ */
+typedef struct {
+    arena_t *arena;                /* The command's: the claims, their names and paths */
+    const mount_table_t *mounts;   /* This machine's table, every claim placed under it */
+    const char *profile;           /* Whose claims: a custom/ claim's binding is its */
+    remove_claim_t *claims;
+    size_t claim_count;
+    size_t claim_capacity;
+} remove_walk_t;
+
+/**
+ * Walk visitor: one claim of the profile, whatever its kind, collected and placed
+ *
+ * @param claim One claim, decoded (borrowed — valid for the call only)
+ * @param payload The walk (remove_walk_t)
+ * @return NULL: a collection fails nowhere
+ */
+static error_t remove_collect_claim(const profile_claim_t *claim, void *payload) {
+    remove_walk_t *walk = payload;
+
+    /* The name copied out of the walk's loan, and the kind off the type the decode
+     * gave: a blob is a file claim whatever its filemode */
+    walk->claims = arena_grow(
+        walk->arena, walk->claims, &walk->claim_capacity, walk->claim_count + 1,
+        sizeof(*walk->claims)
+    );
+    remove_claim_t *collected = &walk->claims[walk->claim_count++];
+    collected->storage_path = arena_strdup(walk->arena, claim->storage_path);
+    collected->kind = path_type_kind(claim->type);
+
+    /* Where it stands on this machine, placed as it is collected: NULL for a
+     * custom/ claim under a profile with no target here, which stands nowhere
+     * and which its name still names. The name is one the walk validated — the
+     * tree's shape check, the sheet's parse — so the resolve has no failure to
+     * answer. */
+    collected->filesystem_path = mount_resolve(
+        walk->arena, walk->mounts, walk->profile, collected->storage_path
+    );
+
+    return NULL;
+}
+
+/**
+ * What a removal hands its hooks: the path each claim stands at, once
+ *
+ * A path two claims stand at — a blob and the directory claim at its own name,
+ * or two names one binding places together — is one entry: a hook is told the
+ * paths the removal reaches, never how many claims stood at each. The first claim
+ * at a path places it, so the list keeps the claims' order. A claim this machine
+ * places nowhere hands its name instead, the shape a hook comparing DOTTA_FILE_N
+ * against $HOME has always received here.
+ *
+ * Readers: remove_paths (the claims its arguments took) and remove_profile (every
+ * claim the profile makes) — one producer, so the two routes cannot hand a hook
+ * two shapes of one list.
+ *
+ * @param arena The list's arena, and its seen-set's (must not be NULL)
+ * @param claims The claims (borrowed; their strings outlive the list's set)
+ * @param claim_count How many
+ * @return The paths, copies in `arena`
+ */
+static string_array_t remove_hook_paths(
+    arena_t *arena, const remove_claim_t *claims, size_t claim_count
+) {
+    string_array_t paths;
+    string_array_init(&paths, arena);
+
+    /* Each path once, by a seen-set's one probe over the claims' own strings
+     * (base/hashmap.h hashmap_add); the list keeps copies, the shape the hook
+     * contract's char *const * takes as it stands */
+    hashmap_t *handed = hashmap_borrow(arena, claim_count);
+    for (size_t i = 0; i < claim_count; i++) {
+        const char *path = claims[i].filesystem_path
+            ? claims[i].filesystem_path : claims[i].storage_path;
+        if (hashmap_add(handed, path, NULL)) string_array_push(&paths, path);
+    }
+
+    return paths;
+}
+
+/**
  * One path a removal let go, and whose word decides its fate
  *
  * A candidate is a path the removal's Git effect no longer claims, joined to
@@ -181,6 +264,11 @@ static error_t remove_settle(
  * match (remove_resolve), while a pruned directory entry was no claim of the
  * arguments and is placed here.
  *
+ * One candidate a path: what the commit let go at one place — two names one binding
+ * places together, or a claim and a rung the prune let go there — joins one record,
+ * which is settled once. The claims come first, so a path an argument took is
+ * named however else the commit let it go.
+ *
  * Asked twice by its one caller (remove_paths): before the lock, whether there
  * is anything to settle, and under it, what the settle acts on.
  */
@@ -203,27 +291,32 @@ static error_t remove_paths_candidates(
     if (err) return err;
     if (record_count == 0) return NULL;
 
+    /* Room for every path, and the paths already joined, by a seen-set's one
+     * probe over the candidates' own strings (base/hashmap.h hashmap_add) */
     remove_candidate_t *candidates = arena_calloc(
         ctx->arena, claim_count + pruned_dirs->count, sizeof(*candidates)
     );
+    hashmap_t *joined = hashmap_borrow(ctx->arena, claim_count + pruned_dirs->count);
     size_t count = 0;
 
     /* The claims the arguments took: the user's word reaches all of them
      * (remove_settle). Each joined to its record by a lookup in the read
-     * (state_find_record). */
+     * (state_find_record), once a path. */
     for (size_t i = 0; i < claim_count; i++) {
         const char *filesystem_path = claims[i].filesystem_path;
         if (!filesystem_path) continue;
         const state_record_t *record = state_find_record(records, record_count, filesystem_path);
         if (!record || strcmp(record->profile, profile) != 0) continue;
+        if (!hashmap_add(joined, filesystem_path, NULL)) continue;
         candidates[count++] = (remove_candidate_t){
             .path = filesystem_path, .record = record, .named = true
         };
     }
 
     /* The entries the metadata step pruned: nobody asked for them, so the flag
-     * does not speak to them. One this machine cannot place stands nowhere, and
-     * no record of this run's can be there. */
+     * does not speak to them — but where a claim the arguments took stands at
+     * one, it was joined above, named. One this machine cannot place stands
+     * nowhere, and no record of this run's can be there. */
     for (size_t i = 0; i < pruned_dirs->count; i++) {
         const char *filesystem_path = mount_resolve(
             ctx->arena, ctx->run.mounts, profile, pruned_dirs->entries[i]
@@ -231,6 +324,7 @@ static error_t remove_paths_candidates(
         if (!filesystem_path) continue;
         const state_record_t *record = state_find_record(records, record_count, filesystem_path);
         if (!record || strcmp(record->profile, profile) != 0) continue;
+        if (!hashmap_add(joined, filesystem_path, NULL)) continue;
         candidates[count++] = (remove_candidate_t){
             .path = filesystem_path, .record = record, .named = false
         };
@@ -1149,25 +1243,16 @@ static error_t remove_paths(
         goto cleanup;
     }
 
-    /* Build hook invocation with the claims' filesystem paths (resolved by
-     * remove_resolve). Reached only on non-dry-run: the dry-run branch above
-     * early-cleanups before this point, so dry_run is always false here in practice
-     * — still passed for honesty. */
-    char **hook_paths = arena_calloc(ctx->arena, claim_count, sizeof(char *));
-    for (size_t i = 0; i < claim_count; i++) {
-        /* Arena-backed and never written through; the cast bridges the hook
-         * contract's char *const *. A claim this machine places nowhere has no
-         * path to hand over, and its name goes in the field's stead — the shape
-         * a hook comparing DOTTA_FILE_N against $HOME has always received here,
-         * spelled at the site rather than substituted upstream. */
-        hook_paths[i] = (char *) (claims[i].filesystem_path ? claims[i].filesystem_path
-                                                            : claims[i].storage_path);
-    }
+    /* The hooks are handed the paths the accepted claims stand at, each once
+     * (remove_hook_paths), as placed by the resolver. Reached only on non-dry-run:
+     * the dry-run branch above early-cleanups before this point, so dry_run is
+     * always false here in practice — still passed for honesty. */
+    const string_array_t hook_paths = remove_hook_paths(ctx->arena, claims, claim_count);
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
         .profile    = opts->profile,
-        .files      = hook_paths,
-        .file_count = claim_count,
+        .files      = hook_paths.entries,
+        .file_count = hook_paths.count,
         .dry_run    = opts->dry_run,
     };
 
@@ -1383,25 +1468,6 @@ cleanup:
 }
 
 /**
- * Walk visitor: one claim of a profile being deleted, its name onto its hooks' list
- *
- * Every claim, whatever its kind: a deletion takes them all, and its hooks are
- * handed each one, a directory's beside a file's (etc/hooks/README.md).
- *
- * @param claim One claim, decoded (borrowed — valid for the call only)
- * @param payload The hooks' list of names (string_array_t, given its arena)
- * @return NULL: a collection fails nowhere
- */
-static error_t remove_collect_claim(const profile_claim_t *claim, void *payload) {
-    string_array_t *names = payload;
-
-    /* The name copied out of the walk's loan, into the list's own arena */
-    string_array_push(names, claim->storage_path);
-
-    return NULL;
-}
-
-/**
  * Delete a profile
  */
 static error_t remove_profile(
@@ -1461,19 +1527,18 @@ static error_t remove_profile(
     err = profile_load(repo, opts->profile, &profile);
     if (err) goto cleanup;
 
-    /* Every claim the deletion takes, by name: the claims the walk shows — the
-     * blobs, then the directory claims that stand — and then those the tree
-     * contradicts (core/profiles.h profile_contradicted), so the hooks are handed
-     * every claim the profile goes with, one entry each, and a path two claims
-     * stand at once for each. Read tolerantly: a deletion that refused over a
-     * sheet it cannot read would leave the profile undeletable, so it goes on
-     * and says below what its hooks lose. A tree it cannot walk is refused here,
-     * before the preview: no tolerant read loses the tree's half. */
-    string_array_t hook_storage;
-    string_array_init(&hook_storage, ctx->arena);
-    err = profile_walk(profile, PROFILE_READ_TOLERANT, remove_collect_claim, &hook_storage);
+    /* Every claim the deletion takes, each placed where this machine puts it:
+     * the claims the walk shows — the blobs, then the directory claims that stand
+     * — and then those the tree contradicts (core/profiles.h profile_contradicted),
+     * so the hooks are handed every path the profile goes with. Read tolerantly:
+     * a deletion that refused over a sheet it cannot read would leave the profile
+     * undeletable, so it goes on and says below what its hooks lose. A tree it
+     * cannot walk is refused here, before the preview: no tolerant read loses
+     * the tree's half. */
+    remove_walk_t walk = { .arena = ctx->arena, .mounts = mounts, .profile = opts->profile };
+    err = profile_walk(profile, PROFILE_READ_TOLERANT, remove_collect_claim, &walk);
     if (err) goto cleanup;
-    err = profile_contradicted(profile, PROFILE_READ_TOLERANT, remove_collect_claim, &hook_storage);
+    err = profile_contradicted(profile, PROFILE_READ_TOLERANT, remove_collect_claim, &walk);
     if (err) goto cleanup;
 
     /* What the tolerant read lost, said where it was read, so the dry run says
@@ -1492,8 +1557,8 @@ static error_t remove_profile(
      * profile_counts): one truth with `dotta list`. Its failure is display-only
      * — the deletion must not refuse over a count — so it becomes the phrase
      * the preview prints, its error dropped and err back to the NULL the phase
-     * began with. The profile is read no further: the hooks' list holds its own
-     * copies. */
+     * began with. The profile is read no further: the claims its hooks are handed
+     * hold their own copies. */
     profile_counts_t count = { 0 };
     err = profile_counts(profile, &count);
     profile_free(profile);
@@ -1668,31 +1733,16 @@ static error_t remove_profile(
             goto cleanup;
     }
 
-    /* Convert storage paths to filesystem paths for hook consistency. The file
-     * removal path passes filesystem paths to hooks; do the same here.
-     *
-     * Borrows the run's mount table. HOME and ROOT are always present, so home/
-     * and root/ paths resolve unconditionally. CUSTOM paths resolve only when
-     * the profile is enabled with a binding; otherwise the loop substitutes the
-     * storage path so the hook sees a meaningful name. */
-    string_array_t hook_filesystem;
-    string_array_init(&hook_filesystem, ctx->arena);
-    for (size_t i = 0; i < hook_storage.count; i++) {
-        const char *filesystem_path = mount_resolve(
-            ctx->arena, mounts, opts->profile, hook_storage.entries[i]
-        );
-        string_array_push(
-            &hook_filesystem, filesystem_path ? filesystem_path : hook_storage.entries[i]
-        );
-    }
-
-    /* Build hook invocation with the filesystem paths (consistent with the
-     * file-removal subcommand). The arrays are the command arena's. */
+    /* The hooks are handed the path of every claim the profile goes with, each
+     * once, by the producer the file route's hooks read (remove_hook_paths):
+     * HOME and ROOT place every home/ and root/ claim, and a custom/ claim with
+     * no binding here hands its name. The list is the command arena's. */
+    const string_array_t hook_paths = remove_hook_paths(ctx->arena, walk.claims, walk.claim_count);
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
         .profile    = opts->profile,
-        .files      = hook_filesystem.entries,
-        .file_count = hook_filesystem.count,
+        .files      = hook_paths.entries,
+        .file_count = hook_paths.count,
         .dry_run    = opts->dry_run,
     };
 

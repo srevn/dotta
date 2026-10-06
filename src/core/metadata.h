@@ -715,10 +715,11 @@ error_t metadata_capture_ancestors(
  * offer through the profile's strict walk (core/profiles.h profile_walk, from
  * cmds/completion.c completion_directories, which drops the failure as every
  * completion source drops its own: cmds/completion.h), and the claims a profile's
- * deletion hands its hooks through the profile's tolerant walk and
- * profile_contradicted (core/profiles.h, from cmds/remove.c remove_profile; the
- * profile goes all the same, its hooks handed the tree's files alone, warned
- * before the preview). A further reader would have to argue for one.
+ * deletion takes, whose paths its hooks are handed, through the profile's tolerant
+ * walk and profile_contradicted (core/profiles.h, from cmds/remove.c
+ * remove_profile; the profile goes all the same, its hooks handed the tree's
+ * files alone, warned before the preview). A further reader would have to argue
+ * for one.
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)

@@ -12,9 +12,10 @@
 #   DOTTA_REPO_DIR    - Path to dotta repository
 #   DOTTA_COMMAND     - Command being executed ("remove")
 #   DOTTA_PROFILE     - Profile name being modified or deleted
-#   DOTTA_FILE_COUNT  - Number of entries: one per claim the removal takes, a
-#                       directory's as well as a file's (every claim the
-#                       profile makes, when it is deleted)
+#   DOTTA_FILE_COUNT  - Number of entries: one per path the removal takes a
+#                       claim at, a directory's as well as a file's (every
+#                       path the profile claims, when it is deleted), each
+#                       once, however many claims stand there
 #   DOTTA_FILE_0      - First entry's path (0-indexed)
 #   DOTTA_FILE_1      - Second entry's path
 #   DOTTA_FILE_N      - Nth entry's path (where N = 0 to COUNT-1)

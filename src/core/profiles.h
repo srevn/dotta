@@ -355,9 +355,9 @@ typedef error_t (*profile_visit_fn)(const profile_claim_t *claim, void *payload)
  * beneath its name (cmds/export.c export_collect_profile and
  * export_collect_storage, through export_collect_claim); the directory claims a
  * completion offers (cmds/completion.c completion_directories, through
- * completion_offer_directory); and every claim a profile's deletion hands its
- * hooks, read TOLERANT before profile_contradicted (cmds/remove.c remove_profile,
- * through remove_collect_claim).
+ * completion_offer_directory); and every claim a profile's deletion takes, whose
+ * paths its hooks are handed, read TOLERANT before profile_contradicted
+ * (cmds/remove.c remove_profile, through remove_collect_claim).
  *
  * @param profile Handle (must not be NULL); its sheet is read by the first question
  *                that needs it, a walk or profile_load_sheet
@@ -391,9 +391,9 @@ error_t profile_walk(
  * STRICT: a sheet that will not load is the failure, before any claim is shown.
  * TOLERANT: none is shown past one, the failure kept (profile_load_sheet).
  *
- * Readers: every claim a profile's deletion hands its hooks, read TOLERANT after
- * the walk, through the walk's visitor (cmds/remove.c remove_profile, through
- * remove_collect_claim).
+ * Readers: every claim a profile's deletion takes, whose paths its hooks are
+ * handed, read TOLERANT after the walk, through the walk's visitor (cmds/remove.c
+ * remove_profile, through remove_collect_claim).
  *
  * @param profile Handle (must not be NULL); its sheet read through it
  * @param read The sheet's policy for this question

@@ -479,8 +479,10 @@ static error_t update_profile(
                      * no-op. */
                     err = stage_remove(stage, item->storage_path);
                     if (err) goto cleanup;
-                    /* Remove metadata entry if it exists */
-                    metadata_remove_item(metadata, item->storage_path);
+                    /* Its FILE item with it, where one stands: its own kind alone,
+                     * so a directory claim at the name, which the blob
+                     * contradicted, stands again once the blob is gone */
+                    metadata_remove_item(metadata, PATH_KIND_FILE, item->storage_path);
                     commit->deleted[commit->deleted_count++] = item;
                     continue;
                 }
@@ -534,8 +536,10 @@ static error_t update_profile(
 
                 /* meta_item is NULL for a link that claims nothing — no mode to
                  * take, no ownership tracked. A capture that claims nothing retires
-                 * the standing claim: an item at the key is the replaced
-                 * state's. */
+                 * the standing claim: a FILE item at the key is the replaced
+                 * state's. Either way the capture writes its own kind, so a
+                 * directory claim at the name, which the blob contradicts, rides
+                 * the commit, carried. */
                 if (meta_item) {
                     /* Say what the capture took before metadata_add_item takes
                      * it — the claim decides the shape. The fourth combination
@@ -568,12 +572,12 @@ static error_t update_profile(
                         );
                     }
 
-                    /* Add to metadata collection */
+                    /* Into the sheet */
                     metadata_add_item(metadata, &meta_item);
 
                     captured_file_count++;
                 } else {
-                    metadata_remove_item(metadata, item->storage_path);
+                    metadata_remove_item(metadata, PATH_KIND_FILE, item->storage_path);
                 }
 
                 commit->captured_count++;
@@ -589,7 +593,7 @@ static error_t update_profile(
                  * bookkeeping like a deleted file, so the commit gate counts
                  * it, the message names it, and the record loop retires it. */
                 if (item->state == WORKSPACE_STATE_DELETED) {
-                    if (metadata_remove_item(metadata, item->storage_path)) {
+                    if (metadata_remove_item(metadata, PATH_KIND_DIRECTORY, item->storage_path)) {
                         output_info(
                             out, OUTPUT_VERBOSE, "  Removed directory metadata: %s",
                             item->filesystem_path
@@ -627,11 +631,13 @@ static error_t update_profile(
                  * attributes and never the class: whether the profile tracks
                  * this directory or only passes through it was decided by the
                  * walk that authored the claim, and an update is not that walk.
-                 * The standing item is the authority for it — this is the profile's
-                 * own sheet, not the resolved view, so precedence has nothing
-                 * to say here — and a key it does not hold answers with the class
-                 * dotta does less with. */
-                const metadata_item_t *held = metadata_lookup(metadata, item->storage_path);
+                 * The standing directory claim is the authority for it — this
+                 * is the profile's own sheet, not the resolved view, so precedence
+                 * has nothing to say here — and a key it does not hold answers
+                 * with the class dotta does less with. */
+                const metadata_item_t *held = metadata_find_item(
+                    metadata, PATH_KIND_DIRECTORY, item->storage_path
+                );
                 metadata_item_t *meta_item = NULL;
                 err = metadata_capture_directory(
                     item->storage_path, &dir_stat, held && held->tracked, &meta_item
@@ -682,7 +688,8 @@ static error_t update_profile(
                     );
                 }
 
-                /* Add to metadata collection (upsert - updates if exists) */
+                /* Into the sheet, over the directory claim it refreshes — its
+                 * own kind alone, so a FILE item no blob backs at the name stays */
                 metadata_add_item(metadata, &meta_item);
 
                 updated_dir_count++;

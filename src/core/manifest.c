@@ -216,8 +216,8 @@ static manifest_row_t *manifest_place(
  * and none possible — the profile's walk shows a name once (core/profiles.h
  * profile_walk): a name the tree holds a blob at, or a sheet key it holds no
  * blob at or above, the content-authority rule having contradicted the rest before
- * anything was resolved. And a tree holds one blob per path, a sheet one item
- * per key.
+ * anything was resolved. And a tree holds one blob per path, a sheet one directory
+ * claim per key.
  *
  * The slice grows in the arena (arena_grow). Both strings must be arena-backed
  * by the caller; the entry borrows them for the view's lifetime.
@@ -253,9 +253,9 @@ static void manifest_note_unbound(
  * The health primitive the settle spends its losers through: appends (profile,
  * name, kind) against the name that stood at the path. No dedup — a row is in
  * one group and is recorded once if it loses, and no two rows of one profile
- * share a name (the tree holds one blob per path, the sheet one item per key,
- * and the content-authority rule settles the one name they can both carry before
- * the contest sees it).
+ * share a name (the tree holds one blob per path, the sheet one directory claim
+ * per key, and the content-authority rule settles the one name they can both
+ * carry before the contest sees it).
  *
  * The slice grows in the arena, as the unbound one does. Every string must be
  * arena-backed by the caller; the entry borrows them for the view's lifetime.
@@ -293,10 +293,10 @@ static void manifest_note_unkept(
  * The health primitive the per-profile step spends profile_contradicted's claims
  * through: a tracked one is appended — its profile, its name and the blob above
  * it — to the view's slice; a derived one records nothing. No dedup, and none
- * possible: the sheet holds one item a key. A visitor and not a recorder beside
- * the other two, since the claims arrive by a walk and no second caller records
- * one. The claim and its strings are lent for the visit (core/profiles.h), so
- * the two names are copied into the arena the view lives in.
+ * possible: the sheet holds one directory claim a key. A visitor and not a recorder
+ * beside the other two, since the claims arrive by a walk and no second caller
+ * records one. The claim and its strings are lent for the visit (core/profiles.h),
+ * so the two names are copied into the arena the view lives in.
  *
  * @param claim One claim the profile's tree contradicts (borrowed — valid for
  *              the call only)
@@ -628,9 +628,9 @@ static int name_order(const void *a, const void *b) {
  * included. No comparator carries `fresh` and no bool survives the loop.
  *
  * Two rows of one group can never share a name, so the order is total: the tree
- * holds one blob per path, the sheet one item per key, and the content-authority
- * rule contradicts the one name they can both carry at the blob, before either
- * name was resolved and long before the contest sees it.
+ * holds one blob per path, the sheet one directory claim per key, and the
+ * content-authority rule contradicts the one name they can both carry at the
+ * blob, before either name was resolved and long before the contest sees it.
  *
  * The group outlives this call, indexed on the contribution: what stands at a
  * contested path is a rule and not a fact the build fixes, so every namer that

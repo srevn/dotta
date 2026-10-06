@@ -305,7 +305,7 @@ error_t profile_load_sheet(profile_t *profile) {
  *
  * @param path The claim's name, which the claim keeps (must not be NULL)
  * @param entry The blob's tree entry (must not be NULL)
- * @param item The FILE item at the name, or NULL: none, or one the caller voided
+ * @param item The FILE item at the name, or NULL where the sheet holds none there
  * @return The claim, by value: a function of its three inputs, which cannot fail
  */
 static profile_claim_t profile_decode_blob(
@@ -494,15 +494,14 @@ static error_t profile_directory_item(
     if (err || above > 0) return err;
 
     /* An open question: the sheet, under the reader's policy. A tolerant read
-     * past a sheet that will not load holds no item, since metadata_lookup takes
-     * the NULL sheet the failure leaves (profile_load_sheet) */
+     * past a sheet that will not load holds no item, since metadata_find_item
+     * takes the NULL sheet the failure leaves (profile_load_sheet) */
     err = profile_load_sheet(profile);
     if (err && read == PROFILE_READ_STRICT) return err;
 
-    /* The item at the name, where it claims a directory: a FILE item with no
-     * blob claims nothing here, as in the walk */
-    const metadata_item_t *item = metadata_lookup(profile->sheet, storage_path);
-    if (item && item->kind == PATH_KIND_DIRECTORY) *out = item;
+    /* The directory claim at the name, by its kind: a FILE item with no blob is
+     * the other kind's, and claims nothing here, as in the walk */
+    *out = metadata_find_item(profile->sheet, PATH_KIND_DIRECTORY, storage_path);
 
     return NULL;
 }
@@ -577,22 +576,23 @@ static error_t profile_step(
     error_t err = label_validate_storage(path);
     if (err) return err;
 
-    /* This blob's claim, by the name the tree gave it — and, in the same answer,
-     * the content authority. A path is a tree or a blob and the tree is the content
-     * authority, so a DIRECTORY item standing at a blob's name is contradicted:
-     * it claims nothing here, not even its owner or group — and nothing as a
-     * directory either, which the directory half finds for itself, asking whether
-     * a blob stands at the item's name or above it, as a point question does
-     * (profile_blob_above). Asked by name, and a name needs no path, so the one
-     * rule covers the blob this machine can place and the blob it cannot alike.
+    /* This blob's claim, by the name the tree gave it: the sheet's FILE item
+     * there, its kind the lookup's — and, in the same answer, the content
+     * authority. A path is a tree or a blob and the tree is the content authority,
+     * so a DIRECTORY item standing at a blob's name is contradicted: it claims
+     * nothing here, not even its owner or group — the other kind's, the lookup
+     * never reaches it — and nothing as a directory either, which the directory
+     * half finds for itself, asking whether a blob stands at the item's name or
+     * above it, as a point question does (profile_blob_above). Asked by name,
+     * and a name needs no path, so the one rule covers the blob this machine
+     * can place and the blob it cannot alike.
      *
-     * The blob a contradicted item leaves is claimed at its floors and with no
-     * stamp, which reads a ciphertext blob through the plaintext comparison and
-     * prints [modified] on every load (core/workspace.c). The contradiction is
-     * the profile's and that is where it gets fixed; the decode states it rather
-     * than repairs it. */
-    const metadata_item_t *item = metadata_lookup(walk->sheet, path);
-    if (item && item->kind == PATH_KIND_DIRECTORY) item = NULL;
+     * A blob no FILE item stands at is claimed at its floors and with no stamp,
+     * which reads a ciphertext blob through the plaintext comparison and prints
+     * [modified] on every load (core/workspace.c) — a sheet a hand or a merge
+     * left without the blob's item. That is the profile's to fix; the decode
+     * states it rather than repairs it. */
+    const metadata_item_t *item = metadata_find_item(walk->sheet, PATH_KIND_FILE, path);
 
     /* The claim the blob makes, its identity and the item's claim over it, by
      * the one decode a point question at this name reads too
@@ -642,18 +642,15 @@ error_t profile_walk(
      * over claims nothing, and is profile_contradicted's to show. The descent
      * reads no tree the blobs' half did not, so its failure needs a store that
      * changed beneath the walk. */
-    size_t count = 0;
-    const metadata_item_t *const *items = metadata_items(profile->sheet, &count);
-    for (size_t i = 0; i < count; i++) {
-        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
-
+    const metadata_items_t directories = metadata_items(profile->sheet, PATH_KIND_DIRECTORY);
+    for (size_t i = 0; i < directories.count; i++) {
         size_t above = 0;
-        err = profile_blob_above(profile, items[i]->key, &above);
+        err = profile_blob_above(profile, directories.entries[i]->key, &above);
         if (err) return err;
         if (above > 0) continue;
 
         /* The claim the point question answers at that name, by its decode */
-        const profile_claim_t claim = profile_decode_directory(items[i]);
+        const profile_claim_t claim = profile_decode_directory(directories.entries[i]);
         err = visit(&claim, payload);
         if (err) return err;
     }
@@ -680,13 +677,10 @@ error_t profile_contradicted(
      * before any walk read the tree, the descent can meet a subtree that will
      * not load on its way, and says so in its own words, naming the claim's
      * name. */
-    size_t count = 0;
-    const metadata_item_t *const *items = metadata_items(profile->sheet, &count);
-    for (size_t i = 0; i < count; i++) {
-        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
-
+    const metadata_items_t directories = metadata_items(profile->sheet, PATH_KIND_DIRECTORY);
+    for (size_t i = 0; i < directories.count; i++) {
         size_t above = 0;
-        err = profile_blob_above(profile, items[i]->key, &above);
+        err = profile_blob_above(profile, directories.entries[i]->key, &above);
         if (err) return err;
         if (above == 0) continue;
 
@@ -694,8 +688,8 @@ error_t profile_contradicted(
          * at its name or above it, and that blob, by its name — a prefix of the
          * claim's own, or the whole of it where the blob stands at the claim's
          * name — kept in the handle's arena, as an answer is */
-        profile_claim_t claim = profile_decode_directory(items[i]);
-        claim.blob_above = arena_strndup(profile->arena, items[i]->key, above);
+        profile_claim_t claim = profile_decode_directory(directories.entries[i]);
+        claim.blob_above = arena_strndup(profile->arena, directories.entries[i]->key, above);
         err = visit(&claim, payload);
         if (err) return err;
     }
@@ -882,16 +876,17 @@ error_t profile_find(
                 return NULL;
             }
 
-            /* Its FILE item, under the reader's policy: a DIRECTORY item at a
-             * blob's name claims nothing at the blob — the walk's at-name rule
-             * (profile_step) */
+            /* Its FILE item, under the reader's policy, by its kind: a DIRECTORY
+             * item at a blob's name is the other kind's and claims nothing at
+             * the blob — the walk's at-name rule (profile_step) */
             error_t err = profile_load_sheet(profile);
             if (err && read == PROFILE_READ_STRICT) {
                 git_tree_entry_free(entry);
                 return err;
             }
-            const metadata_item_t *item = metadata_lookup(profile->sheet, storage_path);
-            if (item && item->kind == PATH_KIND_DIRECTORY) item = NULL;
+            const metadata_item_t *item = metadata_find_item(
+                profile->sheet, PATH_KIND_FILE, storage_path
+            );
 
             /* Decoded as the walk decodes the blob, and kept for the handle's
              * life, its name copied beside it: an answer outlives the caller's
@@ -990,13 +985,10 @@ error_t profile_stage_remove(
             error_t err = stage_remove(stage->stage, storage_path);
             if (err) return err;
 
-            /* And its item with it, where the item is a file's: the sheet holds
-             * one item a name, so its kind is asked, and a directory claim at
-             * the name stays — carried, it stands again once the blob is gone */
-            const metadata_item_t *item = metadata_lookup(stage->sheet, storage_path);
-            if (item && item->kind == PATH_KIND_FILE) {
-                metadata_remove_item(stage->sheet, storage_path);
-            }
+            /* And its FILE item with it, where one stands: its own kind alone,
+             * so a directory claim at the name stays — carried, it stands again
+             * once the blob is gone */
+            metadata_remove_item(stage->sheet, PATH_KIND_FILE, storage_path);
 
             return NULL;
         }
@@ -1004,14 +996,12 @@ error_t profile_stage_remove(
         case PATH_KIND_DIRECTORY: {
             /* A directory claim's whole footprint is its item, so none of that
              * kind at the name is the sheet's refusal, naming the profile */
-            const metadata_item_t *item = metadata_lookup(stage->sheet, storage_path);
-            if (!item || item->kind != PATH_KIND_DIRECTORY) {
+            if (!metadata_remove_item(stage->sheet, PATH_KIND_DIRECTORY, storage_path)) {
                 return error_create(
                     ERR_NOT_FOUND, "Profile '%s' claims no directory at '%s'",
                     profile_name(stage->base), storage_path
                 );
             }
-            metadata_remove_item(stage->sheet, storage_path);
 
             return NULL;
         }

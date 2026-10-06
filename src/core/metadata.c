@@ -31,66 +31,88 @@
 #define INITIAL_CAPACITY 16
 
 /**
- * Unified metadata collection
+ * One kind's claims: its items in the order added, and an index over them by key
  *
- * A spine of pointers to items the collection owns, and a key index over them.
- * An item is stable from the moment it is created — only the spine is ever
+ * An item is stable from the moment it is created — only the entries are ever
  * reallocated — so the index stores item pointers directly and metadata_items
- * hands the spine out as the public slice. The index borrows each item's own
- * key (hashmap_borrow), which is why metadata_add_item's update arm must adopt
- * the standing key before it overwrites the slot: the key-adoption dance is the
+ * lends the entries as the kind's slice. The index borrows each item's own key
+ * (hashmap_borrow), which is why metadata_add_item's update arm must adopt the
+ * standing key before it overwrites the item: the key-adoption dance is the
  * borrow's cost.
+ */
+typedef struct {
+    metadata_item_t **entries;  /* Stable items, in the order added */
+    size_t count;               /* Items held */
+    size_t capacity;            /* Entries allocated */
+    hashmap_t *index;           /* key -> item*, borrowing the item's own key */
+} metadata_claims_t;
+
+/**
+ * The sheet: each kind's claims apart
+ *
+ * A key holds at most one item of each kind (metadata.h), and the two kinds never
+ * share an index, so a write of one kind cannot reach the other's claim at its
+ * key. One kind's claims are chosen where they are read — a directory's, or else
+ * a file's — and the readers of both at once take the files first.
  *
  * The sheet is a handle whose lifetime is its own, so it owns an arena: the struct,
- * the spine and the index live and go with it. The items are the heap's, each
- * freed by metadata_free before the arena goes.
+ * each kind's entries and its index live and go with it. The items are the heap's,
+ * each freed by metadata_free before the arena goes.
  *
- * The schema version is the document's, not the collection's: metadata_to_json
- * writes METADATA_VERSION and metadata_from_json refuses anything else, so there
- * is nothing here for a version field to say.
+ * The schema version is the document's, not the sheet's: metadata_to_json writes
+ * METADATA_VERSION and metadata_from_json refuses anything else, so there is
+ * nothing here for a version field to say.
  */
 struct metadata {
-    arena_t *arena;             /* The sheet's own: the struct, the spine, the index */
-    metadata_item_t **items;    /* Spine of stable items, in insertion order */
-    size_t count;               /* Items held */
-    size_t capacity;            /* Spine slots allocated */
-    hashmap_t *index;           /* key -> item*, borrowing the item's own key */
+    arena_t *arena;                   /* The sheet's own: the struct, the entries, the indexes */
+    metadata_claims_t files;          /* FILE items: what a blob at the key carries */
+    metadata_claims_t directories;    /* DIRECTORY items: the directory claims */
 };
 
 /**
- * Create empty metadata collection
+ * Create an empty sheet
  */
 metadata_t *metadata_create_empty(void) {
-    /* The sheet's own arena, and the sheet in it: the spine is made there — room
-     * at once, so metadata_items answers an array for an empty sheet too — and
-     * so is the index, for O(1) lookups */
+    /* The sheet's own arena, and the sheet in it: each kind's entries are made
+     * there — room at once, so each kind lends an array even while it holds
+     * nothing, which the serializer's copy of both reads — and so is each kind's
+     * index, for O(1) lookups */
     arena_t *arena = arena_create(0);
     metadata_t *metadata = arena_calloc(arena, 1, sizeof(*metadata));
     metadata->arena = arena;
-    metadata->items = arena_grow(
-        arena, NULL, &metadata->capacity, INITIAL_CAPACITY, sizeof(*metadata->items)
-    );
-    metadata->index = hashmap_borrow(arena, INITIAL_CAPACITY);
+
+    metadata_claims_t *claims[] = { &metadata->files, &metadata->directories };
+    for (size_t k = 0; k < sizeof(claims) / sizeof(claims[0]); k++) {
+        claims[k]->entries = arena_grow(
+            arena, NULL, &claims[k]->capacity, INITIAL_CAPACITY,
+            sizeof(*claims[k]->entries)
+        );
+        claims[k]->index = hashmap_borrow(arena, INITIAL_CAPACITY);
+    }
 
     return metadata;
 }
 
 /**
- * A copy of the collection
+ * A copy of the sheet
  *
  * Each item cloned under its own key and handed to a sheet of the copy's own,
- * in the source's order: a key is held once in the source, so every add appends,
- * the copy's spine reads as the source's, and its index is its own.
+ * each kind in the source's order: a key is held once in each kind's claims, so
+ * every add appends, the copy's entries read as the source's, and its indexes
+ * are its own.
  */
 metadata_t *metadata_clone(const metadata_t *metadata) {
     CHECK_NULL(metadata);
 
     metadata_t *copy = metadata_create_empty();
-    for (size_t i = 0; i < metadata->count; i++) {
-        metadata_item_t *item = metadata_item_clone(
-            metadata->items[i], metadata->items[i]->key
-        );
-        metadata_add_item(copy, &item);
+    const metadata_claims_t *claims[] = { &metadata->files, &metadata->directories };
+    for (size_t k = 0; k < sizeof(claims) / sizeof(claims[0]); k++) {
+        for (size_t i = 0; i < claims[k]->count; i++) {
+            metadata_item_t *item = metadata_item_clone(
+                claims[k]->entries[i], claims[k]->entries[i]->key
+            );
+            metadata_add_item(copy, &item);
+        }
     }
 
     return copy;
@@ -110,18 +132,22 @@ void metadata_item_free(metadata_item_t *item) {
 }
 
 /**
- * Free metadata structure
+ * Free a sheet
  *
- * Frees every item it holds, then the sheet's arena — the structure, the spine
- * and the index with it.
+ * Frees every item it holds, then the sheet's arena — the struct, each kind's
+ * entries and its index with it.
  */
 void metadata_free(metadata_t *metadata) {
     if (!metadata) return;
 
-    /* Free all items (files, directories, and symlinks). The index borrows their
-     * keys, and nothing reads it again before its arena goes below. */
-    for (size_t i = 0; i < metadata->count; i++) {
-        metadata_item_free(metadata->items[i]);
+    /* Free all items (files, directories, and symlinks), each kind's. The indexes
+     * borrow their keys, and nothing reads them again before their arena goes
+     * below. */
+    const metadata_claims_t *claims[] = { &metadata->files, &metadata->directories };
+    for (size_t k = 0; k < sizeof(claims) / sizeof(claims[0]); k++) {
+        for (size_t i = 0; i < claims[k]->count; i++) {
+            metadata_item_free(claims[k]->entries[i]);
+        }
     }
 
     arena_free(metadata->arena);
@@ -231,12 +257,13 @@ void metadata_item_claim(
 /**
  * Add or update metadata item, transferring ownership
  *
- * Works for every kind. If an item with the same key exists it is replaced in
- * place; otherwise the item is appended.
+ * Of the item's own kind: an item of that kind at the same key is replaced in
+ * place, and the other kind's at the key stays; otherwise the item is appended
+ * to its kind's.
  *
- * The collection stores pointers, so an item handed to it is taken rather than
- * copied: it keeps its place in memory, the collection keeps the pointer, and
- * the caller's handle is cleared.
+ * The sheet stores pointers, so an item handed to it is taken rather than copied:
+ * it keeps its place in memory, the sheet keeps the pointer, and the caller's
+ * handle is cleared.
  *
  * A mode arrives already validated: the two factories are the only construction
  * paths, metadata_item_clone copies an item one of them built, and no caller
@@ -252,19 +279,22 @@ void metadata_add_item(
     CHECK_NULL(*item);
     CHECK_NULL((*item)->key);
 
+    /* The item's own kind's claims, the only ones it can meet: the other kind's
+     * item at its key is another claim, and stays as it stands */
     metadata_item_t *incoming = *item;
+    metadata_claims_t *claims = incoming->kind == PATH_KIND_DIRECTORY
+        ? &metadata->directories : &metadata->files;
 
-    metadata_item_t *existing = hashmap_get(metadata->index, incoming->key);
+    metadata_item_t *existing = hashmap_get(claims->index, incoming->key);
     if (existing) {
         /* UPDATE EXISTING ITEM
          *
-         * The slot keeps the key it was indexed under — the index borrows that
+         * The item keeps the key it was indexed under — the index borrows that
          * pointer, so it must outlive the overwrite — and the incoming key, equal
          * to it by construction, is dropped and its place taken before the copy,
          * so nothing reads a pointer that has been freed. Everything else the
-         * slot held is freed and replaced wholesale, the kind and every field
-         * only one kind reads included, so a kind change leaves no residue of
-         * the old one. */
+         * item held is freed and replaced wholesale, every field it carries for
+         * its kind included. */
         free(incoming->key);
         incoming->key = existing->key;
 
@@ -278,33 +308,38 @@ void metadata_add_item(
         return;
     }
 
-    /* APPEND NEW ITEM. Room for it grows in the sheet's arena; only the spine
-     * moves — the items it points at stay where they were created — so the index
+    /* APPEND NEW ITEM. Room for it grows in the sheet's arena; only the entries
+     * move — the items they point at stay where they were created — so the index
      * needs no maintenance here. */
-    metadata->items = arena_grow(
-        metadata->arena, metadata->items, &metadata->capacity, metadata->count + 1,
-        sizeof(*metadata->items)
+    claims->entries = arena_grow(
+        metadata->arena, claims->entries, &claims->capacity, claims->count + 1,
+        sizeof(*claims->entries)
     );
 
-    hashmap_set(metadata->index, incoming->key, incoming);
+    hashmap_set(claims->index, incoming->key, incoming);
 
-    metadata->items[metadata->count++] = incoming;
+    claims->entries[claims->count++] = incoming;
     *item = NULL;
 }
 
 /**
- * Look up an item by key
+ * The item of `kind` at `key`
  *
- * Works for every kind. A key the collection does not hold is the answer, not a
- * failure.
+ * A key the sheet does not hold under that kind is the answer, not a failure.
  */
-const metadata_item_t *metadata_lookup(
+const metadata_item_t *metadata_find_item(
     const metadata_t *metadata,
+    path_kind_t kind,
     const char *key
 ) {
     if (!metadata || !key) return NULL;
 
-    return hashmap_get(metadata->index, key);
+    /* The kind's own index: the other kind's item at the key is never this
+     * answer */
+    const metadata_claims_t *claims = kind == PATH_KIND_DIRECTORY
+        ? &metadata->directories : &metadata->files;
+
+    return hashmap_get(claims->index, key);
 }
 
 const metadata_item_t *metadata_directory_beneath(
@@ -313,14 +348,12 @@ const metadata_item_t *metadata_directory_beneath(
 ) {
     if (!metadata || !storage_path) return NULL;
 
-    size_t count = 0;
-    const metadata_item_t *const *items = metadata_items(metadata, &count);
+    const metadata_items_t directories = metadata_items(metadata, PATH_KIND_DIRECTORY);
     const size_t len = strlen(storage_path);
 
-    for (size_t i = 0; i < count; i++) {
-        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
-        if (str_path_beneath(items[i]->key, storage_path, len)) {
-            return items[i];
+    for (size_t i = 0; i < directories.count; i++) {
+        if (str_path_beneath(directories.entries[i]->key, storage_path, len)) {
+            return directories.entries[i];
         }
     }
 
@@ -351,71 +384,83 @@ bool metadata_same_claim(const metadata_item_t *a, const metadata_item_t *b) {
 /**
  * Two sheets that say the same thing
  *
- * As many claims, and each of a's the one b holds at its key. A key is held once
- * in each (the index), so that is the same claims whatever order each holds them
- * in, the insertion order being the one thing the serializer does not print.
+ * Each kind apart: as many claims, and each of a's the one b holds at its key.
+ * A key is held once in each kind's index, so that is the same claims whatever
+ * order each holds them in, the order added being the one thing the serializer
+ * does not print.
  */
 bool metadata_same(const metadata_t *a, const metadata_t *b) {
     CHECK_NULL(a);
     CHECK_NULL(b);
 
-    if (a->count != b->count) return false;
+    const metadata_claims_t *in_a[] = { &a->files, &a->directories };
+    const metadata_claims_t *in_b[] = { &b->files, &b->directories };
+    for (size_t k = 0; k < sizeof(in_a) / sizeof(in_a[0]); k++) {
+        if (in_a[k]->count != in_b[k]->count) return false;
 
-    for (size_t i = 0; i < a->count; i++) {
-        const metadata_item_t *held = hashmap_get(b->index, a->items[i]->key);
-        if (!metadata_same_claim(a->items[i], held)) return false;
+        for (size_t i = 0; i < in_a[k]->count; i++) {
+            const metadata_item_t *item = in_a[k]->entries[i];
+            if (!metadata_same_claim(item, hashmap_get(in_b[k]->index, item->key))) {
+                return false;
+            }
+        }
     }
 
     return true;
 }
 
 /**
- * Remove metadata item
+ * Remove the item of `kind` at `key`
  *
- * Works for every kind. A key the collection does not hold changes nothing.
+ * A key the sheet does not hold under that kind changes nothing.
  */
 bool metadata_remove_item(
     metadata_t *metadata,
+    path_kind_t kind,
     const char *key
 ) {
     if (!metadata || !key) return false;
 
-    /* The index answers identity. A key the collection does not hold is answered
-     * here and costs one probe — the walk below is for position, and there is
-     * no position to find. */
-    metadata_item_t *item = hashmap_get(metadata->index, key);
+    /* The kind's own claims: the other kind's item at the key stays as it stands */
+    metadata_claims_t *claims = kind == PATH_KIND_DIRECTORY
+        ? &metadata->directories : &metadata->files;
+
+    /* The index answers identity. A key the kind does not hold is answered here
+     * and costs one probe — the walk below is for position, and there is no
+     * position to find. */
+    metadata_item_t *item = hashmap_get(claims->index, key);
     if (!item) return false;
 
-    /* Only the spine carries position, so only a walk gives it. What the index
+    /* Only the entries carry position, so only a walk gives it. What the index
      * bought is the comparison: the item is already named, so this reads the
-     * spine's own pointers rather than chasing each item's key into a strcmp.
+     * entries' own pointers rather than chasing each item's key into a strcmp.
      * The two agree by construction — the add publishes to both or neither and
      * its update arm mutates the standing item in place, so the value the index
-     * holds is the pointer some spine slot holds. */
-    for (size_t i = 0; i < metadata->count; i++) {
-        if (metadata->items[i] != item) continue;
+     * holds is the pointer some entry holds. */
+    for (size_t i = 0; i < claims->count; i++) {
+        if (claims->entries[i] != item) continue;
 
         /* Unpublish before freeing: the index borrows this item's key, so the
          * removal's own strcmp reads it. */
-        hashmap_remove(metadata->index, item->key, NULL);
+        hashmap_remove(claims->index, item->key, NULL);
         metadata_item_free(item);
-        metadata->count--;
+        claims->count--;
 
-        /* Close the gap. Only the spine shifts — every surviving item stays where
-         * it was, so every index entry stays valid. */
-        if (i < metadata->count) {
+        /* Close the gap. Only the entries shift — every surviving item stays
+         * where it was, so every index entry stays valid. */
+        if (i < claims->count) {
             memmove(
-                &metadata->items[i], &metadata->items[i + 1],
-                (metadata->count - i) * sizeof(*metadata->items)
+                &claims->entries[i], &claims->entries[i + 1],
+                (claims->count - i) * sizeof(*claims->entries)
             );
         }
 
         return true;
     }
 
-    /* Reached only if the index named an item no slot holds: the two agree by
+    /* Reached only if the index named an item no entry holds: the two agree by
      * construction (above), so this is the sheet's own bug. */
-    CHECK_ARG(false, "the index names an item no slot of the spine holds");
+    CHECK_ARG(false, "the index names an item no entry holds");
 }
 
 /**
@@ -431,20 +476,17 @@ bool metadata_remove_item(
  * Strictly beneath, at a component boundary: a claim AT the key is the key, and
  * one above it is the ancestry every path has.
  *
- * @param items The sheet's items, borrowed — the caller's own snapshot (must
- *              not be NULL)
- * @param count How many it holds (zero answers false)
+ * @param directories The sheet's directory claims, borrowed — the caller's own
+ *                    snapshot (an empty one answers false)
  * @param key The derivation's key (must not be NULL)
  * @return true iff a tracked directory claim stands strictly beneath it
  */
-static bool tracked_beneath(
-    const metadata_item_t *const *items, size_t count, const char *key
-) {
+static bool metadata_tracked_beneath(metadata_items_t directories, const char *key) {
     const size_t len = strlen(key);
 
-    for (size_t i = 0; i < count; i++) {
-        if (items[i]->kind != PATH_KIND_DIRECTORY || !items[i]->tracked) continue;
-        if (str_path_beneath(items[i]->key, key, len)) return true;
+    for (size_t i = 0; i < directories.count; i++) {
+        const metadata_item_t *dir = directories.entries[i];
+        if (dir->tracked && str_path_beneath(dir->key, key, len)) return true;
     }
 
     return false;
@@ -454,7 +496,7 @@ static bool tracked_beneath(
  * Prune the derivations nothing stands beneath
  *
  * Two-pass collect-then-prune: metadata_remove_item frees the item it removes
- * and shifts the spine behind it, so the pass that decides cannot also be the
+ * and shifts the entries behind it, so the pass that decides cannot also be the
  * pass that acts. string_array_push copies each key into the array's own arena,
  * so the prune pass operates on strings the removals cannot free.
  */
@@ -469,19 +511,20 @@ error_t metadata_prune_ancestors(
      * them. */
     const size_t first = pruned->count;
 
-    size_t item_count = 0;
-    const metadata_item_t *const *items = metadata_items(metadata, &item_count);
+    /* The directory claims, read before any goes — the removals come after the
+     * pass that decides — and those alone: no other kind is the prune's subject */
+    const metadata_items_t directories = metadata_items(metadata, PATH_KIND_DIRECTORY);
 
-    for (size_t d = 0; d < item_count; d++) {
-        const metadata_item_t *dir = items[d];
+    for (size_t d = 0; d < directories.count; d++) {
+        const metadata_item_t *dir = directories.entries[d];
 
         /* The subject: a derivation, which exists because something beneath it
          * does. A tracked claim is the walk's own word that the profile tracks
          * the directory — it stands with nothing beneath it and at any attributes,
          * and it leaves the sheet where a verb takes it, never by inference
-         * (metadata.h). The two fields capture_ancestor reads to leave a standing
+         * (metadata.h). The field metadata_capture_rung reads to leave a standing
          * claim alone, asked here for the same reason. */
-        if (dir->kind != PATH_KIND_DIRECTORY || dir->tracked) continue;
+        if (dir->tracked) continue;
 
         /* Half of what stands beneath: any path under the directory that a tree
          * can hold. Metadata items are not the universe there — a symlink tracked
@@ -498,52 +541,39 @@ error_t metadata_prune_ancestors(
         }
 
         /* And the other half: the one path a tree cannot hold. */
-        if (tracked_beneath(items, item_count, dir->key)) continue;
+        if (metadata_tracked_beneath(directories, dir->key)) continue;
 
         string_array_push(pruned, dir->key);
     }
 
-    /* Every key here was read off an item the walk above just saw, so each names
-     * something that is there to remove. */
+    /* Every key here was read off a directory claim the walk above just saw, so
+     * each names something that is there to remove. */
     for (size_t i = first; i < pruned->count; i++) {
-        metadata_remove_item(metadata, pruned->entries[i]);
+        metadata_remove_item(metadata, PATH_KIND_DIRECTORY, pruned->entries[i]);
     }
 
     return NULL;
 }
 
 /**
- * Every item the collection holds, in insertion order
+ * One kind's items, in the order added
  *
- * Returns the spine itself (borrowed reference). Zero-cost operation - no
- * allocation, no copying.
- *
- * Anything that grows or shrinks the collection invalidates the returned array;
- * the items it points at are not moved by it — each stands until it is itself
- * removed.
- *
- * @param metadata Metadata collection (NULL yields count 0)
- * @param count Output count (must not be NULL)
- * @return Borrowed array of item pointers (do not free), NULL only when metadata
- *         is NULL
+ * The kind's own entries, lent: no allocation, no copy.
  */
-const metadata_item_t *const *metadata_items(
-    const metadata_t *metadata,
-    size_t *count
-) {
-    /* Handle invalid inputs */
-    if (!metadata || !count) {
-        if (count) {
-            *count = 0;
-        }
-        return NULL;
-    }
+metadata_items_t metadata_items(const metadata_t *metadata, path_kind_t kind) {
+    /* A sheet a tolerant read went on without holds none (core/profiles.c
+     * profile_walk): the empty slice, never a contract breach */
+    if (!metadata) return (metadata_items_t){ 0 };
 
-    *count = metadata->count;
+    /* The kind's own entries, borrowed. They are made with the sheet
+     * (metadata_create_empty), so an empty kind lends an array too. */
+    const metadata_claims_t *claims = kind == PATH_KIND_DIRECTORY
+        ? &metadata->directories : &metadata->files;
 
-    /* Return the spine (borrowed reference) Note: it is always allocated (even
-     * for an empty collection), so this is safe even when count=0 */
-    return (const metadata_item_t *const *) metadata->items;
+    return (metadata_items_t){
+        .entries = (const metadata_item_t *const *) claims->entries,
+        .count = claims->count,
+    };
 }
 
 /**
@@ -743,7 +773,7 @@ error_t metadata_capture_directory(
  *
  * `tracked` is false throughout: this rule authors derivations, never intent.
  *
- * @param metadata Collection to author into (must not be NULL; mutated)
+ * @param metadata The sheet to author into (must not be NULL; mutated)
  * @param mounts The table the rung's name resolves through (must not be NULL)
  * @param profile The rung's profile, for a custom/ name (must not be NULL)
  * @param storage_path The rung's key (must not be NULL)
@@ -752,24 +782,24 @@ error_t metadata_capture_directory(
  * @param retired Receives the key when the rung's claim goes (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t capture_ancestor(
+static error_t metadata_capture_rung(
     metadata_t *metadata, const mount_table_t *mounts, const char *profile,
     const char *storage_path, arena_t *arena, size_t *captured,
     string_array_t *retired
 ) {
-    /* Two standing items are not a derivation's to touch. A tracked claim is
-     * the walk's own word about a directory the profile tracks, and nothing derived
-     * refreshes or retires it. A FILE item is the tree's business: a path is a
-     * blob or a tree, so an item of that kind at a directory's key is stale
-     * metadata, and the tree is its authority — the profile reads a FILE item
-     * only at a blob, one its walk meets or the one a point question is asked
-     * (core/profiles.c profile_step, profile_find), and a capture at that key
-     * replaces it. The prune is no authority over it: it takes derivations, and
-     * this item is not one. */
-    const metadata_item_t *held = metadata_lookup(metadata, storage_path);
-    if (held && (held->kind != PATH_KIND_DIRECTORY || held->tracked)) {
-        return NULL;
-    }
+    /* The directory claim at the rung, the one a derivation may touch, and only
+     * a derived one: a tracked claim is the walk's own word about a directory
+     * the profile tracks, and nothing derived refreshes or retires it. A FILE
+     * item at the rung's key is the other kind's, and no business of this rule:
+     * a blob at the rung would have left the leaf beneath it no room, so the
+     * item is residue no blob backs, carried as every write carries it, and the
+     * rung is claimed beside it — the way's mode is the claim another machine
+     * creates the rung by. The prune is no authority over it either: it takes
+     * derivations, and this item is not one. */
+    const metadata_item_t *held = metadata_find_item(
+        metadata, PATH_KIND_DIRECTORY, storage_path
+    );
+    if (held && held->tracked) return NULL;
 
     /* Where the rung stands is where its own name resolves. The climb carries
      * one string, not a pair that must agree: a resolve is a root's spelling
@@ -804,7 +834,7 @@ static error_t capture_ancestor(
      * was there at capture time never authored a claim to drop; this is the same
      * consent, one command later. */
     if (occupant != FS_OCCUPANT_DIRECTORY) {
-        if (metadata_remove_item(metadata, storage_path)) {
+        if (metadata_remove_item(metadata, PATH_KIND_DIRECTORY, storage_path)) {
             string_array_push(retired, storage_path);
         }
         return NULL;
@@ -846,7 +876,7 @@ static error_t capture_ancestor(
 /**
  * Author the claims for every directory on the way to a path
  *
- * The climb: this names every rung, capture_ancestor decides each one.
+ * The climb: this names every rung, metadata_capture_rung decides each one.
  */
 error_t metadata_capture_ancestors(
     metadata_t *metadata, const mount_table_t *mounts, const char *profile,
@@ -879,7 +909,9 @@ error_t metadata_capture_ancestors(
         size_t cut = (size_t) (sep - storage_path);
 
         rung[cut] = '\0';
-        error_t err = capture_ancestor(metadata, mounts, profile, rung, arena, captured, retired);
+        error_t err = metadata_capture_rung(
+            metadata, mounts, profile, rung, arena, captured, retired
+        );
         rung[cut] = '/';
         if (err) return err;
     }
@@ -888,20 +920,24 @@ error_t metadata_capture_ancestors(
 }
 
 /**
- * Sort helper for the serializer: byte order on the item key
+ * Sort helper for the serializer: byte order on the item key, then the kind — a
+ * file's item before a directory's at one key, so a sheet holding both writes
+ * one spelling on every machine
  */
-static int item_key_cmp(const void *a, const void *b) {
+static int metadata_key_order(const void *a, const void *b) {
     const metadata_item_t *const *ia = a;
     const metadata_item_t *const *ib = b;
 
-    return strcmp((*ia)->key, (*ib)->key);
+    int by_key = strcmp((*ia)->key, (*ib)->key);
+
+    return by_key != 0 ? by_key : (int) (*ia)->kind - (int) (*ib)->kind;
 }
 
 /**
  * Convert metadata to JSON
  *
- * One "items" array, key-ordered, each object carrying its "kind" discriminator
- * and then only what the item claims.
+ * One "items" array, ordered by key and then kind, each object carrying its "kind"
+ * discriminator and then only what the item claims.
  */
 buffer_t metadata_to_json(const metadata_t *metadata) {
     CHECK_NULL(metadata);
@@ -913,19 +949,25 @@ buffer_t metadata_to_json(const metadata_t *metadata) {
     cJSON_AddNumberToObject(root, "version", METADATA_VERSION);
     cJSON *items_array = cJSON_CreateArray();
 
-    /* Serialize in key order — a write-side norm only (the parser accepts any
-     * order, so a hand-edit cannot brick on placement), buying byte-determinism
-     * across machines: sync's merge then conflicts only on genuine same-path
-     * edits, never on capture-order divergence. The sort is over a transient
-     * copy of the spine; the collection's insertion order is untouched. */
+    /* Serialize in key order, then kind — a write-side norm only (the parser
+     * accepts any order, so a hand-edit cannot brick on placement), buying
+     * byte-determinism across machines: sync's merge then conflicts only on genuine
+     * same-path edits, never on capture-order divergence. The sort is over a
+     * transient copy of both kinds' entries, the files' then the directories';
+     * each kind's own order is untouched. */
+    const size_t count = metadata->files.count + metadata->directories.count;
     const metadata_item_t **sorted = NULL;
-    if (metadata->count > 0) {
-        sorted = heap_calloc(metadata->count, sizeof(*sorted));
-        memcpy(sorted, metadata->items, metadata->count * sizeof(*sorted));
-        qsort(sorted, metadata->count, sizeof(*sorted), item_key_cmp);
+    if (count > 0) {
+        sorted = heap_calloc(count, sizeof(*sorted));
+        memcpy(sorted, metadata->files.entries, metadata->files.count * sizeof(*sorted));
+        memcpy(
+            sorted + metadata->files.count, metadata->directories.entries,
+            metadata->directories.count * sizeof(*sorted)
+        );
+        qsort(sorted, count, sizeof(*sorted), metadata_key_order);
     }
 
-    for (size_t i = 0; i < metadata->count; i++) {
+    for (size_t i = 0; i < count; i++) {
         const metadata_item_t *item = sorted[i];
         cJSON *item_obj = cJSON_CreateObject();
 
@@ -996,7 +1038,7 @@ buffer_t metadata_to_json(const metadata_t *metadata) {
  * Parses octal mode string (e.g., "0600", "0644", "0755") to mode_t. Validates
  * that mode is within valid range (0000-0777).
  */
-static error_t parse_mode(const char *mode_str, mode_t *out) {
+static error_t metadata_parse_mode(const char *mode_str, mode_t *out) {
     CHECK_NULL(mode_str);
     CHECK_NULL(out);
 
@@ -1026,12 +1068,12 @@ static error_t parse_mode(const char *mode_str, mode_t *out) {
  * Parse metadata from JSON
  *
  * Parses unified JSON with single "items" array. REJECTS other versions with a
- * clear error message (NO migration code), and refuses a duplicated key — ambiguity
- * is not noise. Absence parses as itself: a missing mode is MODE_UNCLAIMED, missing
- * owner/group NULL, a missing "tracked" an ancestor claim, and an item that claims
- * nothing is accepted and inert — strictness lives where the fact is authored,
- * not here. A present mode, owner or group is a value of its kind or a refusal
- * all the same: a mode that parses, a name.
+ * clear error message (NO migration code), and refuses a duplicated claim —
+ * ambiguity is not noise. Absence parses as itself: a missing mode is
+ * MODE_UNCLAIMED, missing owner/group NULL, a missing "tracked" an ancestor claim,
+ * and an item that claims nothing is accepted and inert — strictness lives where
+ * the fact is authored, not here. A present mode, owner or group is a value of
+ * its kind or a refusal all the same: a mode that parses, a name.
  */
 error_t metadata_from_json(const char *json_str, metadata_t **out) {
     CHECK_NULL(json_str);
@@ -1096,7 +1138,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
         goto cleanup;
     }
 
-    /* Create metadata collection */
+    /* The sheet the items go into */
     metadata = metadata_create_empty();
 
     /* Parse each item in the unified array */
@@ -1145,15 +1187,18 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
         err = label_validate_storage(key_obj->valuestring);
         if (err) goto cleanup;
 
-        /* Refuse a duplicated key before the factory runs. The collection's upsert
-         * would resolve the contradiction silently, last-wins; a document saying
-         * two things about one path gets the same loud refusal every other
-         * malformation does. Only a hand-edit or a mis-resolved merge can author
-         * one. */
-        if (metadata_lookup(metadata, key_obj->valuestring)) {
+        /* Refuse a duplicated claim before the factory runs. A key holds one
+         * item of each kind — a file's and a directory's at one key are two claims,
+         * a document the decode reads — so a second item of one kind at a key
+         * says two things about one claim. The kind's upsert would resolve that
+         * silently, last-wins; a document that disagrees with itself gets the
+         * same loud refusal every other malformation does, and names the kind,
+         * which is what the key alone no longer says. Only a hand-edit or a
+         * mis-resolved merge can author one. */
+        if (metadata_find_item(metadata, kind, key_obj->valuestring)) {
             err = error_create(
-                ERR_INVALID_ARG, "Duplicate key in metadata: '%s'",
-                key_obj->valuestring
+                ERR_INVALID_ARG, "Duplicate %s item in metadata: '%s'",
+                kind_obj->valuestring, key_obj->valuestring
             );
             goto cleanup;
         }
@@ -1169,7 +1214,7 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
                 );
                 goto cleanup;
             }
-            err = parse_mode(mode_obj->valuestring, &mode);
+            err = metadata_parse_mode(mode_obj->valuestring, &mode);
             if (err) {
                 err = error_wrap(
                     err, "Failed to parse mode for item: '%s'",
@@ -1243,8 +1288,8 @@ error_t metadata_from_json(const char *json_str, metadata_t **out) {
             item->group = heap_strdup(group_obj->valuestring);
         }
 
-        /* Hand the item to the collection; it takes it, and leaves the loop's
-         * scratch pointer NULL for the next iteration and the tail. */
+        /* Hand the item to the sheet; it takes it, and leaves the loop's scratch
+         * pointer NULL for the next iteration and the tail. */
         metadata_add_item(metadata, &item);
     }
 
@@ -1266,9 +1311,9 @@ cleanup:
  * Loads metadata.json from a specific Git tree — a branch head or a historical
  * commit's tree alike. A tree without the sheet — no .dotta, or a .dotta directory
  * without the file — holds an empty sheet: the absence's arm is the one producer
- * of that answer, so no reader folds a not-found into a collection of its own,
- * and a file at .dotta is never read as the absence. Every failure meets one
- * tail, which names the profile over it.
+ * of that answer, so no reader folds a not-found into a sheet of its own, and a
+ * file at .dotta is never read as the absence. Every failure meets one tail,
+ * which names the profile over it.
  */
 error_t metadata_load_from_tree(
     git_repository *repo,

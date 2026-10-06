@@ -571,8 +571,8 @@ typedef struct {
  * (core/profiles.h profile_walk) — a name the tree holds a blob at, or a sheet
  * key it holds no blob at or above, the content-authority rule having contradicted
  * the rest (a path is a tree or a blob, and the tree is the content authority)
- * — a tree holding one blob per path and a sheet one item per key. Empty on every
- * build whose claims all placed — the common case, costing nothing.
+ * — a tree holding one blob per path and a sheet one directory claim per key.
+ * Empty on every build whose claims all placed — the common case, costing nothing.
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded claims, valid for the arena's lifetime
@@ -674,9 +674,9 @@ typedef struct {
  *
  * Pure value return — no allocation, no error path. Entries arrive in build order,
  * one profile's contiguous, each in its sheet's order; each (profile, storage
- * path) once, the sheet holding one item a key. Empty on every build whose profiles
- * contradict none of their own claims — the common case, costing the build a
- * second classification of each directory claim.
+ * path) once, the sheet holding one directory claim a key. Empty on every build
+ * whose profiles contradict none of their own claims — the common case, costing
+ * the build a second classification of each directory claim.
  *
  * Readers: the health channel's listing (cmds/status.c status_print_profiles),
  * apply's section (cmds/apply.c cmd_apply) and sync's after its Git phase

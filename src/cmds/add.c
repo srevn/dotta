@@ -1116,10 +1116,10 @@ static error_t add_capture(
     );
 
     /* NULL is a links-only answer (core/metadata.h): the capture claims nothing
-     * — a link with no ownership to track — and an item standing at the key is
-     * the replaced state's, retired. */
+     * — a link with no ownership to track — and a FILE item standing at the key
+     * is the replaced state's, retired. */
     if (!item) {
-        metadata_remove_item(metadata, storage_path);
+        metadata_remove_item(metadata, PATH_KIND_FILE, storage_path);
         return NULL;
     }
 
@@ -2034,22 +2034,17 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
     /* A file listed at a name the sheet claims a directory at takes that claim's
-     * place: its capture replaces the item, kind and all (metadata_add_item),
-     * or retires it where the capture claims nothing (a link). The kind question
-     * the listing asked of the view is why that is the whole story — a claim
-     * the view held at this path would have refused a file here — so what gives
-     * way is a claim the view already reads as no claim, the tree holding a blob
-     * at its name, or as another name's, the settle having kept another member.
-     * Given up here, with the selection complete, so that the sheet the sweep
-     * below reads is the one the commit will carry. */
+     * place, given up here: its capture writes its own kind (metadata_add_item),
+     * and would carry the claim beside it. The kind question the listing asked
+     * of the view is why that is the whole story — a claim the view held at this
+     * path would have refused a file here — so what gives way is a claim the
+     * view already reads as no claim, the tree holding a blob at its name, or
+     * as another name's, the settle having kept another member. Given up here,
+     * with the selection complete, so that the sheet the sweep below reads is
+     * the one the commit will carry. */
     for (size_t i = 0; i < walk.files.count; i++) {
         const path_t *path = walk.files.entries[i];
-        const metadata_item_t *standing = metadata_lookup(
-            metadata, path->claim.storage_path
-        );
-        if (standing && standing->kind == PATH_KIND_DIRECTORY) {
-            metadata_remove_item(metadata, path->claim.storage_path);
-        }
+        metadata_remove_item(metadata, PATH_KIND_DIRECTORY, path->claim.storage_path);
     }
 
     /* The two documents this commit carries name one namespace, and this is where
@@ -2083,12 +2078,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * own admission refused. It also retires claims, and giving one up cannot
      * make room narrower.
      */
-    size_t item_count = 0;
-    const metadata_item_t *const *items = metadata_items(metadata, &item_count);
-    for (size_t i = 0; i < item_count; i++) {
-        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
-
-        err = stage_admit_subtree(admission, items[i]->key);
+    const metadata_items_t directories = metadata_items(metadata, PATH_KIND_DIRECTORY);
+    for (size_t i = 0; i < directories.count; i++) {
+        err = stage_admit_subtree(admission, directories.entries[i]->key);
         if (err) {
             /* The stage names the storage path and the obstruction; the wrap
              * says whose claim it is and that a claim is the subject, so an add

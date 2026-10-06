@@ -13,13 +13,15 @@
  * At each commit a profile is one document in two: the tree — what stands at
  * each name, its bytes and its filemode — and the sheet (core/metadata.h), what
  * the profile claims of a name beyond what a tree can say, and the directories
- * a tree cannot hold. A reader wants the claims, never the two documents: it
- * opens the profile at a tree and asks the handle, which reads that tree's own
- * sheet once, at the first question that needs it. What the handle reads is Git's
- * alone, the tree and its sheet: no view, no record, no disk. A writer wants
- * the claims too: it opens the profile's next commit (profile_stage_t), asks
- * the profile at the tree that commit opened at, and edits through it — never
- * the two documents, which the stage keeps together by the rules its type states.
+ * a tree cannot hold, each claim keyed by its kind and its name, so one name
+ * may carry a file's item and a directory's. A reader wants the claims, never
+ * the two documents: it opens the profile at a tree and asks the handle, which
+ * reads that tree's own sheet once, at the first question that needs it. What
+ * the handle reads is Git's alone, the tree and its sheet: no view, no record,
+ * no disk. A writer wants the claims too: it opens the profile's next commit
+ * (profile_stage_t), asks the profile at the tree that commit opened at, and
+ * edits through it — never the two documents, which the stage keeps together by
+ * the rules its type states.
  *
  * The decode, stated once, applied by the walk to every name it meets
  * (profile_walk) and by profile_find to the one it is asked, by the same rules
@@ -349,11 +351,11 @@ typedef error_t (*profile_visit_fn)(const profile_claim_t *claim, void *payload)
  * The blobs first, in the tree's pre-order; then the directory claims no blob
  * stands at or above, in the sheet's own order — so a reader that keeps the first
  * of two claims at one place keeps the sheet's first, and that order is the
- * document's: the writer sorts by key (core/metadata.c metadata_to_json), a hand
- * may not. A name is shown once: a blob, or a directory claim no blob stands at
- * or above. Each directory claim is the one profile_find answers at its name,
- * by the same question asked of it there, so the walk and a question at one name
- * cannot part.
+ * document's: the writer sorts by key, then kind (core/metadata.c
+ * metadata_to_json), a hand may not. A name is shown once: a blob, or a directory
+ * claim no blob stands at or above. Each directory claim is the one profile_find
+ * answers at its name, by the same question asked of it there, so the walk and
+ * a question at one name cannot part.
  *
  * STRICT: a sheet that will not load is the walk's failure, before any claim is
  * shown. TOLERANT: the walk shows the tree's claims at their floors — no mode,
@@ -621,7 +623,8 @@ typedef struct {
  * bug. Two neighbours ask another question and are not readers: revert's read
  * of the head at the name it writes (cmds/revert.c cmd_revert, step 11) asks
  * Git's one-entry rule, which the sheet must not answer — a directory claim there
- * is retired by the write, not refused; and the orphan probe (core/workspace.c
+ * is never refused: it gives way to the write where it stands, and rides it where
+ * the head's blob contradicts it; and the orphan probe (core/workspace.c
  * workspace_orphan_authority) asks whether the profile holds the claim a record
  * remembers, which a subtree and a gitlink stand at a name without making —
  * profile_find's directory claim for a directory record, and for a file record
@@ -642,13 +645,12 @@ error_t profile_holds(profile_t *profile, const char *storage_path, profile_held
  *
  * The claim profile_walk shows at the name, asked of that name alone: a file
  * claim where a blob stands there, the sheet's FILE item read over it by the
- * walk's own rules — the link rule, and a DIRECTORY item at a blob's name claiming
- * nothing at the blob; a directory claim where the sheet keeps one and no blob
- * stands at the name or above it. A question the tree answers is the tree's —
- * no blob, no file claim; a blob at the name or above it, no directory claim —
- * and reads no sheet. Only an open one does, under `read`: STRICT, a sheet that
- * will not load is the answer's failure; TOLERANT, a file claim stands at its
- * floors and a directory claim is none, as in the walk, the failure kept
+ * walk's own rule, the link rule; a directory claim where the sheet keeps one
+ * and no blob stands at the name or above it. A question the tree answers is
+ * the tree's — no blob, no file claim; a blob at the name or above it, no directory
+ * claim — and reads no sheet. Only an open one does, under `read`: STRICT, a
+ * sheet that will not load is the answer's failure; TOLERANT, a file claim stands
+ * at its floors and a directory claim is none, as in the walk, the failure kept
  * (profile_load_sheet).
  *
  * `storage_path` is validated. The walk checks the shape of every name it meets,

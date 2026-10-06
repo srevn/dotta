@@ -713,7 +713,7 @@ static metadata_item_t *revert_restored_claim(
  * exits before anything is staged.
  *
  * @param standing The entry at the branch head, or NULL for none
- * @param standing_claim The sheet's claim at the name there, or NULL for none
+ * @param standing_claim The sheet's FILE item at the name there, or NULL for none
  * @param restored_blob The blob the write would store (must not be NULL)
  * @param restored_mode The filemode it would carry
  * @param restored_claim The claim the revert would write, or NULL where the target
@@ -921,10 +921,11 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * it stands it is a blob, because a revert restores one file's bytes.
      *
      * The tree alone, on purpose: this asks Git's one-entry rule about the name
-     * the write uses, and a directory claim the sheet holds there is retired by
-     * the write (step 14) rather than standing in its way. So the sheet must
-     * not answer here, which is why core/profiles.h profile_holds names this
-     * read as one of its non-readers. */
+     * the write uses, and a directory claim the sheet holds there never stands
+     * in its way — the write takes its place where it stands, and carries it
+     * where this entry's blob contradicts it (step 20). So the sheet must not
+     * answer here, which is why core/profiles.h profile_holds names this read
+     * as one of its non-readers. */
     rc = git_tree_entry_bypath(&standing_entry, stage_tree(stage), restored_name);
     if (rc < 0 && rc != GIT_ENOTFOUND) {
         err = error_git(rc, "Cannot read '%s' in profile '%s'", restored_name, profile);
@@ -1000,13 +1001,11 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     }
 
     /* Step 14: the claim. What the target records at the name it records it under,
-     * as the claim builder reads one: a FILE item, or nothing. A DIRECTORY item
-     * at a key the tree holds a blob at claims nothing about this file — the
-     * tree is the content authority, and it has already answered (step 8). */
-    const metadata_item_t *recorded = metadata_lookup(target_sheet, target_name);
-    if (recorded && recorded->kind != PATH_KIND_FILE) {
-        recorded = NULL;
-    }
+     * as the claim builder reads one: the FILE item there, or nothing. A DIRECTORY
+     * item at a key the tree holds a blob at is the other kind's, and claims
+     * nothing about this file — the tree is the content authority, and it has
+     * already answered (step 8). */
+    const metadata_item_t *recorded = metadata_find_item(target_sheet, PATH_KIND_FILE, target_name);
 
     /* A link's claim is the entry as recorded and its absence is an answer, so
      * a reconstruction is what a non-link without one earns. Named here, beside
@@ -1019,9 +1018,11 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         recorded, restored_name, restored_mode, target_kind
     );
 
-    /* Step 15: nothing to do — the whole write, entry and claim, already stands */
-    const metadata_item_t *standing_claim = metadata_lookup(
-        standing_sheet, restored_name
+    /* Step 15: nothing to do — the whole write, entry and claim, already stands.
+     * The claim is the FILE item at the name: a directory claim there, which
+     * the standing blob contradicts, rides the write whatever it is (step 20). */
+    const metadata_item_t *standing_claim = metadata_find_item(
+        standing_sheet, PATH_KIND_FILE, restored_name
     );
     if (revert_already_at_target(
         standing_entry, standing_claim, &restored_blob, restored_mode,
@@ -1217,13 +1218,22 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         if (err) goto cleanup;
     }
 
-    /* The claim to restore upserts over the standing one; where the target records
-     * none for a link, the standing item is the reverted-away state's — retire
-     * it. */
+    /* The claim to restore upserts over the standing FILE item; where the target
+     * records none for a link, the standing item is the reverted-away state's —
+     * retire it. */
     if (restored_claim) {
         metadata_add_item(standing_sheet, &restored_claim);
     } else {
-        metadata_remove_item(standing_sheet, restored_name);
+        metadata_remove_item(standing_sheet, PATH_KIND_FILE, restored_name);
+    }
+
+    /* The one write across kinds: a blob put where a directory claim stands takes
+     * its place. The claim stands where the head holds no entry at the name,
+     * step 11's answer, and none above it, which step 16's put refused — an empty
+     * tracked directory, or a rung nothing anchors. Where the head's blob stands
+     * at the name it contradicts the claim, and the write carries it. */
+    if (!standing_entry) {
+        metadata_remove_item(standing_sheet, PATH_KIND_DIRECTORY, restored_name);
     }
 
     err = metadata_save_to_stage(stage, standing_sheet);

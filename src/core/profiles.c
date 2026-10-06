@@ -8,17 +8,18 @@
  * failure kept beside it; the handle itself stands in an arena of its own, with
  * its name and every claim it lends. The walk is the decode core/profiles.h states,
  * in two halves: one walk of the tree for the blobs (profile_step), then the
- * sheet's directory items, each asked the one question that classifies it, the
- * directory claim standing at its name (profile_directory_item) — the items it
- * answers none for are profile_contradicted's. The point questions ask the decode
- * of one name: a blob's claim through the walk's own decode (profile_decode_blob),
- * and the directory claim standing at a name through the question the walk asks
- * of each item, decoded as the walk decodes it (profile_decode_directory). The
- * counts and the need of a target are the walk, folded (profile_counts,
- * profile_needs_target). The next commit is a sys/stage, the base — the profile
- * at the tree the stage opened, its sheet read at the open — and that sheet copied:
- * a removal edits the stage and the copy, and the commit prunes the copy, saves
- * it where its claims are no longer the base's and commits.
+ * sheet's directory items, each asked the one question that classifies it, whether
+ * a blob stands at its name or at a rung above it (profile_blob_above) — the
+ * items a blob stands over are profile_contradicted's. The point questions ask
+ * the decode of one name: a blob's claim through the walk's own decode
+ * (profile_decode_blob), and the directory claim standing at a name through the
+ * question the walk asks of each item (profile_directory_item), decoded as the
+ * walk decodes it (profile_decode_directory). The counts and the need of a target
+ * are the walk, folded (profile_counts, profile_needs_target). The next commit
+ * is a sys/stage, the base — the profile at the tree the stage opened, its sheet
+ * read at the open — and that sheet copied: a removal edits the stage and the
+ * copy, and the commit prunes the copy, saves it where its claims are no longer
+ * the base's and commits.
  */
 
 #include "core/profiles.h"
@@ -382,19 +383,94 @@ static profile_claim_t profile_decode_directory(const metadata_item_t *item) {
 }
 
 /**
+ * The blob over a directory claim at `storage_path` — at its name, or at a rung
+ * above it — as the length of the name it stands at; 0 where none stands
+ *
+ * The classification's question of the tree, one question wherever a directory
+ * claim is classified, so no two readers of it can part. A blob leaves no room
+ * at its name or beneath it (core/profiles.h, the decode), so the first entry
+ * on the way down that is no tree answers: a blob contradicts the claim; a gitlink
+ * does not, placing nothing on disk; nor does a name the tree lacks. A name that
+ * is a tree at every rung, itself included, stands. The label's word is a rung
+ * like any other: a blob at `home` contradicts every home/ claim.
+ *
+ * Readers: profile_walk and profile_contradicted, at each DIRECTORY item; and
+ * profile_directory_item, for the point questions.
+ *
+ * @param profile Handle
+ * @param storage_path A validated storage path
+ * @param out The length of the blob's name — a prefix of storage_path, or the
+ *            whole of it — or 0 where none stands at or above it
+ * @return Error or NULL on success: a subtree on the way that will not load,
+ *         under "Cannot read '%s' in profile '%s'", naming the claim's name
+ */
+static error_t profile_blob_above(
+    profile_t *profile,
+    const char *storage_path,
+    size_t *out
+) {
+    *out = 0;
+
+    /* The name copied once and cut at each separator in turn, so each component
+     * is a string the lookup takes whole: a name has no bound but memory, so no
+     * buffer on the stack holds it */
+    char *name = heap_strdup(storage_path);
+    const git_tree *tree = profile->tree;
+    git_tree *loaded = NULL;    /* The subtree the descent holds; NULL at the root */
+    error_t err = NULL;
+
+    for (char *component = name;;) {
+        char *slash = strchr(component, '/');
+        if (slash) *slash = '\0';
+
+        /* Top-down, each component looked up once in the tree the one before it
+         * found — a claim costs its own components, the lookups a question at the
+         * name alone makes (lib/libgit2/src/libgit2/tree.c git_tree_entry_bypath);
+         * a climb from the name would descend from the root at every rung. A
+         * blob answers, as the length of the name it stands at */
+        const git_tree_entry *entry = git_tree_entry_byname(tree, component);
+        git_object_t type = entry ? git_tree_entry_type(entry) : GIT_OBJECT_INVALID;
+        if (type == GIT_OBJECT_BLOB) {
+            *out = slash ? (size_t) (slash - name) : strlen(storage_path);
+            break;
+        }
+
+        /* Nothing there, a gitlink, or the name itself a tree: the claim stands */
+        if (type != GIT_OBJECT_TREE || !slash) break;
+
+        /* A tree on the way, the next component asked of it — read before the
+         * one holding its entry is let go. One that will not load is a failure
+         * to read, never an absence, as git_tree_entry_bypath reads it */
+        git_tree *next = NULL;
+        int rc = git_tree_lookup(&next, git_tree_owner(tree), git_tree_entry_id(entry));
+        if (rc < 0) {
+            err = error_git(
+                rc, "Cannot read '%s' in profile '%s'", storage_path, profile->name
+            );
+            break;
+        }
+        git_tree_free(loaded);
+        tree = loaded = next;
+        component = slash + 1;
+    }
+
+    git_tree_free(loaded);    /* NULL-safe */
+    free(name);
+
+    return err;
+}
+
+/**
  * The sheet's directory claim standing at `storage_path`, or NULL: the DIRECTORY
- * item there, where no blob stands at the name
+ * item there, where no blob stands at the name or above it
  *
- * The classification, at one name: the walk's directory half asks it of each
- * item and shows the claim it answers, profile_contradicted shows each item it
- * answers none for, and the point questions ask it of the one name they are asked
- * — one question, so no two of them can part. The tree first, so a name a blob
- * stands at answers without the sheet; then the sheet, under `read`. The raw
- * item, which is this module's own: each reader makes of it what it asks.
+ * The classification at one name, for the questions asked of one: the tree first
+ * (profile_blob_above), so a name a blob stands at or over answers without the
+ * sheet; then the sheet, under `read`. The raw item, which is this module's own:
+ * each reader makes of it what it asks.
  *
- * Readers: profile_walk and profile_contradicted, at each DIRECTORY item;
- * profile_holds, where the tree is silent at the name; and profile_find, for a
- * directory claim.
+ * Readers: profile_holds, where the tree is silent at the name; and profile_find,
+ * for a directory claim.
  *
  * @param profile Handle
  * @param read The sheet's policy for this question
@@ -411,28 +487,16 @@ static error_t profile_directory_item(
 ) {
     *out = NULL;
 
-    /* A blob at the name contradicts the claim there and is the tree's answer,
-     * the sheet unread: the whole of what the classification asks the tree. The
-     * look reads its three answers as three — a subtree that will not load on
-     * the way is a failure to read, never an absence
-     * (lib/libgit2/src/libgit2/tree.c git_tree_entry_bypath: -1 where a subtree
-     * will not load, GIT_ENOTFOUND for a name absent or reached through a
-     * non-tree) */
-    git_tree_entry *entry = NULL;
-    int rc = git_tree_entry_bypath(&entry, profile->tree, storage_path);
-    if (rc < 0 && rc != GIT_ENOTFOUND) {
-        return error_git(
-            rc, "Cannot read '%s' in profile '%s'", storage_path, profile->name
-        );
-    }
-    git_object_t type = rc == 0 ? git_tree_entry_type(entry) : GIT_OBJECT_INVALID;
-    git_tree_entry_free(entry);   /* NULL-safe, and NULL unless rc == 0 */
-    if (type == GIT_OBJECT_BLOB) return NULL;
+    /* A blob at the name or above it contradicts the claim there, and is the
+     * tree's answer, the sheet unread */
+    size_t above = 0;
+    error_t err = profile_blob_above(profile, storage_path, &above);
+    if (err || above > 0) return err;
 
     /* An open question: the sheet, under the reader's policy. A tolerant read
      * past a sheet that will not load holds no item, since metadata_lookup takes
      * the NULL sheet the failure leaves (profile_load_sheet) */
-    error_t err = profile_load_sheet(profile);
+    err = profile_load_sheet(profile);
     if (err && read == PROFILE_READ_STRICT) return err;
 
     /* The item at the name, where it claims a directory: a FILE item with no
@@ -515,12 +579,12 @@ static error_t profile_step(
 
     /* This blob's claim, by the name the tree gave it — and, in the same answer,
      * the content authority. A path is a tree or a blob and the tree is the content
-     * authority, so a DIRECTORY item standing at a blob's name is stale metadata:
+     * authority, so a DIRECTORY item standing at a blob's name is contradicted:
      * it claims nothing here, not even its owner or group — and nothing as a
-     * directory either, which the directory half finds for itself, asking the
-     * tree at the item's own name as a point question does
-     * (profile_directory_item). Asked by name, and a name needs no path, so the
-     * one rule covers the blob this machine can place and the blob it cannot alike.
+     * directory either, which the directory half finds for itself, asking whether
+     * a blob stands at the item's name or above it, as a point question does
+     * (profile_blob_above). Asked by name, and a name needs no path, so the one
+     * rule covers the blob this machine can place and the blob it cannot alike.
      *
      * The blob a contradicted item leaves is claimed at its floors and with no
      * stamp, which reads a ciphertext blob through the plaintext comparison and
@@ -573,23 +637,23 @@ error_t profile_walk(
     /* The directory claims the tree leaves standing: every DIRECTORY item the
      * sheet carries, in its own order — none past a sheet a tolerant walk went
      * on without, which holds no item — each asked the question that classifies
-     * it, the directory claim standing at its name, the one a point question
-     * asks there (profile_directory_item). One a blob stands at the name of claims
-     * nothing, and is profile_contradicted's to show. The question reads no tree
-     * the blobs' half did not, so its failure needs a store that changed beneath
-     * the walk. */
+     * it, whether a blob stands at its name or at a rung above it, the one a
+     * point question asks there (profile_blob_above). One a blob stands at or
+     * over claims nothing, and is profile_contradicted's to show. The descent
+     * reads no tree the blobs' half did not, so its failure needs a store that
+     * changed beneath the walk. */
     size_t count = 0;
     const metadata_item_t *const *items = metadata_items(profile->sheet, &count);
     for (size_t i = 0; i < count; i++) {
         if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
 
-        const metadata_item_t *standing = NULL;
-        err = profile_directory_item(profile, read, items[i]->key, &standing);
+        size_t above = 0;
+        err = profile_blob_above(profile, items[i]->key, &above);
         if (err) return err;
-        if (!standing) continue;
+        if (above > 0) continue;
 
         /* The claim the point question answers at that name, by its decode */
-        const profile_claim_t claim = profile_decode_directory(standing);
+        const profile_claim_t claim = profile_decode_directory(items[i]);
         err = visit(&claim, payload);
         if (err) return err;
     }
@@ -611,22 +675,23 @@ error_t profile_contradicted(
     if (err && read == PROFILE_READ_STRICT) return err;
 
     /* The walk's directory half, answered the other way: every DIRECTORY item,
-     * in the sheet's own order, asked the same question (profile_directory_item),
-     * and shown where it answers none — a blob stands at the name. Asked before
-     * any walk read the tree, the question can meet a subtree that will not load
-     * on its way, and says so in its own words, naming the claim's name. */
+     * in the sheet's own order, asked the same question (profile_blob_above),
+     * and shown where a blob stands at its name or at a rung above it. Asked
+     * before any walk read the tree, the descent can meet a subtree that will
+     * not load on its way, and says so in its own words, naming the claim's
+     * name. */
     size_t count = 0;
     const metadata_item_t *const *items = metadata_items(profile->sheet, &count);
     for (size_t i = 0; i < count; i++) {
         if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
 
-        const metadata_item_t *standing = NULL;
-        err = profile_directory_item(profile, read, items[i]->key, &standing);
+        size_t above = 0;
+        err = profile_blob_above(profile, items[i]->key, &above);
         if (err) return err;
-        if (standing) continue;
+        if (above == 0) continue;
 
         /* The item, decoded as the walk would have shown it had no blob stood
-         * at its name */
+         * at its name or above it */
         const profile_claim_t claim = profile_decode_directory(items[i]);
         err = visit(&claim, payload);
         if (err) return err;
@@ -768,11 +833,12 @@ error_t profile_holds(
         );
     }
 
-    /* The tree's silence: the one claim a tree cannot hold, a directory claim
-     * with nothing beneath it, standing here and nowhere else. Read strictly —
-     * whether the sheet alone holds one is the sheet's question, so a sheet that
-     * will not load is the answer — and by the question the walk and the directory
-     * question ask too, so none of them can part */
+    /* The tree's silence — no entry at the name, or none to reach it through:
+     * the one claim a tree cannot hold, a directory claim with nothing beneath
+     * it, standing here and nowhere else, where no blob stands above the name.
+     * Read strictly — whether the sheet alone holds one is the sheet's question,
+     * so a sheet that will not load is the answer — and by the question the walk
+     * and the directory question ask too, so none of them can part */
     const metadata_item_t *item = NULL;
     error_t err = profile_directory_item(
         profile, PROFILE_READ_STRICT, storage_path, &item
@@ -800,7 +866,7 @@ error_t profile_find(
         case PATH_KIND_FILE: {
             /* The blob at the name, or no file claim: the tree's answer, the
              * sheet unread where it gives one. The look reads three answers as
-             * three, as every look here does (profile_directory_item) */
+             * three, as every look here does (profile_holds) */
             git_tree_entry *entry = NULL;
             int rc = git_tree_entry_bypath(&entry, profile->tree, storage_path);
             if (rc < 0 && rc != GIT_ENOTFOUND) {

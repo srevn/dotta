@@ -206,11 +206,11 @@ void completion_directories(
     if (err) return;
 
     /* The directory claims the walk shows, so a claim a blob contradicts at its
-     * own name is none, and is not offered. Read strictly: the claims are the
-     * sheet's alone, so a sheet that will not load offers none either way, and
-     * a strict walk spares the tree. They come after the tree's blobs, so a walk
-     * that fails offers none of them; its failure is dropped, as the load's above,
-     * at most one per offer */
+     * own name or above it is none, and is not offered. Read strictly: the claims
+     * are the sheet's alone, so a sheet that will not load offers none either
+     * way, and a strict walk spares the tree. They come after the tree's blobs,
+     * so a walk that fails offers none of them; its failure is dropped, as the
+     * load's above, at most one per offer */
     completion_offer_t offer = { .out = out, .profile = pinned };
     (void) profile_walk(profile, PROFILE_READ_STRICT, completion_offer_directory, &offer);
     profile_free(profile);

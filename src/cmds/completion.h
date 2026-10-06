@@ -83,7 +83,7 @@ void completion_files(
  * which materializes a profile's claims: bare slash-marked paths, the profile
  * as description. An
  * empty tracked directory (no tree entry) is exactly as offerable as the rest;
- * a claim a blob contradicts at its own name is none (core/profiles.h
+ * a claim a blob contradicts at its own name or above it is none (core/profiles.h
  * profile_walk), and is not offered.
  */
 void completion_directories(

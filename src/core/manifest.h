@@ -32,8 +32,8 @@
  * Within one profile, at one path: an explicit claim (a blob of any type, a
  * `tracked` directory item) outranks a derived one whichever arrives first, and
  * nothing is recorded — the derived row named nothing; a DIRECTORY item whose
- * own name the tree holds a blob at is stale metadata and claims nothing, a path
- * being a tree or a blob and the tree the content authority; and two explicit
+ * name the tree holds a blob at or above is contradicted and claims nothing, a
+ * path being a tree or a blob and the tree the content authority; and two explicit
  * names are decided when the contribution is whole — **the name the profile would
  * give the path fresh** stands (manifest_name's ascent), or the bytewise-least
  * where the profile holds no such name, and every other is recorded against it.
@@ -318,7 +318,7 @@ typedef struct manifest manifest_t;
  * — the tree's blobs first, then the DIRECTORY items of its metadata.json — are
  * placed into that profile's own contribution — the within-profile rule (the
  * two layers, above): an explicit claim outranks a derived one, a DIRECTORY item
- * whose own name the tree holds a blob at is stale metadata and claims nothing,
+ * whose name the tree holds a blob at or above is contradicted and claims nothing,
  * and two explicit names at one path are decided when the contribution is whole,
  * the fresh name kept and every other recorded (manifest_unkept). Only then does
  * precedence run: across profiles the later (higher) claim takes the path whatever
@@ -565,8 +565,8 @@ typedef struct {
  * so one profile's claims are contiguous. Each (profile, storage path) appears
  * once and nothing enforces it: the profile's walk shows a name once
  * (core/profiles.h profile_walk) — a name the tree holds a blob at, or a sheet
- * key it does not, the content-authority rule having contradicted the rest at
- * the blob (a path is a tree or a blob, and the tree is the content authority)
+ * key it holds no blob at or above, the content-authority rule having contradicted
+ * the rest (a path is a tree or a blob, and the tree is the content authority)
  * — a tree holding one blob per path and a sheet one item per key. Empty on every
  * build whose claims all placed — the common case, costing nothing.
  *

@@ -1389,16 +1389,16 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
  * that needs the read — UNVERIFIED, the read asked no more: a failure minted
  * once per cause and answered again (base/error.h). A failed read holds only
  * the rows that need it: a sheet that will not load holds the directory questions
- * the tree leaves open, never a file's claim or a directory's a blob contradicts,
- * which are the tree's to answer. The pass is the retry boundary, as a source
- * filter is (sys/source.h): the next load reads afresh.
+ * the tree leaves open, never a file's claim or a directory's a blob stands at
+ * or above, which are the tree's to answer. The pass is the retry boundary, as
+ * a source filter is (sys/source.h): the next load reads afresh.
  *
  * The head is read at the profile's first row, and the profile is opened at it
  * there, wherever it stands. The sheet is the profile's: read at the first
- * directory question the tree leaves open (a blob at the name answers one alone),
- * and kept by the handle with its failure (core/profiles.h profile_find). A head
- * without metadata.json holds an empty sheet, so a profile that never wrote one
- * backs no directory — an answer, never a failure.
+ * directory question the tree leaves open (a blob at the name or above it answers
+ * one alone), and kept by the handle with its failure (core/profiles.h
+ * profile_find). A head without metadata.json holds an empty sheet, so a profile
+ * that never wrote one backs no directory — an answer, never a failure.
  */
 typedef struct {
     git_tree *tree;             /* The branch's head; NULL where it is gone, or on a failure */
@@ -1431,9 +1431,9 @@ typedef enum {
  *
  * "Does the profile that deployed this path still hold the claim its record
  * remembers?" — at the record's storage name, a claim of the record's kind: a
- * blob of any filemode for a file, a DIRECTORY item no blob stands at for a
- * directory. That is the profile's walk asked of one name before anything is
- * placed — the file claim a blob makes, which the tree alone holds, and the
+ * blob of any filemode for a file, a DIRECTORY item no blob stands at or above
+ * for a directory. That is the profile's walk asked of one name before anything
+ * is placed — the file claim a blob makes, which the tree alone holds, and the
  * directory claim core/profiles.h profile_find answers — so the probe and the
  * view agree on every name, a disabled profile's custom/ name among them, which
  * has no binding to be placed by.
@@ -1448,14 +1448,15 @@ typedef enum {
  *   - Git let go: the branch was deleted, rebased or git rm'd behind the record,
  *     an enabled branch is dead, a pulled removal arrived, or the name was retyped
  *     — a removal and an addition, the claim the record remembers the half removed
- *     — and the deployed copy is left alone.
+ *     — or a blob came to stand above a directory claim's name, which leaves
+ *     the claim no room; and the deployed copy is left alone.
  * The enabled set cannot tell the second from the third; only a live look at
  * Git can. Taken here, every reader of orphan items shares one verdict, and
  * cleanup's verdict phase reads nothing but the item.
  *
  * Answers:
  *   BACKED      the orphan is dotta's to prune, divergence permitting
- *   LOST        the claim is gone from Git; the caller writes
+ *   LOST        the claim no longer stands in Git; the caller writes
  *               WORKSPACE_STATE_RELEASED — left on disk, record retires
  *   UNVERIFIED  a lookup or a load failed. LOST would retire the record and
  *               BACKED would prune the copy, so neither is guessed: the caller
@@ -1526,11 +1527,11 @@ static orphan_authority_t workspace_orphan_authority(
 
     /* A directory claim lives in the sheet alone — a tree holds no empty directory
      * — and the one a record remembers is the claim the profile's walk shows at
-     * the name (core/profiles.h profile_find): a blob there contradicts it and
-     * answers without the sheet, which the handle reads once and keeps with its
-     * failure; a subtree or a gitlink vetoes nothing, and a FILE item claims no
-     * directory. Read strictly: whether the claim stands is the sheet's question,
-     * so one that will not load holds the copy. */
+     * the name (core/profiles.h profile_find): a blob there or at a rung above
+     * it contradicts it and answers without the sheet, which the handle reads
+     * once and keeps with its failure; a subtree or a gitlink vetoes nothing,
+     * and a FILE item claims no directory. Read strictly: whether the claim stands
+     * is the sheet's question, so one that will not load holds the copy. */
     const profile_claim_t *claim = NULL;
     error_t err = profile_find(
         cached->profile, PROFILE_READ_STRICT, PATH_KIND_DIRECTORY, item->storage_path, &claim

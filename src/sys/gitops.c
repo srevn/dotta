@@ -40,13 +40,14 @@ error_t gitops_init(void) {
 
     /* libgit2 caches a parsed object only below a per-type ceiling, 4096 bytes
      * for a tree by default — an entry costs its name plus 27 — so a directory
-     * past ~110 entries yields a tree that is never cached, and every
-     * git_tree_entry_bypath through it re-reads, inflates and SHA-1-verifies
-     * each tree on the way down. Two loops ask once per item, quadratic where
-     * the items scale with the directory's own width: core/workspace.c per orphaned
-     * record (workspace_orphan_authority), and core/profiles.c per directory
-     * item of a sheet (profile_directory_item, asked by the walk and
-     * profile_contradicted).
+     * past ~110 entries yields a tree that is never cached, and every look through
+     * it — a git_tree_entry_bypath, or a descent's git_tree_lookup — re-reads,
+     * inflates and SHA-1-verifies each tree on the way down. Two loops ask once
+     * per item, quadratic where the items scale with the directory's own width:
+     * core/workspace.c per orphaned record (workspace_orphan_authority), and
+     * core/profiles.c per directory item of a sheet (profile_blob_above, asked
+     * by the walk and profile_contradicted at each item, and by the point
+     * questions).
      *
      * Trees: no ceiling. Blobs: libgit2's zero, never cached — infra/content
      * keeps the one a blob needs. Total: 64 MB, below libgit2's 256 MB default.

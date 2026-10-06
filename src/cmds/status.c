@@ -982,7 +982,10 @@ static void status_print_workspace(
                      * sentence is the bare [released] key's, which a file and a
                      * directory share — the legend keeps the first hint a key
                      * meets — so, like the bare [orphaned] key's, it is written
-                     * to be true of both and names no kind. */
+                     * to be true of both and names no kind. Its claim "no longer
+                     * stands": Git dropped it, or Git still carries it where a
+                     * blob of its profile leaves it no room, and the sentence
+                     * is true of both. */
                     hint = item->displaced != WORKSPACE_DISPLACED_NONE
                         ? "not looked at, beneath a squatted directory; "
                         "apply releases its entry, the path stays"
@@ -990,7 +993,7 @@ static void status_print_workspace(
                         ? "what dotta put there is gone, another kind of "
                         "path stands in its place; apply releases its "
                         "entry, the path stays"
-                        : "its claim is no longer in Git, dotta never "
+                        : "its claim no longer stands in Git, dotta never "
                         "deployed it, or its record names it under another "
                         "spelling of its path; apply releases its "
                         "entry, the path stays";

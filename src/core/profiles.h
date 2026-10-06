@@ -36,26 +36,28 @@
  * - a blob takes the sheet's FILE item at its name — the mode, the owner and
  *   group, the seal's stamp — but what a link cannot carry: no mode (symlink(2)
  *   takes none), no stamp (a link's bytes are its target)
- * - a path is a tree or a blob, and the tree is the content authority: a DIRECTORY
- *   item at a blob's name claims nothing, at the blob or as a directory — the
- *   walk shows no such claim, and profile_contradicted shows each one
+ * - a path is a tree or a blob, and the tree is the content authority, so a blob
+ *   leaves no room at its name or beneath it: a DIRECTORY item at a blob's name
+ *   claims nothing, at the blob or as a directory, and one beneath a blob claims
+ *   nothing either — the walk shows no such claim, and profile_contradicted shows
+ *   each one; a gitlink, which places nothing on disk, contradicts nothing
  *
  * The agreement rests on the tree Git writes, its names sorted, each held once
  * and none holding a '/' (git fsck's TREE_NOT_SORTED, DUPLICATE_ENTRIES and
  * FULL_PATHNAME, lib/git/fsck.h): a question at one name finds it by a binary
  * search over a tree's names (lib/libgit2/src/libgit2/tree.c
  * git_tree_entry_bypath), and so does the classification of each directory claim,
- * where the walk's tree half shows every entry as stored. Over a tree a hand
- * wrote otherwise, both can miss a name the walk shows; the decode states it
- * rather than repairs it.
+ * at each rung of its name (git_tree_entry_byname), where the walk's tree half
+ * shows every entry as stored. Over a tree a hand wrote otherwise, both can miss
+ * a name the walk shows; the decode states it rather than repairs it.
  *
  * Failures are worded here, once, naming the profile: a sheet that will not load
  * in the loader's words (core/metadata.h metadata_load_from_tree); the tree's
  * under "Cannot read profile '%s'" for a walk, and "Cannot read '%s' in profile
  * '%s'" for a question asked at one name — a point question's, or the
- * classification's at a directory claim's own — which names the name it was asked.
- * No reader says the profile again. A removal a profile's next commit cannot
- * make is refused in its own document's words (profile_stage_remove).
+ * classification's on the way to a directory claim's name — which names the name
+ * it was asked. No reader says the profile again. A removal a profile's next
+ * commit cannot make is refused in its own document's words (profile_stage_remove).
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name
@@ -340,13 +342,13 @@ typedef error_t (*profile_visit_fn)(const profile_claim_t *claim, void *payload)
  * those its own tree contradicts, which profile_contradicted shows
  *
  * The blobs first, in the tree's pre-order; then the directory claims no blob
- * stands at the name of, in the sheet's own order — so a reader that keeps the
- * first of two claims at one place keeps the sheet's first, and that order is
- * the document's: the writer sorts by key (core/metadata.c metadata_to_json), a
- * hand may not. A name is shown once: a blob, or a directory claim no blob stands
- * at. Each directory claim is the one profile_find answers at its name, by the
- * same question asked of it there, so the walk and a question at one name cannot
- * part.
+ * stands at or above, in the sheet's own order — so a reader that keeps the first
+ * of two claims at one place keeps the sheet's first, and that order is the
+ * document's: the writer sorts by key (core/metadata.c metadata_to_json), a hand
+ * may not. A name is shown once: a blob, or a directory claim no blob stands at
+ * or above. Each directory claim is the one profile_find answers at its name,
+ * by the same question asked of it there, so the walk and a question at one name
+ * cannot part.
  *
  * STRICT: a sheet that will not load is the walk's failure, before any claim is
  * shown. TOLERANT: the walk shows the tree's claims at their floors — no mode,
@@ -376,9 +378,9 @@ typedef error_t (*profile_visit_fn)(const profile_claim_t *claim, void *payload)
  * @param visit The visitor (must not be NULL)
  * @param payload Handed to the visitor untouched
  * @return NULL; the sheet's failure (STRICT), in the loader's words; the tree's,
- *         under "Cannot read profile '%s'" — or, at a directory claim's own name,
- *         under "Cannot read '%s' in profile '%s'", which needs a store that
- *         changed beneath the walk; or the visitor's, as it made it
+ *         under "Cannot read profile '%s'" — or, on the way to a directory claim's
+ *         name, under "Cannot read '%s' in profile '%s'", which needs a store
+ *         that changed beneath the walk; or the visitor's, as it made it
  */
 error_t profile_walk(
     profile_t *profile,
@@ -392,12 +394,13 @@ error_t profile_walk(
  * visitor — the claims the walk does not show
  *
  * Every DIRECTORY item the sheet holds is shown by exactly one of profile_walk
- * and this, by the one question that classifies it: the directory claim standing
- * at its name, profile_find's — none where a blob stands there. So a reader asks
- * for the claims that stand, the walk, or for every claim the profile makes,
- * the walk and these; where the classification draws its line moves a claim between
- * the two, never out of the second reader's sight. Each is shown in the sheet's
- * own order, decoded as the walk would have shown it had no blob stood at its name.
+ * and this, by the one question that classifies it: whether a blob stands at
+ * its name or at a rung above it — profile_find's directory claim at that name,
+ * none where one does. So a reader asks for the claims that stand, the walk, or
+ * for every claim the profile makes, the walk and these; where the classification
+ * draws its line moves a claim between the two, never out of the second reader's
+ * sight. Each is shown in the sheet's own order, decoded as the walk would have
+ * shown it had no blob stood at or above its name.
  *
  * STRICT: a sheet that will not load is the failure, before any claim is shown.
  * TOLERANT: none is shown past one, the failure kept (profile_load_sheet).
@@ -577,12 +580,13 @@ typedef struct {
  * Asked of the two documents in the order the authority rule reads them
  * (core/metadata.h): the tree first, because a name is Git's key and the tree
  * is the content authority, so an entry is the whole answer whatever the sheet
- * says at the name; the sheet on the tree's silence alone, for the one claim a
- * tree cannot hold — the directory claim standing at the name, as the walk shows
- * it. A FILE item without a blob claims nothing and answers NOTHING. This is
- * the namespace's question, not the walk's: a gitlink at a directory claim's
- * name answers SUBMODULE where the walk shows the claim, since a gitlink
- * contradicts nothing.
+ * says at the name; the sheet on the tree's silence alone — no entry at the name,
+ * and no blob above it, which leaves the name no room — for the one claim a tree
+ * cannot hold: the directory claim standing at the name, as the walk shows it.
+ * A FILE item without a blob claims nothing and answers NOTHING. This is the
+ * namespace's question, not the walk's: a gitlink at a directory claim's name
+ * answers SUBMODULE where the walk shows the claim, since a gitlink contradicts
+ * nothing.
  *
  * Strict, with no policy to spell: whether the sheet alone holds a claim at a
  * name is a question only the sheet answers, so a sheet that will not load is
@@ -632,11 +636,12 @@ error_t profile_holds(profile_t *profile, const char *storage_path, profile_held
  * claim where a blob stands there, the sheet's FILE item read over it by the
  * walk's own rules — the link rule, and a DIRECTORY item at a blob's name claiming
  * nothing at the blob; a directory claim where the sheet keeps one and no blob
- * stands at the name. A question the tree answers is the tree's — no blob, no
- * file claim; a blob, no directory claim — and reads no sheet. Only an open one
- * does, under `read`: STRICT, a sheet that will not load is the answer's failure;
- * TOLERANT, a file claim stands at its floors and a directory claim is none, as
- * in the walk, the failure kept (profile_load_sheet).
+ * stands at the name or above it. A question the tree answers is the tree's —
+ * no blob, no file claim; a blob at the name or above it, no directory claim —
+ * and reads no sheet. Only an open one does, under `read`: STRICT, a sheet that
+ * will not load is the answer's failure; TOLERANT, a file claim stands at its
+ * floors and a directory claim is none, as in the walk, the failure kept
+ * (profile_load_sheet).
  *
  * `storage_path` is validated. The walk checks the shape of every name it meets,
  * because Git's names arrive unchecked; a point question trusts the one it is

@@ -207,9 +207,10 @@ static manifest_row_t *manifest_place(
  * The health primitive a claim the placement cannot resolve is spent through:
  * appends (profile, storage_path, kind) to the view's health slice. No dedup,
  * and none possible — the profile's walk shows a name once (core/profiles.h
- * profile_walk): a name the tree holds a blob at, or a sheet key it does not,
- * the content-authority rule having contradicted the rest before anything was
- * resolved. And a tree holds one blob per path, a sheet one item per key.
+ * profile_walk): a name the tree holds a blob at, or a sheet key it holds no
+ * blob at or above, the content-authority rule having contradicted the rest before
+ * anything was resolved. And a tree holds one blob per path, a sheet one item
+ * per key.
  *
  * The slice grows in the arena (arena_grow). Both strings must be arena-backed
  * by the caller; the entry borrows them for the view's lifetime.

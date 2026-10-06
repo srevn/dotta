@@ -577,6 +577,8 @@ typedef enum {
 /**
  * The answer whole: which of the four, and for the tree's entries the two facts
  * a verb reads off one, by value — so no entry outlives the call that read it.
+ * profile_entry answers it from the tree alone, and profile_holds gives the tree's
+ * answer wherever the tree has one.
  */
 typedef struct {
     profile_held_kind_t kind;   /* which of the four stands at the name */
@@ -585,18 +587,49 @@ typedef struct {
 } profile_held_t;
 
 /**
+ * What the profile's tree holds at `storage_path`: Git's one-entry rule
+ *
+ * The tree alone, the sheet never read, in three of the four answers: FILE a
+ * blob of any filemode, DIRECTORY a subtree, SUBMODULE a gitlink; and NOTHING,
+ * no entry at the name or none to reach it through — a blob or a gitlink above
+ * the name leaves nothing there to find (lib/libgit2/src/libgit2/tree.c
+ * git_tree_entry_bypath). The payload is the entry's, its id and its mode word,
+ * zero beside NOTHING. Three answers read as three: an intermediate subtree that
+ * will not load is the failure, never an absence.
+ *
+ * The question asked where the sheet must not answer: what can stand in a blob's
+ * way at a name — a directory claim there never does, giving way to the blob
+ * written where it stands and riding it where the tree's own blob contradicts
+ * it — and what backs a file, a file claim being a blob, which the tree alone
+ * holds.
+ *
+ * Readers: profile_holds, which asks it first and the sheet on its silence;
+ * profile_find, whose file claim is the blob it answers; cmds/revert.c cmd_revert,
+ * at the name the restore writes in the head (step 11), the entry's identity
+ * what the preview diffs; and core/workspace.c workspace_orphan_authority, for
+ * a file record, folding a failure to UNVERIFIED.
+ *
+ * @param profile Handle (must not be NULL); its sheet is never read
+ * @param storage_path A validated storage path (must not be NULL)
+ * @param out The answer (must not be NULL; written on success alone)
+ * @return Error or NULL on success: the tree's, under "Cannot read '%s' in profile
+ *         '%s'"
+ */
+error_t profile_entry(profile_t *profile, const char *storage_path, profile_held_t *out);
+
+/**
  * What the profile holds at `storage_path`
  *
  * Asked of the two documents in the order the authority rule reads them
- * (core/metadata.h): the tree first, because a name is Git's key and the tree
- * is the content authority, so an entry is the whole answer whatever the sheet
- * says at the name; the sheet on the tree's silence alone — no entry at the name,
- * and no blob above it, which leaves the name no room — for the one claim a tree
- * cannot hold: the directory claim standing at the name, as the walk shows it.
- * A FILE item without a blob claims nothing and answers NOTHING. This is the
- * namespace's question, not the walk's: a gitlink at a directory claim's name
- * answers SUBMODULE where the walk shows the claim, since a gitlink contradicts
- * nothing.
+ * (core/metadata.h): the tree first (profile_entry), because a name is Git's
+ * key and the tree is the content authority, so an entry is the whole answer
+ * whatever the sheet says at the name; the sheet on the tree's silence alone —
+ * no entry at the name, and no blob above it, which leaves the name no room —
+ * for the one claim a tree cannot hold: the directory claim standing at the name,
+ * as the walk shows it. A FILE item without a blob claims nothing and answers
+ * NOTHING. This is the namespace's question, not the walk's: a gitlink at a
+ * directory claim's name answers SUBMODULE where the walk shows the claim, since
+ * a gitlink contradicts nothing.
  *
  * Strict, with no policy to spell: whether the sheet alone holds a claim at a
  * name is a question only the sheet answers, so a sheet that will not load is
@@ -607,7 +640,7 @@ typedef struct {
  * there, not an error.
  *
  * The payload is the tree's entry and only the tree's: `oid` and `filemode` are
- * that entry's for the three answers the tree gives, and both are zero exactly
+ * profile_entry's for the three answers the tree gives, and both are zero exactly
  * where the sheet alone answered. Its one reader is revert's restore, which reads
  * the entry of a FILE answer, which the tree always gave (cmds/revert.c cmd_revert,
  * step 8); every other reader reads the kind alone. `out` is written on success
@@ -620,16 +653,13 @@ typedef struct {
  * it by what stands at the name (cmds/export.c export_collect_storage), and
  * remove's directory offer, which offers a claim where no blob stands at its
  * name (cmds/remove.c remove_offer_directory). A reader not on this list is a
- * bug. Two neighbours ask another question and are not readers: revert's read
- * of the head at the name it writes (cmds/revert.c cmd_revert, step 11) asks
- * Git's one-entry rule, which the sheet must not answer — a directory claim there
- * is never refused: it gives way to the write where it stands, and rides it where
- * the head's blob contradicts it; and the orphan probe (core/workspace.c
- * workspace_orphan_authority) asks whether the profile holds the claim a record
- * remembers, which a subtree and a gitlink stand at a name without making —
- * profile_find's directory claim for a directory record, and for a file record
- * the tree alone, Git's one-entry rule again — and folds every failure to
- * UNVERIFIED.
+ * bug. Two neighbours ask profile_entry instead, the tree alone: revert's read
+ * of the head at the name it writes (cmds/revert.c cmd_revert, step 11), where
+ * a directory claim is never refused — it gives way to the write where it stands,
+ * and rides it where the head's blob contradicts it; and the orphan probe's file
+ * arm (core/workspace.c workspace_orphan_authority), which asks whether a blob
+ * still backs a file record, a subtree and a gitlink standing at a name without
+ * making a file claim — its directory arm asking profile_find.
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
  *                tree is silent
@@ -644,14 +674,14 @@ error_t profile_holds(profile_t *profile, const char *storage_path, profile_held
  * The claim of `kind` the profile makes at `storage_path`, decoded, or NULL
  *
  * The claim profile_walk shows at the name, asked of that name alone: a file
- * claim where a blob stands there, the sheet's FILE item read over it by the
- * walk's own rule, the link rule; a directory claim where the sheet keeps one
- * and no blob stands at the name or above it. A question the tree answers is
- * the tree's — no blob, no file claim; a blob at the name or above it, no directory
- * claim — and reads no sheet. Only an open one does, under `read`: STRICT, a
- * sheet that will not load is the answer's failure; TOLERANT, a file claim stands
- * at its floors and a directory claim is none, as in the walk, the failure kept
- * (profile_load_sheet).
+ * claim where a blob stands there (profile_entry), the sheet's FILE item read
+ * over it by the walk's own rule, the link rule; a directory claim where the
+ * sheet keeps one and no blob stands at the name or above it. A question the
+ * tree answers is the tree's — no blob, no file claim; a blob at the name or
+ * above it, no directory claim — and reads no sheet. Only an open one does, under
+ * `read`: STRICT, a sheet that will not load is the answer's failure; TOLERANT,
+ * a file claim stands at its floors and a directory claim is none, as in the
+ * walk, the failure kept (profile_load_sheet).
  *
  * `storage_path` is validated. The walk checks the shape of every name it meets,
  * because Git's names arrive unchecked; a point question trusts the one it is

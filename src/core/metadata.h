@@ -10,10 +10,10 @@
  * Authority, per fact:
  * - content and type: the tree's (a blob, a link, an executable) — never restated
  *   here, and the tree's word wins over a stale item's kind (read for one name
- *   by core/profiles.h profile_holds and profile_find — and, for the claim an
- *   orphan's record remembers, by core/workspace.c workspace_orphan_authority,
- *   through profile_find for a directory; for the whole profile by core/profiles.c
- *   profile_walk)
+ *   by core/profiles.h profile_entry, which profile_holds and profile_find ask
+ *   — and, for the claim an orphan's record remembers, by core/workspace.c
+ *   workspace_orphan_authority, through profile_entry for a file and profile_find
+ *   for a directory; for the whole profile by core/profiles.c profile_walk)
  * - permission bits: the sheet's ("mode") — Git's filemode holds one bit of them
  *   (owner-execute), the sheet holds them all
  * - ownership: the sheet's ("owner"/"group"), two names either of which may be

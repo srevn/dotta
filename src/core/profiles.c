@@ -11,15 +11,17 @@
  * sheet's directory items, each asked the one question that classifies it, whether
  * a blob stands at its name or at a rung above it (profile_blob_above) — the
  * items a blob stands over are profile_contradicted's. The point questions ask
- * the decode of one name: a blob's claim through the walk's own decode
- * (profile_decode_blob), and the directory claim standing at a name through the
- * question the walk asks of each item (profile_directory_item), decoded as the
- * walk decodes it (profile_decode_directory). The counts and the need of a target
- * are the walk, folded (profile_counts, profile_needs_target). The next commit
- * is a sys/stage, the base — the profile at the tree the stage opened, its sheet
- * read at the open — and that sheet copied: a removal edits the stage and the
- * copy, and the commit prunes the copy, saves it where its claims are no longer
- * the base's and commits.
+ * the decode of one name: what the tree holds there, Git's one-entry rule
+ * (profile_entry); a blob's claim through the walk's own decode
+ * (profile_decode_blob), over the entry that rule answers; and the directory
+ * claim standing at a name through the question the walk asks of each item
+ * (profile_directory_item), decoded as the walk decodes it
+ * (profile_decode_directory). The counts and the need of a target are the walk,
+ * folded (profile_counts, profile_needs_target). The next commit is a sys/stage,
+ * the base — the profile at the tree the stage opened, its sheet read at the
+ * open — and that sheet copied: a removal edits the stage and the copy, and the
+ * commit prunes the copy, saves it where its claims are no longer the base's
+ * and commits.
  */
 
 #include "core/profiles.h"
@@ -295,34 +297,36 @@ error_t profile_load_sheet(profile_t *profile) {
 /**
  * The claim a blob makes at its name: its identity, and the item's claim over it
  *
- * Identity — the blob's id and the type its filemode says — is read off the entry
- * here, at the one boundary where the entry is valid (borrowed for the walk's
- * visit, or a point question's own copy), so no claim carries an opaque handle
- * and nothing is duplicated to outlive the walk.
+ * Identity — the blob's id and the type its filemode says — is handed in as the
+ * two facts the caller read off the entry it holds: the walk's, borrowed for
+ * its visit, or a point question's answer by value (profile_entry). So no claim
+ * carries an opaque handle, and nothing is duplicated to outlive the walk.
  *
  * Readers: profile_step, at every blob the walk meets, and profile_find, at the
  * one it is asked — so the file claim a point question answers is the walk's.
  *
  * @param path The claim's name, which the claim keeps (must not be NULL)
- * @param entry The blob's tree entry (must not be NULL)
+ * @param id The blob's id (must not be NULL)
+ * @param filemode The blob's filemode, as its tree records it
  * @param item The FILE item at the name, or NULL where the sheet holds none there
- * @return The claim, by value: a function of its three inputs, which cannot fail
+ * @return The claim, by value: a function of its four inputs, which cannot fail
  */
 static profile_claim_t profile_decode_blob(
     const char *path,
-    const git_tree_entry *entry,
+    const git_oid *id,
+    git_filemode_t filemode,
     const metadata_item_t *item
 ) {
     /* The blob's identity: its id, and the type its filemode says — libgit2
-     * normalizes the mode it hands back (lib/libgit2/src/libgit2/tree.c
+     * normalizes the mode a tree hands back (lib/libgit2/src/libgit2/tree.c
      * normalize_filemode), so a blob's is one of three. No mode is claimed until
      * the item says one. */
     profile_claim_t claim = {
         .storage_path = path,
         .mode         = MODE_UNCLAIMED,
     };
-    git_oid_cpy(&claim.blob_oid, git_tree_entry_id(entry));
-    switch (git_tree_entry_filemode(entry)) {
+    git_oid_cpy(&claim.blob_oid, id);
+    switch (filemode) {
         case GIT_FILEMODE_BLOB_EXECUTABLE:
             claim.type = PATH_TYPE_EXECUTABLE;
             break;
@@ -594,10 +598,12 @@ static error_t profile_step(
      * states it rather than repairs it. */
     const metadata_item_t *item = metadata_find_item(walk->sheet, PATH_KIND_FILE, path);
 
-    /* The claim the blob makes, its identity and the item's claim over it, by
-     * the one decode a point question at this name reads too
-     * (profile_decode_blob) */
-    const profile_claim_t claim = profile_decode_blob(path, entry, item);
+    /* The claim the blob makes, its identity read off the entry while the visit
+     * lends it and the item's claim over it, by the one decode a point question
+     * at this name reads too (profile_decode_blob) */
+    const profile_claim_t claim = profile_decode_blob(
+        path, git_tree_entry_id(entry), git_tree_entry_filemode(entry), item
+    );
 
     /* The visitor's turn. Its failure ends the walk and is kept, so every failure
      * the tree walk answers is the tree's (profile_walk), and the visitor's comes
@@ -790,6 +796,50 @@ error_t profile_needs_target(profile_t *profile, bool *needs_target) {
     return err;
 }
 
+error_t profile_entry(
+    profile_t *profile, const char *storage_path, profile_held_t *out
+) {
+    CHECK_NULL(profile);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out);
+
+    /* The tree at the name, and the tree alone. Three answers read as three: no
+     * entry at the name, or none to reach it through, is an answer; an intermediate
+     * object that will not load is a failure to read, never an absence. */
+    git_tree_entry *entry = NULL;
+    int rc = git_tree_entry_bypath(&entry, profile->tree, storage_path);
+    if (rc == GIT_ENOTFOUND) {
+        *out = (profile_held_t){ .kind = PROFILE_HELD_NOTHING };
+        return NULL;
+    }
+    if (rc < 0) {
+        return error_git(
+            rc, "Cannot read '%s' in profile '%s'",
+            storage_path, profile->name
+        );
+    }
+
+    /* Three kinds and no fourth: git_tree_entry_type reads the entry's mode word,
+     * which is a gitlink, a directory, or a blob — so the last arm is the gitlink
+     * and not a shrug. The entry's two facts are copied out by value, and the
+     * entry goes. */
+    profile_held_kind_t kind;
+    switch (git_tree_entry_type(entry)) {
+        case GIT_OBJECT_BLOB: kind = PROFILE_HELD_FILE; break;
+        case GIT_OBJECT_TREE: kind = PROFILE_HELD_DIRECTORY; break;
+        default:              kind = PROFILE_HELD_SUBMODULE; break;
+    }
+
+    *out = (profile_held_t){
+        .kind = kind,
+        .oid = *git_tree_entry_id(entry),
+        .filemode = git_tree_entry_filemode(entry),
+    };
+    git_tree_entry_free(entry);
+
+    return NULL;
+}
+
 error_t profile_holds(
     profile_t *profile, const char *storage_path, profile_held_t *out
 ) {
@@ -799,35 +849,14 @@ error_t profile_holds(
 
     /* The tree first: a name is Git's key, and the tree is the content authority
      * (core/metadata.h), so an entry here is the whole answer whatever the sheet
-     * says at the name. Three answers read as three: an intermediate object that
-     * will not load is a failure to read, never an absence. */
-    git_tree_entry *entry = NULL;
-    int rc = git_tree_entry_bypath(&entry, profile->tree, storage_path);
-    if (rc == 0) {
-        /* Three kinds and no fourth: git_tree_entry_type reads the entry's mode
-         * word, which is a gitlink, a directory, or a blob — so the last arm is
-         * the gitlink and not a shrug. */
-        profile_held_kind_t kind;
-        switch (git_tree_entry_type(entry)) {
-            case GIT_OBJECT_BLOB: kind = PROFILE_HELD_FILE; break;
-            case GIT_OBJECT_TREE: kind = PROFILE_HELD_DIRECTORY; break;
-            default:              kind = PROFILE_HELD_SUBMODULE; break;
-        }
-
-        *out = (profile_held_t){
-            .kind = kind,
-            .oid = *git_tree_entry_id(entry),
-            .filemode = git_tree_entry_filemode(entry),
-        };
-        git_tree_entry_free(entry);
-
+     * says at the name. Held in a value of the call's own, since `out` is written
+     * on success alone. */
+    profile_held_t held;
+    error_t err = profile_entry(profile, storage_path, &held);
+    if (err) return err;
+    if (held.kind != PROFILE_HELD_NOTHING) {
+        *out = held;
         return NULL;
-    }
-    if (rc != GIT_ENOTFOUND) {
-        return error_git(
-            rc, "Cannot read '%s' in profile '%s'",
-            storage_path, profile->name
-        );
     }
 
     /* The tree's silence — no entry at the name, or none to reach it through:
@@ -837,9 +866,7 @@ error_t profile_holds(
      * so a sheet that will not load is the answer — and by the question the walk
      * and the directory question ask too, so none of them can part */
     const metadata_item_t *item = NULL;
-    error_t err = profile_directory_item(
-        profile, PROFILE_READ_STRICT, storage_path, &item
-    );
+    err = profile_directory_item(profile, PROFILE_READ_STRICT, storage_path, &item);
     if (err) return err;
 
     *out = (profile_held_t){
@@ -862,40 +889,27 @@ error_t profile_find(
     switch (kind) {
         case PATH_KIND_FILE: {
             /* The blob at the name, or no file claim: the tree's answer, the
-             * sheet unread where it gives one. The look reads three answers as
-             * three, as every look here does (profile_holds) */
-            git_tree_entry *entry = NULL;
-            int rc = git_tree_entry_bypath(&entry, profile->tree, storage_path);
-            if (rc < 0 && rc != GIT_ENOTFOUND) {
-                return error_git(
-                    rc, "Cannot read '%s' in profile '%s'", storage_path, profile->name
-                );
-            }
-            if (rc != 0 || git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-                git_tree_entry_free(entry);   /* NULL-safe */
-                return NULL;
-            }
+             * sheet unread where it gives one (profile_entry) */
+            profile_held_t held;
+            error_t err = profile_entry(profile, storage_path, &held);
+            if (err || held.kind != PROFILE_HELD_FILE) return err;
 
             /* Its FILE item, under the reader's policy, by its kind: a DIRECTORY
              * item at a blob's name is the other kind's and claims nothing at
              * the blob — the walk's at-name rule (profile_step) */
-            error_t err = profile_load_sheet(profile);
-            if (err && read == PROFILE_READ_STRICT) {
-                git_tree_entry_free(entry);
-                return err;
-            }
+            err = profile_load_sheet(profile);
+            if (err && read == PROFILE_READ_STRICT) return err;
             const metadata_item_t *item = metadata_find_item(
                 profile->sheet, PATH_KIND_FILE, storage_path
             );
 
-            /* Decoded as the walk decodes the blob, and kept for the handle's
-             * life, its name copied beside it: an answer outlives the caller's
-             * argument */
+            /* Decoded as the walk decodes the blob, over the entry's two facts,
+             * and kept for the handle's life, its name copied beside it: an answer
+             * outlives the caller's argument */
             profile_claim_t *kept = arena_alloc(profile->arena, sizeof(*kept));
             *kept = profile_decode_blob(
-                arena_strdup(profile->arena, storage_path), entry, item
+                arena_strdup(profile->arena, storage_path), &held.oid, held.filemode, item
             );
-            git_tree_entry_free(entry);
 
             *out = kept;
             return NULL;

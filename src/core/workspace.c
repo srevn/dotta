@@ -1433,10 +1433,10 @@ typedef enum {
  * remembers?" — at the record's storage name, a claim of the record's kind: a
  * blob of any filemode for a file, a DIRECTORY item no blob stands at or above
  * for a directory. That is the profile's walk asked of one name before anything
- * is placed — the file claim a blob makes, which the tree alone holds, and the
- * directory claim core/profiles.h profile_find answers — so the probe and the
- * view agree on every name, a disabled profile's custom/ name among them, which
- * has no binding to be placed by.
+ * is placed — the file claim a blob makes, which the tree alone holds
+ * (core/profiles.h profile_entry), and the directory claim profile_find answers
+ * — so the probe and the view agree on every name, a disabled profile's custom/
+ * name among them, which has no binding to be placed by.
  *
  * One kind of row reaches this probe — a record whose path the view lacks — and
  * three reasons it may be there are what the probe tells apart:
@@ -1504,25 +1504,25 @@ static orphan_authority_t workspace_orphan_authority(
     }
 
     if (item->item_kind == PATH_KIND_FILE) {
-        /* The tree at the name, and the tree alone: Git's one-entry rule, which
-         * the sheet must not answer — one that will not load never holds a copy
-         * the tree releases. Three answers, not two: a subtree that will not
-         * load on the way is a failure to look, never an absence — and this row's
-         * alone, kept by nothing, since another name may have a way past it;
-         * its code is read and never worded. */
-        git_tree_entry *entry = NULL;
-        int rc = git_tree_entry_bypath(&entry, cached->tree, item->storage_path);
-        if (rc != 0 && rc != GIT_ENOTFOUND) return ORPHAN_AUTHORITY_UNVERIFIED;
-        git_object_t type = rc == 0 ? git_tree_entry_type(entry) : GIT_OBJECT_INVALID;
-        git_tree_entry_free(entry);             /* NULL-safe, and NULL unless rc == 0 */
+        /* The tree at the name, and the tree alone: Git's one-entry rule
+         * (core/profiles.h profile_entry), which the sheet must not answer —
+         * one that will not load never holds a copy the tree releases. Three
+         * answers, not two: a subtree that will not load on the way is a failure
+         * to look, never an absence — and this row's alone, kept by nothing,
+         * since another name may have a way past it. It is worded for the row
+         * and dropped, one per file record beneath such a subtree, the bound
+         * the directory arm keeps too. */
+        profile_held_t held;
+        error_t err = profile_entry(cached->profile, item->storage_path, &held);
+        if (err) return ORPHAN_AUTHORITY_UNVERIFIED;
 
         /* A file claim is a blob of any filemode — bytes, an executable, a link's
          * target — and nothing else at the name is one: a subtree is the way to
          * what lies beneath it and a gitlink is nothing dotta writes, so neither
          * holds a byte of the copy on disk. A blob or a gitlink above the name
-         * leaves nothing there to find (lib/libgit2/src/libgit2/tree.c
-         * git_tree_entry_bypath), so this is the walk's answer at every rung. */
-        return type == GIT_OBJECT_BLOB ? ORPHAN_AUTHORITY_BACKED : ORPHAN_AUTHORITY_LOST;
+         * leaves nothing there to find, so this is the walk's answer at every
+         * rung. */
+        return held.kind == PROFILE_HELD_FILE ? ORPHAN_AUTHORITY_BACKED : ORPHAN_AUTHORITY_LOST;
     }
 
     /* A directory claim lives in the sheet alone — a tree holds no empty directory

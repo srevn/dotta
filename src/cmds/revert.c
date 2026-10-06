@@ -697,12 +697,12 @@ static metadata_item_t *revert_restored_claim(
  * owner-execute bit (infra/content), so the sheet cannot be read off the entry
  * and is asked for itself.
  *
- * `standing` is NULL where the branch's head has no entry at the name — a path
- * the profile deleted, which is never already at the target. The restored side
- * is an id and a mode rather than an entry, because it may belong to no tree
- * entry at all: bytes resealed under a new name are an object the repository
- * does not hold yet (cmd_revert, the rebind), and it is that object the write
- * would store.
+ * `standing` is what the branch's head holds at the name, a blob or nothing —
+ * and nothing is a path the profile deleted, which is never already at the target.
+ * The restored side is an id and a mode rather than an entry, because it may
+ * belong to no tree entry at all: bytes resealed under a new name are an object
+ * the repository does not hold yet (cmd_revert, the rebind), and it is that object
+ * the write would store.
  *
  * The proof this gate needs is one-way, and it is the only one it makes: if the
  * selected blob, its filemode, or the reconstructed claim differs, this write
@@ -712,7 +712,8 @@ static metadata_item_t *revert_restored_claim(
  * accepts and the serializer normalizes, and nothing here uses it: the true arm
  * exits before anything is staged.
  *
- * @param standing The entry at the branch head, or NULL for none
+ * @param standing What the branch head's tree holds at the name: a blob, or nothing
+ *                 (must not be NULL)
  * @param standing_claim The sheet's FILE item at the name there, or NULL for none
  * @param restored_blob The blob the write would store (must not be NULL)
  * @param restored_mode The filemode it would carry
@@ -721,15 +722,15 @@ static metadata_item_t *revert_restored_claim(
  * @return true when nothing about the write would change the branch
  */
 static bool revert_already_at_target(
-    const git_tree_entry *standing,
+    const profile_held_t *standing,
     const metadata_item_t *standing_claim,
     const git_oid *restored_blob,
     git_filemode_t restored_mode,
     const metadata_item_t *restored_claim
 ) {
-    return standing &&
-           git_oid_equal(git_tree_entry_id(standing), restored_blob) &&
-           git_tree_entry_filemode(standing) == restored_mode &&
+    return standing->kind == PROFILE_HELD_FILE &&
+           git_oid_equal(&standing->oid, restored_blob) &&
+           standing->filemode == restored_mode &&
            metadata_same_claim(standing_claim, restored_claim);
 }
 
@@ -763,7 +764,6 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     profile_t *standing_profile = NULL;
     git_tree *target_tree = NULL;
     profile_t *target_profile = NULL;
-    git_tree_entry *standing_entry = NULL;
     profile_held_t target_held = { 0 };
     metadata_t *standing_sheet = NULL;
     metadata_t *target_sheet = NULL;
@@ -916,33 +916,27 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         profile
     );
 
-    /* Step 11: what stands at that name in the head. It may be absent — a path
+    /* Step 11: what stands at that name in the head. It may be nothing — a path
      * the profile deleted is exactly what a revert brings back — and wherever
      * it stands it is a blob, because a revert restores one file's bytes.
      *
-     * The tree alone, on purpose: this asks Git's one-entry rule about the name
-     * the write uses, and a directory claim the sheet holds there never stands
-     * in its way — the write takes its place where it stands, and carries it
-     * where this entry's blob contradicts it (step 20). So the sheet must not
-     * answer here, which is why core/profiles.h profile_holds names this read
-     * as one of its non-readers. */
-    rc = git_tree_entry_bypath(&standing_entry, stage_tree(stage), restored_name);
-    if (rc < 0 && rc != GIT_ENOTFOUND) {
-        err = error_git(rc, "Cannot read '%s' in profile '%s'", restored_name, profile);
-        goto cleanup;
-    }
+     * The tree alone, on purpose: Git's one-entry rule about the name the write
+     * uses (core/profiles.h profile_entry), by value, and a directory claim the
+     * sheet holds there never stands in its way — the write takes its place where
+     * it stands, and carries it where this entry's blob contradicts it (step
+     * 20). So the sheet must not answer here. */
+    profile_held_t standing;
+    err = profile_entry(standing_profile, restored_name, &standing);
+    if (err) goto cleanup;
 
-    if (standing_entry) {
-        git_object_t standing_type = git_tree_entry_type(standing_entry);
-        if (standing_type != GIT_OBJECT_BLOB) {
-            err = error_create(
-                ERR_INVALID_ARG, "'%s' is %s in profile '%s'; revert restores one file",
-                restored_name,
-                standing_type == GIT_OBJECT_TREE ? "a directory" : "a submodule",
-                profile
-            );
-            goto cleanup;
-        }
+    if (standing.kind == PROFILE_HELD_DIRECTORY || standing.kind == PROFILE_HELD_SUBMODULE) {
+        err = error_create(
+            ERR_INVALID_ARG, "'%s' is %s in profile '%s'; revert restores one file",
+            restored_name,
+            standing.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule",
+            profile
+        );
+        goto cleanup;
     }
 
     /* Step 12: the admission. A typed name the head's tree does not hold is a
@@ -957,7 +951,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * name is the contribution's to answer. A path argument is answered *by*
      * the claim standing there and can never be a second name, so this arm is
      * the typed one's alone. */
-    if (arg.key == PATH_KEY_STORAGE && !standing_entry && filesystem_path) {
+    if (arg.key == PATH_KEY_STORAGE && standing.kind == PROFILE_HELD_NOTHING && filesystem_path) {
         err = revert_refuse_second_name(ctx, standing_profile, filesystem_path, restored_name);
         if (err) goto cleanup;
     }
@@ -1025,8 +1019,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         standing_sheet, PATH_KIND_FILE, restored_name
     );
     if (revert_already_at_target(
-        standing_entry, standing_claim, &restored_blob, restored_mode,
-        restored_claim
+        &standing, standing_claim, &restored_blob, restored_mode, restored_claim
         )) {
         output_info(
             out, OUTPUT_NORMAL, "File '%s' is already at target state (no changes)",
@@ -1138,12 +1131,12 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * differs*, and what is left to differ is the entry's filemode and the four
      * fields of the claim beside it, so the sentence names those rather than
      * two of them. */
-    if (!standing_entry) {
+    if (standing.kind == PROFILE_HELD_NOTHING) {
         output_gap(out, OUTPUT_NORMAL);
         output_print(
             out, OUTPUT_NORMAL, "{green}Restoring a deleted file{reset}\n"
         );
-    } else if (git_oid_equal(git_tree_entry_id(standing_entry), &restored_blob)) {
+    } else if (git_oid_equal(&standing.oid, &restored_blob)) {
         output_gap(out, OUTPUT_NORMAL);
         output_print(
             out, OUTPUT_NORMAL,
@@ -1157,9 +1150,8 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
          * is handled inside revert_print_diff without caller-side metadata
          * gymnastics. */
         err = revert_print_diff(
-            ctx, profile, restored_name, git_tree_entry_id(standing_entry),
-            git_tree_entry_filemode(standing_entry), target_name, target_blob,
-            restored_mode
+            ctx, profile, restored_name, &standing.oid, standing.filemode, target_name,
+            target_blob, restored_mode
         );
         if (err) {
             /* Non-fatal: the revert itself doesn't need decryption (copies blobs).
@@ -1232,7 +1224,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * step 11's answer, and none above it, which step 16's put refused — an empty
      * tracked directory, or a rung nothing anchors. Where the head's blob stands
      * at the name it contradicts the claim, and the write carries it. */
-    if (!standing_entry) {
+    if (standing.kind == PROFILE_HELD_NOTHING) {
         metadata_remove_item(standing_sheet, PATH_KIND_DIRECTORY, restored_name);
     }
 
@@ -1276,7 +1268,6 @@ cleanup:
     if (restored_claim) metadata_item_free(restored_claim);
     if (standing_sheet) metadata_free(standing_sheet);
     if (target_sheet) metadata_free(target_sheet);
-    if (standing_entry) git_tree_entry_free(standing_entry);
     profile_free(target_profile);
     if (target_tree) git_tree_free(target_tree);
     profile_free(standing_profile);

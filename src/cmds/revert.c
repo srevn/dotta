@@ -563,51 +563,6 @@ static error_t revert_print_diff(
 }
 
 /**
- * The revert's commit message
- *
- * Uses custom message if provided, otherwise generates from template system.
- * This centralizes message generation logic for reuse across revert operations.
- *
- * @param arena Arena the message lives in (must not be NULL)
- * @param config Configuration (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @param file_path File path (must not be NULL)
- * @param target_commit_oid Target commit OID (must not be NULL)
- * @param custom_message Custom message (can be NULL for template generation)
- * @return The message, the arena's
- */
-static const char *revert_commit_message(
-    arena_t *arena,
-    const config_t *config,
-    const char *profile,
-    const char *file_path,
-    const git_oid *target_commit_oid,
-    const char *custom_message
-) {
-    if (custom_message && custom_message[0]) {
-        return arena_strdup(arena, custom_message);
-    }
-
-    /* Generate message using template system */
-    char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
-    git_oid_tostr(oid_str, sizeof(oid_str), target_commit_oid);
-
-    /* Build context for commit message. One path, the name the restore wrote,
-     * borrowed for the call as every caller's list is (utils/commit.h). */
-    const char *paths[] = { file_path };
-    commit_message_context_t msg_ctx = {
-        .action        = COMMIT_ACTION_REVERT,
-        .profile       = profile,
-        .paths         = paths,
-        .path_count    = 1,
-        .custom_msg    = NULL,
-        .target_commit = oid_str
-    };
-
-    return commit_message(arena, config, &msg_ctx);
-}
-
-/**
  * Revert command implementation
  */
 error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
@@ -1056,16 +1011,25 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         }
     }
 
-    /* The commit prunes a derived claim nothing stands beneath any longer —
-     * imported redundancy alone, since a restore makes no claim redundant — and
-     * keeps no keys: a revert writes no record, and the next load releases one
-     * a pruned rung stood on (core/profiles.h profile_stage_t). */
-    const char *msg = revert_commit_message(
-        ctx->arena, config, profile, restored.storage_path, git_commit_id(target_commit),
-        opts->message
-    );
-
-    err = profile_stage_commit(stage, msg, NULL);
+    /* The commit, its message built as every writer's is (utils/commit.h): the
+     * user's own where one was given, else the template's over one path — the
+     * name the restore wrote, borrowed for the call — and the commit restored
+     * from, whole. It prunes a derived claim nothing stands beneath any longer
+     * — imported redundancy alone, since a restore makes no claim redundant —
+     * and keeps no keys: a revert writes no record, and the next load releases
+     * one a pruned rung stood on (core/profiles.h profile_stage_t). */
+    char target_hex[GIT_OID_SHA1_HEXSIZE + 1];
+    git_oid_tostr(target_hex, sizeof(target_hex), git_commit_id(target_commit));
+    const char *paths[] = { restored.storage_path };
+    commit_message_context_t msg_ctx = {
+        .action        = COMMIT_ACTION_REVERT,
+        .profile       = profile,
+        .paths         = paths,
+        .path_count    = 1,
+        .custom_msg    = opts->message,
+        .target_commit = target_hex
+    };
+    err = profile_stage_commit(stage, commit_message(ctx->arena, config, &msg_ctx), NULL);
     if (err) goto cleanup;
 
     /* Step 21: Report. Nothing to write: the revert moved the branch HEAD, and

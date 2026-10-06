@@ -45,14 +45,15 @@ typedef struct {
     const char *profile;        /* Profile name (required) */
     const char *const *paths;   /* The paths the commit names, both kinds */
     size_t path_count;          /* How many, and what {count} renders */
-    const char *custom_msg;     /* Custom message from -m flag (NULL = use template) */
+    const char *custom_msg;     /* Custom message from -m flag (NULL or empty = use template) */
     const char *target_commit;  /* Target commit SHA (revert alone, NULL otherwise) */
 } commit_message_context_t;
 
 /**
  * Build a commit message from context
  *
- * If custom_msg is provided, uses it directly. Otherwise, builds message from
+ * A custom message the user wrote is the whole message. Otherwise — none given,
+ * or an empty one, which Git itself never commits — builds the message from the
  * config templates with variable substitution.
  *
  * Available template variables:

@@ -22,6 +22,7 @@
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/policy.h"
+#include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -29,9 +30,7 @@
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/filesystem.h"
-#include "sys/gitops.h"
 #include "sys/identity.h"
-#include "sys/stage.h"
 #include "utils/commit.h"
 #include "utils/hooks.h"
 
@@ -39,12 +38,13 @@
  * Capture a path from the filesystem as the entry it becomes
  *
  * A regular file is sealed as the policy decides (core/policy.h), and the seal
- * it keeps — priority 3 — is read from the entry the stage holds at this name,
- * by its own bytes (infra/content.h content_classify), never from the sheet's
- * copy of that fact. The view projects the copy for its screens, and a sheet
- * that disagrees with its tree — a hand edit, another tool's commit, the
- * contradicted claim a profile decodes as no claim at all (core/profiles.c
- * profile_step) — would otherwise have this capture store a secret in the clear.
+ * it keeps — priority 3 — is read off the blob the profile holds at this name
+ * in the tree its next commit opened at, by that blob's own bytes (core/profiles.h
+ * profile_entry, infra/content.h content_classify), never from the sheet's copy
+ * of that fact. The view projects the copy for its screens, and a sheet that
+ * disagrees with its tree — a hand edit, another tool's commit, the contradicted
+ * claim a profile decodes as no claim at all (core/profiles.c profile_step) —
+ * would otherwise have this capture store a secret in the clear.
  *
  * Routed by what the load observed at the path, as add routes by what its listing
  * found there (cmds/add.c add_capture) — every item on this route carries an
@@ -54,31 +54,30 @@
  * refused rather than read as what it has become, which is the refusal a second
  * look here would only have moved one frame earlier.
  *
- * This routes, decides and captures; the entry the capture becomes is the caller's
- * to put, beside the claim and the record it also writes. So the stage is read
- * here and never written: the only question asked of it is the prior entry above.
+ * This routes, decides and captures; the entry and the claim the capture becomes
+ * are the profile's next commit's to make (core/profiles.h
+ * profile_stage_capture_file), and the record the caller's. So the profile is
+ * asked here and never edited: the one question asked of it is the prior above.
  *
  * @param ctx Dispatch context (must not be NULL; supplies the repository, the
  *            key and the encryption policy)
- * @param stage The profile's stage (must not be NULL; the entry it holds at the
- *              item's name is the prior this capture's policy reads)
+ * @param base The profile as its next commit opened it (must not be NULL): the
+ *             blob it holds at the item's name is the prior this capture's policy
+ *             reads, and its name the seal's key
  * @param item The path to capture (must not be NULL; its occupant chooses the
  *             capture, its two keys name the source and the seal)
- * @param profile The profile, for the seal's key (must not be NULL)
  * @param out The capture (must not be NULL; cleared here before the policy can
  *            refuse, so freeing it is correct on every path)
  */
 static error_t update_capture(
     const dotta_ctx_t *ctx,
-    stage_t *stage,
+    profile_t *base,
     const workspace_item_t *item,
-    const char *profile,
     content_capture_t *out
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(stage);
+    CHECK_NULL(base);
     CHECK_NULL(item);
-    CHECK_NULL(profile);
     CHECK_NULL(out);
 
     /* The captures clear this too, but the policy below stands in front of them
@@ -94,19 +93,19 @@ static error_t update_capture(
         return content_capture_link(filesystem_path, out);
     }
 
-    /* Priority 3's source: the entry the stage holds at this name — the branch
-     * as the stage opened it, an update capturing each name once — judged by
-     * its bytes and its mode, and no entry at all for a file new to the profile.
-     * A blob that cannot be read is an error, not "not encrypted": a sniff that
-     * defaulted would flip the policy silently. */
-    error_t err = NULL;
-    const git_index_entry *prior = git_index_get_bypath(
-        stage_index(stage), storage_path, 0
-    );
+    /* Priority 3's source: the blob the profile holds at this name in the tree
+     * its next commit opened at — the head, which no edit moves — judged by its
+     * bytes and its mode; no blob at all, a name new to the profile or a gitlink
+     * a hand left, which places nothing, is no prior. A blob that cannot be read
+     * is an error, not "not encrypted": a sniff that defaulted would flip the
+     * policy silently. */
+    profile_held_t prior;
+    error_t err = profile_entry(base, storage_path, &prior);
+    if (err) return err;
     content_kind_t prior_kind = CONTENT_PLAINTEXT;
-    if (prior) {
+    if (prior.kind == PROFILE_HELD_FILE) {
         err = content_classify(
-            ctx->run.repo, &prior->id, prior->mode, &prior_kind, NULL
+            ctx->run.repo, &prior.oid, prior.filemode, &prior_kind, NULL
         );
         if (err) {
             return error_wrap(
@@ -130,44 +129,45 @@ static error_t update_capture(
      * and the fstat of the descriptor they came off, bytes and look one inode
      * by construction (infra/content.h content_capture_t). */
     return content_capture_file(
-        filesystem_path, storage_path, profile, keymgr, should_encrypt, out
+        filesystem_path, storage_path, profile_name(base), keymgr, should_encrypt, out
     );
 }
 
 /**
  * What one profile's update commit did, path by path
  *
- * Filled by the walk that does the work — one writer per item: the capture for
- * a file, the claim capture for a directory, the entry removal for a deletion,
- * the ancestry derivation for the chains it climbed, the prune for the directory
- * entries dropped as redundant — and read back by the commit message and by the
- * record loop (update_write_record), so both follow the commit and nothing else:
- * an item the walk skipped (a directory the race guard refused) lands in no list,
- * is not named, and gets no record write. Whether the commit landed at all is
- * the stage's own answer (sys/stage.h stage_commit) — a walk whose edits leave
- * the tree as the stage opened it lands none, whatever its lists hold — and the
- * executor hands on only the bookkeeping of a commit that landed (update_execute).
+ * Filled by the walk that does the work — one edit per item on the profile's
+ * next commit: the capture for a file, the claim capture for a directory, the
+ * removal for a deletion, the ancestry derivation for the chains it climbed,
+ * the commit's prune for the directory entries it dropped as redundant — and
+ * read back by the commit message and by the record loop (update_write_record),
+ * so both follow the commit and nothing else: an item the walk skipped (a directory
+ * the race guard refused) lands in no list, is not named, and gets no record
+ * write. Whether the commit landed at all is the commit's own answer
+ * (core/profiles.h profile_stage_commit) — a walk whose edits leave both documents
+ * as the stage opened them lands none, whatever its lists hold — and the executor
+ * hands on only the bookkeeping of a commit that landed (update_execute).
  *
  * A capture is kept as the record of what it committed — the node the capture
- * held to, the blob the stage wrote, the triple its bytes were read with (a file's,
- * the fstat of the descriptor it read; a link's, the lstat before its target;
- * none for a directory, which confirms no content), and the claim the sheet took
- * — so the record loop writes what this commit put there, never what a later
- * head of the branch says should be. Its names are the item's (workspace lifetime)
- * and the arena's (the claim's, copied before the sheet that held them is freed).
- * Deleted items are borrowed; the pruned and retired keys are storage paths their
- * writers copy out, resolved through the mount table by the record loop — the
- * same route remove's record loop takes. The derivation's two outs are shaped
- * by what a reader can do with them (metadata.h): an authored claim has no
- * consequence beyond the sheet, so `claimed` is the count the commit gate and
- * the receipt read, while a dropped claim leaves the view by this commit and
- * only its key can settle the record it strands.
+ * held to, the blob the commit holds at the name, the triple its bytes were read
+ * with (a file's, the fstat of the descriptor it read; a link's, the lstat before
+ * its target; none for a directory, which confirms no content), and the claim
+ * the capture answered — so the record loop writes what this commit put there,
+ * never what a later head of the branch says should be. Its names are the item's
+ * (workspace lifetime) and the command arena's (the claim's, which the capture
+ * answers there). Deleted items are borrowed; the pruned and retired keys are
+ * storage paths their writers copy out, resolved through the mount table by the
+ * record loop — the same route remove's record loop takes. The derivation's two
+ * outs are shaped by what a reader can do with them (metadata.h): an authored
+ * claim has no consequence beyond the sheet, so `claimed` is the count the receipt
+ * reads, while a dropped claim leaves the view by this commit and only its key
+ * can settle the record it strands.
  *
  * Memory: every member is the command arena's, and nothing frees a commit.
  */
 typedef struct {
     const char *profile;               /* Borrowed from the enabled set */
-    bool committed;                    /* Whether the commit landed: the stage's own answer */
+    bool committed;                    /* Whether the commit landed: the commit's own answer */
     state_record_t *captured;          /* What each capture committed, as the record keeps it */
     size_t captured_count;
     const workspace_item_t **deleted;  /* Items whose deletion the commit recorded */
@@ -384,28 +384,28 @@ static void update_partition(
 /**
  * Update a single profile with workspace items
  *
- * One walk, one writer per item, over one metadata load (the sheet in the tree
- * the stage opened at — the profile's own bytes). Each arm does its item's work
- * and fills the commit's bookkeeping beside it: the capture onto the stage for
- * a file, the claim capture for a directory, the entry removal for a deletion.
- * The chain rides the capture: after the walk, every captured leaf's ancestry
- * is re-derived into the same sheet — the content now comes from this machine,
- * and so does its way — and a named run hands in the profile's in-scope rows,
- * each a leaf whose chain is climbed whether or not anything about it diverged.
- * The walk ends with the redundancy prune, one metadata save, and the commit.
+ * One walk, one edit per item on the profile's next commit, each filling the
+ * commit's bookkeeping beside it: a deletion takes its claim by its kind, a file's
+ * capture becomes its entry and its claim, a directory's its claim. The chain
+ * rides the capture: after the walk, every captured leaf's ancestry is re-derived
+ * on the same commit — the content now comes from this machine, and so does its
+ * way — and a named run hands in the profile's in-scope rows, each a leaf whose
+ * chain is climbed whether or not anything about it diverged. The walk ends with
+ * the commit, which prunes what nothing stands on any longer and saves the sheet
+ * where a claim moved.
  *
  * Success means committed or untouched, and the bookkeeping says which
- * (commit->committed, the stage's answer): a walk that captured nothing and deleted
- * nothing saves nothing and commits nothing — the stage is freed by the caller
- * as it was opened — and a walk whose captures put back what the profile holds
- * commits nothing either. A mid-walk failure returns with the stage part-edited:
- * the executor stops the run there, and a stage that is never committed changes
- * nothing in the repository.
+ * (commit->committed, the commit's own answer): a walk whose edits moved nothing
+ * — none at all, or captures that put back what the profile holds — commits
+ * nothing. A mid-walk failure returns with the stage part-edited: the executor
+ * stops the run there, and a stage that is never committed changes nothing in
+ * the repository.
  *
  * @param ctx Dispatch context (must not be NULL; the capture reads the key and
- *            the encryption policy off it)
- * @param stage The profile's stage, opened by the caller (must not be NULL)
- * @param profile Profile to update (must not be NULL)
+ *            the encryption policy off it, the climb the mount table)
+ * @param stage The profile's next commit, opened by the caller (must not be NULL)
+ * @param profile Profile to update — the enabled set's name, which the bookkeeping
+ *                keeps past the stage (must not be NULL)
  * @param items The profile's share of the run's work, in filter order (empty
  *              where the profile has only chains to re-derive)
  * @param rows The named run's in-scope view rows for this profile, each the leaf
@@ -417,7 +417,7 @@ static void update_partition(
  */
 static error_t update_profile(
     const dotta_ctx_t *ctx,
-    stage_t *stage,
+    profile_stage_t *stage,
     const char *profile,
     workspace_items_t items,
     manifest_rows_t rows,
@@ -430,179 +430,112 @@ static error_t update_profile(
     CHECK_NULL(opts);
     CHECK_NULL(commit);
 
-    git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
 
     commit->profile = profile;
     string_array_init(&commit->pruned, ctx->arena);
     string_array_init(&commit->retired, ctx->arena);
 
-    /* Initialize all resources to NULL for goto cleanup */
-    metadata_t *metadata = NULL;
-    error_t err = NULL;
-
-    /* The one metadata load: the sheet in the tree the stage opened at — the
-     * profile's own bytes — mutated as the walk goes, saved once. */
-    err = metadata_load_from_tree(repo, stage_tree(stage), profile, &metadata);
-    if (err) return err;
-
     /* The capture and deletion lists can each hold every item; the walk fills
-     * them with the ones that landed. A rows-only call has nothing to capture
-     * or delete, and no list to size. */
-    if (items.count > 0) {
-        commit->captured = arena_calloc(
-            ctx->arena, items.count, sizeof(*commit->captured)
-        );
-        commit->deleted = arena_calloc(
-            ctx->arena, items.count, sizeof(*commit->deleted)
-        );
-    }
+     * them with the ones that landed, a rows-only call's at none */
+    commit->captured = arena_calloc(ctx->arena, items.count, sizeof(*commit->captured));
+    commit->deleted = arena_calloc(ctx->arena, items.count, sizeof(*commit->deleted));
 
-    size_t captured_file_count = 0;
-    size_t updated_dir_count = 0;
-
-    /* One walk, one writer per item: each arm does its item's work and fills
-     * the commit's bookkeeping beside it. */
+    /* One walk, one edit per item on the profile's next commit, each filling
+     * the bookkeeping beside it */
     for (size_t i = 0; i < items.count; i++) {
         const workspace_item_t *item = items.entries[i];
 
+        /* A deletion, of either kind, ahead of both arms — the directory arm's
+         * look never meets a path the user removed. It takes the claim of the
+         * item's kind, a file's blob and FILE item or a directory's DIRECTORY
+         * item, never the other kind's at the name, so a directory claim the
+         * blob contradicted stands again once the blob is gone (core/profiles.h
+         * profile_stage_remove). The row said the profile holds it, so one the
+         * commit lacks — another writer's commit since the load — is the model's
+         * error and stops the run, never a no-op. Then the bookkeeping, so the
+         * message names it and the record loop retires it */
+        if (item->state == WORKSPACE_STATE_DELETED) {
+            error_t err = profile_stage_remove(stage, item->item_kind, item->storage_path);
+            if (err) return err;
+
+            output_info(
+                out, OUTPUT_VERBOSE, "  Removed: %s%s", item->filesystem_path,
+                path_kind_suffix(item->item_kind)
+            );
+            commit->deleted[commit->deleted_count++] = item;
+            continue;
+        }
+
         switch (item->item_kind) {
             case PATH_KIND_FILE: {
-                /* Handle deleted files */
-                if (item->state == WORKSPACE_STATE_DELETED) {
-                    output_info(
-                        out, OUTPUT_VERBOSE, "  Removed: %s",
-                        item->filesystem_path
-                    );
-                    /* The entry leaves the stage: the row says the tree holds
-                     * it, so a path the stage lacks is the model's error, not a
-                     * no-op. */
-                    err = stage_remove(stage, item->storage_path);
-                    if (err) goto cleanup;
-                    /* Its FILE item with it, where one stands: its own kind alone,
-                     * so a directory claim at the name, which the blob
-                     * contradicted, stands again once the blob is gone */
-                    metadata_remove_item(metadata, PATH_KIND_FILE, item->storage_path);
-                    commit->deleted[commit->deleted_count++] = item;
-                    continue;
-                }
-
                 output_info(out, OUTPUT_VERBOSE, "  %s", item->filesystem_path);
 
-                /* The capture, and the entry it becomes on the stage, at the
-                 * name the seal was made under (infra/content.h). One tail past
-                 * the door: the bytes are released whichever step refused, and
-                 * each refusal names the path itself — the capture's the file,
-                 * the put's the name it lands at. */
+                /* The capture, and the entry and the claim it becomes on the
+                 * profile's next commit, at the name the seal was made under
+                 * (infra/content.h). One tail past both: the bytes are released
+                 * whichever refused, the look staying readable for the record,
+                 * and each refusal names the path itself — the capture's the
+                 * file, the commit's the name it lands at */
                 content_capture_t capture = { 0 };
-                git_oid blob;
-                err = update_capture(ctx, stage, item, profile, &capture);
+                profile_claim_t claim;
+                error_t err = update_capture(ctx, profile_stage_base(stage), item, &capture);
                 if (!err) {
-                    err = stage_put(
-                        stage, item->storage_path, capture.bytes.data,
-                        capture.bytes.size, capture.mode, &blob
+                    err = profile_stage_capture_file(
+                        stage, item->storage_path, &capture, ctx->arena, &claim
                     );
                 }
                 content_capture_free(&capture);
-                if (err) goto cleanup;
-
-                /* The claim from the capture's own stat, sealed as the capture
-                 * sealed the bytes: its write-time invariant makes that verdict
-                 * the byte truth, so the claim and every reader agree — and a
-                 * link is never sealed. */
-                metadata_item_t *meta_item = NULL;
-                err = metadata_capture_file(
-                    item->storage_path,
-                    &capture.st,
-                    capture.encrypted,
-                    &meta_item
-                );
-                if (err) goto cleanup;
+                if (err) return err;
 
                 /* What the capture committed, as the record keeps it: the node
-                 * the load found and the capture held to, the blob the put wrote
-                 * under the look its bytes came off, and the claim — taken before
-                 * the sheet takes the item */
-                state_record_t *record = &commit->captured[commit->captured_count];
-                *record = (state_record_t){
+                 * the load found and the capture held to, the blob the commit
+                 * holds at the name under the look its bytes came off, and the
+                 * claim the capture answered — its mode the type's floor where
+                 * it claims none, a link's, the record's don't-care under its
+                 * kind */
+                commit->captured[commit->captured_count++] = (state_record_t){
                     .filesystem_path = item->filesystem_path,
                     .storage_path = item->storage_path,
                     .profile = profile,
                     .kind = item->occupant,
-                    .blob_oid = blob,
+                    .blob_oid = claim.blob_oid,
                     .stat = state_stat_from_read(&capture.st),
+                    .mode = profile_claim_mode(&claim),
+                    .owner = claim.owner,
+                    .group = claim.group,
                 };
-                metadata_item_claim(meta_item, ctx->arena, record);
 
-                /* meta_item is NULL for a link that claims nothing — no mode to
-                 * take, no ownership tracked. A capture that claims nothing retires
-                 * the standing claim: a FILE item at the key is the replaced
-                 * state's. Either way the capture writes its own kind, so a
-                 * directory claim at the name, which the blob contradicts, rides
-                 * the commit, carried. */
-                if (meta_item) {
-                    /* Say what the capture took before metadata_add_item takes
-                     * it — the claim decides the shape. The fourth combination
-                     * (no mode, no ownership) has no line: such an item does
-                     * not exist. Ownership is both names or neither at the capture
-                     * (core/metadata.c metadata_capture_ownership), so the owner
-                     * alone is asked, as add asks it (cmds/add.c
-                     * add_print_capture). The ownership-only shape carries no
-                     * encrypted suffix by construction: it is a link's entry,
-                     * and the capture never encrypts one. */
-                    if (meta_item->mode != MODE_UNCLAIMED && meta_item->owner) {
-                        output_info(
-                            out, OUTPUT_VERBOSE,
-                            "  Captured metadata: %s (mode: %04o, owner: %s:%s%s)",
-                            item->filesystem_path, meta_item->mode, meta_item->owner,
-                            meta_item->group, meta_item->encrypted ? ", encrypted" : ""
-                        );
-                    } else if (meta_item->mode != MODE_UNCLAIMED) {
-                        output_info(
-                            out, OUTPUT_VERBOSE,
-                            "  Captured metadata: %s (mode: %04o%s)",
-                            item->filesystem_path, meta_item->mode,
-                            meta_item->encrypted ? ", encrypted" : ""
-                        );
-                    } else {
-                        output_info(
-                            out, OUTPUT_VERBOSE,
-                            "  Captured metadata: %s (owner: %s:%s)",
-                            item->filesystem_path, meta_item->owner, meta_item->group
-                        );
-                    }
-
-                    /* Into the sheet */
-                    metadata_add_item(metadata, &meta_item);
-
-                    captured_file_count++;
-                } else {
-                    metadata_remove_item(metadata, PATH_KIND_FILE, item->storage_path);
+                /* The claim decides the line: mode and ownership, the mode alone,
+                 * or the ownership alone — a link's, whose claim carries no mode
+                 * and no stamp — and none where the capture claims nothing, a
+                 * link the invoker owns. Ownership is both names or neither at
+                 * the capture (core/metadata.c metadata_capture_ownership), so
+                 * the owner alone is asked, as add asks it (cmds/add.c
+                 * add_print_capture) */
+                if (claim.mode != MODE_UNCLAIMED && claim.owner) {
+                    output_info(
+                        out, OUTPUT_VERBOSE,
+                        "  Captured metadata: %s (mode: %04o, owner: %s:%s%s)",
+                        item->filesystem_path, claim.mode, claim.owner, claim.group,
+                        claim.encrypted ? ", encrypted" : ""
+                    );
+                } else if (claim.mode != MODE_UNCLAIMED) {
+                    output_info(
+                        out, OUTPUT_VERBOSE, "  Captured metadata: %s (mode: %04o%s)",
+                        item->filesystem_path, claim.mode,
+                        claim.encrypted ? ", encrypted" : ""
+                    );
+                } else if (claim.owner) {
+                    output_info(
+                        out, OUTPUT_VERBOSE, "  Captured metadata: %s (owner: %s:%s)",
+                        item->filesystem_path, claim.owner, claim.group
+                    );
                 }
-
-                commit->captured_count++;
                 break;
             }
 
             case PATH_KIND_DIRECTORY: {
-                /* Handle deleted directories (symmetric with the file branch
-                 * above). Without this, the stat() below would fail with ENOENT
-                 * and the metadata entry would survive, letting the view keep
-                 * claiming a directory the user just deleted. A deleted directory
-                 * is a deletion: the entry's removal goes on the commit's
-                 * bookkeeping like a deleted file, so the commit gate counts
-                 * it, the message names it, and the record loop retires it. */
-                if (item->state == WORKSPACE_STATE_DELETED) {
-                    if (metadata_remove_item(metadata, PATH_KIND_DIRECTORY, item->storage_path)) {
-                        output_info(
-                            out, OUTPUT_VERBOSE, "  Removed directory metadata: %s",
-                            item->filesystem_path
-                        );
-                        commit->deleted[commit->deleted_count++] = item;
-                    }
-                    continue;
-                }
-
                 /* lstat + S_ISDIR: the race guard. The filter refused load-time
                  * [type] and [unverified]; this refuses a change since load — a
                  * path that vanished, or a tracked directory replaced by a symlink,
@@ -627,73 +560,57 @@ static error_t update_profile(
                     continue;
                 }
 
-                /* Capture directory metadata. A re-derivation replaces the
-                 * attributes and never the class: whether the profile tracks
-                 * this directory or only passes through it was decided by the
-                 * walk that authored the claim, and an update is not that walk.
-                 * The standing directory claim is the authority for it — this
-                 * is the profile's own sheet, not the resolved view, so precedence
-                 * has nothing to say here — and a key it does not hold answers
-                 * with the class dotta does less with. */
-                const metadata_item_t *held = metadata_find_item(
-                    metadata, PATH_KIND_DIRECTORY, item->storage_path
+                /* The claim, refreshed off the look and written tracked: a derived
+                 * claim is asked nothing of a look (core/workspace.c
+                 * workspace_analyze_directory), so every directory this arm meets
+                 * is one the profile tracks. Its one refusal — an owner or a
+                 * group this host cannot name — is non-fatal, and said at the
+                 * verbosity its sibling above is said at: the claim standing on
+                 * the directory is left exactly as it is, and the commit as it
+                 * was — absence of a capture is not knowledge that the claim is
+                 * wrong — so the sheet quietly keeps saying something this run
+                 * could not confirm. The error is dropped once said, one per
+                 * such directory */
+                profile_claim_t claim;
+                error_t err = profile_stage_capture_directory(
+                    stage, item->storage_path, &dir_stat, ctx->arena, &claim
                 );
-                metadata_item_t *meta_item = NULL;
-                err = metadata_capture_directory(
-                    item->storage_path, &dir_stat, held && held->tracked, &meta_item
-                );
-
                 if (err) {
-                    /* Non-fatal, and said at the verbosity its sibling above is
-                     * said at: the claim standing on the directory is left exactly
-                     * as it is — absence of a capture is not knowledge that the
-                     * claim is wrong — so the sheet quietly keeps saying something
-                     * this run could not confirm. The error is dropped once said,
-                     * one per directory whose owner or group this host cannot
-                     * name (core/metadata.h). */
                     output_warning(
                         out, OUTPUT_NORMAL, "Skipping directory '%s': %s",
                         item->filesystem_path, error_line(err)
                     );
-                    err = NULL;
                     continue;
                 }
 
                 /* What the capture committed, as the record keeps it: the directory
-                 * the guard above just held it to, and its claim — no content,
-                 * which a directory never confirms — taken before the sheet takes
-                 * the item */
-                state_record_t *record = &commit->captured[commit->captured_count];
-                *record = (state_record_t){
+                 * the guard above just held it to, and the claim the capture
+                 * answered — no content, which a directory never confirms */
+                commit->captured[commit->captured_count++] = (state_record_t){
                     .filesystem_path = item->filesystem_path,
                     .storage_path = item->storage_path,
                     .profile = profile,
                     .kind = FS_OCCUPANT_DIRECTORY,
+                    .mode = profile_claim_mode(&claim),
+                    .owner = claim.owner,
+                    .group = claim.group,
                 };
-                metadata_item_claim(meta_item, ctx->arena, record);
 
-                /* Say what the capture took before metadata_add_item takes it */
-                if (meta_item->owner) {
+                /* The claim decides the line: its mode, and its owner where it
+                 * names one */
+                if (claim.owner) {
                     output_info(
                         out, OUTPUT_VERBOSE,
                         "  Updated directory metadata: %s (mode: %04o, owner: %s:%s)",
-                        item->filesystem_path, meta_item->mode, meta_item->owner,
-                        meta_item->group
+                        item->filesystem_path, claim.mode, claim.owner, claim.group
                     );
                 } else {
                     output_info(
                         out, OUTPUT_VERBOSE,
                         "  Updated directory metadata: %s (mode: %04o)",
-                        item->filesystem_path, meta_item->mode
+                        item->filesystem_path, claim.mode
                     );
                 }
-
-                /* Into the sheet, over the directory claim it refreshes — its
-                 * own kind alone, so a FILE item no blob backs at the name stays */
-                metadata_add_item(metadata, &meta_item);
-
-                updated_dir_count++;
-                commit->captured_count++;
                 break;
             }
         }
@@ -710,9 +627,9 @@ static error_t update_profile(
      * route's displaced arms), whichever profile's claim the squatter displaced,
      * so a chain that reaches here holds directories at every claimed rung. */
     for (size_t i = 0; i < commit->captured_count; i++) {
-        metadata_capture_ancestors(
-            metadata, ctx->run.mounts, profile, commit->captured[i].storage_path,
-            ctx->arena, &commit->claimed, &commit->retired
+        profile_stage_capture_ancestors(
+            stage, ctx->run.mounts, commit->captured[i].storage_path, &commit->claimed,
+            &commit->retired
         );
     }
 
@@ -723,9 +640,9 @@ static error_t update_profile(
      * named one can, and naming it is the remedy). A row the walk also captured
      * climbs twice for free: the derivation counts only differences. */
     for (size_t i = 0; i < rows.count; i++) {
-        metadata_capture_ancestors(
-            metadata, ctx->run.mounts, profile, rows.entries[i]->storage_path, ctx->arena,
-            &commit->claimed, &commit->retired
+        profile_stage_capture_ancestors(
+            stage, ctx->run.mounts, rows.entries[i]->storage_path, &commit->claimed,
+            &commit->retired
         );
     }
 
@@ -742,51 +659,6 @@ static error_t update_profile(
         );
     }
 
-    /* A profile whose walk captured nothing and deleted nothing, and whose
-     * derivation moved nothing, has nothing to commit, and a no-commit profile
-     * leaves the stage as it was opened: nothing saved, nothing committed. The
-     * prune is skipped with the save — imported redundancy rides whatever commit
-     * triggers the metadata rewrite, never drives one. The derivation is not
-     * redundancy: a chain re-derived under a captured leaf or a named path is
-     * the user's own word about the disk, and it drives the commit it needs —
-     * which is how the remedy for a rung the world moved under works at all. */
-    size_t path_count = commit->captured_count + commit->deleted_count +
-        commit->claimed + commit->retired.count;
-    if (path_count == 0) goto cleanup;
-
-    /* Prune redundant directory entries.
-     *
-     * Catches the implicit-orphaning case (the DELETED branch above handles
-     * explicit removals): file removals can leave a parent directory's metadata
-     * entry with nothing tracked beneath it. That set is judged against the stage's
-     * index (deletions removed, captures put by the walk) for every path a tree
-     * can hold — never against metadata items, which omit unelevated symlinks —
-     * and against the sheet's own tracked claims for the one path it cannot, an
-     * empty directory. Without this, the view would keep claiming the orphaned
-     * entry indefinitely. The keys go on the commit's bookkeeping: the entry
-     * leaves the view by this commit, so its record is this verb's to retire. */
-    err = metadata_prune_ancestors(metadata, stage_index(stage), &commit->pruned);
-    if (err) goto cleanup;
-
-    if (commit->pruned.count > 0) {
-        output_info(
-            out, OUTPUT_VERBOSE, "  Pruned %zu redundant directory entr%s",
-            commit->pruned.count, commit->pruned.count == 1 ? "y" : "ies"
-        );
-    }
-
-    /* The sheet onto the stage (single save for both files and directories) */
-    err = metadata_save_to_stage(stage, metadata);
-    if (err) goto cleanup;
-
-    if (captured_file_count > 0 || updated_dir_count > 0) {
-        output_info(
-            out, OUTPUT_VERBOSE, "Updated metadata for %zu file%s and %zu director%s",
-            captured_file_count, captured_file_count == 1 ? "" : "s",
-            updated_dir_count, updated_dir_count == 1 ? "y" : "ies"
-        );
-    }
-
     /* Build array of storage paths for commit message: what the commit captured
      * and what it let go — the bookkeeping, so an item the walk skipped is not
      * named. Both kinds, a captured directory claim being a path the commit took
@@ -794,22 +666,21 @@ static error_t update_profile(
      * them (it leaves the view by this commit); an authored one only rides, the
      * pruned-keys precedent, so a derivation that only refreshed names nothing
      * and the message's path list says so. */
-    size_t named_count = commit->captured_count + commit->deleted_count +
-        commit->retired.count;
-    const char **storage_paths = NULL;
-    if (named_count > 0) {
-        storage_paths = arena_calloc(ctx->arena, named_count, sizeof(*storage_paths));
+    size_t named_count =
+        commit->captured_count + commit->deleted_count + commit->retired.count;
+    const char **storage_paths = arena_calloc(
+        ctx->arena, named_count, sizeof(*storage_paths)
+    );
 
-        size_t named = 0;
-        for (size_t i = 0; i < commit->captured_count; i++) {
-            storage_paths[named++] = commit->captured[i].storage_path;
-        }
-        for (size_t i = 0; i < commit->deleted_count; i++) {
-            storage_paths[named++] = commit->deleted[i]->storage_path;
-        }
-        for (size_t i = 0; i < commit->retired.count; i++) {
-            storage_paths[named++] = commit->retired.entries[i];
-        }
+    size_t named = 0;
+    for (size_t i = 0; i < commit->captured_count; i++) {
+        storage_paths[named++] = commit->captured[i].storage_path;
+    }
+    for (size_t i = 0; i < commit->deleted_count; i++) {
+        storage_paths[named++] = commit->deleted[i]->storage_path;
+    }
+    for (size_t i = 0; i < commit->retired.count; i++) {
+        storage_paths[named++] = commit->retired.entries[i];
     }
 
     /* Build commit message context */
@@ -822,19 +693,30 @@ static error_t update_profile(
         .target_commit = NULL
     };
 
-    /* The commit, and whether it landed: the stage's own answer, false for a
-     * tree the walk left as the stage opened it — captures that put back what
-     * the profile holds, which a hook rewriting a file between the decision and
-     * the capture makes */
-    err = stage_commit(
-        stage, commit_message(ctx->arena, ctx->config, &msg_ctx), &commit->committed
+    /* The commit, where an edit moved either document: a capture, a deletion,
+     * or a chain re-derived — which is not redundancy but the user's own word
+     * about the disk, and drives the commit it needs, how the remedy for a rung
+     * the world moved under works at all — while imported redundancy rides a
+     * commit and never drives one. Its prune takes what nothing stands on any
+     * longer, its keys on the bookkeeping: the entry leaves the view by this
+     * commit, so its record is this verb's to retire. And whether it landed,
+     * the commit's own answer, false for captures that put back what the profile
+     * holds, which a hook rewriting a file between the decision and the capture
+     * makes */
+    error_t err = profile_stage_commit(
+        stage, commit_message(ctx->arena, ctx->config, &msg_ctx), &commit->committed,
+        &commit->pruned
     );
+    if (err) return err;
 
-cleanup:
-    /* Free resources in reverse order */
-    if (metadata) metadata_free(metadata);
+    if (commit->pruned.count > 0) {
+        output_info(
+            out, OUTPUT_VERBOSE, "  Pruned %zu redundant directory entr%s",
+            commit->pruned.count, commit->pruned.count == 1 ? "y" : "ies"
+        );
+    }
 
-    return err;
+    return NULL;
 }
 
 /**
@@ -852,7 +734,7 @@ cleanup:
  * event. The view says whose the path is and nothing else: a commit another writer
  * landed since moves what Git holds past the capture, which the next load reads
  * as Git's move ([stale]), never as a capture of it. A path the commit let go —
- * a deleted item, a directory entry the walk's prune dropped as redundant, or
+ * a deleted item, a directory entry the commit's prune dropped as redundant, or
  * an ancestor claim the derivation dropped — left Git by this commit: with no
  * row left at the path its record retires (nothing backs it now); with a lower
  * profile's row at the path it is a fallback — the record stays and reads
@@ -1017,8 +899,8 @@ cleanup:
 /**
  * Execute profile updates, in enabled-set order
  *
- * One stage per profile visited: opened at the branch's head, edited by the walk,
- * committed once, freed — nothing is checked out anywhere.
+ * One profile's next commit per profile visited: opened at its head, edited by
+ * the walk, committed once, freed — nothing is checked out anywhere.
  *
  * Profiles are walked in enabled-set order — the model's one canonical profile
  * order — so multi-profile runs commit, report, and (on a stop) strand in one
@@ -1120,14 +1002,12 @@ static error_t update_execute(
             profile
         );
 
-        /* The profile's stage: the branch as it stands now, the parent of the
-         * commit the walk makes. Its life is this iteration's. */
-        char refname[DOTTA_REFNAME_MAX];
-        error_t err = gitops_branch_refname(refname, sizeof(refname), profile);
-        if (err) return err;
-
-        stage_t *stage = NULL;
-        err = stage_open(repo, refname, &stage);
+        /* The profile's next commit, opened at its head: the parent of the commit
+         * the walk makes, and the profile every question of the walk is asked
+         * of, its sheet read now — one that will not load stops the run in the
+         * loader's words. Its life is this iteration's. */
+        profile_stage_t *stage = NULL;
+        error_t err = profile_stage_open(repo, profile, &stage);
         if (err) return err;
 
         /* Update this profile on its stage */
@@ -1138,16 +1018,16 @@ static error_t update_execute(
             (manifest_rows_t){ .entries = rows, .count = row_count },
             opts, &bookkeeping
         );
-        stage_free(stage);
+        profile_stage_free(stage);
 
         /* Any error is a failure before the commit: no commit landed, whatever
          * the bookkeeping holds */
         if (err) return err;
 
-        /* Whether the commit landed is the stage's answer, read off the
-         * bookkeeping: the walk's lists say what it did to the tree, and a tree
-         * it left as the stage opened it is no commit — nothing to report, nothing
-         * to record */
+        /* Whether the commit landed is the commit's own answer, read off the
+         * bookkeeping: the walk's lists say what it edited, and edits that left
+         * both documents as the stage opened them are no commit — nothing to
+         * report, nothing to record */
         if (!bookkeeping.committed) continue;
 
         /* The commit landed: its bookkeeping is the record write's now, the

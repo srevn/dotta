@@ -181,11 +181,11 @@ typedef struct state_record state_record_t;
  * (core/profiles.h profile_claim_mode: the filemode floor for a blob,
  * DIR_MODE_DEFAULT for a directory) and a capture's record takes none
  * (metadata_item_claim: a link's, the one capture that claims no mode) — so no
- * row, record, entry or verdict carries it. The header show prints tests it on
- * the decoded claim, where a mode is claimed (cmds/show.c show_print_blob). The
- * commands that read an item's mode raw test it beside the item: the capture
- * lines add and update print (cmds/add.c add_print_capture, cmds/update.c
- * update_profile).
+ * row, record, entry or verdict carries it. The header show prints and the capture
+ * line update prints test it on the decoded claim, where a mode is claimed
+ * (cmds/show.c show_print_blob, cmds/update.c update_profile). The one command
+ * that reads an item's mode raw tests it beside the item: the capture line add
+ * prints (cmds/add.c add_print_capture).
  */
 #define MODE_UNCLAIMED ((mode_t) -1)
 
@@ -355,12 +355,12 @@ void metadata_item_free(metadata_item_t *item);
  * claim is all this writes: the record's other columns are the caller's.
  *
  * The names are copied, never borrowed: the sheet frees its items with itself,
- * and the record a capture makes outlives the sheet it was made beside — update's
- * sheet is one profile's walk, its record phase every profile's (cmds/update.c
- * update_write_record).
+ * and a record is a value its writer keeps for its record phase, whatever the
+ * sheet does after the capture (cmds/add.c add_write_record).
  *
  * Readers: the captures that record what they committed — cmds/add.c add_capture
- * and cmd_add's directory loop, cmds/update.c update_profile's two arms. A reader
+ * and cmd_add's directory loop; update's record is built from the claim a profile's
+ * next commit answers (core/profiles.h profile_stage_capture_file). A reader
  * not on this list is a bug.
  *
  * @param item The claim a capture authored, or NULL where it authored none
@@ -519,12 +519,12 @@ bool metadata_remove_item(
  * Caller pattern: invoke after every edit of the stage for the impending commit
  * (additions put, deletions removed) and before the sheet is saved onto it, so
  * the prune sees the commit's exact tracked set and lands in the same commit as
- * the triggering removals — a profile's next commit prunes so at its commit
- * (core/profiles.c profile_stage_commit), and update by hand (cmds/update.c
- * update_profile). The keys pruned are appended to `pruned` where the writer
- * keeps them, in the directory claims' order: the entry leaves the view by the
- * verb's own commit, so a verb with a record phase retires its record the way
- * it does a path it removed. Nothing appended means nothing was pruned.
+ * the triggering removals — a profile's next commit prunes so at its commit,
+ * its one reader (core/profiles.c profile_stage_commit). The keys pruned are
+ * appended to `pruned` where the writer keeps them, in the directory claims'
+ * order: the entry leaves the view by the verb's own commit, so a verb with a
+ * record phase retires its record the way it does a path it removed. Nothing
+ * appended means nothing was pruned.
  *
  * @param metadata The sheet (must not be NULL; mutated in place)
  * @param index Post-edit index — the stage's, after every put and removal (must
@@ -618,8 +618,9 @@ error_t metadata_capture_file(
  * reads as a promise of its own commit, would be a wish (cmds/add.c). **update
  * warns and carries on**: a claim it could not refresh keeps standing, nothing
  * was named from this run, and the sheet goes on saying what it said
- * (cmds/update.c). Either way the loss is the mode with the ownership, so update's
- * warning is one the user reads at any verbosity.
+ * (cmds/update.c, through core/profiles.h profile_stage_capture_directory). Either
+ * way the loss is the mode with the ownership, so update's warning is one the
+ * user reads at any verbosity.
  *
  * Ownership capture (user/group): the file capture's rule, above. An owner or a
  * group this host has no name for is ERR_NOT_FOUND — the lookup's absence or
@@ -822,15 +823,15 @@ error_t metadata_from_json(
  * Puts the sheet — .dotta/metadata.json, serialized by metadata_to_json — on
  * the stage as a regular blob; the caller's commit carries it. The one writer
  * of the sheet: a profile's next commit's (core/profiles.c profile_stage_commit),
- * and add's and update's, each until it commits on one. A sheet this serializer
- * wrote, loaded and saved unchanged, puts the blob the tree already holds (the
- * serializer's byte-determinism), which is what lets the stage's commit see an
- * untouched sheet as no change. A hand-written one the parser accepts — other
- * whitespace, another item order, inert fields — is normalized by the save and
- * moves its blob; nothing here promises otherwise, so a caller that must not
- * re-spell a sheet it did not change saves only one whose claims moved
- * (metadata_same), as a profile's next commit does, and one that saves on every
- * run commits a re-spelling alone, as add does.
+ * and add's, until it commits on one. A sheet this serializer wrote, loaded and
+ * saved unchanged, puts the blob the tree already holds (the serializer's
+ * byte-determinism), which is what lets the stage's commit see an untouched sheet
+ * as no change. A hand-written one the parser accepts — other whitespace, another
+ * item order, inert fields — is normalized by the save and moves its blob; nothing
+ * here promises otherwise, so a caller that must not re-spell a sheet it did
+ * not change saves only one whose claims moved (metadata_same), as a profile's
+ * next commit does, and one that saves on every run commits a re-spelling alone,
+ * as add does.
  *
  * @param stage The stage the sheet goes on (must not be NULL)
  * @param metadata Metadata to save (must not be NULL)

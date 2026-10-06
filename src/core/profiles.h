@@ -21,7 +21,8 @@
  * no disk. A writer wants the claims too: it opens the profile's next commit
  * (profile_stage_t), asks the profile at the tree that commit opened at, and
  * edits through it — never the two documents, which the stage keeps together by
- * the rules its type states.
+ * the rules its type states. The stage looks at the disk in one place, the way
+ * above a file a writer captured from it.
  *
  * The decode, stated once, applied by the walk to every name it meets
  * (profile_walk) and by profile_find to the one it is asked, by the same rules
@@ -60,7 +61,8 @@
  * classification's on the way to a directory claim's name — which names the name
  * it was asked. No reader says the profile again. A removal a profile's next
  * commit cannot make is refused in its own document's words (profile_stage_remove),
- * and a restore it cannot admit in the stage's (profile_stage_restore_file).
+ * and a capture or a restore it cannot admit in the stage's
+ * (profile_stage_capture_file, profile_stage_restore_file).
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name,
@@ -96,6 +98,12 @@
 #include <git2.h>
 #include <sys/stat.h>
 #include <types.h>
+
+/* A profile's next commit takes a capture of a file (infra/content.h) and climbs
+ * through a mount table (infra/mount.h), each by pointer; each is named here
+ * and defined there. */
+typedef struct content_capture content_capture_t;
+typedef struct mount_table mount_table_t;
 
 /**
  * The profiles this machine layers, matched by name among those available
@@ -182,7 +190,10 @@ error_t profile_require(git_repository *repo, const char *name);
  * contradicts.
  *
  * Lent, its strings with it: for the visit that shows it, or, one profile_find
- * answers, for the life of the handle that answered it.
+ * answers, for the life of the handle that answered it. One a capture answers
+ * is the caller's: its name the one the caller handed, its owner and group in
+ * the arena the caller handed (profile_stage_capture_file,
+ * profile_stage_capture_directory).
  */
 typedef struct {
     const char *storage_path;   /* The name: a blob's in the tree, a directory's in the sheet */
@@ -567,8 +578,10 @@ error_t profile_needs_target(profile_t *profile, bool *needs_target);
  * saying which; DIRECTORY is a subtree, or a directory claim the sheet alone
  * holds (a tracked directory with nothing beneath it, an ancestor chain the tree
  * no longer has); SUBMODULE is a gitlink, which dotta never writes (sys/stage.c
- * put_entry refuses the mode) and every verb refuses by its noun; NOTHING is
- * neither document holding the name.
+ * put_entry refuses the mode) — a verb that acts on one name refuses it by its
+ * noun, while a file captured from the disk at its name takes its place, as Git's
+ * own add does (profile_stage_capture_file); NOTHING is neither document holding
+ * the name.
  */
 typedef enum {
     PROFILE_HELD_NOTHING,       /* neither document holds the name */
@@ -609,8 +622,11 @@ typedef struct {
  * Readers: profile_holds, which asks it first and the sheet on its silence;
  * profile_find, whose file claim is the blob it answers; cmds/revert.c cmd_revert,
  * at the name the restore writes in the head (step 11), the entry's identity
- * what the preview diffs; and core/workspace.c workspace_orphan_authority, for
- * a file record, folding a failure to UNVERIFIED.
+ * what the preview diffs; core/workspace.c workspace_orphan_authority, for a
+ * file record, folding a failure to UNVERIFIED; and cmds/update.c update_capture,
+ * the encryption policy's prior — the blob the profile holds at the name in the
+ * tree its next commit opened at, judged by its own bytes, and none where no
+ * blob stands.
  *
  * @param profile Handle (must not be NULL); its sheet is never read
  * @param storage_path A validated storage path (must not be NULL)
@@ -654,13 +670,14 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * it by what stands at the name (cmds/export.c export_collect_storage), and
  * remove's directory offer, which offers a claim where no blob stands at its
  * name (cmds/remove.c remove_offer_directory). A reader not on this list is a
- * bug. Two neighbours ask profile_entry instead, the tree alone: revert's read
+ * bug. Three neighbours ask profile_entry instead, the tree alone: revert's read
  * of the head at the name it writes (cmds/revert.c cmd_revert, step 11), where
  * a directory claim is never refused — it gives way to the write where it stands,
- * and rides it where the head's blob contradicts it; and the orphan probe's file
+ * and rides it where the head's blob contradicts it; the orphan probe's file
  * arm (core/workspace.c workspace_orphan_authority), which asks whether a blob
  * still backs a file record, a subtree and a gitlink standing at a name without
- * making a file claim — its directory arm asking profile_find.
+ * making a file claim — its directory arm asking profile_find; and update's
+ * encryption prior (cmds/update.c update_capture), a blob's bytes or none.
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
  *                tree is silent
@@ -728,30 +745,39 @@ error_t profile_find(
  * before it edits; and the sheet the commit will carry — the base's, copied at
  * the open (core/metadata.h metadata_clone) and edited from then on, so every
  * claim the base lends stands whatever the commit does. A writer asks the base
- * and edits the stage; it never holds the sheet, and the stage answers one question
- * of its own, whether its edits move anything (profile_stage_changed). Every
- * edit keeps the document's rules, stated here once:
+ * and edits the stage; it never holds the sheet — it hands the stage what it
+ * captured from the disk or restores from a commit, and the stage authors the
+ * claim — and the stage answers one question of its own, whether its edits move
+ * anything (profile_stage_changed). Every edit keeps the document's rules, stated
+ * here once:
  *   - a write touches its own kind: a removal takes its claim — a file's the
  *     blob and the FILE item at its name, a directory's the DIRECTORY item —
  *     never the other kind's at the same name, so a directory claim a removed
- *     blob contradicted stands again, carried. The one write across kinds is a
+ *     blob contradicted stands again, carried, and a FILE item no blob backs
+ *     rides a directory captured at its name. The one write across kinds is a
  *     blob's where a directory claim stands, no blob at or above its name in
  *     the base: the blob takes that claim's place, and a claim the base's blob
  *     at the name contradicts rides the write, carried;
- *   - the admission: a blob may stand at a name unless a tracked directory claim
+ *   - the admission, asked of every blob the commit writes, a capture's and a
+ *     restore's: a blob may stand at a name unless a tracked directory claim
  *     the commit carries stands strictly beneath it, one the base does not
  *     contradict — the sheet's half — and unless the tree has no room, sys/stage's
- *     half (sys/stage.h stage_put_blob). A claim the base holds contradicted is
- *     never in the way, so restoring the blob that contradicts it carries it;
- *     nor is a derived claim, which what anchors it refuses on its own, and the
- *     prune takes where nothing does;
- *   - the way: a file restored from a commit brings the directory claims it stood
- *     on there, derived, at each rung the base holds nothing at — no disk read;
- *   - the prune: at the commit, a derived claim nothing tracked stands beneath
- *     any longer goes (core/metadata.h metadata_prune_ancestors), its key handed
- *     to the writer's record phase where it has one. Revert has none, so a record
- *     a rung its commit pruned stood on is released by the next load, which finds
- *     the claim gone (core/workspace.c workspace_orphan_authority);
+ *     half (sys/stage.h stage_put, stage_put_blob). A claim the base holds
+ *     contradicted is never in the way, so writing again the blob that contradicts
+ *     it carries it; nor is a derived claim, which what anchors it refuses on
+ *     its own, and the prune takes where nothing does;
+ *   - the ancestors: a derived claim exists iff something tracked stands beneath
+ *     it, and three edits keep that — the climb, which claims the way to a leaf
+ *     from the disk, each rung where its own name resolves
+ *     (profile_stage_capture_ancestors); the way a restored file stood on at
+ *     its commit, brought back at each rung the base holds nothing at, with no
+ *     disk read (profile_stage_restore_file); and the prune, at the commit, of
+ *     every derived claim nothing tracked stands beneath any longer
+ *     (core/metadata.h metadata_prune_ancestors), its key handed to the writer's
+ *     record phase where it has one. Revert has none, so a record a rung its
+ *     commit pruned stood on is released by the next load, which finds the claim
+ *     gone
+ *     (core/workspace.c workspace_orphan_authority);
  *   - the gate, each document held against the one the stage opened: a commit
  *     no edit of which moved the tree or the sheet makes nothing — no prune, no
  *     save, no commit — so imported redundancy rides a commit and never drives
@@ -759,9 +785,11 @@ error_t profile_find(
  *     (core/metadata.h metadata_same), a hand's spelling kept otherwise; and a
  *     tree equal to the one opened is no commit (sys/stage.h stage_commit).
  *
- * Memory: a handle's own struct, made by profile_stage_open and released by
- * profile_stage_free with the stage, the base and the copy; the base borrows
- * the stage's tree, and goes first.
+ * Memory: a handle's own — an arena made by profile_stage_open, holding the struct
+ * and the names the climb spells — released by profile_stage_free with the copy,
+ * the base and the stage; the base borrows the stage's tree, and goes first.
+ * What a capture answers is the caller's (profile_claim_t), so the claim outlives
+ * the stage that wrote it.
  */
 typedef struct profile_stage profile_stage_t;
 
@@ -774,7 +802,8 @@ typedef struct profile_stage profile_stage_t;
  * refuses a sheet that will not load before its preview, in the loader's words,
  * where a reader may go on without it.
  *
- * Readers: cmds/remove.c remove_paths and cmds/revert.c cmd_revert.
+ * Readers: cmds/remove.c remove_paths, cmds/revert.c cmd_revert, and cmds/update.c
+ * update_execute, one profile's next commit for each profile the update visits.
  *
  * @param repo Repository (must not be NULL; borrowed for the stage's life)
  * @param name The profile's name, which its branch is named by (must not be NULL;
@@ -789,9 +818,10 @@ error_t profile_stage_open(git_repository *repo, const char *name, profile_stage
  * The profile as the stage opened it: the base, lent until profile_stage_free
  *
  * Readers: cmds/remove.c remove_paths, for the claims its arguments are matched
- * against (remove_resolve); and cmds/revert.c cmd_revert, for every question of
- * the branch as it stands — the claim standing at a path, a second name, and
- * what the tree holds where the restore writes.
+ * against (remove_resolve); cmds/revert.c cmd_revert, for every question of the
+ * branch as it stands — the claim standing at a path, a second name, and what
+ * the tree holds where the restore writes; and cmds/update.c update_profile,
+ * for a capture's prior and the name its seal is keyed by (update_capture).
  *
  * @param stage The stage (must not be NULL)
  * @return The base; never NULL
@@ -807,7 +837,8 @@ profile_t *profile_stage_base(const profile_stage_t *stage);
  * '%s' claims no directory at '%s'", where the sheet holds none. The other kind's
  * claim at the name is never taken, and a refusal leaves the commit as it was.
  *
- * Reader: cmds/remove.c remove_paths, each claim its arguments took.
+ * Readers: cmds/remove.c remove_paths, each claim its arguments took; and
+ * cmds/update.c update_profile, each deletion it commits, by the item's kind.
  *
  * @param stage The stage (must not be NULL)
  * @param kind A file's claim or a directory's
@@ -818,6 +849,129 @@ error_t profile_stage_remove(
     profile_stage_t *stage,
     path_kind_t kind,
     const char *storage_path
+);
+
+/**
+ * A file captured from the disk, at its name in the commit: its entry, and its
+ * claim off the look
+ *
+ * The capture is the writer's — the bytes it read, sealed or not, their filemode,
+ * the verdict on them and the look they were read with (infra/content.h
+ * content_capture_t) — and a sealed one was sealed under `storage_path`: the
+ * seal binds the name, so the entry stands at the one it was made under and no
+ * other (crypto/cipher.h "Path binding"). In order, each refusal before anything
+ * moves:
+ *   - the claim off the look (core/metadata.h metadata_capture_file): an owner
+ *     or a group this host cannot name, ERR_NOT_FOUND;
+ *   - the admission (profile_stage_t): the sheet's half, ERR_CONFLICT "Cannot
+ *     stage '%s': '%s' is a directory profile '%s' claims beneath it", naming
+ *     the first such claim in the sheet's order; then the tree's, the put's own
+ *     (sys/stage.h stage_put, ERR_CONFLICT or ERR_INVALID_ARG), which writes
+ *     the blob only once it is admitted;
+ *   - the put rule at the name: a directory claim standing there gives way, one
+ *     the base's blob contradicts rides the write;
+ *   - the claim at its own kind: the FILE item the look authors, or the retire
+ *     of the one standing where it authors none — a link the invoker owns, which
+ *     absence already says.
+ * An entry at the name that makes no claim, a gitlink a hand left, is replaced,
+ * as Git's own add replaces one (lib/git/read-cache.c add_to_index,
+ * ADD_CACHE_OK_TO_REPLACE). A failure past the put leaves a stage its writer
+ * abandons (sys/stage.h).
+ *
+ * Reader: cmds/update.c update_profile, each file it captures.
+ *
+ * @param stage The stage (must not be NULL)
+ * @param storage_path The name the entry stands at: a validated storage path,
+ *                     and the one a sealed capture was made under (must not be
+ *                     NULL)
+ * @param capture The capture (must not be NULL; borrowed for the call, its bytes
+ *                the caller's to free)
+ * @param arena The arena the answer's owner and group are copied into (must not
+ *              be NULL)
+ * @param out The claim the commit now carries at the name, as the walk decodes
+ *            it — the blob the put wrote, its type, the claim off the look over
+ *            it, its name `storage_path` (must not be NULL; written on success
+ *            alone)
+ * @return Error or NULL on success
+ */
+error_t profile_stage_capture_file(
+    profile_stage_t *stage,
+    const char *storage_path,
+    const content_capture_t *capture,
+    arena_t *arena,
+    profile_claim_t *out
+);
+
+/**
+ * A directory the profile tracks, captured from the disk: its claim off the look
+ *
+ * A writer captures a directory only where the profile tracks it — a walk entered
+ * it (add), or the claim it refreshes is tracked (update: a derived claim is
+ * asked nothing of a look, core/workspace.c workspace_analyze_directory) — so
+ * the claim is written tracked, its mode and ownership the look's (core/metadata.h
+ * metadata_capture_directory), over the directory claim at the name whatever it
+ * said; a FILE item no blob backs there is the other kind's, and rides. One
+ * refusal, before anything moves: an owner or a group this host cannot name,
+ * ERR_NOT_FOUND — so a writer may go on without the claim, which stands as it
+ * stood. Nothing is asked of the base: a blob another writer committed at the
+ * name since the writer read its view leaves the claim written contradicted,
+ * carried, and a claim another writer took from there comes back tracked — the
+ * window every other edit of that writer reads its view across.
+ *
+ * Reader: cmds/update.c update_profile, each tracked directory whose look moved.
+ *
+ * @param stage The stage (must not be NULL)
+ * @param storage_path A validated storage path (must not be NULL)
+ * @param st The writer's lstat of the path, a directory's (must not be NULL):
+ *           one taken through a link would capture the target's attributes
+ * @param arena The arena the answer's owner and group are copied into (must not
+ *              be NULL)
+ * @param out The claim, as the walk decodes a directory claim — tracked, the look's
+ *            mode and ownership, its name `storage_path` (must not be NULL;
+ *            written on success alone)
+ * @return Error or NULL on success
+ */
+error_t profile_stage_capture_directory(
+    profile_stage_t *stage,
+    const char *storage_path,
+    const struct stat *st,
+    arena_t *arena,
+    profile_claim_t *out
+);
+
+/**
+ * The way to a leaf, claimed from the disk
+ *
+ * Each rung of `storage_path` — a separator of its label's tail, the word and
+ * the leaf excluded — stands where its own name resolves under `mounts`, the
+ * table the leaf was named under, and is decided by what stands there now
+ * (core/metadata.h metadata_capture_ancestors): a directory claims its attributes,
+ * derived, counted in `captured` where the claim moved; anything else retires a
+ * standing derived claim there, its key appended to `retired`; no answer, and
+ * an owner this host cannot name, leave the rung as it is; a tracked claim at a
+ * rung is the walk's own word, left alone. Nothing refuses it. The one place
+ * the stage looks at the disk: the handle reads Git's alone, and the stage, which
+ * writes, reads the way off the machine the leaf was captured on. The rungs'
+ * spellings are the stage's arena's.
+ *
+ * Reader: cmds/update.c update_profile — each leaf it captured, and each row a
+ * named run hands it.
+ *
+ * @param stage The stage (must not be NULL)
+ * @param mounts The table the leaf's name was made under, so a rung resolves
+ *               back to where the leaf was read (must not be NULL)
+ * @param storage_path The leaf's name, under a label (must not be NULL)
+ * @param captured Count of rungs whose claim the climb authored or changed, added
+ *                 to (must not be NULL)
+ * @param retired Keys the climb retired, appended as copies in the array's arena
+ *                (must not be NULL; given its arena by string_array_init)
+ */
+void profile_stage_capture_ancestors(
+    profile_stage_t *stage,
+    const mount_table_t *mounts,
+    const char *storage_path,
+    size_t *captured,
+    string_array_t *retired
 );
 
 /**
@@ -892,13 +1046,21 @@ error_t profile_stage_changed(const profile_stage_t *stage, bool *out);
  * will record, its keys appended to `pruned` where one is given; the sheet saved
  * where its claims are no longer the base's; then one commit (sys/stage.h
  * stage_commit: a tree equal to the opened one is none, and a head another writer
- * moved since the open is refused ERR_CONFLICT). One commit a stage.
+ * moved since the open is refused ERR_CONFLICT). One commit a stage. Whether it
+ * landed is answered as sys/stage answers it: false where the gate stops it,
+ * and past the gate the tree write's own answer, which an edit the gate saw makes
+ * true — it moved a content entry, or a claim, and a sheet whose claims moved
+ * spells other bytes.
  *
- * Readers: cmds/remove.c remove_paths; and cmds/revert.c cmd_revert, which keeps
- * no keys.
+ * Readers: cmds/remove.c remove_paths, which keeps the prune's keys; cmds/revert.c
+ * cmd_revert, which keeps none; and cmds/update.c update_profile, which keeps
+ * the keys and reads whether the commit landed, so a capture that put back what
+ * the profile holds commits nothing and is neither reported nor recorded.
  *
  * @param stage The stage (must not be NULL)
  * @param message Commit message (must not be NULL)
+ * @param out_committed Whether a commit was made (optional, can be NULL; false
+ *                      where nothing moved, or on a failure)
  * @param pruned The keys the prune took, appended as copies in the array's arena
  *               (given its arena by string_array_init); NULL where the writer
  *               keeps none, one with no record phase
@@ -907,12 +1069,13 @@ error_t profile_stage_changed(const profile_stage_t *stage, bool *out);
 error_t profile_stage_commit(
     profile_stage_t *stage,
     const char *message,
+    bool *out_committed,
     string_array_t *pruned
 );
 
 /**
- * Release the stage — the copy, the base and the stage — undoing nothing in the
- * repository (sys/stage.h stage_free)
+ * Release the stage — the copy, the base, the stage and its arena — undoing nothing
+ * in the repository (sys/stage.h stage_free)
  *
  * @param stage The stage (NULL is a no-op)
  */

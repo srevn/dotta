@@ -1029,7 +1029,9 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         .custom_msg    = opts->message,
         .target_commit = target_hex
     };
-    err = profile_stage_commit(stage, commit_message(ctx->arena, config, &msg_ctx), NULL);
+    err = profile_stage_commit(
+        stage, commit_message(ctx->arena, config, &msg_ctx), NULL, NULL
+    );
     if (err) goto cleanup;
 
     /* Step 21: Report. Nothing to write: the revert moved the branch HEAD, and

@@ -223,8 +223,9 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     against, and so the base a difference on a claim axis is read from — disk
  *     off it the user's move, the row off it Git's claim still to bring
  *     (core/workspace.h workspace_claims_moved). The row's at the first observation
- *     and at apply's ownership events, the one a capture authored at add's and
- *     update's (the claim its commit carried, core/metadata.h metadata_item_claim),
+ *     and at apply's ownership events, the one a capture authored at add's (the
+ *     claim its commit carried, core/metadata.h metadata_item_claim) and update's
+ *     (the claim its capture answered, core/profiles.h profile_stage_capture_file),
  *     and on each axis a look found disk standing on, or a fix made it stand
  *     on, the row's since (a learning of the claim) — and on the mode, where a
  *     run left a directory at the working mode it could not narrow, that mode,

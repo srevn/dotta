@@ -1245,7 +1245,7 @@ static error_t remove_paths(
     string_array_t pruned_dirs;   /* Directory entries the commit's prune took (storage paths) */
     string_array_init(&pruned_dirs, ctx->arena);
     err = profile_stage_commit(
-        stage, commit_message(ctx->arena, config, &msg_ctx), &pruned_dirs
+        stage, commit_message(ctx->arena, config, &msg_ctx), NULL, &pruned_dirs
     );
     if (err) goto cleanup;
     if (pruned_dirs.count > 0) {

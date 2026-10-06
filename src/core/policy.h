@@ -101,16 +101,18 @@ typedef enum {
  *   so on a previously-encrypted file would leak its content.
  *
  * Source of `previously_encrypted`:
- *   The caller computes this from byte truth: content_classify on the entry the
- *   profile's stage holds at the name, judged by its mode — so a link, whose
- *   bytes are its target, keeps no name sealed — as both callers do (cmds/add.c,
- *   cmds/update.c). With no entry at the name there are no prior bytes, and the
- *   caller passes false. Policy never opens a metadata side-channel, and neither
- *   caller reads one for this: bytes are the single authority for whether a file
- *   IS encrypted, metadata.encrypted is a byte-derived cache (established at
- *   the write boundary in cmds/add.c, cmds/update.c, and cmds/revert.c's restore),
- *   and a sheet that disagrees with its tree is a state the view tolerates
- *   (core/profiles.c profile_step) — here, where a wrong answer publishes a secret.
+ *   The caller computes this from byte truth: content_classify on the blob the
+ *   profile holds at the name, judged by its mode — so a link, whose bytes are
+ *   its target, keeps no name sealed — as both callers do: update off the tree
+ *   its profile's next commit opened at (cmds/update.c update_capture, through
+ *   core/profiles.h profile_entry), add off its stage's entry (cmds/add.c). With
+ *   no blob at the name there are no prior bytes, and the caller passes false.
+ *   Policy never opens a metadata side-channel, and neither caller reads one
+ *   for this: bytes are the single authority for whether a file IS encrypted,
+ *   metadata.encrypted is a byte-derived cache (established at the write boundary
+ *   in cmds/add.c, cmds/update.c, and cmds/revert.c's restore), and a sheet that
+ *   disagrees with its tree is a state the view tolerates (core/profiles.c
+ *   profile_step) — here, where a wrong answer publishes a secret.
  *
  * @param config Configuration (can be NULL; disables priority-4)
  * @param storage_path File path in profile (e.g., "home/.bashrc", must not be NULL)

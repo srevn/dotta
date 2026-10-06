@@ -74,8 +74,8 @@
  *
  * Layer: sys/. The module knows libgit2 and sys/gitops' signature, nothing of
  * mounts, content or dotta's vocabulary. Called by the commands that write trees
- * (add, update, bootstrap, ignore), by a profile's next commit — remove's and
- * revert's (core/profiles.h profile_stage_t) — by core/metadata's sheet writer,
+ * (add, bootstrap, ignore), by a profile's next commit — remove's, revert's and
+ * update's (core/profiles.h profile_stage_t) — by core/metadata's sheet writer,
  * by core/ignore — a .dottaignore put onto the stage its edit opened, and the
  * machine's baseline seeded on a stage of its own — and by infra/epoch's mint;
  * add alone creates an admission.
@@ -131,15 +131,15 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out);
 /**
  * The tree the stage opened at — the ref's own bytes at open
  *
- * Readers: the sheet loader (add, update); the profile add opens at it (cmds/add.c
- * cmd_add, through core/profiles.h profile_open), and the base of a profile's
- * next commit (core/profiles.c profile_stage_open), whose claims remove's arguments
- * are matched against and of which revert asks the branch as it stood — the claim
- * at a path, the entry at a name, a second name; and the file an edit session
- * opens on (cmds/ignore.c ignore_edit, ignore_modify), read from the tree the
- * session commits on. Never NULL: an orphan's stage stands on the empty tree,
- * and add — the one reader that opens one — reads it as a profile with nothing
- * in it yet, no entry and no sheet. Borrowed; valid until stage_free.
+ * Readers: the sheet loader (add); the profile add opens at it (cmds/add.c cmd_add,
+ * through core/profiles.h profile_open), and the base of a profile's next commit
+ * (core/profiles.c profile_stage_open), whose claims remove's arguments are matched
+ * against, of which revert asks the branch as it stood — the claim at a path,
+ * the entry at a name, a second name — and update a capture's prior; and the
+ * file an edit session opens on (cmds/ignore.c ignore_edit, ignore_modify), read
+ * from the tree the session commits on. Never NULL: an orphan's stage stands on
+ * the empty tree, and add — the one reader that opens one — reads it as a profile
+ * with nothing in it yet, no entry and no sheet. Borrowed; valid until stage_free.
  *
  * @param st Stage (must not be NULL)
  * @return The opened tree
@@ -280,9 +280,10 @@ void stage_admission_free(stage_admission_t *adm);
  * object (index.c index_insert) — then pointed at the blob the bytes became.
  * The blob is answered to the caller that asks, and only once the entry stands:
  * a refused put answers none, and wrote none. Readers: the captures that record
- * what they committed, cmds/add.c add_capture and cmds/update.c update_profile
- * — the id is their evidence of what the commit holds at the name, where the
- * branch, read after it, is another writer's to move.
+ * what they committed, cmds/add.c add_capture and core/profiles.c
+ * profile_stage_capture_file, whose claim carries the id to update's record —
+ * the id is their evidence of what the commit holds at the name, where the branch,
+ * read after it, is another writer's to move.
  *
  * @param st Stage (must not be NULL)
  * @param path Tree path (must not be NULL; canonical, see the header)

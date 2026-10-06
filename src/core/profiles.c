@@ -19,11 +19,14 @@
  * (profile_decode_directory). The counts and the need of a target are the walk,
  * folded (profile_counts, profile_needs_target). The next commit is a sys/stage,
  * the base — the profile at the tree the stage opened, its sheet read at the
- * open — and that sheet copied: a removal edits the stage and the copy; a restore
- * asks the base what stands in its way, puts its entry by id and writes its claim
- * and its way into the copy; the change test holds each document against the
- * one the stage opened; and the commit, where an edit moved either, prunes the
- * copy, saves it where its claims are no longer the base's and commits.
+ * open — and that sheet copied, in an arena of its own: a removal edits the stage
+ * and the copy; a capture authors its claim off the look, asks the base what
+ * stands in its way, puts its bytes and writes the claim into the copy, and the
+ * climb claims the way to a leaf off the disk; a restore asks the base the same,
+ * puts its entry by id and writes its claim and its way into the copy; the change
+ * test holds each document against the one the stage opened; and the commit,
+ * where an edit moved either, prunes the copy, saves it where its claims are no
+ * longer the base's and commits.
  */
 
 #include "core/profiles.h"
@@ -41,6 +44,7 @@
 #include "base/heap.h"
 #include "base/string.h"
 #include "core/metadata.h"
+#include "infra/content.h"
 #include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/gitops.h"
@@ -305,7 +309,9 @@ error_t profile_load_sheet(profile_t *profile) {
  * carries an opaque handle, and nothing is duplicated to outlive the walk.
  *
  * Readers: profile_step, at every blob the walk meets, and profile_find, at the
- * one it is asked — so the file claim a point question answers is the walk's.
+ * one it is asked — so the file claim a point question answers is the walk's;
+ * and profile_stage_capture_file, at the blob it put — so the claim a capture
+ * answers is the one the next walk shows there.
  *
  * @param path The claim's name, which the claim keeps (must not be NULL)
  * @param id The blob's id (must not be NULL)
@@ -369,8 +375,9 @@ static profile_claim_t profile_decode_blob(
  * whole footprint, and the claim's strings are the sheet's, which the handle keeps.
  *
  * Readers: profile_walk, at each directory claim that stands; profile_contradicted,
- * at each one a blob contradicts; and profile_find, at the one it is asked — so
- * the directory claim a point question answers is the walk's.
+ * at each one a blob contradicts; profile_find, at the one it is asked — so the
+ * directory claim a point question answers is the walk's; and
+ * profile_stage_capture_directory, at the item it wrote.
  *
  * @param item A DIRECTORY item (must not be NULL)
  * @return The claim, by value: a function of its item, which cannot fail
@@ -940,6 +947,7 @@ error_t profile_find(
 }
 
 struct profile_stage {
+    arena_t *arena;         /* Its own: the struct, and the names the climb spells */
     stage_t *stage;         /* The next tree, on the profile's branch */
     profile_t *base;        /* The profile at the tree it opened: never edited */
     metadata_t *sheet;      /* The base's sheet, copied: what the commit carries */
@@ -958,13 +966,16 @@ error_t profile_stage_open(git_repository *repo, const char *name, profile_stage
     error_t err = gitops_branch_refname(refname, sizeof(refname), name);
     if (err) return err;
 
-    /* The stage at its head, refused in gitops' words where none stands, and
-     * the base at the tree the stage opened, its sheet read now and strictly: a
-     * writer refuses a sheet that will not load before its preview. The struct
-     * holds each from its first allocation, so every failure releases through
-     * profile_stage_free, and the sheet's failure outlives the base that kept
-     * it (base/error.h "Lifetime") */
-    profile_stage_t *stage = heap_calloc(1, sizeof(*stage));
+    /* The stage in an arena of its own, made here and freed with it, as the profile
+     * handle stands in its own. Then the stage at its head, refused in gitops'
+     * words where none stands, and the base at the tree the stage opened, its
+     * sheet read now and strictly: a writer refuses a sheet that will not load
+     * before its preview. The struct holds each from its first allocation, so
+     * every failure releases through profile_stage_free, and the sheet's failure
+     * outlives the base that kept it (base/error.h "Lifetime") */
+    arena_t *arena = arena_create(0);
+    profile_stage_t *stage = arena_calloc(arena, 1, sizeof(*stage));
+    stage->arena = arena;
     err = stage_open(repo, refname, &stage->stage);
     if (!err) {
         stage->base = profile_open(name, stage_tree(stage->stage));
@@ -1041,7 +1052,8 @@ error_t profile_stage_remove(
  * and void after it, whatever this commit writes above it. Named by the first
  * such claim in the sheet's own order, so a sheet says one sentence on every run.
  *
- * Reader: profile_stage_restore_file, before its put.
+ * Readers: profile_stage_capture_file and profile_stage_restore_file, each before
+ * its put.
  *
  * @param stage The stage
  * @param storage_path The name a blob would stand at
@@ -1085,7 +1097,8 @@ static error_t profile_stage_refuse_beneath(
  * put pays one probe, and of the base, so a claim void before the commit — a
  * blob at its name or above it — is carried, and stands again once that blob goes.
  *
- * Reader: profile_stage_restore_file, after its put.
+ * Readers: profile_stage_capture_file and profile_stage_restore_file, each after
+ * its put.
  *
  * @param stage The stage
  * @param storage_path The name the blob was written at
@@ -1103,6 +1116,107 @@ static error_t profile_stage_convert(profile_stage_t *stage, const char *storage
 
     metadata_remove_item(stage->sheet, PATH_KIND_DIRECTORY, storage_path);
     return NULL;
+}
+
+error_t profile_stage_capture_file(
+    profile_stage_t *stage, const char *storage_path, const content_capture_t *capture,
+    arena_t *arena, profile_claim_t *out
+) {
+    CHECK_NULL(stage);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(capture);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    /* Every refusal before anything moves: the claim off the look first, which
+     * an owner this host cannot name refuses; then the admission's two halves,
+     * the sheet's and the tree's, the put asking the second of the index it writes
+     * and writing the blob only once it is admitted */
+    metadata_item_t *item = NULL;
+    git_oid blob;
+    error_t err = metadata_capture_file(storage_path, &capture->st, capture->encrypted, &item);
+    if (!err) err = profile_stage_refuse_beneath(stage, storage_path);
+    if (!err) {
+        err = stage_put(
+            stage->stage, storage_path, capture->bytes.data, capture->bytes.size,
+            capture->mode, &blob
+        );
+    }
+
+    /* Then the put rule at the name, whose one failure — a subtree of the base
+     * that will not load — leaves the put made, a stage its writer abandons */
+    if (!err) err = profile_stage_convert(stage, storage_path);
+    if (err) {
+        metadata_item_free(item);
+        return err;
+    }
+
+    /* The claim the commit now carries at the name, by the walk's own decode
+     * over the blob the put wrote and the item the look authored — none where
+     * it claims nothing — its names the caller's before the sheet takes the item:
+     * the record built from it is read past the stage */
+    profile_claim_t claim = profile_decode_blob(storage_path, &blob, capture->mode, item);
+    claim.owner = arena_strdup(arena, claim.owner);
+    claim.group = arena_strdup(arena, claim.group);
+
+    /* The claim at its own kind, by the sheet's rule that an item exists iff it
+     * claims something: the look's item, or the retire of the one standing */
+    if (item) {
+        metadata_add_item(stage->sheet, &item);
+    } else {
+        metadata_remove_item(stage->sheet, PATH_KIND_FILE, storage_path);
+    }
+
+    *out = claim;
+    return NULL;
+}
+
+error_t profile_stage_capture_directory(
+    profile_stage_t *stage, const char *storage_path, const struct stat *st,
+    arena_t *arena, profile_claim_t *out
+) {
+    CHECK_NULL(stage);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(st);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    /* The claim off the look, tracked: a writer captures only a directory the
+     * profile tracks. Its one refusal, an owner this host cannot name, comes
+     * before anything moves */
+    metadata_item_t *item = NULL;
+    error_t err = metadata_capture_directory(storage_path, st, true, &item);
+    if (err) return err;
+
+    /* The claim as the walk decodes it, its names the caller's and taken before
+     * the sheet takes the item: over a claim standing at the name, the sheet
+     * keeps its own key and frees the look's */
+    profile_claim_t claim = profile_decode_directory(item);
+    claim.storage_path = storage_path;
+    claim.owner = arena_strdup(arena, claim.owner);
+    claim.group = arena_strdup(arena, claim.group);
+
+    /* Its own kind, over the directory claim at the name whatever it said: a
+     * FILE item no blob backs there is the other kind's, and rides */
+    metadata_add_item(stage->sheet, &item);
+
+    *out = claim;
+    return NULL;
+}
+
+void profile_stage_capture_ancestors(
+    profile_stage_t *stage, const mount_table_t *mounts, const char *storage_path,
+    size_t *captured, string_array_t *retired
+) {
+    CHECK_NULL(stage);
+
+    /* The climb over the copy, its rungs spelled into the stage's arena and freed
+     * with the stage; the profile is the base's, whose bindings place a custom/
+     * rung */
+    metadata_capture_ancestors(
+        stage->sheet, mounts, profile_name(stage->base), storage_path, stage->arena,
+        captured, retired
+    );
 }
 
 /**
@@ -1241,10 +1355,15 @@ error_t profile_stage_changed(const profile_stage_t *stage, bool *out) {
 }
 
 error_t profile_stage_commit(
-    profile_stage_t *stage, const char *message, string_array_t *pruned
+    profile_stage_t *stage, const char *message, bool *out_committed,
+    string_array_t *pruned
 ) {
     CHECK_NULL(stage);
     CHECK_NULL(message);
+
+    /* No commit until the tree write answers one: every return before it says
+     * nothing was committed */
+    if (out_committed) *out_committed = false;
 
     /* Nothing an edit moved: nothing prunes, nothing is saved, nothing commits
      * — imported redundancy rides a commit and never drives one */
@@ -1271,19 +1390,21 @@ error_t profile_stage_commit(
         ? NULL : metadata_save_to_stage(stage->stage, stage->sheet);
     if (err) return err;
 
-    /* One commit, the tree and the sheet in one tree write: none where the tree
-     * is the one the stage opened, and a head another writer moved since the
-     * open is refused (sys/stage.h stage_commit) */
-    return stage_commit(stage->stage, message, NULL);
+    /* One commit, the tree and the sheet in one tree write, whether it landed
+     * the write's own answer: none where the tree is the one the stage opened,
+     * and a head another writer moved since the open is refused (sys/stage.h
+     * stage_commit) */
+    return stage_commit(stage->stage, message, out_committed);
 }
 
 void profile_stage_free(profile_stage_t *stage) {
     if (!stage) return;
 
     /* The copy; then the base, before the stage whose tree it borrows; then the
-     * stage, which undoes nothing in the repository (sys/stage.h stage_free) */
+     * stage, which undoes nothing in the repository (sys/stage.h stage_free);
+     * then the arena, the struct with it */
     metadata_free(stage->sheet);
     profile_free(stage->base);
     stage_free(stage->stage);
-    free(stage);
+    arena_free(stage->arena);
 }

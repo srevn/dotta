@@ -548,15 +548,22 @@ error_t content_require_encryption(
  * That free is the one in this tree that is not total, and the reason is that
  * the other three are values rather than resources, read by both callers past
  * it — the bytes go on the stage (bytes, mode), the claim is authored from the
- * look (core/metadata.h metadata_capture_file: st, encrypted) and the record is
- * bound to it (core/state.h state_stat_from_read: st). A free written to its
- * siblings' shape — `*capture = (content_capture_t){ 0 }`, as compare_diff_deinit
- * and gitops_blob_view_close are written — would leave both commands anchoring
- * a zero stat: a wrong record, with no crash.
+ * look (core/metadata.h metadata_capture_file: st, encrypted), add's by hand
+ * and update's by a profile's next commit (core/profiles.h
+ * profile_stage_capture_file), and the record is bound to it (core/state.h
+ * state_stat_from_read: st). A free written to its siblings' shape — `*capture
+ * = (content_capture_t){ 0 }`, as compare_diff_deinit and gitops_blob_view_close
+ * are written — would leave both commands anchoring a zero stat: a wrong record,
+ * with no crash.
  *
- * Readers: cmds/add.c add_capture, cmds/update.c update_profile.
+ * Tagged, so a header that takes it by pointer names it without this one
+ * (core/profiles.h).
+ *
+ * Readers: cmds/add.c add_capture, which puts it on its stage itself; and
+ * cmds/update.c update_profile, which hands it to a profile's next commit and
+ * keeps the look for its record.
  */
-typedef struct {
+typedef struct content_capture {
     buffer_t bytes;        /* What the entry holds: the bytes as read, sealed as told, a link's target */
     git_filemode_t mode;   /* Git's reading of the look: BLOB, BLOB_EXECUTABLE or LINK */
     bool encrypted;        /* What `bytes` classify as, as the entry they stand in; false for a link */

@@ -714,7 +714,9 @@ error_t metadata_capture_ancestors(
  * which folds the failure to UNVERIFIED and never to "no claims"), the completion's
  * offer through the profile's strict walk (core/profiles.h profile_walk, from
  * cmds/completion.c completion_directories, which drops the failure as every
- * completion source drops its own: cmds/completion.h), and the claims a profile's
+ * completion source drops its own: cmds/completion.h), remove's own directory
+ * offer the same way through its strict walk and profile_contradicted
+ * (core/profiles.h, from cmds/remove.c remove_complete), and the claims a profile's
  * deletion takes, whose paths its hooks are handed, through the profile's tolerant
  * walk and profile_contradicted (core/profiles.h, from cmds/remove.c
  * remove_profile, through remove_list_claims; the profile goes all the same,

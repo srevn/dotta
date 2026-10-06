@@ -23,10 +23,13 @@
  *
  * The sources print newline-separated candidates to a stream, one authority each:
  * a source reads the enabled set, the view, Git, or the filesystem, never a blend
- * — a hook composes sources, the library names them. One state read or one view
- * build, never a workspace load. The filesystem source asks the enabled set for
- * the root it lists under — the one the command reads its arguments under — and
- * never for the paths, which are the disk's alone (completion_paths_under).
+ * — a hook composes sources, the library names them. A verb whose own argument
+ * rule decides which of a profile's claims its names reach offers those beside
+ * the library's sources, under that rule (cmds/remove.c remove_complete). One
+ * state read or one view build, never a workspace load. The filesystem source
+ * asks the enabled set for the root it lists under — the one the command reads
+ * its arguments under — and never for the paths, which are the disk's alone
+ * (completion_paths_under).
  */
 
 #ifndef DOTTA_CMD_COMPLETION_H
@@ -76,9 +79,9 @@ void completion_files(
 
 /**
  * A profile's directory claims, as its walk decodes them rather than as the view
- * places them — the companion of completion_refspecs' pinned form for the verbs
- * that act on a profile's claims (remove untracks them, export materializes them):
- * bare slash-marked paths, the profile as description. An
+ * places them — the companion of completion_refspecs' pinned form for export,
+ * which materializes a profile's claims: bare slash-marked paths, the profile
+ * as description. An
  * empty tracked directory (no tree entry) is exactly as offerable as the rest;
  * a claim a blob contradicts at its own name is none (core/profiles.h
  * profile_walk), and is not offered.

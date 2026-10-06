@@ -248,8 +248,9 @@ profile_t *profile_open(const char *name, const git_tree *tree);
  * target — cmds/profile.c profile_list and profile_enable, cmds/clone.c cmd_clone,
  * cmds/interactive.c read_targets; what a profile's deletion takes, every claim
  * for its hooks and the counts for its preview (cmds/remove.c remove_profile);
- * and the directory claims a completion offers at a profile's head
- * (cmds/completion.c completion_directories).
+ * and the directory claims a completion offers at a profile's head — export's
+ * (cmds/completion.c completion_directories) and remove's own (cmds/remove.c
+ * remove_complete).
  *
  * @param repo Repository (must not be NULL; borrowed)
  * @param name The profile's name, which its branch is named by (must not be NULL;
@@ -354,8 +355,10 @@ typedef error_t (*profile_visit_fn)(const profile_claim_t *claim, void *payload)
  * export's whole and name arms, read TOLERANT, the second keeping the claims
  * beneath its name (cmds/export.c export_collect_profile and
  * export_collect_storage, through export_collect_claim); the directory claims a
- * completion offers (cmds/completion.c completion_directories, through
- * completion_offer_directory); and every claim the profile makes, before
+ * completion offers export (cmds/completion.c completion_directories, through
+ * completion_offer_directory), and those remove's own names would take, before
+ * profile_contradicted's (cmds/remove.c remove_complete, through
+ * remove_offer_directory); and every claim the profile makes, before
  * profile_contradicted's, through one visitor — the universe a removal's arguments
  * are matched against, read STRICT, and every claim a deletion takes, read TOLERANT
  * (cmds/remove.c remove_list_claims, through remove_collect_claim, for
@@ -397,7 +400,9 @@ error_t profile_walk(
  * visitor — the universe a removal's arguments are matched against, read STRICT,
  * and every claim a deletion takes, read TOLERANT (cmds/remove.c
  * remove_list_claims, through remove_collect_claim, for remove_resolve and
- * remove_profile).
+ * remove_profile); and the directory claims remove's own names would take, read
+ * STRICT after the walk (cmds/remove.c remove_complete, through
+ * remove_offer_directory).
  *
  * @param profile Handle (must not be NULL); its sheet read through it
  * @param read The sheet's policy for this question
@@ -591,17 +596,19 @@ typedef struct {
  * Readers: the verbs that act on one name — cmds/show.c show_file, cmds/list.c
  * list_file_history (the history's pre-check), cmds/revert.c revert_target_entry
  * — the search by name across the local profiles (cmds/revert.c
- * revert_select_profile), and export's name arm, which words a copy with nothing
- * in it by what stands at the name (cmds/export.c export_collect_storage). A
- * reader not on this list is a bug. Two neighbours ask another question and are
- * not readers: revert's read of the head at the name it writes (cmds/revert.c
- * cmd_revert, step 11) asks Git's one-entry rule, which the sheet must not answer
- * — a directory claim there is retired by the write, not refused; and the orphan
- * probe (core/workspace.c workspace_orphan_authority) asks whether the profile
- * holds the claim a record remembers, which a subtree and a gitlink stand at a
- * name without making — profile_find's directory claim for a directory record,
- * and for a file record the tree alone, Git's one-entry rule again — and folds
- * every failure to UNVERIFIED.
+ * revert_select_profile), export's name arm, which words a copy with nothing in
+ * it by what stands at the name (cmds/export.c export_collect_storage), and
+ * remove's directory offer, which offers a claim where no blob stands at its
+ * name (cmds/remove.c remove_offer_directory). A reader not on this list is a
+ * bug. Two neighbours ask another question and are not readers: revert's read
+ * of the head at the name it writes (cmds/revert.c cmd_revert, step 11) asks
+ * Git's one-entry rule, which the sheet must not answer — a directory claim there
+ * is retired by the write, not refused; and the orphan probe (core/workspace.c
+ * workspace_orphan_authority) asks whether the profile holds the claim a record
+ * remembers, which a subtree and a gitlink stand at a name without making —
+ * profile_find's directory claim for a directory record, and for a file record
+ * the tree alone, Git's one-entry rule again — and folds every failure to
+ * UNVERIFIED.
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
  *                tree is silent

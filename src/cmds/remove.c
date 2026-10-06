@@ -1926,11 +1926,51 @@ static error_t remove_post_parse(
 }
 
 /**
+ * A directory offer: where its candidates go, and whose claims it asks
+ */
+typedef struct {
+    FILE *out;
+    profile_t *profile;   /* Asked of each claim's name; its name each description */
+} remove_offer_t;
+
+/**
+ * Walk visitor: a directory claim offered where its own name would take it —
+ * where no blob stands at that name (remove_resolve). A file claim is the refspecs'
+ * to offer (cmds/completion.h completion_refspecs).
+ *
+ * @param claim One claim, decoded (borrowed — valid for the call only)
+ * @param payload The offer (remove_offer_t)
+ * @return NULL, or the question's failure, which ends the offer
+ */
+static error_t remove_offer_directory(const profile_claim_t *claim, void *payload) {
+    const remove_offer_t *offer = payload;
+
+    if (claim->type != PATH_TYPE_DIRECTORY) return NULL;
+
+    /* Whether a blob stands at the claim's own name, where an argument naming
+     * it would name the blob and take the blob alone. Asked of the name, never
+     * read off which walk showed the claim, so the offer holds wherever the
+     * classification draws its line: a claim beneath a blob is its own name's
+     * to take, one at a blob's name is not. A gitlink's name names no blob. */
+    profile_held_t held;
+    error_t err = profile_holds(offer->profile, claim->storage_path, &held);
+    if (err) return err;
+    if (held.kind != PROFILE_HELD_FILE) {
+        fprintf(
+            offer->out, "%s/\t%s\n",
+            claim->storage_path, profile_name(offer->profile)
+        );
+    }
+
+    return NULL;
+}
+
+/**
  * What can stand at the cursor, read off the buckets remove_post_parse routes:
  * a local profile in the profile slot — the first positional, unless -p took it
  * — then the claims of that profile, shadowed and disabled ones included: its
- * files, and its directory claims slash-marked; nothing after --delete-profile,
- * which takes no path.
+ * files, and the directory claims its own names would take, slash-marked; nothing
+ * after --delete-profile, which takes no path.
  */
 static args_want_t remove_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1953,12 +1993,31 @@ static args_want_t remove_complete(
     if (o->delete_profile) {
         return ARGS_WANT_NONE;
     }
-    completion_refspecs(
-        ctx, out, o->profile ? o->profile : o->positional_args[0]
-    );
-    completion_directories(
-        ctx, out, o->profile ? o->profile : o->positional_args[0]
-    );
+    const char *pinned = o->profile ? o->profile : o->positional_args[0];
+    completion_refspecs(ctx, out, pinned);
+
+    /* The directory claims, remove's own offer: every claim the profile makes
+     * at its head — the walk's, then those its tree contradicts — asked whether
+     * its own name would take it (remove_offer_directory), so the offer is the
+     * rule's and not where the classification draws its line. Read strictly:
+     * the claims are the sheet's, so a sheet that will not load offers none either
+     * way. None outside a repository, and every failure dropped, as every
+     * completion source drops its own (cmds/completion.h) */
+    if (ctx->run.repo == NULL) return ARGS_WANT_NONE;
+    remove_offer_t offer = { .out = out };
+    error_t err = profile_load(ctx->run.repo, pinned, &offer.profile);
+    if (!err) {
+        err = profile_walk(
+            offer.profile, PROFILE_READ_STRICT, remove_offer_directory, &offer
+        );
+    }
+    if (!err) {
+        (void) profile_contradicted(
+            offer.profile, PROFILE_READ_STRICT, remove_offer_directory, &offer
+        );
+    }
+    profile_free(offer.profile);
+
     return ARGS_WANT_NONE;
 }
 

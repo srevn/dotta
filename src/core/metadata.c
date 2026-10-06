@@ -749,10 +749,10 @@ error_t metadata_capture_directory(
     CHECK_NULL(st);
     CHECK_NULL(out);
 
-    /* Verify it's actually a directory */
-    if (!S_ISDIR(st->st_mode)) {
-        return error_create(ERR_INVALID_ARG, "Path is not a directory: '%s'", storage_path);
-    }
+    /* The kind the caller established, asked once more as a contract and not as
+     * a refusal: every caller held its look to a directory first (the header),
+     * so a file, a link or anything else is a caller's error. */
+    CHECK_ARG(S_ISDIR(st->st_mode), "st must be a directory's");
 
     /* Create directory item via factory, its mode the stat's permission bits */
     mode_t mode = st->st_mode & 0777;
@@ -780,6 +780,8 @@ error_t metadata_capture_directory(
  * it found it.
  *
  * `tracked` is false throughout: this rule authors derivations, never intent.
+ * And it cannot fail: every answer the disk gives is one of the three, and the
+ * one the capture refuses is the silence of the third.
  *
  * @param metadata The sheet to author into (must not be NULL; mutated)
  * @param mounts The table the rung's name resolves through (must not be NULL)
@@ -788,9 +790,8 @@ error_t metadata_capture_directory(
  * @param arena Arena the rung's path is spelled into (must not be NULL)
  * @param captured Incremented when the rung's claim moved (must not be NULL)
  * @param retired Receives the key when the rung's claim goes (must not be NULL)
- * @return Error or NULL on success
  */
-static error_t metadata_capture_rung(
+static void metadata_capture_rung(
     metadata_t *metadata, const mount_table_t *mounts, const char *profile,
     const char *storage_path, arena_t *arena, size_t *captured,
     string_array_t *retired
@@ -807,7 +808,7 @@ static error_t metadata_capture_rung(
     const metadata_item_t *held = metadata_find_item(
         metadata, PATH_KIND_DIRECTORY, storage_path
     );
-    if (held && held->tracked) return NULL;
+    if (held && held->tracked) return;
 
     /* Where the rung stands is where its own name resolves. The climb carries
      * one string, not a pair that must agree: a resolve is a root's spelling
@@ -820,7 +821,7 @@ static error_t metadata_capture_rung(
 
     /* A rung this machine cannot place — an unbound custom/ name — has no answer
      * to give, the same silence as a rung nothing stands at. */
-    if (!filesystem_path) return NULL;
+    if (!filesystem_path) return;
 
     struct stat st;
     fs_occupant_t occupant = fs_lstat_occupant(filesystem_path, &st);
@@ -829,7 +830,7 @@ static error_t metadata_capture_rung(
      * and no answer is not an answer of "no". A chain the world moved under between
      * the leaf's capture and this climb keeps the claims it already had. */
     if (occupant == FS_OCCUPANT_NONE || occupant == FS_OCCUPANT_UNKNOWN) {
-        return NULL;
+        return;
     }
 
     /* Something stands here that is not a directory, so the profile passes through
@@ -845,22 +846,18 @@ static error_t metadata_capture_rung(
         if (metadata_remove_item(metadata, PATH_KIND_DIRECTORY, storage_path)) {
             string_array_push(retired, storage_path);
         }
-        return NULL;
+        return;
     }
 
+    /* A directory stands, the look's own kind, so the capture's one refusal is
+     * a name this host cannot spell (metadata_capture_directory) — the same silence
+     * as a path it cannot see: a directory capture that fails loses a claim and
+     * nothing else, so the rung keeps what it had and dotta creates it as it
+     * would have before. Its error is dropped — one per such rung, per leaf climbed
+     * through it. */
     metadata_item_t *item = NULL;
     error_t err = metadata_capture_directory(storage_path, &st, false, &item);
-    if (err) {
-        /* A name this host cannot spell is the same silence as a path it cannot
-         * see: a directory capture that fails loses a claim and nothing else,
-         * so the rung keeps what it had and dotta creates it as it would have
-         * before. Its error is dropped — one per such rung, per leaf climbed
-         * through it. */
-        if (error_code(err) != ERR_NOT_FOUND) {
-            return err;
-        }
-        return NULL;
-    }
+    if (err) return;
 
     /* A re-derivation that found nothing new authors nothing: the standing claim
      * keeps its place, so nothing is counted and the caller's commit gate never
@@ -871,14 +868,12 @@ static error_t metadata_capture_rung(
         str_equal(held->owner, item->owner) &&
         str_equal(held->group, item->group)) {
         metadata_item_free(item);
-        return NULL;
+        return;
     }
 
     metadata_add_item(metadata, &item);
 
     (*captured)++;
-
-    return NULL;
 }
 
 /**
@@ -886,7 +881,7 @@ static error_t metadata_capture_rung(
  *
  * The climb: this names every rung, metadata_capture_rung decides each one.
  */
-error_t metadata_capture_ancestors(
+void metadata_capture_ancestors(
     metadata_t *metadata, const mount_table_t *mounts, const char *profile,
     const char *storage_path, arena_t *arena, size_t *captured,
     string_array_t *retired
@@ -903,7 +898,7 @@ error_t metadata_capture_ancestors(
      * by where the scan starts and the leaf by where it ends — arithmetic, not
      * a special case — so a path directly beneath a mount root climbs nowhere. */
     const char *first = strchr(label_tail(storage_path), '/');
-    if (!first) return NULL;
+    if (!first) return;
 
     /* Every rung is a prefix of the leaf's own name, so one copy spells them
      * all: each separator truncates it in place and is restored before the next
@@ -917,14 +912,9 @@ error_t metadata_capture_ancestors(
         size_t cut = (size_t) (sep - storage_path);
 
         rung[cut] = '\0';
-        error_t err = metadata_capture_rung(
-            metadata, mounts, profile, rung, arena, captured, retired
-        );
+        metadata_capture_rung(metadata, mounts, profile, rung, arena, captured, retired);
         rung[cut] = '/';
-        if (err) return err;
     }
-
-    return NULL;
 }
 
 /**

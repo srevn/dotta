@@ -2387,11 +2387,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         for (size_t i = 0; i < chains[b]->count; i++) {
             const path_t *path = chains[b]->entries[i];
 
-            err = metadata_capture_ancestors(
+            metadata_capture_ancestors(
                 metadata, mounts, opts->profile, path->claim.storage_path, ctx->arena,
                 &ancestors_captured, &ancestry_retired
             );
-            if (err) goto cleanup;
         }
     }
     if (ancestors_captured > 0) {

@@ -625,11 +625,18 @@ error_t metadata_capture_file(
  * group this host has no name for is ERR_NOT_FOUND — the lookup's absence or
  * its failure alike, the claim unmakeable either way — and a derivation reads
  * it (core/metadata.c metadata_capture_rung): its rung keeps the claim it had,
- * as it does for a path it could not look at.
+ * as it does for a path it could not look at. That is the one refusal.
+ *
+ * `st` is a directory's, and nothing else — the kind is the caller's to have
+ * established, and every caller holds its look to one first: add's directory
+ * loop and update's, each an lstat and S_ISDIR (cmds/add.c cmd_add, cmds/update.c
+ * update_profile), and the climb's rung, a look that found a directory
+ * (core/metadata.c metadata_capture_rung). A stat of any other kind is a contract
+ * breach and reads as one, not as a refusal with a remedy.
  *
  * @param storage_path Storage path in profile (must not be NULL, e.g.,
  *                     "home/.config/nvim")
- * @param st Directory stat data (must not be NULL)
+ * @param st Directory stat data (must not be NULL; a directory's)
  * @param tracked The profile tracks the directory itself
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
@@ -685,8 +692,10 @@ error_t metadata_capture_directory(
  * report, while a claim retired leaves the view by the caller's commit and its
  * record behind — and only the key names that.
  *
- * Idempotent, and total over the chain: no rung stops the climb. O(depth) resolves
- * and lstats per call; the callers pay it once per captured leaf.
+ * Idempotent, and total over the chain: no rung stops the climb, and nothing
+ * fails it — a rung the disk does not answer, and one whose owner this host cannot
+ * name, are the same silence. O(depth) resolves and lstats per call; the callers
+ * pay it once per captured leaf.
  *
  * @param metadata The sheet to author into (must not be NULL; mutated)
  * @param mounts The table these names were made under, so that a rung resolves
@@ -700,9 +709,8 @@ error_t metadata_capture_directory(
  *                 to (must not be NULL)
  * @param retired Keys this call retired, appended as copies in the array's arena
  *                (must not be NULL; given its arena by string_array_init)
- * @return Error or NULL on success
  */
-error_t metadata_capture_ancestors(
+void metadata_capture_ancestors(
     metadata_t *metadata,
     const mount_table_t *mounts,
     const char *profile,

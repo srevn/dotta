@@ -710,11 +710,10 @@ static error_t update_profile(
      * route's displaced arms), whichever profile's claim the squatter displaced,
      * so a chain that reaches here holds directories at every claimed rung. */
     for (size_t i = 0; i < commit->captured_count; i++) {
-        err = metadata_capture_ancestors(
+        metadata_capture_ancestors(
             metadata, ctx->run.mounts, profile, commit->captured[i].storage_path,
             ctx->arena, &commit->claimed, &commit->retired
         );
-        if (err) goto cleanup;
     }
 
     /* A named path re-derives its subtree's chains: the rows the caller gathered
@@ -724,11 +723,10 @@ static error_t update_profile(
      * named one can, and naming it is the remedy). A row the walk also captured
      * climbs twice for free: the derivation counts only differences. */
     for (size_t i = 0; i < rows.count; i++) {
-        err = metadata_capture_ancestors(
+        metadata_capture_ancestors(
             metadata, ctx->run.mounts, profile, rows.entries[i]->storage_path, ctx->arena,
             &commit->claimed, &commit->retired
         );
-        if (err) goto cleanup;
     }
 
     if (commit->claimed > 0) {

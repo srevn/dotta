@@ -76,20 +76,23 @@ typedef struct {
  * The operation:
  * 1. Discovers which profile holds the argument (requires --profile if ambiguous)
  * 2. Resolves commit reference in profile branch history
- * 3. Reads both entries — the commit's, which must be a blob, and the branch
- *    head's, which may be absent — the restored blob's own bytes, and the claims
- *    both sheets record at the two names
+ * 3. Opens the profile's next commit at its head (core/profiles.h profile_stage_t),
+ *    and reads the claim the commit holds — a blob's, decoded — what the head's
+ *    tree holds at the name the write uses, which may be nothing, and the restored
+ *    blob's own bytes
  * 4. Refuses a typed name that would be the profile's second for one path
- * 5. Answers "nothing to do" when that whole write already stands
- * 6. Puts the entry on the stage — the write's own admission, made here so that
- *    a tree that cannot hold it refuses before the preview and not after the
- *    prompt; no object is written by it. The sheet is asked first, since a
- *    directory the profile claims and nothing fills has no entry for the index
- *    to find and a blob above one leaves it nowhere to stand
+ * 5. Restores the claim onto the profile's next commit — the write's own admission,
+ *    made here so that a commit that cannot hold it refuses before the preview
+ *    and not after the prompt: the sheet first, since a directory the profile
+ *    claims and nothing fills has no entry for the index to find and a blob above
+ *    one leaves it nowhere to stand, then the tree. The entry is put at its id
+ *    and no object is written; the claim goes beside it, and the directory claims
+ *    the file stood on at the commit wherever the head holds nothing
+ * 6. Answers "nothing to do" when the restore moved neither document
  * 7. Shows the preview (restored / diff / mode and ownership only), naming the
  *    commit's own name for the file wherever it differs
  * 8. Prompts for confirmation (unless --force)
- * 9. Creates one commit with the restored blob and the merged metadata
+ * 9. Creates one commit: the restored blob, its claim and its way
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

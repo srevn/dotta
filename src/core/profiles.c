@@ -19,9 +19,11 @@
  * (profile_decode_directory). The counts and the need of a target are the walk,
  * folded (profile_counts, profile_needs_target). The next commit is a sys/stage,
  * the base — the profile at the tree the stage opened, its sheet read at the
- * open — and that sheet copied: a removal edits the stage and the copy, and the
- * commit prunes the copy, saves it where its claims are no longer the base's
- * and commits.
+ * open — and that sheet copied: a removal edits the stage and the copy; a restore
+ * asks the base what stands in its way, puts its entry by id and writes its claim
+ * and its way into the copy; the change test holds each document against the
+ * one the stage opened; and the commit, where an edit moved either, prunes the
+ * copy, saves it where its claims are no longer the base's and commits.
  */
 
 #include "core/profiles.h"
@@ -398,8 +400,10 @@ static profile_claim_t profile_decode_directory(const metadata_item_t *item) {
  * is a tree at every rung, itself included, stands. The label's word is a rung
  * like any other: a blob at `home` contradicts every home/ claim.
  *
- * Readers: profile_walk and profile_contradicted, at each DIRECTORY item; and
- * profile_directory_item, for the point questions.
+ * Readers: profile_walk and profile_contradicted, at each DIRECTORY item;
+ * profile_directory_item, for the point questions; and a profile's next commit,
+ * whose admission and put rule ask the base (profile_stage_refuse_beneath,
+ * profile_stage_convert).
  *
  * @param profile Handle
  * @param storage_path A validated storage path
@@ -1024,12 +1028,229 @@ error_t profile_stage_remove(
     CHECK_ARG(false, "a path kind no enumerator names");
 }
 
+/**
+ * The sheet's half of the admission at `storage_path`: refused where a tracked
+ * directory claim the commit carries stands strictly beneath the name, one the
+ * base does not contradict
+ *
+ * The copy is the state: a claim this commit removed, or one a blob's put took
+ * the place of, answers nothing, and nothing beside the sheet says so. A derived
+ * claim is not asked — what anchors it refuses on its own, a tracked claim here
+ * or an entry the tree's half finds, and the prune takes one nothing anchors —
+ * nor is one a blob in the base stands at or above, a claim void before the commit
+ * and void after it, whatever this commit writes above it. Named by the first
+ * such claim in the sheet's own order, so a sheet says one sentence on every run.
+ *
+ * Reader: profile_stage_restore_file, before its put.
+ *
+ * @param stage The stage
+ * @param storage_path The name a blob would stand at
+ * @return The refusal, ERR_CONFLICT naming the claim; the classification's failure,
+ *         a subtree of the base that will not load; or NULL
+ */
+static error_t profile_stage_refuse_beneath(
+    const profile_stage_t *stage, const char *storage_path
+) {
+    const metadata_items_t directories = metadata_items(stage->sheet, PATH_KIND_DIRECTORY);
+    const size_t len = strlen(storage_path);
+
+    for (size_t i = 0; i < directories.count; i++) {
+        /* A tracked claim strictly beneath the name: one at the name is the put
+         * rule's, and one above it the way every path has */
+        const metadata_item_t *dir = directories.entries[i];
+        if (!dir->tracked || !str_path_beneath(dir->key, storage_path, len)) continue;
+
+        /* As the base classifies it (profile_blob_above): a claim a blob in the
+         * base stands at or above claims nothing, and is in nothing's way */
+        size_t above = 0;
+        error_t err = profile_blob_above(stage->base, dir->key, &above);
+        if (err) return err;
+        if (above > 0) continue;
+
+        return error_create(
+            ERR_CONFLICT, "Cannot stage '%s': '%s' is a directory profile '%s' "
+            "claims beneath it", storage_path, dir->key, stage->base->name
+        );
+    }
+
+    return NULL;
+}
+
+/**
+ * The put rule for a blob written at `storage_path`: a directory claim standing
+ * there gives way, and one the base contradicts rides the write
+ *
+ * The one write across kinds (core/metadata.h): a blob leaves a directory claim
+ * at its name no room. Asked only where the copy holds such a claim, so an ordinary
+ * put pays one probe, and of the base, so a claim void before the commit — a
+ * blob at its name or above it — is carried, and stands again once that blob goes.
+ *
+ * Reader: profile_stage_restore_file, after its put.
+ *
+ * @param stage The stage
+ * @param storage_path The name the blob was written at
+ * @return Error or NULL on success: the classification's, a subtree of the base
+ *         that will not load
+ */
+static error_t profile_stage_convert(profile_stage_t *stage, const char *storage_path) {
+    if (!metadata_find_item(stage->sheet, PATH_KIND_DIRECTORY, storage_path)) return NULL;
+
+    /* As the base classifies it (profile_blob_above): a blob there contradicts
+     * the claim, which rides the write */
+    size_t above = 0;
+    error_t err = profile_blob_above(stage->base, storage_path, &above);
+    if (err || above > 0) return err;
+
+    metadata_remove_item(stage->sheet, PATH_KIND_DIRECTORY, storage_path);
+    return NULL;
+}
+
+/**
+ * The way a restored file stood on at the commit it came from
+ *
+ * Each rung of `storage_path` — a separator of its label's tail, the word and
+ * the leaf excluded, as the climb names them (core/metadata.h
+ * metadata_capture_ancestors) — paired from the leaf with a rung of
+ * `from_storage_path`: both names place one path, so their tails end alike, and
+ * the pairing ends where either runs out. Each rung is decided alone, since the
+ * base may hold a rung by a sheet claim with nothing above it. A rung the base
+ * holds anything at is the base's word on that directory, kept as it stands; at
+ * one it holds nothing at, `from`'s directory claim at the pair is written,
+ * derived. No disk read: the commit is the source.
+ *
+ * Asked after the put, of the base, which the restore edited at the leaf alone:
+ * the put admitted, no blob stands at or above any rung, so every claim at a
+ * rung stands, and a claim written there replaces none the base contradicts.
+ *
+ * Reader: profile_stage_restore_file.
+ *
+ * @param stage The stage
+ * @param from The profile at the commit
+ * @param from_storage_path The commit's name for the file
+ * @param storage_path The name the restore writes
+ * @return Error or NULL on success: a subtree that will not load, in either tree
+ */
+static error_t profile_stage_restore_ancestors(
+    profile_stage_t *stage, profile_t *from, const char *from_storage_path,
+    const char *storage_path
+) {
+    /* Each name copied once and cut from the leaf in step, a rung of each at
+     * every cut: a name is read past its label's word alone (infra/label.h
+     * label_tail), so the word is never a rung */
+    char *rung = heap_strdup(storage_path);
+    char *pair = heap_strdup(from_storage_path);
+    error_t err = NULL;
+
+    for (;;) {
+        /* The next rung of each name, at its last separator left; a name with
+         * none left ends the pairing */
+        char *rung_cut = strrchr(label_tail(rung), '/');
+        char *pair_cut = strrchr(label_tail(pair), '/');
+        if (!rung_cut || !pair_cut) break;
+        *rung_cut = '\0';
+        *pair_cut = '\0';
+
+        /* A rung the base holds anything at — a subtree, a gitlink, a standing
+         * directory claim — is the base's, by the namespace's own question, the
+         * one every reader asks there (profile_holds) */
+        profile_held_t held;
+        err = profile_holds(stage->base, rung, &held);
+        if (err) break;
+        if (held.kind != PROFILE_HELD_NOTHING) continue;
+
+        /* The commit's claim at the pair, as its walk shows it — none where the
+         * commit claimed none there — restored derived: the restore brings a
+         * file's way, never a directory's tracking. A FILE item no blob backs
+         * at the rung is the other kind's, and stays beside it */
+        const profile_claim_t *claim = NULL;
+        err = profile_find(from, PROFILE_READ_STRICT, PATH_KIND_DIRECTORY, pair, &claim);
+        if (err) break;
+        if (!claim) continue;
+
+        metadata_item_t *item = metadata_item_create_directory(rung, claim->mode, false);
+        item->owner = heap_strdup(claim->owner);
+        item->group = heap_strdup(claim->group);
+        metadata_add_item(stage->sheet, &item);
+    }
+
+    free(rung);
+    free(pair);
+
+    return err;
+}
+
+error_t profile_stage_restore_file(
+    profile_stage_t *stage, const profile_claim_t *claim, profile_t *from,
+    const char *from_storage_path
+) {
+    CHECK_NULL(stage);
+    CHECK_NULL(claim);
+    CHECK_NULL(from);
+    CHECK_NULL(from_storage_path);
+
+    /* The admission's two halves, each refusing before anything moves: the sheet's,
+     * then the tree's, which the put asks of the index it writes — the entry at
+     * its id, an object the ODB holds by the commit, so nothing is written here */
+    error_t err = profile_stage_refuse_beneath(stage, claim->storage_path);
+    if (!err) {
+        err = stage_put_blob(
+            stage->stage, claim->storage_path, &claim->blob_oid,
+            gitops_type_filemode(claim->type)
+        );
+    }
+
+    /* Then the put rule at the name, and the way the commit stood the file on */
+    if (!err) err = profile_stage_convert(stage, claim->storage_path);
+    if (!err) {
+        err = profile_stage_restore_ancestors(
+            stage, from, from_storage_path, claim->storage_path
+        );
+    }
+    if (err) return err;
+
+    /* The claim at its own kind, by the sheet's rule that an item exists iff it
+     * claims something: one of no mode, owner or group — a link the commit records
+     * no ownership for — retires the item standing at the name */
+    if (claim->mode == MODE_UNCLAIMED && !claim->owner && !claim->group) {
+        metadata_remove_item(stage->sheet, PATH_KIND_FILE, claim->storage_path);
+        return NULL;
+    }
+
+    metadata_item_t *item = metadata_item_create_file(
+        claim->storage_path, claim->mode, claim->encrypted
+    );
+    item->owner = heap_strdup(claim->owner);
+    item->group = heap_strdup(claim->group);
+    metadata_add_item(stage->sheet, &item);
+
+    return NULL;
+}
+
+error_t profile_stage_changed(const profile_stage_t *stage, bool *out) {
+    CHECK_NULL(stage);
+    CHECK_NULL(out);
+
+    /* Each document against the one the stage opened, by its owner: the sheet
+     * claim by claim, which reads nothing; then the tree, entry by entry */
+    if (!metadata_same(stage->sheet, stage->base->sheet)) {
+        *out = true;
+        return NULL;
+    }
+
+    return stage_changed(stage->stage, out);
+}
+
 error_t profile_stage_commit(
     profile_stage_t *stage, const char *message, string_array_t *pruned
 ) {
     CHECK_NULL(stage);
     CHECK_NULL(message);
-    CHECK_NULL(pruned);
+
+    /* Nothing an edit moved: nothing prunes, nothing is saved, nothing commits
+     * — imported redundancy rides a commit and never drives one */
+    bool changed = false;
+    error_t err = profile_stage_changed(stage, &changed);
+    if (err || !changed) return err;
 
     /* The prune, against the stage's index — the tree the commit will record,
      * the removed file claims gone from it (the judge's own contract,
@@ -1037,8 +1258,9 @@ error_t profile_stage_commit(
      * derived claim above it with nothing tracked beneath. The index answers
      * that for every path a tree can hold — never the sheet's items, which omit
      * unelevated symlinks — and the copy's own tracked claims answer it for the
-     * one path it cannot, an empty directory. */
-    error_t err = metadata_prune_ancestors(stage->sheet, stage_index(stage->stage), pruned);
+     * one path it cannot, an empty directory. Its keys are handed back where
+     * the writer keeps them, for its record phase. */
+    err = metadata_prune_ancestors(stage->sheet, stage_index(stage->stage), pruned);
     if (err) return err;
 
     /* The sheet, saved only where its claims are no longer the base's: a commit

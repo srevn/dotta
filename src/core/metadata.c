@@ -94,6 +94,32 @@ metadata_t *metadata_create_empty(void) {
 }
 
 /**
+ * The same claim, deep-copied
+ *
+ * Every field travels — kind, key, mode, ownership and the two flags — and the
+ * copy owns its three strings, an absent name copied as absent.
+ *
+ * Reader: metadata_clone, item by item.
+ *
+ * @param source The item to copy (must not be NULL)
+ * @return The copy (caller frees with metadata_item_free)
+ */
+static metadata_item_t *metadata_item_clone(const metadata_item_t *source) {
+    metadata_item_t *item = heap_calloc(1, sizeof(metadata_item_t));
+
+    /* Everything that is not a pointer copies wholesale — kind, mode and the
+     * two flags, so a field added later needs no line here. The three strings
+     * are then owned here: the key, and the two ownership names the source carries,
+     * an absent one copied as absent. */
+    *item = *source;
+    item->key = heap_strdup(source->key);
+    item->owner = heap_strdup(source->owner);
+    item->group = heap_strdup(source->group);
+
+    return item;
+}
+
+/**
  * A copy of the sheet
  *
  * Each item cloned under its own key and handed to a sheet of the copy's own,
@@ -108,9 +134,7 @@ metadata_t *metadata_clone(const metadata_t *metadata) {
     const metadata_claims_t *claims[] = { &metadata->files, &metadata->directories };
     for (size_t k = 0; k < sizeof(claims) / sizeof(claims[0]); k++) {
         for (size_t i = 0; i < claims[k]->count; i++) {
-            metadata_item_t *item = metadata_item_clone(
-                claims[k]->entries[i], claims[k]->entries[i]->key
-            );
+            metadata_item_t *item = metadata_item_clone(claims[k]->entries[i]);
             metadata_add_item(copy, &item);
         }
     }
@@ -201,30 +225,6 @@ metadata_item_t *metadata_item_create_directory(
     item->group = NULL;      /* Optional, set by caller if needed */
     item->encrypted = false; /* A directory has no blob to stamp */
     item->tracked = tracked;
-
-    return item;
-}
-
-/**
- * Clone a claim under the name it is being written to
- */
-metadata_item_t *metadata_item_clone(
-    const metadata_item_t *source,
-    const char *storage_path
-) {
-    CHECK_NULL(source);
-    CHECK_NULL(storage_path);
-
-    metadata_item_t *item = heap_calloc(1, sizeof(metadata_item_t));
-
-    /* Everything that is not a pointer copies wholesale — kind, mode and the
-     * two flags, so a field added later needs no line here. The three strings
-     * are then owned here: the key the caller named, and the two ownership names
-     * the source carries, an absent one copied as absent. */
-    *item = *source;
-    item->key = heap_strdup(storage_path);
-    item->owner = heap_strdup(source->owner);
-    item->group = heap_strdup(source->group);
 
     return item;
 }
@@ -363,11 +363,21 @@ const metadata_item_t *metadata_directory_beneath(
 /**
  * Two claims that say the same thing
  *
- * Field by field, absence included. Two claims of the same key can differ in
- * what only the sheet carries — the mode's lower bits, an owner, a group — so
- * the tree's entry cannot stand in for this comparison.
+ * Every field, the key included: a claim is one row of the sheet, and two rows
+ * are the same row when nothing about them differs. Absence is a value on both
+ * sides — a NULL owner is a claim of no owner, and two absent claims (NULL and
+ * NULL) are equal, which is what a comparison of two sheets needs about a key
+ * one of them does not hold. Two claims of the same key can differ in what only
+ * the sheet carries — the mode's lower bits, an owner, a group — so the tree's
+ * entry cannot stand in for this comparison.
+ *
+ * Reader: metadata_same, claim by claim.
+ *
+ * @param a First claim (NULL is the absent claim)
+ * @param b Second claim (NULL is the absent claim)
+ * @return true if the two say the same thing
  */
-bool metadata_same_claim(const metadata_item_t *a, const metadata_item_t *b) {
+static bool metadata_same_claim(const metadata_item_t *a, const metadata_item_t *b) {
     if (a == b) {
         return true;
     }
@@ -495,27 +505,19 @@ static bool metadata_tracked_beneath(metadata_items_t directories, const char *k
 /**
  * Prune the derivations nothing stands beneath
  *
- * Two-pass collect-then-prune: metadata_remove_item frees the item it removes
- * and shifts the entries behind it, so the pass that decides cannot also be the
- * pass that acts. string_array_push copies each key into the array's own arena,
- * so the prune pass operates on strings the removals cannot free.
+ * One forward pass that decides each derivation where it meets it and removes
+ * it there: a decision reads the index and the tracked claims alone, and the
+ * prune moves neither, so a removal changes no later decision, and the keys come
+ * back in the directory claims' order.
  */
 error_t metadata_prune_ancestors(
     metadata_t *metadata, git_index *index, string_array_t *pruned
 ) {
     CHECK_NULL(metadata);
     CHECK_NULL(index);
-    CHECK_NULL(pruned);
 
-    /* The keys this call appends start here; the removal pass below walks only
-     * them. */
-    const size_t first = pruned->count;
-
-    /* The directory claims, read before any goes — the removals come after the
-     * pass that decides — and those alone: no other kind is the prune's subject */
-    const metadata_items_t directories = metadata_items(metadata, PATH_KIND_DIRECTORY);
-
-    for (size_t d = 0; d < directories.count; d++) {
+    metadata_items_t directories = metadata_items(metadata, PATH_KIND_DIRECTORY);
+    for (size_t d = 0; d < directories.count;) {
         const metadata_item_t *dir = directories.entries[d];
 
         /* The subject: a derivation, which exists because something beneath it
@@ -524,7 +526,10 @@ error_t metadata_prune_ancestors(
          * and it leaves the sheet where a verb takes it, never by inference
          * (metadata.h). The field metadata_capture_rung reads to leave a standing
          * claim alone, asked here for the same reason. */
-        if (dir->tracked) continue;
+        if (dir->tracked) {
+            d++;
+            continue;
+        }
 
         /* Half of what stands beneath: any path under the directory that a tree
          * can hold. Metadata items are not the universe there — a symlink tracked
@@ -535,21 +540,24 @@ error_t metadata_prune_ancestors(
         size_t position;
         int rc = git_index_find_prefix(&position, index, prefix);
         free(prefix);
-        if (rc == 0) continue;
-        if (rc != GIT_ENOTFOUND) {
+        if (rc != 0 && rc != GIT_ENOTFOUND) {
             return error_git(rc, "Cannot search the tree beneath '%s'", dir->key);
         }
 
-        /* And the other half: the one path a tree cannot hold. */
-        if (metadata_tracked_beneath(directories, dir->key)) continue;
+        /* And the other half: the one path a tree cannot hold. Anchored by either,
+         * the derivation stands, and the cursor moves past it. */
+        if (rc == 0 || metadata_tracked_beneath(directories, dir->key)) {
+            d++;
+            continue;
+        }
 
-        string_array_push(pruned, dir->key);
-    }
-
-    /* Every key here was read off a directory claim the walk above just saw, so
-     * each names something that is there to remove. */
-    for (size_t i = first; i < pruned->count; i++) {
-        metadata_remove_item(metadata, PATH_KIND_DIRECTORY, pruned->entries[i]);
+        /* Nothing stands beneath it: its key handed back where the caller keeps
+         * them, copied before the removal frees it; then the derivation goes,
+         * and the slice is read again, the removal having moved the entries behind
+         * the cursor up to it */
+        if (pruned) string_array_push(pruned, dir->key);
+        metadata_remove_item(metadata, PATH_KIND_DIRECTORY, dir->key);
+        directories = metadata_items(metadata, PATH_KIND_DIRECTORY);
     }
 
     return NULL;

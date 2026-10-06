@@ -5,7 +5,8 @@
  * the profile makes about its paths beyond what its tree can say. An item exists
  * iff it claims something — every field beyond the key is a claim (or the one
  * cache), a capture whose answer claims nothing authors no item, and one that
- * finds a stale item of its kind standing at its key retires it.
+ * finds a stale item of its kind standing at its key retires it; so does a restore
+ * of a claim that says nothing (core/profiles.h profile_stage_restore_file).
  *
  * Authority, per fact:
  * - content and type: the tree's (a blob, a link, an executable) — never restated
@@ -42,8 +43,9 @@
  * backs, residue a hand left. Each is found, replaced and removed by its own
  * kind, so a write of one kind never reaches the other's claim at its key; the
  * one write across kinds is a blob's where a directory claim stands, no blob at
- * or above its name, which takes that claim's place, and its writers spell it
- * where they write (cmds/revert.c cmd_revert, cmds/add.c cmd_add).
+ * or above its name, which takes that claim's place — a profile's next commit
+ * spells it as its put rule (core/profiles.h profile_stage_t), and add by hand
+ * until it commits on one (cmds/add.c cmd_add).
  *
  * Two kinds of directory claim, one field between them. "tracked" says the profile
  * tracks the directory itself: a walk went into it, so the directory exists because
@@ -342,24 +344,6 @@ metadata_item_t *metadata_item_create_directory(
 void metadata_item_free(metadata_item_t *item);
 
 /**
- * The same claim, deep-copied under `storage_path`
- *
- * Every field but the key travels: kind, mode, ownership, and the two flags.
- * The key is a parameter because a claim outlives the name it was recorded under
- * — a revert restores a commit's claim into the name the profile holds now
- * (cmds/revert.c) — and passing `source->key` is the identity copy, which a sheet's
- * copy makes of every item (metadata_clone).
- *
- * @param source Source item to clone (must not be NULL)
- * @param storage_path The key the copy carries (must not be NULL)
- * @return The copy (caller frees with metadata_item_free)
- */
-metadata_item_t *metadata_item_clone(
-    const metadata_item_t *source,
-    const char *storage_path
-);
-
-/**
  * The claim an item makes, as the record keeps it
  *
  * Onto `record`'s claim, the one the path is reconciled against from here on
@@ -447,7 +431,7 @@ const metadata_item_t *metadata_find_item(
  * its subtrees costs.
  *
  * Readers: add's walk and add's argument arm, each before it lists a name a blob
- * would stand at, and revert's restore, before its preview promises the write.
+ * would stand at.
  *
  * @param metadata The sheet (NULL returns NULL)
  * @param storage_path The name a blob would stand at (NULL returns NULL)
@@ -460,39 +444,20 @@ const metadata_item_t *metadata_directory_beneath(
 );
 
 /**
- * Two claims that say the same thing
- *
- * Every field, the key included: a claim is one row of the sheet, and two rows
- * are the same row when nothing about them differs. Absence is a value on both
- * sides — a NULL owner is a claim of no owner, and two absent claims (NULL and
- * NULL) are equal, which is what a caller comparing "what the sheet says" with
- * "what it would say" needs about a key neither holds.
- *
- * Readers: revert's nothing-to-do gate, which must know whether the write it is
- * about to make is already standing, and the comparison of two sheets, claim by
- * claim (metadata_same). The sheet carries what the tree cannot — the mode below
- * the owner-execute bit, and ownership — so a caller that reads the tree's entry
- * alone cannot answer this (infra/content stamps a filemode from S_IXUSR and
- * nothing else).
- *
- * @param a First claim (NULL is the absent claim)
- * @param b Second claim (NULL is the absent claim)
- * @return true if the two say the same thing
- */
-bool metadata_same_claim(const metadata_item_t *a, const metadata_item_t *b);
-
-/**
  * Two sheets that say the same thing
  *
- * The same claims of each kind, each the same (metadata_same_claim), whatever
- * order each holds them in: the serializer writes the items by key, then kind
- * (metadata_to_json), so two sheets that hold the same claims serialize alike,
- * and a sheet whose claims differ from another's has one to write.
+ * The same claims of each kind, each the same in every field, absence included,
+ * whatever order each holds them in: the serializer writes the items by key,
+ * then kind (metadata_to_json), so two sheets that hold the same claims serialize
+ * alike, and a sheet whose claims differ from another's has one to write. The
+ * sheet carries what the tree cannot — the mode below the owner-execute bit,
+ * and ownership — so a comparison of the trees alone cannot answer this.
  *
- * Reader: the save's gate of a profile's next commit (core/profiles.c
- * profile_stage_commit), which compares the sheet it carries with the one it
- * opened, as sys/stage compares the trees (sys/stage.h stage_commit) — so a sheet
- * no claim of which moved keeps the bytes it has, a hand's spelling included.
+ * Readers: a profile's next commit, which compares the sheet it carries with
+ * the one it opened, as sys/stage compares the trees (sys/stage.h stage_changed,
+ * stage_commit) — its change test, and its save's gate, so a sheet no claim of
+ * which moved keeps the bytes it has, a hand's spelling included (core/profiles.c
+ * profile_stage_changed, profile_stage_commit).
  *
  * @param a A sheet (must not be NULL)
  * @param b Another (must not be NULL)
@@ -556,16 +521,17 @@ bool metadata_remove_item(
  * the prune sees the commit's exact tracked set and lands in the same commit as
  * the triggering removals — a profile's next commit prunes so at its commit
  * (core/profiles.c profile_stage_commit), and update by hand (cmds/update.c
- * update_profile). The keys pruned are appended to `pruned`, in the directory
- * claims' order: the entry leaves the view by the verb's own commit, so the verb
- * retires its record the way it does a path it removed. Nothing appended means
- * nothing was pruned.
+ * update_profile). The keys pruned are appended to `pruned` where the writer
+ * keeps them, in the directory claims' order: the entry leaves the view by the
+ * verb's own commit, so a verb with a record phase retires its record the way
+ * it does a path it removed. Nothing appended means nothing was pruned.
  *
  * @param metadata The sheet (must not be NULL; mutated in place)
  * @param index Post-edit index — the stage's, after every put and removal (must
  *              not be NULL)
  * @param pruned Receives the keys pruned, appended as copies in the array's arena
- *               (must not be NULL; given its arena by string_array_init)
+ *               (given its arena by string_array_init); NULL where the writer
+ *               keeps none, as revert's commit does
  * @return Error or NULL on success
  */
 error_t metadata_prune_ancestors(
@@ -848,13 +814,13 @@ error_t metadata_from_json(
  * Puts the sheet — .dotta/metadata.json, serialized by metadata_to_json — on
  * the stage as a regular blob; the caller's commit carries it. The one writer
  * of the sheet: a profile's next commit's (core/profiles.c profile_stage_commit),
- * and add's, update's and revert's, each until it commits on one. A sheet this
- * serializer wrote, loaded and saved unchanged, puts the blob the tree already
- * holds (the serializer's byte-determinism), which is what lets the stage's commit
- * see an untouched sheet as no change. A hand-written one the parser accepts —
- * other whitespace, another item order, inert fields — is normalized by the save
- * and moves its blob; nothing here promises otherwise, so a caller that must
- * not re-spell a sheet it did not change saves only one whose claims moved
+ * and add's and update's, each until it commits on one. A sheet this serializer
+ * wrote, loaded and saved unchanged, puts the blob the tree already holds (the
+ * serializer's byte-determinism), which is what lets the stage's commit see an
+ * untouched sheet as no change. A hand-written one the parser accepts — other
+ * whitespace, another item order, inert fields — is normalized by the save and
+ * moves its blob; nothing here promises otherwise, so a caller that must not
+ * re-spell a sheet it did not change saves only one whose claims moved
  * (metadata_same), as a profile's next commit does, and one that saves on every
  * run commits a re-spelling alone, as add does.
  *

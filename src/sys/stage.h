@@ -48,15 +48,16 @@
  * committed.
  *
  * Every entry names a blob the ODB holds by commit time: stage_put writes it,
- * stage_put_blob trusts the caller (revert's target blob is looked up from a
- * commit), and the tree write refuses an id the ODB lacks. *By commit time* is
- * the whole of the promise: the put itself does not check, so an id whose object
- * is not written yet is admitted and refused only if the commit still lacks it.
- * A writer that must decide before it writes puts the id and materialises the
- * bytes later — revert admits a reseal's hash before its preview and stores the
- * object only past the prompt, so a dry run leaves the database as it found it.
- * Bytes are stored as given — no clean filter, no autocrlf, no filemode config
- * — the way apply writes them back; the mode is the caller's word.
+ * stage_put_blob trusts the caller (a restore's blob is looked up from a commit),
+ * and the tree write refuses an id the ODB lacks. *By commit time* is the whole
+ * of the promise: the put itself does not check, so an id whose object is not
+ * written yet is admitted and refused only if the commit still lacks it. A writer
+ * that must decide before it writes puts the id and materialises the bytes later
+ * — revert's restore puts a reseal's hash before its preview (core/profiles.h
+ * profile_stage_restore_file), and revert stores the object only past the prompt,
+ * so a dry run leaves the database as it found it. Bytes are stored as given —
+ * no clean filter, no autocrlf, no filemode config — the way apply writes them
+ * back; the mode is the caller's word.
  *
  * Nothing here touches HEAD, a working directory, or the repository's own index,
  * and neither an open nor an admission writes anything — the ref is resolved
@@ -73,9 +74,9 @@
  *
  * Layer: sys/. The module knows libgit2 and sys/gitops' signature, nothing of
  * mounts, content or dotta's vocabulary. Called by the commands that write trees
- * (add, update, revert, bootstrap, ignore), by a profile's next commit — remove's
- * (core/profiles.h profile_stage_t) — by core/metadata's sheet writer, by
- * core/ignore — a .dottaignore put onto the stage its edit opened, and the
+ * (add, update, bootstrap, ignore), by a profile's next commit — remove's and
+ * revert's (core/profiles.h profile_stage_t) — by core/metadata's sheet writer,
+ * by core/ignore — a .dottaignore put onto the stage its edit opened, and the
  * machine's baseline seeded on a stage of its own — and by infra/epoch's mint;
  * add alone creates an admission.
  */
@@ -130,16 +131,15 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out);
 /**
  * The tree the stage opened at — the ref's own bytes at open
  *
- * Readers: the sheet loader (add, update, revert); the profile add and revert
- * open at it (cmds/add.c cmd_add, cmds/revert.c cmd_revert, through core/profiles.h
- * profile_open), and the base of a profile's next commit (core/profiles.c
- * profile_stage_open), whose claims remove's arguments are matched against; the
- * questions revert asks of the branch as it stood — the claim at a path, the
- * entry at a name, a second name; and the file an edit session opens on
- * (cmds/ignore.c ignore_edit, ignore_modify), read from the tree the session
- * commits on. Never NULL: an orphan's stage stands on the empty tree, and add —
- * the one reader that opens one — reads it as a profile with nothing in it yet,
- * no entry and no sheet. Borrowed; valid until stage_free.
+ * Readers: the sheet loader (add, update); the profile add opens at it (cmds/add.c
+ * cmd_add, through core/profiles.h profile_open), and the base of a profile's
+ * next commit (core/profiles.c profile_stage_open), whose claims remove's arguments
+ * are matched against and of which revert asks the branch as it stood — the claim
+ * at a path, the entry at a name, a second name; and the file an edit session
+ * opens on (cmds/ignore.c ignore_edit, ignore_modify), read from the tree the
+ * session commits on. Never NULL: an orphan's stage stands on the empty tree,
+ * and add — the one reader that opens one — reads it as a profile with nothing
+ * in it yet, no entry and no sheet. Borrowed; valid until stage_free.
  *
  * @param st Stage (must not be NULL)
  * @return The opened tree
@@ -215,9 +215,10 @@ error_t stage_admission_create(const stage_t *st, stage_admission_t **out);
  * carries (index.c index_entry_dup passes no stat), so nothing a mode could change
  * is reachable through this door or the put's.
  *
- * Readers: add's walk and add's argument arm, before either lists a name.
- * cmds/revert deliberately does not read it — it holds the id and the mode, so
- * it hoists the whole put before its preview and needs the actual index operation's
+ * Readers: add's walk and add's argument arm, before either lists a name. A
+ * profile's restore deliberately does not read it (core/profiles.c
+ * profile_stage_restore_file) — it holds the id and the mode, so it puts the
+ * entry itself before its writer's preview and needs the actual index operation's
  * refusal there, not a question about it.
  *
  * @param adm Admission (must not be NULL)
@@ -331,6 +332,29 @@ error_t stage_put_blob(
  * @return Error or NULL on success
  */
 error_t stage_remove(stage_t *st, const char *path);
+
+/**
+ * Whether the puts and removals so far move the tree from the one the stage opened
+ * at
+ *
+ * stage_commit's question, asked without its write: libgit2 diffs the opened
+ * tree against the index through two iterators, an entry unmodified where its
+ * id and its mode agree, and writes no object
+ * (lib/libgit2/src/libgit2/diff_generate.c git_diff_tree_to_index, maybe_modified
+ * — the arms that hash reach a workdir side alone). So a dry run may ask it and
+ * leave the database as it found it, and an id put before its object is written
+ * is compared by the id alone. An entry put back as the tree holds it moves
+ * nothing; an orphan's stage is compared against the empty tree. About 0.1 µs
+ * an entry.
+ *
+ * Reader: core/profiles.c profile_stage_changed, the sheet's comparison beside it.
+ *
+ * @param st Stage (must not be NULL)
+ * @param out Whether the tree moved (must not be NULL; written on success alone)
+ * @return Error or NULL on success: a tree the comparison could not read, which
+ *         needs a store that changed beneath the stage
+ */
+error_t stage_changed(const stage_t *st, bool *out);
 
 /**
  * The tree, and — when it differs from the opened one — one commit

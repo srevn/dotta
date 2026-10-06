@@ -138,11 +138,15 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out) {
 }
 
 const git_tree *stage_tree(const stage_t *st) {
-    return st ? st->tree : NULL;
+    CHECK_NULL(st);
+
+    return st->tree;
 }
 
 git_index *stage_index(stage_t *st) {
-    return st ? st->index : NULL;
+    CHECK_NULL(st);
+
+    return st->index;
 }
 
 /**
@@ -400,6 +404,27 @@ error_t stage_remove(stage_t *st, const char *path) {
     if (rc < 0) {
         return error_git(rc, "Failed to remove '%s'", path);
     }
+
+    return NULL;
+}
+
+error_t stage_changed(const stage_t *st, bool *out) {
+    CHECK_NULL(st);
+    CHECK_NULL(out);
+
+    /* The index against the tree the open read, stage_commit's question asked
+     * without its write: libgit2 diffs the two through iterators, an entry
+     * unmodified where its id and its mode agree, and writes no object — an id
+     * whose object is not written yet is compared by the id alone */
+    git_diff *diff = NULL;
+    int rc = git_diff_tree_to_index(&diff, st->repo, st->tree, st->index, NULL);
+    if (rc < 0) {
+        return error_git(rc, "Failed to compare the tree of '%s'", st->refname);
+    }
+
+    /* An unmodified entry is no delta, so any delta is a move */
+    *out = git_diff_num_deltas(diff) > 0;
+    git_diff_free(diff);
 
     return NULL;
 }

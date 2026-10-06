@@ -175,7 +175,7 @@ typedef struct {
     string_array_t pruned;             /* Directory entries dropped as redundant (storage paths) */
     size_t claimed;                    /* Ancestor claims the derivation authored or refreshed */
     string_array_t retired;            /* Ancestor claims the derivation dropped (storage paths) */
-} commit_t;
+} update_commit_t;
 
 /**
  * What the filter made of the diverged items, in scope
@@ -237,7 +237,7 @@ typedef struct {
     workspace_items_t unscanned;             /* In scope, where the scan could not look — listed, never taken */
     size_t refused[WORKSPACE_ROUTE_COUNT];   /* In scope, deployed, refused — by the route that refused it */
     size_t faults[WORKSPACE_FAULT_COUNT];    /* The UNVERIFIABLE arm again — by whose remedy the look is */
-} partition_t;
+} update_partition_t;
 
 /**
  * Partition the workspace's diverged items for update
@@ -245,9 +245,9 @@ typedef struct {
  * The scope first: the profiles and paths the user named, then the patterns they
  * excluded — the order every scope reader asks in (core/scope.h
  * scope_accepts_entry). Then the state rule under the flags, and for a deployed
- * item the route: the partition (partition_t). It decides in silence: what it
- * answers, the command says (cmd_update traces the excluded, as apply traces
- * its plans').
+ * item the route: the partition (update_partition_t). It decides in silence:
+ * what it answers, the command says (cmd_update traces the excluded, as apply
+ * traces its plans').
  *
  * @param ws Workspace (must not be NULL)
  * @param opts Update options (must not be NULL)
@@ -261,7 +261,7 @@ static void update_partition(
     const cmd_update_options_t *opts,
     const scope_t *scope,
     arena_t *arena,
-    partition_t *partition
+    update_partition_t *partition
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(opts);
@@ -269,7 +269,7 @@ static void update_partition(
     CHECK_NULL(arena);
     CHECK_NULL(partition);
 
-    *partition = (partition_t){ 0 };
+    *partition = (update_partition_t){ 0 };
 
     /* Each item is added to its lists as the walk decides it, and every list is
      * filled once the walk is done — the arena's, beside the items they borrow */
@@ -422,7 +422,7 @@ static error_t update_profile(
     workspace_items_t items,
     manifest_rows_t rows,
     const cmd_update_options_t *opts,
-    commit_t *commit
+    update_commit_t *commit
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(stage);
@@ -846,11 +846,11 @@ cleanup:
  * invalidates nothing about an earlier profile's landed commit, so the record
  * follows each one. The view is computed, so nothing projects; what update writes
  * is the one thing only it knows about the paths it committed — read off each
- * commit's own bookkeeping (commit_t), so a path the walk skipped gets no record
- * write. A modified or new file was captured FROM disk, so where the capture's
- * own claim still stands at its path in the post-commit view the record is what
- * the capture committed — its node, its blob under the stat the capture took
- * (the next status takes the fast path), its claim — stamped as an ownership
+ * commit's own bookkeeping (update_commit_t), so a path the walk skipped gets
+ * no record write. A modified or new file was captured FROM disk, so where the
+ * capture's own claim still stands at its path in the post-commit view the record
+ * is what the capture committed — its node, its blob under the stat the capture
+ * took (the next status takes the fast path), its claim — stamped as an ownership
  * event. The view says whose the path is and nothing else: a commit another writer
  * landed since moves what Git holds past the capture, which the next load reads
  * as Git's move ([stale]), never as a capture of it. A path the commit let go —
@@ -903,7 +903,7 @@ cleanup:
  */
 static error_t update_write_record(
     const dotta_ctx_t *ctx,
-    const commit_t *commits,
+    const update_commit_t *commits,
     size_t commit_count
 ) {
     CHECK_NULL(ctx);
@@ -934,7 +934,7 @@ static error_t update_write_record(
     time_t now = time(NULL);
 
     for (size_t c = 0; c < commit_count; c++) {
-        const commit_t *commit = &commits[c];
+        const update_commit_t *commit = &commits[c];
 
         for (size_t i = 0; i < commit->captured_count; i++) {
             /* What the capture committed, where its claim still stands, and the
@@ -1063,7 +1063,7 @@ static error_t update_execute(
     manifest_rows_t derive_rows,
     const cmd_update_options_t *opts,
     size_t *total_updated,
-    commit_t **out_commits,
+    update_commit_t **out_commits,
     size_t *out_commit_count
 ) {
     CHECK_NULL(ctx);
@@ -1082,7 +1082,7 @@ static error_t update_execute(
     /* One bookkeeping slot per enabled profile — an upper bound; only landed
      * commits fill one, each as it lands, so the caller holds every commit that
      * landed whichever profile stops the run. */
-    commit_t *commits = arena_calloc(ctx->arena, enabled->count, sizeof(*commits));
+    update_commit_t *commits = arena_calloc(ctx->arena, enabled->count, sizeof(*commits));
     *out_commits = commits;
 
     /* One profile's items and chains, gathered afresh for each profile into two
@@ -1133,7 +1133,7 @@ static error_t update_execute(
         if (err) return err;
 
         /* Update this profile on its stage */
-        commit_t bookkeeping = { 0 };
+        update_commit_t bookkeeping = { 0 };
         err = update_profile(
             ctx, stage, profile,
             (workspace_items_t){ .entries = items, .count = item_count },
@@ -1191,7 +1191,7 @@ static error_t update_execute(
  *                  run whose rows all held still has none to preview — its filter
  *                  context printed ahead of the census)
  */
-static void update_print_preview(output_t *out, const partition_t *partition) {
+static void update_print_preview(output_t *out, const update_partition_t *partition) {
     CHECK_NULL(out);
     CHECK_NULL(partition);
 
@@ -1510,7 +1510,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Partition the diverged items: the scope, the flags, and for a deployed
      * item the route table. */
-    partition_t partition;
+    update_partition_t partition;
     update_partition(ws, opts, scope, ctx->arena, &partition);
 
     /* What the patterns spared, one verbose line each — as apply traces what
@@ -1819,7 +1819,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * ctx->run.keymgr is borrowed by the capture inside per-profile iteration.
      * A dry run executes nothing: the sections above are its preview, and the
      * summary below is its one sentence. */
-    commit_t *commits = NULL;
+    update_commit_t *commits = NULL;
     size_t commit_count = 0;
     size_t total_updated = 0;
     error_t record_err = NULL;   /* The record phase's fate: non-fatal, read by the stop and the summary */

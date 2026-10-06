@@ -192,8 +192,9 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  * asks nothing of it (state_write), so each rule is kept where a record is built:
  * a first observation and apply's ownership events from the row the path is
  * reconciled against (core/workspace.h workspace_observation), add's and update's
- * from what their capture committed (cmds/add.c path_t, cmds/update.c commit_t),
- * a learning from the record the load read (core/workspace.c workspace_learning).
+ * from what their capture committed (cmds/add.c path_t, cmds/update.c
+ * update_commit_t), a learning from the record the load read (core/workspace.c
+ * workspace_learning).
  *   - the binding (profile, storage_path): the row the record follows — who
  *     deployed what — and the pair its blob was confirmed under. The row's at
  *     the first observation — a gone node's record's replacement among them —

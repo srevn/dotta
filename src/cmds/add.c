@@ -1958,18 +1958,20 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
         /* A kind the claim contradicts: what stands there now is not what the
          * profile holds there. The removal is name-shaped: it takes that claim
-         * and everything beneath it, under every topology, where a
-         * filesystem-shaped one addresses another key at a binder's own spelling
-         * — so the clause spells it, a way out the fact cannot imply. */
+         * — a directory's with everything beneath it, a file's alone, a blob
+         * leaving no room (cmds/remove.c remove_resolve) — under every topology,
+         * where a filesystem-shaped one addresses another key at a binder's own
+         * spelling — so the clause spells it, a way out the fact cannot imply. */
         if (held && path_type_kind(held->type) != kind) {
             char shown[PATH_MAX];
             output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));
             err = error_create(
                 ERR_INVALID_ARG, "Profile '%s' holds '%s' as the %s '%s', and a %s "
-                "stands there now; dotta remove %s %s gives that claim up, and "
-                "everything beneath it", opts->profile, shown,
+                "stands there now; dotta remove %s %s gives that claim up%s",
+                opts->profile, shown,
                 held->type == PATH_TYPE_DIRECTORY ? "directory" : "file",
-                held->storage_path, fs_stat_noun(&st), opts->profile, held->storage_path
+                held->storage_path, fs_stat_noun(&st), opts->profile, held->storage_path,
+                held->type == PATH_TYPE_DIRECTORY ? ", and everything beneath it" : ""
             );
             goto cleanup;
         }

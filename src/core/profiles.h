@@ -218,13 +218,13 @@ typedef struct profile profile_t;
  *
  * Readers: core/manifest.c manifest_build (each enabled head gitops_branch_tree
  * found) and core/workspace.c workspace_orphan_authority (each orphan's profile's
- * head, found the same way), cmds/add.c cmd_add and cmds/revert.c cmd_revert
- * (the tree a stage opened at, and revert's target commit's), cmds/diff.c
- * diff_commit_to_workspace (the commit's), cmds/export.c cmd_export, cmds/show.c
- * cmd_show and cmds/list.c list_file_history (the tree the verb selected),
- * cmds/list.c list_profiles and list_files (the tree of the head each listing
- * read, so what each prints is that commit's); and profile_load, at the head it
- * read.
+ * head, found the same way), cmds/add.c cmd_add, cmds/remove.c remove_paths and
+ * cmds/revert.c cmd_revert (the tree a stage opened at, and revert's target
+ * commit's), cmds/diff.c diff_commit_to_workspace (the commit's), cmds/export.c
+ * cmd_export, cmds/show.c cmd_show and cmds/list.c list_file_history (the tree
+ * the verb selected), cmds/list.c list_profiles and list_files (the tree of the
+ * head each listing read, so what each prints is that commit's); and profile_load,
+ * at the head it read.
  *
  * @param name Whose claims these are (must not be NULL; copied)
  * @param tree The tree (must not be NULL; borrowed, and outlives the handle)
@@ -355,9 +355,11 @@ typedef error_t (*profile_visit_fn)(const profile_claim_t *claim, void *payload)
  * beneath its name (cmds/export.c export_collect_profile and
  * export_collect_storage, through export_collect_claim); the directory claims a
  * completion offers (cmds/completion.c completion_directories, through
- * completion_offer_directory); and every claim a profile's deletion takes, whose
- * paths its hooks are handed, read TOLERANT before profile_contradicted
- * (cmds/remove.c remove_profile, through remove_collect_claim).
+ * completion_offer_directory); and every claim the profile makes, before
+ * profile_contradicted's, through one visitor — the universe a removal's arguments
+ * are matched against, read STRICT, and every claim a deletion takes, read TOLERANT
+ * (cmds/remove.c remove_list_claims, through remove_collect_claim, for
+ * remove_resolve and remove_profile).
  *
  * @param profile Handle (must not be NULL); its sheet is read by the first question
  *                that needs it, a walk or profile_load_sheet
@@ -391,9 +393,11 @@ error_t profile_walk(
  * STRICT: a sheet that will not load is the failure, before any claim is shown.
  * TOLERANT: none is shown past one, the failure kept (profile_load_sheet).
  *
- * Readers: every claim a profile's deletion takes, whose paths its hooks are
- * handed, read TOLERANT after the walk, through the walk's visitor (cmds/remove.c
- * remove_profile, through remove_collect_claim).
+ * Readers: every claim the profile makes, after the walk, through the walk's
+ * visitor — the universe a removal's arguments are matched against, read STRICT,
+ * and every claim a deletion takes, read TOLERANT (cmds/remove.c
+ * remove_list_claims, through remove_collect_claim, for remove_resolve and
+ * remove_profile).
  *
  * @param profile Handle (must not be NULL); its sheet read through it
  * @param read The sheet's policy for this question

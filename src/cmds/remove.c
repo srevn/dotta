@@ -25,7 +25,6 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
@@ -93,6 +92,53 @@ static error_t remove_collect_claim(const profile_claim_t *claim, void *payload)
         walk->arena, walk->mounts, walk->profile, collected->storage_path
     );
 
+    return NULL;
+}
+
+/**
+ * Every claim the profile makes, each placed where this machine puts it
+ *
+ * The claims the walk shows, then those its own tree contradicts (core/profiles.h
+ * profile_walk, profile_contradicted), collected by one visitor, under the reader's
+ * policy: a removal reads strictly, refusing a sheet that will not load before
+ * its preview as every writer does; a deletion tolerantly, so a profile whose
+ * sheet will not load stays deletable (xkq8). In order: the blobs in the tree's
+ * pre-order, the directory claims that stand in the sheet's, the contradicted
+ * ones in the sheet's.
+ *
+ * Readers: remove_resolve, the universe a removal's arguments are matched against,
+ * and remove_profile, every claim a deletion takes — one producer, so the two
+ * routes cannot read two universes (ckft).
+ *
+ * @param ctx Dispatch context: the arena the claims live in, this machine's table
+ * @param profile The profile (must not be NULL); its sheet is read through it
+ * @param read The sheet's policy for this reader
+ * @param out The claims, in ctx->arena (must not be NULL; NULL after an error)
+ * @param out_count How many (must not be NULL)
+ * @return Error or NULL on success: the walk's, which names the profile
+ */
+static error_t remove_list_claims(
+    const dotta_ctx_t *ctx,
+    profile_t *profile,
+    profile_read_t read,
+    remove_claim_t **out,
+    size_t *out_count
+) {
+    *out = NULL;
+    *out_count = 0;
+
+    /* What stands, then what the tree contradicts, through the one visitor. The
+     * walk's failures name the profile already — the loader's words for the sheet,
+     * "Cannot read profile" over the tree's — so nothing is said over them. */
+    remove_walk_t walk = {
+        .arena = ctx->arena, .mounts = ctx->run.mounts, .profile = profile_name(profile),
+    };
+    error_t err = profile_walk(profile, read, remove_collect_claim, &walk);
+    if (!err) err = profile_contradicted(profile, read, remove_collect_claim, &walk);
+    if (err) return err;
+
+    *out = walk.claims;
+    *out_count = walk.claim_count;
     return NULL;
 }
 
@@ -193,15 +239,15 @@ typedef struct {
  * The flag is the user's word about the paths the removal NAMED, and only those
  * — named by the resolver's reach, not the typed line: an argument takes the
  * exact claim and every claim beneath a named directory (naming a directory means
- * untracking it whole, remove_resolve), and the flag speaks for all of them.
- * The flag alone cannot make dotta delete a path it never made: cleanup reads
- * the order ahead of the ownership gate, by design, since a named path the user
- * wants gone must go whether dotta deployed it or only ever found it. For a path
- * the user did not name there is nothing to read ahead of, so the gate answers,
- * and it is read here because the record that carries it is about to retire:
- * dotta takes back what it created on the way in and leaves what it merely found.
- * The flag stays a ceiling over both — a plain remove promises release and deletes
- * nothing, whoever made the path.
+ * untracking it whole), a named blob alone (remove_resolve), and the flag speaks
+ * for all of them. The flag alone cannot make dotta delete a path it never made:
+ * cleanup reads the order ahead of the ownership gate, by design, since a named
+ * path the user wants gone must go whether dotta deployed it or only ever found
+ * it. For a path the user did not name there is nothing to read ahead of, so
+ * the gate answers, and it is read here because the record that carries it is
+ * about to retire: dotta takes back what it created on the way in and leaves
+ * what it merely found. The flag stays a ceiling over both — a plain remove
+ * promises release and deletes nothing, whoever made the path.
  *
  * One loop for both routes because the rule drifted while each spelled its own:
  * a let-go record's fate must not turn on which removal retired it. The gate
@@ -264,10 +310,11 @@ static error_t remove_settle(
  * match (remove_resolve), while a pruned directory entry was no claim of the
  * arguments and is placed here.
  *
- * One candidate a path: what the commit let go at one place — two names one binding
- * places together, or a claim and a rung the prune let go there — joins one record,
- * which is settled once. The claims come first, so a path an argument took is
- * named however else the commit let it go.
+ * One candidate a path: what the commit let go at one place — a blob and the
+ * directory claim at its own name, two names one binding places together, or a
+ * claim and a rung the prune let go there — joins one record, which is settled
+ * once. The claims come first, so a path an argument took is named however else
+ * the commit let it go.
  *
  * Asked twice by its one caller (remove_paths): before the lock, whether there
  * is anything to settle, and under it, what the settle acts on.
@@ -381,104 +428,33 @@ static error_t remove_profile_candidates(
 }
 
 /**
- * Walk visitor: one entry of a profile tree, onto the listing where it is content
+ * Whether a blob an argument names contradicts the claim at `storage_path`: the
+ * name stands at or beneath the blob's own, where a blob leaves no room
+ * (remove_resolve)
  *
- * A content blob's storage path is pushed onto the listing, the payload; the
- * branch's machinery is pruned with its subtree, a tree beneath a label is entered
- * and a gitlink passed; a name the storage grammar refuses is the walk's failure.
+ * @param storage_path A directory claim's name
+ * @param named The names of the blobs the argument names
+ * @param named_count How many
+ * @return true iff the claim stands at or beneath one of them
  */
-static error_t remove_list_entry(
-    const char *path,
-    const git_tree_entry *entry,
-    void *payload,
-    gitops_next_t *next
+static bool remove_contradicted(
+    const char *storage_path, const char *const *named, size_t named_count
 ) {
-    string_array_t *paths = payload;
-
-    /* The content gate: a managed path is a name in the grammar — beneath a label,
-     * or the label's word alone, the namespace's own directory — and everything
-     * else the branch carries is machinery, which no walk of content sees
-     * (infra/label.h label_prefixes). Asked of every entry's whole name, a tree's
-     * included, so a tree of machinery goes with everything beneath it. */
-    if (!label_prefixes(path)) {
-        *next = GITOPS_NEXT_SKIP;
-        return NULL;
+    for (size_t i = 0; i < named_count; i++) {
+        if (strcmp(storage_path, named[i]) == 0 ||
+            str_path_beneath(storage_path, named[i], strlen(named[i]))) {
+            return true;
+        }
     }
 
-    /* Content is a blob: a tree beneath a label is walked into, and a gitlink
-     * claims nothing. */
-    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-        return NULL;
-    }
-
-    /* The entry name is Git's, not this machine's. A tree can name a subtree
-     * "..", and every consumer of a path from here joins it onto a root's spelling
-     * (infra/mount.h mount_resolve) on the strength of its having been validated
-     * where it was written — which holds for a branch this machine authored and
-     * not for one that arrived by clone, sync or foreign push. So the shape is
-     * checked where the tree is read, exactly as the profile's walk checks its
-     * own (core/profiles.c profile_step). Malformed here is corruption, not an
-     * entry to skip: a walk that dropped it silently would leave the caller a
-     * listing it cannot place and call it complete. */
-    error_t err = label_validate_storage(path);
-    if (err) return err;
-
-    string_array_push(paths, path);
-    return NULL;
+    return false;
 }
 
 /**
- * List deployable files in a Git tree
+ * Resolve the arguments to the claims they take
  *
- * Walks the tree past the branch's machinery (infra/label.h label_prefixes, the
- * content gate), and returns the storage paths of its content blobs. It takes
- * the tree its caller holds, so one read of the branch serves the walk and whatever
- * else the caller does with it.
- *
- * Complete or an error: an entry whose name the storage grammar refuses is
- * corruption and fails the walk rather than being skipped, since a listing short
- * by a name would still read as complete. A branch this machine authored holds
- * no such entry; one that arrived by clone, sync or foreign push can. A name is
- * never refused for its length: Git's only bound on one is memory. Every failure
- * is said under the profile, since the walk's own name a path in the tree and
- * never the profile whose branch it is, and no reader names it again.
- *
- * Reader: remove_resolve.
- *
- * @param tree Git tree to walk (must not be NULL)
- * @param profile The profile whose branch the tree is (must not be NULL)
- * @param arena Arena the listing lives in (must not be NULL)
- * @param out The storage paths (must not be NULL; left as it was on a failure)
- * @return Error or NULL on success
- */
-static error_t remove_list_tree_files(
-    const git_tree *tree,
-    const char *profile,
-    arena_t *arena,
-    string_array_t *out
-) {
-    CHECK_NULL(tree);
-    CHECK_NULL(profile);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
-
-    /* The walk pushes straight onto the listing, handed out once it is whole.
-     * Its failures name a path in the tree — a name the grammar refused, a subtree
-     * that would not load — and the profile is the where they do not say. */
-    string_array_t paths;
-    string_array_init(&paths, arena);
-    error_t err = gitops_tree_walk(tree, remove_list_entry, &paths);
-    if (err) return error_wrap(err, "Failed to list files in profile '%s'", profile);
-
-    *out = paths;
-    return NULL;
-}
-
-/**
- * Resolve the arguments to the claims they remove
- *
- * The claims array starts as everything the profile holds, in its own order (the
- * tree's blobs, then the directory items) — read from `tree`, the one the caller's
+ * The claims array starts as every claim the profile makes, placed
+ * (remove_list_claims, read strictly) — the profile at the tree the caller's
  * stage opened at, so the claims, the sheet and the commit describe one head;
  * the arguments mark what they take, and the array compacts to just that.
  *
@@ -487,10 +463,20 @@ static error_t remove_list_tree_files(
  * manufactured from the other. A storage argument matches over the claims' names;
  * a path argument matches over the paths they were placed at — so `remove web
  * ~/jail/etc/x` takes the claim standing there under whatever name, and a root
- * takes everything beneath it. Either way an argument matches the exact claim
+ * takes everything beneath it. Either way an argument takes every claim at it
  * and — at a '/' boundary, never a false prefix like home/dir2 for home/dir —
  * every claim beneath it: naming a directory means untracking it whole. A claim
  * is removed once, however many arguments match it.
+ *
+ * But a blob the argument names leaves no room: a file has nothing beneath it,
+ * so the directory claims at or beneath the named blob's own name — the claims
+ * it contradicts — are none of the argument's, and naming a blob takes it alone
+ * (2n2g). By path every blob placed at the argument is named, and a claim placed
+ * beneath it under another name — another label, another binding — contradicts
+ * none of them and is the argument's. The rule reads names alone, never the
+ * classification (core/profiles.h), so where the classification draws its line
+ * moves none of its answers; and over a tree a hand stored unsorted, where the
+ * classification can miss a blob, the names do not.
  *
  * A claim this machine places nowhere — an unbound custom/ one — keeps a NULL
  * path and no path argument reaches it; its name still does, which is how such
@@ -499,120 +485,58 @@ static error_t remove_list_tree_files(
  * hand over, and the overlap analysis and the record read the NULL as the fact
  * it is.
  *
- * The profile's metadata rides out through `metadata_out` for the commit's edit
- * — loaded once, where the directory claims are enumerated; an empty sheet when
- * the profile carries none (the loader's contract). Caller frees.
- *
  * @param ctx Dispatch context (must not be NULL). ctx->run.mounts covers HOME,
  *            ROOT, and every enabled profile's binding.
- * @param tree The profile's tree as the stage opened it — the universe of claims
- *            (must not be NULL)
- * @param claims_out The claims the arguments took, borrowed from ctx->arena (do
- *            not free)
+ * @param profile The profile at the tree the caller's stage opened at (must not
+ *                be NULL)
+ * @param opts The options: the profile's name, the arguments, --force (must not
+ *             be NULL)
+ * @param out The claims the arguments took, in ctx->arena (must not be NULL)
+ * @param out_count How many (must not be NULL)
+ * @return Error or NULL on success
  */
 static error_t remove_resolve(
     const dotta_ctx_t *ctx,
-    const git_tree *tree,
-    const char *profile,
-    char **input_paths,
-    size_t path_count,
+    profile_t *profile,
     const cmd_remove_options_t *opts,
-    remove_claim_t **claims_out,
-    size_t *count_out,
-    metadata_t **metadata_out
+    remove_claim_t **out,
+    size_t *out_count
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(tree);
     CHECK_NULL(profile);
-    CHECK_NULL(input_paths);
     CHECK_NULL(opts);
-    CHECK_NULL(claims_out);
-    CHECK_NULL(count_out);
-    CHECK_NULL(metadata_out);
+    CHECK_NULL(out);
+    CHECK_NULL(out_count);
 
-    git_repository *repo = ctx->run.repo;
-    const mount_table_t *mounts = ctx->run.mounts;
-    output_t *out = ctx->out;
+    *out = NULL;
+    *out_count = 0;
 
-    /* Initialize all resources to NULL for safe cleanup */
-    error_t err = NULL;
-    metadata_t *metadata = NULL;
-
-    /* The profile's claims, off the tree: its blobs, then the metadata's directory
-     * claims. */
-    string_array_t profile_files;
-    err = remove_list_tree_files(tree, profile, ctx->arena, &profile_files);
+    /* Every claim the profile makes, each placed where this machine puts it —
+     * the key a path argument matches against, established before the match.
+     * Read strictly: a sheet that will not load refuses the removal before its
+     * preview, as every writer's does. */
+    remove_claim_t *claims = NULL;
+    size_t claim_count = 0;
+    error_t err = remove_list_claims(ctx, profile, PROFILE_READ_STRICT, &claims, &claim_count);
     if (err) return err;
 
-    err = metadata_load_from_tree(repo, tree, profile, &metadata);
-    if (err) goto cleanup;
-
-    size_t item_count = 0;
-    size_t dir_count = 0;
-    const metadata_item_t *const *items = metadata_items(metadata, &item_count);
-    for (size_t i = 0; i < item_count; i++) {
-        if (items[i]->kind == PATH_KIND_DIRECTORY) dir_count++;
-    }
-
-    remove_claim_t *claims = NULL;
-    bool *taken = NULL;            /* beside claims[j]: an argument took it */
-    size_t claim_count = 0;
-    if (profile_files.count + dir_count > 0) {
-        claims = arena_calloc(
-            ctx->arena, profile_files.count + dir_count, sizeof(remove_claim_t)
-        );
-        taken = arena_calloc(
-            ctx->arena, profile_files.count + dir_count, sizeof(bool)
-        );
-    }
-
-    for (size_t i = 0; i < profile_files.count; i++) {
-        claims[claim_count++] = (remove_claim_t) {
-            .storage_path = profile_files.entries[i], .kind = PATH_KIND_FILE
-        };
-    }
-
-    for (size_t i = 0; i < item_count; i++) {
-        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
-        const char *key = items[i]->key;
-
-        /* Same-profile rule as the profile's walk (core/profiles.c profile_walk):
-         * a key the tree holds as a blob cannot also stand as a directory claim
-         * — the tree's blob outranks the stale item. Keeps every claim path unique,
-         * so one argument takes one claim. */
-        if (string_array_contains(&profile_files, key)) continue;
-
-        claims[claim_count++] = (remove_claim_t) {
-            .storage_path = arena_strdup(ctx->arena, key), .kind = PATH_KIND_DIRECTORY
-        };
-    }
-
-    /* Where each claim stands on this machine, or nowhere: the key a filesystem
-     * argument matches against, established before the match rather than after
-     * it. A custom/ claim under a profile with no target here stands nowhere
-     * and gets none — a miss the filesystem arm below reads as "not this claim".
-     * Every path here is a validated storage path (the tree walk's own gate and
-     * the sheet's parse both refuse anything else), so the resolve has no failure
-     * left to answer. */
-    for (size_t j = 0; j < claim_count; j++) {
-        claims[j].filesystem_path = mount_resolve(
-            ctx->arena, mounts, profile, claims[j].storage_path
-        );
-    }
+    /* Beside each claim, whether an argument took it; and the names of the blobs
+     * one argument names, refilled by each */
+    bool *taken = arena_calloc(ctx->arena, claim_count, sizeof(*taken));
+    const char **named = arena_calloc(ctx->arena, claim_count, sizeof(*named));
 
     /* Match each argument, marking the claims it takes */
-    for (size_t i = 0; i < path_count; i++) {
+    for (size_t i = 0; i < opts->path_count; i++) {
         path_input_t arg;
-        err = path_input_resolve(input_paths[i], ctx->arena, &arg);
+        err = path_input_resolve(opts->paths[i], ctx->arena, &arg);
         if (err) {
-            if (!opts->force) goto cleanup;
+            if (!opts->force) return err;
             /* With --force, skip this path: its error is dropped, one per refused
              * argument */
             output_warning(
-                out, OUTPUT_VERBOSE, "Skipping invalid path '%s': %s",
-                input_paths[i], error_line(err)
+                ctx->out, OUTPUT_VERBOSE, "Skipping invalid path '%s': %s",
+                opts->paths[i], error_line(err)
             );
-            err = NULL;
             continue;
         }
 
@@ -620,15 +544,13 @@ static error_t remove_resolve(
          * keys against the claims' names and a path against where they stand,
          * the word alone among the names — every claim of its namespace being
          * beneath it — and the form that reaches a profile with no binding here,
-         * whose custom/ claims stand nowhere for a path to match. The filesystem
-         * root is spelled "" — the one prefix every absolute path is beneath,
-         * as the table spells it and the pathspec reads it. */
+         * whose custom/ claims stand nowhere for a path to match. */
         const char *subject = NULL;
         bool by_name = false;
 
         switch (arg.key) {
             case PATH_KEY_FILESYSTEM:
-                subject = strcmp(arg.filesystem_path, "/") == 0 ? "" : arg.filesystem_path;
+                subject = arg.filesystem_path;
                 break;
 
             case PATH_KEY_STORAGE:
@@ -637,17 +559,43 @@ static error_t remove_resolve(
                 break;
         }
 
-        size_t subject_len = strlen(subject);
-        size_t matches_found = 0;
+        /* The prefix the claims beneath the subject join under: the subject itself,
+         * but at the filesystem root, whose key is "/" and whose prefix is "" —
+         * the mount table's two spellings of it (infra/mount.c join_prefix) —
+         * so "/" is a root like any other: what stands at it is at it, and every
+         * absolute path is beneath it */
+        const char *prefix = strcmp(subject, "/") == 0 ? "" : subject;
+        const size_t prefix_len = strlen(prefix);
 
+        /* The blobs the argument names: a file claim at the subject itself — by
+         * its name, or each name this machine places there */
+        size_t named_count = 0;
         for (size_t j = 0; j < claim_count; j++) {
-            const char *key = by_name ? claims[j].storage_path
-                                      : claims[j].filesystem_path;
+            const char *key = by_name ? claims[j].storage_path : claims[j].filesystem_path;
+            if (claims[j].kind == PATH_KIND_FILE && key && strcmp(key, subject) == 0) {
+                named[named_count++] = claims[j].storage_path;
+            }
+        }
+
+        size_t matches_found = 0;
+        for (size_t j = 0; j < claim_count; j++) {
+            const char *key = by_name ? claims[j].storage_path : claims[j].filesystem_path;
             if (!key) continue;                       /* it stands nowhere */
 
-            /* The exact claim, or one beneath it at a directory boundary */
-            if (strcmp(key, subject) != 0 &&
-                !str_path_beneath(key, subject, subject_len)) continue;
+            /* The claim at the subject, or one beneath it at a directory boundary */
+            if (strcmp(key, subject) != 0 && !str_path_beneath(key, prefix, prefix_len)) {
+                continue;
+            }
+
+            /* But a blob the argument names leaves no room: a directory claim
+             * at or beneath its name is the blob's contradiction, and none of
+             * the argument's. A file claim there is the blob itself — a tree
+             * holds no blob beneath a blob, nor two at one name — so only a
+             * directory claim is asked. */
+            if (claims[j].kind == PATH_KIND_DIRECTORY &&
+                remove_contradicted(claims[j].storage_path, named, named_count)) {
+                continue;
+            }
 
             matches_found++;
             taken[j] = true;
@@ -655,16 +603,15 @@ static error_t remove_resolve(
 
         if (matches_found == 0) {
             if (!opts->force) {
-                err = error_create(
+                return error_create(
                     ERR_NOT_FOUND, "Path '%s' not found in profile '%s'",
-                    input_paths[i], profile
+                    opts->paths[i], opts->profile
                 );
-                goto cleanup;
             }
             /* With --force, warn and skip */
             output_warning(
-                out, OUTPUT_VERBOSE, "Path '%s' not found in profile, skipping",
-                input_paths[i]
+                ctx->out, OUTPUT_VERBOSE, "Path '%s' not found in profile, skipping",
+                opts->paths[i]
             );
         }
     }
@@ -677,25 +624,15 @@ static error_t remove_resolve(
 
     /* Check if the arguments took any claims */
     if (taken_count == 0) {
-        err = error_create(
-            ERR_NOT_FOUND, "No paths found to remove from profile '%s'",
-            profile
+        return error_create(
+            ERR_NOT_FOUND, "No paths found to remove from profile '%s'", opts->profile
         );
-        goto cleanup;
     }
 
-    /* Success — the claims are arena-backed; the metadata rides out for the
-     * commit's edit */
-    *claims_out = claims;
-    *count_out = taken_count;
-    *metadata_out = metadata;
-    metadata = NULL;
-
-cleanup:
-    /* Free all resources */
-    if (metadata) metadata_free(metadata);
-
-    return err;
+    /* The claims are the command arena's, as the universe they were cut from */
+    *out = claims;
+    *out_count = taken_count;
+    return NULL;
 }
 
 /**
@@ -822,8 +759,9 @@ static error_t remove_build_filesystem_index(
 /**
  * One path this removal shares with other profiles
  *
- * The claim removed there — the first, where a pair of the profile's own names
- * is removed at one place — and who else stands there under what name.
+ * The claim removed there — the first, where the removal takes two at one place:
+ * two of the profile's names, or a blob and the directory claim at its own name
+ * — and who else stands there under what name.
  */
 typedef struct {
     const char *filesystem_path;
@@ -852,9 +790,10 @@ typedef struct {
  * name and a binding's name at one place do share and used to go unsaid. A claim
  * this machine places nowhere meets nothing and is skipped.
  *
- * The index is read once per path and taken out of the map, so a pair of the
- * profile's own names removed at one place is one line and one count — the data
- * is the dedup, and no seen-set or second scan is needed.
+ * The index is read once per path and taken out of the map, so two claims the
+ * removal takes at one place — two of the profile's names, or a blob and the
+ * directory claim at its own name — are one line and one count: the data is the
+ * dedup, and no seen-set or second scan is needed.
  *
  * `provided_by_other` is the view's fact, not the record's: the winner at the
  * path is another enabled profile, so the path stays as it is. It is asked only
@@ -1117,9 +1056,10 @@ static error_t remove_paths(
     /* Initialize all resources to NULL for safe cleanup */
     error_t err = NULL;
     stage_t *stage = NULL;              /* the branch's head, tree and index; the commit's */
+    profile_t *profile = NULL;          /* the profile at the stage's tree: the claims */
     remove_claim_t *claims = NULL;      /* arena — the resolver's */
     size_t claim_count = 0;
-    metadata_t *metadata = NULL;        /* the profile's, from the resolver (owned) */
+    metadata_t *metadata = NULL;        /* the sheet the commit edits (owned) */
     remove_overlaps_t overlaps = { 0 }; /* arena — the analysis's */
 
     /* The branch's stage: the head everything below reads — the claims, the sheet,
@@ -1132,11 +1072,15 @@ static error_t remove_paths(
     err = stage_open(repo, refname, &stage);
     if (err) goto cleanup;
 
-    /* Resolve the arguments to the claims they remove */
-    err = remove_resolve(
-        ctx, stage_tree(stage), opts->profile, opts->paths, opts->path_count, opts,
-        &claims, &claim_count, &metadata
-    );
+    /* The arguments resolved against the claims the profile makes at the tree
+     * the stage opened at — the head the commit will have as its parent */
+    profile = profile_open(opts->profile, stage_tree(stage));
+    err = remove_resolve(ctx, profile, opts, &claims, &claim_count);
+    if (err) goto cleanup;
+
+    /* The sheet the commit edits, read from the same tree: the profile read it
+     * for the claims it showed, and keeps it its own */
+    err = metadata_load_from_tree(repo, stage_tree(stage), opts->profile, &metadata);
     if (err) goto cleanup;
 
     /* What the removal shares with the other profiles (critical safety check).
@@ -1264,17 +1208,20 @@ static error_t remove_paths(
      * riding the same commit. A FILE claim is a tree entry; a DIRECTORY claim
      * has no tree entry — its whole Git footprint is its metadata item. Every
      * FILE claim is in the stage's tree (the resolver's universe is that tree's
-     * own listing), so the stage's missing-entry error cannot fire. */
+     * own walk), so the stage's missing-entry error cannot fire. */
     size_t removed_files = 0, removed_dirs = 0, meta_edits = 0;
 
-    /* The names this commit lets go, borrowed from the claims (arena): one per
-     * claim, both kinds, since the message's unit is the path and a directory
-     * claim is a path the commit gives up as surely as a blob is (utils/commit.h).
-     * The message reads them once and the arena outlives the call, so nothing
+    /* The names this commit lets go, borrowed from the claims (arena), each once:
+     * both kinds, since the message's unit is the path and a directory claim is
+     * a path the commit gives up as surely as a blob is (utils/commit.h) — so a
+     * blob and the directory claim at its own name are one name, listed and counted
+     * once. The message reads them once and the arena outlives the call, so nothing
      * is copied. */
     const char **removed_paths = arena_calloc(
         ctx->arena, claim_count, sizeof(*removed_paths)
     );
+    size_t removed_path_count = 0;
+    hashmap_t *listed = hashmap_borrow(ctx->arena, claim_count);
 
     for (size_t i = 0; i < claim_count; i++) {
         const remove_claim_t *claim = &claims[i];
@@ -1287,12 +1234,22 @@ static error_t remove_paths(
             removed_dirs++;
         }
 
-        if (metadata_remove_item(metadata, claim->storage_path)) {
+        /* The claim's own kind leaves the sheet: a directory claim at a removed
+         * file's name is that claim's, and stays — carried, it stands again once
+         * the blob is gone (a1mr, h2ye) — and a file's item goes with the file */
+        const metadata_item_t *item = metadata_lookup(metadata, claim->storage_path);
+        if (item && item->kind == claim->kind) {
+            metadata_remove_item(metadata, claim->storage_path);
             meta_edits++;
         }
 
-        removed_paths[i] = claim->storage_path;
-        output_info(out, OUTPUT_VERBOSE, "Removed: %s", claim->storage_path);
+        if (hashmap_add(listed, claim->storage_path, NULL)) {
+            removed_paths[removed_path_count++] = claim->storage_path;
+        }
+        output_info(
+            out, OUTPUT_VERBOSE, "Removed: %s%s",
+            claim->storage_path, path_kind_suffix(claim->kind)
+        );
     }
 
     /* Prune redundant directory entries against the stage's index — the branch
@@ -1328,7 +1285,7 @@ static error_t remove_paths(
         .action        = COMMIT_ACTION_REMOVE,
         .profile       = opts->profile,
         .paths         = removed_paths,
-        .path_count    = claim_count,
+        .path_count    = removed_path_count,
         .custom_msg    = opts->message,
         .target_commit = NULL
     };
@@ -1462,6 +1419,7 @@ cleanup:
      * on error paths. */
     state_rollback(state);
     if (metadata) metadata_free(metadata);
+    profile_free(profile);      /* before the stage: its tree is the stage's */
     stage_free(stage);
 
     return err;

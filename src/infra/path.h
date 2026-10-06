@@ -175,9 +175,9 @@ bool path_input_announces_path(const char *input);
  *     the word alone is the name every name of its namespace is beneath. The
  *     anchors of its filesystem-shaped rules go through the door, never the
  *     resolver.
- *   - remove (cmds/remove.c) takes either: the claims beneath the subject, matched
- *     by name or by place, the name being the one form that reaches a profile
- *     with no binding here.
+ *   - remove (cmds/remove.c remove_resolve) takes either: the claims at and beneath
+ *     the subject, matched by name or by place, a blob at the subject alone;
+ *     the name being the one form that reaches a profile with no binding here.
  *   - export (cmds/export.c) takes either, one arm each: a name selects what
  *     the profile claims at and beneath it, a filesystem path the profile's rows
  *     there.

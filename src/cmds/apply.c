@@ -1993,12 +1993,12 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* The claims the view could not place speak before the plan: they are in no
      * bucket below, and silence at the deploy moment is exactly what the old
-     * hard error existed to prevent. Two sections in the shape this screen gives
+     * hard error existed to prevent. Sections in the shape this screen gives
      * every other set of paths it will not touch — the header, the paths, then
      * the cost and the way out on their own lines — rather than a warning and a
      * hint, which is how this file speaks about a run and not about a list of
-     * paths. Both slices arrive grouped by profile, so the listing reads by profile
-     * unsorted, and both cap where every list in this file caps.
+     * paths. The slices arrive grouped by profile, so each listing reads by profile
+     * unsorted, and each caps where every list in this file caps.
      *
      * The repairs name neither a profile nor a path: a line above names every
      * profile that carries one, so a filled name would read as the only one,
@@ -2070,11 +2070,45 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* The third: an enabled profile the build found no branch for contributes
+    /* The third: the directory claims a profile's own tree contradicts. A file
+     * of the same profile stands at or above each, so no row stands for them
+     * and no bucket below meets one. Which verb keeps which turns on whether
+     * the file stands at the claim's own path or above it, which only the pair
+     * shows: status -v pairs them, and its legend keys each remedy to the pair's
+     * shape, where one line here would have to be both. */
+    {
+        manifest_contradicted_t contradicted = manifest_contradicted(manifest);
+        if (contradicted.count > 0) {
+            output_section(out, OUTPUT_NORMAL, "Contradicted directories");
+            for (size_t i = 0; i < contradicted.count && i < LIST_LIMIT; i++) {
+                output_print(
+                    out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s/ {dim}(from %s){reset}\n",
+                    contradicted.entries[i].storage_path, contradicted.entries[i].profile
+                );
+            }
+            if (contradicted.count > LIST_LIMIT) {
+                output_print(
+                    out, OUTPUT_NORMAL, "  ... and %zu more\n",
+                    contradicted.count - LIST_LIMIT
+                );
+            }
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  A file of the same profile stands at or above each, so nothing lands them."
+            );
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  'dotta status -v' pairs each with its file, and says how to keep one or "
+                "the other"
+            );
+        }
+    }
+
+    /* The fourth: an enabled profile the build found no branch for contributes
      * nothing, so what it deployed is an orphan no branch backs, which cleanup
      * releases — named here, where a release would otherwise read as having no
      * cause. A row is the profile, so the repairs name it as generically as the
-     * two above. */
+     * three above. */
     {
         manifest_missing_t missing = manifest_missing(manifest);
         if (missing.count > 0) {

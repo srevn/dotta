@@ -60,11 +60,11 @@
  * commit cannot make is refused in its own document's words (profile_stage_remove).
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
- * by profile_free: an arena of its own, holding the handle, its copy of the name
- * and every claim profile_find answers; the sheet it read; and a head profile_load
- * read. Any other tree it is opened at is the caller's, and outlives it. A claim
- * a visitor is shown is lent for its visit; one profile_find answers, for the
- * handle's life.
+ * by profile_free: an arena of its own, holding the handle, its copy of the name,
+ * every claim profile_find answers and the name of each blob profile_contradicted
+ * names over a claim; the sheet it read; and a head profile_load read. Any other
+ * tree it is opened at is the caller's, and outlives it. A claim a visitor is
+ * shown is lent for its visit; one profile_find answers, for the handle's life.
  *
  * The layering convention, least specific first:
  * 1. global
@@ -172,7 +172,11 @@ error_t profile_require(git_repository *repo, const char *name);
  * and whose it is (core/manifest.h). One field means something else: `mode` is
  * the sheet's, MODE_UNCLAIMED where none is claimed (core/metadata.h), where
  * the row's is total — profile_claim_mode resolves it, and a reader that asks
- * whether a mode is claimed at all compares with MODE_UNCLAIMED.
+ * whether a mode is claimed at all compares with MODE_UNCLAIMED. And one is no
+ * row's: `blob_above`, the name of the blob that contradicts a claim
+ * profile_contradicted shows — at the claim's name, or at a rung above it — and
+ * NULL on every claim the walk shows or profile_find answers, which nothing
+ * contradicts.
  *
  * Lent, its strings with it: for the visit that shows it, or, one profile_find
  * answers, for the life of the handle that answered it.
@@ -186,6 +190,7 @@ typedef struct {
     const char *group;          /* The sheet's, or NULL: none named */
     bool encrypted;             /* The seal's stamp; never on a link or a directory */
     bool tracked;               /* A directory's class; false on every blob */
+    const char *blob_above;     /* The blob at its name or above it: profile_contradicted's alone */
 } profile_claim_t;
 
 /**
@@ -400,7 +405,8 @@ error_t profile_walk(
  * for every claim the profile makes, the walk and these; where the classification
  * draws its line moves a claim between the two, never out of the second reader's
  * sight. Each is shown in the sheet's own order, decoded as the walk would have
- * shown it had no blob stood at or above its name.
+ * shown it had no blob stood at or above its name, and with that blob, by its
+ * name (blob_above).
  *
  * STRICT: a sheet that will not load is the failure, before any claim is shown.
  * TOLERANT: none is shown past one, the failure kept (profile_load_sheet).
@@ -409,9 +415,11 @@ error_t profile_walk(
  * visitor — the universe a removal's arguments are matched against, read STRICT,
  * and every claim a deletion takes, read TOLERANT (cmds/remove.c
  * remove_list_claims, through remove_collect_claim, for remove_resolve and
- * remove_profile); and the directory claims remove's own names would take, read
- * STRICT after the walk (cmds/remove.c remove_complete, through
- * remove_offer_directory).
+ * remove_profile); the directory claims remove's own names would take, read STRICT
+ * after the walk (cmds/remove.c remove_complete, through remove_offer_directory);
+ * and the tracked claims the view's health names, each with its blob, read STRICT
+ * after the walk (core/manifest.c manifest_contribute, through
+ * manifest_note_contradicted).
  *
  * @param profile Handle (must not be NULL); its sheet read through it
  * @param read The sheet's policy for this question

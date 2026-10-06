@@ -42,22 +42,26 @@
  * called fresh, so manifest_name answers what the *next* settle will keep rather
  * than what the last one did.
  *
- * Two things a claim can fail to become, and the health channel says both. A
+ * Three things a claim can fail to become, and the health channel says each. A
  * claim this machine cannot place stands nowhere: manifest_unbound, the repair
  * a `--target`. A claim the view did not **keep** has one, and another name of
- * the same profile stands there: manifest_unkept, the repair a `remove`. Both
- * are claims the profile holds and the view has no row for, for two different
- * reasons; a claim precedence hides is neither — it is **overridden**, the normal
- * shape of layering, and no health question at all. A name the view did not keep
- * is in the profile and in no row, so nothing keyed by the view meets it: no
- * filter, no record join, no divergence screen, no deploy. The verbs that read
- * a profile directly serve it as readily as any other name — `dotta list -p P`
- * lists it, `dotta show -p P` prints its bytes — and none of them says it is
- * unused, which is what the health channel is for; `remove`, which reads the
- * profile too, is the one verb that takes it away. And one thing a profile can
- * fail to be: here. An enabled profile Git holds no branch for is **missing**
- * and contributes nothing: manifest_missing, the channel's third slice, the repair
- * a disable, or a fetch that brings the branch back.
+ * the same profile stands there: manifest_unkept, the repair a `remove`. A
+ * directory claim the profile's own tree **contradicts** — a blob of the same
+ * profile at its name or at a rung above it — stands nowhere though the profile
+ * holds it: manifest_contradicted, the repair a removal of one of the two, or a
+ * re-capture of the file where both are one path. All three are claims the profile
+ * holds and the view has no row for, for three different reasons; a claim
+ * precedence hides is none of them — it is **overridden**, the normal shape of
+ * layering, and no health question at all. A name the view did not keep is in
+ * the profile and in no row, so nothing keyed by the view meets it: no filter,
+ * no record join, no divergence screen, no deploy. The verbs that read a profile
+ * directly serve it as readily as any other name — `dotta list -p P` lists it,
+ * `dotta show -p P` prints its bytes — and none of them says it is unused, which
+ * is what the health channel is for; `remove`, which reads the profile too, is
+ * the one verb that takes it away. And one thing a profile can fail to be: here.
+ * An enabled profile Git holds no branch for is **missing** and contributes
+ * nothing: manifest_missing, the channel's fourth slice, the repair a disable,
+ * or a fetch that brings the branch back.
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_profile walks one profile
@@ -638,7 +642,53 @@ typedef struct {
 manifest_unkept_t manifest_unkept(const manifest_t *manifest);
 
 /**
- * Bound carrier for the view's third health slice, the manifest_rows_t idiom:
+ * One directory claim a profile's own tree contradicts: a tracked claim of its
+ * sheet with a blob of the same profile at its name or at a rung above it
+ * (core/profiles.h profile_contradicted). The tree is the content authority, so
+ * the file stands and the claim nowhere — in the profile and in no row, the third
+ * way a claim fails to become one. Tracked claims alone: a derived one is the
+ * way to a tracked one, recorded here, or to none, which the profile's next settle
+ * prunes.
+ *
+ * The screen says **contradicted**, the decode's word, and names the file — the
+ * two things a repair chooses between. Strings are the build arena's, same lifetime
+ * as the rows.
+ */
+typedef struct {
+    const char *profile;
+    const char *storage_path;      /* the directory claim the tree contradicts */
+    const char *blob_above;        /* the blob at its name or at a rung above it */
+} manifest_contradicted_claim_t;
+
+/**
+ * Bound carrier for the view's third health slice, the manifest_rows_t idiom.
+ */
+typedef struct {
+    const manifest_contradicted_claim_t *entries;
+    size_t count;
+} manifest_contradicted_t;
+
+/**
+ * The tracked directory claims the profiles' own trees contradict, grouped by
+ * profile
+ *
+ * Pure value return — no allocation, no error path. Entries arrive in build order,
+ * one profile's contiguous, each in its sheet's order; each (profile, storage
+ * path) once, the sheet holding one item a key. Empty on every build whose profiles
+ * contradict none of their own claims — the common case, costing the build a
+ * second classification of each directory claim.
+ *
+ * Readers: the health channel's listing (cmds/status.c status_print_profiles),
+ * apply's section (cmds/apply.c cmd_apply) and sync's after its Git phase
+ * (cmds/sync.c cmd_sync).
+ *
+ * @param manifest Manifest (NULL returns an empty slice)
+ * @return Borrowed slice over the recorded claims, valid for the arena's lifetime
+ */
+manifest_contradicted_t manifest_contradicted(const manifest_t *manifest);
+
+/**
+ * Bound carrier for the view's fourth health slice, the manifest_rows_t idiom:
  * the missing profiles' names, the build arena's.
  */
 typedef struct {
@@ -654,10 +704,10 @@ typedef struct {
  * backs, which the workspace reads as released (core/workspace.c
  * workspace_orphan_authority). Missing is an observation, never an error
  * (manifest_build): the health channel's fact about a profile, where
- * manifest_unbound and manifest_unkept are its facts about claims. Only Git
- * surgery, or a state write that failed after `remove` deleted the branch, leaves
- * one. Empty on every build whose enabled profiles all have their branches, and
- * on one profile's view.
+ * manifest_unbound, manifest_unkept and manifest_contradicted are its facts about
+ * claims. Only Git surgery, or a state write that failed after `remove` deleted
+ * the branch, leaves one. Empty on every build whose enabled profiles all have
+ * their branches, and on one profile's view.
  *
  * The screen says **no branch**: the header's word is what the build found of
  * the profile, the screen's is what it lacks — the branch a fetch brings back,

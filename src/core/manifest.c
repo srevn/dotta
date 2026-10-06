@@ -130,6 +130,11 @@ struct manifest {
     size_t unkept_count;
     size_t unkept_capacity;
 
+    /* The tracked claims a profile's own tree contradicts (manifest_contradicted) */
+    manifest_contradicted_claim_t *contradicted; /* Arena; grouped by profile, in build order */
+    size_t contradicted_count;
+    size_t contradicted_capacity;
+
     /* The enabled profiles the build found no branch for (manifest_missing) */
     const char **missing;                        /* Arena; in the enabled set's order */
     size_t missing_count;
@@ -141,7 +146,9 @@ struct manifest {
  *
  * Everything the walk's visitor needs to place one profile's claims where they
  * stand: the view and the contribution being filled, and the two lists the step
- * spends. Handed to each profile's walk once and read at O(1) per claim.
+ * spends. Handed to each profile's walk once and read at O(1) per claim — and
+ * to its second question, the claims its tree contradicts, whose visitor reads
+ * the view, the profile's name and the arena alone (manifest_note_contradicted).
  *
  * Memory ownership:
  * - manifest: borrowed, caller retains ownership — the mount table and the unbound
@@ -278,6 +285,45 @@ static void manifest_note_unkept(
         .kept = kept,
         .filesystem_path = row->filesystem_path,
     };
+}
+
+/**
+ * Walk visitor that records one directory claim the profile's own tree contradicts
+ *
+ * The health primitive the per-profile step spends profile_contradicted's claims
+ * through: a tracked one is appended — its profile, its name and the blob above
+ * it — to the view's slice; a derived one records nothing. No dedup, and none
+ * possible: the sheet holds one item a key. A visitor and not a recorder beside
+ * the other two, since the claims arrive by a walk and no second caller records
+ * one. The claim and its strings are lent for the visit (core/profiles.h), so
+ * the two names are copied into the arena the view lives in.
+ *
+ * @param claim One claim the profile's tree contradicts (borrowed — valid for
+ *              the call only)
+ * @param payload The claim walk (claim_walk_t)
+ * @return NULL: recording a claim fails nowhere
+ */
+static error_t manifest_note_contradicted(const profile_claim_t *claim, void *payload) {
+    claim_walk_t *walk = payload;
+    manifest_t *manifest = walk->manifest;
+
+    /* A derived claim is the way to a tracked one, recorded in its own right,
+     * or to none, which the profile's next settle prunes: the repair is a tracked
+     * claim's */
+    if (!claim->tracked) return NULL;
+
+    manifest->contradicted = arena_grow(
+        walk->arena, manifest->contradicted, &manifest->contradicted_capacity,
+        manifest->contradicted_count + 1, sizeof(*manifest->contradicted)
+    );
+
+    manifest->contradicted[manifest->contradicted_count++] = (manifest_contradicted_claim_t){
+        .profile = walk->contribution->profile,
+        .storage_path = arena_strdup(walk->arena, claim->storage_path),
+        .blob_above = arena_strdup(walk->arena, claim->blob_above),
+    };
+
+    return NULL;
 }
 
 /**
@@ -788,8 +834,10 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
  * profile_walk) — its blobs, then the directory claims its own tree does not
  * contradict — and each is placed as it arrives (manifest_place_claim): resolved
  * against the mount table, recorded where this machine cannot place it
- * (manifest_note_unbound), and standing or contending. The settle then decides
- * every path this profile named twice, and the tail cuts the spine to what stands.
+ * (manifest_note_unbound), and standing or contending. The tracked claims its
+ * tree does contradict are noted on the view's health beside them
+ * (manifest_note_contradicted). The settle then decides every path this profile
+ * named twice, and the tail cuts the spine to what stands.
  *
  * The walk reads the profile's own sheet, strictly: a sheet that will not load
  * fails the build rather than read as "no claims", so no caller of a builder
@@ -849,6 +897,13 @@ static error_t manifest_contribute(
      * places under this profile's target and no other's. The walk names the profile
      * over its own failures (core/profiles.h), so nothing here says it again. */
     error_t err = profile_walk(profile, PROFILE_READ_STRICT, manifest_place_claim, &walk);
+    if (err) return err;
+
+    /* The tracked claims its own tree contradicts, which no row stands for, noted
+     * on the view's health (manifest_note_contradicted): the sheet the walk read,
+     * each directory claim classified again — the walk shows a claim or does
+     * not, and says nothing of the ones it does not */
+    err = profile_contradicted(profile, PROFILE_READ_STRICT, manifest_note_contradicted, &walk);
     if (err) return err;
 
     /* Every path this profile named twice, decided once. */
@@ -1160,6 +1215,17 @@ manifest_unkept_t manifest_unkept(const manifest_t *manifest) {
     return (manifest_unkept_t){
         .entries = manifest->unkept,
         .count = manifest->unkept_count,
+    };
+}
+
+/**
+ * The tracked directory claims the profiles' own trees contradict
+ */
+manifest_contradicted_t manifest_contradicted(const manifest_t *manifest) {
+    if (!manifest) return (manifest_contradicted_t){ 0 };
+    return (manifest_contradicted_t){
+        .entries = manifest->contradicted,
+        .count = manifest->contradicted_count,
     };
 }
 

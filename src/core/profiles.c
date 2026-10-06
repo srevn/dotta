@@ -691,8 +691,11 @@ error_t profile_contradicted(
         if (above == 0) continue;
 
         /* The item, decoded as the walk would have shown it had no blob stood
-         * at its name or above it */
-        const profile_claim_t claim = profile_decode_directory(items[i]);
+         * at its name or above it, and that blob, by its name — a prefix of the
+         * claim's own, or the whole of it where the blob stands at the claim's
+         * name — kept in the handle's arena, as an answer is */
+        profile_claim_t claim = profile_decode_directory(items[i]);
+        claim.blob_above = arena_strndup(profile->arena, items[i]->key, above);
         err = visit(&claim, payload);
         if (err) return err;
     }

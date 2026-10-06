@@ -52,14 +52,17 @@ static void status_print_profiles(
 
     /* The view's health, annotated onto the block. The claims the build could
      * not place, onto their profile's line (a count, the paths under -v), the
-     * repair a legend line under the block; and its sibling, the names a profile
+     * repair a legend line under the block; its sibling, the names a profile
      * holds for a path it also names otherwise, annotated and listed the same
-     * way — both say a profile carries more than it projects, for two different
-     * reasons. And the enabled profiles the build found no branch for, a line
-     * each beneath the rest: a profile the state enables is not left out of the
-     * block that lists the enabled. */
+     * way; and the directory claims a profile's own tree contradicts, the same
+     * way again, each beside the file that contradicts it — the three say a profile
+     * carries more than it projects, for three different reasons. And the enabled
+     * profiles the build found no branch for, a line each beneath the rest: a
+     * profile the state enables is not left out of the block that lists the
+     * enabled. */
     manifest_unbound_t unbound = manifest_unbound(view);
     manifest_unkept_t unkept = manifest_unkept(view);
+    manifest_contradicted_t contradicted = manifest_contradicted(view);
     manifest_missing_t missing = manifest_missing(view);
 
     /* Show enabled profiles */
@@ -75,6 +78,7 @@ static void status_print_profiles(
      * slice's own count would explain an annotation no line above it carries. */
     bool unbound_shown = false;
     bool unused_shown = false;
+    bool contradicted_shown = false;
     bool missing_shown = false;
 
     for (size_t i = 0; i < profiles->count; i++) {
@@ -128,6 +132,14 @@ static void status_print_profiles(
         }
         if (unused > 0) unused_shown = true;
 
+        /* Nor are the directory claims its own tree contradicts: a file of the
+         * profile stands at or above each, so the view has no row for them. */
+        size_t voided = 0;
+        for (size_t j = 0; j < contradicted.count; j++) {
+            if (strcmp(contradicted.entries[j].profile, profile) == 0) voided++;
+        }
+        if (voided > 0) contradicted_shown = true;
+
         /* Show per-profile last deployed timestamp */
         if (profile_deploy_time > 0) {
             char relative_buf[64];
@@ -154,6 +166,13 @@ static void status_print_profiles(
             output_print(
                 out, OUTPUT_NORMAL, "  {yellow}(%zu unused path%s){reset}",
                 unused, unused == 1 ? "" : "s"
+            );
+        }
+
+        if (voided > 0) {
+            output_print(
+                out, OUTPUT_NORMAL, "  {yellow}(%zu contradicted director%s){reset}",
+                voided, voided == 1 ? "y" : "ies"
             );
         }
 
@@ -196,6 +215,21 @@ static void status_print_profiles(
                     unkept.entries[j].kept
                 );
             }
+
+            /* The file is what a repair chooses against, and where it stands
+             * decides which verb keeps it: at the claim's own path, or above it
+             * (the legend below). Both by storage path: the shape is a relation
+             * of the two names, and the remedies take names. */
+            for (size_t j = 0; j < contradicted.count; j++) {
+                const manifest_contradicted_claim_t *claim = &contradicted.entries[j];
+                if (strcmp(claim->profile, profile) != 0) continue;
+                output_print(
+                    out, OUTPUT_NORMAL, "\n    contradicted: %s/ (%s the file %s)",
+                    claim->storage_path,
+                    strcmp(claim->storage_path, claim->blob_above) == 0
+                    ? "at" : "beneath", claim->blob_above
+                );
+            }
         }
 
         output_endline(out, OUTPUT_NORMAL);
@@ -231,10 +265,12 @@ static void status_print_profiles(
      * is read rather than pasted into a command it would break. `--dry-run` is
      * the whole of the unused-path safety: dropping a directory name takes every
      * claim beneath it, and the preview shows that rather than asserting it.
-     * The claims' two are worth a line at all because nothing else offers them
-     * — neither claim has a row, so no completion source reaches one — and the
-     * missing profile's because nothing else on this screen names it. */
-    if (unbound_shown || unused_shown || missing_shown) {
+     * The first two claims' lines are worth having at all because nothing else
+     * offers them — neither claim has a row, so no completion source reaches
+     * one; the contradicted claim's because which verb keeps which turns on a
+     * shape only the -v line shows; and the missing profile's because nothing
+     * else on this screen names it. */
+    if (unbound_shown || unused_shown || contradicted_shown || missing_shown) {
         output_gap(out, OUTPUT_NORMAL);
         if (unbound_shown) {
             output_hintline(
@@ -249,6 +285,32 @@ static void status_print_profiles(
                 out, OUTPUT_NORMAL,
                 "  unused paths  - 'dotta remove --dry-run <profile> <path>' shows "
                 "what dropping one takes"
+            );
+        }
+        if (contradicted_shown) {
+            /* Keyed to the shape the -v line names, one remedy a line. The
+             * directory is kept by taking the file, which names a blob and takes
+             * it alone (cmds/remove.c remove_resolve); a machine whose disk holds
+             * the file moves it aside by hand, or the file's record stays under
+             * the directory's row as the user's squatter and apply lands nothing
+             * beneath it. The file is kept by taking the directory: by its own
+             * path where it lies beneath the file — a path that names no blob —
+             * and, where the two are one path, which would name the file, by
+             * capturing the file over it. */
+            output_hintline(
+                out, OUTPUT_NORMAL,
+                "  contradicted  - 'dotta remove <profile> <file>' keeps the directory, "
+                "the file moved aside by hand where it stands"
+            );
+            output_hintline(
+                out, OUTPUT_NORMAL,
+                "                  'dotta remove <profile> <directory>' keeps the file "
+                "the directory is beneath"
+            );
+            output_hintline(
+                out, OUTPUT_NORMAL,
+                "                  'dotta add --force <profile> <file>' keeps the file "
+                "the directory is at"
             );
         }
         if (missing_shown) {

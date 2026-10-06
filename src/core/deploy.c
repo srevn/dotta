@@ -1562,7 +1562,7 @@ static error_t deploy_file(
     err = content_cache_get_from_blob_oid(
         run->cache,
         &file->blob_oid,
-        path_type_to_git_filemode(file->type),
+        gitops_type_filemode(file->type),
         file->storage_path,
         file->profile,
         &content_buffer

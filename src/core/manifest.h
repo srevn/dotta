@@ -110,7 +110,6 @@
 #include <sys/stat.h>
 #include <types.h>
 
-#include "base/error.h"
 #include "base/hashmap.h"
 #include "infra/mount.h"
 
@@ -275,39 +274,6 @@ typedef struct {
     const manifest_row_t *const *entries;
     size_t count;
 } manifest_rows_t;
-
-/**
- * Convert a path type to its git filemode
- *
- * The canonical conversion, a type back to the filemode the content layer and
- * the comparisons read. Readers: core/workspace.c workspace_analyze_file,
- * core/deploy.c deploy_file, cmds/diff.c show_file_diff_from_workspace and
- * compare_tree_files_to_filesystem, and cmds/show.c show_print_blob (a decoded
- * claim's type, which the profile read off one of a blob's three filemodes).
- *
- * Mapping:
- *   PATH_TYPE_SYMLINK    -> GIT_FILEMODE_LINK (0120000)
- *   PATH_TYPE_EXECUTABLE -> GIT_FILEMODE_BLOB_EXECUTABLE (0100755)
- *   PATH_TYPE_DIRECTORY  -> GIT_FILEMODE_TREE (0040000)
- *   PATH_TYPE_FILE       -> GIT_FILEMODE_BLOB (0100644)
- *
- * @param type Path type
- * @return Corresponding git filemode
- */
-static inline git_filemode_t path_type_to_git_filemode(path_type_t type) {
-    switch (type) {
-        case PATH_TYPE_FILE:
-            return GIT_FILEMODE_BLOB;
-        case PATH_TYPE_SYMLINK:
-            return GIT_FILEMODE_LINK;
-        case PATH_TYPE_EXECUTABLE:
-            return GIT_FILEMODE_BLOB_EXECUTABLE;
-        case PATH_TYPE_DIRECTORY:
-            return GIT_FILEMODE_TREE;
-    }
-
-    CHECK_ARG(false, "a path type no enumerator names");
-}
 
 /**
  * Manifest (opaque)

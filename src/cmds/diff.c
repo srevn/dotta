@@ -332,7 +332,7 @@ static error_t show_file_diff_from_workspace(
 
     /* Get content from cache via the row's blob_oid (borrowed reference - don't
      * free), read as the entry the row's type says it is */
-    git_filemode_t mode = path_type_to_git_filemode(file->type);
+    git_filemode_t mode = gitops_type_filemode(file->type);
     const buffer_t *content = NULL;
     error_t err = content_cache_get_from_blob_oid(
         cache, &file->blob_oid, mode, file->storage_path, file->profile, &content
@@ -642,7 +642,7 @@ static error_t compare_tree_files_to_filesystem(
             continue;
         }
 
-        git_filemode_t mode = path_type_to_git_filemode(entry->type);
+        git_filemode_t mode = gitops_type_filemode(entry->type);
 
         /* Name-only output */
         if (opts->name_only) {

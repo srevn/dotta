@@ -1053,7 +1053,7 @@ static void workspace_analyze_file(
          * key for the sealed one. The fast path needs none — the pair it answers
          * from carries its own kind — so the mapping is made here rather than
          * above the fork. */
-        git_filemode_t expected_filemode = path_type_to_git_filemode(row->type);
+        git_filemode_t expected_filemode = gitops_type_filemode(row->type);
 
         /* The ladder's first rung, asked of the look before anything is read:
          * another kind than the row's stands (core/workspace.h

@@ -734,6 +734,19 @@ error_t gitops_tree_walk(
     return err;
 }
 
+git_filemode_t gitops_type_filemode(path_type_t type) {
+    /* One arm a type and no default, so a type the enum gains is the compiler's
+     * question here (w9kc); one no enumerator names falls through to its death */
+    switch (type) {
+        case PATH_TYPE_FILE:       return GIT_FILEMODE_BLOB;
+        case PATH_TYPE_SYMLINK:    return GIT_FILEMODE_LINK;
+        case PATH_TYPE_EXECUTABLE: return GIT_FILEMODE_BLOB_EXECUTABLE;
+        case PATH_TYPE_DIRECTORY:  return GIT_FILEMODE_TREE;
+    }
+
+    CHECK_ARG(false, "a path type no enumerator names");
+}
+
 /**
  * Commit operations
  */

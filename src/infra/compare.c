@@ -77,14 +77,14 @@ static error_t judge(
 /**
  * The modes a comparison is defined over
  *
- * A blob's two spellings and a link: what a file row's type becomes
- * (core/manifest.h path_type_to_git_filemode). A tree — which that same function
- * returns for a directory row — or a mode from nowhere is the caller's bug, and
- * dies in both ladders before either touches the disk: read as a blob, a directory
- * would be opened and judged, and mode_stands below would ask a regular file's
- * question about it. Every caller maps a file row's type, and a tree entry's
- * filemode reaches none: the profile keys a blob's type off its entry
- * (core/profiles.c profile_decode_blob) and a gitlink claims nothing there.
+ * A blob's two spellings and a link: what a file row's type becomes (sys/gitops.h
+ * gitops_type_filemode). A tree — which that same function returns for a directory
+ * row — or a mode from nowhere is the caller's bug, and dies in both ladders
+ * before either touches the disk: read as a blob, a directory would be opened
+ * and judged, and mode_stands below would ask a regular file's question about
+ * it. Every caller maps a file row's type, and a tree entry's filemode reaches
+ * none: the profile keys a blob's type off its entry (core/profiles.c
+ * profile_decode_blob) and a gitlink claims nothing there.
  *
  * Asked first in both ladders, so one caller error has one answer wherever it
  * is made. It used to sit after the pair's own stat, where an unsupported mode

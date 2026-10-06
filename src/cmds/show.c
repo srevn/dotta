@@ -106,7 +106,7 @@ static error_t show_print_blob(
      * are read as they stand. */
     buffer_t content = BUFFER_INIT;
     error_t err = content_get_from_blob_oid(
-        repo, &claim->blob_oid, path_type_to_git_filemode(claim->type),
+        repo, &claim->blob_oid, gitops_type_filemode(claim->type),
         claim->storage_path, profile, keymgr, &content
     );
     if (err) return err;

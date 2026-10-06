@@ -497,6 +497,25 @@ error_t gitops_tree_walk(
 );
 
 /**
+ * The filemode a path's type stands as in a tree
+ *
+ * dotta's type (include/types.h path_type_t) in Git's words: a file 0100644, an
+ * executable 0100755, a link 0120000, a directory a tree, 040000 — the filemode
+ * the content layer and the comparisons read a claim's bytes under. The decode
+ * reads the other way, a blob's filemode into its type (core/profiles.c
+ * profile_decode_blob). A type no enumerator names is a caller's bug, and dies.
+ *
+ * Readers: core/workspace.c workspace_analyze_file, core/deploy.c deploy_file,
+ * cmds/diff.c show_file_diff_from_workspace and compare_tree_files_to_filesystem,
+ * and cmds/show.c show_print_blob (a decoded claim's type, which the profile
+ * read off one of a blob's three filemodes).
+ *
+ * @param type Path type
+ * @return Its filemode
+ */
+git_filemode_t gitops_type_filemode(path_type_t type);
+
+/**
  * Zero-copy view into a git blob's raw bytes.
  *
  * Holds an open git_blob handle and exposes its raw content without copying.

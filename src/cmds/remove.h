@@ -9,8 +9,9 @@
  * Filesystem synchronization is handled by 'dotta apply'.
  *
  * Removal is pure tree surgery — no content is captured, nothing needs a working
- * copy — so the Git phase is one stage (sys/stage): the entries removed, the
- * sheet rewritten beside them, one commit; no per-file filesystem IO.
+ * copy — so the Git phase is one stage, the profile's next commit (core/profiles.h
+ * profile_stage_t): each claim removed by its own kind, the sheet pruned and
+ * rewritten beside them, one commit; no per-file filesystem IO.
  */
 
 #ifndef DOTTA_CMD_REMOVE_H

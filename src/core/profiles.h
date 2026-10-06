@@ -1,5 +1,6 @@
 /**
- * profiles.h - A profile: what its name says, and what it claims at a tree
+ * profiles.h - A profile: what its name says, what it claims at a tree, and its
+ * next commit
  *
  * A profile is dotta's: a name, and what it claims at each of its commits. Git
  * keeps it as a branch of the same name (sys/gitops.h gitops_branch_refname),
@@ -15,7 +16,10 @@
  * a tree cannot hold. A reader wants the claims, never the two documents: it
  * opens the profile at a tree and asks the handle, which reads that tree's own
  * sheet once, at the first question that needs it. What the handle reads is Git's
- * alone, the tree and its sheet: no view, no record, no disk.
+ * alone, the tree and its sheet: no view, no record, no disk. A writer wants
+ * the claims too: it opens the profile's next commit (profile_stage_t), asks
+ * the profile at the tree that commit opened at, and edits through it — never
+ * the two documents, which the stage keeps together by the rules its type states.
  *
  * The decode, stated once, applied by the walk to every name it meets
  * (profile_walk) and by profile_find to the one it is asked, by the same rules
@@ -50,7 +54,8 @@
  * under "Cannot read profile '%s'" for a walk, and "Cannot read '%s' in profile
  * '%s'" for a question asked at one name — a point question's, or the
  * classification's at a directory claim's own — which names the name it was asked.
- * No reader says the profile again.
+ * No reader says the profile again. A removal a profile's next commit cannot
+ * make is refused in its own document's words (profile_stage_remove).
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name
@@ -218,13 +223,13 @@ typedef struct profile profile_t;
  *
  * Readers: core/manifest.c manifest_build (each enabled head gitops_branch_tree
  * found) and core/workspace.c workspace_orphan_authority (each orphan's profile's
- * head, found the same way), cmds/add.c cmd_add, cmds/remove.c remove_paths and
- * cmds/revert.c cmd_revert (the tree a stage opened at, and revert's target
- * commit's), cmds/diff.c diff_commit_to_workspace (the commit's), cmds/export.c
- * cmd_export, cmds/show.c cmd_show and cmds/list.c list_file_history (the tree
- * the verb selected), cmds/list.c list_profiles and list_files (the tree of the
- * head each listing read, so what each prints is that commit's); and profile_load,
- * at the head it read.
+ * head, found the same way), cmds/add.c cmd_add and cmds/revert.c cmd_revert
+ * (the tree a stage opened at, and revert's target commit's), cmds/diff.c
+ * diff_commit_to_workspace (the commit's), cmds/export.c cmd_export, cmds/show.c
+ * cmd_show and cmds/list.c list_file_history (the tree the verb selected),
+ * cmds/list.c list_profiles and list_files (the tree of the head each listing
+ * read, so what each prints is that commit's); profile_load, at the head it read;
+ * and profile_stage_open, at the tree its stage opened at.
  *
  * @param name Whose claims these are (must not be NULL; copied)
  * @param tree The tree (must not be NULL; borrowed, and outlives the handle)
@@ -310,12 +315,13 @@ typedef enum {
  * metadata_load_from_tree).
  *
  * Readers: profile_walk, profile_contradicted and the point questions
- * (profile_holds, profile_find), which read the sheet through it; cmds/show.c
- * show_file, whose header says what its tolerant read lost; cmds/list.c list_files,
- * whose verbose rows say what its tolerant walk lost; cmds/export.c cmd_export,
- * which says what a tolerant arm's collection lost, once, beside the two arms
- * whose copy came out empty, where the failure is the answer
- * (export_collect_profile, export_collect_storage); and cmds/remove.c
+ * (profile_holds, profile_find), which read the sheet through it;
+ * profile_stage_open, which reads it at the open, strictly, and copies it for
+ * the commit; cmds/show.c show_file, whose header says what its tolerant read
+ * lost; cmds/list.c list_files, whose verbose rows say what its tolerant walk
+ * lost; cmds/export.c cmd_export, which says what a tolerant arm's collection
+ * lost, once, beside the two arms whose copy came out empty, where the failure
+ * is the answer (export_collect_profile, export_collect_storage); and cmds/remove.c
  * remove_profile, which says before its preview what its hooks' tolerant list lost.
  *
  * @param profile Handle (must not be NULL)
@@ -662,5 +668,119 @@ error_t profile_find(
     const char *storage_path,
     const profile_claim_t **out
 );
+
+/**
+ * A profile's next commit: both of its documents staged in memory (opaque)
+ *
+ * sys/stage's role one level up (sys/stage.h: one ref's next tree, staged in
+ * memory): one profile's next tree, and the sheet that rides it. Opened at the
+ * profile's head, it holds the stage; the profile at the tree the stage opened
+ * at — the base, read and never edited, lent for every question a writer asks
+ * before it edits; and the sheet the commit will carry — the base's, copied at
+ * the open (core/metadata.h metadata_clone) and edited from then on, so every
+ * claim the base lends stands whatever the commit does. A writer asks the base
+ * and edits the stage; it never holds the sheet. Every edit keeps the document's
+ * rules, stated here once:
+ *   - a removal takes its own kind: a file's the blob and the FILE item at its
+ *     name, a directory's the DIRECTORY item — never the other kind's claim at
+ *     the same name, so a directory claim a blob contradicts stands again once
+ *     the blob goes, carried;
+ *   - the prune: at the commit, a derived claim nothing tracked stands beneath
+ *     any longer goes (core/metadata.h metadata_prune_ancestors), its key handed
+ *     to the writer's record phase;
+ *   - the gate, each document held against the one the stage opened: the sheet
+ *     is saved only where its claims are no longer the base's (core/metadata.h
+ *     metadata_same), so a sheet no claim of which moved keeps its bytes, a hand's
+ *     spelling included; and a tree equal to the one opened is no commit
+ *     (sys/stage.h stage_commit).
+ *
+ * Memory: a handle's own struct, made by profile_stage_open and released by
+ * profile_stage_free with the stage, the base and the copy; the base borrows
+ * the stage's tree, and goes first.
+ */
+typedef struct profile_stage profile_stage_t;
+
+/**
+ * Open a profile's next commit at its head
+ *
+ * The stage at the profile's branch (sys/stage.h stage_open: a branch that does
+ * not stand is refused ERR_NOT_FOUND, naming its reference), the base at the
+ * tree the stage opened, and the base's sheet read now and strictly: a writer
+ * refuses a sheet that will not load before its preview, in the loader's words,
+ * where a reader may go on without it.
+ *
+ * Reader: cmds/remove.c remove_paths.
+ *
+ * @param repo Repository (must not be NULL; borrowed for the stage's life)
+ * @param name The profile's name, which its branch is named by (must not be NULL;
+ *             copied)
+ * @param out The stage (must not be NULL; released by profile_stage_free); NULL
+ *            on a failure
+ * @return Error or NULL on success
+ */
+error_t profile_stage_open(git_repository *repo, const char *name, profile_stage_t **out);
+
+/**
+ * The profile as the stage opened it: the base, lent until profile_stage_free
+ *
+ * Reader: cmds/remove.c remove_paths, for the claims its arguments are matched
+ * against (remove_resolve).
+ *
+ * @param stage The stage (must not be NULL)
+ * @return The base; never NULL
+ */
+profile_t *profile_stage_base(const profile_stage_t *stage);
+
+/**
+ * The claim of `kind` at `storage_path`, gone from the commit
+ *
+ * FILE: the blob, and the FILE item at its name where one stands — refused in
+ * sys/stage's words where the tree holds no entry there (sys/stage.h stage_remove,
+ * ERR_NOT_FOUND). DIRECTORY: the DIRECTORY item — refused ERR_NOT_FOUND, "Profile
+ * '%s' claims no directory at '%s'", where the sheet holds none. The other kind's
+ * claim at the name is never taken, and a refusal leaves the commit as it was.
+ *
+ * Reader: cmds/remove.c remove_paths, each claim its arguments took.
+ *
+ * @param stage The stage (must not be NULL)
+ * @param kind A file's claim or a directory's
+ * @param storage_path A validated storage path (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t profile_stage_remove(
+    profile_stage_t *stage,
+    path_kind_t kind,
+    const char *storage_path
+);
+
+/**
+ * The commit
+ *
+ * The prune, against the index the commit will record, its keys appended to
+ * `pruned`; the sheet saved where its claims moved; then one commit (sys/stage.h
+ * stage_commit: a tree equal to the opened one is none, and a head another writer
+ * moved since the open is refused ERR_CONFLICT). One commit a stage.
+ *
+ * Reader: cmds/remove.c remove_paths.
+ *
+ * @param stage The stage (must not be NULL)
+ * @param message Commit message (must not be NULL)
+ * @param pruned The keys the prune took, appended as copies in the array's arena
+ *               (must not be NULL; given its arena by string_array_init)
+ * @return Error or NULL on success
+ */
+error_t profile_stage_commit(
+    profile_stage_t *stage,
+    const char *message,
+    string_array_t *pruned
+);
+
+/**
+ * Release the stage — the copy, the base and the stage — undoing nothing in the
+ * repository (sys/stage.h stage_free)
+ *
+ * @param stage The stage (NULL is a no-op)
+ */
+void profile_stage_free(profile_stage_t *stage);
 
 #endif /* DOTTA_PROFILES_H */

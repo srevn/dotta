@@ -241,6 +241,24 @@ typedef struct metadata metadata_t;
 metadata_t *metadata_create_empty(void);
 
 /**
+ * A copy of the collection: every item deep-copied, in the source's insertion order
+ *
+ * For the reader that edits and must leave the source as it read it: a profile's
+ * next commit edits a copy of the sheet its base decoded (core/profiles.h
+ * profile_stage_open), so the claims the base lends stand whatever the commit
+ * does, and the commit saves the copy only where its claims are no longer the
+ * base's (metadata_same). The same document a second parse of the bytes would
+ * give — insertion order kept, which the serializer sorts away — at about a ninth
+ * of its cost.
+ *
+ * Reader: core/profiles.c profile_stage_open.
+ *
+ * @param metadata The collection to copy (must not be NULL)
+ * @return The copy, a sheet of its own (caller frees with metadata_free)
+ */
+metadata_t *metadata_clone(const metadata_t *metadata);
+
+/**
  * Free metadata structure
  *
  * Frees every item it holds, then the sheet's arena — the structure, its spine
@@ -304,7 +322,8 @@ void metadata_item_free(metadata_item_t *item);
  * Every field but the key travels: kind, mode, ownership, and the two flags.
  * The key is a parameter because a claim outlives the name it was recorded under
  * — a revert restores a commit's claim into the name the profile holds now
- * (cmds/revert.c) — and passing `source->key` is the identity copy.
+ * (cmds/revert.c) — and passing `source->key` is the identity copy, which a sheet's
+ * copy makes of every item (metadata_clone).
  *
  * @param source Source item to clone (must not be NULL)
  * @param storage_path The key the copy carries (must not be NULL)
@@ -420,17 +439,37 @@ const metadata_item_t *metadata_directory_beneath(
  * NULL) are equal, which is what a caller comparing "what the sheet says" with
  * "what it would say" needs about a key neither holds.
  *
- * Reader: revert's nothing-to-do gate, which must know whether the write it is
- * about to make is already standing. The sheet carries what the tree cannot —
- * the mode below the owner-execute bit, and ownership — so a caller that reads
- * the tree's entry alone cannot answer this (infra/content stamps a filemode
- * from S_IXUSR and nothing else).
+ * Readers: revert's nothing-to-do gate, which must know whether the write it is
+ * about to make is already standing, and the comparison of two sheets, claim by
+ * claim (metadata_same). The sheet carries what the tree cannot — the mode below
+ * the owner-execute bit, and ownership — so a caller that reads the tree's entry
+ * alone cannot answer this (infra/content stamps a filemode from S_IXUSR and
+ * nothing else).
  *
  * @param a First claim (NULL is the absent claim)
  * @param b Second claim (NULL is the absent claim)
  * @return true if the two say the same thing
  */
 bool metadata_same_claim(const metadata_item_t *a, const metadata_item_t *b);
+
+/**
+ * Two sheets that say the same thing
+ *
+ * The same claims, each the same (metadata_same_claim), whatever order each holds
+ * them in: the serializer writes the items by key (metadata_to_json), so two
+ * sheets that hold the same claims serialize alike, and a sheet whose claims
+ * differ from another's has one to write.
+ *
+ * Reader: the save's gate of a profile's next commit (core/profiles.c
+ * profile_stage_commit), which compares the sheet it carries with the one it
+ * opened, as sys/stage compares the trees (sys/stage.h stage_commit) — so a sheet
+ * no claim of which moved keeps the bytes it has, a hand's spelling included.
+ *
+ * @param a A sheet (must not be NULL)
+ * @param b Another (must not be NULL)
+ * @return true where the two hold the same claims
+ */
+bool metadata_same(const metadata_t *a, const metadata_t *b);
 
 /**
  * Remove metadata item
@@ -483,10 +522,11 @@ bool metadata_remove_item(
  * Caller pattern: invoke after every edit of the stage for the impending commit
  * (additions put, deletions removed) and before the sheet is saved onto it, so
  * the prune sees the commit's exact tracked set and lands in the same commit as
- * the triggering removals. The keys pruned are appended to `pruned`, in item
- * order: the entry leaves the view by the verb's own commit, so the verb retires
- * its record the way it does a path it removed. Nothing appended means nothing
- * was pruned (caller may use this to skip a no-op rewrite).
+ * the triggering removals — a profile's next commit prunes so at its commit
+ * (core/profiles.c profile_stage_commit), and update by hand (cmds/update.c
+ * update_profile). The keys pruned are appended to `pruned`, in item order: the
+ * entry leaves the view by the verb's own commit, so the verb retires its record
+ * the way it does a path it removed. Nothing appended means nothing was pruned.
  *
  * @param metadata Metadata collection (must not be NULL; mutated in place)
  * @param index Post-edit index — the stage's, after every put and removal (must
@@ -774,13 +814,16 @@ error_t metadata_from_json(
  *
  * Puts the sheet — .dotta/metadata.json, serialized by metadata_to_json — on
  * the stage as a regular blob; the caller's commit carries it. The one writer
- * of the sheet, for add, update, remove and revert alike. A sheet this serializer
- * wrote, loaded and saved unchanged, puts the blob the tree already holds (the
- * serializer's byte-determinism), which is what lets the stage's commit see an
- * untouched sheet as no change. A hand-written one the parser accepts — other
- * whitespace, another item order, inert fields — is normalized by the save and
- * moves its blob; nothing here promises otherwise, and no caller normalizes a
- * sheet it did not otherwise change.
+ * of the sheet: a profile's next commit's (core/profiles.c profile_stage_commit),
+ * and add's, update's and revert's, each until it commits on one. A sheet this
+ * serializer wrote, loaded and saved unchanged, puts the blob the tree already
+ * holds (the serializer's byte-determinism), which is what lets the stage's commit
+ * see an untouched sheet as no change. A hand-written one the parser accepts —
+ * other whitespace, another item order, inert fields — is normalized by the save
+ * and moves its blob; nothing here promises otherwise, so a caller that must
+ * not re-spell a sheet it did not change saves only one whose claims moved
+ * (metadata_same), as a profile's next commit does, and one that saves on every
+ * run commits a re-spelling alone, as add does.
  *
  * @param stage The stage the sheet goes on (must not be NULL)
  * @param metadata Metadata to save (must not be NULL)

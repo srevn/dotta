@@ -76,6 +76,27 @@ metadata_t *metadata_create_empty(void) {
 }
 
 /**
+ * A copy of the collection
+ *
+ * Each item cloned under its own key and handed to a sheet of the copy's own,
+ * in the source's order: a key is held once in the source, so every add appends,
+ * the copy's spine reads as the source's, and its index is its own.
+ */
+metadata_t *metadata_clone(const metadata_t *metadata) {
+    CHECK_NULL(metadata);
+
+    metadata_t *copy = metadata_create_empty();
+    for (size_t i = 0; i < metadata->count; i++) {
+        metadata_item_t *item = metadata_item_clone(
+            metadata->items[i], metadata->items[i]->key
+        );
+        metadata_add_item(copy, &item);
+    }
+
+    return copy;
+}
+
+/**
  * Free metadata item
  */
 void metadata_item_free(metadata_item_t *item) {
@@ -325,6 +346,27 @@ bool metadata_same_claim(const metadata_item_t *a, const metadata_item_t *b) {
            a->encrypted == b->encrypted && a->tracked == b->tracked &&
            str_equal(a->key, b->key) && str_equal(a->owner, b->owner) &&
            str_equal(a->group, b->group);
+}
+
+/**
+ * Two sheets that say the same thing
+ *
+ * As many claims, and each of a's the one b holds at its key. A key is held once
+ * in each (the index), so that is the same claims whatever order each holds them
+ * in, the insertion order being the one thing the serializer does not print.
+ */
+bool metadata_same(const metadata_t *a, const metadata_t *b) {
+    CHECK_NULL(a);
+    CHECK_NULL(b);
+
+    if (a->count != b->count) return false;
+
+    for (size_t i = 0; i < a->count; i++) {
+        const metadata_item_t *held = hashmap_get(b->index, a->items[i]->key);
+        if (!metadata_same_claim(a->items[i], held)) return false;
+    }
+
+    return true;
 }
 
 /**

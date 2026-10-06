@@ -1,5 +1,6 @@
 /**
- * profiles.c - A profile: what its name says, and what it claims at a tree
+ * profiles.c - A profile: what its name says, what it claims at a tree, and its
+ * next commit
  *
  * The name's questions: which names this machine layers (the host's), in what
  * order (the names' alone), and whether a profile's branch stands (Git's). The
@@ -14,7 +15,10 @@
  * and the directory claim standing at a name through the question the walk asks
  * of each item, decoded as the walk decodes it (profile_decode_directory). The
  * counts and the need of a target are the walk, folded (profile_counts,
- * profile_needs_target).
+ * profile_needs_target). The next commit is a sys/stage, the base — the profile
+ * at the tree the stage opened, its sheet read at the open — and that sheet copied:
+ * a removal edits the stage and the copy, and the commit prunes the copy, saves
+ * it where its claims are no longer the base's and commits.
  */
 
 #include "core/profiles.h"
@@ -29,11 +33,13 @@
 #include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/string.h"
 #include "core/metadata.h"
 #include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/gitops.h"
+#include "sys/stage.h"
 
 /**
  * One layer's profiles among those available: its base, and its variants one
@@ -849,4 +855,140 @@ error_t profile_find(
     }
 
     CHECK_ARG(false, "a path kind no enumerator names");
+}
+
+struct profile_stage {
+    stage_t *stage;         /* The next tree, on the profile's branch */
+    profile_t *base;        /* The profile at the tree it opened: never edited */
+    metadata_t *sheet;      /* The base's sheet, copied: what the commit carries */
+};
+
+error_t profile_stage_open(git_repository *repo, const char *name, profile_stage_t **out) {
+    CHECK_NULL(repo);
+    CHECK_NULL(name);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    /* The branch the profile is built on, by Git's branch rule, before anything
+     * is opened (sys/gitops.h gitops_branch_refname) */
+    char refname[DOTTA_REFNAME_MAX];
+    error_t err = gitops_branch_refname(refname, sizeof(refname), name);
+    if (err) return err;
+
+    /* The stage at its head, refused in gitops' words where none stands, and
+     * the base at the tree the stage opened, its sheet read now and strictly: a
+     * writer refuses a sheet that will not load before its preview. The struct
+     * holds each from its first allocation, so every failure releases through
+     * profile_stage_free, and the sheet's failure outlives the base that kept
+     * it (base/error.h "Lifetime") */
+    profile_stage_t *stage = heap_calloc(1, sizeof(*stage));
+    err = stage_open(repo, refname, &stage->stage);
+    if (!err) {
+        stage->base = profile_open(name, stage_tree(stage->stage));
+        err = profile_load_sheet(stage->base);
+    }
+    if (err) {
+        profile_stage_free(stage);
+        return err;
+    }
+
+    /* The sheet the commit carries: the base's, copied, so every claim the base
+     * lends stands whatever the edits do, and the commit has the base's to compare
+     * it with */
+    stage->sheet = metadata_clone(stage->base->sheet);
+
+    *out = stage;
+    return NULL;
+}
+
+profile_t *profile_stage_base(const profile_stage_t *stage) {
+    CHECK_NULL(stage);
+
+    return stage->base;
+}
+
+error_t profile_stage_remove(
+    profile_stage_t *stage, path_kind_t kind, const char *storage_path
+) {
+    CHECK_NULL(stage);
+    CHECK_NULL(storage_path);
+
+    switch (kind) {
+        case PATH_KIND_FILE: {
+            /* The blob leaves the tree, refused in the stage's words where the
+             * tree holds none, so a refusal leaves the sheet as it was */
+            error_t err = stage_remove(stage->stage, storage_path);
+            if (err) return err;
+
+            /* And its item with it, where the item is a file's: the sheet holds
+             * one item a name, so its kind is asked, and a directory claim at
+             * the name stays — carried, it stands again once the blob is gone */
+            const metadata_item_t *item = metadata_lookup(stage->sheet, storage_path);
+            if (item && item->kind == PATH_KIND_FILE) {
+                metadata_remove_item(stage->sheet, storage_path);
+            }
+
+            return NULL;
+        }
+
+        case PATH_KIND_DIRECTORY: {
+            /* A directory claim's whole footprint is its item, so none of that
+             * kind at the name is the sheet's refusal, naming the profile */
+            const metadata_item_t *item = metadata_lookup(stage->sheet, storage_path);
+            if (!item || item->kind != PATH_KIND_DIRECTORY) {
+                return error_create(
+                    ERR_NOT_FOUND, "Profile '%s' claims no directory at '%s'",
+                    profile_name(stage->base), storage_path
+                );
+            }
+            metadata_remove_item(stage->sheet, storage_path);
+
+            return NULL;
+        }
+    }
+
+    CHECK_ARG(false, "a path kind no enumerator names");
+}
+
+error_t profile_stage_commit(
+    profile_stage_t *stage, const char *message, string_array_t *pruned
+) {
+    CHECK_NULL(stage);
+    CHECK_NULL(message);
+    CHECK_NULL(pruned);
+
+    /* The prune, against the stage's index — the tree the commit will record,
+     * the removed file claims gone from it (the judge's own contract,
+     * core/metadata.h metadata_prune_ancestors): removing a file may leave the
+     * derived claim above it with nothing tracked beneath. The index answers
+     * that for every path a tree can hold — never the sheet's items, which omit
+     * unelevated symlinks — and the copy's own tracked claims answer it for the
+     * one path it cannot, an empty directory. */
+    error_t err = metadata_prune_ancestors(stage->sheet, stage_index(stage->stage), pruned);
+    if (err) return err;
+
+    /* The sheet, saved only where its claims are no longer the base's: a commit
+     * whose edits took no item and pruned none keeps the sheet's bytes as they
+     * stand, a hand's spelling included, as the stage keeps a tree no edit moved
+     * (core/metadata.h metadata_same) */
+    err = metadata_same(stage->sheet, stage->base->sheet)
+        ? NULL : metadata_save_to_stage(stage->stage, stage->sheet);
+    if (err) return err;
+
+    /* One commit, the tree and the sheet in one tree write: none where the tree
+     * is the one the stage opened, and a head another writer moved since the
+     * open is refused (sys/stage.h stage_commit) */
+    return stage_commit(stage->stage, message, NULL);
+}
+
+void profile_stage_free(profile_stage_t *stage) {
+    if (!stage) return;
+
+    /* The copy; then the base, before the stage whose tree it borrows; then the
+     * stage, which undoes nothing in the repository (sys/stage.h stage_free) */
+    metadata_free(stage->sheet);
+    profile_free(stage->base);
+    stage_free(stage->stage);
+    free(stage);
 }

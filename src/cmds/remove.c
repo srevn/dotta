@@ -22,13 +22,11 @@
 #include "base/string.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
-#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
-#include "sys/stage.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
 #include "utils/commit.h"
@@ -102,13 +100,13 @@ static error_t remove_collect_claim(const profile_claim_t *claim, void *payload)
  * profile_walk, profile_contradicted), collected by one visitor, under the reader's
  * policy: a removal reads strictly, refusing a sheet that will not load before
  * its preview as every writer does; a deletion tolerantly, so a profile whose
- * sheet will not load stays deletable (xkq8). In order: the blobs in the tree's
- * pre-order, the directory claims that stand in the sheet's, the contradicted
- * ones in the sheet's.
+ * sheet will not load stays deletable. In order: the blobs in the tree's pre-order,
+ * the directory claims that stand in the sheet's, the contradicted ones in the
+ * sheet's.
  *
  * Readers: remove_resolve, the universe a removal's arguments are matched against,
  * and remove_profile, every claim a deletion takes — one producer, so the two
- * routes cannot read two universes (ckft).
+ * routes cannot read two universes.
  *
  * @param ctx Dispatch context: the arena the claims live in, this machine's table
  * @param profile The profile (must not be NULL); its sheet is read through it
@@ -185,14 +183,14 @@ static string_array_t remove_hook_paths(
  *
  * A candidate is a path the removal's Git effect no longer claims, joined to
  * the record standing at it. The file route's commit lets go of the claims the
- * arguments named and the directory entries the metadata step reaped once nothing
- * tracked stood beneath them; the profile route lets go of every path whose record
- * names the deleted profile. Only paths bearing this profile's record become
- * candidates — a record naming another profile is not ours to settle, and a path
- * with no record was never observed: nothing to settle.
+ * arguments named and the directory entries its prune took once nothing tracked
+ * stood beneath them; the profile route lets go of every path whose record names
+ * the deleted profile. Only paths bearing this profile's record become candidates
+ * — a record naming another profile is not ours to settle, and a path with no
+ * record was never observed: nothing to settle.
  *
  * The routes part on one question — whether the user was asked. Only a named
- * path hears --delete-files with its own voice; a reaped entry lost its reason
+ * path hears --delete-files with its own voice; a pruned entry lost its reason
  * rather than being asked for, and a profile deletion names the profile, not
  * its paths, so both leave the flag to the record's ownership (remove_settle).
  *
@@ -300,7 +298,7 @@ static error_t remove_settle(
  *
  * The paths the commit let go, as this profile deploys them, each joined to the
  * record standing at it by a lookup in one read (state_find_record): the claims
- * the arguments took, and the directory entries the metadata step pruned. A
+ * the arguments took, and the directory entries the commit's prune took. A
  * candidate exists only where one of this profile's records stands; a claim that
  * stands nowhere on this machine (custom/ under a profile with no target here)
  * names nothing to settle, and is not one.
@@ -360,7 +358,7 @@ static error_t remove_paths_candidates(
         };
     }
 
-    /* The entries the metadata step pruned: nobody asked for them, so the flag
+    /* The entries the commit's prune took: nobody asked for them, so the flag
      * does not speak to them — but where a claim the arguments took stands at
      * one, it was joined above, named. One this machine cannot place stands
      * nowhere, and no record of this run's can be there. */
@@ -454,9 +452,9 @@ static bool remove_contradicted(
  * Resolve the arguments to the claims they take
  *
  * The claims array starts as every claim the profile makes, placed
- * (remove_list_claims, read strictly) — the profile at the tree the caller's
- * stage opened at, so the claims, the sheet and the commit describe one head;
- * the arguments mark what they take, and the array compacts to just that.
+ * (remove_list_claims, read strictly) — the base of the caller's stage
+ * (core/profiles.h profile_stage_base), so the claims and the commit describe
+ * one head; the arguments mark what they take, and the array compacts to just that.
  *
  * Where each claim stands is established before the match, not after it, because
  * the match is by the key the argument named (infra/path.h) and neither key is
@@ -470,13 +468,13 @@ static bool remove_contradicted(
  *
  * But a blob the argument names leaves no room: a file has nothing beneath it,
  * so the directory claims at or beneath the named blob's own name — the claims
- * it contradicts — are none of the argument's, and naming a blob takes it alone
- * (2n2g). By path every blob placed at the argument is named, and a claim placed
- * beneath it under another name — another label, another binding — contradicts
- * none of them and is the argument's. The rule reads names alone, never the
- * classification (core/profiles.h), so where the classification draws its line
- * moves none of its answers; and over a tree a hand stored unsorted, where the
- * classification can miss a blob, the names do not.
+ * it contradicts — are none of the argument's, and naming a blob takes it alone.
+ * By path every blob placed at the argument is named, and a claim placed beneath
+ * it under another name — another label, another binding — contradicts none of
+ * them and is the argument's. The rule reads names alone, never the classification
+ * (core/profiles.h), so where the classification draws its line moves none of
+ * its answers; and over a tree a hand stored unsorted, where the classification
+ * can miss a blob, the names do not.
  *
  * A claim this machine places nowhere — an unbound custom/ one — keeps a NULL
  * path and no path argument reaches it; its name still does, which is how such
@@ -487,8 +485,8 @@ static bool remove_contradicted(
  *
  * @param ctx Dispatch context (must not be NULL). ctx->run.mounts covers HOME,
  *            ROOT, and every enabled profile's binding.
- * @param profile The profile at the tree the caller's stage opened at (must not
- *                be NULL)
+ * @param profile The base of the caller's stage: the profile at the head the
+ *                commit will have as its parent (must not be NULL)
  * @param opts The options: the profile's name, the arguments, --force (must not
  *             be NULL)
  * @param out The claims the arguments took, in ctx->arena (must not be NULL)
@@ -1055,32 +1053,21 @@ static error_t remove_paths(
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t err = NULL;
-    stage_t *stage = NULL;              /* the branch's head, tree and index; the commit's */
-    profile_t *profile = NULL;          /* the profile at the stage's tree: the claims */
+    profile_stage_t *stage = NULL;      /* the profile's next commit (owned) */
     remove_claim_t *claims = NULL;      /* arena — the resolver's */
     size_t claim_count = 0;
-    metadata_t *metadata = NULL;        /* the sheet the commit edits (owned) */
     remove_overlaps_t overlaps = { 0 }; /* arena — the analysis's */
 
-    /* The branch's stage: the head everything below reads — the claims, the sheet,
-     * the judge — and the parent the commit will have. The removal is pure tree
-     * surgery, so the stage is the whole of its Git side. */
-    char refname[DOTTA_REFNAME_MAX];
-    err = gitops_branch_refname(refname, sizeof(refname), opts->profile);
-    if (err) goto cleanup;
-
-    err = stage_open(repo, refname, &stage);
+    /* The profile's stage: the head everything below reads — the claims, the
+     * sheet, the judge — and the parent the commit will have, its sheet read at
+     * the open, strictly. The removal is pure tree surgery, so the stage is the
+     * whole of its Git side. */
+    err = profile_stage_open(repo, opts->profile, &stage);
     if (err) goto cleanup;
 
     /* The arguments resolved against the claims the profile makes at the tree
      * the stage opened at — the head the commit will have as its parent */
-    profile = profile_open(opts->profile, stage_tree(stage));
-    err = remove_resolve(ctx, profile, opts, &claims, &claim_count);
-    if (err) goto cleanup;
-
-    /* The sheet the commit edits, read from the same tree: the profile read it
-     * for the claims it showed, and keeps it its own */
-    err = metadata_load_from_tree(repo, stage_tree(stage), opts->profile, &metadata);
+    err = remove_resolve(ctx, profile_stage_base(stage), opts, &claims, &claim_count);
     if (err) goto cleanup;
 
     /* What the removal shares with the other profiles (critical safety check).
@@ -1204,12 +1191,14 @@ static error_t remove_paths(
     err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
-    /* The plan, on the stage: which tree entries leave, and the metadata edit
-     * riding the same commit. A FILE claim is a tree entry; a DIRECTORY claim
-     * has no tree entry — its whole Git footprint is its metadata item. Every
-     * FILE claim is in the stage's tree (the resolver's universe is that tree's
-     * own walk), so the stage's missing-entry error cannot fire. */
-    size_t removed_files = 0, removed_dirs = 0, meta_edits = 0;
+    /* The plan, on the stage: each claim leaves the commit by its own kind
+     * (core/profiles.h profile_stage_remove) — a FILE claim its tree entry and
+     * its item, a DIRECTORY claim its item, the whole of its Git footprint — so
+     * a directory claim at a removed file's name stays, carried, and stands again
+     * once the blob is gone. Every claim is the base's own, taken once (the
+     * resolver's universe is the base's walk and the claims its tree contradicts),
+     * so neither of the removal's refusals can fire. */
+    size_t removed_files = 0, removed_dirs = 0;
 
     /* The names this commit lets go, borrowed from the claims (arena), each once:
      * both kinds, since the message's unit is the path and a directory claim is
@@ -1226,22 +1215,10 @@ static error_t remove_paths(
     for (size_t i = 0; i < claim_count; i++) {
         const remove_claim_t *claim = &claims[i];
 
-        if (claim->kind == PATH_KIND_FILE) {
-            err = stage_remove(stage, claim->storage_path);
-            if (err) goto cleanup;
-            removed_files++;
-        } else {
-            removed_dirs++;
-        }
-
-        /* The claim's own kind leaves the sheet: a directory claim at a removed
-         * file's name is that claim's, and stays — carried, it stands again once
-         * the blob is gone (a1mr, h2ye) — and a file's item goes with the file */
-        const metadata_item_t *item = metadata_lookup(metadata, claim->storage_path);
-        if (item && item->kind == claim->kind) {
-            metadata_remove_item(metadata, claim->storage_path);
-            meta_edits++;
-        }
+        err = profile_stage_remove(stage, claim->kind, claim->storage_path);
+        if (err) goto cleanup;
+        if (claim->kind == PATH_KIND_DIRECTORY) removed_dirs++;
+        else removed_files++;
 
         if (hashmap_add(listed, claim->storage_path, NULL)) {
             removed_paths[removed_path_count++] = claim->storage_path;
@@ -1252,35 +1229,11 @@ static error_t remove_paths(
         );
     }
 
-    /* Prune redundant directory entries against the stage's index — the branch
-     * tree minus the removed file claims, the tree the impending commit will
-     * record (the judge's own contract, metadata.h). Removing a file may leave
-     * its parent directory metadata entry with nothing tracked beneath it. The
-     * index answers that for every path a tree can hold — never the metadata
-     * items, which omit unelevated symlinks — and the sheet's own tracked claims
-     * answer it for the one path it cannot, an empty directory. */
-    string_array_t pruned_dirs;   /* Directory entries the metadata step pruned (storage paths) */
-    string_array_init(&pruned_dirs, ctx->arena);
-    err = metadata_prune_ancestors(metadata, stage_index(stage), &pruned_dirs);
-    if (err) goto cleanup;
-    if (pruned_dirs.count > 0) {
-        output_info(
-            out, OUTPUT_VERBOSE, "Pruned %zu redundant directory entr%s",
-            pruned_dirs.count, pruned_dirs.count == 1 ? "y" : "ies"
-        );
-    }
-
-    /* The sheet, only when the collection actually changed — a removal that touched
-     * no items and pruned nothing keeps the profile's metadata.json byte-identical,
-     * so no rewrite is staged. */
-    if (meta_edits + pruned_dirs.count > 0) {
-        err = metadata_save_to_stage(stage, metadata);
-        if (err) goto cleanup;
-    }
-
-    /* One atomic commit: the file claims leave the tree, metadata.json follows
-     * in the same tree write. All-or-nothing — any failure up to here leaves
-     * the repository byte-identical. */
+    /* One atomic commit: the file claims leave the tree, and the sheet follows
+     * in the same tree write where its claims moved — pruned first of the derived
+     * directory entries the removals left nothing tracked beneath, whose keys
+     * come back in pruned_dirs (core/profiles.h profile_stage_commit).
+     * All-or-nothing: any failure up to here leaves every ref where it was. */
     commit_message_context_t msg_ctx = {
         .action        = COMMIT_ACTION_REMOVE,
         .profile       = opts->profile,
@@ -1289,8 +1242,18 @@ static error_t remove_paths(
         .custom_msg    = opts->message,
         .target_commit = NULL
     };
-    err = stage_commit(stage, commit_message(ctx->arena, config, &msg_ctx), NULL);
+    string_array_t pruned_dirs;   /* Directory entries the commit's prune took (storage paths) */
+    string_array_init(&pruned_dirs, ctx->arena);
+    err = profile_stage_commit(
+        stage, commit_message(ctx->arena, config, &msg_ctx), &pruned_dirs
+    );
     if (err) goto cleanup;
+    if (pruned_dirs.count > 0) {
+        output_info(
+            out, OUTPUT_VERBOSE, "Pruned %zu redundant directory entr%s",
+            pruned_dirs.count, pruned_dirs.count == 1 ? "y" : "ies"
+        );
+    }
 
     /*
      * Architectural note: no filesystem deletion here. Only apply writes to a
@@ -1302,9 +1265,9 @@ static error_t remove_paths(
 
     /* The record phase: the record answers to the record. The candidates are
      * the paths this commit let go — the removed claims, and the directory entries
-     * the metadata step pruned as redundant (an ancestor claim above the named
-     * path is the common case), which left the view by the same commit — each
-     * joined to its record and settled by the one rule (remove_settle).
+     * its prune took as redundant (an ancestor claim above the named path is
+     * the common case), which left the view by the same commit — each joined to
+     * its record and settled by the one rule (remove_settle).
      *
      * Enablement decides no fate: a record dotta holds under a disabled profile
      * is still dotta's record — the rule remove_profile runs over every record
@@ -1418,9 +1381,7 @@ cleanup:
      * is active, so it safely closes any partially-begun record-update transaction
      * on error paths. */
     state_rollback(state);
-    if (metadata) metadata_free(metadata);
-    profile_free(profile);      /* before the stage: its tree is the stage's */
-    stage_free(stage);
+    profile_stage_free(stage);
 
     return err;
 }

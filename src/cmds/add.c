@@ -2418,17 +2418,6 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     err = metadata_save_to_stage(stage, metadata);
     if (err) goto cleanup;
 
-    /* Verbose summary. Every count from here on is a list's own: each capture
-     * loop above is total over its list, so a run that reaches this line captured
-     * everything it listed and no accumulator says it twice. */
-    if (walk.directories.count > 0) {
-        output_info(
-            out, OUTPUT_VERBOSE,
-            "Tracked %zu director%s for change detection",
-            walk.directories.count, walk.directories.count == 1 ? "y" : "ies"
-        );
-    }
-
     /* Create commit. A stage that holds the branch's own tree — every capture
      * as the profile already had it, a --force re-add of identical bytes — commits
      * nothing, and the summary says so. */

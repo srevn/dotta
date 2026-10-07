@@ -75,7 +75,7 @@ typedef struct {
     fs_occupant_t occupant;       /* What the listing found there: chooses the capture */
     bool should_encrypt;          /* The decision pass's verdict; false but for a regular file */
     state_record_t record;        /* What the capture committed; empty until it lands */
-} path_t;
+} add_path_t;
 
 /**
  * The walk: what every frame reads, and the two lists it fills
@@ -119,9 +119,9 @@ typedef struct {
     stage_admission_t *admission;        /* The branch's tree, and every blob listed since */
     const metadata_t *sheet;             /* The profile's claims, asked with it */
     hashmap_t *listing;                  /* filesystem path -> &item->claim (borrowed both) */
-    ptr_array_t files;                   /* path_t *: every non-directory listed */
-    ptr_array_t directories;             /* path_t *: every directory walked into */
-} walk_t;
+    ptr_array_t files;                   /* add_path_t *: every non-directory listed */
+    ptr_array_t directories;             /* add_path_t *: every directory walked into */
+} add_walk_t;
 
 /**
  * What the record phase did, for the receipt
@@ -168,7 +168,7 @@ typedef struct {
     size_t overridden;     /* Captures a higher-precedence profile's row holds */
     size_t unkept;         /* Captures another name of this profile holds */
     size_t gone;           /* Captures whose name the profile no longer holds at the path */
-} receipt_t;
+} add_receipt_t;
 
 /**
  * Is this argument the target, or beneath it?
@@ -383,7 +383,7 @@ static error_t add_spell(
  * @return The source layer's failure, where no rung is excluded; NULL otherwise
  */
 static error_t add_verdict(
-    const walk_t *walk, const manifest_row_t *held, const char *filesystem_path,
+    const add_walk_t *walk, const manifest_row_t *held, const char *filesystem_path,
     const char *storage_path, path_kind_t kind, ignore_verdict_t *out
 ) {
     /* A claim meets the operation's own filter and no rule of discovery: the -e
@@ -421,12 +421,12 @@ static error_t add_verdict(
  * tracking, and every phase after reads the two lists apart.
  */
 static void add_list(
-    walk_t *walk, const char *filesystem_path, const char *storage_path,
+    add_walk_t *walk, const char *filesystem_path, const char *storage_path,
     fs_occupant_t occupant
 ) {
     arena_t *arena = walk->ctx->arena;
 
-    path_t *path = arena_calloc(arena, 1, sizeof(*path));
+    add_path_t *path = arena_calloc(arena, 1, sizeof(*path));
     path->filesystem_path = arena_strdup(arena, filesystem_path);
     path->claim = (manifest_claim_t){
         arena_strdup(arena, storage_path),
@@ -464,7 +464,7 @@ static void add_list(
  * a verdict about the path.
  */
 static error_t add_admit(
-    const walk_t *walk, const char *storage_path, path_kind_t kind
+    const add_walk_t *walk, const char *storage_path, path_kind_t kind
 ) {
     if (kind == PATH_KIND_DIRECTORY) {
         return stage_admit_subtree(walk->admission, storage_path);
@@ -505,7 +505,7 @@ static error_t add_admit(
  * it began at.
  */
 static error_t add_refuse_unjudged(
-    const walk_t *walk, arena_t *scratch, const char *directory, size_t depth,
+    const add_walk_t *walk, arena_t *scratch, const char *directory, size_t depth,
     error_t failure
 ) {
     /* The frame's name, as the walk named it — its claim, else its composition,
@@ -580,7 +580,7 @@ static error_t add_refuse_unjudged(
  * @return Error or NULL on success
  */
 static error_t add_collect(
-    walk_t *walk, arena_t *scratch, const char *directory, size_t depth
+    add_walk_t *walk, arena_t *scratch, const char *directory, size_t depth
 ) {
     CHECK_NULL(walk);
     CHECK_NULL(directory);
@@ -752,7 +752,7 @@ static error_t add_collect(
  * the user types it back into (base/string.h str_shell_quote).
  */
 static error_t add_refuse_excluded(
-    const walk_t *walk, const char *file, const char *storage_path, path_kind_t kind,
+    const add_walk_t *walk, const char *file, const char *storage_path, path_kind_t kind,
     const ignore_verdict_t *verdict
 ) {
     arena_t *arena = walk->ctx->arena;
@@ -824,7 +824,7 @@ static error_t add_refuse_excluded(
  * Not liftable by --force: --force overwrites bytes under a name the profile
  * holds, which is not what abandoning a name is.
  */
-static error_t add_refuse_moves(const walk_t *walk) {
+static error_t add_refuse_moves(const add_walk_t *walk) {
     manifest_unkept_t unkept = manifest_unkept(walk->view);
 
     for (size_t i = 0; i < unkept.count; i++) {
@@ -971,7 +971,7 @@ static void add_print_enable(
  * @param walk The selection, the table it named through, and the output (must
  *             not be NULL)
  */
-static void add_print_labels(const walk_t *walk) {
+static void add_print_labels(const add_walk_t *walk) {
     output_t *out = walk->ctx->out;
     const mount_table_t *mounts = manifest_mounts(walk->view);
     const ptr_array_t *listed[] = { &walk->files, &walk->directories };
@@ -981,7 +981,7 @@ static void add_print_labels(const walk_t *walk) {
     size_t count[LABEL_COUNT] = { 0 };
     for (size_t b = 0; b < sizeof(listed) / sizeof(listed[0]); b++) {
         for (size_t i = 0; i < listed[b]->count; i++) {
-            const path_t *path = listed[b]->entries[i];
+            const add_path_t *path = listed[b]->entries[i];
             count[label_of(path->claim.storage_path)]++;
         }
     }
@@ -1036,7 +1036,7 @@ static error_t add_capture(
     const dotta_ctx_t *ctx,
     stage_t *stage,
     const char *profile,
-    path_t *path,
+    add_path_t *path,
     metadata_t *metadata
 ) {
     CHECK_NULL(ctx);
@@ -1147,7 +1147,7 @@ static error_t add_capture(
  * @return Error or NULL on success
  */
 static error_t add_commit(
-    const walk_t *walk,
+    const add_walk_t *walk,
     stage_t *stage,
     const cmd_add_options_t *opts,
     bool *out_committed
@@ -1169,7 +1169,7 @@ static error_t add_commit(
     size_t named = 0;
     for (size_t b = 0; b < sizeof(listed) / sizeof(listed[0]); b++) {
         for (size_t i = 0; i < listed[b]->count; i++) {
-            const path_t *path = listed[b]->entries[i];
+            const add_path_t *path = listed[b]->entries[i];
             paths[named++] = path->claim.storage_path;
         }
     }
@@ -1196,7 +1196,7 @@ static error_t add_commit(
  *
  * Called after Git commit succeeds, for a new profile and an existing one alike.
  * Anchors what this add captured: every path was captured FROM disk, so its record
- * is what the capture committed (path_t's record) — the blob, under the stat
+ * is what the capture committed (add_path_t's record) — the blob, under the stat
  * the capture took, so the next status hits the fast path, and the node and the
  * claim — stamped as an ownership event; a directory's carries no stat, having
  * no content to confirm. The view is computed, so nothing projects; one build
@@ -1297,7 +1297,7 @@ static error_t add_write_record(
     const ptr_array_t *added_files,
     const ptr_array_t *added_dirs,
     const string_array_t *retired,
-    receipt_t *receipt
+    add_receipt_t *receipt
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(mounts);
@@ -1312,7 +1312,7 @@ static error_t add_write_record(
 
     error_t err = NULL;
 
-    *receipt = (receipt_t){ 0 };
+    *receipt = (add_receipt_t){ 0 };
 
     /* STEP 1: Scope.
      *
@@ -1425,7 +1425,7 @@ static error_t add_write_record(
         const ptr_array_t *captured[] = { added_files, added_dirs };
         for (size_t b = 0; b < sizeof(captured) / sizeof(captured[0]); b++) {
             for (size_t i = 0; i < captured[b]->count; i++) {
-                const path_t *path = captured[b]->entries[i];
+                const add_path_t *path = captured[b]->entries[i];
 
                 const manifest_row_t *row = manifest_lookup(manifest, path->filesystem_path);
                 if (!manifest_is_claim(row, profile, path->claim.storage_path)) {
@@ -1524,10 +1524,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const gitignore_ruleset_t *profile_rules = NULL;
     stage_t *stage = NULL;
     stage_admission_t *admission = NULL; /* The tree as its names are chosen: see below */
-    manifest_t *view = NULL;         /* The profile as the stage opened it: see below */
-    walk_t walk = { .ctx = ctx };    /* Filled once the table and the rules are known */
-    bool profile_exists = false;     /* The pre-flight's question, read by both modes */
-    bool profile_created = false;    /* The orphan open's answer, read below the commit */
+    manifest_t *view = NULL;          /* The profile as the stage opened it: see below */
+    add_walk_t walk = { .ctx = ctx }; /* Filled once the table and the rules are known */
+    bool profile_exists = false;      /* The pre-flight's question, read by both modes */
+    bool profile_created = false;     /* The orphan open's answer, read below the commit */
     bool committed = false;
     metadata_t *metadata = NULL;
     mount_table_t *mounts = NULL;         /* The command's table: see below */
@@ -2043,7 +2043,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * with the selection complete, so that the sheet the sweep below reads is
      * the one the commit will carry. */
     for (size_t i = 0; i < walk.files.count; i++) {
-        const path_t *path = walk.files.entries[i];
+        const add_path_t *path = walk.files.entries[i];
         metadata_remove_item(metadata, PATH_KIND_DIRECTORY, path->claim.storage_path);
     }
 
@@ -2094,7 +2094,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
     for (size_t i = 0; i < walk.directories.count; i++) {
-        const path_t *path = walk.directories.entries[i];
+        const add_path_t *path = walk.directories.entries[i];
 
         err = stage_admit_subtree(admission, path->claim.storage_path);
         if (err) {
@@ -2125,7 +2125,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * questions, one lookup each. */
     if (!opts->force) {
         for (size_t i = 0; i < walk.files.count; i++) {
-            const path_t *path = walk.files.entries[i];
+            const add_path_t *path = walk.files.entries[i];
             if (!git_index_get_bypath(
                 stage_index(stage), path->claim.storage_path, 0
                 )) {
@@ -2160,7 +2160,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * when this run can never seal — encryption turned off — rather than at a
      * capture the others would already have preceded into the object database. */
     for (size_t i = 0; i < walk.files.count; i++) {
-        path_t *path = walk.files.entries[i];
+        add_path_t *path = walk.files.entries[i];
         if (path->occupant == FS_OCCUPANT_SYMLINK) continue;
 
         const char *storage_path = path->claim.storage_path;
@@ -2223,14 +2223,14 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * and sealed as the decision pass said. What a capture reads off its
          * source — the mode and the owner a claim takes — is the capture's. */
         for (size_t i = 0; i < walk.directories.count; i++) {
-            const path_t *path = walk.directories.entries[i];
+            const add_path_t *path = walk.directories.entries[i];
             output_info(
                 out, OUTPUT_VERBOSE, "Would track directory: %s -> %s",
                 path->filesystem_path, path->claim.storage_path
             );
         }
         for (size_t i = 0; i < walk.files.count; i++) {
-            const path_t *path = walk.files.entries[i];
+            const add_path_t *path = walk.files.entries[i];
             if (path->should_encrypt) {
                 output_info(
                     out, OUTPUT_VERBOSE, "Would encrypt: %s -> %s",
@@ -2310,7 +2310,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * is found before any source blob reaches the object database.
      */
     for (size_t i = 0; i < walk.directories.count; i++) {
-        path_t *path = walk.directories.entries[i];
+        add_path_t *path = walk.directories.entries[i];
         const char *storage_path = path->claim.storage_path;
 
         /* Stat directory to capture mode (and ownership if root/custom). lstat
@@ -2366,7 +2366,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * put wrote and the stat of the bytes committed, which a later lstat could
      * not promise. */
     for (size_t i = 0; i < walk.files.count; i++) {
-        path_t *path = walk.files.entries[i];
+        add_path_t *path = walk.files.entries[i];
 
         err = add_capture(ctx, stage, opts->profile, path, metadata);
         if (err) goto cleanup;
@@ -2385,7 +2385,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const ptr_array_t *chains[] = { &walk.files, &walk.directories };
     for (size_t b = 0; b < sizeof(chains) / sizeof(chains[0]); b++) {
         for (size_t i = 0; i < chains[b]->count; i++) {
-            const path_t *path = chains[b]->entries[i];
+            const add_path_t *path = chains[b]->entries[i];
 
             metadata_capture_ancestors(
                 metadata, mounts, opts->profile, path->claim.storage_path, ctx->arena,
@@ -2468,7 +2468,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * add, which a record failure is not. The error is therefore carried from
      * here to the screen that renders it, and the region between holds no exit.
      */
-    receipt_t receipt = { 0 };
+    add_receipt_t receipt = { 0 };
 
     error_t record_err = add_write_record(
         ctx, mounts, opts->profile, target, profile_created,
@@ -2530,8 +2530,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* The branch is Git's fact and stands whatever the record did; the enabling
      * is a row, which a failed phase can leave standing (a branch recreated over
      * a leftover row) and a successful one cannot invent. So the second clause
-     * keys on membership — the handle's rows, as the phase settled them (receipt_t)
-     * — not on the fate. */
+     * keys on membership — the handle's rows, as the phase settled them
+     * (add_receipt_t) — not on the fate. */
     if (profile_created) {
         output_success(
             out, OUTPUT_NORMAL,
@@ -2583,8 +2583,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             );
 
             /* Each cause named by the count that checked it, never by the shortfall
-             * (receipt_t): a row of another profile is an override, a row of
-             * this one under another of its own names is an unused path, whose
+             * (add_receipt_t): a row of another profile is an override, a row
+             * of this one under another of its own names is an unused path, whose
              * repair the health channel carries on the status screen, and a name
              * the profile no longer holds is one a later commit removed. The
              * three sum to the shortfall exactly. */

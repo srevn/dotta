@@ -889,7 +889,7 @@ const manifest_row_t *manifest_lookup_claim(
  * join asks the other question the predicate answers: whether a capture's name
  * is still the profile's where the walk read it — the table cannot have moved
  * under the command's lock, but Git's branch can, another writer's commit taking
- * the name away since the capture's (cmds/add.c receipt_t's `gone`).
+ * the name away since the capture's (cmds/add.c add_receipt_t's `gone`).
  *
  * @param manifest Manifest (NULL answers false)
  * @param profile The asker (NULL answers false)

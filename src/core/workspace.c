@@ -81,9 +81,9 @@ struct workspace {
      * for the whole run — the record a writer patches is the one its item holds
      * (workspace_item_t), never a row. The view's own index answers the scan,
      * at each child it lists and each rung above a root (workspace_scan,
-     * workspace_blob_above): a path is one row, and each asks row->type for the
-     * kind it wants. A reader outside the module asks for the path's item instead,
-     * which carries its row (workspace_find). */
+     * core/manifest.h manifest_blob_above): a path is one row, and each asks
+     * row->type for the kind it wants. A reader outside the module asks for the
+     * path's item instead, which carries its row (workspace_find). */
     const manifest_t *manifest;                  /* Borrowed */
 
     /* The active items: one per row of the view, the directories and then the
@@ -2238,65 +2238,6 @@ static void workspace_analyze_orphans(workspace_t *ws) {
 }
 
 /**
- * The blob the view holds over a directory — at it, or at a rung above it
- *
- * A directory standing where the view holds a blob is the [type] the file analysis
- * said, and nothing beneath it can stand: the view says a file belongs there,
- * so anything offered beneath is something no apply can ever place. Whichever
- * profile's blob, precedence applied (core/manifest.h manifest_lookup) — the
- * question is what stands at the path, not what the scanning profile holds. A
- * directory row of either kind stops nothing: an ancestor claim names neither
- * itself nor anything beneath it (manifest_is_derived), which is why a derived
- * row at one key is no answer about the other.
- *
- * A directory has one key — the tracked row's own, which mount_resolve spelled
- * — and the walk's joins beneath it are keys by the same construction
- * (infra/mount.h: a child joined onto a key is a key), so one climb here answers
- * for every path in that walk. Each step is the last separator's index, or 1
- * for a rung beneath the root directory, so a rung is strictly shorter than the
- * one before it; the root directory is read and ends the climb, because a claim
- * can stand there — `root` spells it, and `home` or `custom` on a machine whose
- * HOME or target is one (infra/label.h) — and the view places a blob at any of
- * the three as a FILE row at that directory (core/manifest.c manifest_place_claim).
- * The key is absolute; the copy the climb truncates is the caller's arena's,
- * one per ask, and abandoned.
- *
- * The ascent over these very rungs floors on the asker's own root (core/manifest.c
- * manifest_ascend): it is naming a path for one profile, and nothing of that
- * profile's stands above its root. This climb has no asker — it asks what stands
- * at a path, whoever holds it — so the root directory is its floor, as it is
- * deploy's (core/deploy.c nearest_ancestor).
- *
- * Reader: the scan driver (workspace_analyze_untracked), of every tracked directory
- * it is about to enumerate — an independent tracked root beneath a file claim
- * is as much beneath it as a child the walk would have stopped at. One ask per
- * root and none per child: the walk asks the view at each child's own key, which
- * is the one rung a frame adds to this answer (workspace_scan).
- *
- * @param view      The precedence-resolved view (must not be NULL)
- * @param directory The directory's key (must not be NULL)
- * @param scratch   Arena the climb's copy is taken in (must not be NULL)
- * @return The blob standing over it, or NULL
- */
-static const manifest_row_t *workspace_blob_above(
-    const manifest_t *view, const char *directory, arena_t *scratch
-) {
-    char *rung = arena_strdup(scratch, directory);
-
-    /* The guard is on the truncation and not on the read, because the root
-     * directory is its own parent (base/string.h str_path_parent_len): a climb
-     * that tested before reading would never read it, and one that truncated
-     * after it would never leave. */
-    for (;;) {
-        const manifest_row_t *row = manifest_lookup(view, rung);
-        if (row && row->type != PATH_TYPE_DIRECTORY) return row;
-        if (!rung[1]) return NULL;
-
-        rung[str_path_parent_len(rung)] = '\0';
-    }
-}
-
-/**
  * The scan root standing at a directory, or NULL
  *
  * A scan root is a tracked directory's item, kept whole: the directory to
@@ -2406,12 +2347,12 @@ typedef struct {
  *
  * Nothing beneath a blob the view holds is offered, and the climb that says so
  * is the driver's, asked once of the directory a walk begins at
- * (workspace_analyze_untracked, workspace_blob_above). A frame adds exactly one
- * rung to that answer — the child's own key, which is the question above — and
- * every rung over it was answered before the frame was entered, no frame being
- * entered whose directory a blob stands at or over. So the rule is this walk's
- * induction rather than a climb per child, and `directory` carries it as a
- * precondition.
+ * (workspace_analyze_untracked, through core/manifest.h manifest_blob_above). A
+ * frame adds exactly one rung to that answer — the child's own key, which is
+ * the question above — and every rung over it was answered before the frame was
+ * entered, no frame being entered whose directory a blob stands at or over. So
+ * the rule is this walk's induction rather than a climb per child, and `directory`
+ * carries it as a precondition.
  *
  * The order is the order. The view's word first, because a claim that names its
  * own path settles the child whatever stands there and costs no look; the lstat
@@ -2643,13 +2584,13 @@ static workspace_fault_t workspace_scan(
  * later-enabled where two stand at one — under the name that profile's own claims
  * give it (core/manifest.h manifest_name), minus what that profile's ignore layers
  * and the source tree exclude — and nothing at all beneath a path the view holds
- * a blob at, a tracked root of its own included (workspace_blob_above). A look
- * that lists what it can read and says where it could not — a directory it could
- * not list, a path it could not look at, what Git's ignore rules could not judge,
- * withheld — each an unscanned item at the path (workspace_add_unscanned): not
- * a snapshot, and not an admission — what the commit can hold at that name is
- * the question a profile's next commit asks at update's capture (core/profiles.h
- * profile_stage_capture_file).
+ * a blob at, a tracked root of its own included (core/manifest.h
+ * manifest_blob_above). A look that lists what it can read and says where it
+ * could not — a directory it could not list, a path it could not look at, what
+ * Git's ignore rules could not judge, withheld — each an unscanned item at the
+ * path (workspace_add_unscanned): not a snapshot, and not an admission — what
+ * the commit can hold at that name is the question a profile's next commit asks
+ * at update's capture (core/profiles.h profile_stage_capture_file).
  *
  * The driver enumerates the view's tracked directories, one scan each, and the
  * walk descends only into directories the view does not track
@@ -2739,10 +2680,11 @@ static error_t workspace_analyze_untracked(
          * replaced: the directory stays a boundary and is not scanned, whatever
          * a lower row standing at it under a cleaner spelling could have offered
          * — the view's word about the directory is its owner's. The walk beneath
-         * inherits this answer and climbs nothing of its own: it asks the view
-         * at each child's own key, and every rung over that key is this one
-         * (workspace_scan). */
-        if (workspace_blob_above(ws->manifest, root->filesystem_path, ws->arena)) continue;
+         * inherits this answer and climbs nothing of its own: the directory's
+         * key is its row's own, which mount_resolve spelled, and a child joined
+         * onto a key is a key (infra/mount.h), so it asks the view at each child's
+         * own key, and every rung over that key is this one (workspace_scan). */
+        if (manifest_blob_above(ws->manifest, root->filesystem_path, ws->arena)) continue;
 
         /* The owner's ruleset (memoised in the builder). Fatal on failure: scanning
          * a profile without its ignore rules risks reporting genuinely ignored

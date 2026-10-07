@@ -514,10 +514,11 @@ static manifest_claim_t manifest_standing(const naming_t *n, const char *filesys
  * what the profile's committed claims settle on), and the path is composed beneath
  * the first that names what lies beneath it, a DIRECTORY claim of either layer
  * (manifest_claim_beneath). An ancestor claim names nothing, and a blob names
- * its own path and nothing under it — a name beneath a file is a tree entry the
- * stage refuses — so both are climbed past. Where no claim above gave a name,
- * the root's label and the tail spell one (infra/label.h label_compose), the
- * word alone at the root itself.
+ * its own path and nothing under it — a name beneath its own is one the stage
+ * refuses, and a path beneath its place one its writer refuses before it names
+ * anything (cmds/add.c cmd_add, through manifest_blob_above) — so both are climbed
+ * past. Where no claim above gave a name, the root's label and the tail spell
+ * one (infra/label.h label_compose), the word alone at the root itself.
  *
  * The root is the floor and not a per-rung test, because no root of the profile
  * can stand strictly between it and the path — one that did would enclose the
@@ -1380,6 +1381,37 @@ const manifest_row_t *manifest_lookup(
 ) {
     if (!manifest || !filesystem_path) return NULL;
     return hashmap_get(manifest->index, filesystem_path);
+}
+
+/**
+ * The blob the view holds at a path, or at a rung above it
+ *
+ * Each rung is the last separator's index, or 1 for a rung beneath the root
+ * directory (base/string.h str_path_parent_len), so a rung is strictly shorter
+ * than the one before it.
+ */
+const manifest_row_t *manifest_blob_above(
+    const manifest_t *manifest,
+    const char *filesystem_path,
+    arena_t *scratch
+) {
+    CHECK_NULL(manifest);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(scratch);
+
+    char *rung = arena_strdup(scratch, filesystem_path);
+
+    /* The guard is on the truncation and not on the read, because the root
+     * directory is its own parent (base/string.h str_path_parent_len): a climb
+     * that tested before reading would never read it, and one that truncated
+     * after it would never leave. */
+    for (;;) {
+        const manifest_row_t *row = manifest_lookup(manifest, rung);
+        if (row && row->type != PATH_TYPE_DIRECTORY) return row;
+        if (!rung[1]) return NULL;
+
+        rung[str_path_parent_len(rung)] = '\0';
+    }
 }
 
 /**

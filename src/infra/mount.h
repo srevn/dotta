@@ -35,10 +35,9 @@
  * path_input_filesystem_path), a walk's join (a parent and a name) and a climb's
  * cut — a key truncated at a separator, which is a root's spelling and a shorter
  * tail whichever label named it, so an ancestor's key is never manufactured a
- * second way (core/manifest.c manifest_ascend, core/workspace.c
- * workspace_blob_above, core/cleanup.c, infra/pathspec.c). So two spellings are
- * one path iff they are one string, and a symlink anywhere in a path is a component
- * like any other:
+ * second way (core/manifest.c manifest_ascend and manifest_blob_above,
+ * core/cleanup.c, infra/pathspec.c). So two spellings are one path iff they are
+ * one string, and a symlink anywhere in a path is a component like any other:
  * nothing here reads through one, `~/.config -> ~/dotfiles/config` stays the
  * entry it is, and two claims through and around it are two claims. A filesystem
  * that folds case or normalization can stand one entry at two strings; the two

@@ -1965,6 +1965,34 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
+        /* One rung up, the same refusal: a path beneath one of the profile's
+         * own files, whichever label names either, lies where the file stands,
+         * and no apply could place both. The removal that gives the file up is
+         * the way past, as at the path. The commit's admission sees the pair
+         * only where the two names share a prefix (sys/stage.h); the view sees
+         * it wherever the two stand. A walk needs no such question: it meets
+         * the file's place before anything beneath it, and the kind refusal skips
+         * it there */
+        const char *parent = arena_strndup(
+            ctx->arena, filesystem_path, str_path_parent_len(filesystem_path)
+        );
+        const manifest_row_t *above = manifest_blob_above(view, parent, ctx->arena);
+        if (above) {
+            char shown[PATH_MAX], beneath[PATH_MAX];
+            output_format_path(
+                above->filesystem_path, identity()->home, shown, sizeof(shown)
+            );
+            output_format_path(
+                filesystem_path, identity()->home, beneath, sizeof(beneath)
+            );
+            err = error_create(
+                ERR_INVALID_ARG, "Profile '%s' holds '%s' as the file '%s', and '%s' "
+                "lies beneath it; dotta remove %s %s gives that claim up", opts->profile,
+                shown, above->storage_path, beneath, opts->profile, above->storage_path
+            );
+            goto cleanup;
+        }
+
         /* The name, by the profile's own claims — the authority on names. A typed
          * name is the one input the namer did not produce, so it is the one place
          * a second name for one path can be born; a name the profile already

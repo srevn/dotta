@@ -117,8 +117,10 @@ typedef struct {
  * up — and a file captured at a directory claim's own name takes the claim's
  * place. The kind a profile's own claim gives a path is that path's question
  * and is asked of the view: a path whose kind changed under a claim is refused
- * by name and skipped by a walk, and `--force` lifts neither — overwriting bytes
- * under a name the profile holds is not re-shaping the tree.
+ * by name and skipped by a walk, and so is a path beneath one of the profile's
+ * own files, whichever label names either — a walk meets the file's place first
+ * — and `--force` lifts neither: overwriting bytes under a name the profile holds
+ * is not re-shaping the tree.
  *
  * **THE KEY INVARIANT**: for every path this command lists, `mount_resolve` of
  * the claim it was listed under is the filesystem path it was read at. A typed

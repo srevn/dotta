@@ -1749,8 +1749,10 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         } else if (err && commit_count > 0) {
             /* The executor stopped mid-sequence, and the commits that landed
              * are recorded (just above): said before the stop is reported, so
-             * the ✓ lines above are accounted for */
-            output_info(out, OUTPUT_NORMAL, "Record updated");
+             * the ✓ lines above are accounted for. The line stands under the
+             * header of the profile that stopped the run, whose commit did not
+             * land, so it says whose record it wrote, in the failure's words */
+            output_info(out, OUTPUT_NORMAL, "Record updated for the commits that landed");
         }
 
         if (err) return err;

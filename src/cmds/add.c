@@ -34,7 +34,6 @@
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
-#include "sys/stage.h"
 #include "utils/commit.h"
 #include "utils/hooks.h"
 
@@ -62,12 +61,14 @@
  *
  * `record` is what the capture committed, as the record keeps it: the path, the
  * name and the node the listing found — which the capture held to, refusing another
- * — the blob the stage wrote, the triple its bytes were read with (the fstat
- * beside a file's, the lstat before a link's target; none for a directory, which
- * confirms no content), and the claim the sheet took. Set by the capture, empty
- * until it lands, and written by the record phase wherever the claim still stands
- * (add_write_record) — every column but the stamp the capture's, so the record
- * says what dotta put there, never what a later head of the branch says should be.
+ * — the blob the commit holds at the name, the triple its bytes were read with
+ * (the fstat beside a file's, the lstat before a link's target; none for a
+ * directory, which confirms no content), and the claim the capture answered
+ * (core/profiles.h profile_stage_capture_file, profile_stage_capture_directory).
+ * Set by the capture, empty until it lands, and written by the record phase
+ * wherever the claim still stands (add_write_record) — every column but the stamp
+ * the capture's, so the record says what dotta put there, never what a later
+ * head of the branch says should be.
  */
 typedef struct {
     const char *filesystem_path;  /* Where the claim stands (arena) */
@@ -93,21 +94,20 @@ typedef struct {
  * (infra/mount.h). Keys and values borrow the arena the items live in.
  *
  * `view` is the profile as this command opened it: this profile's contribution
- * alone, from the tree the stage opened at, under this command's table. Every
- * name comes from it (core/manifest.h manifest_name, over `listing`), so does
- * the claim standing at a path (manifest_lookup_claim) — which rules reach the
- * path (add_verdict) and what kind it must be — and so does the one refusal the
+ * alone, from its next commit's base, under this command's table. Every name
+ * comes from it (core/manifest.h manifest_name, over `listing`), so does the
+ * claim standing at a path (manifest_lookup_claim) — which rules reach the path
+ * (add_verdict) and what kind it must be — and so does the one refusal the
  * completed selection owes (add_refuse_moves).
  *
- * `admission` and `sheet` are the two documents one commit carries, and the walk
- * asks both whether the commit has room for a name before a byte is read. The
- * tree holds every blob (sys/stage.h, the admission: the branch's entries and
- * every blob this command listed before), and the sheet holds the directories a
- * tree cannot — an empty one has no entry, so a claim the index cannot see is
- * the sheet's to answer for (core/metadata.h metadata_directory_beneath). The
- * admission grows with every blob listed; the sheet is the profile's and holds
- * no directory this command lists, so those are read once more with the selection
- * complete (cmd_add).
+ * `stage` is the profile's next commit, and the walk asks it whether the commit
+ * has room for a name before a byte is read (core/profiles.h profile_stage_admit):
+ * its two documents name one namespace, the tree holding every blob — the branch's,
+ * and every blob this command listed before — and the sheet the directories a
+ * tree cannot, an empty one having no entry. A directory this command lists is
+ * claimed in the sheet as it is admitted, so a blob listed above it later meets
+ * it at its own admission, as one above a directory the profile already claims
+ * does. The captures land on it too, every name they take admitted first.
  */
 typedef struct {
     const dotta_ctx_t *ctx;              /* The arena the paths live in, and the output */
@@ -116,8 +116,7 @@ typedef struct {
     const gitignore_ruleset_t *rules;    /* The profile's .dottaignore layers */
     const gitignore_ruleset_t *excludes; /* The -e layer alone, what a claim meets; NULL: none */
     source_filter_t *source;             /* The source layer, the builder's; NULL: turned off */
-    stage_admission_t *admission;        /* The branch's tree, and every blob listed since */
-    const metadata_t *sheet;             /* The profile's claims, asked with it */
+    profile_stage_t *stage;              /* The profile's next commit: what it has room for */
     hashmap_t *listing;                  /* filesystem path -> &item->claim (borrowed both) */
     ptr_array_t files;                   /* add_path_t *: every non-directory listed */
     ptr_array_t directories;             /* add_path_t *: every directory walked into */
@@ -442,51 +441,6 @@ static void add_list(
 }
 
 /**
- * Has the commit room for this name — in its tree, and in its sheet?
- *
- * One commit carries two documents, and they name one namespace: the tree holds
- * every blob, and the sheet holds the directories a tree cannot, since an empty
- * one has no entry at all. A blob leaves no room for a directory at its name or
- * for anything beneath it, whichever document the thing beneath it lives in —
- * so a blob asks both and a subtree asks the tree, a directory claim beneath
- * another being ordinary.
- *
- * The subject is the commit as this command has chosen it so far: the admission
- * — the branch's tree and every blob listed before this one — and the profile's
- * sheet. A directory this command listed is in neither until its capture, so a
- * blob chosen above one is asked about once more, with the selection complete
- * (cmd_add).
- *
- * One producer, two voices: every refusal is ERR_CONFLICT and says which name
- * stands in the way, and the callers give it their own — the argument arm (cmd_add)
- * wraps it as an error, the walk (add_collect) reads the code, prints it and
- * skips the subtree. Anything else is the run failing to decide, which is never
- * a verdict about the path.
- */
-static error_t add_admit(
-    const add_walk_t *walk, const char *storage_path, path_kind_t kind
-) {
-    if (kind == PATH_KIND_DIRECTORY) {
-        return stage_admit_subtree(walk->admission, storage_path);
-    }
-
-    /* The sheet first: a directory it claims beneath this name has no tree entry
-     * to find, so the admission cannot answer for it. */
-    const metadata_item_t *claimed = metadata_directory_beneath(
-        walk->sheet, storage_path
-    );
-    if (claimed) {
-        return error_create(
-            ERR_CONFLICT,
-            "Cannot stage '%s': '%s' is a directory this profile claims beneath it",
-            storage_path, claimed->key
-        );
-    }
-
-    return stage_admit_blob(walk->admission, storage_path);
-}
-
-/**
  * Refuse a walk that met an entry Git's ignore rules could not judge
  *
  * What the source layer cannot read may be what git excludes, so the walk refuses
@@ -557,15 +511,16 @@ static error_t add_refuse_unjudged(
  *
  * Two verdicts skip a child with its subtree, each with one line at NORMAL: a
  * kind the profile's own claim at the path contradicts, and a name the commit
- * has no room for, or one Git will not hold (add_admit). Neither may fail the
- * command — a stale claim deep inside $HOME must not fail `dotta add p ~`, and
- * the capture that would have refused it arrives too late to skip anything. What
- * the walk could not look at refuses rather than skips — a directory that will
- * not list, an entry that will not stat, a path past the kernel's PATH_MAX among
- * them, what Git's rules could not judge — since collection precedes capture,
- * so a refusal there costs nothing, where a skip would leave the profile short
- * of a subtree it never said it missed. Depth is no limit of the walk's own: it
- * goes as deep as the kernel resolves a path (sys/filesystem.h fs_listing_t).
+ * has no room for, or one Git will not hold (core/profiles.h profile_stage_admit).
+ * Neither may fail the command — a stale claim deep inside $HOME must not fail
+ * `dotta add p ~`, and the capture that would have refused it arrives too late
+ * to skip anything. What the walk could not look at refuses rather than skips —
+ * a directory that will not list, an entry that will not stat, a path past the
+ * kernel's PATH_MAX among them, what Git's rules could not judge — since collection
+ * precedes capture, so a refusal there costs nothing, where a skip would leave
+ * the profile short of a subtree it never said it missed. Depth is no limit of
+ * the walk's own: it goes as deep as the kernel resolves a path (sys/filesystem.h
+ * fs_listing_t).
  *
  * On error the lists keep what was collected, in the command arena, and the scratch
  * is left as it stands, for the walk's driver to free.
@@ -651,7 +606,7 @@ static error_t add_collect(
          * — it says the profile holds a subtree beneath the path, which a path
          * that became a file cannot carry — and it is the one reading that sees
          * a claim with nothing beneath it for either of the profile's documents
-         * to find, where add_admit below covers the rest, by the name. */
+         * to find, where the admission below covers the rest, by the name. */
         const manifest_row_t *held = manifest_lookup_claim(
             walk->view, walk->profile, child_fs
         );
@@ -709,13 +664,16 @@ static error_t add_collect(
             continue;
         }
 
-        /* What the commit can hold, asked before a byte is read. Only a conflict
-         * is a verdict about the path — a name the tree or the sheet has no room
-         * for, or one Git will not hold (sys/stage.h); a failure to decide is
-         * the run failing, and publishing a selection past one would commit a
-         * silently partial capture. A conflict is warned and dropped, one per
-         * child it skips. */
-        err = add_admit(walk, child_storage, kind);
+        /* What the commit can hold, asked of the profile's next commit before a
+         * byte is read (core/profiles.h profile_stage_admit). One producer, two
+         * voices: its refusals are ERR_CONFLICT and name what stands in the way,
+         * and the walk gives them its own — the argument arm (cmd_add) refuses
+         * the command. Only a conflict is a verdict about the path — a name the
+         * tree or the claims the commit carries have no room for, or one Git
+         * will not hold; a failure to decide is the run failing, and publishing
+         * a selection past one would commit a silently partial capture. A conflict
+         * is warned and dropped, one per child it skips. */
+        err = profile_stage_admit(walk->stage, kind, child_storage);
         if (err) {
             if (error_code(err) != ERR_CONFLICT) return err;
             output_warning(
@@ -864,13 +822,13 @@ static error_t add_refuse_moves(const add_walk_t *walk) {
 /**
  * Say what a capture claimed — the claim decides the shape
  *
- * Three claim shapes exist, by the sheet's own existence rule (an item exists
- * iff it claims something): mode and ownership, mode alone, ownership alone —
- * the entry of a link another owner holds, which a directory capture never produces
- * since a directory always claims its mode. The fourth combination has no line
- * to print: such an item does not exist, the capture returned NULL instead.
- * Ownership is all-or-none at the capture boundary (core/metadata.c
- * metadata_capture_ownership), so a present owner implies a present group.
+ * Three claim shapes have a line: mode and ownership, mode alone, ownership alone
+ * — a link another owner holds, which a directory capture never answers since a
+ * directory always claims its mode. A claim of neither has none: a link the invoker
+ * owns, which absence already says, and which the sheet holds no item for
+ * (core/metadata.h, an item exists iff it claims something). Ownership is
+ * all-or-none at the capture boundary (core/metadata.c metadata_capture_ownership),
+ * so a present owner implies a present group.
  *
  * The one voice for the file capture and the directory capture, which had drifted
  * apart; update's sibling line is not this one — it speaks at the receipt's indent
@@ -879,26 +837,26 @@ static error_t add_refuse_moves(const add_walk_t *walk) {
  * @param out Output context (must not be NULL)
  * @param what The claim's noun: "metadata" or "directory metadata"
  * @param filesystem_path The captured path (must not be NULL)
- * @param item The capture's claim (must not be NULL)
+ * @param claim The claim the capture answered (must not be NULL)
  */
 static void add_print_capture(
     output_t *out, const char *what, const char *filesystem_path,
-    const metadata_item_t *item
+    const profile_claim_t *claim
 ) {
-    if (item->mode != MODE_UNCLAIMED && item->owner) {
+    if (claim->mode != MODE_UNCLAIMED && claim->owner) {
         output_info(
             out, OUTPUT_VERBOSE, "Captured %s: %s (mode: %04o, owner: %s:%s)",
-            what, filesystem_path, item->mode, item->owner, item->group
+            what, filesystem_path, claim->mode, claim->owner, claim->group
         );
-    } else if (item->mode != MODE_UNCLAIMED) {
+    } else if (claim->mode != MODE_UNCLAIMED) {
         output_info(
             out, OUTPUT_VERBOSE, "Captured %s: %s (mode: %04o)",
-            what, filesystem_path, item->mode
+            what, filesystem_path, claim->mode
         );
-    } else {
+    } else if (claim->owner) {
         output_info(
             out, OUTPUT_VERBOSE, "Captured %s: %s (owner: %s:%s)",
-            what, filesystem_path, item->owner, item->group
+            what, filesystem_path, claim->owner, claim->group
         );
     }
 }
@@ -1011,40 +969,31 @@ static void add_print_labels(const add_walk_t *walk) {
 }
 
 /**
- * Capture one listed path onto the stage, and its claim onto the sheet
+ * Capture one listed path onto the profile's next commit
  *
  * As the kind it was listed as: the occupant chooses the capture, and each capture
  * refuses the other's (infra/content.h), so a path whose kind changed after its
  * listing is refused rather than read as what it has become — and the verdict
  * the decision pass reached for a regular file is read by a regular file's capture
  * alone. Sealed as that pass decided. The capture answers with the entry's bytes
- * and the look they were read with; this function places both — the entry on
- * the stage, the claim on the sheet — and keeps what it placed as the path's
- * record (path->record): the blob the put wrote, the look's triple, the claim.
+ * and the look they were read with; the stage makes both its entry and its claim
+ * (core/profiles.h profile_stage_capture_file) and answers the claim as the next
+ * walk shows it, and this keeps what the capture committed as the path's record
+ * (path->record): the blob, the look's triple, the claim.
  *
- * @param ctx Dispatch context (must not be NULL; the key manager for a seal,
- *            the arena the record's names are copied into, and the output)
- * @param stage The profile's stage (must not be NULL)
- * @param profile The profile, for the seal's key and the record's binding (must
- *                not be NULL)
+ * @param walk The selection (must not be NULL): the context — the key manager
+ *             for a seal, the arena the record's names are copied into, the output
+ *             — the profile, the seal's key and the record's binding, and its
+ *             next commit, which takes the capture
  * @param path The listed path (must not be NULL; its record is the capture's
  *             once the capture lands)
- * @param metadata The sheet the claim goes onto (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t add_capture(
-    const dotta_ctx_t *ctx,
-    stage_t *stage,
-    const char *profile,
-    add_path_t *path,
-    metadata_t *metadata
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(stage);
-    CHECK_NULL(profile);
+static error_t add_capture(const add_walk_t *walk, add_path_t *path) {
+    CHECK_NULL(walk);
     CHECK_NULL(path);
-    CHECK_NULL(metadata);
 
+    const dotta_ctx_t *ctx = walk->ctx;
     output_t *out = ctx->out;
     const char *filesystem_path = path->filesystem_path;
     const char *storage_path = path->claim.storage_path;
@@ -1055,54 +1004,48 @@ static error_t add_capture(
      * and triple one inode by construction — and that stat is the claim's and
      * the record's both.
      *
-     * Then the entry, at the name the capture was made under: a sealed capture
-     * binds it (infra/content.h), so the put repeats it and never a second name.
-     * One tail past the door — the bytes are the stage's now, or nobody's, and
-     * the look stays readable for the claim and the record below. */
+     * Then its entry and its claim on the profile's next commit, at the name
+     * the capture was made under: a sealed capture binds it (infra/content.h),
+     * so the put repeats it and never a second name. One tail past both — the
+     * bytes are released whichever refused, and the look stays readable for the
+     * record below. */
     content_capture_t capture = { 0 };
-    git_oid blob;
+    profile_claim_t claim;
     error_t err = NULL;
     if (path->occupant == FS_OCCUPANT_SYMLINK) {
         err = content_capture_link(filesystem_path, &capture);
     } else {
         err = content_capture_file(
-            filesystem_path, storage_path, profile, ctx->run.keymgr,
+            filesystem_path, storage_path, walk->profile, ctx->run.keymgr,
             path->should_encrypt, &capture
         );
     }
     if (!err) {
-        err = stage_put(
-            stage, storage_path, capture.bytes.data, capture.bytes.size,
-            capture.mode, &blob
+        err = profile_stage_capture_file(
+            walk->stage, storage_path, &capture, ctx->arena, &claim
         );
     }
     content_capture_free(&capture);
     if (err) return err;
 
-    /* The claim from the capture's own look, sealed as the capture says: its
-     * write-time invariant makes that verdict the byte truth (a plaintext that
-     * would read as ciphertext is refused there), so the claim and every reader
-     * of the bytes agree — and a link is never sealed. */
-    metadata_item_t *item = NULL;
-    err = metadata_capture_file(
-        storage_path, &capture.st, capture.encrypted, &item
-    );
-    if (err) return err;
-
     /* What the capture committed, as the record keeps it: the node the listing
-     * found and the capture held to, the blob the put wrote under the look its
-     * bytes came off, and the claim — taken before the sheet takes the item */
+     * found and the capture held to, the blob the commit holds at the name under
+     * the look its bytes came off, and the claim the capture answered — its mode
+     * the type's floor where it claims none, a link's, the record's don't-care
+     * under its kind */
     path->record = (state_record_t){
         .filesystem_path = filesystem_path,
         .storage_path = storage_path,
-        .profile = profile,
+        .profile = walk->profile,
         .kind = path->occupant,
-        .blob_oid = blob,
+        .blob_oid = claim.blob_oid,
         .stat = state_stat_from_read(&capture.st),
+        .mode = profile_claim_mode(&claim),
+        .owner = claim.owner,
+        .group = claim.group,
     };
-    metadata_item_claim(item, ctx->arena, &path->record);
 
-    if (capture.encrypted) {
+    if (claim.encrypted) {
         output_info(
             out, OUTPUT_VERBOSE, "Encrypted: %s -> %s",
             filesystem_path, storage_path
@@ -1114,48 +1057,38 @@ static error_t add_capture(
                                               : "Added: %s -> %s",
         filesystem_path, storage_path
     );
-
-    /* NULL is a links-only answer (core/metadata.h): the capture claims nothing
-     * — a link with no ownership to track — and a FILE item standing at the key
-     * is the replaced state's, retired. */
-    if (!item) {
-        metadata_remove_item(metadata, PATH_KIND_FILE, storage_path);
-        return NULL;
-    }
-
-    add_print_capture(out, "metadata", filesystem_path, item);
-
-    metadata_add_item(metadata, &item);
+    add_print_capture(out, "metadata", filesystem_path, &claim);
 
     return NULL;
 }
 
 /**
- * Commit the stage
+ * Commit the profile's next commit
  *
  * The message names both kinds this commit carries — the message's unit is the
  * path (utils/commit.h), and a commit that claimed a directory and no file has
  * a path to name and no file — so the walk goes in, not one of its lists.
  *
- * @param walk The selection, both lists, and the arena the names live in (must
- *             not be NULL)
- * @param stage The profile's stage, every capture on it (must not be NULL)
+ * @param walk The selection, both lists, the arena the names live in, and the
+ *             profile's next commit, every capture on it (must not be NULL)
  * @param opts Command options
- * @param out_committed Whether a commit was made: false when the stage holds
- *                      the branch's own tree, so a re-add of what the profile
- *                      already holds moves nothing (must not be NULL)
+ * @param out_committed Whether a commit was made: false where no edit moved either
+ *                      document, so a re-add of what the profile already holds
+ *                      moves nothing (must not be NULL)
+ * @param pruned The derivations the commit's prune took, appended by key (must
+ *               not be NULL; given its arena by string_array_init)
  * @return Error or NULL on success
  */
 static error_t add_commit(
     const add_walk_t *walk,
-    stage_t *stage,
     const cmd_add_options_t *opts,
-    bool *out_committed
+    bool *out_committed,
+    string_array_t *pruned
 ) {
     CHECK_NULL(walk);
-    CHECK_NULL(stage);
     CHECK_NULL(opts);
     CHECK_NULL(out_committed);
+    CHECK_NULL(pruned);
 
     /* The names this commit takes, borrowed from the claims the walk listed them
      * under: every listed path has one (add_list). Both kinds, in the order every
@@ -1185,9 +1118,9 @@ static error_t add_commit(
     };
 
     /* Create commit */
-    return stage_commit(
-        stage, commit_message(walk->ctx->arena, walk->ctx->config, &msg_ctx),
-        out_committed
+    return profile_stage_commit(
+        walk->stage, commit_message(walk->ctx->arena, walk->ctx->config, &msg_ctx),
+        out_committed, pruned
     );
 }
 
@@ -1211,7 +1144,8 @@ static error_t add_commit(
  *      (enable's business), never the settle
  *   2. Build the view; anchor each capture where its own claim stands at the
  *      path the walk read it at, its record the capture's; settle what the commit
- *      let go
+ *      let go — the ancestor claims the climb retired, and the derivations the
+ *      commit's prune took
  *   3. Commit the transaction (state_save), and finish it either way
  *
  * CRITICAL ORDER: step 1 must precede step 2. The builder's own table is built
@@ -1276,8 +1210,8 @@ static error_t add_commit(
  *               new profile and an enabled one (the UPSERT keeps a row's own
  *               for a NULL)
  * @param profile_created This add created the profile's branch: enable it here
- * @param retired The ancestor claims the ancestry pass dropped, by key (must
- *                not be NULL)
+ * @param retired The ancestor claims the climb dropped, by key (must not be NULL)
+ * @param pruned The derivations the commit's prune took, by key (must not be NULL)
  * @param receipt What the phase did, zeroed first (must not be NULL)
  * @return Error or NULL on success (non-fatal - caller treats as warning)
  */
@@ -1286,10 +1220,12 @@ static error_t add_write_record(
     const char *target,
     bool profile_created,
     const string_array_t *retired,
+    const string_array_t *pruned,
     add_receipt_t *receipt
 ) {
     CHECK_NULL(walk);
     CHECK_NULL(retired);
+    CHECK_NULL(pruned);
     CHECK_NULL(receipt);
 
     const dotta_ctx_t *ctx = walk->ctx;
@@ -1322,13 +1258,13 @@ static error_t add_write_record(
          * spelling or binds an unbound row. */
         err = state_enable_profile(state, profile, target);
         if (err) goto cleanup;
-    } else if (!state_enabled(state, profile) && retired->count == 0) {
+    } else if (!state_enabled(state, profile) && retired->count == 0 && pruned->count == 0) {
         /* Nothing to write at all: no row for a capture to win, a target the
          * run brought left unbound (enable's business, when the user gets there),
          * and no claim let go. The settle below is not gated on enablement —
-         * the commit dropped whatever `retired` names whatever the enabled set
-         * says, and a path the commit let go settles by its record — but with
-         * nothing let go it has nothing to do either. */
+         * the commit dropped whatever `retired` and `pruned` name whatever the
+         * enabled set says, and a path the commit let go settles by its record
+         * — but with nothing let go it has nothing to do either. */
         goto cleanup;                                  /* err is NULL */
     }
 
@@ -1447,32 +1383,37 @@ static error_t add_write_record(
         }
     }
 
-    /* What the commit let go: an ancestor claim the derivation retired leaves
-     * the view by this very commit, so its record settles here rather than
-     * orphaning until an apply gets around to it — the record the commit stranded
-     * is the commit's to settle. It refuses nothing while it stands: a directory
-     * only a record remembers reaches no view row (the reach rule,
-     * core/workspace.h), so the leaf this add just captured through the arrangement
-     * is judged on its own occupant either way, and a retire that fails ends
-     * the phase without refusing the add — the retry re-anchors and re-runs no
-     * retire, the sheet already lacking the claim, so the stranded record stays
-     * apply's to release under status's Issues exactly as before. Enablement
-     * was not consulted on the way here: the derivation saw the disk contradict
-     * the claim whatever the enabled set says, and the record its drop strands
-     * is stale under a disabled profile exactly as under an enabled one. A rung
-     * some other profile still claims keeps its row and its record — the retire
-     * is this profile's word about its own claim, never about the path — and an
-     * unbound claim names nothing on this machine to retire. */
-    for (size_t i = 0; i < retired->count; i++) {
-        /* Placed by the table the walk named through, which the view lends back
-         * (manifest_mounts): a retired name stands nowhere until it gives one */
-        const char *filesystem_path = mount_resolve(
-            ctx->arena, manifest_mounts(walk->view), profile, retired->entries[i]
-        );
-        if (!filesystem_path || manifest_lookup(manifest, filesystem_path)) continue;
+    /* What the commit let go: an ancestor claim the climb retired, and a derivation
+     * the commit's prune took, each leave the view by this very commit, so its
+     * record settles here rather than orphaning until an apply gets around to
+     * it — the record the commit stranded is the commit's to settle. It refuses
+     * nothing while it stands: a directory only a record remembers reaches no
+     * view row (the reach rule, core/workspace.h), so the leaf this add just
+     * captured through the arrangement is judged on its own occupant either way,
+     * and a retire that fails ends the phase without refusing the add — the retry
+     * re-anchors and re-runs no retire, the sheet already lacking the claim, so
+     * the stranded record stays apply's to release under status's Issues exactly
+     * as before. Enablement was not consulted on the way here: the climb saw
+     * the disk contradict the claim, and the prune found nothing beneath it,
+     * whatever the enabled set says, and the record either strands is stale under
+     * a disabled profile exactly as under an enabled one. A rung some other profile
+     * still claims keeps its row and its record — the retire is this profile's
+     * word about its own claim, never about the path — and an unbound claim names
+     * nothing on this machine to retire. */
+    const string_array_t *let_go[] = { retired, pruned };
+    for (size_t b = 0; b < sizeof(let_go) / sizeof(let_go[0]); b++) {
+        for (size_t i = 0; i < let_go[b]->count; i++) {
+            /* Placed by the table the walk named through, which the view lends
+             * back (manifest_mounts): a name let go stands nowhere until it gives
+             * one */
+            const char *filesystem_path = mount_resolve(
+                ctx->arena, manifest_mounts(walk->view), profile, let_go[b]->entries[i]
+            );
+            if (!filesystem_path || manifest_lookup(manifest, filesystem_path)) continue;
 
-        err = state_retire(state, filesystem_path);
-        if (err) goto cleanup;
+            err = state_retire(state, filesystem_path);
+            if (err) goto cleanup;
+        }
     }
 
     /* STEP 3: the transaction the dispatcher opened is this phase's to close.
@@ -1511,21 +1452,12 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     error_t err = NULL;
     ignore_rules_t *ignore_rules = NULL;
     const gitignore_ruleset_t *profile_rules = NULL;
-    stage_t *stage = NULL;
-    stage_admission_t *admission = NULL; /* The tree as its names are chosen: see below */
-    manifest_t *view = NULL;          /* The profile as the stage opened it: see below */
+    profile_stage_t *stage = NULL;    /* The profile's next commit: see below */
+    manifest_t *view = NULL;          /* The profile as its next commit opened it: see below */
     add_walk_t walk = { .ctx = ctx }; /* Filled once the table and the rules are known */
-    bool profile_exists = false;      /* The pre-flight's question, read by both modes */
-    bool profile_created = false;     /* The orphan open's answer, read below the commit */
-    bool committed = false;
-    metadata_t *metadata = NULL;
-    mount_table_t *mounts = NULL;         /* The command's table: see below */
-    const char *target = NULL;            /* --target, absolute: what the row stores */
-
-    /* The ancestry pass's other half: the keys it retired, read by the record
-     * write once the commit that drops them has landed. */
-    string_array_t ancestry_retired;
-    string_array_init(&ancestry_retired, ctx->arena);
+    bool profile_exists = false;      /* The pre-flight's: no branch until this add brings it */
+    mount_table_t *mounts = NULL;     /* The command's table: see below */
+    const char *target = NULL;        /* --target, absolute: what the row stores */
 
     /* The branch this add will write to: its stage is opened below when it is
      * there, an orphan's when it is not. Both answers are needed here, before
@@ -1662,20 +1594,16 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
-    /* The profile's stage, as the pre-flight above resolved it: the branch's
-     * head and tree when it exists, the empty tree and a root commit-to-be when
-     * it does not. A branch that appeared or vanished since the pre-flight is
-     * refused by the open rather than silently taken the other way. */
-    char refname[DOTTA_REFNAME_MAX];
-    err = gitops_branch_refname(refname, sizeof(refname), opts->profile);
-    if (err) goto cleanup;
-
-    if (profile_exists) {
-        err = stage_open(repo, refname, &stage);
-    } else {
-        err = stage_orphan(repo, refname, &stage);
-        profile_created = true;   /* This add is what brings the branch */
-    }
+    /* The profile's next commit, as the pre-flight above resolved it: at the
+     * branch's head when it exists, over Git's empty tree and a root commit-to-be
+     * when it does not. A branch that appeared or vanished since the pre-flight
+     * is refused by the open rather than silently taken the other way. The sheet
+     * is read at the open, strictly, so a sheet that will not load refuses the
+     * add here rather than after the arguments have been diagnosed — the profile's
+     * own state is the earlier question. */
+    err = profile_exists
+        ? profile_stage_open(repo, opts->profile, &stage)
+        : profile_stage_orphan(repo, opts->profile, &stage);
     if (err) goto cleanup;
 
     /* Resolve the profile-specific ruleset. Safe for both paths: existing profile
@@ -1685,46 +1613,24 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     err = ignore_ruleset(ignore_rules, opts->profile, &profile_rules);
     if (err) goto cleanup;
 
-    /* The profile's sheet, from the tree the stage opened at: the profile's own
-     * bytes, an empty sheet for a new profile (the loader's contract). Read before
-     * the walk, which asks it what the profile already claims beneath a name
-     * (add_admit). The decide phase gives up a claim a listed file takes the
-     * place of, the captures write the rest, and it is saved once. A sheet that
-     * will not load refuses the add here rather than after the arguments have
-     * been diagnosed — the profile's own state is the earlier question.
-     */
-    err = metadata_load_from_tree(repo, stage_tree(stage), opts->profile, &metadata);
-    if (err) goto cleanup;
-
     /* The profile as this command found it, under this command's table: one
-     * contribution, its own, from the tree the stage opened at, the handle let
-     * go once its view is built. Built after the sheet load so a sheet that will
-     * not load is still the earlier refusal — the profile loads it again and
-     * would say the same thing later. Every naming question below reads it, so
-     * does the kind question, and so does the refusal the completed selection
+     * contribution, its own, built over the base its next commit opened — the
+     * sheet the open read, parsed once. Every naming question below reads it,
+     * so does the kind question, and so does the refusal the completed selection
      * owes; the command's arena's, as every view is. */
-    profile_t *profile = profile_open(opts->profile, stage_tree(stage));
-    err = manifest_build_profile(profile, mounts, ctx->arena, &view);
-    profile_free(profile);
-    if (err) goto cleanup;
-
-    /* The tree this commit will write, as its names are chosen: the branch's
-     * entries, and every blob this command lists from here on (sys/stage.h).
-     * The walk and the argument arm record into it as they list; the sheet's
-     * directories are read against it once more, below. */
-    err = stage_admission_create(stage, &admission);
+    err = manifest_build_profile(profile_stage_base(stage), mounts, ctx->arena, &view);
     if (err) goto cleanup;
 
     /* Collect every path to add, expanding directories. Each listing is named
      * once, by the claim standing at it; what the walk finds beneath one already
-     * listed is named from that claim. */
+     * listed is named from that claim, and admitted by the profile's next commit
+     * as it is listed. */
     walk.profile = opts->profile;
     walk.view = view;
     walk.rules = profile_rules;
     walk.excludes = excludes;
     walk.source = ignore_source(ignore_rules);
-    walk.admission = admission;
-    walk.sheet = metadata;
+    walk.stage = stage;
     walk.listing = hashmap_borrow(ctx->arena, 0);
     ptr_array_init(&walk.files, ctx->arena);
     ptr_array_init(&walk.directories, ctx->arena);
@@ -1969,10 +1875,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * own files, whichever label names either, lies where the file stands,
          * and no apply could place both. The removal that gives the file up is
          * the way past, as at the path. The commit's admission sees the pair
-         * only where the two names share a prefix (sys/stage.h); the view sees
-         * it wherever the two stand. A walk needs no such question: it meets
-         * the file's place before anything beneath it, and the kind refusal skips
-         * it there */
+         * only where the two names share a prefix (core/profiles.h
+         * profile_stage_admit); the view sees it wherever the two stand. A walk
+         * needs no such question: it meets the file's place before anything beneath
+         * it, and the kind refusal skips it there */
         const char *parent = arena_strndup(
             ctx->arena, filesystem_path, str_path_parent_len(filesystem_path)
         );
@@ -2016,11 +1922,11 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        /* What the commit can hold, before a byte is read. The verdict a walked
-         * entry answers with a skip is an error here: the user asked for this
-         * path by name, and working around a claim they did not mention is not
-         * this command's to do. */
-        err = add_admit(&walk, storage_path, kind);
+        /* What the commit can hold, before a byte is read (core/profiles.h
+         * profile_stage_admit). The verdict a walked entry answers with a skip
+         * is an error here: the user asked for this path by name, and working
+         * around a claim they did not mention is not this command's to do. */
+        err = profile_stage_admit(stage, kind, storage_path);
         if (err) {
             err = error_wrap(err, "Cannot add '%s'", file);
             goto cleanup;
@@ -2050,104 +1956,30 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
-    /* A file listed at a name the sheet claims a directory at takes that claim's
-     * place, given up here: its capture writes its own kind (metadata_add_item),
-     * and would carry the claim beside it. The kind question the listing asked
-     * of the view is why that is the whole story — a claim the view held at this
-     * path would have refused a file here — so what gives way is a claim the
-     * view already reads as no claim, the tree holding a blob at its name, or
-     * as another name's, the settle having kept another member. Given up here,
-     * with the selection complete, so that the sheet the sweep below reads is
-     * the one the commit will carry. */
-    for (size_t i = 0; i < walk.files.count; i++) {
-        const add_path_t *path = walk.files.entries[i];
-        metadata_remove_item(metadata, PATH_KIND_DIRECTORY, path->claim.storage_path);
-    }
-
-    /* The two documents this commit carries name one namespace, and this is where
-     * they meet: with the selection complete, before any byte is read. The tree
-     * holds every blob and the sheet the directories a tree cannot, and a blob
-     * leaves no room for a directory at its name or for anything beneath it.
-     *
-     * Every listing met both documents as the command stood when it was made
-     * (add_admit): the admission held the branch's entries and every blob listed
-     * before, and the sheet held the profile's claims. Two readings remain, and
-     * they are this pass's two loops:
-     *   - the profile's own claims, against every name the tree will hold. A
-     *     blob this command chose above one was refused at its name, and a file
-     *     listed at one's own name has just taken its place, so what refuses
-     *     here is a contradiction the branch arrived with. Nothing repairs it
-     *     silently, and its remedies are two — `dotta remove` gives up a claim
-     *     beneath a blob, and a forced re-capture of the file takes the place
-     *     of one at the blob's own name — so no one line names them;
-     *   - this command's own directories, against the blobs chosen after them.
-     *     The sheet holds them only once they are captured, so no listing could
-     *     see them.
-     *
-     * That is every directory the commit's sheet will claim, and nothing the
-     * captures do can escape it. The directory loop writes the keys the second
-     * loop asks about, under the same kind. The file captures write file items,
-     * which claim no room beneath them, at keys where no directory claim still
-     * stands. The ancestry pass claims proper prefixes of names this command
-     * captured (metadata_capture_ancestors: the mount root is excluded by where
-     * the scan starts and the leaf by where it ends); a blob at or above such a
-     * prefix is a proper prefix of the captured name itself, which that name's
-     * own admission refused. It also retires claims, and giving one up cannot
-     * make room narrower.
-     */
-    const metadata_items_t directories = metadata_items(metadata, PATH_KIND_DIRECTORY);
-    for (size_t i = 0; i < directories.count; i++) {
-        err = stage_admit_subtree(admission, directories.entries[i]->key);
-        if (err) {
-            /* The stage names the storage path and the obstruction; the wrap
-             * says whose claim it is and that a claim is the subject, so an add
-             * of one path does not answer with a sentence about another the user
-             * never typed. */
-            err = error_wrap(
-                err, "Profile '%s' claims a directory its tree cannot hold",
-                opts->profile
-            );
-            goto cleanup;
-        }
-    }
-    for (size_t i = 0; i < walk.directories.count; i++) {
-        const add_path_t *path = walk.directories.entries[i];
-
-        err = stage_admit_subtree(admission, path->claim.storage_path);
-        if (err) {
-            /* A pair this command made, named by its directory — as the argument
-             * arm names it in the other order, where the directory's own admission
-             * met the blob first. */
-            char shown[PATH_MAX];
-            output_format_path(
-                path->filesystem_path, identity()->home, shown, sizeof(shown)
-            );
-            err = error_wrap(err, "Cannot add '%s'", shown);
-            goto cleanup;
-        }
-    }
-
     /* The selection is complete, so the question of names its parts cannot answer
      * is asked here: does this command abandon a name it moves? */
     err = add_refuse_moves(&walk);
     if (err) goto cleanup;
 
-    /* What the profile already holds under a name this command chose. Asked over
-     * the whole listing before a byte is read, so a refusal at the last file
-     * does not leave the first four in the object database. Keyed by the name
-     * and not by the path: at a path the profile names twice, a typed re-capture
-     * of the loser must be gated by the name the user typed, not by the row that
-     * happens to stand there. The decision pass below keeps its own
-     * git_index_get_bypath for the encryption policy's priority-3 read — two
-     * questions, one lookup each. */
+    /* What the profile already holds under a name this command chose: a blob, a
+     * file claim being one, which the tree alone holds (core/profiles.h
+     * profile_entry) — a gitlink a hand left there is no claim, and the capture
+     * takes its place as Git's own add does (profile_stage_capture_file). Asked
+     * over the whole listing before a byte is read, so a refusal at the last
+     * file does not leave the first four in the object database. Keyed by the
+     * name and not by the path: at a path the profile names twice, a typed
+     * re-capture of the loser must be gated by the name the user typed, not by
+     * the row that happens to stand there. The decision pass below asks the same
+     * entry for the encryption policy's priority-3 read — two questions, one
+     * lookup each. */
     if (!opts->force) {
         for (size_t i = 0; i < walk.files.count; i++) {
             const add_path_t *path = walk.files.entries[i];
-            if (!git_index_get_bypath(
-                stage_index(stage), path->claim.storage_path, 0
-                )) {
-                continue;
-            }
+            profile_held_t held;
+            err = profile_entry(profile_stage_base(stage), path->claim.storage_path, &held);
+            if (err) goto cleanup;
+            if (held.kind != PROFILE_HELD_FILE) continue;
+
             err = error_create(
                 ERR_EXISTS, "File '%s' (as '%s') already exists in profile '%s'; "
                 "--force overwrites it", path->filesystem_path,
@@ -2159,34 +1991,35 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* The encryption decision, taken with the name and never with a source byte.
      * Its inputs are the config, the name this command chose, the request, and
-     * the entry the profile's stage holds at that name — judged by its mode and
-     * its header through the index the stage opened on, never by a claim, with
-     * no key and no source file (infra/content.h content_classify) — so it is a
-     * decision and is made with the others, before any capture runs. The capture
-     * is told (add_capture).
+     * the blob the profile holds at that name in the tree its next commit opened
+     * at — judged by its mode and its header, never by a claim, with no key and
+     * no source file (core/profiles.h profile_entry, infra/content.h
+     * content_classify) — so it is a decision and is made with the others, before
+     * any capture runs. The capture is told (add_capture).
      *
      * A regular file alone: a link's entry is its target and carries no seal
      * (core/policy.h), so the policy is never asked about one; and the capture
      * a link was listed for is the link's — a regular file standing there by
      * then is refused by it, never stored under a verdict nobody reached.
      *
-     * After the held-entry gate, so an entry is met here only under --force;
-     * with none there are no prior bytes, and priorities 4 and 5 decide. A blob
-     * that cannot be read is an error, not "not encrypted": a sniff that defaulted
-     * would flip the policy silently. And a verdict that seals is refused here
-     * when this run can never seal — encryption turned off — rather than at a
-     * capture the others would already have preceded into the object database. */
+     * After the held-entry gate, so a blob is met here only under --force; with
+     * none — a name new to the profile, or a gitlink, which places nothing —
+     * there are no prior bytes, and priorities 4 and 5 decide. A blob that cannot
+     * be read is an error, not "not encrypted": a sniff that defaulted would
+     * flip the policy silently. And a verdict that seals is refused here when
+     * this run can never seal — encryption turned off — rather than at a capture
+     * the others would already have preceded into the object database. */
     for (size_t i = 0; i < walk.files.count; i++) {
         add_path_t *path = walk.files.entries[i];
         if (path->occupant == FS_OCCUPANT_SYMLINK) continue;
 
         const char *storage_path = path->claim.storage_path;
-        const git_index_entry *prior = git_index_get_bypath(
-            stage_index(stage), storage_path, 0
-        );
+        profile_held_t prior;
+        err = profile_entry(profile_stage_base(stage), storage_path, &prior);
+        if (err) goto cleanup;
         content_kind_t prior_kind = CONTENT_PLAINTEXT;
-        if (prior) {
-            err = content_classify(repo, &prior->id, prior->mode, &prior_kind, NULL);
+        if (prior.kind == PROFILE_HELD_FILE) {
+            err = content_classify(repo, &prior.oid, prior.filemode, &prior_kind, NULL);
             if (err) {
                 err = error_wrap(
                     err, "Failed to classify the committed bytes of '%s'",
@@ -2218,22 +2051,24 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * and writes.
      *
      * So a preview answers what the selection answers — every name, admitted
-     * together against the tree and the sheet the commit would carry (sys/stage.h,
-     * the admission); the name a directory claim would abandon; the entries the
-     * profile holds under a chosen name; and each file's encryption verdict,
-     * with whether this run could seal at all — and a run refused over any of
-     * them is a preview refused in the same words. What only a source, or a later
-     * writer, can say is below: bytes that cannot be read, a plaintext that would
-     * read as ciphertext, the key a seal needs, an owner a claim cannot name, a
-     * kind that changes before its capture, the chain above each path, whether
-     * the commit moves anything, and the record (cmds/add.h).
+     * together against the tree and the claims the commit would carry
+     * (core/profiles.h profile_stage_admit); the name a directory claim would
+     * abandon; the entries the profile holds under a chosen name; and each file's
+     * encryption verdict, with whether this run could seal at all — and a run
+     * refused over any of them is a preview refused in the same words. What only
+     * a source, or a later writer, can say is below: bytes that cannot be read,
+     * a plaintext that would read as ciphertext, the key a seal needs, an owner
+     * a claim cannot name, a kind that changes before its capture, the chain
+     * above each path, whether the commit moves anything, and the record
+     * (cmds/add.h).
      *
      * And nothing above wrote anything of dotta's: the state was opened in the
-     * read shape and holds no lock (include/runtime.h), the stage and the admission
-     * are indexes in memory over the tree the open read — Git's empty tree for
-     * a profile that does not exist yet, read and never written (sys/stage.h) —
-     * and the sheet's edit is dropped unsaved. The pre-add hook was told it is
-     * a dry run; the post-add hook is below. */
+     * read shape and holds no lock (include/runtime.h), and the profile's next
+     * commit holds indexes in memory over the tree the open read — Git's empty
+     * tree for a profile that does not exist yet, read and never written
+     * (sys/stage.h) — and a copy of its sheet, whose admitted claims are dropped
+     * unsaved with it. The pre-add hook was told it is a dry run; the post-add
+     * hook is below. */
     if (opts->dry_run) {
         /* The captures' own lines, in their order and in the future tense: every
          * directory, then every file, by the capture its listed occupant chooses
@@ -2324,7 +2159,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * — and the listing, which add_refuse_moves reads as a promise of the commit,
      * would be a wish (core/metadata.h metadata_capture_directory). Ahead of
      * the file captures for the same reason: a directory that cannot be claimed
-     * is found before any source blob reaches the object database.
+     * is found before any source blob reaches the object database. Each is captured
+     * over the claim its admission wrote, which said the class and left the
+     * attributes to this look.
      */
     for (size_t i = 0; i < walk.directories.count; i++) {
         add_path_t *path = walk.directories.entries[i];
@@ -2349,43 +2186,66 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        /* Capture directory metadata using stat data. The walk entered this
-         * directory, so the claim is a tracked one: the profile tracks the path
-         * itself, scans it for new files and converges its attributes. */
-        metadata_item_t *dir_item = NULL;
-        err = metadata_capture_directory(storage_path, &dir_stat, true, &dir_item);
+        /* The claim off the look, on the profile's next commit. The walk entered
+         * this directory, so the claim is a tracked one: the profile tracks the
+         * path itself, scans it for new files and converges its attributes */
+        profile_claim_t claim;
+        err = profile_stage_capture_directory(
+            stage, storage_path, &dir_stat, ctx->arena, &claim
+        );
         if (err) goto cleanup;
 
         /* What the capture committed, as the record keeps it: the directory the
-         * guard above just held it to, and its claim — no content, which a
-         * directory never confirms — taken before the sheet takes the item */
+         * guard above just held it to, and the claim the capture answered — no
+         * content, which a directory never confirms */
         path->record = (state_record_t){
             .filesystem_path = path->filesystem_path,
             .storage_path = storage_path,
             .profile = opts->profile,
             .kind = FS_OCCUPANT_DIRECTORY,
+            .mode = profile_claim_mode(&claim),
+            .owner = claim.owner,
+            .group = claim.group,
         };
-        metadata_item_claim(dir_item, ctx->arena, &path->record);
 
-        /* Verbose output before consuming the item */
-        add_print_capture(out, "directory metadata", path->filesystem_path, dir_item);
-
-        /* Add directory to metadata */
-        metadata_add_item(metadata, &dir_item);
+        add_print_capture(out, "directory metadata", path->filesystem_path, &claim);
         output_info(
             out, OUTPUT_VERBOSE, "Tracked directory: %s -> %s", path->filesystem_path,
             storage_path
         );
     }
 
+    /* The remedy that keeps the file, add's own: a file this command captures
+     * at the name where its profile's own blob contradicts a tracked directory
+     * claim takes that claim's place, the claim given up — where every other
+     * write carries it (core/profiles.h profile_stage_t, the put rule). Read
+     * off the view's contradicted slice: each claim at its blob's own name —
+     * one beneath a blob is remove's to give up — matched to the file listed at
+     * its place under that very name, since a listing under another of the
+     * profile's names captures elsewhere, and a claim this machine cannot place
+     * is listed nowhere. At such a name only --force gets here, the held-entry
+     * gate refusing a name whose blob stands. A derived claim there rides the
+     * capture to the commit's prune. */
+    const manifest_contradicted_t contradicted = manifest_contradicted(view);
+    for (size_t i = 0; i < contradicted.count; i++) {
+        const manifest_contradicted_claim_t *at = &contradicted.entries[i];
+        if (strcmp(at->blob_above, at->storage_path) != 0) continue;
+
+        const manifest_claim_t *listed = hashmap_get(
+            walk.listing, mount_resolve(ctx->arena, mounts, opts->profile, at->storage_path)
+        );
+        if (!listed || strcmp(listed->storage_path, at->storage_path) != 0) continue;
+
+        err = profile_stage_remove(stage, PATH_KIND_DIRECTORY, at->storage_path);
+        if (err) goto cleanup;
+    }
+
     /* Every file, as it was listed and as the decision pass sealed it
      * (add_capture). Each capture's record is kept on the path: the blob the
-     * put wrote and the stat of the bytes committed, which a later lstat could
+     * commit holds and the stat of the bytes committed, which a later lstat could
      * not promise. */
     for (size_t i = 0; i < walk.files.count; i++) {
-        add_path_t *path = walk.files.entries[i];
-
-        err = add_capture(ctx, stage, opts->profile, path, metadata);
+        err = add_capture(&walk, walk.files.entries[i]);
         if (err) goto cleanup;
     }
 
@@ -2396,17 +2256,21 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * over both lists: a directory the walk listed has a chain of its own, and
      * an empty one has no file beneath it to carry that chain. Scope-blind by
      * design, as the pass that reads it is — an exclusion names a path, never
-     * the way to it.
+     * the way to it. Its two outs: the claims it authored or refreshed, counted
+     * for the line below, and the ones it retired, by key, which leave the view
+     * by this commit and are settled by the record phase once it lands.
      */
     size_t ancestors_captured = 0;
+    string_array_t ancestors_retired;
+    string_array_init(&ancestors_retired, ctx->arena);
     const ptr_array_t *chains[] = { &walk.files, &walk.directories };
     for (size_t b = 0; b < sizeof(chains) / sizeof(chains[0]); b++) {
         for (size_t i = 0; i < chains[b]->count; i++) {
             const add_path_t *path = chains[b]->entries[i];
 
-            metadata_capture_ancestors(
-                metadata, mounts, opts->profile, path->claim.storage_path, ctx->arena,
-                &ancestors_captured, &ancestry_retired
+            profile_stage_capture_ancestors(
+                stage, mounts, path->claim.storage_path, &ancestors_captured,
+                &ancestors_retired
             );
         }
     }
@@ -2416,19 +2280,23 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             ancestors_captured, ancestors_captured == 1 ? "y" : "ies"
         );
     }
-
-    /* A new profile's .dottaignore: the template, on the stage beside the sheet
-     * — the two blobs this commit carries that no capture wrote. Here rather
-     * than at the orphan's open, where the add has decided nothing yet: stage_put
-     * writes the blob to the object database at once, so a refusal between the
-     * two — a path that is not there, an argument the rules exclude, an unreadable
-     * file — would leave it there for a profile that was never created. */
-    if (profile_created) {
-        const char *template = ignore_profile_template();
-        err = stage_put(
-            stage, ".dottaignore", template, strlen(template), GIT_FILEMODE_BLOB,
-            NULL
+    if (ancestors_retired.count > 0) {
+        output_info(
+            out, OUTPUT_VERBOSE, "Dropped %zu ancestor claim%s",
+            ancestors_retired.count, ancestors_retired.count == 1 ? "" : "s"
         );
+    }
+
+    /* A new profile's .dottaignore: the template, beside the claims — the one
+     * blob this commit carries that no capture wrote. Here rather than at the
+     * orphan's open, where the add has decided nothing yet: the put writes the
+     * blob to the object database at once (core/profiles.h
+     * profile_stage_put_machinery), so a refusal between the two — a path that
+     * is not there, an argument the rules exclude, an unreadable file — would
+     * leave it there for a profile that was never created. */
+    if (!profile_exists) {
+        const char *template = ignore_profile_template();
+        err = profile_stage_put_machinery(stage, ".dottaignore", template, strlen(template));
         if (err) {
             err = error_wrap(
                 err, "Failed to initialize .dottaignore for profile '%s'",
@@ -2442,15 +2310,26 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
     }
 
-    /* The sheet onto the stage, beside the captures */
-    err = metadata_save_to_stage(stage, metadata);
+    /* The commit, where an edit moved either document — a capture, a directory
+     * claimed, a climb that authored or retired, the claim the remedy above gave
+     * up — its prune taking what nothing stands on any longer, its keys for the
+     * record phase, and the sheet saved only where its claims moved, a hand's
+     * spelling kept otherwise. A commit whose edits moved nothing — every capture
+     * as the profile already had it, a --force re-add of identical bytes — makes
+     * none, and the summary says so (core/profiles.h profile_stage_commit). Its
+     * two outs: whether it landed, which the receipt reads, and the derivations
+     * its prune took, by key, which the record phase settles. */
+    bool committed = false;
+    string_array_t pruned;
+    string_array_init(&pruned, ctx->arena);
+    err = add_commit(&walk, opts, &committed, &pruned);
     if (err) goto cleanup;
-
-    /* Create commit. A stage that holds the branch's own tree — every capture
-     * as the profile already had it, a --force re-add of identical bytes — commits
-     * nothing, and the summary says so. */
-    err = add_commit(&walk, stage, opts, &committed);
-    if (err) goto cleanup;
+    if (pruned.count > 0) {
+        output_info(
+            out, OUTPUT_VERBOSE, "Pruned %zu redundant directory entr%s",
+            pruned.count, pruned.count == 1 ? "y" : "ies"
+        );
+    }
 
     /* Write the record - auto-enable new profiles, anchor for enabled ones
      *
@@ -2477,7 +2356,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     add_receipt_t receipt = { 0 };
 
     error_t record_err = add_write_record(
-        &walk, target, profile_created, &ancestry_retired, &receipt
+        &walk, target, !profile_exists, &ancestors_retired, &pruned, &receipt
     );
 
     /* Execute post-add hook. The record phase settled its own transaction before
@@ -2537,7 +2416,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * a leftover row) and a successful one cannot invent. So the second clause
      * keys on membership — the handle's rows, as the phase settled them
      * (add_receipt_t) — not on the fate. */
-    if (profile_created) {
+    if (!profile_exists) {
         output_success(
             out, OUTPUT_NORMAL,
             state_enabled(state, opts->profile) ? "Profile '%s' created and enabled"
@@ -2660,11 +2539,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
 cleanup:
-    /* Free resources in reverse order of allocation. The listing, the view and
-     * the source filter are the arena's. */
-    if (metadata) metadata_free(metadata);
-    stage_admission_free(admission);
-    stage_free(stage);
+    /* The profile's next commit, whatever it held — a stage never committed changes
+     * nothing in the repository. The listing, the view and the source filter
+     * are the arena's. */
+    profile_stage_free(stage);
 
     return err;
 }

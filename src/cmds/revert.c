@@ -11,7 +11,6 @@
 #include <string.h>
 #include <time.h>
 
-#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/buffer.h"

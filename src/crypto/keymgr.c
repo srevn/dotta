@@ -49,7 +49,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
 #include "base/secure.h"

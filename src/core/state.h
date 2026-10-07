@@ -223,18 +223,18 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     against, and so the base a difference on a claim axis is read from — disk
  *     off it the user's move, the row off it Git's claim still to bring
  *     (core/workspace.h workspace_claims_moved). The row's at the first observation
- *     and at apply's ownership events, the one a capture authored at add's (the
- *     claim its commit carried, core/metadata.h metadata_item_claim) and update's
- *     (the claim its capture answered, core/profiles.h profile_stage_capture_file),
- *     and on each axis a look found disk standing on, or a fix made it stand
- *     on, the row's since (a learning of the claim) — and on the mode, where a
- *     run left a directory at the working mode it could not narrow, that mode,
- *     which no claim made (core/deploy.h deploy_hold_t), so the row's reads as
- *     Git's still to bring. It is a file orphan's reference on disk too; a
- *     directory orphan is judged by its emptiness, never its claim. A link claims
- *     no mode: its column is NULL, and every other node's is permission bits,
- *     0000–0777; an owner and a group are names, whole and never empty, NULL
- *     where the claim names none (each schema-enforced).
+ *     and at apply's ownership events, the one a capture authored at add's and
+ *     update's (the claim its capture answered, core/profiles.h
+ *     profile_stage_capture_file, profile_stage_capture_directory), and on each
+ *     axis a look found disk standing on, or a fix made it stand on, the row's
+ *     since (a learning of the claim) — and on the mode, where a run left a
+ *     directory at the working mode it could not narrow, that mode, which no
+ *     claim made (core/deploy.h deploy_hold_t), so the row's reads as Git's still
+ *     to bring. It is a file orphan's reference on disk too; a directory orphan
+ *     is judged by its emptiness, never its claim. A link claims no mode: its
+ *     column is NULL, and every other node's is permission bits, 0000–0777; an
+ *     owner and a group are names, whole and never empty, NULL where the claim
+ *     names none (each schema-enforced).
  *   - the lifecycle (deployed_at, ordered_at): the two acts the record remembers,
  *     each a moment or 0 (schema-enforced). deployed_at advances to now on every
  *     ownership event and a learning keeps it, 0 = dotta never put this here.

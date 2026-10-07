@@ -21,7 +21,6 @@
 #include "base/hashmap.h"
 #include "base/heap.h"
 #include "base/string.h"
-#include "core/state.h"
 #include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/filesystem.h"
@@ -281,31 +280,6 @@ metadata_item_t *metadata_item_create_directory(
 }
 
 /**
- * The claim an item makes, as the record keeps it
- *
- * The mode as the item claims it, 0 where it claims none (a link's); the names
- * copied into the arena.
- */
-void metadata_item_claim(
-    const metadata_item_t *item,
-    arena_t *arena,
-    state_record_t *record
-) {
-    CHECK_NULL(arena);
-    CHECK_NULL(record);
-
-    /* The empty claim first, what no item says: a link that claims nothing */
-    record->mode = 0;
-    record->owner = NULL;
-    record->group = NULL;
-    if (!item) return;
-
-    if (item->mode != MODE_UNCLAIMED) record->mode = item->mode;
-    record->owner = arena_strdup(arena, item->owner);
-    record->group = arena_strdup(arena, item->group);
-}
-
-/**
  * Add or update metadata item, transferring ownership
  *
  * Of the item's own kind: an item of that kind at the same key is replaced in
@@ -433,19 +407,6 @@ metadata_items_t metadata_items_beneath(
         .entries = (const metadata_item_t *const *) claims->entries + first,
         .count = past - first,
     };
-}
-
-const metadata_item_t *metadata_directory_beneath(
-    const metadata_t *metadata,
-    const char *storage_path
-) {
-    /* The directory claims beneath the name, and the first of them: in key order,
-     * the byte-least */
-    const metadata_items_t beneath = metadata_items_beneath(
-        metadata, PATH_KIND_DIRECTORY, storage_path
-    );
-
-    return beneath.count > 0 ? beneath.entries[0] : NULL;
 }
 
 /**

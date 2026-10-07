@@ -44,8 +44,7 @@
  * kind, so a write of one kind never reaches the other's claim at its key; the
  * one write across kinds is a blob's where a directory claim stands, no blob at
  * or above its name, which takes that claim's place — a profile's next commit
- * spells it as its put rule (core/profiles.h profile_stage_t), and add by hand
- * until it commits on one (cmds/add.c cmd_add).
+ * spells it as its put rule (core/profiles.h profile_stage_t), for every writer.
  *
  * Two kinds of directory claim, one field between them. "tracked" says the profile
  * tracks the directory itself: a walk went into it, so the directory exists because
@@ -147,10 +146,6 @@
 #include "infra/mount.h"
 #include "sys/stage.h"
 
-/* A capture's claim is written onto the record (metadata_item_claim), which is
- * named here and defined there (core/state.h). */
-typedef struct state_record state_record_t;
-
 #define METADATA_VERSION 6
 #define METADATA_DIR ".dotta"
 #define METADATA_FILE_PATH METADATA_DIR "/metadata.json"
@@ -177,15 +172,13 @@ typedef struct state_record state_record_t;
  * mode a user can mean. Absence therefore needs a value outside the domain, not
  * the domain's floor. A sheet's item carries it, and so does the claim a profile
  * decodes from one (core/profiles.h profile_claim_t); it ends wherever a mode
- * is placed — the view's rows and export's copy take the claim's floor
- * (core/profiles.h profile_claim_mode: the filemode floor for a blob,
- * DIR_MODE_DEFAULT for a directory) and a capture's record takes none
- * (metadata_item_claim: a link's, the one capture that claims no mode) — so no
- * row, record, entry or verdict carries it. The header show prints and the capture
- * line update prints test it on the decoded claim, where a mode is claimed
- * (cmds/show.c show_print_blob, cmds/update.c update_profile). The one command
- * that reads an item's mode raw tests it beside the item: the capture line add
- * prints (cmds/add.c add_print_capture).
+ * is placed — the view's rows, export's copy and a capture's record take the
+ * claim's floor (core/profiles.h profile_claim_mode: the filemode floor for a
+ * blob, DIR_MODE_DEFAULT for a directory, and on a link, the one capture that
+ * claims no mode, the record's don't-care) — so no row, record, entry or verdict
+ * carries it. The header show prints and the capture lines add and update print
+ * test it on the decoded claim, where a mode is claimed (cmds/show.c
+ * show_print_blob, cmds/add.c add_print_capture, cmds/update.c update_profile).
  */
 #define MODE_UNCLAIMED ((mode_t) -1)
 
@@ -274,12 +267,12 @@ metadata_t *metadata_create_empty(void);
  *
  * For the reader that edits and must leave the source as it read it: a profile's
  * next commit edits a copy of the sheet its base decoded (core/profiles.h
- * profile_stage_open), so the claims the base lends stand whatever the commit
- * does, and the commit saves the copy only where its claims are no longer the
- * base's (metadata_same). The same sheet a second parse of the bytes would give,
- * at about a ninth of its cost.
+ * profile_stage_open, profile_stage_orphan), so the claims the base lends stand
+ * whatever the commit does, and the commit saves the copy only where its claims
+ * are no longer the base's (metadata_same). The same sheet a second parse of
+ * the bytes would give, at about a ninth of its cost.
  *
- * Reader: core/profiles.c profile_stage_open.
+ * Reader: core/profiles.c profile_stage_seed, both openers' one body.
  *
  * @param metadata The sheet to copy (must not be NULL)
  * @return The copy, a sheet of its own (caller frees with metadata_free)
@@ -345,37 +338,6 @@ metadata_item_t *metadata_item_create_directory(
 void metadata_item_free(metadata_item_t *item);
 
 /**
- * The claim an item makes, as the record keeps it
- *
- * Onto `record`'s claim, the one the path is reconciled against from here on
- * (core/state.h state_record_t): the item's mode, and its owner and group copied
- * into `arena`. MODE_UNCLAIMED reaches no record — the item that claims no mode
- * is a link's, whose record reads none under its kind — so it lands as 0, the
- * don't-care a read of the record gives back. No item claims nothing, and the
- * record's claim is written empty — a link that claims no ownership either. The
- * claim is all this writes: the record's other columns are the caller's.
- *
- * The names are copied, never borrowed: the sheet frees its items with itself,
- * and a record is a value its writer keeps for its record phase, whatever the
- * sheet does after the capture (cmds/add.c add_write_record).
- *
- * Readers: the captures that record what they committed — cmds/add.c add_capture
- * and cmd_add's directory loop; update's record is built from the claim a profile's
- * next commit answers (core/profiles.h profile_stage_capture_file). A reader
- * not on this list is a bug.
- *
- * @param item The claim a capture authored, or NULL where it authored none
- * @param arena The arena the names are copied into (must not be NULL)
- * @param record The record whose claim is written (must not be NULL; its other
- *               columns are left as they are)
- */
-void metadata_item_claim(
-    const metadata_item_t *item,
-    arena_t *arena,
-    state_record_t *record
-);
-
-/**
  * Add or update metadata item, transferring ownership
  *
  * Of the item's own kind: an item of that kind at the same key is replaced in
@@ -412,37 +374,6 @@ const metadata_item_t *metadata_find_item(
     const metadata_t *metadata,
     path_kind_t kind,
     const char *key
-);
-
-/**
- * The directory claim standing beneath `storage_path`, if the sheet holds one
- *
- * The sheet's half of the tree's one namespace rule, read from a blob's side. A
- * tree holds no empty directory, so a directory this profile claims and nothing
- * fills lives in this sheet alone — the index has no entry for it, and sys/stage's
- * admission therefore cannot see it. A blob standing at an ancestor of such a
- * claim leaves it nowhere to stand: the two could never be deployed together,
- * and the commit would carry a namespace that contradicts itself.
- *
- * Strictly beneath, and only that: a directory claim AT the path is the conversion
- * a re-capture makes — its writer gives the claim up and the blob lands (the
- * module header) — and one above it is the ancestry every path has.
- *
- * The claim, not a verdict: the caller names the obstruction in its own voice,
- * at the verbosity its own arm speaks at. The first of the directory claims beneath
- * (metadata_items_beneath), so in key order the byte-least, one search.
- *
- * Readers: add's walk and add's argument arm, each before it lists a name a blob
- * would stand at.
- *
- * @param metadata The sheet (NULL returns NULL)
- * @param storage_path The name a blob would stand at (NULL returns NULL)
- * @return Borrowed item pointer (do not free), or NULL when no claim stands beneath
- *         it
- */
-const metadata_item_t *metadata_directory_beneath(
-    const metadata_t *metadata,
-    const char *storage_path
 );
 
 /**
@@ -517,8 +448,7 @@ metadata_items_t metadata_items(const metadata_t *metadata, path_kind_t kind);
  *
  * Readers: a profile's next commit — the admission's sheet half, of the name a
  * blob would stand at (core/profiles.c profile_stage_refuse_beneath), and the
- * prune's, of a derivation's key (profile_stage_tracked_beneath); and
- * metadata_directory_beneath, until its last reader goes.
+ * prune's, of a derivation's key (profile_stage_tracked_beneath).
  *
  * @param metadata The sheet (NULL answers the empty slice)
  * @param kind Which kind's items
@@ -588,15 +518,15 @@ error_t metadata_capture_file(
  * through to the factory unread.
  *
  * The two callers that capture a claim answer a failure here differently, and
- * the difference is what the claim is for. **add refuses**: a directory it listed
- * is the name its walk composed beneath, so a claim that does not land leaves
- * files committed under a name nothing authors — and the listing, which the command
- * reads as a promise of its own commit, would be a wish (cmds/add.c). **update
- * warns and carries on**: a claim it could not refresh keeps standing, nothing
- * was named from this run, and the sheet goes on saying what it said
- * (cmds/update.c, through core/profiles.h profile_stage_capture_directory). Either
- * way the loss is the mode with the ownership, so update's warning is one the
- * user reads at any verbosity.
+ * the difference is what the claim is for, each through a profile's next commit
+ * (core/profiles.h profile_stage_capture_directory). **add refuses**: a directory
+ * it listed is the name its walk composed beneath, so a claim that does not land
+ * leaves files committed under a name nothing authors — and the listing, which
+ * the command reads as a promise of its own commit, would be a wish (cmds/add.c
+ * cmd_add). **update warns and carries on**: a claim it could not refresh keeps
+ * standing, nothing was named from this run, and the sheet goes on saying what
+ * it said (cmds/update.c update_profile). Either way the loss is the mode with
+ * the ownership, so update's warning is one the user reads at any verbosity.
  *
  * Ownership capture (user/group): the file capture's rule, above. An owner or a
  * group this host has no name for is ERR_NOT_FOUND — the lookup's absence or
@@ -605,9 +535,10 @@ error_t metadata_capture_file(
  * as it does for a path it could not look at. That is the one refusal.
  *
  * `st` is a directory's, and nothing else — the kind is the caller's to have
- * established, and every caller holds its look to one first: add's directory
- * loop and update's, each an lstat and S_ISDIR (cmds/add.c cmd_add, cmds/update.c
- * update_profile), and the climb's rung, a look that found a directory
+ * established, and every caller holds its look to one first: a profile's next
+ * commit's directory capture, whose writers each lstat and hold to S_ISDIR —
+ * add's directory loop and update's (cmds/add.c cmd_add, cmds/update.c
+ * update_profile) — and the climb's rung, a look that found a directory
  * (core/metadata.c metadata_capture_rung). A stat of any other kind is a contract
  * breach and reads as one, not as a refusal with a remedy.
  *
@@ -800,15 +731,12 @@ error_t metadata_from_json(
  * Puts the sheet — .dotta/metadata.json, serialized by metadata_to_json — on
  * the stage as a regular blob; the caller's commit carries it. The one writer
  * of the sheet: a profile's next commit's (core/profiles.c profile_stage_commit),
- * and add's, until it commits on one. A sheet this serializer wrote, loaded and
- * saved unchanged, puts the blob the tree already holds (the serializer's
- * byte-determinism), which is what lets the stage's commit see an untouched sheet
- * as no change. A hand-written one the parser accepts — other whitespace, another
- * item order, inert fields — is normalized by the save and moves its blob; nothing
- * here promises otherwise, so a caller that must not re-spell a sheet it did
- * not change saves only one whose claims moved (metadata_same), as a profile's
- * next commit does, and one that saves on every run commits a re-spelling alone,
- * as add does.
+ * every claim writer's. A sheet this serializer wrote, loaded and saved unchanged,
+ * puts the blob the tree already holds (the serializer's byte-determinism). A
+ * hand-written one the parser accepts — other whitespace, another item order,
+ * inert fields — is normalized by the save and moves its blob; nothing here
+ * promises otherwise, so the caller saves only a sheet whose claims moved
+ * (metadata_same), and a commit that moved none keeps a hand's spelling.
  *
  * @param stage The stage the sheet goes on (must not be NULL)
  * @param metadata Metadata to save (must not be NULL)

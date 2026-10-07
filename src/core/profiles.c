@@ -17,16 +17,19 @@
  * claim standing at a name through the question the walk asks of each item
  * (profile_directory_item), decoded as the walk decodes it
  * (profile_decode_directory). The counts and the need of a target are the walk,
- * folded (profile_counts, profile_needs_target). The next commit is a sys/stage,
- * the base — the profile at the tree the stage opened, its sheet read at the
- * open — and that sheet copied, in an arena of its own: a removal edits the stage
- * and the copy; a capture authors its claim off the look, asks the base what
- * stands in its way, puts its bytes and writes the claim into the copy, and the
- * climb claims the way to a leaf off the disk; a restore asks the base the same,
- * puts its entry by id and writes its claim and its way into the copy; the change
- * test holds each document against the one the stage opened; and the commit,
- * where an edit moved either, prunes the copy, saves it where its claims are no
- * longer the base's and commits.
+ * folded (profile_counts, profile_needs_target). The next commit is three things
+ * in an arena of its own: a sys/stage, opened at the profile's head or over Git's
+ * empty tree for a profile the commit creates; the base, the profile at the tree
+ * the stage opened, its sheet read at the open; and that sheet copied. An admission
+ * asks a name chosen before its bytes of the copy and of the tree as chosen so
+ * far, claiming a directory in the copy as it admits it; a removal edits the
+ * stage and the copy; a capture authors its claim off the look, asks the base
+ * what stands in its way, puts its bytes and writes the claim into the copy,
+ * and the climb claims the way to a leaf off the disk; a restore asks the base
+ * the same, puts its entry by id and writes its claim and its way into the copy;
+ * dotta's own file is put beside the claims; the change test holds each document
+ * against the one the stage opened; and the commit, where an edit moved either,
+ * prunes the copy, saves it where its claims are no longer the base's and commits.
  */
 
 #include "core/profiles.h"
@@ -946,13 +949,37 @@ error_t profile_find(
 }
 
 struct profile_stage {
-    arena_t *arena;         /* Its own: the struct, and the names the climb and the prune spell */
-    stage_t *stage;         /* The next tree, on the profile's branch */
-    profile_t *base;        /* The profile at the tree it opened: never edited */
-    metadata_t *sheet;      /* The base's sheet, copied: what the commit carries */
+    arena_t *arena;                 /* Its own: the struct, the climb's and the prune's names */
+    stage_t *stage;                 /* The next tree, on the profile's branch */
+    profile_t *base;                /* The profile at the tree it opened: never edited */
+    metadata_t *sheet;              /* The base's sheet, copied: what the commit carries */
+    stage_admission_t *admission;   /* The tree as a writer chooses its names; NULL until it asks */
 };
 
-error_t profile_stage_open(git_repository *repo, const char *name, profile_stage_t **out) {
+/**
+ * A profile's next commit over the stage `opener` opens: the base at the tree
+ * the stage opened, its sheet read now and strictly, and that sheet copied
+ *
+ * `opener` is sys/stage's for what the writer expects of the profile's branch —
+ * stage_open where it stands, stage_orphan where the commit creates it — handed
+ * the branch's reference by Git's branch rule, and refusing the other state in
+ * its own words. Everything after it is one body: the two openers differ in what
+ * they expect of the branch and in nothing they make.
+ *
+ * Readers: profile_stage_open and profile_stage_orphan.
+ *
+ * @param repo Repository
+ * @param name The profile's name
+ * @param opener sys/stage's opener of the branch's stage
+ * @param out The stage; NULL on a failure
+ * @return Error or NULL on success
+ */
+static error_t profile_stage_seed(
+    git_repository *repo,
+    const char *name,
+    error_t (*opener)(git_repository *repo, const char *refname, stage_t **out),
+    profile_stage_t **out
+) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
     CHECK_NULL(out);
@@ -966,16 +993,18 @@ error_t profile_stage_open(git_repository *repo, const char *name, profile_stage
     if (err) return err;
 
     /* The stage in an arena of its own, made here and freed with it, as the profile
-     * handle stands in its own. Then the stage at its head, refused in gitops'
-     * words where none stands, and the base at the tree the stage opened, its
-     * sheet read now and strictly: a writer refuses a sheet that will not load
-     * before its preview. The struct holds each from its first allocation, so
-     * every failure releases through profile_stage_free, and the sheet's failure
-     * outlives the base that kept it (base/error.h "Lifetime") */
+     * handle stands in its own. Then the stage the opener opens, refused in
+     * sys/stage's words where the branch is not as the writer expects it, and
+     * the base at the tree the stage opened — the head's, or Git's empty tree,
+     * which holds no sheet and so an empty one — its sheet read now and strictly:
+     * a writer refuses a sheet that will not load before its preview. The struct
+     * holds each from its first allocation, so every failure releases through
+     * profile_stage_free, and the sheet's failure outlives the base that kept
+     * it (base/error.h "Lifetime") */
     arena_t *arena = arena_create(0);
     profile_stage_t *stage = arena_calloc(arena, 1, sizeof(*stage));
     stage->arena = arena;
-    err = stage_open(repo, refname, &stage->stage);
+    err = opener(repo, refname, &stage->stage);
     if (!err) {
         stage->base = profile_open(name, stage_tree(stage->stage));
         err = profile_load_sheet(stage->base);
@@ -992,6 +1021,14 @@ error_t profile_stage_open(git_repository *repo, const char *name, profile_stage
 
     *out = stage;
     return NULL;
+}
+
+error_t profile_stage_open(git_repository *repo, const char *name, profile_stage_t **out) {
+    return profile_stage_seed(repo, name, stage_open, out);
+}
+
+error_t profile_stage_orphan(git_repository *repo, const char *name, profile_stage_t **out) {
+    return profile_stage_seed(repo, name, stage_orphan, out);
 }
 
 profile_t *profile_stage_base(const profile_stage_t *stage) {
@@ -1052,7 +1089,8 @@ error_t profile_stage_remove(
  * such claim — the copy's key order — so a commit's claims say one sentence
  * whatever order its writer made them in.
  *
- * Readers: profile_stage_capture_file and profile_stage_restore_file, each before
+ * Readers: profile_stage_admit, of a blob a writer chooses before it reads it;
+ * and profile_stage_capture_file and profile_stage_restore_file, each before
  * its put.
  *
  * @param stage The stage
@@ -1089,6 +1127,60 @@ static error_t profile_stage_refuse_beneath(
     }
 
     return NULL;
+}
+
+error_t profile_stage_admit(
+    profile_stage_t *stage, path_kind_t kind, const char *storage_path
+) {
+    CHECK_NULL(stage);
+    CHECK_NULL(storage_path);
+
+    /* The tree as the writer chooses its names, made at its first question: only
+     * a writer that chooses its names before it reads them asks, and an index
+     * of the whole tree at every other open would buy those nothing */
+    if (!stage->admission) {
+        error_t err = stage_admission_create(stage->stage, &stage->admission);
+        if (err) return err;
+    }
+
+    switch (kind) {
+        case PATH_KIND_FILE: {
+            /* The sheet's half first: a directory the commit claims beneath the
+             * name has no tree entry for the tree's half to find. Then the tree's,
+             * which records the blob, so the next name is asked of a tree that
+             * holds it */
+            error_t err = profile_stage_refuse_beneath(stage, storage_path);
+            if (err) return err;
+
+            return stage_admit_blob(stage->admission, storage_path);
+        }
+
+        case PATH_KIND_DIRECTORY: {
+            /* The tree's half: a blob at the name or above it — the opened tree's,
+             * or one admitted since — leaves the directory none */
+            error_t err = stage_admit_subtree(stage->admission, storage_path);
+            if (err) return err;
+
+            /* And the walk's word, in the sheet the commit carries, its attributes
+             * left to the look its capture takes (profile_stage_capture_directory):
+             * a blob chosen above it later meets it at its own admission, as
+             * one above a claim the base holds does. A claim the profile tracks
+             * there already says it */
+            const metadata_item_t *held = metadata_find_item(
+                stage->sheet, PATH_KIND_DIRECTORY, storage_path
+            );
+            if (held && held->tracked) return NULL;
+
+            metadata_item_t *item = metadata_item_create_directory(
+                storage_path, MODE_UNCLAIMED, true
+            );
+            metadata_add_item(stage->sheet, &item);
+
+            return NULL;
+        }
+    }
+
+    CHECK_ARG(false, "a path kind no enumerator names");
 }
 
 /**
@@ -1343,6 +1435,28 @@ error_t profile_stage_restore_file(
     return NULL;
 }
 
+error_t profile_stage_put_machinery(
+    profile_stage_t *stage, const char *name, const void *bytes, size_t size
+) {
+    CHECK_NULL(stage);
+    CHECK_NULL(name);
+
+    /* The door's contract, and no refusal of a user's: a name in the grammar is
+     * a claim's, which this door would put past the admission and the put rule,
+     * and the sheet's directory is the commit's own to write, at its save */
+    CHECK_ARG(
+        !label_prefixes(name),
+        "a name in the grammar is a claim's, never machinery"
+    );
+    CHECK_ARG(
+        strcmp(name, METADATA_DIR) != 0 && !str_starts_with(name, METADATA_DIR "/"),
+        "the sheet's directory is the commit's own"
+    );
+
+    /* A regular blob, at once in the object database (sys/stage.h stage_put) */
+    return stage_put(stage->stage, name, bytes, size, GIT_FILEMODE_BLOB, NULL);
+}
+
 error_t profile_stage_changed(const profile_stage_t *stage, bool *out) {
     CHECK_NULL(stage);
     CHECK_NULL(out);
@@ -1525,9 +1639,10 @@ error_t profile_stage_commit(
 void profile_stage_free(profile_stage_t *stage) {
     if (!stage) return;
 
-    /* The copy; then the base, before the stage whose tree it borrows; then the
-     * stage, which undoes nothing in the repository (sys/stage.h stage_free);
-     * then the arena, the struct with it */
+    /* The admission and the copy, each its own; then the base, before the stage
+     * whose tree it borrows; then the stage, which undoes nothing in the repository
+     * (sys/stage.h stage_free); then the arena, the struct with it */
+    stage_admission_free(stage->admission);
     metadata_free(stage->sheet);
     profile_free(stage->base);
     stage_free(stage->stage);

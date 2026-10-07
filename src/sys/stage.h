@@ -73,12 +73,13 @@
  * by the head check — a writer with more to write opens another.
  *
  * Layer: sys/. The module knows libgit2 and sys/gitops' signature, nothing of
- * mounts, content or dotta's vocabulary. Called by the commands that write trees
- * (add, bootstrap, ignore), by a profile's next commit — remove's, revert's and
- * update's (core/profiles.h profile_stage_t) — by core/metadata's sheet writer,
- * by core/ignore — a .dottaignore put onto the stage its edit opened, and the
- * machine's baseline seeded on a stage of its own — and by infra/epoch's mint;
- * add alone creates an admission.
+ * mounts, content or dotta's vocabulary. Called by the commands that write a
+ * branch's machinery (bootstrap, ignore), by a profile's next commit — every
+ * claim writer's: add's, remove's, revert's and update's (core/profiles.h
+ * profile_stage_t) — by core/metadata's sheet writer, by core/ignore — a
+ * .dottaignore put onto the stage its edit opened, and the machine's baseline
+ * seeded on a stage of its own — and by infra/epoch's mint; a profile's next
+ * commit alone creates an admission, for add.
  */
 
 #ifndef DOTTA_STAGE_H
@@ -131,15 +132,16 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out);
 /**
  * The tree the stage opened at — the ref's own bytes at open
  *
- * Readers: the sheet loader (add); the profile add opens at it (cmds/add.c cmd_add,
- * through core/profiles.h profile_open), and the base of a profile's next commit
- * (core/profiles.c profile_stage_open), whose claims remove's arguments are matched
- * against, of which revert asks the branch as it stood — the claim at a path,
- * the entry at a name, a second name — and update a capture's prior; and the
- * file an edit session opens on (cmds/ignore.c ignore_edit, ignore_modify), read
- * from the tree the session commits on. Never NULL: an orphan's stage stands on
- * the empty tree, and add — the one reader that opens one — reads it as a profile
- * with nothing in it yet, no entry and no sheet. Borrowed; valid until stage_free.
+ * Readers: the base of a profile's next commit (core/profiles.c
+ * profile_stage_seed), whose claims remove's arguments are matched against, of
+ * which revert asks the branch as it stood — the claim at a path, the entry at
+ * a name, a second name — update a capture's prior, and add its view, its
+ * held-entry gate and its prior; and the file an edit session opens on
+ * (cmds/ignore.c ignore_edit, ignore_modify), read from the tree the session
+ * commits on. Never NULL: an orphan's stage stands on the empty tree, and a
+ * profile's next commit — the one reader that opens one, for add — reads it as
+ * a profile with nothing in it yet, no entry and no sheet. Borrowed; valid until
+ * stage_free.
  *
  * @param st Stage (must not be NULL)
  * @return The opened tree
@@ -149,10 +151,10 @@ const git_tree *stage_tree(const stage_t *st);
 /**
  * The index as the stage stands: the tree the commit would record
  *
- * Read it — the prune judge, the entry at a path (git_index_get_bypath). Write
- * it only through the verbs below, which is what keeps the collision rule true.
- * Borrowed; valid until stage_free. Non-const because libgit2's own readers of
- * an index are.
+ * Read it — the prune's judge, whether anything stands beneath a derivation
+ * (core/profiles.c profile_stage_prune_ancestors), its one reader. Write it only
+ * through the verbs below, which is what keeps the collision rule true. Borrowed;
+ * valid until stage_free. Non-const because libgit2's own readers of an index are.
  *
  * @param st Stage (must not be NULL)
  * @return The index
@@ -207,16 +209,17 @@ error_t stage_admission_create(const stage_t *st, stage_admission_t **out);
  *     libgit2 protects — which is libgit2's own rule, asked through the door
  *     the put uses.
  * The last three are ERR_CONFLICT: a verdict about the name, which a caller that
- * walks skips (cmds/add.c add_collect reads it, through add_admit) and a caller
- * that was named refuses. An entry at the path itself is the upsert every writer
- * wants, and is admitted.
+ * walks skips (add's walk reads it, through core/profiles.h profile_stage_admit)
+ * and a caller that was named refuses. An entry at the path itself is the upsert
+ * every writer wants, and is admitted.
  *
  * The mode is not asked. libgit2 validates a path with mode 0 whatever the entry
  * carries (index.c index_entry_dup passes no stat), so nothing a mode could change
  * is reachable through this door or the put's.
  *
- * Readers: add's walk and add's argument arm, before either lists a name. A
- * profile's restore deliberately does not read it (core/profiles.c
+ * Reader: a profile's next commit's admission of a blob (core/profiles.c
+ * profile_stage_admit), for add's walk and its argument arm, before either lists
+ * a name. A profile's restore deliberately does not read it (core/profiles.c
  * profile_stage_restore_file) — it holds the id and the mode, so it puts the
  * entry itself before its writer's preview and needs the actual index operation's
  * refusal there, not a question about it.
@@ -240,13 +243,15 @@ error_t stage_admit_blob(stage_admission_t *adm, const char *path);
  *
  * Nothing is recorded, which is what the const says: the tree holds no directory
  * claim, so a subtree admitted here moves no answer this admission gives. A blob
- * chosen above it later is the claiming document's to refuse, or its caller's
- * to ask about once more with the selection complete (cmds/add). libgit2's own
- * path rule is not asked here: a claim needs no entry, and a blob beneath a name
- * Git will not hold is refused at its own admission.
+ * chosen above it later is the claiming document's to refuse: a profile's next
+ * commit claims the directory in the sheet it carries as it admits it
+ * (core/profiles.h profile_stage_admit). libgit2's own path rule is not asked
+ * here: a claim needs no entry, and a blob beneath a name Git will not hold is
+ * refused at its own admission.
  *
- * Readers: add's walk and add's argument arm, before either lists a directory;
- * and add's sweep, with the selection complete.
+ * Reader: a profile's next commit's admission of a directory (core/profiles.c
+ * profile_stage_admit), for add's walk and its argument arm, before either lists
+ * a directory.
  *
  * @param adm Admission (must not be NULL)
  * @param path Storage path (must not be NULL)
@@ -279,11 +284,11 @@ void stage_admission_free(stage_admission_t *adm);
  * the entry is put under the null id first — the ownerless index asks for no
  * object (index.c index_insert) — then pointed at the blob the bytes became.
  * The blob is answered to the caller that asks, and only once the entry stands:
- * a refused put answers none, and wrote none. Readers: the captures that record
- * what they committed, cmds/add.c add_capture and core/profiles.c
- * profile_stage_capture_file, whose claim carries the id to update's record —
- * the id is their evidence of what the commit holds at the name, where the branch,
- * read after it, is another writer's to move.
+ * a refused put answers none, and wrote none. Reader: a profile's next commit's
+ * capture (core/profiles.c profile_stage_capture_file), whose claim carries the
+ * id to add's and update's records — the id is their evidence of what the commit
+ * holds at the name, where the branch, read after it, is another writer's to
+ * move — and its machinery put (profile_stage_put_machinery), which asks for none.
  *
  * @param st Stage (must not be NULL)
  * @param path Tree path (must not be NULL; canonical, see the header)

@@ -160,7 +160,9 @@ label_split_t label_split(const char *s);
  * And it is the shape dispatch on an argument, which reads a storage shape before
  * the filesystem shapes.
  *
- * Readers: the profile's walk (core/profiles.c profile_step), the refspec
+ * Readers: the profile's walk (core/profiles.c profile_step), and the door a
+ * profile's next commit puts dotta's own file through, which a name in the grammar
+ * never passes (core/profiles.c profile_stage_put_machinery); the refspec
  * completion (cmds/completion.c refspec_emit), diff's delta selection (cmds/diff.c
  * select_delta), the rule compiler (infra/pathspec.c compile_rule), the resolver's
  * storage arm and the question its neighbour asks of a positional whose slot is

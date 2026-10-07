@@ -290,8 +290,9 @@ void transfer_op_end(transfer_context_t *xfer, int rc) {
      * ephemeral line is cleared; a lasting one says done only for an op that
      * succeeded. */
     if (xfer->progress_active) {
-        if (xfer->ephemeral) output_clear_line(xfer->output);
-        else {
+        if (xfer->ephemeral) {
+            output_clear_line(xfer->output);
+        } else {
             fputs(rc == 0 ? ", done.\n" : "\n", xfer->output->stream);
             fflush(xfer->output->stream);
         }

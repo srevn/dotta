@@ -402,12 +402,12 @@ error_t manifest_build(
  * selected (cmds/show.c cmd_show, cmds/list.c list_file_history, which ask it
  * manifest_claim_name); revert's two questions of a tree, the claim standing at
  * a path and the second-name admission (cmds/revert.c revert_claim_standing,
- * revert_refuse_second_name); add, which builds one over the tree its stage opened
- * at and asks it every naming question for the length of the command (cmds/add.c
- * cmd_add); `ignore --test`'s named arm (cmds/ignore.c ignore_test); and the
- * two cross-profile searches, which build one per local profile (cmds/revert.c
- * revert_select_profile, through revert_claim_standing, and cmds/remove.c
- * remove_build_filesystem_index).
+ * revert_refuse_second_name); add, which builds one over its next commit's base
+ * (core/profiles.h profile_stage_base) and asks it every naming question for
+ * the length of the command (cmds/add.c cmd_add); `ignore --test`'s named arm
+ * (cmds/ignore.c ignore_test); and the two cross-profile searches, which build
+ * one per local profile (cmds/revert.c revert_select_profile, through
+ * revert_claim_standing, and cmds/remove.c remove_build_filesystem_index).
  *
  * Memory: every allocation produced by the call lives in the caller's arena, as
  * manifest_build's does, but the sheet the walk reads where no question has yet,
@@ -680,7 +680,8 @@ typedef struct {
  *
  * Readers: the health channel's listing (cmds/status.c status_print_profiles),
  * apply's section (cmds/apply.c cmd_apply) and sync's after its Git phase
- * (cmds/sync.c cmd_sync).
+ * (cmds/sync.c cmd_sync); and add's own remedy over its one profile's view, a
+ * file it captures at a claim's own name taking it (cmds/add.c cmd_add).
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded claims, valid for the arena's lifetime

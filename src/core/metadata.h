@@ -235,22 +235,24 @@ typedef struct {
 } metadata_item_t;
 
 /**
- * The sheet (opaque): each kind's claims apart, in the order added and indexed
- * by key
+ * The sheet (opaque): each kind's claims apart, in key order and indexed by key
  *
- * Owns every item it holds and hands them out borrowed. An item pointer stays
- * valid until that item is itself removed or the sheet is freed, whatever else
- * is added or removed meanwhile.
+ * Key order is the document's (metadata_to_json): byte order on the key, whatever
+ * order the claims were added or a hand spelled them in. Owns every item it holds
+ * and hands them out borrowed. An item pointer stays valid until that item is
+ * itself removed or the sheet is freed, whatever else is added or removed
+ * meanwhile.
  */
 typedef struct metadata metadata_t;
 
 /**
- * One kind's items, lent: the sheet's own entries, in the order added
+ * One kind's items, lent: the sheet's own entries, in key order
  *
- * The slice metadata_items answers, the tree's shape for a lent collection
- * (core/manifest.h manifest_rows_t). It survives every edit of the other kind,
- * each kind's entries being apart, and none of its own: an add or a removal of
- * its kind may move the entries, though never an item they point at.
+ * The slice metadata_items and metadata_items_beneath answer, the tree's shape
+ * for a lent collection (core/manifest.h manifest_rows_t). It survives every
+ * edit of the other kind, each kind's entries being apart, and none of its own:
+ * an add or a removal of its kind may move the entries, though never an item
+ * they point at.
  */
 typedef struct {
     const metadata_item_t *const *entries;
@@ -268,15 +270,14 @@ typedef struct {
 metadata_t *metadata_create_empty(void);
 
 /**
- * A copy of the sheet: every item deep-copied, each kind in the source's order
+ * A copy of the sheet: every item deep-copied
  *
  * For the reader that edits and must leave the source as it read it: a profile's
  * next commit edits a copy of the sheet its base decoded (core/profiles.h
  * profile_stage_open), so the claims the base lends stand whatever the commit
  * does, and the commit saves the copy only where its claims are no longer the
- * base's (metadata_same). The same document a second parse of the bytes would
- * give — each kind's order kept, which the serializer sorts away — at about a
- * ninth of its cost.
+ * base's (metadata_same). The same sheet a second parse of the bytes would give,
+ * at about a ninth of its cost.
  *
  * Reader: core/profiles.c profile_stage_open.
  *
@@ -379,7 +380,9 @@ void metadata_item_claim(
  *
  * Of the item's own kind: an item of that kind at the same key is replaced in
  * place, and the other kind's at the key stays as it stands; otherwise the item
- * is appended to its kind's.
+ * takes its key's place in its kind's order — past the last where it sorts past
+ * it, as each item of a document the serializer wrote does, and otherwise with
+ * every entry past that place moved up one.
  *
  * The sheet TAKES the item it is handed rather than duplicating it: the item
  * keeps its place in memory, the sheet keeps the pointer, and *item is left NULL.
@@ -426,9 +429,8 @@ const metadata_item_t *metadata_find_item(
  * module header) — and one above it is the ancestry every path has.
  *
  * The claim, not a verdict: the caller names the obstruction in its own voice,
- * at the verbosity its own arm speaks at. The directory claims' order, first
- * match; O(directory claims) per call, which is what a sheet with no index over
- * its subtrees costs.
+ * at the verbosity its own arm speaks at. The first of the directory claims beneath
+ * (metadata_items_beneath), so in key order the byte-least, one search.
  *
  * Readers: add's walk and add's argument arm, each before it lists a name a blob
  * would stand at.
@@ -446,12 +448,12 @@ const metadata_item_t *metadata_directory_beneath(
 /**
  * Two sheets that say the same thing
  *
- * The same claims of each kind, each the same in every field, absence included,
- * whatever order each holds them in: the serializer writes the items by key,
- * then kind (metadata_to_json), so two sheets that hold the same claims serialize
- * alike, and a sheet whose claims differ from another's has one to write. The
- * sheet carries what the tree cannot — the mode below the owner-execute bit,
- * and ownership — so a comparison of the trees alone cannot answer this.
+ * The same claims of each kind, each the same in every field, absence included:
+ * each kind stands in key order, so two sheets holding the same claims hold them
+ * at the same places, and serialize alike (metadata_to_json), and a sheet whose
+ * claims differ from another's has one to write. The sheet carries what the tree
+ * cannot — the mode below the owner-execute bit, and ownership — so a comparison
+ * of the trees alone cannot answer this.
  *
  * Readers: a profile's next commit, which compares the sheet it carries with
  * the one it opened, as sys/stage compares the trees (sys/stage.h stage_changed,
@@ -472,9 +474,8 @@ bool metadata_same(const metadata_t *a, const metadata_t *b);
  * stands. A key the sheet does not hold under that kind changes nothing and is
  * not a failure — the answer is false, arrived at by one index probe.
  *
- * A key the sheet does hold costs a walk on top of that: closing the gap in the
- * kind's order needs the item's position, and only the entries have it. Callers
- * removing many keys pay that walk once per key.
+ * A key the sheet does hold costs a search for its place on top of that, and
+ * the gap it leaves closed in the kind's order, every entry past it moved down one.
  *
  * @param metadata The sheet (NULL returns false)
  * @param kind The claim's kind
@@ -488,7 +489,7 @@ bool metadata_remove_item(
 );
 
 /**
- * One kind's items, in the order added
+ * One kind's items, in key order
  *
  * The sheet's own entries, lent (metadata_items_t): no allocation, no copy. A
  * sheet that is not there holds none — a tolerant read past a sheet that will
@@ -502,6 +503,34 @@ bool metadata_remove_item(
  *         the sheet's free
  */
 metadata_items_t metadata_items(const metadata_t *metadata, path_kind_t kind);
+
+/**
+ * One kind's items strictly beneath `key`, lent: one slice of the kind's key order
+ *
+ * The claims beneath a name are one block of the order — every key the name and
+ * a separator begin, and none other: "x.bak" sorts before "x/y" and "x0" after,
+ * '/' being neither the least byte nor the greatest — so two searches find them
+ * and nothing is copied. Strictly beneath, at a component boundary: the claim
+ * at `key` is not among them, nor a sibling whose name merely starts the same
+ * way. In key order, so the first is the byte-least. A name with nothing beneath
+ * it answers the empty slice, and so does a NULL sheet, as metadata_items answers.
+ *
+ * Readers: a profile's next commit — the admission's sheet half, of the name a
+ * blob would stand at (core/profiles.c profile_stage_refuse_beneath), and the
+ * prune's, of a derivation's key (profile_stage_tracked_beneath); and
+ * metadata_directory_beneath, until its last reader goes.
+ *
+ * @param metadata The sheet (NULL answers the empty slice)
+ * @param kind Which kind's items
+ * @param key The name (NULL answers the empty slice)
+ * @return The slice, borrowed: good until an add or a removal of that kind, or
+ *         the sheet's free
+ */
+metadata_items_t metadata_items_beneath(
+    const metadata_t *metadata,
+    path_kind_t kind,
+    const char *key
+);
 
 /**
  * Capture a path's claim from stat data (regular file or symlink)
@@ -751,7 +780,8 @@ buffer_t metadata_to_json(const metadata_t *metadata);
  * Parses metadata from JSON content. Rejects version mismatches with clear error
  * message (no migration code), and a claim the document makes twice — a second
  * item of one kind at a key, refused by its kind; a file's item and a directory's
- * at one key are two claims, both read.
+ * at one key are two claims, both read. A document in any order parses, each
+ * kind read into key order (metadata_add_item).
  *
  * @param json_str JSON string (must not be NULL)
  * @param out Metadata (must not be NULL, caller must free with metadata_free);

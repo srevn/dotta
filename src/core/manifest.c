@@ -774,15 +774,16 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
      * the profile holds a subtree beneath the path, never which name its subtree
      * runs through.
      *
-     * The first placed is the sheet's first key (the walk shows directory claims
-     * in the sheet's own order, core/profiles.h profile_walk, and the writer
-     * sorts, core/metadata.c), and the tie-break settles more than a name: a
-     * derived claim carries the mode, owner and group dotta creates the directory
-     * with, and two chains captured at different moments can disagree about them
-     * — 0700 under home/jail/etc, 0755 under custom/etc, one path. Neither is
-     * the truer statement, both being what disk held when a walk passed through,
-     * so the tie is stated here rather than decided. Nothing is recorded either:
-     * manifest_unkept is names, and a derived claim named nothing. */
+     * The first placed is the byte-least name (the walk shows directory claims
+     * in key order, core/profiles.h profile_walk, whatever the document spells),
+     * and the tie-break settles more than a name: a derived claim carries the
+     * mode, owner and group dotta creates the directory with, and two chains
+     * captured at different moments can disagree about them — 0700 under
+     * home/jail/etc, 0755 under custom/etc, one path. Neither is the truer
+     * statement, both being what disk held when a walk passed through, so the
+     * tie is stated here rather than decided — by the names alone, which no
+     * spelling of the document moves. Nothing is recorded either: manifest_unkept
+     * is names, and a derived claim named nothing. */
     if (held && claim->type == PATH_TYPE_DIRECTORY && !claim->tracked) return NULL;
 
     /* The row is the claim, placed: one profile's, and fresh — nothing is reset

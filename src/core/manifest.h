@@ -673,10 +673,10 @@ typedef struct {
  * profile
  *
  * Pure value return — no allocation, no error path. Entries arrive in build order,
- * one profile's contiguous, each in its sheet's order; each (profile, storage
- * path) once, the sheet holding one directory claim a key. Empty on every build
- * whose profiles contradict none of their own claims — the common case, costing
- * the build a second classification of each directory claim.
+ * one profile's contiguous, each in key order; each (profile, storage path) once,
+ * the sheet holding one directory claim a key. Empty on every build whose profiles
+ * contradict none of their own claims — the common case, costing the build a
+ * second classification of each directory claim.
  *
  * Readers: the health channel's listing (cmds/status.c status_print_profiles),
  * apply's section (cmds/apply.c cmd_apply) and sync's after its Git phase

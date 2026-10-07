@@ -652,8 +652,8 @@ error_t profile_walk(
     if (walk.failure) return walk.failure;
 
     /* The directory claims the tree leaves standing: every DIRECTORY item the
-     * sheet carries, in its own order — none past a sheet a tolerant walk went
-     * on without, which holds no item — each asked the question that classifies
+     * sheet carries, in key order — none past a sheet a tolerant walk went on
+     * without, which holds no item — each asked the question that classifies
      * it, whether a blob stands at its name or at a rung above it, the one a
      * point question asks there (profile_blob_above). One a blob stands at or
      * over claims nothing, and is profile_contradicted's to show. The descent
@@ -689,11 +689,10 @@ error_t profile_contradicted(
     if (err && read == PROFILE_READ_STRICT) return err;
 
     /* The walk's directory half, answered the other way: every DIRECTORY item,
-     * in the sheet's own order, asked the same question (profile_blob_above),
-     * and shown where a blob stands at its name or at a rung above it. Asked
-     * before any walk read the tree, the descent can meet a subtree that will
-     * not load on its way, and says so in its own words, naming the claim's
-     * name. */
+     * in key order, asked the same question (profile_blob_above), and shown where
+     * a blob stands at its name or at a rung above it. Asked before any walk
+     * read the tree, the descent can meet a subtree that will not load on its
+     * way, and says so in its own words, naming the claim's name. */
     const metadata_items_t directories = metadata_items(profile->sheet, PATH_KIND_DIRECTORY);
     for (size_t i = 0; i < directories.count; i++) {
         size_t above = 0;
@@ -1049,8 +1048,9 @@ error_t profile_stage_remove(
  * claim is not asked — what anchors it refuses on its own, a tracked claim here
  * or an entry the tree's half finds, and the prune takes one nothing anchors —
  * nor is one a blob in the base stands at or above, a claim void before the commit
- * and void after it, whatever this commit writes above it. Named by the first
- * such claim in the sheet's own order, so a sheet says one sentence on every run.
+ * and void after it, whatever this commit writes above it. Named by the byte-least
+ * such claim — the copy's key order — so a commit's claims say one sentence
+ * whatever order its writer made them in.
  *
  * Readers: profile_stage_capture_file and profile_stage_restore_file, each before
  * its put.
@@ -1063,14 +1063,17 @@ error_t profile_stage_remove(
 static error_t profile_stage_refuse_beneath(
     const profile_stage_t *stage, const char *storage_path
 ) {
-    const metadata_items_t directories = metadata_items(stage->sheet, PATH_KIND_DIRECTORY);
-    const size_t len = strlen(storage_path);
+    /* The directory claims strictly beneath the name, one slice of the copy's
+     * key order: one at the name is the put rule's, and one above it the way
+     * every path has. None, in the common case, found in one search */
+    const metadata_items_t beneath = metadata_items_beneath(
+        stage->sheet, PATH_KIND_DIRECTORY, storage_path
+    );
 
-    for (size_t i = 0; i < directories.count; i++) {
-        /* A tracked claim strictly beneath the name: one at the name is the put
-         * rule's, and one above it the way every path has */
-        const metadata_item_t *dir = directories.entries[i];
-        if (!dir->tracked || !str_path_beneath(dir->key, storage_path, len)) continue;
+    for (size_t i = 0; i < beneath.count; i++) {
+        /* A tracked claim: a derived one is not asked (above) */
+        const metadata_item_t *dir = beneath.entries[i];
+        if (!dir->tracked) continue;
 
         /* As the base classifies it (profile_blob_above): a claim a blob in the
          * base stands at or above claims nothing, and is in nothing's way */
@@ -1365,21 +1368,22 @@ error_t profile_stage_changed(const profile_stage_t *stage, bool *out) {
  * this too, so the two readings cannot drift: they are one field.
  *
  * Strictly beneath, at a component boundary: a claim AT the key is the key, and
- * one above it is the ancestry every path has.
+ * one above it is the ancestry every path has — so the claims asked are one slice
+ * of the copy's key order (core/metadata.h metadata_items_beneath).
  *
  * Reader: profile_stage_prune_ancestors.
  *
- * @param directories The copy's directory claims, borrowed — the caller's own
- *                    snapshot (an empty one answers false)
+ * @param stage The stage, whose copy is asked
  * @param key The derivation's key
  * @return true iff a tracked directory claim stands strictly beneath it
  */
-static bool profile_stage_tracked_beneath(metadata_items_t directories, const char *key) {
-    const size_t len = strlen(key);
+static bool profile_stage_tracked_beneath(const profile_stage_t *stage, const char *key) {
+    const metadata_items_t beneath = metadata_items_beneath(
+        stage->sheet, PATH_KIND_DIRECTORY, key
+    );
 
-    for (size_t i = 0; i < directories.count; i++) {
-        const metadata_item_t *dir = directories.entries[i];
-        if (dir->tracked && str_path_beneath(dir->key, key, len)) return true;
+    for (size_t i = 0; i < beneath.count; i++) {
+        if (beneath.entries[i]->tracked) return true;
     }
 
     return false;
@@ -1415,7 +1419,7 @@ static bool profile_stage_tracked_beneath(metadata_items_t directories, const ch
  * forward pass decides each derivation where it meets it and removes it there:
  * a decision reads the index and the tracked claims alone, and the prune moves
  * neither, so a removal changes no later decision, and the keys come back in
- * the directory claims' order.
+ * key order.
  *
  * Reader: profile_stage_commit, past its gate.
  *
@@ -1458,7 +1462,7 @@ static error_t profile_stage_prune_ancestors(profile_stage_t *stage, string_arra
 
         /* And the other half: the one path a tree cannot hold. Anchored by either,
          * the derivation stands, and the cursor moves past it. */
-        if (rc == 0 || profile_stage_tracked_beneath(directories, dir->key)) {
+        if (rc == 0 || profile_stage_tracked_beneath(stage, dir->key)) {
             d++;
             continue;
         }

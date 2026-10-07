@@ -363,13 +363,12 @@ typedef error_t (*profile_visit_fn)(const profile_claim_t *claim, void *payload)
  * those its own tree contradicts, which profile_contradicted shows
  *
  * The blobs first, in the tree's pre-order; then the directory claims no blob
- * stands at or above, in the sheet's own order — so a reader that keeps the first
- * of two claims at one place keeps the sheet's first, and that order is the
- * document's: the writer sorts by key, then kind (core/metadata.c
- * metadata_to_json), a hand may not. A name is shown once: a blob, or a directory
- * claim no blob stands at or above. Each directory claim is the one profile_find
- * answers at its name, by the same question asked of it there, so the walk and
- * a question at one name cannot part.
+ * stands at or above, in key order — the document's as the serializer writes it
+ * (core/metadata.h metadata_to_json), whatever a hand spelled — so a reader that
+ * keeps the first of two claims at one place keeps the byte-least name's. A name
+ * is shown once: a blob, or a directory claim no blob stands at or above. Each
+ * directory claim is the one profile_find answers at its name, by the same question
+ * asked of it there, so the walk and a question at one name cannot part.
  *
  * STRICT: a sheet that will not load is the walk's failure, before any claim is
  * shown. TOLERANT: the walk shows the tree's claims at their floors — no mode,
@@ -420,9 +419,9 @@ error_t profile_walk(
  * none where one does. So a reader asks for the claims that stand, the walk, or
  * for every claim the profile makes, the walk and these; where the classification
  * draws its line moves a claim between the two, never out of the second reader's
- * sight. Each is shown in the sheet's own order, decoded as the walk would have
- * shown it had no blob stood at or above its name, and with that blob, by its
- * name (blob_above).
+ * sight. Each is shown in key order, decoded as the walk would have shown it
+ * had no blob stood at or above its name, and with that blob, by its name
+ * (blob_above).
  *
  * STRICT: a sheet that will not load is the failure, before any claim is shown.
  * TOLERANT: none is shown past one, the failure kept (profile_load_sheet).
@@ -864,9 +863,9 @@ error_t profile_stage_remove(
  *     or a group this host cannot name, ERR_NOT_FOUND;
  *   - the admission (profile_stage_t): the sheet's half, ERR_CONFLICT "Cannot
  *     stage '%s': '%s' is a directory profile '%s' claims beneath it", naming
- *     the first such claim in the sheet's order; then the tree's, the put's own
- *     (sys/stage.h stage_put, ERR_CONFLICT or ERR_INVALID_ARG), which writes
- *     the blob only once it is admitted;
+ *     the byte-least such claim; then the tree's, the put's own (sys/stage.h
+ *     stage_put, ERR_CONFLICT or ERR_INVALID_ARG), which writes the blob only
+ *     once it is admitted;
  *   - the put rule at the name: a directory claim standing there gives way, one
  *     the base's blob contradicts rides the write;
  *   - the claim at its own kind: the FILE item the look authors, or the retire
@@ -984,19 +983,17 @@ void profile_stage_capture_ancestors(
  * In order, each refusal before the sheet moves:
  *   - the admission (profile_stage_t): the sheet's half, ERR_CONFLICT "Cannot
  *     stage '%s': '%s' is a directory profile '%s' claims beneath it", naming
- *     the first such claim in the sheet's order; then the tree's, the put's own
- *     (sys/stage.h
+ *     the byte-least such claim; then the tree's, the put's own (sys/stage.h
  *     stage_put_blob, ERR_CONFLICT or ERR_INVALID_ARG), which writes no object;
  *   - the put rule at the name: a directory claim standing there gives way, one
  *     the base's blob contradicts rides the write;
  *   - the way: each rung of the name, paired from the leaf with a rung of
  *     `from_storage_path` — both names place one path, so their tails end alike
  *     — takes `from`'s directory claim at its pair, derived, wherever the base
- *     holds
- *     nothing at the rung (profile_holds);
+ *     holds nothing at the rung (profile_holds);
  *   - the claim at its own kind: the FILE item it makes, or the retire of the
- *     one standing where it claims nothing — a link the commit records no ownership
- *     for.
+ *     one standing where it claims nothing — a link the commit records no
+ *     ownership for.
  * A failure past the put leaves a stage its writer abandons (sys/stage.h).
  *
  * Reader: cmds/revert.c cmd_revert.

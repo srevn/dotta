@@ -1932,7 +1932,7 @@ static void index_entries(workspace_t *ws) {
  * the one arm of the orphan analysis that writes one leaves the copy unmeasured
  * and never prunable.
  *
- * Callers: the orphan analysis's two arms that find the copy dotta's to prune —
+ * Readers: the orphan analysis's two arms that find the copy dotta's to prune —
  * the user's prune order, and Git's backing (workspace_analyze_orphans). A
  * candidacy, not cleanup's verdict, which still skips the copy for a divergence
  * or a reason of its own.

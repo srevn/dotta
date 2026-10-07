@@ -882,10 +882,11 @@ error_t state_write(state_t *state, const state_record_t *record);
  * their commits let go without asking whether anything still stands.
  *
  * A missing record is success: the callers name paths that may have no record —
- * never seen here, nothing to retire. Callers: apply's record phase (cmds/apply.c
- * apply_write_record), for every orphan it settles; remove's settle and update's
- * purge, for what their commits let go; and add's settle, for the ancestor claims
- * its own commit dropped.
+ * never seen here, nothing to retire. Readers: apply's record phase, for every
+ * orphan it settles (cmds/apply.c apply_write_record); remove's settle and update's
+ * record phase, for what their commits let go (cmds/remove.c remove_settle,
+ * cmds/update.c update_write_record); and add's record phase, for the ancestor
+ * claims its own commit dropped (cmds/add.c add_write_record).
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose record retires (must not be NULL)

@@ -1680,9 +1680,8 @@ static error_t profile_prune_ancestors(profile_draft_t *draft, string_array_t *p
         }
 
         /* Nothing stands beneath it: its key handed back where the caller keeps
-         * them, copied before the removal frees it; then the derivation goes,
-         * and the slice is read again, the removal having moved the entries behind
-         * the cursor up to it */
+         * them; then the derivation goes, and the slice is read again, the removal
+         * having moved every entry past the cursor down one */
         if (pruned) string_array_push(pruned, dir->key);
         metadata_remove_item(draft->sheet, PATH_KIND_DIRECTORY, dir->key);
         directories = metadata_items(draft->sheet, PATH_KIND_DIRECTORY);

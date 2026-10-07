@@ -180,7 +180,10 @@
  * against this to read intent back out of it. Readers, each supplying the answer
  * where a claim named none: the claim's floor, which the view's rows take
  * (core/profiles.c profile_claim_mode), deploy's creation of a rung no claim
- * covers (core/deploy.c), and export's materialisation (cmds/export.c).
+ * covers (core/deploy.c create_ancestor), and export's materialisation — each
+ * arm's root and every directory the copy completes (cmds/export.c
+ * export_collect_profile, export_collect_storage, export_collect_filesystem,
+ * complete_directories).
  */
 #define DIR_MODE_DEFAULT 0755
 
@@ -197,7 +200,9 @@
  * claims no mode, the record's don't-care) — so no row, record, entry or verdict
  * carries it. The header show prints and the capture lines add and update print
  * test it on the decoded claim, where a mode is claimed (cmds/show.c
- * show_print_blob, cmds/add.c add_print_capture, cmds/update.c update_profile).
+ * show_print_blob, cmds/add.c add_print_capture, cmds/update.c update_profile),
+ * and revert on the commit's, where a file claiming nothing takes its type's
+ * floor (cmds/revert.c cmd_revert, step 14).
  */
 #define MODE_UNCLAIMED ((mode_t) -1)
 
@@ -223,18 +228,21 @@
  * as it was lent — its names with it — for the life of the arena the sheet stands
  * in, whatever is written or removed after it.
  *
- * Every field is read off the item metadata_find_item hands back; the sheet offers
- * no per-field reader, so a consumer that holds the item reads the field and
- * one that holds only a key looks the item up first. `encrypted` is cross-checked
- * nowhere: the content reader classifies the blob's own bytes and consults no
- * claim (infra/content.h content_get_from_blob_oid), so the stamp answers "was
- * it sealed when it was written" — a screen's question, or a schedule's. Readers,
- * each through the claim the profile decodes from it (core/profiles.c
- * profile_decode_blob): cmds/export.c export_entry_from_claim (which blobs phase
- * 1 reads), cmds/list.c list_files (the mark, and the framing taken off the size
- * beside it) and list_size_claim (the same framing, in the fold the rows' total
- * must agree with), cmds/show.c show_print_blob (the annotation) and, onto the
- * view's rows (core/manifest.h manifest_row_t.encrypted), cmds/export.c
+ * Every field is read off an item the sheet lends — the one metadata_find_item
+ * hands back, or a slice's (metadata_items, metadata_items_beneath); the sheet
+ * offers no per-field reader, so a consumer that holds the item reads the field
+ * and one that holds only a key looks the item up first. `encrypted` is
+ * cross-checked nowhere: the content reader classifies the blob's own bytes and
+ * consults no claim (infra/content.h content_get_from_blob_oid), so the stamp
+ * answers "was it sealed when it was written" — a screen's question, or a
+ * schedule's. Readers, each through the claim the profile decodes from it
+ * (core/profiles.c profile_decode_blob): cmds/export.c export_entry_from_claim
+ * (which blobs phase 1 reads), cmds/list.c list_collect_file, for list_files
+ * (the mark, and the framing taken off the size beside it), and list_size_claim
+ * (the same framing, in the fold the rows' total must agree with), cmds/show.c
+ * show_print_blob (the annotation), the verbose capture lines of add and update
+ * (cmds/add.c add_capture, cmds/update.c update_profile) and, onto the view's
+ * rows (core/manifest.h manifest_row_t.encrypted), cmds/export.c
  * export_entry_from_row, core/workspace.c workspace_analyze_file and cmds/key.c
  * key_status.
  *

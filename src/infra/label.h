@@ -222,9 +222,10 @@ label_t label_of(const char *storage_path);
  * subject it matched (cmds/ignore.c ignore_test). Two readers cut rather than
  * match: the negation that re-opens a verdict's rung, spelled from the tail cut
  * there (core/ignore.c ignore_verdict_negation), and the frame a walk's refusal
- * offers to leave out (cmds/add.c add_refuse_unjudged). One reader counts rather
- * than matches: the climb, whose rungs are the separators in the tail
- * (core/profiles.c profile_capture_ancestors).
+ * offers to leave out (cmds/add.c add_refuse_unjudged). Two walk the rungs rather
+ * than match: the climb, whose rungs are the separators in the tail
+ * (core/profiles.c profile_capture_ancestors), and the way a restore brings back,
+ * which cuts them from the leaf (core/profiles.c profile_restore_ancestors).
  *
  * @param storage_path Storage path, under a label
  * @return Pointer past the label; "" for the word alone, and for a label spelled

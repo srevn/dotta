@@ -23,7 +23,10 @@
  * the draft's base, the profile at the tree the draft opened at, and edits the
  * draft: never the two documents, which the draft keeps together by the rules
  * its type states. The draft looks at the disk in one place, the way above a
- * file a writer captured from it.
+ * file a writer captured from it, and asks the host twice more: the names of a
+ * look's owner and group, where a capture names them (core/metadata.h
+ * metadata_capture_file, metadata_capture_directory), and the commit's signature
+ * where Git's configuration names none (sys/gitops.h gitops_get_signature).
  *
  * The decode, stated once, applied by the walk to every name it meets
  * (profile_walk) and by profile_find to the one it is asked, by the same rules
@@ -215,10 +218,14 @@ typedef struct {
  * row's don't-care. A claimed 0000 is a claim. The one producer of the floor
  * the view's rows carry (core/manifest.h manifest_row_t, "Totality").
  *
- * Readers: core/manifest.c manifest_place_claim; and export's projection of a
- * claim and the root its name arm makes (cmds/export.c export_entry_from_claim,
+ * Readers: core/manifest.c manifest_place_claim; export's projection of a claim
+ * and the root its name arm makes (cmds/export.c export_entry_from_claim,
  * export_collect_storage), so the mode an export copies off a claim is the one
- * a row would place.
+ * a row would place; the record a capture's claim builds, a file's and a
+ * directory's, add's and update's (cmds/add.c add_capture and cmd_add,
+ * cmds/update.c update_profile), so the record holds the mode the row places;
+ * and revert's mode for a file its commit claims nothing about (cmds/revert.c
+ * cmd_revert, step 14).
  *
  * @param claim A decoded claim (must not be NULL)
  * @return The mode the claim stands for
@@ -303,8 +310,11 @@ void profile_free(profile_t *profile);
  * word a refusal under it (cmds/export.c export_collect_profile,
  * export_collect_storage and export_collect_filesystem, cmds/revert.c
  * revert_claim_standing, revert_refuse_second_name and revert_target_claim);
- * and cmds/show.c show_file, whose bytes the profile's key opens and whose warning
- * names it.
+ * cmds/show.c show_file, whose bytes the profile's key opens and whose warning
+ * names it; remove's universe, whose custom/ claims it places under the profile's
+ * binding, and its directory offer, which describes each claim by it (cmds/remove.c
+ * remove_list_claims, remove_offer_directory); and update's capture, whose seal
+ * the profile's key makes (cmds/update.c update_capture).
  *
  * @param profile Handle (must not be NULL)
  * @return The handle's copy; valid until profile_free
@@ -670,18 +680,20 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * revert_select_profile), export's name arm, which words a copy with nothing in
  * it by what stands at the name (cmds/export.c export_collect_storage), and
  * remove's directory offer, which offers a claim where no blob stands at its
- * name (cmds/remove.c remove_offer_directory). A reader not on this list is a
- * bug. Four neighbours ask profile_entry instead, the tree alone: revert's read
- * of the head at the name it writes (cmds/revert.c cmd_revert, step 11), where
- * a directory claim is never refused — it gives way to the write where it stands,
- * and rides it where the head's blob contradicts it; the orphan probe's file
- * arm (core/workspace.c workspace_orphan_authority), which asks whether a blob
- * still backs a file record, a subtree and a gitlink standing at a name without
- * making a file claim — its directory arm asking profile_find; the encryption
- * prior of update's captures and of add's decision pass (cmds/update.c
- * update_capture, cmds/add.c cmd_add), a blob's bytes or none; and add's held-entry
- * gate (cmds/add.c cmd_add), a blob at a name the command chose — a gitlink there
- * is no claim, and the capture takes its place without --force.
+ * name (cmds/remove.c remove_offer_directory); and a profile's draft, at each
+ * rung of the way a restore brings back, where whatever the base holds keeps
+ * the rung (profile_restore_file). A reader not on this list is a bug. Four
+ * neighbours ask profile_entry instead, the tree alone: revert's read of the
+ * head at the name it writes (cmds/revert.c cmd_revert, step 11), where a directory
+ * claim is never refused — it gives way to the write where it stands, and rides
+ * it where the head's blob contradicts it; the orphan probe's file arm
+ * (core/workspace.c workspace_orphan_authority), which asks whether a blob still
+ * backs a file record, a subtree and a gitlink standing at a name without making
+ * a file claim — its directory arm asking profile_find; the encryption prior of
+ * update's captures and of add's decision pass (cmds/update.c update_capture,
+ * cmds/add.c cmd_add), a blob's bytes or none; and add's held-entry gate
+ * (cmds/add.c cmd_add), a blob at a name the command chose — a gitlink there is
+ * no claim, and the capture takes its place without --force.
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
  *                tree is silent
@@ -795,10 +807,10 @@ error_t profile_find(
  *
  * Memory: a handle's own — an arena made at the open, holding the struct, the
  * copy of the base's sheet with every claim an edit writes into it, and the names
- * the climb and the prune spell — released by profile_draft_free with the
- * admission, the base and the stage; the base borrows the stage's tree, and goes
- * before it. What a capture answers is the caller's (profile_claim_t), so the
- * claim outlives the draft that wrote it.
+ * the climb, the way and the prune spell — released by profile_draft_free with
+ * the admission, the base and the stage; the base borrows the stage's tree, and
+ * goes before it. What a capture answers is the caller's (profile_claim_t), so
+ * the claim outlives the draft that wrote it.
  */
 typedef struct profile_draft profile_draft_t;
 
@@ -878,9 +890,13 @@ profile_t *profile_draft_base(const profile_draft_t *draft);
  * or above it, the opened tree's or one admitted since, leaves it none) and
  * claimed: tracked, in the sheet the commit carries, its attributes left to its
  * capture (profile_capture_directory), so a blob chosen above it later is refused
- * at its own admission. Nothing is read from the disk and nothing written to
- * the object database: a writer that stops after its admissions — a dry run —
- * leaves the repository as it found it.
+ * at its own admission. Never captured, it is committed so — tracked, claiming
+ * no attributes — over a derived claim at its name or where none stood; a tracked
+ * claim there keeps its own. add, the one writer that admits, captures every
+ * directory it admits or refuses its command (cmds/add.c cmd_add); a writer that
+ * went on past a failed capture would commit that claim. Nothing is read from
+ * the disk and nothing written to the object database: a writer that stops after
+ * its admissions — a dry run — leaves the repository as it found it.
  *
  * Every admission precedes the commit's edits. The tree's half is asked of the
  * tree the stage opened and the names admitted since, never of the stage's own
@@ -1004,9 +1020,10 @@ error_t profile_capture_file(
  *           one taken through a link would capture the target's attributes
  * @param arena The arena the answer's owner and group are named in (must not be
  *              NULL)
- * @param out The claim, as the walk decodes a directory claim — tracked, the look's
- *            mode and ownership, its name `storage_path` (must not be NULL;
- *            written on success alone)
+ * @param out The claim the capture authored — tracked, the look's mode and
+ *            ownership, its name `storage_path` — decoded as the walk decodes
+ *            one; whether a walk shows it is the classification's (must not be
+ *            NULL; written on success alone)
  * @return Error or NULL on success
  */
 error_t profile_capture_directory(
@@ -1084,8 +1101,8 @@ void profile_capture_ancestors(
  *
  * The claim is the write's whole: its name, where the restore writes it; its
  * blob, an id the ODB holds by the commit — a writer that decides before it writes
- * puts
- * the id now and stores the object past its prompt (sys/stage.h stage_put_blob);
+ * puts the id now and stores the object past its prompt
+ * (sys/stage.h stage_put_blob);
  * its type; and what its item carries, the mode, the owner and group, the stamp.
  * In order, each refusal before the sheet moves:
  *   - the admission (profile_draft_t): the sheet's half, ERR_CONFLICT "Cannot
@@ -1179,9 +1196,11 @@ error_t profile_changed(const profile_draft_t *draft, bool *out);
  * a tree equal to the opened one is none, and a head another writer moved since
  * the open is refused ERR_CONFLICT). One commit a draft. Whether it landed is
  * answered as sys/stage answers it: false where the gate stops it, and past the
- * gate the tree write's own answer, which an edit the gate saw makes true — it
- * moved a content entry, or a claim, and a sheet whose claims moved spells other
- * bytes.
+ * gate the tree write's own answer — true where an edit the gate saw stands past
+ * the prune, since it moved a content entry or a claim and a sheet whose claims
+ * moved spells other bytes, and false where the prune took back the only edits
+ * the gate saw: a climb's rungs nothing tracked stands beneath, authored and
+ * pruned in one draft.
  *
  * Readers: cmds/add.c add_commit and cmds/update.c update_profile, which keep
  * the prune's keys and read whether the commit landed, so a capture that put

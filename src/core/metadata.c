@@ -589,6 +589,61 @@ error_t metadata_capture_directory(
 }
 
 /**
+ * One claim as the document spells it: its kind and its key, then only what it
+ * claims
+ *
+ * Every node is cJSON's, from the heap that cannot fail (metadata_to_json), so
+ * none is refused.
+ *
+ * Reader: metadata_to_json, at each claim of its merge.
+ *
+ * @param item A claim the sheet holds
+ * @return The claim's object, for the items array to take
+ */
+static cJSON *metadata_item_object(const metadata_item_t *item) {
+    cJSON *item_obj = cJSON_CreateObject();
+
+    /* Add kind discriminator */
+    const char *kind_str = item->kind == PATH_KIND_DIRECTORY ? "directory" : "file";
+    cJSON_AddStringToObject(item_obj, "kind", kind_str);
+
+    /* Add key (storage_path for both files and directories) */
+    cJSON_AddStringToObject(item_obj, "key", item->key);
+
+    /* Add mode — a claimed one; an unclaimed one has no line to print */
+    if (item->mode != MODE_UNCLAIMED) {
+        char mode_str[8];
+        snprintf(mode_str, sizeof(mode_str), "%04o", (unsigned) item->mode);
+        cJSON_AddStringToObject(item_obj, "mode", mode_str);
+    }
+
+    /* Add optional owner (present iff the item claims one) */
+    if (item->owner) {
+        cJSON_AddStringToObject(item_obj, "owner", item->owner);
+    }
+
+    /* Add optional group (present iff the item claims one) */
+    if (item->group) {
+        cJSON_AddStringToObject(item_obj, "group", item->group);
+    }
+
+    /* Add encrypted flag iff true — false for DIRECTORY, held at the one way
+     * into a sheet (metadata_write_item), so no kind test stands here */
+    if (item->encrypted) {
+        cJSON_AddBoolToObject(item_obj, "encrypted", true);
+    }
+
+    /* And tracked, the other flag one kind carries: false for FILE by the same
+     * contract, and absent on a directory that says the profile only passes through
+     * it. The two are mutually exclusive, so they print in one place. */
+    if (item->tracked) {
+        cJSON_AddBoolToObject(item_obj, "tracked", true);
+    }
+
+    return item_obj;
+}
+
+/**
  * Convert metadata to JSON
  *
  * One "items" array, ordered by key and then kind, each object carrying its "kind"
@@ -609,59 +664,34 @@ buffer_t metadata_to_json(const metadata_t *metadata) {
      * byte-determinism across machines: sync's merge then conflicts only on genuine
      * same-path edits, never on capture-order divergence, and two sheets holding
      * the same claims write one spelling. Each kind stands in key order already
-     * (metadata_write_item), so the document's order is one merge of the two, a
-     * file's item first at a key both kinds hold: no copy, no sort. */
+     * (metadata_write_item), so the document's order is one merge of the two:
+     * no copy, no sort. Each claim's object goes to the items array, which owns
+     * it from then on. */
     const metadata_claims_t *files = &metadata->files;
     const metadata_claims_t *directories = &metadata->directories;
-    for (size_t f = 0, d = 0; f < files->count || d < directories->count;) {
-        const bool file_first = d == directories->count || (
-            f < files->count &&
-            strcmp(files->entries[f]->key, directories->entries[d]->key) <= 0
+    size_t f = 0, d = 0;
+    for (; d < directories->count; d++) {
+        /* Each directory claim after the file items at or before its key: a file's
+         * item first at a key both kinds hold */
+        const char *key = directories->entries[d]->key;
+        for (; f < files->count && strcmp(files->entries[f]->key, key) <= 0; f++) {
+            cJSON_AddItemToArray(
+                items_array,
+                metadata_item_object(files->entries[f])
+            );
+        }
+        cJSON_AddItemToArray(
+            items_array,
+            metadata_item_object(directories->entries[d])
         );
-        const metadata_item_t *item = file_first
-            ? files->entries[f++] : directories->entries[d++];
-        cJSON *item_obj = cJSON_CreateObject();
+    }
 
-        /* Add kind discriminator */
-        const char *kind_str = item->kind == PATH_KIND_DIRECTORY ? "directory" : "file";
-        cJSON_AddStringToObject(item_obj, "kind", kind_str);
-
-        /* Add key (storage_path for both files and directories) */
-        cJSON_AddStringToObject(item_obj, "key", item->key);
-
-        /* Add mode — a claimed one; an unclaimed one has no line to print */
-        if (item->mode != MODE_UNCLAIMED) {
-            char mode_str[8];
-            snprintf(mode_str, sizeof(mode_str), "%04o", (unsigned) item->mode);
-            cJSON_AddStringToObject(item_obj, "mode", mode_str);
-        }
-
-        /* Add optional owner (present iff the item claims one) */
-        if (item->owner) {
-            cJSON_AddStringToObject(item_obj, "owner", item->owner);
-        }
-
-        /* Add optional group (present iff the item claims one) */
-        if (item->group) {
-            cJSON_AddStringToObject(item_obj, "group", item->group);
-        }
-
-        /* Add encrypted flag iff true — false for DIRECTORY, held at the one
-         * way into a sheet (metadata_write_item), so no kind test stands here */
-        if (item->encrypted) {
-            cJSON_AddBoolToObject(item_obj, "encrypted", true);
-        }
-
-        /* And tracked, the other flag one kind carries: false for FILE by the
-         * same contract, and absent on a directory that says the profile only
-         * passes through it. The two are mutually exclusive, so they print in
-         * one place. */
-        if (item->tracked) {
-            cJSON_AddBoolToObject(item_obj, "tracked", true);
-        }
-
-        /* Add item object to items array (ownership transferred to array) */
-        cJSON_AddItemToArray(items_array, item_obj);
+    /* Then the file items past the last directory claim's key */
+    for (; f < files->count; f++) {
+        cJSON_AddItemToArray(
+            items_array,
+            metadata_item_object(files->entries[f])
+        );
     }
 
     /* Add items array to root (ownership transferred to root) */

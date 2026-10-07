@@ -1396,7 +1396,6 @@ static error_t remove_profile(
 
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;
-    const mount_table_t *mounts = ctx->run.mounts;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
@@ -1444,18 +1443,16 @@ static error_t remove_profile(
     err = profile_load(repo, opts->profile, &profile);
     if (err) goto cleanup;
 
-    /* Every claim the deletion takes, each placed where this machine puts it:
-     * the claims the walk shows — the blobs, then the directory claims that stand
-     * — and then those the tree contradicts (core/profiles.h profile_contradicted),
-     * so the hooks are handed every path the profile goes with. Read tolerantly:
-     * a deletion that refused over a sheet it cannot read would leave the profile
-     * undeletable, so it goes on and says below what its hooks lose. A tree it
-     * cannot walk is refused here, before the preview: no tolerant read loses
-     * the tree's half. */
-    remove_walk_t walk = { .arena = ctx->arena, .mounts = mounts, .profile = opts->profile };
-    err = profile_walk(profile, PROFILE_READ_TOLERANT, remove_collect_claim, &walk);
-    if (err) goto cleanup;
-    err = profile_contradicted(profile, PROFILE_READ_TOLERANT, remove_collect_claim, &walk);
+    /* Every claim the deletion takes, each placed where this machine puts it —
+     * the claims the walk shows, and those the tree contradicts, by the producer
+     * the resolver reads (remove_list_claims) — so the hooks are handed every
+     * path the profile goes with. Read tolerantly: a deletion that refused over
+     * a sheet it cannot read would leave the profile undeletable, so it goes on
+     * and says below what its hooks lose. A tree it cannot walk is refused here,
+     * before the preview: no tolerant read loses the tree's half. */
+    remove_claim_t *claims = NULL;
+    size_t claim_count = 0;
+    err = remove_list_claims(ctx, profile, PROFILE_READ_TOLERANT, &claims, &claim_count);
     if (err) goto cleanup;
 
     /* What the tolerant read lost, said where it was read, so the dry run says
@@ -1654,7 +1651,7 @@ static error_t remove_profile(
      * once, by the producer the file route's hooks read (remove_hook_paths):
      * HOME and ROOT place every home/ and root/ claim, and a custom/ claim with
      * no binding here hands its name. The list is the command arena's. */
-    const string_array_t hook_paths = remove_hook_paths(ctx->arena, walk.claims, walk.claim_count);
+    const string_array_t hook_paths = remove_hook_paths(ctx->arena, claims, claim_count);
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
         .profile    = opts->profile,

@@ -490,9 +490,9 @@ bool completion_paths_under(
      * against an absolute root, and the row's spelling against the flag's as
      * the binders compare them. The arena's, as every reader of a filesystem
      * key is, so the two spellings the root may take are one borrowed pointer
-     * with nothing to free between them. A flag this door cannot read leaves
-     * the completion with no root of its own to offer beneath, so the shell's
-     * own files stand. */
+     * with nothing to free between them. A flag that will not read leaves the
+     * completion with no root of its own to offer beneath, so the shell's own
+     * files stand. */
     const char *root = NULL;
     error_t err = path_input_filesystem_path(target, ctx->arena, &root);
     if (err) {

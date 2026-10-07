@@ -35,7 +35,7 @@
  * no empty component): libgit2 refuses `..`, `.` and `.git` components at the
  * put — a verdict about the name, as a collision is, so both are ERR_CONFLICT —
  * and `a//b` at the tree write, but writes `/a` as a tree with an empty-named
- * component, so the stage checks the shape at the door.
+ * component, so the stage checks the shape itself, before libgit2 is asked.
  *
  * That rule is askable before a byte is read, of the tree one writer intends
  * (stage_admission_t): the ref's own entries, and every blob the writer has
@@ -205,8 +205,8 @@ error_t stage_admission_create(const stage_t *st, stage_admission_t **out);
  *   - a proper prefix that names an entry — a file where a directory is needed;
  *   - an entry beneath the path — a directory where the file goes;
  *   - a name Git will not hold at all — `.git` as a component, in every spelling
- *     libgit2 protects — which is libgit2's own rule, asked through the door
- *     the put uses.
+ *     libgit2 protects — which is libgit2's own rule, asked through the add the
+ *     put makes (sys/stage.c put_entry).
  * The last three are ERR_CONFLICT: a verdict about the name, which a caller that
  * walks skips (add's walk reads it, through core/profiles.h profile_admit) and
  * a caller that was named refuses. An entry at the path itself is the upsert
@@ -214,7 +214,7 @@ error_t stage_admission_create(const stage_t *st, stage_admission_t **out);
  *
  * The mode is not asked. libgit2 validates a path with mode 0 whatever the entry
  * carries (index.c index_entry_dup passes no stat), so nothing a mode could change
- * is reachable through this door or the put's.
+ * is reachable through this admission or the put.
  *
  * Reader: a profile's admission of a blob (core/profiles.c profile_admit), for
  * add's walk and its argument arm, before either lists a name. A profile's restore

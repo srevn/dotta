@@ -475,8 +475,8 @@ typedef struct dotta_run {
  *         measured 4.1 MB of peak RSS at the shape that composed names by hand,
  *         20.3 MB against `ctx->arena`, and 4.1 MB with a scratch of the walk's
  *         own, and `add -e` over 51,000 excluded entries 13.2 MB against
- *         `ctx->arena` and 7.3 MB with one; what outlives an entry is copied at
- *         the one door it leaves through (workspace_add_untracked, add_list). A
+ *         `ctx->arena` and 7.3 MB with one; what outlives an entry is copied
+ *         where it leaves the scratch (workspace_add_untracked, add_list). A
  *         view built to read one answer off it is built in one too:
  *         `cmds/interactive.c`'s plan_check learns only that the saved set's
  *         view builds, where a session kept one per save — 50 saves over a

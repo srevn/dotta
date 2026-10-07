@@ -395,8 +395,8 @@ static workspace_fault_t workspace_error_fault(error_t err) {
  *
  * Empty on every healthy load, which is what makes every ask free.
  *
- * Readers: workspace_look, before every look the load takes — the one door, which
- * writes the answer onto the item it withholds the look from — and
+ * Readers: workspace_look, before every look the load takes — it takes them all,
+ * and writes the answer onto the item it withholds the look from — and
  * workspace_squatted_ancestor, the view-only face that lends the answer whole
  * to a caller that needs the squatter itself (core/deploy.c check_ancestry).
  *
@@ -446,7 +446,7 @@ static void workspace_note_diverged(workspace_t *ws, const workspace_item_t *ite
 }
 
 /**
- * Add an untracked item — a discovery, the scan's first door
+ * Add an untracked item — a discovery, the scan's first answer
  *
  * The untracked scan found a new file inside a tracked directory: no row (the
  * view does not claim the path), no record (dotta has no memory of having managed
@@ -454,12 +454,13 @@ static void workspace_note_diverged(workspace_t *ws, const workspace_item_t *ite
  * so a path either of them holds under any spelling never reaches here. State,
  * divergence and kind are the constants of the state.
  *
- * This door and the unscanned one (workspace_add_unscanned) are the two the walk's
- * strings leave its scratch through, and each copies them rather than aliasing:
- * the path the walk joined and the name the namer answered live in the walk's
- * scratch, which the frame's next entry reclaims (sys/filesystem.h fs_listing_t),
- * and the item outlives the walk. The profile is the owner's — the row's own,
- * whose tracked directory the walk began at — and is the view's arena's already.
+ * This and its unscanned twin (workspace_add_unscanned) are the only two the
+ * walk's strings leave its scratch through, and each copies them rather than
+ * aliasing: the path the walk joined and the name the namer answered live in
+ * the walk's scratch, which the frame's next entry reclaims (sys/filesystem.h
+ * fs_listing_t), and the item outlives the walk. The profile is the owner's —
+ * the row's own, whose tracked directory the walk began at — and is the view's
+ * arena's already.
  *
  * No earlier item stands at the path: the view's and the record's paths were
  * skipped at the leaf guard, and no directory is enumerated twice (one scan root
@@ -522,7 +523,7 @@ static void workspace_add_untracked(
  * divergence is DIVERGENCE_UNVERIFIED and the fault the failed look's class
  * (workspace.h workspace_fault_t), never NONE and never LOCKED: the scan reads
  * no content. The strings are copied out of the walk's scratch, the profile is
- * the view's, as at the untracked door.
+ * the view's, as for an untracked item (workspace_add_untracked).
  *
  * @param ws Workspace context (must not be NULL)
  * @param filesystem_path The path where the walk stopped (must not be NULL)
@@ -565,7 +566,7 @@ static void workspace_add_unscanned(
 /**
  * The load's one look at an item's path, and the squatter it finds
  *
- * The one door for every look the load takes at a path it knows — the directory
+ * Every look the load takes at a path it knows is taken here — the directory
  * analysis's, the file analysis's, workspace_look_orphans' — so both halves of
  * the reach rule (core/workspace.h workspace_displaced_t) live here: no look is
  * taken beneath a squatter, and every squatter is noted by the look that found
@@ -2423,8 +2424,8 @@ static workspace_fault_t workspace_scan(
      * the path, the namer's copy and its answer — go at the next entry, the frames
      * of its subtree with them: a frame beneath this one lists above them, so
      * `child` stands as that frame's `directory` for the whole subtree. What
-     * outlives the entry is an item's, copied at its door (workspace_add_untracked,
-     * workspace_add_unscanned). */
+     * outlives the entry is an item's, copied where the item is made
+     * (workspace_add_untracked, workspace_add_unscanned). */
     for (const char *child; (child = fs_listing_next(&listing)) != NULL;) {
         /* The view's word at the child's own key, before any look. A claim that
          * names its own path settles the child whatever stands there: a blob

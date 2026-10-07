@@ -43,18 +43,19 @@
  * The write side:
  *
  * Nothing here writes. Not to the object database, not to an index, not to disk:
- * every door reads — a blob, a file, a link — and answers with bytes, and the
- * caller places them. So a capture that is refused leaves the repository exactly
- * as it found it, there is no repository to place into by mistake, a dry run
- * that decides before it reads is neutral by construction, and sys/stage keeps
- * the tree's one blob writer (sys/stage.h stage_put).
+ * every function here reads — a blob, a file, a link — and answers with bytes,
+ * and the caller places them. So a capture that is refused leaves the repository
+ * exactly as it found it, there is no repository to place into by mistake, a
+ * dry run that decides before it reads is neutral by construction, and sys/stage
+ * keeps the tree's one blob writer (sys/stage.h stage_put).
  *
- * Three doors: content_capture_file and content_capture_link, a path on disk as
- * the entry it becomes; content_rebind, a sealed blob's content under a second
- * name. A link's capture holds no crypto at all and is here for content's own
- * rule — a link's bytes are its target and never a seal, whatever they begin
- * with — the same rule the classifier and the cache's key spell on the read side;
- * a capture's `encrypted` false for a link is that rule stated as a value.
+ * Three functions make an entry: content_capture_file and content_capture_link,
+ * a path on disk as the entry it becomes; content_rebind, a sealed blob's content
+ * under a second name. A link's capture holds no crypto at all and is here for
+ * content's own rule — a link's bytes are its target and never a seal, whatever
+ * they begin with — the same rule the classifier and the cache's key spell on
+ * the read side; a capture's `encrypted` false for a link is that rule stated
+ * as a value.
  *
  * The plaintext a seal consumes never leaves this module: the encrypt runs inside
  * the capture and the plaintext is wiped there, whichever way the seal went.
@@ -141,7 +142,7 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * and existence for every filemode), `infra/epoch.c epoch_present_blob` (which
  * blobs a rotation must not orphan, where a false absence outlives the run).
  * Every reader is outside this module, and that is the shape rather than an
- * accident: content's own doors judge bytes they already hold
+ * accident: content's own functions judge bytes they already hold
  * (content_classify_bytes on a view, classify_entry inside a read), so none of
  * them pays a load to ask. A reader not on this list is a bug.
  *

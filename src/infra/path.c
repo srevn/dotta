@@ -26,15 +26,15 @@
  *                             diff, apply, update)
  *
  * One dispatch: the resolver reads the storage grammar itself and hands every
- * filesystem spelling (absolute, tilde, relative) to the argument's door, whose
- * answer is the key. The grammar of a name (infra/label.h: label_prefixes,
+ * filesystem spelling (absolute, tilde, relative) to the argument's reading,
+ * whose answer is the key. The grammar of a name (infra/label.h: label_prefixes,
  * label_validate_storage), the filesystem's two readings (fs_expand_tilde,
  * fs_working_directory), the path's algebra (base/string.h: str_path_join,
  * str_path_fold) and HOME's two spellings (sys/identity) are delegated to the
  * layers below. The table of roots is not among them: no root's spelling is read
  * here and no root's noun, so this file names no place (infra/path.h). A target's
- * rules are mount's (the place a binding means), asked of the door's answer and
- * of nothing the table holds.
+ * rules are mount's (the place a binding means), asked of the argument's spelling
+ * and of nothing the table holds.
  */
 
 #include "infra/path.h"
@@ -69,8 +69,8 @@ error_t path_input_resolve(
 
     *out = (path_input_t){ 0 };
 
-    /* The same sentence the door gives, said here because the storage arm below
-     * never reaches the door at all. */
+    /* The same sentence the argument's reading gives, said here because the storage
+     * arm below never reaches it at all. */
     if (input[0] == '\0') {
         return error_create(ERR_INVALID_ARG, "Path cannot be empty");
     }
@@ -102,7 +102,7 @@ error_t path_input_resolve(
      * `./X` is what says a path was meant. One refusal for every verb, and the
      * only one a word standing alone earns anywhere — the three words are names
      * and the arm above reads them. A verb that reads a bare word as a path asks
-     * the argument's door instead (add, the binders, `ignore --test`, the
+     * the argument's reading instead (add, the binders, `ignore --test`, the
      * completion). */
     if (input[0] != '/' && input[0] != '~' && input[0] != '.' &&
         !strchr(input, '/')) {

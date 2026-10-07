@@ -23,14 +23,14 @@
 error_t mount_validate_target(const char *target) {
     CHECK_NULL(target);
 
-    /* The shape: absolute and folded, as the argument's door spells every one,
-     * and the door is the one way a typed target reaches here (infra/path.h
-     * path_input_target) — so an unfolded spelling is its caller's bug. "/" is
-     * included: a target at the root is a binding like any other, and the table
-     * keeps it as it stands (mount_table_build). */
+    /* The shape: absolute and folded, as the argument's reading spells every
+     * one, and the target's reading is the one way a typed target reaches here
+     * (infra/path.h path_input_target) — so an unfolded spelling is its caller's
+     * bug. "/" is included: a target at the root is a binding like any other,
+     * and the table keeps it as it stands (mount_table_build). */
     CHECK_ARG(
         str_path_folded(target),
-        "a target is read through its door first (infra/path.h path_input_target)"
+        "a target is spelled by its reading first (infra/path.h path_input_target)"
     );
 
     /* The place: it stands, and it is a directory — one stat, through a link

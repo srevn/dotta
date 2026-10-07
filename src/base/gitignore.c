@@ -42,13 +42,13 @@
  * length and the shortcuts above reach further. A *dangling* escape is kept rather
  * than dropped — the one shape where dropping it changed an answer.
  *
- * One deliberate difference from git, at the door, which the parity suite cannot
- * see, for it asks only about files: git hands a command-line entry to its list
- * unread (`ls-files -x '#foo'` matches a file named `#foo`, `-x 'foo '` keeps
- * the space, `-x ''` is taken and matches nothing), where a pattern here is read
- * as the line it would be in a file, and refused where that line makes no rule,
- * or opens with `~/`, which git reads as a directory named `~` and its writer
- * as home (validate_pattern; gitignore.h says why).
+ * One deliberate difference from git, which the parity suite cannot see, for it
+ * asks only about files, is where a pattern enters: git hands a command-line
+ * entry to its list unread (`ls-files -x '#foo'` matches a file named `#foo`,
+ * `-x 'foo '` keeps the space, `-x ''` is taken and matches nothing), where a
+ * pattern here is read as the line it would be in a file, and refused where that
+ * line makes no rule, or opens with `~/`, which git reads as a directory named
+ * `~` and its writer as home (validate_pattern; gitignore.h says why).
  *
  * What git has and this file must not take, for want of a subject: per-pattern
  * base/baselen (git reads a .gitignore per directory; dotta stores one at each
@@ -264,7 +264,7 @@ static size_t rule_span(const char *line, size_t len) {
 /* One line into the rule it makes. A line that makes no rule — rule_span's zero,
  * and nothing else — leaves out_rule->pattern NULL: a file skips it, and a pattern
  * never arrives as one (validate_pattern refused it). The origin and the line
- * are not the parse's: the ruleset tags the rule after it, and the file door
+ * are not the parse's: the ruleset tags the rule after it, and the file's reading
  * numbers it, so a rule alone carries neither. */
 static void parse_line(
     arena_t *arena, const char *line, size_t line_len, gitignore_rule_t *out_rule
@@ -351,8 +351,8 @@ static void parse_line(
  * named. The refusal's clause spells both readings: the anchor, which starts
  * the pattern at the top of the rules' own directory — `/` alone being no pattern,
  * nothing is offered for `~/` alone — and the escape. A lone `~` is a name like
- * any other. Every caller names its door around the refusal, so the refusal names
- * no module of its own. */
+ * any other. Every caller says where the pattern came from around the refusal,
+ * so the refusal names no module of its own. */
 static error_t validate_pattern(const char *pattern, size_t len) {
     if (memchr(pattern, '\n', len))
         return error_create(ERR_VALIDATION, "A pattern is one line");

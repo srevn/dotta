@@ -596,7 +596,7 @@ static error_t profile_enable(
 
     /* Fatal up-front: the target itself. A target is a filesystem-shaped argument
      * — absolute, tilde, or relative to the working directory, the spelling
-     * completion offers — read through the target's door (infra/path.h
+     * completion offers — spelled by the target's reading (infra/path.h
      * path_input_target): the absolute path the row stores, held to the target's
      * rules. Validating inside the per-profile loop used to categorize a bad
      * target as not_found, which mislabels a CLI input problem as a missing

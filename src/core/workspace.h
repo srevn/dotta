@@ -377,9 +377,9 @@ typedef enum {
  *
  * One per active path and one per orphan record, made at the partition before
  * anything is looked at, with the record at its path paired onto it there; an
- * item of the scan's is one more, made at one of its two doors with neither source
- * — a discovery, or a place it could not look (UNSCANNED). Items can be files
- * (PATH_KIND_FILE: content, claimed by a profile's tree) or directories
+ * item of the scan's is one more, made with neither source, as one of its two
+ * answers — a discovery, or a place it could not look (UNSCANNED). Items can be
+ * files (PATH_KIND_FILE: content, claimed by a profile's tree) or directories
  * (PATH_KIND_DIRECTORY: metadata only, claimed by a profile's metadata.json,
  * planned and converged by core/deploy on apply's behalf). Arena-allocated and
  * never moved, so an item's address is stable for the workspace's lifetime —

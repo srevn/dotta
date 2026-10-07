@@ -34,8 +34,8 @@ void string_array_init_cap(string_array_t *arr, arena_t *arena, size_t cap) {
 }
 
 /* The one way a string enters the array: a string its arena already holds, at
- * the end, and the terminator after it. The arena was asked for at the door that
- * made the string, before the string was made there. */
+ * the end, and the terminator after it. The arena was asked for by the function
+ * that made the string, before it made the string there. */
 static void string_array_append(string_array_t *arr, char *str) {
     arr->entries = arena_grow(
         arr->arena,

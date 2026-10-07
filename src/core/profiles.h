@@ -952,8 +952,8 @@ error_t profile_remove(profile_draft_t *draft, path_kind_t kind, const char *sto
  * abandons (sys/stage.h).
  *
  * Readers: cmds/add.c add_capture, each file it listed, and cmds/update.c
- * update_profile, each file it captures — the one door every capture meets its
- * name through, each handing it the name its capture sealed under.
+ * update_profile, each file it captures — where every capture meets its name,
+ * and nowhere else, each handing it the name its capture sealed under.
  *
  * @param draft The draft (must not be NULL)
  * @param storage_path The name the entry stands at: a validated storage path,

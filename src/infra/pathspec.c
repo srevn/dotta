@@ -71,7 +71,7 @@ static void prefix_storage(entry_t *e, const char *name) {
  * prefix, or a leading `<star><star>`/`<star>` component — compiles as typed. A
  * filesystem shape (absolute, tilde, relative dot) is an anchor and a tail: the
  * components before the first that holds a metacharacter are a directory spelling,
- * read through the argument's door and compared literally, and the rest is the
+ * spelled by the argument's reading and compared literally, and the rest is the
  * pattern, rooted there as a .gitignore is rooted in its directory — a leading
  * slash on the tail so gitignore anchors it. The split is what keeps filesystem
  * bytes out of pattern syntax: what HOME or the working directory inserts is
@@ -121,7 +121,7 @@ static error_t compile_rule(const char *input, arena_t *arena, entry_t *out) {
         /* The head is a filesystem spelling and nothing else can reach here:
          * the gate above entered only for a body no label prefixes, and the guard
          * refused every first byte but '/', '~' and '.'. So it is read as the
-         * path it names, through the door that reads one and answers no key to
+         * path it names, by the argument's reading, which answers no key to
          * disagree with (infra/path.h path_input_filesystem_path). */
         const char *filesystem_path = NULL;
         error_t err = path_input_filesystem_path(head, arena, &filesystem_path);

@@ -479,8 +479,8 @@ metadata_items_t metadata_items_beneath(
  * refuses every other occupant. A stat of any other kind is a contract breach
  * and reads as one, not as a refusal with a remedy: no user input reaches here.
  *
- * Reader: a profile's draft, at the one door every capture of a file meets its
- * name through (core/profiles.c profile_capture_file).
+ * Reader: a profile's draft, where every capture of a file meets its name
+ * (core/profiles.c profile_capture_file).
  *
  * @param storage_path Path in profile (must not be NULL): the item's key, borrowed
  *                     by it

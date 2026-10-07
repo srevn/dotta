@@ -10,8 +10,8 @@
  * as written, newlines included. Every conversion is a datum: a string's or a
  * character's bytes as a terminal may show them (base/string.h str_display), a
  * number as printf writes it. A string handed to output any other way — a list's
- * title, tags and rows — is a datum whole. The one door for bytes as they are
- * is output_write: a payload the user asked to see verbatim.
+ * title, tags and rows — is a datum whole. Bytes as they are reach the stream
+ * through output_write alone: a payload the user asked to see verbatim.
  */
 
 #ifndef DOTTA_OUTPUT_H

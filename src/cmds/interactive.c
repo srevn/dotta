@@ -201,9 +201,9 @@ static error_t build_items(git_repository *repo, state_t *deploy_state, view_t *
  * The need is absorbed, not propagated: the editor is the way out of an enabled
  * set the next load cannot build. A sheet this build refuses on one enabled profile
  * kills status; here SPACE disables the profile and `w` saves, plan_check building
- * over the post-mutation set — the door tests/test-claims.sh pins for `profile
- * disable`, and a strict seed would close it. The row says what the seed could
- * not, and is not gated: we do not know, so we do not prompt. */
+ * over the post-mutation set — the recovery that tests/test-claims.sh pins for
+ * `profile disable`, which a strict seed would take away. The row says what the
+ * seed could not, and is not gated: we do not know, so we do not prompt. */
 static void read_targets(git_repository *repo, state_t *deploy_state, view_t *view) {
     for (size_t i = 0; i < view->item_count; i++) {
         item_t *it = &view->items[i];
@@ -340,12 +340,13 @@ static error_t plan_classify(state_t *deploy_state, view_t *view, plan_t *plan) 
             }
         }
 
-        /* Every text but the row's own spelling is read now, through the binders'
-         * one door (infra/path.h path_input_target), at the moment the target
-         * is written: a refusal is the door's or the rules' in their own words,
-         * and the item takes the spelling it read, the one the store keeps. The
-         * row's own spelling is the binding the store holds and is not read again,
-         * so a save that touches no target stands over a directory gone since. */
+        /* Every text but the row's own spelling goes through the binders' one
+         * reading now (infra/path.h path_input_target), at the moment the target
+         * is written: a refusal is the spelling's or the rules' in their own
+         * words, and the item takes the spelling it read, the one the store keeps.
+         * The row's own spelling is the binding the store holds and is not read
+         * again, so a save that touches no target stands over a directory gone
+         * since. */
         if (it->target != NULL &&
             (persisted_target == NULL || strcmp(it->target, persisted_target) != 0)) {
             const char *target = NULL;

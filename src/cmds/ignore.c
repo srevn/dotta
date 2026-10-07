@@ -562,7 +562,7 @@ static path_kind_t ignore_kind(
  * ignore --test foo.log` reads it against the working directory, as add's grammar
  * does — and path_input_resolve refuses one, its callers' first positional being
  * a profile. What the shape dispatches to *is* the resolver for a storage spelling,
- * which sheds the directory slash; the filesystem arm is the argument's door
+ * which sheds the directory slash; the filesystem arm is the argument's reading
  * alone, whose answer is what the view's rows are keyed by too (infra/mount.h).
  * Both are read before the view is built, so a refusal is a plain return.
  *
@@ -645,7 +645,7 @@ static error_t ignore_test(
         err = path_input_resolve(opts->test_path, ctx->arena, &arg);
         if (err) return err;
     } else {
-        /* The key as the argument's door spells it: absolute, folded, nothing
+        /* The key as the argument's reading spells it: absolute, folded, nothing
          * read through — the resolver's own filesystem arm, read here because
          * the resolver refuses the bare name this grammar reads (infra/path.h
          * path_input_filesystem_path). */
@@ -654,8 +654,8 @@ static error_t ignore_test(
         if (err) return err;
     }
 
-    /* What each key owes before there is an asker to ask — the door, and the
-     * two keys this command answers (infra/path.h). */
+    /* What each key owes before there is an asker to ask — the reading above,
+     * and the two keys this command answers (infra/path.h). */
     switch (arg.key) {
         case PATH_KEY_STORAGE:
             /* The name is the one the rules read, for every asker alike. */

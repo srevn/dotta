@@ -690,7 +690,7 @@ error_t fs_ensure_parent_dirs(const char *path);
  * only where nothing spelled it — a sudo that dropped $PWD, a cron, an env -i.
  *
  * Readers: fs_make_absolute, which joins a relative path onto it; and the
- * argument's door (infra/path.h path_input_filesystem_path), which spells it
+ * argument's reading (infra/path.h path_input_filesystem_path), which spells it
  * under HOME before it joins — the one reader that reads the kernel's spelling
  * back.
  *
@@ -734,8 +734,8 @@ const char *fs_temp_directory(void);
  * Readers: the store's directory, the one reading its two sources share so that
  * the two can be compared — the configured one, settled at load (utils/config.c),
  * and a create-style command's positional (utils/repo.c repo_create_target);
- * and the hooks' directory beside it. A CLI argument that names a key is the
- * argument's door's instead (infra/path.h), which spells the working directory
+ * and the hooks' directory beside it. A CLI argument that names a key goes to
+ * the argument's reading instead (infra/path.h), which spells the working directory
  * for a key before it joins and folds by the string alone.
  *
  * Examples:

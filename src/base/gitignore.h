@@ -140,8 +140,8 @@ gitignore_ruleset_t *gitignore_ruleset_create(
  * Parse `content` as a gitignore file and append the resulting rules, each tagged
  * with `origin`. Safe to call repeatedly to compose layers (e.g. baseline then
  * profile). A file, not a pattern: one string meant as one rule goes through
- * gitignore_ruleset_append_pattern, which refuses what this door would split on
- * a newline or skip as a comment.
+ * gitignore_ruleset_append_pattern, which refuses what this function would split
+ * on a newline or skip as a comment.
  *
  * Blank and comment lines are skipped. A UTF-8 byte-order mark at the head of
  * `content` is shed before the first line (gitignore_file_lines) — it is the
@@ -364,7 +364,8 @@ const gitignore_rule_t *gitignore_ruleset_rule(
  * home, a `~/` opening it past a `!`, with its anchored spelling and the escape
  * that names a directory called `~`. A refusal about what the pattern says quotes
  * it, bounded by that order to one line; one about its shape quotes nothing.
- * The caller names its door around the refusal and repeats none of it.
+ * The caller says where the pattern came from around the refusal, and repeats
+ * none of it.
  *
  * @param pattern One pattern (must not be NULL)
  * @return Error (ERR_VALIDATION), or NULL when the pattern is one rule
@@ -482,10 +483,11 @@ gitignore_origin_t gitignore_rule_origin(const gitignore_rule_t *rule);
  * was given.
  *
  * `line` is one line: a `\n` inside it is pattern content here, where the ruleset's
- * own door would have split on it. A caller holding a whole file splits first;
- * a caller holding one string it means as a single rule should put it through
- * `gitignore_validate_pattern` (or `gitignore_rule_parse`, which keeps the rule),
- * which refuses an embedded newline and a line that makes no rule, by name.
+ * reading of a file would have split on it. A caller holding a whole file splits
+ * first; a caller holding one string it means as a single rule should put it
+ * through `gitignore_validate_pattern` (or `gitignore_rule_parse`, which keeps
+ * the rule), which refuses an embedded newline and a line that makes no rule,
+ * by name.
  *
  * Allocates nothing, never fails. Safe on a NULL line (0).
  *

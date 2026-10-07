@@ -187,14 +187,14 @@ typedef struct {
  * inside and named for where it lands.
  *
  * Every prefix is folded before it is asked, because the target is folded — its
- * binder read it through its door (infra/path.h path_input_target), and a row
- * holds no other shape (core/state.c), so `bound` is folded too — and `/a/..`
- * is a spelling of nowhere. The boundary is not always found before the first
- * `..`, and does not need to be: `/a/../<target>/x` meets one first, and the
- * fold is per prefix, not per argument. The root the walk starts from is asked
- * like every other prefix, which is what makes a target at "/" a prefix of every
- * absolute argument; a `.` leaves the prefix as it was and a `..` returns it to
- * one the walk already stood on, so neither can be the first answer.
+ * binder spelled it by the target's reading (infra/path.h path_input_target),
+ * and a row holds no other shape (core/state.c), so `bound` is folded too — and
+ * `/a/..` is a spelling of nowhere. The boundary is not always found before the
+ * first `..`, and does not need to be: `/a/../<target>/x` meets one first, and
+ * the fold is per prefix, not per argument. The root the walk starts from is
+ * asked like every other prefix, which is what makes a target at "/" a prefix
+ * of every absolute argument; a `.` leaves the prefix as it was and a `..` returns
+ * it to one the walk already stood on, so neither can be the first answer.
  *
  * `input` is absolute: the caller's grammar decides who is asked at all, and a
  * bare relative path is the jail's without a question (add_spell). The scratch
@@ -305,10 +305,10 @@ static error_t add_spell(
     /* The grammar, by the argument's first byte: what the argument is spelled
      * from. Three spellings are the shell's own and are never re-rooted — a tilde
      * path, a path spelled from here, and an empty argument, which is no path
-     * in any grammar and which the argument's door is the one place to say so
-     * of: the join takes no empty name. A host-absolute path is the jail's unless
-     * a prefix of it is the target — something only an absolute spelling can
-     * be, since folding a bare relative path onto the root to ask would read
+     * in any grammar and which the argument's reading is the one place to say
+     * so of: the join takes no empty name. A host-absolute path is the jail's
+     * unless a prefix of it is the target — something only an absolute spelling
+     * can be, since folding a bare relative path onto the root to ask would read
      * `etc/foo` under `--target /etc` as the target itself — and a bare relative
      * path is the jail's outright. The join reads a host-absolute input's leading
      * '/' as its own separator, so `/etc/foo` and `etc/foo` both land at
@@ -407,7 +407,7 @@ static error_t add_verdict(
  * List `filesystem_path` under the name it was given: the item, its bucket, and
  * the listing's index
  *
- * The one door a walked path leaves the walk's scratch through: both strings
+ * A walked path leaves the walk's scratch here and nowhere else: both strings
  * are copied into the command arena, where the item lives, so the index's key
  * and the claim it lends are the item's own and outlive the entry that found
  * them (sys/filesystem.h fs_listing_t). The item is the arena's and stable, which
@@ -546,7 +546,8 @@ static error_t add_collect(
      * the whole of it, and the stream closed with it — one open at a time down
      * the recursion rather than one per frame. Each child's strings — its path
      * and its name — go at the next entry, the frames of its subtree with them;
-     * what outlives the entry is a listed path's, copied at its door (add_list). */
+     * what outlives the entry is a listed path's, copied where it is listed
+     * (add_list). */
     fs_listing_t listing;
     error_t err = fs_listing_init(&listing, scratch, directory);
     if (err) return err;
@@ -1500,9 +1501,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const char *bound = arena_strdup(ctx->arena, state_target(state, opts->profile));
 
     /* The target, when the run brought one: a filesystem-shaped argument —
-     * absolute, tilde, or relative to the working directory — read through the
-     * target's door (infra/path.h path_input_target): the absolute path the row
-     * stores, held to the target's rules. */
+     * absolute, tilde, or relative to the working directory — spelled by the
+     * target's reading (infra/path.h path_input_target): the absolute path the
+     * row stores, held to the target's rules. */
     if (opts->target) {
         err = path_input_target(opts->target, ctx->arena, &target);
         if (err) goto cleanup;

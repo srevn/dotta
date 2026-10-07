@@ -46,8 +46,8 @@ struct stage_admission {
  *
  * The stage owns everything it makes from its first allocation on, and the parent
  * from the call, so every failure frees through stage_free and nothing is handed
- * across this call half-built. The two openers are its doors: each resolves the
- * ref, refuses the state it did not expect, and seeds here.
+ * across this call half-built. Its readers are the two openers: each resolves
+ * the ref, refuses the state it did not expect, and seeds here.
  */
 static error_t stage_seed(
     git_repository *repo, const char *refname, git_commit *parent, stage_t **out
@@ -196,7 +196,7 @@ static error_t admit_tree_path(git_index *index, const char *path) {
  * Put an entry into `index`: the mode, the shape, the two collisions, then
  * libgit2's add
  *
- * The one door into an index here — the stage's, and an admission's — and its
+ * Every entry enters an index here — the stage's, and an admission's — and the
  * order is the header's first rule: git_index_add REPLACES on a file/directory
  * collision (index.c check_file_directory_collision with ok_to_replace), so an
  * entry added past a refusal would take another away. Both collisions are refused
@@ -354,8 +354,8 @@ error_t stage_put(
     if (err) return err;
 
     /* Then the blob, written once — the one hash of the bytes — and the entry
-     * pointed at it through the same door, which meets the answers it met. A
-     * write that fails leaves the entry at the null id (the header). */
+     * pointed at it through the same add (put_entry), which meets the answers
+     * it met. A write that fails leaves the entry at the null id (the header). */
     git_oid blob;
     int rc = git_blob_create_from_buffer(
         &blob, st->repo, size > 0 ? data : "", size

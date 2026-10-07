@@ -1539,8 +1539,8 @@ error_t profile_put_machinery(
     CHECK_NULL(draft);
     CHECK_NULL(name);
 
-    /* The door's contract, and no refusal of a user's: a name in the grammar is
-     * a claim's, which this door would put past the admission and the put rule,
+    /* The put's contract, and no refusal of a user's: a name in the grammar is
+     * a claim's, which this put would take past the admission and the put rule,
      * and the sheet's directory is the commit's own to write, at its save */
     CHECK_ARG(
         !label_prefixes(name),

@@ -224,7 +224,7 @@ label_t label_of(const char *storage_path);
  * there (core/ignore.c ignore_verdict_negation), and the frame a walk's refusal
  * offers to leave out (cmds/add.c add_refuse_unjudged). One reader counts rather
  * than matches: the climb, whose rungs are the separators in the tail
- * (core/metadata.c metadata_capture_ancestors).
+ * (core/profiles.c profile_stage_capture_ancestors).
  *
  * @param storage_path Storage path, under a label
  * @return Pointer past the label; "" for the word alone, and for a label spelled

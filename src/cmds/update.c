@@ -158,10 +158,11 @@ static error_t update_capture(
  * answers there). Deleted items are borrowed; the pruned and retired keys are
  * storage paths their writers copy out, resolved through the mount table by the
  * record loop — the same route remove's record loop takes. The derivation's two
- * outs are shaped by what a reader can do with them (metadata.h): an authored
- * claim has no consequence beyond the sheet, so `claimed` is the count the receipt
- * reads, while a dropped claim leaves the view by this commit and only its key
- * can settle the record it strands.
+ * outs are shaped by what a reader can do with them (core/profiles.h
+ * profile_stage_capture_ancestors): an authored claim has no consequence beyond
+ * the sheet, so `ancestors_captured` is the count the receipt reads, while a
+ * dropped claim leaves the view by this commit and only its key can settle the
+ * record it strands.
  *
  * Memory: every member is the command arena's, and nothing frees a commit.
  */
@@ -173,8 +174,8 @@ typedef struct {
     const workspace_item_t **deleted;  /* Items whose deletion the commit recorded */
     size_t deleted_count;
     string_array_t pruned;             /* Directory entries dropped as redundant (storage paths) */
-    size_t claimed;                    /* Ancestor claims the derivation authored or refreshed */
-    string_array_t retired;            /* Ancestor claims the derivation dropped (storage paths) */
+    size_t ancestors_captured;         /* Ancestor claims the derivation authored or refreshed */
+    string_array_t ancestors_retired;  /* Ancestor claims the derivation dropped (storage paths) */
 } update_commit_t;
 
 /**
@@ -433,8 +434,6 @@ static error_t update_profile(
     output_t *out = ctx->out;
 
     commit->profile = profile;
-    string_array_init(&commit->pruned, ctx->arena);
-    string_array_init(&commit->retired, ctx->arena);
 
     /* The capture and deletion lists can each hold every item; the walk fills
      * them with the ones that landed, a rows-only call's at none */
@@ -626,10 +625,11 @@ static error_t update_profile(
      * retires: a leaf beneath a squatted rung was refused at the filter (the
      * route's displaced arms), whichever profile's claim the squatter displaced,
      * so a chain that reaches here holds directories at every claimed rung. */
+    string_array_init(&commit->ancestors_retired, ctx->arena);
     for (size_t i = 0; i < commit->captured_count; i++) {
         profile_stage_capture_ancestors(
-            stage, ctx->run.mounts, commit->captured[i].storage_path, &commit->claimed,
-            &commit->retired
+            stage, ctx->run.mounts, commit->captured[i].storage_path,
+            &commit->ancestors_captured, &commit->ancestors_retired
         );
     }
 
@@ -641,21 +641,21 @@ static error_t update_profile(
      * climbs twice for free: the derivation counts only differences. */
     for (size_t i = 0; i < rows.count; i++) {
         profile_stage_capture_ancestors(
-            stage, ctx->run.mounts, rows.entries[i]->storage_path, &commit->claimed,
-            &commit->retired
+            stage, ctx->run.mounts, rows.entries[i]->storage_path,
+            &commit->ancestors_captured, &commit->ancestors_retired
         );
     }
 
-    if (commit->claimed > 0) {
+    if (commit->ancestors_captured > 0) {
         output_info(
             out, OUTPUT_VERBOSE, "  Captured %zu ancestor director%s",
-            commit->claimed, commit->claimed == 1 ? "y" : "ies"
+            commit->ancestors_captured, commit->ancestors_captured == 1 ? "y" : "ies"
         );
     }
-    if (commit->retired.count > 0) {
+    if (commit->ancestors_retired.count > 0) {
         output_info(
             out, OUTPUT_VERBOSE, "  Dropped %zu ancestor claim%s",
-            commit->retired.count, commit->retired.count == 1 ? "" : "s"
+            commit->ancestors_retired.count, commit->ancestors_retired.count == 1 ? "" : "s"
         );
     }
 
@@ -667,7 +667,7 @@ static error_t update_profile(
      * pruned-keys precedent, so a derivation that only refreshed names nothing
      * and the message's path list says so. */
     size_t named_count =
-        commit->captured_count + commit->deleted_count + commit->retired.count;
+        commit->captured_count + commit->deleted_count + commit->ancestors_retired.count;
     const char **storage_paths = arena_calloc(
         ctx->arena, named_count, sizeof(*storage_paths)
     );
@@ -679,8 +679,8 @@ static error_t update_profile(
     for (size_t i = 0; i < commit->deleted_count; i++) {
         storage_paths[named++] = commit->deleted[i]->storage_path;
     }
-    for (size_t i = 0; i < commit->retired.count; i++) {
-        storage_paths[named++] = commit->retired.entries[i];
+    for (size_t i = 0; i < commit->ancestors_retired.count; i++) {
+        storage_paths[named++] = commit->ancestors_retired.entries[i];
     }
 
     /* Build commit message context */
@@ -703,6 +703,7 @@ static error_t update_profile(
      * the commit's own answer, false for captures that put back what the profile
      * holds, which a hook rewriting a file between the decision and the capture
      * makes */
+    string_array_init(&commit->pruned, ctx->arena);
     error_t err = profile_stage_commit(
         stage, commit_message(ctx->arena, ctx->config, &msg_ctx), &commit->committed,
         &commit->pruned
@@ -850,7 +851,7 @@ static error_t update_write_record(
              * not ours to count. */
         }
 
-        const string_array_t *let_go[] = { &commit->pruned, &commit->retired };
+        const string_array_t *let_go[] = { &commit->pruned, &commit->ancestors_retired };
         for (size_t b = 0; b < sizeof(let_go) / sizeof(let_go[0]); b++) {
             for (size_t i = 0; i < let_go[b]->count; i++) {
                 const char *filesystem_path = mount_resolve(

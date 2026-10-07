@@ -50,6 +50,7 @@
 #include "infra/content.h"
 #include "infra/label.h"
 #include "infra/mount.h"
+#include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/stage.h"
 
@@ -1064,7 +1065,7 @@ error_t profile_stage_remove(
             if (!metadata_remove_item(stage->sheet, PATH_KIND_DIRECTORY, storage_path)) {
                 return error_create(
                     ERR_NOT_FOUND, "Profile '%s' claims no directory at '%s'",
-                    profile_name(stage->base), storage_path
+                    stage->base->name, storage_path
                 );
             }
 
@@ -1299,33 +1300,157 @@ error_t profile_stage_capture_directory(
     return NULL;
 }
 
+/**
+ * Author, refresh or retire the derived claim at one rung of a chain
+ *
+ * One component of a leaf's name, spelled by the climb, standing where its own
+ * name resolves under the table the leaf was named under — the profile the base's,
+ * whose bindings place a custom/ rung. The rule is the sheet's own, read one
+ * level up: an item exists iff it claims something, so a rung the disk answers
+ * "directory" for claims its attributes, a rung it answers anything else for
+ * retires the claim that said otherwise, and a rung it does not answer at all
+ * leaves the copy exactly as it found it.
+ *
+ * Derived throughout: this rule authors the way, never intent. And it cannot
+ * fail: every answer the disk gives is one of the three, and the one the capture
+ * refuses is the silence of the third.
+ *
+ * Reader: profile_stage_capture_ancestors, each rung of each leaf it climbs.
+ *
+ * @param stage The stage: the copy the rung's claim is read and written in, and
+ *              the arena the rung's place is spelled into
+ * @param mounts The table the rung's name resolves through
+ * @param rung The rung's name
+ * @param captured Incremented where the rung's claim moved
+ * @param retired Receives the name where the rung's claim goes
+ */
+static void profile_stage_capture_rung(
+    profile_stage_t *stage, const mount_table_t *mounts, const char *rung,
+    size_t *captured, string_array_t *retired
+) {
+    /* The directory claim at the rung, the one a derivation may touch, and only
+     * a derived one: a tracked claim is the walk's own word about a directory
+     * the profile tracks, and nothing derived refreshes or retires it. A FILE
+     * item at the rung's key is the other kind's, and no business of this rule:
+     * a blob at the rung would have left the leaf beneath it no room, so the
+     * item is residue no blob backs, carried as every write carries it, and the
+     * rung is claimed beside it — the way's mode is the claim another machine
+     * creates the rung by. The prune is no authority over it either: it takes
+     * derivations, and this item is not one. */
+    const metadata_item_t *held = metadata_find_item(stage->sheet, PATH_KIND_DIRECTORY, rung);
+    if (held && held->tracked) return;
+
+    /* Where the rung stands is where its own name resolves. The climb carries
+     * one string, not a pair that must agree: a resolve is a root's spelling
+     * and a tail, and truncating the leaf's path would land the same bytes — at
+     * the cost of a second string the caller must have got right, which is what
+     * the cross-check this shape deleted used to assert. One producer places a
+     * name (infra/mount.h mount_resolve); the cost is one table scan per rung
+     * per leaf, bounded by the profile count. */
+    const char *filesystem_path = mount_resolve(stage->arena, mounts, stage->base->name, rung);
+
+    /* A rung this machine cannot place — an unbound custom/ name — has no answer
+     * to give, the same silence as a rung nothing stands at. */
+    if (!filesystem_path) return;
+
+    struct stat st;
+    fs_occupant_t occupant = fs_lstat_occupant(filesystem_path, &st);
+
+    /* Nothing there, or nothing this host could see: the rung has no answer,
+     * and no answer is not an answer of "no". A chain the world moved under between
+     * the leaf's capture and this climb keeps the claims it already had. */
+    if (occupant == FS_OCCUPANT_NONE || occupant == FS_OCCUPANT_UNKNOWN) {
+        return;
+    }
+
+    /* Something stands here that is not a directory, so the profile passes through
+     * no directory at this rung and a claim that says it does has just been
+     * contradicted by the disk. The case that matters is a symlink the user put
+     * there after the first capture: writing through it is what they asked for,
+     * and dropping the claim is what lets dotta — the row leaves the view with
+     * the claim, and the caller retires the record that named the path (the two
+     * halves core/workspace reads to call a directory displaced). A symlink that
+     * was there at capture time never authored a claim to drop; this is the same
+     * consent, one command later. */
+    if (occupant != FS_OCCUPANT_DIRECTORY) {
+        if (metadata_remove_item(stage->sheet, PATH_KIND_DIRECTORY, rung)) {
+            string_array_push(retired, rung);
+        }
+        return;
+    }
+
+    /* A directory stands, the look's own kind, so the capture's one refusal is
+     * a name this host cannot spell (core/metadata.h metadata_capture_directory)
+     * — the same silence as a path it cannot see: a directory capture that fails
+     * loses a claim and nothing else, so the rung keeps what it had and dotta
+     * creates it as it would have before. Its error is dropped — one per such
+     * rung, per leaf climbed through it. */
+    metadata_item_t *item = NULL;
+    error_t err = metadata_capture_directory(rung, &st, false, &item);
+    if (err) return;
+
+    /* A re-derivation that found nothing new authors nothing: the standing claim
+     * keeps its place, so nothing is counted and the commit's gate never fires
+     * on a chain that has not moved. Ownership is both names or neither
+     * (core/metadata.c metadata_capture_ownership), so an absent one compares
+     * as the value it is. */
+    if (held && held->mode == item->mode &&
+        str_equal(held->owner, item->owner) &&
+        str_equal(held->group, item->group)) {
+        metadata_item_free(item);
+        return;
+    }
+
+    metadata_add_item(stage->sheet, &item);
+
+    (*captured)++;
+}
+
 void profile_stage_capture_ancestors(
     profile_stage_t *stage, const mount_table_t *mounts, const char *storage_path,
     size_t *captured, string_array_t *retired
 ) {
     CHECK_NULL(stage);
+    CHECK_NULL(mounts);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(captured);
+    CHECK_NULL(retired);
 
-    /* The climb over the copy, its rungs spelled into the stage's arena and freed
-     * with the stage; the profile is the base's, whose bindings place a custom/
-     * rung */
-    metadata_capture_ancestors(
-        stage->sheet, mounts, profile_name(stage->base), storage_path, stage->arena,
-        captured, retired
-    );
+    /* One rung per separator in the label's tail. The word is excluded by where
+     * the scan starts and the leaf by where it ends — arithmetic, not a special
+     * case — so a path directly beneath a root climbs nowhere. */
+    const char *first = strchr(label_tail(storage_path), '/');
+    if (!first) return;
+
+    /* Every rung is a prefix of the leaf's own name, so one copy spells them
+     * all: each separator truncates it in place and is restored before the next
+     * one extends past it. The scan reads the caller's string, which is never
+     * written, so the cut is an offset into it. The copy is the stage's arena's,
+     * as each rung's place is; what keeps a rung — the copy's item, the retired
+     * array — copies it. */
+    char *rung = arena_strdup(stage->arena, storage_path);
+
+    for (const char *sep = first; sep; sep = strchr(sep + 1, '/')) {
+        size_t cut = (size_t) (sep - storage_path);
+
+        rung[cut] = '\0';
+        profile_stage_capture_rung(stage, mounts, rung, captured, retired);
+        rung[cut] = '/';
+    }
 }
 
 /**
  * The way a restored file stood on at the commit it came from
  *
  * Each rung of `storage_path` — a separator of its label's tail, the word and
- * the leaf excluded, as the climb names them (core/metadata.h
- * metadata_capture_ancestors) — paired from the leaf with a rung of
- * `from_storage_path`: both names place one path, so their tails end alike, and
- * the pairing ends where either runs out. Each rung is decided alone, since the
- * base may hold a rung by a sheet claim with nothing above it. A rung the base
- * holds anything at is the base's word on that directory, kept as it stands; at
- * one it holds nothing at, `from`'s directory claim at the pair is written,
- * derived. No disk read: the commit is the source.
+ * the leaf excluded, as the climb names them (profile_stage_capture_ancestors)
+ * — paired from the leaf with a rung of `from_storage_path`: both names place
+ * one path, so their tails end alike, and the pairing ends where either runs
+ * out. Each rung is decided alone, since the base may hold a rung by a sheet
+ * claim with nothing above it. A rung the base holds anything at is the base's
+ * word on that directory, kept as it stands; at one it holds nothing at, `from`'s
+ * directory claim at the pair is written, derived. No disk read: the commit is
+ * the source.
  *
  * Asked after the put, of the base, which the restore edited at the leaf alone:
  * the put admitted, no blob stands at or above any rung, so every claim at a
@@ -1554,8 +1679,9 @@ static error_t profile_stage_prune_ancestors(profile_stage_t *stage, string_arra
          * does. A tracked claim is the walk's own word that the profile tracks
          * the directory — it stands with nothing beneath it and at any attributes,
          * and it leaves the sheet where a verb takes it, never by inference
-         * (core/metadata.h). The field core/metadata.c metadata_capture_rung
-         * reads to leave a standing claim alone, asked here for the same reason. */
+         * (core/metadata.h). The field the climb's rung reads to leave a standing
+         * claim alone (profile_stage_capture_rung), asked here for the same
+         * reason. */
         if (dir->tracked) {
             d++;
             continue;

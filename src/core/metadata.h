@@ -143,7 +143,6 @@
 #include <sys/stat.h>
 #include <types.h>
 
-#include "infra/mount.h"
 #include "sys/stage.h"
 
 #define METADATA_VERSION 6
@@ -531,16 +530,16 @@ error_t metadata_capture_file(
  * Ownership capture (user/group): the file capture's rule, above. An owner or a
  * group this host has no name for is ERR_NOT_FOUND — the lookup's absence or
  * its failure alike, the claim unmakeable either way — and a derivation reads
- * it (core/metadata.c metadata_capture_rung): its rung keeps the claim it had,
- * as it does for a path it could not look at. That is the one refusal.
+ * it (core/profiles.c profile_stage_capture_rung): its rung keeps the claim it
+ * had, as it does for a path it could not look at. That is the one refusal.
  *
  * `st` is a directory's, and nothing else — the kind is the caller's to have
  * established, and every caller holds its look to one first: a profile's next
  * commit's directory capture, whose writers each lstat and hold to S_ISDIR —
  * add's directory loop and update's (cmds/add.c cmd_add, cmds/update.c
  * update_profile) — and the climb's rung, a look that found a directory
- * (core/metadata.c metadata_capture_rung). A stat of any other kind is a contract
- * breach and reads as one, not as a refusal with a remedy.
+ * (core/profiles.c profile_stage_capture_rung). A stat of any other kind is a
+ * contract breach and reads as one, not as a refusal with a remedy.
  *
  * @param storage_path Storage path in profile (must not be NULL, e.g.,
  *                     "home/.config/nvim")
@@ -554,78 +553,6 @@ error_t metadata_capture_directory(
     const struct stat *st,
     bool tracked,
     metadata_item_t **out
-);
-
-/**
- * Author the claims for every directory on the way to a path
- *
- * The sheet's completeness rule for the chain. Every component between the mount
- * root and `storage_path` that is a real directory right now claims the attributes
- * it has, as an ancestor claim: the profile does not track the directory, it
- * passes through it, so `tracked` is absent and the claim binds only dotta's
- * own creation of that path (core/deploy's ancestors pass). The mount root itself
- * is never a rung — the climb's rungs are the separators in the tail, and a word
- * has none — and neither is the leaf, which is its own capture's business.
- *
- * The name is the whole input, and every rung stands where its own name resolves
- * (mount_resolve, under `profile`'s bindings): the chain's own separators spell
- * every ancestor, and the table says where each one of them is and nothing else
- * about it. A name is portable and a binding is not, so a rung this machine mounts
- * a root at is claimed like every other — a chain answered the other way leaves
- * a hole no other machine can fill, and the create there falls back to the default
- * mode (core/deploy's ancestors pass). The climb carries one string, not a pair
- * that must agree — a resolve is a root's spelling and a tail, so the leaf's
- * path cut short would land the same bytes, at the cost of a second string the
- * caller must have got right; one producer places a name.
- *
- * Per rung, root-first:
- *   - a tracked claim standing at the key is the walk's own word and is left
- *     exactly as it is; the climb continues past it, since a tracked claim says
- *     nothing about the rungs above it
- *   - a FILE item at the key is the other kind's: residue no blob backs, since
- *     a blob at a rung would have left the leaf no room, carried as every write
- *     carries it, and the rung is claimed beside it
- *   - a directory on disk  -> captured and upserted; counted only when the claim
- *     it makes differs from the one standing, so a re-derivation that found nothing
- *     new rewrites nothing and drives no commit
- *   - anything else on disk -> the derivation claims no directory here, so a
- *     standing ancestor claim is retired (the sheet's own producer rule) and
- *     its key appended to `retired`
- *   - no path here (an unbound custom/ name), nothing there, or nothing this
- *     host could see or name -> the rung has no answer, and no answer is not an
- *     answer of "no": nothing authored, nothing retired
- *
- * The two outs are shaped by what a caller can do with them, not by symmetry: a
- * claim authored has no consequence beyond the sheet, so its count is the whole
- * report, while a claim retired leaves the view by the caller's commit and its
- * record behind — and only the key names that.
- *
- * Idempotent, and total over the chain: no rung stops the climb, and nothing
- * fails it — a rung the disk does not answer, and one whose owner this host cannot
- * name, are the same silence. O(depth) resolves and lstats per call; the callers
- * pay it once per captured leaf.
- *
- * @param metadata The sheet to author into (must not be NULL; mutated)
- * @param mounts The table these names were made under, so that a rung resolves
- *               back to where the leaf was read (must not be NULL)
- * @param profile Profile whose chain this is, for a custom/ rung (must not be NULL)
- * @param storage_path Leaf's storage path, under a label — the vocabulary's
- *                     precondition (infra/label.h label_tail), which every caller
- *                     meets with a name it composed or validated (must not be NULL)
- * @param arena Arena the rungs' paths are spelled into (must not be NULL)
- * @param captured Count of rungs whose claim this call authored or changed, added
- *                 to (must not be NULL)
- * @param retired Keys this call retired, appended as copies in the array's arena
- *                (must not be NULL; given its arena by string_array_init)
- */
-void metadata_capture_ancestors(
-    metadata_t *metadata,
-    const mount_table_t *mounts,
-    const char *profile,
-    const char *storage_path,
-    arena_t *arena,
-    size_t *captured,
-    string_array_t *retired
 );
 
 /**

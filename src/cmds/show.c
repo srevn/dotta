@@ -131,9 +131,8 @@ static error_t show_print_blob(
         output_print(
             out, OUTPUT_NORMAL, "{dim}# Type:{reset}    %s",
             is_binary
-              ? "binary file"
-              : claim->type == PATH_TYPE_EXECUTABLE ? "executable"
-              : "regular file"
+              ? "binary file" : claim->type == PATH_TYPE_EXECUTABLE
+              ? "executable" : "regular file"
         );
         if (claim->encrypted) {
             output_print(out, OUTPUT_NORMAL, " (encrypted)");

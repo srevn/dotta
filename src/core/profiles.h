@@ -1027,17 +1027,41 @@ error_t profile_stage_capture_directory(
 /**
  * The way to a leaf, claimed from the disk
  *
- * Each rung of `storage_path` — a separator of its label's tail, the word and
- * the leaf excluded — stands where its own name resolves under `mounts`, the
- * table the leaf was named under, and is decided by what stands there now
- * (core/metadata.h metadata_capture_ancestors): a directory claims its attributes,
- * derived, counted in `captured` where the claim moved; anything else retires a
- * standing derived claim there, its key appended to `retired`; no answer, and
- * an owner this host cannot name, leave the rung as it is; a tracked claim at a
- * rung is the walk's own word, left alone. Nothing refuses it. The one place
- * the stage looks at the disk: the handle reads Git's alone, and the stage, which
- * writes, reads the way off the machine the leaf was captured on. The rungs'
- * spellings are the stage's arena's.
+ * The sheet's completeness rule for the chain: every rung between the label's
+ * word and the leaf that is a real directory right now claims the attributes it
+ * has, derived — the profile passes through it and does not track it, so the
+ * claim binds only dotta's own creation of that path (core/deploy.c, the ancestors'
+ * pass). The rungs are the separators of the label's tail, so the word is never
+ * one, nor the leaf, which is its own capture's business. Each stands where its
+ * own name resolves under `mounts`, the table the leaf was named under: a name
+ * is portable and a binding is not, so a rung this machine mounts a root at is
+ * claimed like every other — a chain answered the other way leaves a hole no
+ * other machine can fill. Per rung, root-first, by what stands there now:
+ *   - a tracked claim standing at it is the walk's own word, left exactly as it
+ *     is, and the climb goes on past it, a tracked claim saying nothing of the
+ *     rungs above it;
+ *   - a FILE item at it is the other kind's, residue no blob backs, carried as
+ *     every write carries it, and the rung is claimed beside it;
+ *   - a directory claims its attributes, counted in `captured` only where the
+ *     claim moved, so a re-derivation that found nothing new rewrites nothing
+ *     and drives no commit;
+ *   - anything else retires a standing derived claim there, its key appended to
+ *     `retired`;
+ *   - no answer — an unbound custom/ name, nothing there, nothing this host could
+ *     see, an owner it cannot name — leaves the rung as it is: no answer is not
+ *     an answer of "no".
+ * The two outs are shaped by what a writer can do with them: a claim authored
+ * has no consequence beyond the sheet, so its count is the whole report, while
+ * a claim retired leaves the view by the commit and its record behind, and only
+ * the key names that.
+ *
+ * Total and idempotent: nothing refuses the climb and no rung stops it, and each
+ * climb decides every rung it passes, so a rung two leaves share is decided at
+ * each climb through it — again to the same answer where nothing moved between,
+ * counting and retiring nothing. A resolve and a look a rung, every climb; the
+ * rungs' spellings are the stage's arena's. The one place the stage looks at
+ * the disk: the handle reads Git's alone, and the stage, which writes, reads
+ * the way off the machine the leaf was captured on.
  *
  * Readers: cmds/add.c cmd_add, each path it captured, under the table it named
  * them under; and cmds/update.c update_profile — each leaf it captured, and each
@@ -1046,7 +1070,9 @@ error_t profile_stage_capture_directory(
  * @param stage The stage (must not be NULL)
  * @param mounts The table the leaf's name was made under, so a rung resolves
  *               back to where the leaf was read (must not be NULL)
- * @param storage_path The leaf's name, under a label (must not be NULL)
+ * @param storage_path The leaf's name, under a label — the vocabulary's
+ *                     precondition (infra/label.h label_tail), which every writer
+ *                     meets with a name it composed or validated (must not be NULL)
  * @param captured Count of rungs whose claim the climb authored or changed, added
  *                 to (must not be NULL)
  * @param retired Keys the climb retired, appended as copies in the array's arena

@@ -1267,46 +1267,33 @@ static error_t add_commit(
  * Performance: one view build and one read of the record, then each captured
  * path looked up in both — O(N log A), N = paths captured, A = records
  *
- * @param ctx Dispatch context (must not be NULL; reads the repository, the state
- *            and the command arena)
- * @param mounts The command's table, read here by the settle alone: `retired`
- *               holds names the ancestry pass dropped, and a name stands nowhere
- *               until the table gives it one (must not be NULL). The anchor pass
- *               needs no table — a listing carries the path its own claim resolves
- *               to under this very table (the key invariant, cmds/add.h)
- * @param profile The profile added to (must not be NULL)
+ * @param walk The selection (must not be NULL): the context — the repository,
+ *             the state and the command arena — the profile added to, the files
+ *             and the directories the walk listed, each with the record its capture
+ *             made, and the view they were named under, whose table places what
+ *             the settle retires
  * @param target The binding the run brought, absolute, or NULL: written for a
  *               new profile and an enabled one (the UPSERT keeps a row's own
  *               for a NULL)
  * @param profile_created This add created the profile's branch: enable it here
- * @param added_files The files the walk listed, each with the record its capture
- *                    made (must not be NULL)
- * @param added_dirs The directories the walk passed through, each with the record
- *                   its capture made (must not be NULL)
  * @param retired The ancestor claims the ancestry pass dropped, by key (must
  *                not be NULL)
  * @param receipt What the phase did, zeroed first (must not be NULL)
  * @return Error or NULL on success (non-fatal - caller treats as warning)
  */
 static error_t add_write_record(
-    const dotta_ctx_t *ctx,
-    const mount_table_t *mounts,
-    const char *profile,
+    const add_walk_t *walk,
     const char *target,
     bool profile_created,
-    const ptr_array_t *added_files,
-    const ptr_array_t *added_dirs,
     const string_array_t *retired,
     add_receipt_t *receipt
 ) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(mounts);
-    CHECK_NULL(profile);
-    CHECK_NULL(added_files);
-    CHECK_NULL(added_dirs);
+    CHECK_NULL(walk);
     CHECK_NULL(retired);
     CHECK_NULL(receipt);
 
+    const dotta_ctx_t *ctx = walk->ctx;
+    const char *profile = walk->profile;
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE) */
 
@@ -1422,7 +1409,7 @@ static error_t add_write_record(
          * the receipt's recovery line true of every prior state: nothing this
          * phase wrote stands. Non-fatal is still the contract one level up —
          * Git's commit stands and the receipt names the retry. */
-        const ptr_array_t *captured[] = { added_files, added_dirs };
+        const ptr_array_t *captured[] = { &walk->files, &walk->directories };
         for (size_t b = 0; b < sizeof(captured) / sizeof(captured[0]); b++) {
             for (size_t i = 0; i < captured[b]->count; i++) {
                 const add_path_t *path = captured[b]->entries[i];
@@ -1477,8 +1464,10 @@ static error_t add_write_record(
      * is this profile's word about its own claim, never about the path — and an
      * unbound claim names nothing on this machine to retire. */
     for (size_t i = 0; i < retired->count; i++) {
+        /* Placed by the table the walk named through, which the view lends back
+         * (manifest_mounts): a retired name stands nowhere until it gives one */
         const char *filesystem_path = mount_resolve(
-            ctx->arena, mounts, profile, retired->entries[i]
+            ctx->arena, manifest_mounts(walk->view), profile, retired->entries[i]
         );
         if (!filesystem_path || manifest_lookup(manifest, filesystem_path)) continue;
 
@@ -2471,8 +2460,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     add_receipt_t receipt = { 0 };
 
     error_t record_err = add_write_record(
-        ctx, mounts, opts->profile, target, profile_created,
-        &walk.files, &walk.directories, &ancestry_retired, &receipt
+        &walk, target, profile_created, &ancestry_retired, &receipt
     );
 
     /* Execute post-add hook. The record phase settled its own transaction before

@@ -322,7 +322,7 @@ static error_t remove_paths_candidates(
     const char *profile,
     const remove_claim_t *claims,
     size_t claim_count,
-    const string_array_t *pruned_dirs,
+    const string_array_t *pruned,
     remove_candidate_t **out,
     size_t *out_count
 ) {
@@ -339,9 +339,9 @@ static error_t remove_paths_candidates(
     /* Room for every path, and the paths already joined, by a seen-set's one
      * probe over the candidates' own strings (base/hashmap.h hashmap_add) */
     remove_candidate_t *candidates = arena_calloc(
-        ctx->arena, claim_count + pruned_dirs->count, sizeof(*candidates)
+        ctx->arena, claim_count + pruned->count, sizeof(*candidates)
     );
-    hashmap_t *joined = hashmap_borrow(ctx->arena, claim_count + pruned_dirs->count);
+    hashmap_t *joined = hashmap_borrow(ctx->arena, claim_count + pruned->count);
     size_t count = 0;
 
     /* The claims the arguments took: the user's word reaches all of them
@@ -362,9 +362,9 @@ static error_t remove_paths_candidates(
      * does not speak to them — but where a claim the arguments took stands at
      * one, it was joined above, named. One this machine cannot place stands
      * nowhere, and no record of this run's can be there. */
-    for (size_t i = 0; i < pruned_dirs->count; i++) {
+    for (size_t i = 0; i < pruned->count; i++) {
         const char *filesystem_path = mount_resolve(
-            ctx->arena, ctx->run.mounts, profile, pruned_dirs->entries[i]
+            ctx->arena, ctx->run.mounts, profile, pruned->entries[i]
         );
         if (!filesystem_path) continue;
         const state_record_t *record = state_find_record(records, record_count, filesystem_path);
@@ -1232,8 +1232,8 @@ static error_t remove_paths(
     /* One atomic commit: the file claims leave the tree, and the sheet follows
      * in the same tree write where its claims moved — pruned first of the derived
      * directory entries the removals left nothing tracked beneath, whose keys
-     * come back in pruned_dirs (core/profiles.h profile_stage_commit).
-     * All-or-nothing: any failure up to here leaves every ref where it was. */
+     * come back in `pruned` (core/profiles.h profile_stage_commit). All-or-nothing:
+     * any failure up to here leaves every ref where it was. */
     commit_message_context_t msg_ctx = {
         .action        = COMMIT_ACTION_REMOVE,
         .profile       = opts->profile,
@@ -1242,16 +1242,16 @@ static error_t remove_paths(
         .custom_msg    = opts->message,
         .target_commit = NULL
     };
-    string_array_t pruned_dirs;   /* Directory entries the commit's prune took (storage paths) */
-    string_array_init(&pruned_dirs, ctx->arena);
+    string_array_t pruned;   /* Directory entries the commit's prune took (storage paths) */
+    string_array_init(&pruned, ctx->arena);
     err = profile_stage_commit(
-        stage, commit_message(ctx->arena, config, &msg_ctx), NULL, &pruned_dirs
+        stage, commit_message(ctx->arena, config, &msg_ctx), NULL, &pruned
     );
     if (err) goto cleanup;
-    if (pruned_dirs.count > 0) {
+    if (pruned.count > 0) {
         output_info(
             out, OUTPUT_VERBOSE, "Pruned %zu redundant directory entr%s",
-            pruned_dirs.count, pruned_dirs.count == 1 ? "y" : "ies"
+            pruned.count, pruned.count == 1 ? "y" : "ies"
         );
     }
 
@@ -1293,7 +1293,7 @@ static error_t remove_paths(
     remove_candidate_t *candidates = NULL;
     size_t candidate_count = 0;
     err = remove_paths_candidates(
-        ctx, opts->profile, claims, claim_count, &pruned_dirs, &candidates, &candidate_count
+        ctx, opts->profile, claims, claim_count, &pruned, &candidates, &candidate_count
     );
 
     if (!err && (candidate_count > 0 || state_enabled(state, opts->profile))) {
@@ -1304,7 +1304,7 @@ static error_t remove_paths(
          * record between the two — or while this one waits for it. */
         if (!err) {
             err = remove_paths_candidates(
-                ctx, opts->profile, claims, claim_count, &pruned_dirs,
+                ctx, opts->profile, claims, claim_count, &pruned,
                 &candidates, &candidate_count
             );
         }

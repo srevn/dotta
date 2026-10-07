@@ -434,11 +434,11 @@ typedef struct dotta_run {
  *
  *   - An arena, for what lives until a scope ends. Nothing in one is freed alone,
  *     and a container lives in the arena it was made in (base/array.h,
- *     base/hashmap.h). A function whose answer is memory takes the arena its
- *     answer lives in — first, or just before the out parameter it answers through
- *     (core/manifest.h manifest_build) — unless a handle it reads lends the answer
- *     from its own (core/profiles.h profile_find); a callee that fills a caller's
- *     container takes none.
+ *     base/hashmap.h, core/metadata.h). A function whose answer is memory takes
+ *     the arena its answer lives in — first, or just before the out parameter
+ *     it answers through (core/manifest.h manifest_build) — unless a handle it
+ *     reads lends the answer from its own (core/profiles.h profile_find); a callee
+ *     that fills a caller's container takes none.
  *
  *       - The process's. `main`'s, made before the command's line is parsed and
  *         freed after everything, on every exit: the line as parsed — the options
@@ -497,12 +497,12 @@ typedef struct dotta_run {
  *         status_print_workspace), and a walk whose answer is an error
  *         (`sys/filesystem.c` fs_remove_dir).
  *
- *       - A handle's own. Made by its opener and freed by its closer: the sheet
- *         (core/metadata.h), a printer's list (base/output.h output_list_t), a
- *         profile at a tree (core/profiles.h profile_open): itself, its name
- *         and the claims it lends; a profile's next commit (core/profiles.h
- *         profile_stage_open, profile_stage_orphan): itself, and the names its
- *         climb and its prune spell.
+ *       - A handle's own. Made by its opener and freed by its closer: a printer's
+ *         list (base/output.h output_list_t), a profile at a tree (core/profiles.h
+ *         profile_open): itself, its name, its sheet and the claims it lends; a
+ *         profile's next commit (core/profiles.h profile_stage_open,
+ *         profile_stage_orphan): itself, the copy of the sheet it edits, and
+ *         the names its climb and its prune spell.
  *
  *   - The heap, for what dies before any scope does: a payload sized by its data
  *     (base/buffer.h — a file's bytes, a blob's, a diff's text), freed with the

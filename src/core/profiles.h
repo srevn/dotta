@@ -66,10 +66,10 @@
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name,
- * every claim profile_find answers and the name of each blob profile_contradicted
- * names over a claim; the sheet it read; and a head profile_load read. Any other
- * tree it is opened at is the caller's, and outlives it. A claim a visitor is
- * shown is lent for its visit; one profile_find answers, for the handle's life.
+ * the sheet it read, every claim profile_find answers and the name of each blob
+ * profile_contradicted names over a claim; and a head profile_load read. Any
+ * other tree it is opened at is the caller's, and outlives it. A claim a visitor
+ * is shown is lent for its visit; one profile_find answers, for the handle's life.
  *
  * The layering convention, least specific first:
  * 1. global
@@ -288,8 +288,8 @@ profile_t *profile_open(const char *name, const git_tree *tree);
 error_t profile_load(git_repository *repo, const char *name, profile_t **out);
 
 /**
- * Release a handle: its arena — the handle, its name and the claims it lent —
- * its sheet, and a head it loaded
+ * Release a handle: its arena — the handle, its name, its sheet and the claims
+ * it lent — and a head it loaded
  *
  * @param profile Handle (NULL is a no-op)
  */
@@ -793,11 +793,12 @@ error_t profile_find(
  *     (core/metadata.h metadata_same), a hand's spelling kept otherwise; and a
  *     tree equal to the one opened is no commit (sys/stage.h stage_commit).
  *
- * Memory: a handle's own — an arena made at the open, holding the struct and
- * the names the climb and the prune spell — released by profile_stage_free with
- * the admission, the copy, the base and the stage; the base borrows the stage's
- * tree, and goes before it. What a capture answers is the caller's
- * (profile_claim_t), so the claim outlives the stage that wrote it.
+ * Memory: a handle's own — an arena made at the open, holding the struct, the
+ * copy of the base's sheet with every claim an edit writes into it, and the names
+ * the climb and the prune spell — released by profile_stage_free with the
+ * admission, the base and the stage; the base borrows the stage's tree, and goes
+ * before it. What a capture answers is the caller's (profile_claim_t), so the
+ * claim outlives the stage that wrote it.
  */
 typedef struct profile_stage profile_stage_t;
 
@@ -950,9 +951,9 @@ error_t profile_stage_remove(
  *     once it is admitted;
  *   - the put rule at the name: a directory claim standing there gives way, one
  *     the base's blob contradicts rides the write;
- *   - the claim at its own kind: the FILE item the look authors, or the retire
- *     of the one standing where it authors none — a link the invoker owns, which
- *     absence already says.
+ *   - the claim at its own kind, written (core/metadata.h metadata_write_item):
+ *     the look's, or — where it claims nothing, a link the invoker owns, which
+ *     absence already says — the retire of the FILE item standing there.
  * An entry at the name that makes no claim, a gitlink a hand left, is replaced,
  * as Git's own add replaces one (lib/git/read-cache.c add_to_index,
  * ADD_CACHE_OK_TO_REPLACE). A failure past the put leaves a stage its writer
@@ -968,8 +969,8 @@ error_t profile_stage_remove(
  *                     NULL)
  * @param capture The capture (must not be NULL; borrowed for the call, its bytes
  *                the caller's to free)
- * @param arena The arena the answer's owner and group are copied into (must not
- *              be NULL)
+ * @param arena The arena the answer's owner and group are named in (must not be
+ *              NULL)
  * @param out The claim the commit now carries at the name, as the walk decodes
  *            it — the blob the put wrote, its type, the claim off the look over
  *            it, its name `storage_path` (must not be NULL; written on success
@@ -1009,8 +1010,8 @@ error_t profile_stage_capture_file(
  * @param storage_path A validated storage path (must not be NULL)
  * @param st The writer's lstat of the path, a directory's (must not be NULL):
  *           one taken through a link would capture the target's attributes
- * @param arena The arena the answer's owner and group are copied into (must not
- *              be NULL)
+ * @param arena The arena the answer's owner and group are named in (must not be
+ *              NULL)
  * @param out The claim, as the walk decodes a directory claim — tracked, the look's
  *            mode and ownership, its name `storage_path` (must not be NULL;
  *            written on success alone)
@@ -1105,9 +1106,9 @@ void profile_stage_capture_ancestors(
  *     `from_storage_path` — both names place one path, so their tails end alike
  *     — takes `from`'s directory claim at its pair, derived, wherever the base
  *     holds nothing at the rung (profile_holds);
- *   - the claim at its own kind: the FILE item it makes, or the retire of the
- *     one standing where it claims nothing — a link the commit records no ownership
- *     for.
+ *   - the claim at its own kind, written (core/metadata.h metadata_write_item):
+ *     the claim's, or — where it claims nothing, a link the commit records no
+ *     ownership for — the retire of the FILE item standing there.
  * A failure past the put leaves a stage its writer abandons (sys/stage.h).
  *
  * Reader: cmds/revert.c cmd_revert.

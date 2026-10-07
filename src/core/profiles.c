@@ -6,14 +6,14 @@
  * order (the names' alone), and whether a profile's branch stands (Git's). The
  * handle is a tree and the sheet read from it once, at the first question, its
  * failure kept beside it; the handle itself stands in an arena of its own, with
- * its name and every claim it lends. The walk is the decode core/profiles.h states,
- * in two halves: one walk of the tree for the blobs (profile_step), then the
- * sheet's directory items, each asked the one question that classifies it, whether
- * a blob stands at its name or at a rung above it (profile_blob_above) — the
- * items a blob stands over are profile_contradicted's. The point questions ask
- * the decode of one name: what the tree holds there, Git's one-entry rule
- * (profile_entry); a blob's claim through the walk's own decode
- * (profile_decode_blob), over the entry that rule answers; and the directory
+ * its name, its sheet and every claim it lends. The walk is the decode
+ * core/profiles.h states, in two halves: one walk of the tree for the blobs
+ * (profile_step), then the sheet's directory items, each asked the one question
+ * that classifies it, whether a blob stands at its name or at a rung above it
+ * (profile_blob_above) — the items a blob stands over are profile_contradicted's.
+ * The point questions ask the decode of one name: what the tree holds there,
+ * Git's one-entry rule (profile_entry); a blob's claim through the walk's own
+ * decode (profile_decode_blob), over the entry that rule answers; and the directory
  * claim standing at a name through the question the walk asks of each item
  * (profile_directory_item), decoded as the walk decodes it
  * (profile_decode_directory). The counts and the need of a target are the walk,
@@ -225,7 +225,7 @@ struct profile {
     const char *name;       /* Whose claims these are, named over every failure */
     const git_tree *tree;   /* The caller's, or `own` */
     git_tree *own;          /* The head profile_load read; NULL at a caller's tree */
-    metadata_t *sheet;      /* NULL until a question loads it, and beside a failure */
+    metadata_t *sheet;      /* In the arena; NULL until a question loads it, and beside a failure */
     error_t sheet_failure;  /* Why it would not load; NULL where it did or is not asked yet */
 };
 
@@ -271,8 +271,8 @@ void profile_free(profile_t *profile) {
     if (!profile) return;
 
     /* What the arena does not hold first, read off the handle while it stands;
-     * then the arena, and the handle with it */
-    metadata_free(profile->sheet);
+     * then the arena, and the handle with it, its name, its sheet and every claim
+     * it lent */
     git_tree_free(profile->own);
     arena_free(profile->arena);
 }
@@ -289,15 +289,11 @@ error_t profile_load_sheet(profile_t *profile) {
     /* Asked once. The loader answers a sheet or a failure — an absent sheet is
      * an empty one, never NULL — so a handle holding neither has not asked yet;
      * and a failure leaves the sheet as it was, NULL beside it (core/metadata.h
-     * metadata_load_from_tree, untouched on failure). The blob is read through
-     * the repository the tree was read from, which a tree knows
-     * (lib/libgit2/src/libgit2/object.c git_object_owner) */
+     * metadata_load_from_tree, untouched on failure). The sheet is the handle's
+     * own, in its arena, read off its tree */
     if (!profile->sheet && !profile->sheet_failure) {
         profile->sheet_failure = metadata_load_from_tree(
-            git_tree_owner(profile->tree),
-            profile->tree,
-            profile->name,
-            &profile->sheet
+            profile->tree, profile->name, profile->arena, &profile->sheet
         );
     }
 
@@ -950,10 +946,10 @@ error_t profile_find(
 }
 
 struct profile_stage {
-    arena_t *arena;                 /* Its own: the struct, the climb's and the prune's names */
+    arena_t *arena;                 /* Its own: the struct, the copy, the climb's and the prune's names */
     stage_t *stage;                 /* The next tree, on the profile's branch */
     profile_t *base;                /* The profile at the tree it opened: never edited */
-    metadata_t *sheet;              /* The base's sheet, copied: what the commit carries */
+    metadata_t *sheet;              /* The base's sheet, copied into the arena: what the commit carries */
     stage_admission_t *admission;   /* The tree as a writer chooses its names; NULL until it asks */
 };
 
@@ -1015,10 +1011,10 @@ static error_t profile_stage_seed(
         return err;
     }
 
-    /* The sheet the commit carries: the base's, copied, so every claim the base
-     * lends stands whatever the edits do, and the commit has the base's to compare
-     * it with */
-    stage->sheet = metadata_clone(stage->base->sheet);
+    /* The sheet the commit carries: the base's, copied into the stage's arena,
+     * so every claim the base lends stands whatever the edits do, and the commit
+     * has the base's to compare it with */
+    stage->sheet = metadata_clone(stage->arena, stage->base->sheet);
 
     *out = stage;
     return NULL;
@@ -1172,10 +1168,13 @@ error_t profile_stage_admit(
             );
             if (held && held->tracked) return NULL;
 
-            metadata_item_t *item = metadata_item_create_directory(
-                storage_path, MODE_UNCLAIMED, true
-            );
-            metadata_add_item(stage->sheet, &item);
+            const metadata_item_t item = {
+                .kind    = PATH_KIND_DIRECTORY,
+                .key     = storage_path,
+                .mode    = MODE_UNCLAIMED,
+                .tracked = true,
+            };
+            metadata_write_item(stage->sheet, &item);
 
             return NULL;
         }
@@ -1225,12 +1224,16 @@ error_t profile_stage_capture_file(
     CHECK_NULL(out);
 
     /* Every refusal before anything moves: the claim off the look first, which
-     * an owner this host cannot name refuses; then the admission's two halves,
-     * the sheet's and the tree's, the put asking the second of the index it writes
-     * and writing the blob only once it is admitted */
-    metadata_item_t *item = NULL;
+     * an owner this host cannot name refuses, its names spelled in the caller's
+     * arena — the record built from the claim is read past the stage; then the
+     * admission's two halves, the sheet's and the tree's, the put asking the
+     * second of the index it writes and writing the blob only once it is
+     * admitted */
+    metadata_item_t item;
     git_oid blob;
-    error_t err = metadata_capture_file(storage_path, &capture->st, capture->encrypted, &item);
+    error_t err = metadata_capture_file(
+        storage_path, &capture->st, capture->encrypted, arena, &item
+    );
     if (!err) err = profile_stage_refuse_beneath(stage, storage_path);
     if (!err) {
         err = stage_put(
@@ -1242,28 +1245,16 @@ error_t profile_stage_capture_file(
     /* Then the put rule at the name, whose one failure — a subtree of the base
      * that will not load — leaves the put made, a stage its writer abandons */
     if (!err) err = profile_stage_convert(stage, storage_path);
-    if (err) {
-        metadata_item_free(item);
-        return err;
-    }
+    if (err) return err;
 
     /* The claim the commit now carries at the name, by the walk's own decode
-     * over the blob the put wrote and the item the look authored — none where
-     * it claims nothing — its names the caller's before the sheet takes the item:
-     * the record built from it is read past the stage */
-    profile_claim_t claim = profile_decode_blob(storage_path, &blob, capture->mode, item);
-    claim.owner = arena_strdup(arena, claim.owner);
-    claim.group = arena_strdup(arena, claim.group);
+     * over the blob the put wrote and the claim off the look; then that claim
+     * at its own kind, the sheet's copy of it — or, where it claims nothing,
+     * the retire of the item standing there (core/metadata.h
+     * metadata_write_item) */
+    *out = profile_decode_blob(storage_path, &blob, capture->mode, &item);
+    metadata_write_item(stage->sheet, &item);
 
-    /* The claim at its own kind, by the sheet's rule that an item exists iff it
-     * claims something: the look's item, or the retire of the one standing */
-    if (item) {
-        metadata_add_item(stage->sheet, &item);
-    } else {
-        metadata_remove_item(stage->sheet, PATH_KIND_FILE, storage_path);
-    }
-
-    *out = claim;
     return NULL;
 }
 
@@ -1279,24 +1270,17 @@ error_t profile_stage_capture_directory(
 
     /* The claim off the look, tracked: a writer captures only a directory the
      * profile tracks. Its one refusal, an owner this host cannot name, comes
-     * before anything moves */
-    metadata_item_t *item = NULL;
-    error_t err = metadata_capture_directory(storage_path, st, true, &item);
+     * before anything moves; its names are spelled in the caller's arena */
+    metadata_item_t item;
+    error_t err = metadata_capture_directory(storage_path, st, true, arena, &item);
     if (err) return err;
 
-    /* The claim as the walk decodes it, its names the caller's and taken before
-     * the sheet takes the item: over a claim standing at the name, the sheet
-     * keeps its own key and frees the look's */
-    profile_claim_t claim = profile_decode_directory(item);
-    claim.storage_path = storage_path;
-    claim.owner = arena_strdup(arena, claim.owner);
-    claim.group = arena_strdup(arena, claim.group);
+    /* The claim as the walk decodes it; then the sheet's copy of it, at its own
+     * kind, over the directory claim at the name whatever it said: a FILE item
+     * no blob backs there is the other kind's, and rides */
+    *out = profile_decode_directory(&item);
+    metadata_write_item(stage->sheet, &item);
 
-    /* Its own kind, over the directory claim at the name whatever it said: a
-     * FILE item no blob backs there is the other kind's, and rides */
-    metadata_add_item(stage->sheet, &item);
-
-    *out = claim;
     return NULL;
 }
 
@@ -1385,25 +1369,15 @@ static void profile_stage_capture_rung(
      * loses a claim and nothing else, so the rung keeps what it had and dotta
      * creates it as it would have before. Its error is dropped — one per such
      * rung, per leaf climbed through it. */
-    metadata_item_t *item = NULL;
-    error_t err = metadata_capture_directory(rung, &st, false, &item);
+    metadata_item_t item;
+    error_t err = metadata_capture_directory(rung, &st, false, stage->arena, &item);
     if (err) return;
 
-    /* A re-derivation that found nothing new authors nothing: the standing claim
-     * keeps its place, so nothing is counted and the commit's gate never fires
-     * on a chain that has not moved. Ownership is both names or neither
-     * (core/metadata.c metadata_capture_ownership), so an absent one compares
-     * as the value it is. */
-    if (held && held->mode == item->mode &&
-        str_equal(held->owner, item->owner) &&
-        str_equal(held->group, item->group)) {
-        metadata_item_free(item);
-        return;
-    }
-
-    metadata_add_item(stage->sheet, &item);
-
-    (*captured)++;
+    /* The claim written, and counted where it moved the sheet: a re-derivation
+     * that found nothing new moves nothing (core/metadata.h metadata_write_item),
+     * so nothing is counted and the commit's gate never fires on a chain that
+     * has not moved */
+    if (metadata_write_item(stage->sheet, &item)) (*captured)++;
 }
 
 void profile_stage_capture_ancestors(
@@ -1468,19 +1442,19 @@ static error_t profile_stage_restore_ancestors(
     profile_stage_t *stage, profile_t *from, const char *from_storage_path,
     const char *storage_path
 ) {
-    /* Each name copied once and cut from the leaf in step, a rung of each at
-     * every cut: a name is read past its label's word alone (infra/label.h
-     * label_tail), so the word is never a rung */
-    char *rung = heap_strdup(storage_path);
-    char *pair = heap_strdup(from_storage_path);
-    error_t err = NULL;
+    /* Each name copied once into the stage's arena, as the climb spells its rungs,
+     * and cut from the leaf in step, a rung of each at every cut: a name is read
+     * past its label's word alone (infra/label.h label_tail), so the word is
+     * never a rung */
+    char *rung = arena_strdup(stage->arena, storage_path);
+    char *pair = arena_strdup(stage->arena, from_storage_path);
 
     for (;;) {
         /* The next rung of each name, at its last separator left; a name with
          * none left ends the pairing */
         char *rung_cut = strrchr(label_tail(rung), '/');
         char *pair_cut = strrchr(label_tail(pair), '/');
-        if (!rung_cut || !pair_cut) break;
+        if (!rung_cut || !pair_cut) return NULL;
         *rung_cut = '\0';
         *pair_cut = '\0';
 
@@ -1488,8 +1462,8 @@ static error_t profile_stage_restore_ancestors(
          * directory claim — is the base's, by the namespace's own question, the
          * one every reader asks there (profile_holds) */
         profile_held_t held;
-        err = profile_holds(stage->base, rung, &held);
-        if (err) break;
+        error_t err = profile_holds(stage->base, rung, &held);
+        if (err) return err;
         if (held.kind != PROFILE_HELD_NOTHING) continue;
 
         /* The commit's claim at the pair, as its walk shows it — none where the
@@ -1498,19 +1472,18 @@ static error_t profile_stage_restore_ancestors(
          * at the rung is the other kind's, and stays beside it */
         const profile_claim_t *claim = NULL;
         err = profile_find(from, PROFILE_READ_STRICT, PATH_KIND_DIRECTORY, pair, &claim);
-        if (err) break;
+        if (err) return err;
         if (!claim) continue;
 
-        metadata_item_t *item = metadata_item_create_directory(rung, claim->mode, false);
-        item->owner = heap_strdup(claim->owner);
-        item->group = heap_strdup(claim->group);
-        metadata_add_item(stage->sheet, &item);
+        const metadata_item_t item = {
+            .kind  = PATH_KIND_DIRECTORY,
+            .key   = rung,
+            .mode  = claim->mode,
+            .owner = claim->owner,
+            .group = claim->group,
+        };
+        metadata_write_item(stage->sheet, &item);
     }
-
-    free(rung);
-    free(pair);
-
-    return err;
 }
 
 error_t profile_stage_restore_file(
@@ -1542,20 +1515,18 @@ error_t profile_stage_restore_file(
     }
     if (err) return err;
 
-    /* The claim at its own kind, by the sheet's rule that an item exists iff it
-     * claims something: one of no mode, owner or group — a link the commit records
-     * no ownership for — retires the item standing at the name */
-    if (claim->mode == MODE_UNCLAIMED && !claim->owner && !claim->group) {
-        metadata_remove_item(stage->sheet, PATH_KIND_FILE, claim->storage_path);
-        return NULL;
-    }
-
-    metadata_item_t *item = metadata_item_create_file(
-        claim->storage_path, claim->mode, claim->encrypted
-    );
-    item->owner = heap_strdup(claim->owner);
-    item->group = heap_strdup(claim->group);
-    metadata_add_item(stage->sheet, &item);
+    /* The claim at its own kind, the sheet's copy of it — or, where it claims
+     * nothing, a link the commit records no ownership for, the retire of the
+     * item standing at the name (core/metadata.h metadata_write_item) */
+    const metadata_item_t item = {
+        .kind      = PATH_KIND_FILE,
+        .key       = claim->storage_path,
+        .mode      = claim->mode,
+        .owner     = claim->owner,
+        .group     = claim->group,
+        .encrypted = claim->encrypted,
+    };
+    metadata_write_item(stage->sheet, &item);
 
     return NULL;
 }
@@ -1765,11 +1736,10 @@ error_t profile_stage_commit(
 void profile_stage_free(profile_stage_t *stage) {
     if (!stage) return;
 
-    /* The admission and the copy, each its own; then the base, before the stage
-     * whose tree it borrows; then the stage, which undoes nothing in the repository
-     * (sys/stage.h stage_free); then the arena, the struct with it */
+    /* The admission, its own; then the base, before the stage whose tree it
+     * borrows; then the stage, which undoes nothing in the repository (sys/stage.h
+     * stage_free); then the arena, the struct and the copy with it */
     stage_admission_free(stage->admission);
-    metadata_free(stage->sheet);
     profile_free(stage->base);
     stage_free(stage->stage);
     arena_free(stage->arena);

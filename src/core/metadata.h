@@ -4,9 +4,12 @@
  * Beside its tree, each profile carries a sheet, .dotta/metadata.json: the claims
  * the profile makes about its paths beyond what its tree can say. An item exists
  * iff it claims something — every field beyond the key is a claim (or the one
- * cache), a capture whose answer claims nothing authors no item, and one that
- * finds a stale item of its kind standing at its key retires it; so does a restore
- * of a claim that says nothing (core/profiles.h profile_stage_restore_file).
+ * cache) — and the sheet keeps the rule at the one way a claim enters it
+ * (metadata_write_item): a file's item that claims nothing is no item, and written,
+ * it retires the one standing at its key — a capture's whose look claims nothing,
+ * a restore's of a claim that says nothing (core/profiles.h
+ * profile_stage_capture_file, profile_stage_restore_file) — while a document's
+ * is read past (metadata_from_json).
  *
  * Authority, per fact:
  * - content and type: the tree's (a blob, a link, an executable) — never restated
@@ -29,7 +32,7 @@
  *   reads a lone half as a narrow claim deliberately made, so a name the host
  *   cannot spell fails the capture rather than authoring one. A claim a hand
  *   wrote is honoured wherever it stands and replaced by the next capture over
- *   that path, which authors the item whole (metadata_add_item): a capture states
+ *   that path, which writes the item whole (metadata_write_item): a capture states
  *   what disk holds, and cannot tell a hand's intent from a claim that went stale
  * - a directory's existence: the sheet's ("tracked") — the one claim a tree cannot
  *   hold, since Git trees have no empty directories
@@ -83,10 +86,28 @@
  * "file" item without a mode; a link with no ownership to track has no entry at
  * all.
  *
- * Out of scope, deliberately: timestamps (cross-machine noise by design);
+ * Out of scope, deliberately: timestamps (cross-machine noise by design); the
+ * special mode bits — setuid, setgid, sticky — which a capture masks off (the
+ * stat's & 0777), the parser refuses past 0777, and a deployment's chmod clears;
  * xattrs, ACLs, SELinux contexts, capabilities, chflags; hardlinks, devices,
  * FIFOs; symlink mode; umask-relative mode classes. Each would need its own
  * capture/deploy/divergence story; none is blocked by this schema.
+ *
+ * Two halves, read apart. The sheet — the item, the collection, the codec, the
+ * load from a tree and the save to a stage — is a profile's own, read by one
+ * module: the handle decodes it, and a profile's next commit edits a copy of it
+ * (core/profiles.c profile_load_sheet, profile_walk, profile_stage_seed and the
+ * stage's edits). The claim's attributes on this host — the directory default,
+ * the unclaimed mode, ownership as this host's ids, and the captures that read
+ * a claim off a look — are every layer's that places or prints a claim, each
+ * name below listing its readers.
+ *
+ * Memory: a sheet is a container (include/runtime.h "Memory"). It lives in the
+ * arena it was made in — a profile's, which keeps the sheet its tree holds, or
+ * a profile's next commit's, which keeps the copy it edits — with every claim
+ * it holds and every name a claim spells; nothing frees a sheet or a claim, and
+ * the arena goes with its owner. A claim enters by value and the sheet copies
+ * what it keeps, so an item a caller builds borrows its names for the call alone.
  *
  * JSON Schema (Version 6) — items sorted by key, then kind (a file's item before
  * a directory's at one key), fields present iff claimed:
@@ -192,10 +213,16 @@
  * the one path a tree cannot hold.
  *
  * Absence is a value: mode MODE_UNCLAIMED, owner/group NULL, and a tracked that
- * is false — an ancestor claim's whole spelling. The two flags are one kind's
- * each, encrypted the cache of a blob's own bytes and tracked the claim that
- * the profile tracks a directory, and each is false for the other kind by
- * construction at both boundaries (the factories and the parser).
+ * is false — an ancestor claim's whole spelling. A mode of 0 is a claim, `chmod
+ * 000`'s, so an item built by hand spells its absence. The two flags are one
+ * kind's each, encrypted the cache of a blob's own bytes and tracked the claim
+ * that the profile tracks a directory, and each is false for the other kind,
+ * which the one way into a sheet holds its caller to (metadata_write_item).
+ *
+ * A value. One a caller builds borrows its names for the call it is handed to;
+ * one a sheet lends is the sheet's, written once and never again, so it stands
+ * as it was lent — its names with it — for the life of the arena the sheet stands
+ * in, whatever is written or removed after it.
  *
  * Every field is read off the item metadata_find_item hands back; the sheet offers
  * no per-field reader, so a consumer that holds the item reads the field and
@@ -217,35 +244,34 @@
  * reader here to hold it, and no reader of a profile's stamp reads the item.
  */
 typedef struct {
-    path_kind_t kind;   /* FILE: the tree names the path. DIRECTORY: the item is the claim. */
-    char *key;          /* Storage path — the join key for every consumer */
-    mode_t mode;        /* Claimed permission bits, or MODE_UNCLAIMED */
-    char *owner;        /* Claimed owner, or NULL */
-    char *group;        /* Claimed group, or NULL */
-    bool encrypted;     /* The blob's ciphertext stamp (false for DIRECTORY) */
-    bool tracked;       /* The profile tracks the directory (false for FILE) */
+    path_kind_t kind;       /* FILE: the tree names the path. DIRECTORY: the item is the claim. */
+    const char *key;        /* Storage path — the join key for every consumer */
+    mode_t mode;            /* Claimed permission bits, or MODE_UNCLAIMED */
+    const char *owner;      /* Claimed owner, or NULL */
+    const char *group;      /* Claimed group, or NULL */
+    bool encrypted;         /* The blob's ciphertext stamp (false for DIRECTORY) */
+    bool tracked;           /* The profile tracks the directory (false for FILE) */
 } metadata_item_t;
 
 /**
  * The sheet (opaque): each kind's claims apart, in key order
  *
  * Key order is the document's (metadata_to_json): byte order on the key, whatever
- * order the claims were added or a hand spelled them in. The order is the one
- * representation: an item is found, added and removed by its key's place in it,
- * and the claims beneath a name are one slice of it. Owns every item it holds
- * and hands them out borrowed. An item pointer stays valid until that item is
- * itself removed or the sheet is freed, whatever else is added or removed
- * meanwhile.
+ * order the claims were written or a hand spelled them in. The order is the one
+ * representation: a claim is found, written and removed by its key's place in
+ * it, and the claims beneath a name are one slice of it. A container (the module
+ * header): it lives in the arena it was made in, with every claim and name it
+ * holds, and nothing frees it.
  */
 typedef struct metadata metadata_t;
 
 /**
- * One kind's items, lent: the sheet's own entries, in key order
+ * One kind's claims, lent: the sheet's own, in key order
  *
  * The slice metadata_items and metadata_items_beneath answer, the tree's shape
  * for a lent collection (core/manifest.h manifest_rows_t). It survives every
- * edit of the other kind, each kind's entries being apart, and none of its own:
- * an add or a removal of its kind may move the entries, though never an item
+ * edit of the other kind, each kind's claims standing apart, and none of its
+ * own: a write or a removal of its kind moves the entries, though never a claim
  * they point at.
  */
 typedef struct {
@@ -254,110 +280,69 @@ typedef struct {
 } metadata_items_t;
 
 /**
- * Create an empty sheet
+ * An empty sheet, in `arena`
  *
- * The sheet is a handle whose lifetime is its own, so it owns an arena: the struct
- * and each kind's entries live there; its items are the heap's.
+ * Readers: the loader, for a tree that holds no sheet (metadata_load_from_tree),
+ * the parser (metadata_from_json) and the copy (metadata_clone).
  *
- * @return The sheet (caller frees with metadata_free)
+ * @param arena The arena the sheet lives in, and every claim written into it
+ *              (must not be NULL)
+ * @return The sheet; never NULL
  */
-metadata_t *metadata_create_empty(void);
+metadata_t *metadata_create(arena_t *arena);
 
 /**
- * A copy of the sheet: every item deep-copied
+ * A copy of the sheet, in `arena`: every claim, its names the copy's own
  *
  * For the reader that edits and must leave the source as it read it: a profile's
  * next commit edits a copy of the sheet its base decoded (core/profiles.h
  * profile_stage_open, profile_stage_orphan), so the claims the base lends stand
  * whatever the commit does, and the commit saves the copy only where its claims
  * are no longer the base's (metadata_same). The same sheet a second parse of
- * the bytes would give, at about a ninth of its cost.
+ * the bytes would give, at a fraction of its cost.
  *
  * Reader: core/profiles.c profile_stage_seed, both openers' one body.
  *
+ * @param arena The arena the copy lives in (must not be NULL)
  * @param metadata The sheet to copy (must not be NULL)
- * @return The copy, a sheet of its own (caller frees with metadata_free)
+ * @return The copy; never NULL
  */
-metadata_t *metadata_clone(const metadata_t *metadata);
+metadata_t *metadata_clone(arena_t *arena, const metadata_t *metadata);
 
 /**
- * Free a sheet
+ * Write a claim: the one way a claim enters a sheet
  *
- * Frees every item it holds, then the sheet's arena — the struct and each kind's
- * entries with it.
+ * Of the item's own kind: the claim of that kind at its key is made over — or
+ * left as it stands, where it says the same — and the other kind's at the key
+ * stays as it stands; otherwise the claim takes its key's place in its kind's
+ * order, the claims past it moved up one. The sheet copies what it keeps into
+ * its arena, so the item and its names are the caller's, borrowed for the call
+ * alone.
  *
- * @param metadata The sheet to free (can be NULL)
- */
-void metadata_free(metadata_t *metadata);
-
-/**
- * Create file metadata item
+ * An item exists iff it claims something (the module header): a file's item that
+ * claims nothing — no mode, no owner, no group, no stamp: a link the invoker
+ * owns, a restore of a claim that says nothing — is no claim, and its write retires
+ * the file's item standing at its key. A directory's item is the claim itself,
+ * and stands whatever it carries.
  *
- * A mode past 0777 is a caller's bug: every producer masks a stat's bits or parses
- * a mode that refuses more.
+ * The item's contract is held here, at the one way in: a mode is claimed bits
+ * or MODE_UNCLAIMED, and each flag is its own kind's — a caller that breaks either
+ * is a caller's bug, and dies. A document's mode past 0777 is the parser's refusal,
+ * and the flag a hand wrote onto the other kind is read past there
+ * (metadata_from_json).
  *
- * @param storage_path Path in profile (must not be NULL)
- * @param mode Claimed permission bits (e.g., 0600, 0644), or MODE_UNCLAIMED
- * @param encrypted Encryption flag
- * @return The item (caller frees with metadata_item_free)
- */
-metadata_item_t *metadata_item_create_file(
-    const char *storage_path,
-    mode_t mode,
-    bool encrypted
-);
-
-/**
- * Create directory metadata item
- *
- * The class is the author's to answer, which is why it is a parameter and not a
- * default: a walk that entered the directory says true, a derivation of the chain
- * above a tracked path says false, and nothing else authors a directory claim.
- *
- * Accepts MODE_UNCLAIMED for the parse path (a hand-sparse document may omit
- * the mode); the capture path always claims one from its stat.
- *
- * A mode past 0777 is a caller's bug, as for a file.
- *
- * @param storage_path Storage path in profile (must not be NULL, e.g.,
- *                     "home/.config/nvim")
- * @param mode Claimed permission bits (e.g., 0700, 0755), or MODE_UNCLAIMED
- * @param tracked The profile tracks the directory itself
- * @return The item (caller frees with metadata_item_free)
- */
-metadata_item_t *metadata_item_create_directory(
-    const char *storage_path,
-    mode_t mode,
-    bool tracked
-);
-
-/**
- * Free metadata item
- *
- * @param item Item to free (can be NULL)
- */
-void metadata_item_free(metadata_item_t *item);
-
-/**
- * Add or update metadata item, transferring ownership
- *
- * Of the item's own kind: an item of that kind at the same key is replaced in
- * place, and the other kind's at the key stays as it stands; otherwise the item
- * takes its key's place in its kind's order — past the last where it sorts past
- * it, as each item of a document the serializer wrote does, and otherwise with
- * every entry past that place moved up one.
- *
- * The sheet TAKES the item it is handed rather than duplicating it: the item
- * keeps its place in memory, the sheet keeps the pointer, and *item is left NULL.
+ * Readers: the parser and the copy (metadata_from_json, metadata_clone); and a
+ * profile's next commit, its every edit that writes a claim (core/profiles.c
+ * profile_stage_admit, profile_stage_capture_file, profile_stage_capture_directory,
+ * profile_stage_capture_rung, profile_stage_restore_ancestors and
+ * profile_stage_restore_file), the rung counting what it moved.
  *
  * @param metadata The sheet (must not be NULL)
- * @param item Item to hand over (neither it nor *item may be NULL; *item is left
- *             NULL)
+ * @param item The claim (must not be NULL; its key must not be NULL)
+ * @return true where the sheet moved: a claim new to its key, one made over, or
+ *         one retired
  */
-void metadata_add_item(
-    metadata_t *metadata,
-    metadata_item_t **item
-);
+bool metadata_write_item(metadata_t *metadata, const metadata_item_t *item);
 
 /**
  * The item of `kind` at `key`, or NULL
@@ -365,12 +350,13 @@ void metadata_add_item(
  * One kind's: the other kind's item at the key, where one stands, is another
  * claim and never this answer (the module header). A key the sheet does not hold
  * under that kind is the answer, not a failure — NULL. Found by its place in
- * its kind's order: one comparison past the last item, and a search otherwise.
+ * its kind's order: one comparison past the last claim, and a search otherwise.
  *
  * @param metadata The sheet (NULL returns NULL)
  * @param kind The claim's kind
  * @param key The storage path (NULL returns NULL)
- * @return Borrowed item pointer (do not free), or NULL where none is held
+ * @return The claim, lent for the life of the sheet's arena, no write editing
+ *         it; or NULL where none is held
  */
 const metadata_item_t *metadata_find_item(
     const metadata_t *metadata,
@@ -406,8 +392,8 @@ bool metadata_same(const metadata_t *a, const metadata_t *b);
  * One kind's: the other kind's item at the key, where one stands, stays as it
  * stands. A key the sheet does not hold under that kind changes nothing and is
  * not a failure — the answer is false. One search finds the key's place in its
- * kind's order, and the gap a removal leaves is closed, every entry past it moved
- * down one.
+ * kind's order, and the gap a removal leaves is closed, every claim past it moved
+ * down one. Nothing is freed: a claim lent stands for whoever holds it.
  *
  * @param metadata The sheet (NULL returns false)
  * @param kind The claim's kind
@@ -431,8 +417,7 @@ bool metadata_remove_item(
  *
  * @param metadata The sheet (NULL answers the empty slice)
  * @param kind Which kind's items
- * @return The slice, borrowed: good until an add or a removal of that kind, or
- *         the sheet's free
+ * @return The slice, borrowed: good until a write or a removal of that kind
  */
 metadata_items_t metadata_items(const metadata_t *metadata, path_kind_t kind);
 
@@ -454,8 +439,7 @@ metadata_items_t metadata_items(const metadata_t *metadata, path_kind_t kind);
  * @param metadata The sheet (NULL answers the empty slice)
  * @param kind Which kind's items
  * @param key The name (NULL answers the empty slice)
- * @return The slice, borrowed: good until an add or a removal of that kind, or
- *         the sheet's free
+ * @return The slice, borrowed: good until a write or a removal of that kind
  */
 metadata_items_t metadata_items_beneath(
     const metadata_t *metadata,
@@ -466,12 +450,13 @@ metadata_items_t metadata_items_beneath(
 /**
  * Capture a path's claim from stat data (regular file or symlink)
  *
- * One existence rule: an item exists iff it claims something. A regular file
- * always claims its mode (0000 included); a symlink claims none — symlink(2)
- * takes none — so its item carries ownership alone, and when there is no ownership
- * to claim either, no item is authored and *out is NULL. A NULL answer is therefore
- * a links-only answer, and the producers read it as "the capture claims nothing":
- * retire whatever stale item stands at the key.
+ * The claim off the look, whatever it claims. A regular file always claims its
+ * mode (0000 included); a symlink claims none — symlink(2) takes none — so its
+ * item carries ownership alone, and where there is no ownership to claim either
+ * the item claims nothing: a link the invoker owns, which absence already says.
+ * Written, such an item is no item, and retires whatever stale one stands at
+ * the key (metadata_write_item) — the sheet's existence rule, kept where a claim
+ * enters it.
  *
  * Ownership capture (user/group): the ownership half is authored where absence,
  * which every machine reads as its own invoker (metadata_ownership), would misstate
@@ -487,7 +472,7 @@ metadata_items_t metadata_items_beneath(
  *
  * The seal is the caller's, as the directory sibling's class is: a stat cannot
  * say what the bytes an entry holds classify as, so `encrypted` is carried through
- * to the factory unread. Its producer is the capture that made those bytes, which
+ * to the item unread. Its producer is the capture that made those bytes, which
  * is the authority on them (infra/content.h, the capture's write-time invariant).
  *
  * `st` is a regular file's or a symlink's, and nothing else — the kind is the
@@ -495,18 +480,23 @@ metadata_items_t metadata_items_beneath(
  * refuses every other occupant. A stat of any other kind is a contract breach
  * and reads as one, not as a refusal with a remedy: no user input reaches here.
  *
- * @param storage_path Path in profile (must not be NULL)
+ * Reader: a profile's next commit, at the one door every capture of a file meets
+ * its name through (core/profiles.c profile_stage_capture_file).
+ *
+ * @param storage_path Path in profile (must not be NULL): the item's key, borrowed
+ *                     by it
  * @param st File stat data (must not be NULL; a regular file's or a symlink's)
  * @param encrypted Whether the entry's bytes are sealed (the caller's word)
- * @param out Item (must not be NULL, caller must free with metadata_item_free)
- *            Set to NULL if the capture claims nothing (not an error)
+ * @param arena The arena the item's owner and group are named in (must not be NULL)
+ * @param out The item (must not be NULL; written on success alone)
  * @return Error or NULL on success
  */
 error_t metadata_capture_file(
     const char *storage_path,
     const struct stat *st,
     bool encrypted,
-    metadata_item_t **out
+    arena_t *arena,
+    metadata_item_t *out
 );
 
 /**
@@ -516,7 +506,7 @@ error_t metadata_capture_file(
  * rules as file capture — the unnameable UID among them — while the mode is always
  * claimed from the stat. The class is the caller's: a stat cannot say whether a
  * walk entered the directory or only passed above it, so `tracked` is carried
- * through to the factory unread.
+ * through to the item unread.
  *
  * The two callers that capture a claim answer a failure here differently, and
  * the difference is what the claim is for, each through a profile's next commit
@@ -544,24 +534,28 @@ error_t metadata_capture_file(
  * contract breach and reads as one, not as a refusal with a remedy.
  *
  * @param storage_path Storage path in profile (must not be NULL, e.g.,
- *                     "home/.config/nvim")
+ *                     "home/.config/nvim"): the item's key, borrowed by it
  * @param st Directory stat data (must not be NULL; a directory's)
  * @param tracked The profile tracks the directory itself
- * @param out Item (must not be NULL, caller must free with metadata_item_free)
+ * @param arena The arena the item's owner and group are named in (must not be NULL)
+ * @param out The item (must not be NULL; written on success alone)
  * @return Error or NULL on success
  */
 error_t metadata_capture_directory(
     const char *storage_path,
     const struct stat *st,
     bool tracked,
-    metadata_item_t **out
+    arena_t *arena,
+    metadata_item_t *out
 );
 
 /**
  * Load metadata from a Git tree
  *
  * Loads metadata.json from a specific Git tree — a branch head or a historical
- * commit's tree alike.
+ * commit's tree alike — through the repository the tree was read from, which a
+ * tree knows (lib/libgit2/src/libgit2/object.c git_object_owner), the blob's
+ * bytes lent to the parse with their length (sys/gitops.h gitops_blob_view_open).
  *
  * A tree without a sheet holds an empty sheet: no .dotta, or a .dotta directory
  * without the file. The absent entry is a settled answer (nothing claimed), not
@@ -605,19 +599,20 @@ error_t metadata_capture_directory(
  * its hooks handed the tree's files alone, warned before the preview). A further
  * reader would have to argue for one.
  *
- * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)
  * @param profile The profile whose sheet this is, named over every failure —
  *                its callers name it nowhere (must not be NULL)
- * @param out Metadata (must not be NULL, caller must free with metadata_free);
- *            untouched on failure, so the NULL a caller passed is still no sheet
- *            (core/profiles.c profile_load_sheet's handle)
+ * @param arena The arena the sheet lives in (must not be NULL); a load that fails
+ *              leaves what it parsed there, unreachable, until the arena goes
+ * @param out The sheet (must not be NULL); untouched on failure, so the NULL a
+ *            caller passed is still no sheet (core/profiles.c profile_load_sheet's
+ *            handle)
  * @return Error or NULL on success
  */
 error_t metadata_load_from_tree(
-    git_repository *repo,
     const git_tree *tree,
     const char *profile,
+    arena_t *arena,
     metadata_t **out
 );
 
@@ -637,20 +632,26 @@ buffer_t metadata_to_json(const metadata_t *metadata);
 /**
  * Parse metadata from JSON string
  *
- * Parses metadata from JSON content. Rejects version mismatches with clear error
- * message (no migration code), and a claim the document makes twice — a second
- * item of one kind at a key, refused by its kind; a file's item and a directory's
- * at one key are two claims, both read. A document in any order parses, each
- * kind read into key order (metadata_add_item).
+ * Parses metadata from JSON content, `size` bytes of it, which need no terminator.
+ * Rejects version mismatches with clear error message (no migration code), and
+ * a claim the document makes twice — a second item of one kind at a key, refused
+ * by its kind; a file's item and a directory's at one key are two claims, both
+ * read. A file's item that claims nothing is no claim (the module header): read
+ * past, it is a second of none. A document in any order parses, each kind read
+ * into key order (metadata_write_item).
  *
- * @param json_str JSON string (must not be NULL)
- * @param out Metadata (must not be NULL, caller must free with metadata_free);
- *            untouched on failure, so metadata_load_from_tree hands the parse
- *            its own out
+ * @param json The document's bytes (must not be NULL)
+ * @param size Their count
+ * @param arena The arena the sheet lives in (must not be NULL); a refusal leaves
+ *              what it parsed there, unreachable, until the arena goes
+ * @param out The sheet (must not be NULL); untouched on failure, so
+ *            metadata_load_from_tree hands the parse its own out
  * @return Error or NULL on success
  */
 error_t metadata_from_json(
-    const char *json_str,
+    const char *json,
+    size_t size,
+    arena_t *arena,
     metadata_t **out
 );
 

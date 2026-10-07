@@ -1210,7 +1210,8 @@ static error_t add_commit(
  *               new profile and an enabled one (the UPSERT keeps a row's own
  *               for a NULL)
  * @param profile_created This add created the profile's branch: enable it here
- * @param retired The ancestor claims the climb dropped, by key (must not be NULL)
+ * @param ancestors_retired The ancestor claims the climb dropped, by key (must
+ *                          not be NULL)
  * @param pruned The derivations the commit's prune took, by key (must not be NULL)
  * @param receipt What the phase did, zeroed first (must not be NULL)
  * @return Error or NULL on success (non-fatal - caller treats as warning)
@@ -1219,12 +1220,12 @@ static error_t add_write_record(
     const add_walk_t *walk,
     const char *target,
     bool profile_created,
-    const string_array_t *retired,
+    const string_array_t *ancestors_retired,
     const string_array_t *pruned,
     add_receipt_t *receipt
 ) {
     CHECK_NULL(walk);
-    CHECK_NULL(retired);
+    CHECK_NULL(ancestors_retired);
     CHECK_NULL(pruned);
     CHECK_NULL(receipt);
 
@@ -1258,13 +1259,14 @@ static error_t add_write_record(
          * spelling or binds an unbound row. */
         err = state_enable_profile(state, profile, target);
         if (err) goto cleanup;
-    } else if (!state_enabled(state, profile) && retired->count == 0 && pruned->count == 0) {
+    } else if (!state_enabled(state, profile) &&
+        ancestors_retired->count == 0 && pruned->count == 0) {
         /* Nothing to write at all: no row for a capture to win, a target the
          * run brought left unbound (enable's business, when the user gets there),
          * and no claim let go. The settle below is not gated on enablement —
-         * the commit dropped whatever `retired` and `pruned` name whatever the
-         * enabled set says, and a path the commit let go settles by its record
-         * — but with nothing let go it has nothing to do either. */
+         * the commit dropped whatever `ancestors_retired` and `pruned` name
+         * whatever the enabled set says, and a path the commit let go settles
+         * by its record — but with nothing let go it has nothing to do either. */
         goto cleanup;                                  /* err is NULL */
     }
 
@@ -1400,7 +1402,7 @@ static error_t add_write_record(
      * still claims keeps its row and its record — the retire is this profile's
      * word about its own claim, never about the path — and an unbound claim names
      * nothing on this machine to retire. */
-    const string_array_t *let_go[] = { retired, pruned };
+    const string_array_t *let_go[] = { ancestors_retired, pruned };
     for (size_t b = 0; b < sizeof(let_go) / sizeof(let_go[0]); b++) {
         for (size_t i = 0; i < let_go[b]->count; i++) {
             /* Placed by the table the walk named through, which the view lends

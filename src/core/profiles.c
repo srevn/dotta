@@ -1190,7 +1190,7 @@ error_t profile_stage_admit(
  *
  * The one write across kinds (core/metadata.h): a blob leaves a directory claim
  * at its name no room. Asked only where the copy holds such a claim, so an ordinary
- * put pays one probe, and of the base, so a claim void before the commit — a
+ * put pays one search, and of the base, so a claim void before the commit — a
  * blob at its name or above it — is carried, and stands again once that blob goes.
  *
  * Readers: profile_stage_capture_file and profile_stage_restore_file, each after

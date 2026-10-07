@@ -17,7 +17,6 @@
 #include "base/arena.h"
 #include "base/buffer.h"
 #include "base/error.h"
-#include "base/hashmap.h"
 #include "base/heap.h"
 #include "base/string.h"
 #include "infra/label.h"
@@ -27,84 +26,81 @@
 #define INITIAL_CAPACITY 16
 
 /**
- * One kind's claims: its items in key order, and an index over them by key
+ * One kind's claims: its items, in key order
  *
  * The order is the document's (metadata_to_json): byte order on the key. So a
  * sheet the serializer wrote parses in place, a writer's edits land where their
- * keys fall, and two questions the index cannot answer are one search each —
- * where a key stands, and which claims stand beneath a name (metadata_bound).
- * An item is stable from the moment it is created — only the entries move, grown
- * or shifted — so the index stores item pointers directly and metadata_items
- * lends the entries as the kind's slice. The index borrows each item's own key
- * (hashmap_borrow), which is why metadata_add_item's update arm must adopt the
- * standing key before it overwrites the item: the key-adoption dance is the
- * borrow's cost.
+ * keys fall, and every question the sheet asks of its items is one search of
+ * the order — where a key stands (metadata_place), and which claims stand beneath
+ * a name (metadata_bound). The order is the one representation: nothing beside
+ * it says where an item is, so nothing has to agree with it. An item is stable
+ * from the moment it is created — only the entries move, grown or shifted — so
+ * metadata_items lends the entries as the kind's slice.
  */
 typedef struct {
     metadata_item_t **entries;  /* Stable items, in key order */
     size_t count;               /* Items held */
     size_t capacity;            /* Entries allocated */
-    hashmap_t *index;           /* key -> item*, borrowing the item's own key */
 } metadata_claims_t;
 
 /**
  * The sheet: each kind's claims apart
  *
  * A key holds at most one item of each kind (metadata.h), and the two kinds never
- * share an index, so a write of one kind cannot reach the other's claim at its
+ * share an order, so a write of one kind cannot reach the other's claim at its
  * key. One kind's claims are chosen where they are read — a directory's, or else
  * a file's — and the readers of both at once take the files first.
  *
- * The sheet is a handle whose lifetime is its own, so it owns an arena: the struct,
- * each kind's entries and its index live and go with it. The items are the heap's,
- * each freed by metadata_free before the arena goes.
+ * The sheet is a handle whose lifetime is its own, so it owns an arena: the struct
+ * and each kind's entries live and go with it. The items are the heap's, each
+ * freed by metadata_free before the arena goes.
  *
  * The schema version is the document's, not the sheet's: metadata_to_json writes
  * METADATA_VERSION and metadata_from_json refuses anything else, so there is
  * nothing here for a version field to say.
  */
 struct metadata {
-    arena_t *arena;                   /* The sheet's own: the struct, the entries, the indexes */
+    arena_t *arena;                   /* The sheet's own: the struct, the entries */
     metadata_claims_t files;          /* FILE items: what a blob at the key carries */
     metadata_claims_t directories;    /* DIRECTORY items: the directory claims */
 };
 
 /**
- * The first of one kind's entries not before `key` and `byte` after it
+ * The first of one kind's entries not before `name` and `byte` after it
  *
  * The entries are in strcmp order, and every key a name prefixes sorts after it
  * in one block — the claims beneath it, the name and a separator, and the siblings
  * it merely prefixes, "x.bak" before "x/y" and "x0" after, '/' being neither
  * the least byte nor the greatest (core/workspace.c workspace_orphan_beneath,
  * the same block over the orphans). So one lower bound answers each place the
- * sheet asks of its order: `byte` NUL, where the key itself stands or would;
+ * sheet asks of its order: `byte` NUL, where the name itself stands or would;
  * '/', the first claim beneath it; '/' + 1, the first key past those — no byte
  * lies between the two. Nothing is spelled to search.
  *
- * Readers: metadata_add_item's append arm and metadata_remove_item, a key's place;
- * metadata_items_beneath, the block's two ends.
+ * Readers: metadata_place, a key's place; metadata_items_beneath, the block's
+ * two ends.
  *
  * @param claims One kind's claims, in key order
- * @param key The name searched for
+ * @param name The name searched for
  * @param byte What follows its bytes in the bound searched for
  * @return The place, in [0, claims->count]
  */
 static size_t metadata_bound(
-    const metadata_claims_t *claims, const char *key, unsigned char byte
+    const metadata_claims_t *claims, const char *name, unsigned char byte
 ) {
-    const size_t len = strlen(key);
+    const size_t len = strlen(name);
     size_t lo = 0;
     size_t hi = claims->count;
 
     while (lo < hi) {
         const size_t mid = lo + (hi - lo) / 2;
-        const char *at = claims->entries[mid]->key;
+        const char *key = claims->entries[mid]->key;
 
-        /* The entry against the name and the byte: the name's bytes, then the
-         * byte after them, read unsigned as strcmp reads every byte, where an
-         * entry the name is all of reads its terminator */
-        int order = strncmp(at, key, len);
-        if (order == 0) order = (unsigned char) at[len] - byte;
+        /* The key against the name and the byte: the name's bytes, then the byte
+         * after them, read unsigned as strcmp reads every byte, where a key the
+         * name is all of reads its terminator */
+        int order = strncmp(key, name, len);
+        if (order == 0) order = (unsigned char) key[len] - byte;
 
         if (order < 0) {
             lo = mid + 1;
@@ -117,13 +113,37 @@ static size_t metadata_bound(
 }
 
 /**
+ * Where `key` stands in one kind's order, or would: whether an item stands there
+ *
+ * Readers: metadata_add_item, metadata_find_item and metadata_remove_item.
+ *
+ * @param claims One kind's claims, in key order
+ * @param key The key
+ * @param place Its place, in [0, claims->count]
+ * @return true where an item stands at `key`
+ */
+static bool metadata_place(const metadata_claims_t *claims, const char *key, size_t *place) {
+    /* Past the last item: a document the serializer wrote, and a copy, arrive
+     * in key order, so each of their keys falls here, one comparison deciding it */
+    if (claims->count == 0 || strcmp(claims->entries[claims->count - 1]->key, key) < 0) {
+        *place = claims->count;
+        return false;
+    }
+
+    /* Any other key is one search. The last item is not before it, so the place
+     * the search finds holds an item: the key's own, or the next */
+    *place = metadata_bound(claims, key, '\0');
+    return strcmp(claims->entries[*place]->key, key) == 0;
+}
+
+/**
  * Create an empty sheet
  */
 metadata_t *metadata_create_empty(void) {
     /* The sheet's own arena, and the sheet in it: each kind's entries are made
      * there — room at once, so each kind lends an array even while it holds
      * nothing, which every slice of it offsets into (metadata_items,
-     * metadata_items_beneath) — and so is each kind's index, for O(1) lookups */
+     * metadata_items_beneath) */
     arena_t *arena = arena_create(0);
     metadata_t *metadata = arena_calloc(arena, 1, sizeof(*metadata));
     metadata->arena = arena;
@@ -134,7 +154,6 @@ metadata_t *metadata_create_empty(void) {
             arena, NULL, &claims[k]->capacity, INITIAL_CAPACITY,
             sizeof(*claims[k]->entries)
         );
-        claims[k]->index = hashmap_borrow(arena, INITIAL_CAPACITY);
     }
 
     return metadata;
@@ -171,8 +190,8 @@ static metadata_item_t *metadata_item_clone(const metadata_item_t *source) {
  *
  * Each item cloned under its own key and handed to a sheet of the copy's own,
  * each kind in the source's key order: a key is held once in each kind's claims,
- * so every add lands past the last, one comparison deciding it — the copy's entries
- * read as the source's, and its indexes are its own.
+ * so every add lands past the last, one comparison deciding it, and the copy's
+ * entries read as the source's.
  */
 metadata_t *metadata_clone(const metadata_t *metadata) {
     CHECK_NULL(metadata);
@@ -205,15 +224,14 @@ void metadata_item_free(metadata_item_t *item) {
 /**
  * Free a sheet
  *
- * Frees every item it holds, then the sheet's arena — the struct, each kind's
- * entries and its index with it.
+ * Frees every item it holds, then the sheet's arena — the struct and each kind's
+ * entries with it.
  */
 void metadata_free(metadata_t *metadata) {
     if (!metadata) return;
 
-    /* Free all items (files, directories, and symlinks), each kind's. The indexes
-     * borrow their keys, and nothing reads them again before their arena goes
-     * below. */
+    /* Every item of each kind, the heap's; then the arena below, which holds
+     * the entries that pointed at them */
     const metadata_claims_t *claims[] = { &metadata->files, &metadata->directories };
     for (size_t k = 0; k < sizeof(claims) / sizeof(claims[0]); k++) {
         for (size_t i = 0; i < claims[k]->count; i++) {
@@ -307,19 +325,16 @@ void metadata_add_item(
     metadata_claims_t *claims = incoming->kind == PATH_KIND_DIRECTORY
         ? &metadata->directories : &metadata->files;
 
-    metadata_item_t *existing = hashmap_get(claims->index, incoming->key);
-    if (existing) {
+    size_t place;
+    if (metadata_place(claims, incoming->key, &place)) {
         /* UPDATE EXISTING ITEM
          *
-         * The item keeps the key it was indexed under — the index borrows that
-         * pointer, so it must outlive the overwrite — and the incoming key, equal
-         * to it by construction, is dropped and its place taken before the copy,
-         * so nothing reads a pointer that has been freed. Everything else the
-         * item held is freed and replaced wholesale, every field it carries for
-         * its kind included. */
-        free(incoming->key);
-        incoming->key = existing->key;
-
+         * The standing item keeps its place in memory, so a pointer to it stays
+         * good, and takes the incoming item whole: its own three names are freed,
+         * and every field the incoming item carries for its kind replaces them
+         * — the key too, equal to its own — before the incoming struct goes. */
+        metadata_item_t *existing = claims->entries[place];
+        free(existing->key);
         free(existing->owner);
         free(existing->group);
 
@@ -331,30 +346,20 @@ void metadata_add_item(
     }
 
     /* INSERT NEW ITEM, at its key's place in the kind's order. Room for it grows
-     * in the sheet's arena; only the entries move — the items they point at stay
-     * where they were created — so the index needs no maintenance here. */
+     * in the sheet's arena, and the entries past the place move up one: pointers
+     * alone, every item staying where it was created, but one move an item out
+     * of place — so a writer adding in an order of its own, a walk in readdir's,
+     * pays a run of them, where a document in key order lands past the last. */
     claims->entries = arena_grow(
         metadata->arena, claims->entries, &claims->capacity, claims->count + 1,
         sizeof(*claims->entries)
     );
+    memmove(
+        &claims->entries[place + 1], &claims->entries[place],
+        (claims->count - place) * sizeof(*claims->entries)
+    );
 
-    /* A document the serializer wrote arrives in key order, and so does a copy,
-     * so each of their items lands past the last, one comparison deciding it.
-     * Any other lands where its key falls, the entries past that place moved up
-     * one: pointers alone, but one move an item out of place, so a writer adding
-     * in an order of its own — a walk in readdir's — pays a run of them */
-    size_t at = claims->count;
-    if (at > 0 && strcmp(claims->entries[at - 1]->key, incoming->key) > 0) {
-        at = metadata_bound(claims, incoming->key, '\0');
-        memmove(
-            &claims->entries[at + 1], &claims->entries[at],
-            (claims->count - at) * sizeof(*claims->entries)
-        );
-    }
-
-    hashmap_set(claims->index, incoming->key, incoming);
-
-    claims->entries[at] = incoming;
+    claims->entries[place] = incoming;
     claims->count++;
     *item = NULL;
 }
@@ -371,12 +376,13 @@ const metadata_item_t *metadata_find_item(
 ) {
     if (!metadata || !key) return NULL;
 
-    /* The kind's own index: the other kind's item at the key is never this
+    /* The kind's own claims: the other kind's item at the key is never this
      * answer */
     const metadata_claims_t *claims = kind == PATH_KIND_DIRECTORY
         ? &metadata->directories : &metadata->files;
 
-    return hashmap_get(claims->index, key);
+    size_t place;
+    return metadata_place(claims, key, &place) ? claims->entries[place] : NULL;
 }
 
 /**
@@ -471,32 +477,19 @@ bool metadata_remove_item(
     metadata_claims_t *claims = kind == PATH_KIND_DIRECTORY
         ? &metadata->directories : &metadata->files;
 
-    /* The index answers identity. A key the kind does not hold is answered here
-     * and costs one probe — the search below is for the place, and there is no
-     * place to find. */
-    metadata_item_t *item = hashmap_get(claims->index, key);
-    if (!item) return false;
+    /* The key's place in the kind's order; a key the kind does not hold changes
+     * nothing */
+    size_t place;
+    if (!metadata_place(claims, key, &place)) return false;
 
-    /* The place is the key's in the kind's order, one search. The two agree by
-     * construction — the add publishes to both at the key's place and its update
-     * arm mutates the standing item in place — so an index naming an item the
-     * place does not hold is the sheet's own bug. */
-    const size_t at = metadata_bound(claims, key, '\0');
-    CHECK_ARG(
-        at < claims->count && claims->entries[at] == item,
-        "the index names an item no entry holds"
-    );
-
-    /* Unpublish before freeing — the index borrows this item's key, so the
-     * removal's own strcmp reads it, and `key` may be that very string — then
-     * close the gap. Only the entries shift: every surviving item stays where
-     * it was, so every index entry stays valid. */
-    hashmap_remove(claims->index, item->key, NULL);
-    metadata_item_free(item);
+    /* The item freed — after the search, which read `key`, and `key` may be the
+     * item's own — and the gap closed: the entries past it move down one, every
+     * other item staying where it was. */
+    metadata_item_free(claims->entries[place]);
     claims->count--;
     memmove(
-        &claims->entries[at], &claims->entries[at + 1],
-        (claims->count - at) * sizeof(*claims->entries)
+        &claims->entries[place], &claims->entries[place + 1],
+        (claims->count - place) * sizeof(*claims->entries)
     );
 
     return true;

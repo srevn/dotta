@@ -227,10 +227,12 @@ typedef struct {
 } metadata_item_t;
 
 /**
- * The sheet (opaque): each kind's claims apart, in key order and indexed by key
+ * The sheet (opaque): each kind's claims apart, in key order
  *
  * Key order is the document's (metadata_to_json): byte order on the key, whatever
- * order the claims were added or a hand spelled them in. Owns every item it holds
+ * order the claims were added or a hand spelled them in. The order is the one
+ * representation: an item is found, added and removed by its key's place in it,
+ * and the claims beneath a name are one slice of it. Owns every item it holds
  * and hands them out borrowed. An item pointer stays valid until that item is
  * itself removed or the sheet is freed, whatever else is added or removed
  * meanwhile.
@@ -254,8 +256,8 @@ typedef struct {
 /**
  * Create an empty sheet
  *
- * The sheet is a handle whose lifetime is its own, so it owns an arena: the struct,
- * each kind's entries and its index live there; its items are the heap's.
+ * The sheet is a handle whose lifetime is its own, so it owns an arena: the struct
+ * and each kind's entries live there; its items are the heap's.
  *
  * @return The sheet (caller frees with metadata_free)
  */
@@ -281,8 +283,8 @@ metadata_t *metadata_clone(const metadata_t *metadata);
 /**
  * Free a sheet
  *
- * Frees every item it holds, then the sheet's arena — the struct, each kind's
- * entries and its index with it.
+ * Frees every item it holds, then the sheet's arena — the struct and each kind's
+ * entries with it.
  *
  * @param metadata The sheet to free (can be NULL)
  */
@@ -362,7 +364,8 @@ void metadata_add_item(
  *
  * One kind's: the other kind's item at the key, where one stands, is another
  * claim and never this answer (the module header). A key the sheet does not hold
- * under that kind is the answer, not a failure — NULL.
+ * under that kind is the answer, not a failure — NULL. Found by its place in
+ * its kind's order: one comparison past the last item, and a search otherwise.
  *
  * @param metadata The sheet (NULL returns NULL)
  * @param kind The claim's kind
@@ -402,10 +405,9 @@ bool metadata_same(const metadata_t *a, const metadata_t *b);
  *
  * One kind's: the other kind's item at the key, where one stands, stays as it
  * stands. A key the sheet does not hold under that kind changes nothing and is
- * not a failure — the answer is false, arrived at by one index probe.
- *
- * A key the sheet does hold costs a search for its place on top of that, and
- * the gap it leaves closed in the kind's order, every entry past it moved down one.
+ * not a failure — the answer is false. One search finds the key's place in its
+ * kind's order, and the gap a removal leaves is closed, every entry past it moved
+ * down one.
  *
  * @param metadata The sheet (NULL returns false)
  * @param kind The claim's kind

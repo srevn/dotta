@@ -7,9 +7,8 @@
  * cache) — and the sheet keeps the rule at the one way a claim enters it
  * (metadata_write_item): a file's item that claims nothing is no item, and written,
  * it retires the one standing at its key — a capture's whose look claims nothing,
- * a restore's of a claim that says nothing (core/profiles.h
- * profile_stage_capture_file, profile_stage_restore_file) — while a document's
- * is read past (metadata_from_json).
+ * a restore's of a claim that says nothing (core/profiles.h profile_capture_file,
+ * profile_restore_file) — while a document's is read past (metadata_from_json).
  *
  * Authority, per fact:
  * - content and type: the tree's (a blob, a link, an executable) — never restated
@@ -46,8 +45,8 @@
  * backs, residue a hand left. Each is found, replaced and removed by its own
  * kind, so a write of one kind never reaches the other's claim at its key; the
  * one write across kinds is a blob's where a directory claim stands, no blob at
- * or above its name, which takes that claim's place — a profile's next commit
- * spells it as its put rule (core/profiles.h profile_stage_t), for every writer.
+ * or above its name, which takes that claim's place — a profile's draft spells
+ * it as its put rule (core/profiles.h profile_draft_t), for every writer.
  *
  * Two kinds of directory claim, one field between them. "tracked" says the profile
  * tracks the directory itself: a walk went into it, so the directory exists because
@@ -73,7 +72,7 @@
  * not say alone — an unclaimed directory mode projects as DIR_MODE_DEFAULT, which
  * is what an unclaimed path would have got anyway. The prune weighs no attribute
  * at all: a derivation survives by what stands beneath it, a tracked claim by
- * the word itself (core/profiles.c profile_stage_prune_ancestors).
+ * the word itself (core/profiles.c profile_prune_ancestors).
  *
  * The sheet is sparse and the view completes it: an unclaimed mode is resolved
  * into an answer at build, by the claim's floor (core/profiles.h
@@ -95,19 +94,19 @@
  *
  * Two halves, read apart. The sheet — the item, the collection, the codec, the
  * load from a tree and the save to a stage — is a profile's own, read by one
- * module: the handle decodes it, and a profile's next commit edits a copy of it
- * (core/profiles.c profile_load_sheet, profile_walk, profile_stage_seed and the
- * stage's edits). The claim's attributes on this host — the directory default,
+ * module: the handle decodes it, and a profile's draft edits a copy of it
+ * (core/profiles.c profile_load_sheet, profile_walk, profile_draft_seed and the
+ * draft's edits). The claim's attributes on this host — the directory default,
  * the unclaimed mode, ownership as this host's ids, and the captures that read
  * a claim off a look — are every layer's that places or prints a claim, each
  * name below listing its readers.
  *
  * Memory: a sheet is a container (include/runtime.h "Memory"). It lives in the
  * arena it was made in — a profile's, which keeps the sheet its tree holds, or
- * a profile's next commit's, which keeps the copy it edits — with every claim
- * it holds and every name a claim spells; nothing frees a sheet or a claim, and
- * the arena goes with its owner. A claim enters by value and the sheet copies
- * what it keeps, so an item a caller builds borrows its names for the call alone.
+ * a draft's, which keeps the copy it edits — with every claim it holds and every
+ * name a claim spells; nothing frees a sheet or a claim, and the arena goes with
+ * its owner. A claim enters by value and the sheet copies what it keeps, so an
+ * item a caller builds borrows its names for the call alone.
  *
  * JSON Schema (Version 6) — items sorted by key, then kind (a file's item before
  * a directory's at one key), fields present iff claimed:
@@ -295,13 +294,13 @@ metadata_t *metadata_create(arena_t *arena);
  * A copy of the sheet, in `arena`: every claim, its names the copy's own
  *
  * For the reader that edits and must leave the source as it read it: a profile's
- * next commit edits a copy of the sheet its base decoded (core/profiles.h
- * profile_stage_open, profile_stage_orphan), so the claims the base lends stand
+ * draft edits a copy of the sheet its base decoded (core/profiles.h
+ * profile_draft_open, profile_draft_orphan), so the claims the base lends stand
  * whatever the commit does, and the commit saves the copy only where its claims
  * are no longer the base's (metadata_same). The same sheet a second parse of
  * the bytes would give, at a fraction of its cost.
  *
- * Reader: core/profiles.c profile_stage_seed, both openers' one body.
+ * Reader: core/profiles.c profile_draft_seed, both openers' one body.
  *
  * @param arena The arena the copy lives in (must not be NULL)
  * @param metadata The sheet to copy (must not be NULL)
@@ -332,10 +331,10 @@ metadata_t *metadata_clone(arena_t *arena, const metadata_t *metadata);
  * (metadata_from_json).
  *
  * Readers: the parser and the copy (metadata_from_json, metadata_clone); and a
- * profile's next commit, its every edit that writes a claim (core/profiles.c
- * profile_stage_admit, profile_stage_capture_file, profile_stage_capture_directory,
- * profile_stage_capture_rung, profile_stage_restore_ancestors and
- * profile_stage_restore_file), the rung counting what it moved.
+ * profile's draft, its every edit that writes a claim (core/profiles.c
+ * profile_admit, profile_capture_file, profile_capture_directory,
+ * profile_capture_rung, profile_restore_ancestors and profile_restore_file),
+ * the rung counting what it moved.
  *
  * @param metadata The sheet (must not be NULL)
  * @param item The claim (must not be NULL; its key must not be NULL)
@@ -374,11 +373,11 @@ const metadata_item_t *metadata_find_item(
  * cannot — the mode below the owner-execute bit, and ownership — so a comparison
  * of the trees alone cannot answer this.
  *
- * Readers: a profile's next commit, which compares the sheet it carries with
- * the one it opened, as sys/stage compares the trees (sys/stage.h stage_changed,
+ * Readers: a profile's draft, which compares the sheet it carries with the one
+ * it opened, as sys/stage compares the trees (sys/stage.h stage_changed,
  * stage_commit) — its change test, and its save's gate, so a sheet no claim of
  * which moved keeps the bytes it has, a hand's spelling included (core/profiles.c
- * profile_stage_changed, profile_stage_commit).
+ * profile_changed, profile_commit).
  *
  * @param a A sheet (must not be NULL)
  * @param b Another (must not be NULL)
@@ -432,9 +431,9 @@ metadata_items_t metadata_items(const metadata_t *metadata, path_kind_t kind);
  * way. In key order, so the first is the byte-least. A name with nothing beneath
  * it answers the empty slice, and so does a NULL sheet, as metadata_items answers.
  *
- * Readers: a profile's next commit — the admission's sheet half, of the name a
- * blob would stand at (core/profiles.c profile_stage_refuse_beneath), and the
- * prune's, of a derivation's key (profile_stage_tracked_beneath).
+ * Readers: a profile's draft — the admission's sheet half, of the name a blob
+ * would stand at (core/profiles.c profile_refuse_beneath), and the prune's, of
+ * a derivation's key (profile_tracked_beneath).
  *
  * @param metadata The sheet (NULL answers the empty slice)
  * @param kind Which kind's items
@@ -480,8 +479,8 @@ metadata_items_t metadata_items_beneath(
  * refuses every other occupant. A stat of any other kind is a contract breach
  * and reads as one, not as a refusal with a remedy: no user input reaches here.
  *
- * Reader: a profile's next commit, at the one door every capture of a file meets
- * its name through (core/profiles.c profile_stage_capture_file).
+ * Reader: a profile's draft, at the one door every capture of a file meets its
+ * name through (core/profiles.c profile_capture_file).
  *
  * @param storage_path Path in profile (must not be NULL): the item's key, borrowed
  *                     by it
@@ -509,9 +508,9 @@ error_t metadata_capture_file(
  * through to the item unread.
  *
  * The two callers that capture a claim answer a failure here differently, and
- * the difference is what the claim is for, each through a profile's next commit
- * (core/profiles.h profile_stage_capture_directory). **add refuses**: a directory
- * it listed is the name its walk composed beneath, so a claim that does not land
+ * the difference is what the claim is for, each through a profile's draft
+ * (core/profiles.h profile_capture_directory). **add refuses**: a directory it
+ * listed is the name its walk composed beneath, so a claim that does not land
  * leaves files committed under a name nothing authors — and the listing, which
  * the command reads as a promise of its own commit, would be a wish (cmds/add.c
  * cmd_add). **update warns and carries on**: a claim it could not refresh keeps
@@ -522,16 +521,16 @@ error_t metadata_capture_file(
  * Ownership capture (user/group): the file capture's rule, above. An owner or a
  * group this host has no name for is ERR_NOT_FOUND — the lookup's absence or
  * its failure alike, the claim unmakeable either way — and a derivation reads
- * it (core/profiles.c profile_stage_capture_rung): its rung keeps the claim it
- * had, as it does for a path it could not look at. That is the one refusal.
+ * it (core/profiles.c profile_capture_rung): its rung keeps the claim it had,
+ * as it does for a path it could not look at. That is the one refusal.
  *
  * `st` is a directory's, and nothing else — the kind is the caller's to have
  * established, and every caller holds its look to one first: a profile's next
  * commit's directory capture, whose writers each lstat and hold to S_ISDIR —
  * add's directory loop and update's (cmds/add.c cmd_add, cmds/update.c
  * update_profile) — and the climb's rung, a look that found a directory
- * (core/profiles.c profile_stage_capture_rung). A stat of any other kind is a
- * contract breach and reads as one, not as a refusal with a remedy.
+ * (core/profiles.c profile_capture_rung). A stat of any other kind is a contract
+ * breach and reads as one, not as a refusal with a remedy.
  *
  * @param storage_path Storage path in profile (must not be NULL, e.g.,
  *                     "home/.config/nvim"): the item's key, borrowed by it
@@ -660,13 +659,13 @@ error_t metadata_from_json(
  *
  * Puts the sheet — .dotta/metadata.json, serialized by metadata_to_json — on
  * the stage as a regular blob; the caller's commit carries it. The one writer
- * of the sheet: a profile's next commit's (core/profiles.c profile_stage_commit),
- * every claim writer's. A sheet this serializer wrote, loaded and saved unchanged,
- * puts the blob the tree already holds (the serializer's byte-determinism). A
- * hand-written one the parser accepts — other whitespace, another item order,
- * inert fields — is normalized by the save and moves its blob; nothing here
- * promises otherwise, so the caller saves only a sheet whose claims moved
- * (metadata_same), and a commit that moved none keeps a hand's spelling.
+ * of the sheet: a draft's commit (core/profiles.c profile_commit), every claim
+ * writer's. A sheet this serializer wrote, loaded and saved unchanged, puts the
+ * blob the tree already holds (the serializer's byte-determinism). A hand-written
+ * one the parser accepts — other whitespace, another item order, inert fields —
+ * is normalized by the save and moves its blob; nothing here promises otherwise,
+ * so the caller saves only a sheet whose claims moved (metadata_same), and a
+ * commit that moved none keeps a hand's spelling.
  *
  * @param stage The stage the sheet goes on (must not be NULL)
  * @param metadata Metadata to save (must not be NULL)

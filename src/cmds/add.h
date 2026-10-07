@@ -1,8 +1,8 @@
 /**
  * add.h - Add files to profiles
  *
- * Captures files onto a profile's next commit (core/profiles.h profile_stage_t)
- * and commits it: nothing is checked out, nothing is written under $TMPDIR.
+ * Captures files onto a profile's draft (core/profiles.h profile_draft_t) and
+ * commits it: nothing is checked out, nothing is written under $TMPDIR.
  */
 
 #ifndef DOTTA_CMD_ADD_H
@@ -105,22 +105,22 @@ typedef struct {
  * What the commit guarantees: its two documents name one namespace. The tree
  * holds every blob and the sheet holds the directories a tree cannot — an empty
  * one has no entry — and a blob leaves no room for a directory at its name or
- * for anything beneath it. Every path is admitted by the profile's next commit
- * as it is listed, before a byte is read — against the tree as this command has
- * chosen it so far and the claims the commit carries, the directories this command
- * listed among them (core/profiles.h profile_stage_admit) — so a walked entry
- * the commit has no room for, or whose name Git will not hold, is skipped with
- * its subtree and a named one is refused, and of a pair this command makes, a
- * blob and a directory beneath it, the name that came second is. A contradiction
- * the branch arrived with is carried, as every write carries it — `dotta remove
- * <profile> <path>` gives the claim up — and a file captured at a directory claim's
- * own name takes the claim's place, under --force the one its profile's own blob
- * contradicts there included. The kind a profile's own claim gives a path is
- * that path's question and is asked of the view: a path whose kind changed under
- * a claim is refused by name and skipped by a walk, and so is a path beneath
- * one of the profile's own files, whichever label names either — a walk meets
- * the file's place first — and `--force` lifts neither: overwriting bytes under
- * a name the profile holds is not re-shaping the tree.
+ * for anything beneath it. Every path is admitted by the profile's draft as it
+ * is listed, before a byte is read — against the tree as this command has chosen
+ * it so far and the claims the commit carries, the directories this command listed
+ * among them (core/profiles.h profile_admit) — so a walked entry the commit has
+ * no room for, or whose name Git will not hold, is skipped with its subtree and
+ * a named one is refused, and of a pair this command makes, a blob and a directory
+ * beneath it, the name that came second is. A contradiction the branch arrived
+ * with is carried, as every write carries it — `dotta remove <profile> <path>`
+ * gives the claim up — and a file captured at a directory claim's own name takes
+ * the claim's place, under --force the one its profile's own blob contradicts
+ * there included. The kind a profile's own claim gives a path is that path's
+ * question and is asked of the view: a path whose kind changed under a claim is
+ * refused by name and skipped by a walk, and so is a path beneath one of the
+ * profile's own files, whichever label names either — a walk meets the file's
+ * place first — and `--force` lifts neither: overwriting bytes under a name the
+ * profile holds is not re-shaping the tree.
  *
  * **THE KEY INVARIANT**: for every path this command lists, `mount_resolve` of
  * the claim it was listed under is the filesystem path it was read at. A typed

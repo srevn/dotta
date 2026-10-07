@@ -1,6 +1,6 @@
 /**
- * profiles.c - A profile: what its name says, what it claims at a tree, and its
- * next commit
+ * profiles.c - A profile: what its name says, what it claims at a tree, and the
+ * draft of its next commit
  *
  * The name's questions: which names this machine layers (the host's), in what
  * order (the names' alone), and whether a profile's branch stands (Git's). The
@@ -17,8 +17,8 @@
  * claim standing at a name through the question the walk asks of each item
  * (profile_directory_item), decoded as the walk decodes it
  * (profile_decode_directory). The counts and the need of a target are the walk,
- * folded (profile_counts, profile_needs_target). The next commit is three things
- * in an arena of its own: a sys/stage, opened at the profile's head or over Git's
+ * folded (profile_counts, profile_needs_target). The draft is three things in
+ * an arena of its own: a sys/stage, opened at the profile's head or over Git's
  * empty tree for a profile the commit creates; the base, the profile at the tree
  * the stage opened, its sheet read at the open; and that sheet copied. An admission
  * asks a name chosen before its bytes of the copy and of the tree as chosen so
@@ -28,7 +28,7 @@
  * and the climb claims the way to a leaf off the disk; a restore asks the base
  * the same, puts its entry by id and writes its claim and its way into the copy;
  * dotta's own file is put beside the claims; the change test holds each document
- * against the one the stage opened; and the commit, where an edit moved either,
+ * against the one the draft opened; and the commit, where an edit moved either,
  * prunes the copy, saves it where its claims are no longer the base's and commits.
  */
 
@@ -310,8 +310,8 @@ error_t profile_load_sheet(profile_t *profile) {
  *
  * Readers: profile_step, at every blob the walk meets, and profile_find, at the
  * one it is asked — so the file claim a point question answers is the walk's;
- * and profile_stage_capture_file, at the blob it put — so the claim a capture
- * answers is the one the next walk shows there.
+ * and profile_capture_file, at the blob it put — so the claim a capture answers
+ * is the one the next walk shows there.
  *
  * @param path The claim's name, which the claim keeps (must not be NULL)
  * @param id The blob's id (must not be NULL)
@@ -377,7 +377,7 @@ static profile_claim_t profile_decode_blob(
  * Readers: profile_walk, at each directory claim that stands; profile_contradicted,
  * at each one a blob contradicts; profile_find, at the one it is asked — so the
  * directory claim a point question answers is the walk's; and
- * profile_stage_capture_directory, at the item it wrote.
+ * profile_capture_directory, at the item it wrote.
  *
  * @param item A DIRECTORY item (must not be NULL)
  * @return The claim, by value: a function of its item, which cannot fail
@@ -408,9 +408,8 @@ static profile_claim_t profile_decode_directory(const metadata_item_t *item) {
  * like any other: a blob at `home` contradicts every home/ claim.
  *
  * Readers: profile_walk and profile_contradicted, at each DIRECTORY item;
- * profile_directory_item, for the point questions; and a profile's next commit,
- * whose admission and put rule ask the base (profile_stage_refuse_beneath,
- * profile_stage_convert).
+ * profile_directory_item, for the point questions; and a profile's draft, whose
+ * admission and put rule ask the base (profile_refuse_beneath, profile_convert).
  *
  * @param profile Handle
  * @param storage_path A validated storage path
@@ -945,7 +944,7 @@ error_t profile_find(
     CHECK_ARG(false, "a path kind no enumerator names");
 }
 
-struct profile_stage {
+struct profile_draft {
     arena_t *arena;                 /* Its own: the struct, the copy, the climb's and the prune's names */
     stage_t *stage;                 /* The next tree, on the profile's branch */
     profile_t *base;                /* The profile at the tree it opened: never edited */
@@ -954,8 +953,8 @@ struct profile_stage {
 };
 
 /**
- * A profile's next commit over the stage `opener` opens: the base at the tree
- * the stage opened, its sheet read now and strictly, and that sheet copied
+ * A profile's draft over the stage `opener` opens: the base at the tree the stage
+ * opened, its sheet read now and strictly, and that sheet copied
  *
  * `opener` is sys/stage's for what the writer expects of the profile's branch —
  * stage_open where it stands, stage_orphan where the commit creates it — handed
@@ -963,19 +962,19 @@ struct profile_stage {
  * its own words. Everything after it is one body: the two openers differ in what
  * they expect of the branch and in nothing they make.
  *
- * Readers: profile_stage_open and profile_stage_orphan.
+ * Readers: profile_draft_open and profile_draft_orphan.
  *
  * @param repo Repository
  * @param name The profile's name
  * @param opener sys/stage's opener of the branch's stage
- * @param out The stage; NULL on a failure
+ * @param out The draft; NULL on a failure
  * @return Error or NULL on success
  */
-static error_t profile_stage_seed(
+static error_t profile_draft_seed(
     git_repository *repo,
     const char *name,
     error_t (*opener)(git_repository *repo, const char *refname, stage_t **out),
-    profile_stage_t **out
+    profile_draft_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
@@ -989,68 +988,70 @@ static error_t profile_stage_seed(
     error_t err = gitops_branch_refname(refname, sizeof(refname), name);
     if (err) return err;
 
-    /* The stage in an arena of its own, made here and freed with it, as the profile
+    /* The draft in an arena of its own, made here and freed with it, as the profile
      * handle stands in its own. Then the stage the opener opens, refused in
      * sys/stage's words where the branch is not as the writer expects it, and
      * the base at the tree the stage opened — the head's, or Git's empty tree,
      * which holds no sheet and so an empty one — its sheet read now and strictly:
      * a writer refuses a sheet that will not load before its preview. The struct
      * holds each from its first allocation, so every failure releases through
-     * profile_stage_free, and the sheet's failure outlives the base that kept
+     * profile_draft_free, and the sheet's failure outlives the base that kept
      * it (base/error.h "Lifetime") */
     arena_t *arena = arena_create(0);
-    profile_stage_t *stage = arena_calloc(arena, 1, sizeof(*stage));
-    stage->arena = arena;
-    err = opener(repo, refname, &stage->stage);
+    profile_draft_t *draft = arena_calloc(arena, 1, sizeof(*draft));
+    draft->arena = arena;
+    err = opener(repo, refname, &draft->stage);
     if (!err) {
-        stage->base = profile_open(name, stage_tree(stage->stage));
-        err = profile_load_sheet(stage->base);
+        draft->base = profile_open(name, stage_tree(draft->stage));
+        err = profile_load_sheet(draft->base);
     }
     if (err) {
-        profile_stage_free(stage);
+        profile_draft_free(draft);
         return err;
     }
 
-    /* The sheet the commit carries: the base's, copied into the stage's arena,
+    /* The sheet the commit carries: the base's, copied into the draft's arena,
      * so every claim the base lends stands whatever the edits do, and the commit
      * has the base's to compare it with */
-    stage->sheet = metadata_clone(stage->arena, stage->base->sheet);
+    draft->sheet = metadata_clone(draft->arena, draft->base->sheet);
 
-    *out = stage;
+    *out = draft;
     return NULL;
 }
 
-error_t profile_stage_open(git_repository *repo, const char *name, profile_stage_t **out) {
-    return profile_stage_seed(repo, name, stage_open, out);
-}
-
-error_t profile_stage_orphan(git_repository *repo, const char *name, profile_stage_t **out) {
-    return profile_stage_seed(repo, name, stage_orphan, out);
-}
-
-profile_t *profile_stage_base(const profile_stage_t *stage) {
-    CHECK_NULL(stage);
-
-    return stage->base;
-}
-
-error_t profile_stage_remove(
-    profile_stage_t *stage, path_kind_t kind, const char *storage_path
+error_t profile_draft_open(
+    git_repository *repo, const char *name, profile_draft_t **out
 ) {
-    CHECK_NULL(stage);
+    return profile_draft_seed(repo, name, stage_open, out);
+}
+
+error_t profile_draft_orphan(
+    git_repository *repo, const char *name, profile_draft_t **out
+) {
+    return profile_draft_seed(repo, name, stage_orphan, out);
+}
+
+profile_t *profile_draft_base(const profile_draft_t *draft) {
+    CHECK_NULL(draft);
+
+    return draft->base;
+}
+
+error_t profile_remove(profile_draft_t *draft, path_kind_t kind, const char *storage_path) {
+    CHECK_NULL(draft);
     CHECK_NULL(storage_path);
 
     switch (kind) {
         case PATH_KIND_FILE: {
             /* The blob leaves the tree, refused in the stage's words where the
              * tree holds none, so a refusal leaves the sheet as it was */
-            error_t err = stage_remove(stage->stage, storage_path);
+            error_t err = stage_remove(draft->stage, storage_path);
             if (err) return err;
 
             /* And its FILE item with it, where one stands: its own kind alone,
              * so a directory claim at the name stays — carried, it stands again
              * once the blob is gone */
-            metadata_remove_item(stage->sheet, PATH_KIND_FILE, storage_path);
+            metadata_remove_item(draft->sheet, PATH_KIND_FILE, storage_path);
 
             return NULL;
         }
@@ -1058,10 +1059,10 @@ error_t profile_stage_remove(
         case PATH_KIND_DIRECTORY: {
             /* A directory claim's whole footprint is its item, so none of that
              * kind at the name is the sheet's refusal, naming the profile */
-            if (!metadata_remove_item(stage->sheet, PATH_KIND_DIRECTORY, storage_path)) {
+            if (!metadata_remove_item(draft->sheet, PATH_KIND_DIRECTORY, storage_path)) {
                 return error_create(
                     ERR_NOT_FOUND, "Profile '%s' claims no directory at '%s'",
-                    stage->base->name, storage_path
+                    draft->base->name, storage_path
                 );
             }
 
@@ -1086,23 +1087,20 @@ error_t profile_stage_remove(
  * such claim — the copy's key order — so a commit's claims say one sentence
  * whatever order its writer made them in.
  *
- * Readers: profile_stage_admit, of a blob a writer chooses before it reads it;
- * and profile_stage_capture_file and profile_stage_restore_file, each before
- * its put.
+ * Readers: profile_admit, of a blob a writer chooses before it reads it; and
+ * profile_capture_file and profile_restore_file, each before its put.
  *
- * @param stage The stage
+ * @param draft The draft
  * @param storage_path The name a blob would stand at
  * @return The refusal, ERR_CONFLICT naming the claim; the classification's failure,
  *         a subtree of the base that will not load; or NULL
  */
-static error_t profile_stage_refuse_beneath(
-    const profile_stage_t *stage, const char *storage_path
-) {
+static error_t profile_refuse_beneath(const profile_draft_t *draft, const char *storage_path) {
     /* The directory claims strictly beneath the name, one slice of the copy's
      * key order: one at the name is the put rule's, and one above it the way
      * every path has. None, in the common case, found in one search */
     const metadata_items_t beneath = metadata_items_beneath(
-        stage->sheet, PATH_KIND_DIRECTORY, storage_path
+        draft->sheet, PATH_KIND_DIRECTORY, storage_path
     );
 
     for (size_t i = 0; i < beneath.count; i++) {
@@ -1113,30 +1111,28 @@ static error_t profile_stage_refuse_beneath(
         /* As the base classifies it (profile_blob_above): a claim a blob in the
          * base stands at or above claims nothing, and is in nothing's way */
         size_t above = 0;
-        error_t err = profile_blob_above(stage->base, dir->key, &above);
+        error_t err = profile_blob_above(draft->base, dir->key, &above);
         if (err) return err;
         if (above > 0) continue;
 
         return error_create(
             ERR_CONFLICT, "Cannot stage '%s': '%s' is a directory profile '%s' "
-            "claims beneath it", storage_path, dir->key, stage->base->name
+            "claims beneath it", storage_path, dir->key, draft->base->name
         );
     }
 
     return NULL;
 }
 
-error_t profile_stage_admit(
-    profile_stage_t *stage, path_kind_t kind, const char *storage_path
-) {
-    CHECK_NULL(stage);
+error_t profile_admit(profile_draft_t *draft, path_kind_t kind, const char *storage_path) {
+    CHECK_NULL(draft);
     CHECK_NULL(storage_path);
 
     /* The tree as the writer chooses its names, made at its first question: only
      * a writer that chooses its names before it reads them asks, and an index
      * of the whole tree at every other open would buy those nothing */
-    if (!stage->admission) {
-        error_t err = stage_admission_create(stage->stage, &stage->admission);
+    if (!draft->admission) {
+        error_t err = stage_admission_create(draft->stage, &draft->admission);
         if (err) return err;
     }
 
@@ -1146,25 +1142,25 @@ error_t profile_stage_admit(
              * name has no tree entry for the tree's half to find. Then the tree's,
              * which records the blob, so the next name is asked of a tree that
              * holds it */
-            error_t err = profile_stage_refuse_beneath(stage, storage_path);
+            error_t err = profile_refuse_beneath(draft, storage_path);
             if (err) return err;
 
-            return stage_admit_blob(stage->admission, storage_path);
+            return stage_admit_blob(draft->admission, storage_path);
         }
 
         case PATH_KIND_DIRECTORY: {
             /* The tree's half: a blob at the name or above it — the opened tree's,
              * or one admitted since — leaves the directory none */
-            error_t err = stage_admit_subtree(stage->admission, storage_path);
+            error_t err = stage_admit_subtree(draft->admission, storage_path);
             if (err) return err;
 
             /* And the walk's word, in the sheet the commit carries, its attributes
-             * left to the look its capture takes (profile_stage_capture_directory):
-             * a blob chosen above it later meets it at its own admission, as
-             * one above a claim the base holds does. A claim the profile tracks
-             * there already says it */
+             * left to the look its capture takes (profile_capture_directory): a
+             * blob chosen above it later meets it at its own admission, as one
+             * above a claim the base holds does. A claim the profile tracks there
+             * already says it */
             const metadata_item_t *held = metadata_find_item(
-                stage->sheet, PATH_KIND_DIRECTORY, storage_path
+                draft->sheet, PATH_KIND_DIRECTORY, storage_path
             );
             if (held && held->tracked) return NULL;
 
@@ -1174,7 +1170,7 @@ error_t profile_stage_admit(
                 .mode    = MODE_UNCLAIMED,
                 .tracked = true,
             };
-            metadata_write_item(stage->sheet, &item);
+            metadata_write_item(draft->sheet, &item);
 
             return NULL;
         }
@@ -1192,32 +1188,33 @@ error_t profile_stage_admit(
  * put pays one search, and of the base, so a claim void before the commit — a
  * blob at its name or above it — is carried, and stands again once that blob goes.
  *
- * Readers: profile_stage_capture_file and profile_stage_restore_file, each after
- * its put.
+ * Readers: profile_capture_file and profile_restore_file, each after its put.
  *
- * @param stage The stage
+ * @param draft The draft
  * @param storage_path The name the blob was written at
  * @return Error or NULL on success: the classification's, a subtree of the base
  *         that will not load
  */
-static error_t profile_stage_convert(profile_stage_t *stage, const char *storage_path) {
-    if (!metadata_find_item(stage->sheet, PATH_KIND_DIRECTORY, storage_path)) return NULL;
+static error_t profile_convert(profile_draft_t *draft, const char *storage_path) {
+    if (!metadata_find_item(draft->sheet, PATH_KIND_DIRECTORY, storage_path)) {
+        return NULL;
+    }
 
     /* As the base classifies it (profile_blob_above): a blob there contradicts
      * the claim, which rides the write */
     size_t above = 0;
-    error_t err = profile_blob_above(stage->base, storage_path, &above);
+    error_t err = profile_blob_above(draft->base, storage_path, &above);
     if (err || above > 0) return err;
 
-    metadata_remove_item(stage->sheet, PATH_KIND_DIRECTORY, storage_path);
+    metadata_remove_item(draft->sheet, PATH_KIND_DIRECTORY, storage_path);
     return NULL;
 }
 
-error_t profile_stage_capture_file(
-    profile_stage_t *stage, const char *storage_path, const content_capture_t *capture,
+error_t profile_capture_file(
+    profile_draft_t *draft, const char *storage_path, const content_capture_t *capture,
     arena_t *arena, profile_claim_t *out
 ) {
-    CHECK_NULL(stage);
+    CHECK_NULL(draft);
     CHECK_NULL(storage_path);
     CHECK_NULL(capture);
     CHECK_NULL(arena);
@@ -1225,7 +1222,7 @@ error_t profile_stage_capture_file(
 
     /* Every refusal before anything moves: the claim off the look first, which
      * an owner this host cannot name refuses, its names spelled in the caller's
-     * arena — the record built from the claim is read past the stage; then the
+     * arena — the record built from the claim is read past the draft; then the
      * admission's two halves, the sheet's and the tree's, the put asking the
      * second of the index it writes and writing the blob only once it is
      * admitted */
@@ -1234,17 +1231,17 @@ error_t profile_stage_capture_file(
     error_t err = metadata_capture_file(
         storage_path, &capture->st, capture->encrypted, arena, &item
     );
-    if (!err) err = profile_stage_refuse_beneath(stage, storage_path);
+    if (!err) err = profile_refuse_beneath(draft, storage_path);
     if (!err) {
         err = stage_put(
-            stage->stage, storage_path, capture->bytes.data, capture->bytes.size,
+            draft->stage, storage_path, capture->bytes.data, capture->bytes.size,
             capture->mode, &blob
         );
     }
 
     /* Then the put rule at the name, whose one failure — a subtree of the base
-     * that will not load — leaves the put made, a stage its writer abandons */
-    if (!err) err = profile_stage_convert(stage, storage_path);
+     * that will not load — leaves the put made, a draft its writer abandons */
+    if (!err) err = profile_convert(draft, storage_path);
     if (err) return err;
 
     /* The claim the commit now carries at the name, by the walk's own decode
@@ -1253,16 +1250,16 @@ error_t profile_stage_capture_file(
      * the retire of the item standing there (core/metadata.h
      * metadata_write_item) */
     *out = profile_decode_blob(storage_path, &blob, capture->mode, &item);
-    metadata_write_item(stage->sheet, &item);
+    metadata_write_item(draft->sheet, &item);
 
     return NULL;
 }
 
-error_t profile_stage_capture_directory(
-    profile_stage_t *stage, const char *storage_path, const struct stat *st,
+error_t profile_capture_directory(
+    profile_draft_t *draft, const char *storage_path, const struct stat *st,
     arena_t *arena, profile_claim_t *out
 ) {
-    CHECK_NULL(stage);
+    CHECK_NULL(draft);
     CHECK_NULL(storage_path);
     CHECK_NULL(st);
     CHECK_NULL(arena);
@@ -1279,7 +1276,7 @@ error_t profile_stage_capture_directory(
      * kind, over the directory claim at the name whatever it said: a FILE item
      * no blob backs there is the other kind's, and rides */
     *out = profile_decode_directory(&item);
-    metadata_write_item(stage->sheet, &item);
+    metadata_write_item(draft->sheet, &item);
 
     return NULL;
 }
@@ -1299,17 +1296,17 @@ error_t profile_stage_capture_directory(
  * fail: every answer the disk gives is one of the three, and the one the capture
  * refuses is the silence of the third.
  *
- * Reader: profile_stage_capture_ancestors, each rung of each leaf it climbs.
+ * Reader: profile_capture_ancestors, each rung of each leaf it climbs.
  *
- * @param stage The stage: the copy the rung's claim is read and written in, and
+ * @param draft The draft: the copy the rung's claim is read and written in, and
  *              the arena the rung's place is spelled into
  * @param mounts The table the rung's name resolves through
  * @param rung The rung's name
  * @param captured Incremented where the rung's claim moved
  * @param retired Receives the name where the rung's claim goes
  */
-static void profile_stage_capture_rung(
-    profile_stage_t *stage, const mount_table_t *mounts, const char *rung,
+static void profile_capture_rung(
+    profile_draft_t *draft, const mount_table_t *mounts, const char *rung,
     size_t *captured, string_array_t *retired
 ) {
     /* The directory claim at the rung, the one a derivation may touch, and only
@@ -1321,7 +1318,9 @@ static void profile_stage_capture_rung(
      * rung is claimed beside it — the way's mode is the claim another machine
      * creates the rung by. The prune is no authority over it either: it takes
      * derivations, and this item is not one. */
-    const metadata_item_t *held = metadata_find_item(stage->sheet, PATH_KIND_DIRECTORY, rung);
+    const metadata_item_t *held = metadata_find_item(
+        draft->sheet, PATH_KIND_DIRECTORY, rung
+    );
     if (held && held->tracked) return;
 
     /* Where the rung stands is where its own name resolves. The climb carries
@@ -1331,7 +1330,9 @@ static void profile_stage_capture_rung(
      * the cross-check this shape deleted used to assert. One producer places a
      * name (infra/mount.h mount_resolve); the cost is one table scan per rung
      * per leaf, bounded by the profile count. */
-    const char *filesystem_path = mount_resolve(stage->arena, mounts, stage->base->name, rung);
+    const char *filesystem_path = mount_resolve(
+        draft->arena, mounts, draft->base->name, rung
+    );
 
     /* A rung this machine cannot place — an unbound custom/ name — has no answer
      * to give, the same silence as a rung nothing stands at. */
@@ -1357,7 +1358,7 @@ static void profile_stage_capture_rung(
      * was there at capture time never authored a claim to drop; this is the same
      * consent, one command later. */
     if (occupant != FS_OCCUPANT_DIRECTORY) {
-        if (metadata_remove_item(stage->sheet, PATH_KIND_DIRECTORY, rung)) {
+        if (metadata_remove_item(draft->sheet, PATH_KIND_DIRECTORY, rung)) {
             string_array_push(retired, rung);
         }
         return;
@@ -1370,21 +1371,21 @@ static void profile_stage_capture_rung(
      * creates it as it would have before. Its error is dropped — one per such
      * rung, per leaf climbed through it. */
     metadata_item_t item;
-    error_t err = metadata_capture_directory(rung, &st, false, stage->arena, &item);
+    error_t err = metadata_capture_directory(rung, &st, false, draft->arena, &item);
     if (err) return;
 
     /* The claim written, and counted where it moved the sheet: a re-derivation
      * that found nothing new moves nothing (core/metadata.h metadata_write_item),
      * so nothing is counted and the commit's gate never fires on a chain that
      * has not moved */
-    if (metadata_write_item(stage->sheet, &item)) (*captured)++;
+    if (metadata_write_item(draft->sheet, &item)) (*captured)++;
 }
 
-void profile_stage_capture_ancestors(
-    profile_stage_t *stage, const mount_table_t *mounts, const char *storage_path,
+void profile_capture_ancestors(
+    profile_draft_t *draft, const mount_table_t *mounts, const char *storage_path,
     size_t *captured, string_array_t *retired
 ) {
-    CHECK_NULL(stage);
+    CHECK_NULL(draft);
     CHECK_NULL(mounts);
     CHECK_NULL(storage_path);
     CHECK_NULL(captured);
@@ -1399,16 +1400,16 @@ void profile_stage_capture_ancestors(
     /* Every rung is a prefix of the leaf's own name, so one copy spells them
      * all: each separator truncates it in place and is restored before the next
      * one extends past it. The scan reads the caller's string, which is never
-     * written, so the cut is an offset into it. The copy is the stage's arena's,
+     * written, so the cut is an offset into it. The copy is the draft's arena's,
      * as each rung's place is; what keeps a rung — the copy's item, the retired
      * array — copies it. */
-    char *rung = arena_strdup(stage->arena, storage_path);
+    char *rung = arena_strdup(draft->arena, storage_path);
 
     for (const char *sep = first; sep; sep = strchr(sep + 1, '/')) {
         size_t cut = (size_t) (sep - storage_path);
 
         rung[cut] = '\0';
-        profile_stage_capture_rung(stage, mounts, rung, captured, retired);
+        profile_capture_rung(draft, mounts, rung, captured, retired);
         rung[cut] = '/';
     }
 }
@@ -1417,37 +1418,36 @@ void profile_stage_capture_ancestors(
  * The way a restored file stood on at the commit it came from
  *
  * Each rung of `storage_path` — a separator of its label's tail, the word and
- * the leaf excluded, as the climb names them (profile_stage_capture_ancestors)
- * — paired from the leaf with a rung of `from_storage_path`: both names place
- * one path, so their tails end alike, and the pairing ends where either runs
- * out. Each rung is decided alone, since the base may hold a rung by a sheet
- * claim with nothing above it. A rung the base holds anything at is the base's
- * word on that directory, kept as it stands; at one it holds nothing at, `from`'s
- * directory claim at the pair is written, derived. No disk read: the commit is
- * the source.
+ * the leaf excluded, as the climb names them (profile_capture_ancestors) — paired
+ * from the leaf with a rung of `from_storage_path`: both names place one path,
+ * so their tails end alike, and the pairing ends where either runs out. Each
+ * rung is decided alone, since the base may hold a rung by a sheet claim with
+ * nothing above it. A rung the base holds anything at is the base's word on that
+ * directory, kept as it stands; at one it holds nothing at, `from`'s directory
+ * claim at the pair is written, derived. No disk read: the commit is the source.
  *
  * Asked after the put, of the base, which the restore edited at the leaf alone:
  * the put admitted, no blob stands at or above any rung, so every claim at a
  * rung stands, and a claim written there replaces none the base contradicts.
  *
- * Reader: profile_stage_restore_file.
+ * Reader: profile_restore_file.
  *
- * @param stage The stage
+ * @param draft The draft
  * @param from The profile at the commit
  * @param from_storage_path The commit's name for the file
  * @param storage_path The name the restore writes
  * @return Error or NULL on success: a subtree that will not load, in either tree
  */
-static error_t profile_stage_restore_ancestors(
-    profile_stage_t *stage, profile_t *from, const char *from_storage_path,
+static error_t profile_restore_ancestors(
+    profile_draft_t *draft, profile_t *from, const char *from_storage_path,
     const char *storage_path
 ) {
-    /* Each name copied once into the stage's arena, as the climb spells its rungs,
+    /* Each name copied once into the draft's arena, as the climb spells its rungs,
      * and cut from the leaf in step, a rung of each at every cut: a name is read
      * past its label's word alone (infra/label.h label_tail), so the word is
      * never a rung */
-    char *rung = arena_strdup(stage->arena, storage_path);
-    char *pair = arena_strdup(stage->arena, from_storage_path);
+    char *rung = arena_strdup(draft->arena, storage_path);
+    char *pair = arena_strdup(draft->arena, from_storage_path);
 
     for (;;) {
         /* The next rung of each name, at its last separator left; a name with
@@ -1462,7 +1462,7 @@ static error_t profile_stage_restore_ancestors(
          * directory claim — is the base's, by the namespace's own question, the
          * one every reader asks there (profile_holds) */
         profile_held_t held;
-        error_t err = profile_holds(stage->base, rung, &held);
+        error_t err = profile_holds(draft->base, rung, &held);
         if (err) return err;
         if (held.kind != PROFILE_HELD_NOTHING) continue;
 
@@ -1471,7 +1471,9 @@ static error_t profile_stage_restore_ancestors(
          * file's way, never a directory's tracking. A FILE item no blob backs
          * at the rung is the other kind's, and stays beside it */
         const profile_claim_t *claim = NULL;
-        err = profile_find(from, PROFILE_READ_STRICT, PATH_KIND_DIRECTORY, pair, &claim);
+        err = profile_find(
+            from, PROFILE_READ_STRICT, PATH_KIND_DIRECTORY, pair, &claim
+        );
         if (err) return err;
         if (!claim) continue;
 
@@ -1482,15 +1484,15 @@ static error_t profile_stage_restore_ancestors(
             .owner = claim->owner,
             .group = claim->group,
         };
-        metadata_write_item(stage->sheet, &item);
+        metadata_write_item(draft->sheet, &item);
     }
 }
 
-error_t profile_stage_restore_file(
-    profile_stage_t *stage, const profile_claim_t *claim, profile_t *from,
+error_t profile_restore_file(
+    profile_draft_t *draft, const profile_claim_t *claim, profile_t *from,
     const char *from_storage_path
 ) {
-    CHECK_NULL(stage);
+    CHECK_NULL(draft);
     CHECK_NULL(claim);
     CHECK_NULL(from);
     CHECK_NULL(from_storage_path);
@@ -1498,19 +1500,19 @@ error_t profile_stage_restore_file(
     /* The admission's two halves, each refusing before anything moves: the sheet's,
      * then the tree's, which the put asks of the index it writes — the entry at
      * its id, an object the ODB holds by the commit, so nothing is written here */
-    error_t err = profile_stage_refuse_beneath(stage, claim->storage_path);
+    error_t err = profile_refuse_beneath(draft, claim->storage_path);
     if (!err) {
         err = stage_put_blob(
-            stage->stage, claim->storage_path, &claim->blob_oid,
+            draft->stage, claim->storage_path, &claim->blob_oid,
             gitops_type_filemode(claim->type)
         );
     }
 
     /* Then the put rule at the name, and the way the commit stood the file on */
-    if (!err) err = profile_stage_convert(stage, claim->storage_path);
+    if (!err) err = profile_convert(draft, claim->storage_path);
     if (!err) {
-        err = profile_stage_restore_ancestors(
-            stage, from, from_storage_path, claim->storage_path
+        err = profile_restore_ancestors(
+            draft, from, from_storage_path, claim->storage_path
         );
     }
     if (err) return err;
@@ -1526,15 +1528,15 @@ error_t profile_stage_restore_file(
         .group     = claim->group,
         .encrypted = claim->encrypted,
     };
-    metadata_write_item(stage->sheet, &item);
+    metadata_write_item(draft->sheet, &item);
 
     return NULL;
 }
 
-error_t profile_stage_put_machinery(
-    profile_stage_t *stage, const char *name, const void *bytes, size_t size
+error_t profile_put_machinery(
+    profile_draft_t *draft, const char *name, const void *bytes, size_t size
 ) {
-    CHECK_NULL(stage);
+    CHECK_NULL(draft);
     CHECK_NULL(name);
 
     /* The door's contract, and no refusal of a user's: a name in the grammar is
@@ -1550,21 +1552,21 @@ error_t profile_stage_put_machinery(
     );
 
     /* A regular blob, at once in the object database (sys/stage.h stage_put) */
-    return stage_put(stage->stage, name, bytes, size, GIT_FILEMODE_BLOB, NULL);
+    return stage_put(draft->stage, name, bytes, size, GIT_FILEMODE_BLOB, NULL);
 }
 
-error_t profile_stage_changed(const profile_stage_t *stage, bool *out) {
-    CHECK_NULL(stage);
+error_t profile_changed(const profile_draft_t *draft, bool *out) {
+    CHECK_NULL(draft);
     CHECK_NULL(out);
 
-    /* Each document against the one the stage opened, by its owner: the sheet
+    /* Each document against the one the draft opened, by its owner: the sheet
      * claim by claim, which reads nothing; then the tree, entry by entry */
-    if (!metadata_same(stage->sheet, stage->base->sheet)) {
+    if (!metadata_same(draft->sheet, draft->base->sheet)) {
         *out = true;
         return NULL;
     }
 
-    return stage_changed(stage->stage, out);
+    return stage_changed(draft->stage, out);
 }
 
 /**
@@ -1581,15 +1583,15 @@ error_t profile_stage_changed(const profile_stage_t *stage, bool *out) {
  * one above it is the ancestry every path has — so the claims asked are one slice
  * of the copy's key order (core/metadata.h metadata_items_beneath).
  *
- * Reader: profile_stage_prune_ancestors.
+ * Reader: profile_prune_ancestors.
  *
- * @param stage The stage, whose copy is asked
+ * @param draft The draft, whose copy is asked
  * @param key The derivation's key
  * @return true iff a tracked directory claim stands strictly beneath it
  */
-static bool profile_stage_tracked_beneath(const profile_stage_t *stage, const char *key) {
+static bool profile_tracked_beneath(const profile_draft_t *draft, const char *key) {
     const metadata_items_t beneath = metadata_items_beneath(
-        stage->sheet, PATH_KIND_DIRECTORY, key
+        draft->sheet, PATH_KIND_DIRECTORY, key
     );
 
     for (size_t i = 0; i < beneath.count; i++) {
@@ -1602,7 +1604,7 @@ static bool profile_stage_tracked_beneath(const profile_stage_t *stage, const ch
 /**
  * Prune the derivations nothing stands beneath
  *
- * The ancestors' third edit (profile_stage_t): the climb and the way author a
+ * The ancestors' third edit (profile_draft_t): the climb and the way author a
  * derived claim at a rung because something beneath it stands, and this removes
  * one the moment nothing does. A tracked claim is not this pass's subject at
  * all — the walk's own word stands with nothing beneath it and at any attributes,
@@ -1631,18 +1633,18 @@ static bool profile_stage_tracked_beneath(const profile_stage_t *stage, const ch
  * neither, so a removal changes no later decision, and the keys come back in
  * key order.
  *
- * Reader: profile_stage_commit, past its gate.
+ * Reader: profile_commit, past its gate.
  *
- * @param stage The stage
+ * @param draft The draft
  * @param pruned Receives the keys pruned, appended as copies in the array's arena;
  *               NULL where the writer keeps none, one with no record phase
  * @return Error or NULL on success: a failed look at the index, which must not
  *         prune
  */
-static error_t profile_stage_prune_ancestors(profile_stage_t *stage, string_array_t *pruned) {
-    git_index *index = stage_index(stage->stage);
+static error_t profile_prune_ancestors(profile_draft_t *draft, string_array_t *pruned) {
+    git_index *index = stage_index(draft->stage);
 
-    metadata_items_t directories = metadata_items(stage->sheet, PATH_KIND_DIRECTORY);
+    metadata_items_t directories = metadata_items(draft->sheet, PATH_KIND_DIRECTORY);
     for (size_t d = 0; d < directories.count;) {
         const metadata_item_t *dir = directories.entries[d];
 
@@ -1651,8 +1653,7 @@ static error_t profile_stage_prune_ancestors(profile_stage_t *stage, string_arra
          * the directory — it stands with nothing beneath it and at any attributes,
          * and it leaves the sheet where a verb takes it, never by inference
          * (core/metadata.h). The field the climb's rung reads to leave a standing
-         * claim alone (profile_stage_capture_rung), asked here for the same
-         * reason. */
+         * claim alone (profile_capture_rung), asked here for the same reason. */
         if (dir->tracked) {
             d++;
             continue;
@@ -1662,10 +1663,10 @@ static error_t profile_stage_prune_ancestors(profile_stage_t *stage, string_arra
          * can hold. The sheet's items are not the universe there — a symlink
          * tracked without elevation carries no item, yet still anchors its parent
          * — so the index is the authority. It is sorted, so one prefix probe
-         * answers, the prefix spelled into the stage's arena; a failed look must
+         * answers, the prefix spelled into the draft's arena; a failed look must
          * not prune. */
         int rc = git_index_find_prefix(
-            NULL, index, arena_str_format(stage->arena, "%s/", dir->key)
+            NULL, index, arena_str_format(draft->arena, "%s/", dir->key)
         );
         if (rc != 0 && rc != GIT_ENOTFOUND) {
             return error_git(rc, "Cannot search the tree beneath '%s'", dir->key);
@@ -1673,7 +1674,7 @@ static error_t profile_stage_prune_ancestors(profile_stage_t *stage, string_arra
 
         /* And the other half: the one path a tree cannot hold. Anchored by either,
          * the derivation stands, and the cursor moves past it. */
-        if (rc == 0 || profile_stage_tracked_beneath(stage, dir->key)) {
+        if (rc == 0 || profile_tracked_beneath(draft, dir->key)) {
             d++;
             continue;
         }
@@ -1683,18 +1684,18 @@ static error_t profile_stage_prune_ancestors(profile_stage_t *stage, string_arra
          * and the slice is read again, the removal having moved the entries behind
          * the cursor up to it */
         if (pruned) string_array_push(pruned, dir->key);
-        metadata_remove_item(stage->sheet, PATH_KIND_DIRECTORY, dir->key);
-        directories = metadata_items(stage->sheet, PATH_KIND_DIRECTORY);
+        metadata_remove_item(draft->sheet, PATH_KIND_DIRECTORY, dir->key);
+        directories = metadata_items(draft->sheet, PATH_KIND_DIRECTORY);
     }
 
     return NULL;
 }
 
-error_t profile_stage_commit(
-    profile_stage_t *stage, const char *message, bool *out_committed,
+error_t profile_commit(
+    profile_draft_t *draft, const char *message, bool *out_committed,
     string_array_t *pruned
 ) {
-    CHECK_NULL(stage);
+    CHECK_NULL(draft);
     CHECK_NULL(message);
 
     /* No commit until the tree write answers one: every return before it says
@@ -1704,43 +1705,43 @@ error_t profile_stage_commit(
     /* Nothing an edit moved: nothing prunes, nothing is saved, nothing commits
      * — imported redundancy rides a commit and never drives one */
     bool changed = false;
-    error_t err = profile_stage_changed(stage, &changed);
+    error_t err = profile_changed(draft, &changed);
     if (err || !changed) return err;
 
     /* The prune, against the stage's index — the tree the commit will record,
      * the removed file claims gone from it (the judge's own contract,
-     * profile_stage_prune_ancestors): removing a file may leave the derived claim
-     * above it with nothing tracked beneath. The index answers that for every
-     * path a tree can hold — never the sheet's items, which omit unelevated
-     * symlinks — and the copy's own tracked claims answer it for the one path
-     * it cannot, an empty directory. Its keys are handed back where the writer
-     * keeps them, for its record phase. */
-    err = profile_stage_prune_ancestors(stage, pruned);
+     * profile_prune_ancestors): removing a file may leave the derived claim above
+     * it with nothing tracked beneath. The index answers that for every path a
+     * tree can hold — never the sheet's items, which omit unelevated symlinks —
+     * and the copy's own tracked claims answer it for the one path it cannot,
+     * an empty directory. Its keys are handed back where the writer keeps them,
+     * for its record phase. */
+    err = profile_prune_ancestors(draft, pruned);
     if (err) return err;
 
     /* The sheet, saved only where its claims are no longer the base's: a commit
      * whose edits took no item and pruned none keeps the sheet's bytes as they
      * stand, a hand's spelling included, as the stage keeps a tree no edit moved
      * (core/metadata.h metadata_same) */
-    err = metadata_same(stage->sheet, stage->base->sheet)
-        ? NULL : metadata_save_to_stage(stage->stage, stage->sheet);
+    err = metadata_same(draft->sheet, draft->base->sheet)
+        ? NULL : metadata_save_to_stage(draft->stage, draft->sheet);
     if (err) return err;
 
     /* One commit, the tree and the sheet in one tree write, whether it landed
      * the write's own answer: none where the tree is the one the stage opened,
      * and a head another writer moved since the open is refused (sys/stage.h
      * stage_commit) */
-    return stage_commit(stage->stage, message, out_committed);
+    return stage_commit(draft->stage, message, out_committed);
 }
 
-void profile_stage_free(profile_stage_t *stage) {
-    if (!stage) return;
+void profile_draft_free(profile_draft_t *draft) {
+    if (!draft) return;
 
     /* The admission, its own; then the base, before the stage whose tree it
      * borrows; then the stage, which undoes nothing in the repository (sys/stage.h
      * stage_free); then the arena, the struct and the copy with it */
-    stage_admission_free(stage->admission);
-    profile_free(stage->base);
-    stage_free(stage->stage);
-    arena_free(stage->arena);
+    stage_admission_free(draft->admission);
+    profile_free(draft->base);
+    stage_free(draft->stage);
+    arena_free(draft->arena);
 }

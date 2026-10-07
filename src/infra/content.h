@@ -549,17 +549,17 @@ error_t content_require_encryption(
  * the other three are values rather than resources, read by both callers past
  * it — the bytes go on the stage (bytes, mode), the claim is authored from the
  * look (core/metadata.h metadata_capture_file: st, encrypted), both by a profile's
- * next commit (core/profiles.h profile_stage_capture_file), and the record is
- * bound to it (core/state.h state_stat_from_read: st). A free written to its
- * siblings' shape — `*capture = (content_capture_t){ 0 }`, as compare_diff_deinit
- * and gitops_blob_view_close are written — would leave both commands anchoring
- * a zero stat: a wrong record, with no crash.
+ * draft (core/profiles.h profile_capture_file), and the record is bound to it
+ * (core/state.h state_stat_from_read: st). A free written to its siblings' shape
+ * — `*capture = (content_capture_t){ 0 }`, as compare_diff_deinit and
+ * gitops_blob_view_close are written — would leave both commands anchoring a
+ * zero stat: a wrong record, with no crash.
  *
  * Tagged, so a header that takes it by pointer names it without this one
  * (core/profiles.h).
  *
  * Readers: cmds/add.c add_capture and cmds/update.c update_profile, each of which
- * hands it to a profile's next commit and keeps the look for its record.
+ * hands it to a profile's draft and keeps the look for its record.
  */
 typedef struct content_capture {
     buffer_t bytes;        /* What the entry holds: the bytes as read, sealed as told, a link's target */

@@ -39,7 +39,7 @@
  *
  * A regular file is sealed as the policy decides (core/policy.h), and the seal
  * it keeps — priority 3 — is read off the blob the profile holds at this name
- * in the tree its next commit opened at, by that blob's own bytes (core/profiles.h
+ * in the tree its draft opened at, by that blob's own bytes (core/profiles.h
  * profile_entry, infra/content.h content_classify), never from the sheet's copy
  * of that fact. The view projects the copy for its screens, and a sheet that
  * disagrees with its tree — a hand edit, another tool's commit, the contradicted
@@ -55,14 +55,14 @@
  * look here would only have moved one frame earlier.
  *
  * This routes, decides and captures; the entry and the claim the capture becomes
- * are the profile's next commit's to make (core/profiles.h
- * profile_stage_capture_file), and the record the caller's. So the profile is
- * asked here and never edited: the one question asked of it is the prior above.
+ * are the draft's to make (core/profiles.h profile_capture_file), and the record
+ * the caller's. So the profile is asked here and never edited: the one question
+ * asked of it is the prior above.
  *
  * @param ctx Dispatch context (must not be NULL; supplies the repository, the
  *            key and the encryption policy)
- * @param base The profile as its next commit opened it (must not be NULL): the
- *             blob it holds at the item's name is the prior this capture's policy
+ * @param base The profile as its draft opened it (must not be NULL): the blob
+ *             it holds at the item's name is the prior this capture's policy
  *             reads, and its name the seal's key
  * @param item The path to capture (must not be NULL; its occupant chooses the
  *             capture, its two keys name the source and the seal)
@@ -94,9 +94,9 @@ static error_t update_capture(
     }
 
     /* Priority 3's source: the blob the profile holds at this name in the tree
-     * its next commit opened at — the head, which no edit moves — judged by its
-     * bytes and its mode; no blob at all, a name new to the profile or a gitlink
-     * a hand left, which places nothing, is no prior. A blob that cannot be read
+     * its draft opened at — the head, which no edit moves — judged by its bytes
+     * and its mode; no blob at all, a name new to the profile or a gitlink a
+     * hand left, which places nothing, is no prior. A blob that cannot be read
      * is an error, not "not encrypted": a sniff that defaulted would flip the
      * policy silently. */
     profile_held_t prior;
@@ -137,16 +137,16 @@ static error_t update_capture(
  * What one profile's update commit did, path by path
  *
  * Filled by the walk that does the work — one edit per item on the profile's
- * next commit: the capture for a file, the claim capture for a directory, the
- * removal for a deletion, the ancestry derivation for the chains it climbed,
- * the commit's prune for the directory entries it dropped as redundant — and
- * read back by the commit message and by the record loop (update_write_record),
- * so both follow the commit and nothing else: an item the walk skipped (a directory
- * the race guard refused) lands in no list, is not named, and gets no record
- * write. Whether the commit landed at all is the commit's own answer
- * (core/profiles.h profile_stage_commit) — a walk whose edits leave both documents
- * as the stage opened them lands none, whatever its lists hold — and the executor
- * hands on only the bookkeeping of a commit that landed (update_execute).
+ * draft: the capture for a file, the claim capture for a directory, the removal
+ * for a deletion, the ancestry derivation for the chains it climbed, the commit's
+ * prune for the directory entries it dropped as redundant — and read back by
+ * the commit message and by the record loop (update_write_record), so both follow
+ * the commit and nothing else: an item the walk skipped (a directory the race
+ * guard refused) lands in no list, is not named, and gets no record write. Whether
+ * the commit landed at all is the commit's own answer (core/profiles.h
+ * profile_commit) — a walk whose edits leave both documents as the draft opened
+ * them lands none, whatever its lists hold — and the executor hands on only the
+ * bookkeeping of a commit that landed (update_execute).
  *
  * A capture is kept as the record of what it committed — the node the capture
  * held to, the blob the commit holds at the name, the triple its bytes were read
@@ -159,10 +159,10 @@ static error_t update_capture(
  * storage paths their writers copy out, resolved through the mount table by the
  * record loop — the same route remove's record loop takes. The derivation's two
  * outs are shaped by what a reader can do with them (core/profiles.h
- * profile_stage_capture_ancestors): an authored claim has no consequence beyond
- * the sheet, so `ancestors_captured` is the count the receipt reads, while a
- * dropped claim leaves the view by this commit and only its key can settle the
- * record it strands.
+ * profile_capture_ancestors): an authored claim has no consequence beyond the
+ * sheet, so `ancestors_captured` is the count the receipt reads, while a dropped
+ * claim leaves the view by this commit and only its key can settle the record
+ * it strands.
  *
  * Memory: every member is the command arena's, and nothing frees a commit.
  */
@@ -385,28 +385,28 @@ static void update_partition(
 /**
  * Update a single profile with workspace items
  *
- * One walk, one edit per item on the profile's next commit, each filling the
- * commit's bookkeeping beside it: a deletion takes its claim by its kind, a file's
- * capture becomes its entry and its claim, a directory's its claim. The chain
- * rides the capture: after the walk, every captured leaf's ancestry is re-derived
- * on the same commit — the content now comes from this machine, and so does its
- * way — and a named run hands in the profile's in-scope rows, each a leaf whose
- * chain is climbed whether or not anything about it diverged. The walk ends with
- * the commit, which prunes what nothing stands on any longer and saves the sheet
+ * One walk, one edit per item on the profile's draft, each filling the commit's
+ * bookkeeping beside it: a deletion takes its claim by its kind, a file's capture
+ * becomes its entry and its claim, a directory's its claim. The chain rides the
+ * capture: after the walk, every captured leaf's ancestry is re-derived on the
+ * same commit — the content now comes from this machine, and so does its way —
+ * and a named run hands in the profile's in-scope rows, each a leaf whose chain
+ * is climbed whether or not anything about it diverged. The walk ends with the
+ * commit, which prunes what nothing stands on any longer and saves the sheet
  * where a claim moved.
  *
  * Success means committed or untouched, and the bookkeeping says which
  * (commit->committed, the commit's own answer): a walk whose edits moved nothing
  * — none at all, or captures that put back what the profile holds — commits
- * nothing. A mid-walk failure returns with the stage part-edited: the executor
- * stops the run there, and a stage that is never committed changes nothing in
+ * nothing. A mid-walk failure returns with the draft part-edited: the executor
+ * stops the run there, and a draft that is never committed changes nothing in
  * the repository.
  *
  * @param ctx Dispatch context (must not be NULL; the capture reads the key and
  *            the encryption policy off it, the climb the mount table)
- * @param stage The profile's next commit, opened by the caller (must not be NULL)
+ * @param draft The profile's draft, opened by the caller (must not be NULL)
  * @param profile Profile to update — the enabled set's name, which the bookkeeping
- *                keeps past the stage (must not be NULL)
+ *                keeps past the draft (must not be NULL)
  * @param items The profile's share of the run's work, in filter order (empty
  *              where the profile has only chains to re-derive)
  * @param rows The named run's in-scope view rows for this profile, each the leaf
@@ -418,7 +418,7 @@ static void update_partition(
  */
 static error_t update_profile(
     const dotta_ctx_t *ctx,
-    profile_stage_t *stage,
+    profile_draft_t *draft,
     const char *profile,
     workspace_items_t items,
     manifest_rows_t rows,
@@ -426,7 +426,7 @@ static error_t update_profile(
     update_commit_t *commit
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(stage);
+    CHECK_NULL(draft);
     CHECK_NULL(profile);
     CHECK_NULL(opts);
     CHECK_NULL(commit);
@@ -440,8 +440,8 @@ static error_t update_profile(
     commit->captured = arena_calloc(ctx->arena, items.count, sizeof(*commit->captured));
     commit->deleted = arena_calloc(ctx->arena, items.count, sizeof(*commit->deleted));
 
-    /* One walk, one edit per item on the profile's next commit, each filling
-     * the bookkeeping beside it */
+    /* One walk, one edit per item on the profile's draft, each filling the
+     * bookkeeping beside it */
     for (size_t i = 0; i < items.count; i++) {
         const workspace_item_t *item = items.entries[i];
 
@@ -450,12 +450,12 @@ static error_t update_profile(
          * item's kind, a file's blob and FILE item or a directory's DIRECTORY
          * item, never the other kind's at the name, so a directory claim the
          * blob contradicted stands again once the blob is gone (core/profiles.h
-         * profile_stage_remove). The row said the profile holds it, so one the
-         * commit lacks — another writer's commit since the load — is the model's
-         * error and stops the run, never a no-op. Then the bookkeeping, so the
-         * message names it and the record loop retires it */
+         * profile_remove). The row said the profile holds it, so one the commit
+         * lacks — another writer's commit since the load — is the model's error
+         * and stops the run, never a no-op. Then the bookkeeping, so the message
+         * names it and the record loop retires it */
         if (item->state == WORKSPACE_STATE_DELETED) {
-            error_t err = profile_stage_remove(stage, item->item_kind, item->storage_path);
+            error_t err = profile_remove(draft, item->item_kind, item->storage_path);
             if (err) return err;
 
             output_info(
@@ -471,17 +471,17 @@ static error_t update_profile(
                 output_info(out, OUTPUT_VERBOSE, "  %s", item->filesystem_path);
 
                 /* The capture, and the entry and the claim it becomes on the
-                 * profile's next commit, at the name the seal was made under
+                 * profile's draft, at the name the seal was made under
                  * (infra/content.h). One tail past both: the bytes are released
                  * whichever refused, the look staying readable for the record,
                  * and each refusal names the path itself — the capture's the
                  * file, the commit's the name it lands at */
                 content_capture_t capture = { 0 };
                 profile_claim_t claim;
-                error_t err = update_capture(ctx, profile_stage_base(stage), item, &capture);
+                error_t err = update_capture(ctx, profile_draft_base(draft), item, &capture);
                 if (!err) {
-                    err = profile_stage_capture_file(
-                        stage, item->storage_path, &capture, ctx->arena, &claim
+                    err = profile_capture_file(
+                        draft, item->storage_path, &capture, ctx->arena, &claim
                     );
                 }
                 content_capture_free(&capture);
@@ -571,8 +571,8 @@ static error_t update_profile(
                  * could not confirm. The error is dropped once said, one per
                  * such directory */
                 profile_claim_t claim;
-                error_t err = profile_stage_capture_directory(
-                    stage, item->storage_path, &dir_stat, ctx->arena, &claim
+                error_t err = profile_capture_directory(
+                    draft, item->storage_path, &dir_stat, ctx->arena, &claim
                 );
                 if (err) {
                     output_warning(
@@ -627,8 +627,8 @@ static error_t update_profile(
      * so a chain that reaches here holds directories at every claimed rung. */
     string_array_init(&commit->ancestors_retired, ctx->arena);
     for (size_t i = 0; i < commit->captured_count; i++) {
-        profile_stage_capture_ancestors(
-            stage, ctx->run.mounts, commit->captured[i].storage_path,
+        profile_capture_ancestors(
+            draft, ctx->run.mounts, commit->captured[i].storage_path,
             &commit->ancestors_captured, &commit->ancestors_retired
         );
     }
@@ -640,8 +640,8 @@ static error_t update_profile(
      * named one can, and naming it is the remedy). A row the walk also captured
      * climbs twice for free: the derivation counts only differences. */
     for (size_t i = 0; i < rows.count; i++) {
-        profile_stage_capture_ancestors(
-            stage, ctx->run.mounts, rows.entries[i]->storage_path,
+        profile_capture_ancestors(
+            draft, ctx->run.mounts, rows.entries[i]->storage_path,
             &commit->ancestors_captured, &commit->ancestors_retired
         );
     }
@@ -704,8 +704,8 @@ static error_t update_profile(
      * holds, which a hook rewriting a file between the decision and the capture
      * makes */
     string_array_init(&commit->pruned, ctx->arena);
-    error_t err = profile_stage_commit(
-        stage, commit_message(ctx->arena, ctx->config, &msg_ctx), &commit->committed,
+    error_t err = profile_commit(
+        draft, commit_message(ctx->arena, ctx->config, &msg_ctx), &commit->committed,
         &commit->pruned
     );
     if (err) return err;
@@ -900,8 +900,8 @@ cleanup:
 /**
  * Execute profile updates, in enabled-set order
  *
- * One profile's next commit per profile visited: opened at its head, edited by
- * the walk, committed once, freed — nothing is checked out anywhere.
+ * One draft per profile visited: opened at its head, edited by the walk, committed
+ * once, freed — nothing is checked out anywhere.
  *
  * Profiles are walked in enabled-set order — the model's one canonical profile
  * order — so multi-profile runs commit, report, and (on a stop) strand in one
@@ -920,7 +920,7 @@ cleanup:
  * one whose captures put back what the profile holds, or a failure before its
  * commit — contributes no entry, and its items are neither counted nor said.
  *
- * @param ctx Dispatch context (must not be NULL; the stages are opened on the
+ * @param ctx Dispatch context (must not be NULL; the drafts are opened on the
  *            run's repository, the capture reads the key and the encryption policy)
  * @param enabled The enabled set, in order (must not be NULL)
  * @param work The run's work: the accepted items, less the new files where the
@@ -1003,23 +1003,23 @@ static error_t update_execute(
             profile
         );
 
-        /* The profile's next commit, opened at its head: the parent of the commit
-         * the walk makes, and the profile every question of the walk is asked
-         * of, its sheet read now — one that will not load stops the run in the
-         * loader's words. Its life is this iteration's. */
-        profile_stage_t *stage = NULL;
-        error_t err = profile_stage_open(repo, profile, &stage);
+        /* The profile's draft, opened at its head: the parent of the commit the
+         * walk makes, and the profile every question of the walk is asked of,
+         * its sheet read now — one that will not load stops the run in the loader's
+         * words. Its life is this iteration's. */
+        profile_draft_t *draft = NULL;
+        error_t err = profile_draft_open(repo, profile, &draft);
         if (err) return err;
 
-        /* Update this profile on its stage */
+        /* Update this profile on its draft */
         update_commit_t bookkeeping = { 0 };
         err = update_profile(
-            ctx, stage, profile,
+            ctx, draft, profile,
             (workspace_items_t){ .entries = items, .count = item_count },
             (manifest_rows_t){ .entries = rows, .count = row_count },
             opts, &bookkeeping
         );
-        profile_stage_free(stage);
+        profile_draft_free(draft);
 
         /* Any error is a failure before the commit: no commit landed, whatever
          * the bookkeeping holds */
@@ -1027,7 +1027,7 @@ static error_t update_execute(
 
         /* Whether the commit landed is the commit's own answer, read off the
          * bookkeeping: the walk's lists say what it edited, and edits that left
-         * both documents as the stage opened them are no commit — nothing to
+         * both documents as the draft opened them are no commit — nothing to
          * report, nothing to record */
         if (!bookkeeping.committed) continue;
 

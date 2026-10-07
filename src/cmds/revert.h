@@ -44,7 +44,7 @@ typedef struct {
  *
  * Everything the revert writes is decided before any of it is shown, and shown
  * before it is asked: a dry run and a real run reach the same verdict on the
- * same argument — the same admission, semantic and structural, the stage's own
+ * same argument — the same admission, semantic and structural, the draft's own
  * refusals included — and the prompt is the only gate between the preview and
  * the commit. What no preview can foresee is what is left: a ref another writer
  * moved between the preview and the commit, a repository that will not write.
@@ -76,12 +76,12 @@ typedef struct {
  * The operation:
  * 1. Discovers which profile holds the argument (requires --profile if ambiguous)
  * 2. Resolves commit reference in profile branch history
- * 3. Opens the profile's next commit at its head (core/profiles.h profile_stage_t),
+ * 3. Opens the profile's draft at its head (core/profiles.h profile_draft_t),
  *    and reads the claim the commit holds — a blob's, decoded — what the head's
  *    tree holds at the name the write uses, which may be nothing, and the restored
  *    blob's own bytes
  * 4. Refuses a typed name that would be the profile's second for one path
- * 5. Restores the claim onto the profile's next commit — the write's own admission,
+ * 5. Restores the claim onto the profile's draft — the write's own admission,
  *    made here so that a commit that cannot hold it refuses before the preview
  *    and not after the prompt: the sheet first, since a directory the profile
  *    claims and nothing fills has no entry for the index to find and a blob above

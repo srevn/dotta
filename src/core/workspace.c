@@ -2364,11 +2364,10 @@ typedef struct {
  * before the descent, because an excluded directory is not entered.
  *
  * A best-effort look, and neither a snapshot nor an admission: what the commit
- * can hold at an offered name is the question a profile's next commit asks at
- * update's capture (core/profiles.h profile_stage_capture_file). The view's word
- * closes the one class the view can decide for itself and closes no other — a
- * name the profile's tree or its claim sheet cannot hold is still the capture's
- * to refuse.
+ * can hold at an offered name is the question a profile's draft asks at update's
+ * capture (core/profiles.h profile_capture_file). The view's word closes the
+ * one class the view can decide for itself and closes no other — a name the
+ * profile's tree or its claim sheet cannot hold is still the capture's to refuse.
  *
  * One arrangement the blob rule does not reach, and need not: where a later
  * profile's explicit DIRECTORY claim wins a path an earlier one holds a blob
@@ -2589,8 +2588,8 @@ static workspace_fault_t workspace_scan(
  * could not — a directory it could not list, a path it could not look at, what
  * Git's ignore rules could not judge, withheld — each an unscanned item at the
  * path (workspace_add_unscanned): not a snapshot, and not an admission — what
- * the commit can hold at that name is the question a profile's next commit asks
- * at update's capture (core/profiles.h profile_stage_capture_file).
+ * the commit can hold at that name is the question a profile's draft asks at
+ * update's capture (core/profiles.h profile_capture_file).
  *
  * The driver enumerates the view's tracked directories, one scan each, and the
  * walk descends only into directories the view does not track

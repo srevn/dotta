@@ -533,8 +533,8 @@ const char *ignore_baseline_defaults(void);
  * Profile `.dottaignore` template.
  *
  * Minimal starter content documenting the layering model and baseline inheritance.
- * Put on the stage by `dotta add` when it creates a profile branch, and used by
- * `dotta ignore` when seeding an editor session for an empty profile.
+ * Put on the profile's draft by `dotta add` when it creates a profile branch,
+ * and used by `dotta ignore` when seeding an editor session for an empty profile.
  *
  * @return Static NUL-terminated string (never to be freed)
  */

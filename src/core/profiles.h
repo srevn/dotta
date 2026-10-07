@@ -1,6 +1,6 @@
 /**
- * profiles.h - A profile: what its name says, what it claims at a tree, and its
- * next commit
+ * profiles.h - A profile: what its name says, what it claims at a tree, and the
+ * draft of its next commit
  *
  * A profile is dotta's: a name, and what it claims at each of its commits. Git
  * keeps it as a branch of the same name (sys/gitops.h gitops_branch_refname),
@@ -18,11 +18,12 @@
  * the two documents: it opens the profile at a tree and asks the handle, which
  * reads that tree's own sheet once, at the first question that needs it. What
  * the handle reads is Git's alone, the tree and its sheet: no view, no record,
- * no disk. A writer wants the claims too: it opens the profile's next commit
- * (profile_stage_t), asks the profile at the tree that commit opened at, and
- * edits through it — never the two documents, which the stage keeps together by
- * the rules its type states. The stage looks at the disk in one place, the way
- * above a file a writer captured from it.
+ * no disk. A writer wants the claims too: it opens the profile's draft
+ * (profile_draft_t) — its next commit, built on a stage (sys/stage.h) — asks
+ * the draft's base, the profile at the tree the draft opened at, and edits the
+ * draft: never the two documents, which the draft keeps together by the rules
+ * its type states. The draft looks at the disk in one place, the way above a
+ * file a writer captured from it.
  *
  * The decode, stated once, applied by the walk to every name it meets
  * (profile_walk) and by profile_find to the one it is asked, by the same rules
@@ -59,10 +60,10 @@
  * under "Cannot read profile '%s'" for a walk, and "Cannot read '%s' in profile
  * '%s'" for a question asked at one name — a point question's, or the
  * classification's on the way to a directory claim's name — which names the name
- * it was asked. No reader says the profile again. A removal a profile's next
- * commit cannot make is refused in its own document's words (profile_stage_remove),
- * and a name, a capture or a restore it cannot admit in the stage's
- * (profile_stage_admit, profile_stage_capture_file, profile_stage_restore_file).
+ * it was asked. No reader says the profile again. A removal a profile's draft
+ * cannot make is refused in its own document's words (profile_remove), and a
+ * name, a capture or a restore it cannot admit under "Cannot stage '%s'"
+ * (profile_admit, profile_capture_file, profile_restore_file).
  *
  * Memory: a handle's own, made by profile_open or profile_load and released whole
  * by profile_free: an arena of its own, holding the handle, its copy of the name,
@@ -99,9 +100,9 @@
 #include <sys/stat.h>
 #include <types.h>
 
-/* A profile's next commit takes a capture of a file (infra/content.h) and climbs
- * through a mount table (infra/mount.h), each by pointer; each is named here
- * and defined there. */
+/* A profile's draft takes a capture of a file (infra/content.h) and climbs through
+ * a mount table (infra/mount.h), each by pointer; each is named here and defined
+ * there. */
 typedef struct content_capture content_capture_t;
 typedef struct mount_table mount_table_t;
 
@@ -192,8 +193,7 @@ error_t profile_require(git_repository *repo, const char *name);
  * Lent, its strings with it: for the visit that shows it, or, one profile_find
  * answers, for the life of the handle that answered it. One a capture answers
  * is the caller's: its name the one the caller handed, its owner and group in
- * the arena the caller handed (profile_stage_capture_file,
- * profile_stage_capture_directory).
+ * the arena the caller handed (profile_capture_file, profile_capture_directory).
  */
 typedef struct {
     const char *storage_path;   /* The name: a blob's in the tree, a directory's in the sheet */
@@ -249,8 +249,8 @@ typedef struct profile profile_t;
  * cmds/show.c cmd_show and cmds/list.c list_file_history (the tree the verb
  * selected), cmds/list.c list_profiles and list_files (the tree of the head each
  * listing read, so what each prints is that commit's); profile_load, at the head
- * it read; and a profile's next commit, at the tree its stage opened at — a head,
- * or Git's empty tree (profile_stage_open, profile_stage_orphan).
+ * it read; and a profile's draft, at the tree its stage opened at — a head, or
+ * Git's empty tree (profile_draft_open, profile_draft_orphan).
  *
  * @param name Whose claims these are (must not be NULL; copied)
  * @param tree The tree (must not be NULL; borrowed, and outlives the handle)
@@ -337,8 +337,8 @@ typedef enum {
  *
  * Readers: profile_walk, profile_contradicted and the point questions
  * (profile_holds, profile_find), which read the sheet through it; a profile's
- * next commit, which reads it at the open, strictly, and copies it for the commit
- * (profile_stage_open, profile_stage_orphan); cmds/revert.c cmd_revert, which
+ * draft, which reads it at the open, strictly, and copies it for the commit
+ * (profile_draft_open, profile_draft_orphan); cmds/revert.c cmd_revert, which
  * reads its target commit's before any question of it, its failure said as the
  * commit's; cmds/show.c show_file, whose header says what its tolerant read lost;
  * cmds/list.c list_files, whose verbose rows say what its tolerant walk lost;
@@ -579,8 +579,8 @@ error_t profile_needs_target(profile_t *profile, bool *needs_target);
  * no longer has); SUBMODULE is a gitlink, which dotta never writes (sys/stage.c
  * put_entry refuses the mode) — a verb that acts on one name refuses it by its
  * noun, while a file captured from the disk at its name takes its place, as Git's
- * own add does (profile_stage_capture_file); NOTHING is neither document holding
- * the name.
+ * own add does (profile_capture_file); NOTHING is neither document holding the
+ * name.
  */
 typedef enum {
     PROFILE_HELD_NOTHING,       /* neither document holds the name */
@@ -623,8 +623,8 @@ typedef struct {
  * at the name the restore writes in the head (step 11), the entry's identity
  * what the preview diffs; core/workspace.c workspace_orphan_authority, for a
  * file record, folding a failure to UNVERIFIED; the encryption policy's prior —
- * the blob the profile holds at the name in the tree its next commit opened at,
- * judged by its own bytes, and none where no blob stands — at each capture
+ * the blob the profile holds at the name in the tree its draft opened at, judged
+ * by its own bytes, and none where no blob stands — at each capture
  * (cmds/update.c update_capture) and in add's decision pass (cmds/add.c cmd_add);
  * and add's held-entry gate before it (cmds/add.c cmd_add), what the profile
  * holds under a name the command chose, a file claim being a blob.
@@ -719,8 +719,8 @@ error_t profile_holds(profile_t *profile, const char *storage_path, profile_held
  * revert_target_claim (a file claim, STRICT: the claim the commit holds, which
  * the restore writes), core/workspace.c workspace_orphan_authority (a directory
  * claim, STRICT: whether the profile still backs an orphan's directory), and a
- * profile's next commit at each rung of the way a restore brings back (a directory
- * claim, STRICT, of the commit's profile: profile_stage_restore_file).
+ * profile's draft at each rung of the way a restore brings back (a directory
+ * claim, STRICT, of the commit's profile: profile_restore_file).
  *
  * @param profile Handle (must not be NULL)
  * @param read The sheet's policy for this question
@@ -740,22 +740,22 @@ error_t profile_find(
 );
 
 /**
- * A profile's next commit: both of its documents staged in memory (opaque)
+ * A profile's draft: its next commit, both of its documents in memory (opaque)
  *
- * sys/stage's role one level up (sys/stage.h: one ref's next tree, staged in
- * memory): one profile's next tree, and the sheet that rides it. Opened at the
- * profile's head (profile_stage_open), or over Git's empty tree for a profile
- * the commit creates (profile_stage_orphan), it holds the stage; the profile at
- * the tree the stage opened at — the base, read and never edited, lent for every
- * question a writer asks before it edits; and the sheet the commit will carry —
- * the base's, copied at the open (core/metadata.h metadata_clone) and edited
- * from then on, so every claim the base lends stands whatever the commit does.
- * A writer asks the base and edits the stage; it never holds the sheet — it hands
- * the stage what it captured from the disk or restores from a commit, and the
- * stage authors the claim — and the stage answers what the base cannot: whether
- * a name a writer chooses before reading it has room beside the names chosen
- * with it (profile_stage_admit), and whether its edits move anything
- * (profile_stage_changed). Every edit keeps the document's rules, stated here once:
+ * One profile's next tree, on a stage (sys/stage.h: one ref's next tree, staged
+ * in memory), and the sheet that rides it — a stage is Git's, a draft dotta's.
+ * Opened at the profile's head (profile_draft_open), or over Git's empty tree
+ * for a profile the commit creates (profile_draft_orphan), it holds its stage;
+ * the profile at the tree the stage opened at — the base, read and never edited,
+ * lent for every question a writer asks before it edits; and the sheet the commit
+ * will carry — the base's, copied at the open (core/metadata.h metadata_clone)
+ * and edited from then on, so every claim the base lends stands whatever the
+ * commit does. A writer asks the base and edits the draft; it never holds the
+ * sheet — it hands the draft what it captured from the disk or restores from a
+ * commit, and the draft authors the claim — and the draft answers what the base
+ * cannot: whether a name a writer chooses before reading it has room beside the
+ * names chosen with it (profile_admit), and whether its edits move anything
+ * (profile_changed). Every edit keeps the document's rules, stated here once:
  *   - a write touches its own kind: a removal takes its claim — a file's the
  *     blob and the FILE item at its name, a directory's the DIRECTORY item —
  *     never the other kind's at the same name, so a directory claim a removed
@@ -766,7 +766,7 @@ error_t profile_find(
  *     at the name contradicts rides the write, carried;
  *   - the admission, asked of every blob the commit writes, a capture's and a
  *     restore's, and of every name a writer chooses before it reads a byte
- *     (profile_stage_admit): a blob may stand at a name unless a tracked directory
+ *     (profile_admit): a blob may stand at a name unless a tracked directory
  *     claim the commit carries stands strictly beneath it, one the base does
  *     not contradict — the sheet's half — and unless the tree has no room,
  *     sys/stage's half (sys/stage.h stage_put, stage_put_blob, stage_admit_blob).
@@ -778,15 +778,15 @@ error_t profile_find(
  *   - the ancestors: a derived claim exists iff something tracked stands beneath
  *     it, and three edits keep that — the climb, which claims the way to a leaf
  *     from the disk, each rung where its own name resolves
- *     (profile_stage_capture_ancestors); the way a restored file stood on at
- *     its commit, brought back at each rung the base holds nothing at, with no
- *     disk read (profile_stage_restore_file); and the prune, at the commit, of
- *     every derived claim nothing tracked stands beneath any longer
- *     (core/profiles.c profile_stage_prune_ancestors), its key handed to the
- *     writer's record phase where it has one. Revert has none, so a record a
- *     rung its commit pruned stood on is released by the next load, which finds
- *     the claim gone (core/workspace.c workspace_orphan_authority);
- *   - the gate, each document held against the one the stage opened: a commit
+ *     (profile_capture_ancestors); the way a restored file stood on at its commit,
+ *     brought back at each rung the base holds nothing at, with no disk read
+ *     (profile_restore_file); and the prune, at the commit, of every derived
+ *     claim nothing tracked stands beneath any longer (core/profiles.c
+ *     profile_prune_ancestors), its key handed to the writer's record phase where
+ *     it has one. Revert has none, so a record a rung its commit pruned stood
+ *     on is released by the next load, which finds the claim gone
+ *     (core/workspace.c workspace_orphan_authority);
+ *   - the gate, each document held against the one the draft opened: a commit
  *     no edit of which moved the tree or the sheet makes nothing — no prune, no
  *     save, no commit — so imported redundancy rides a commit and never drives
  *     one; the sheet is saved only where its claims are no longer the base's
@@ -795,15 +795,15 @@ error_t profile_find(
  *
  * Memory: a handle's own — an arena made at the open, holding the struct, the
  * copy of the base's sheet with every claim an edit writes into it, and the names
- * the climb and the prune spell — released by profile_stage_free with the
+ * the climb and the prune spell — released by profile_draft_free with the
  * admission, the base and the stage; the base borrows the stage's tree, and goes
  * before it. What a capture answers is the caller's (profile_claim_t), so the
- * claim outlives the stage that wrote it.
+ * claim outlives the draft that wrote it.
  */
-typedef struct profile_stage profile_stage_t;
+typedef struct profile_draft profile_draft_t;
 
 /**
- * Open a profile's next commit at its head
+ * Open a profile's draft at its head
  *
  * The stage at the profile's branch (sys/stage.h stage_open: a branch that does
  * not stand is refused ERR_NOT_FOUND, naming its reference), the base at the
@@ -813,19 +813,19 @@ typedef struct profile_stage profile_stage_t;
  *
  * Readers: cmds/add.c cmd_add, for a profile its pre-flight found; cmds/remove.c
  * remove_paths, cmds/revert.c cmd_revert, and cmds/update.c update_execute, one
- * profile's next commit for each profile the update visits.
+ * draft for each profile the update visits.
  *
- * @param repo Repository (must not be NULL; borrowed for the stage's life)
+ * @param repo Repository (must not be NULL; borrowed for the draft's life)
  * @param name The profile's name, which its branch is named by (must not be NULL;
  *             copied)
- * @param out The stage (must not be NULL; released by profile_stage_free); NULL
+ * @param out The draft (must not be NULL; released by profile_draft_free); NULL
  *            on a failure
  * @return Error or NULL on success
  */
-error_t profile_stage_open(git_repository *repo, const char *name, profile_stage_t **out);
+error_t profile_draft_open(git_repository *repo, const char *name, profile_draft_t **out);
 
 /**
- * Open the first commit of a profile the commit creates
+ * Open the draft of a profile its commit creates
  *
  * The stage over Git's empty tree (sys/stage.h stage_orphan: a branch that stands
  * is refused ERR_EXISTS, naming its reference), its commit the branch's root;
@@ -836,17 +836,17 @@ error_t profile_stage_open(git_repository *repo, const char *name, profile_stage
  *
  * Reader: cmds/add.c cmd_add, for a profile its pre-flight found no branch for.
  *
- * @param repo Repository (must not be NULL; borrowed for the stage's life)
+ * @param repo Repository (must not be NULL; borrowed for the draft's life)
  * @param name The profile's name, which its branch will be named by (must not
  *             be NULL; copied)
- * @param out The stage (must not be NULL; released by profile_stage_free); NULL
+ * @param out The draft (must not be NULL; released by profile_draft_free); NULL
  *            on a failure
  * @return Error or NULL on success
  */
-error_t profile_stage_orphan(git_repository *repo, const char *name, profile_stage_t **out);
+error_t profile_draft_orphan(git_repository *repo, const char *name, profile_draft_t **out);
 
 /**
- * The profile as the stage opened it: the base, lent until profile_stage_free
+ * The profile as the draft opened it: the base, lent until profile_draft_free
  *
  * Readers: cmds/add.c cmd_add, for the view every naming and kind question of
  * the run reads (core/manifest.h manifest_build_profile), the held-entry gate
@@ -857,10 +857,10 @@ error_t profile_stage_orphan(git_repository *repo, const char *name, profile_sta
  * cmds/update.c update_profile, for a capture's prior and the name its seal is
  * keyed by (update_capture).
  *
- * @param stage The stage (must not be NULL)
+ * @param draft The draft (must not be NULL)
  * @return The base; never NULL
  */
-profile_t *profile_stage_base(const profile_stage_t *stage);
+profile_t *profile_draft_base(const profile_draft_t *draft);
 
 /**
  * Room for a name in the commit, asked before its bytes are read
@@ -869,7 +869,7 @@ profile_t *profile_stage_base(const profile_stage_t *stage);
  * arguments and walk can reach one place twice through a link: each is asked of
  * the commit as chosen so far, every name admitted before it recorded, so the
  * names admitted can stand together and not merely each on its own. A blob is
- * asked both halves of the admission (profile_stage_t) — the sheet's, ERR_CONFLICT
+ * asked both halves of the admission (profile_draft_t) — the sheet's, ERR_CONFLICT
  * "Cannot stage '%s': '%s' is a directory profile '%s' claims beneath it", naming
  * the byte-least such claim; then the tree's (sys/stage.h stage_admit_blob:
  * ERR_CONFLICT for a collision or a name Git will not hold, ERR_INVALID_ARG for
@@ -877,10 +877,10 @@ profile_t *profile_stage_base(const profile_stage_t *stage);
  * is asked the tree's half (sys/stage.h stage_admit_subtree: a blob at its name
  * or above it, the opened tree's or one admitted since, leaves it none) and
  * claimed: tracked, in the sheet the commit carries, its attributes left to its
- * capture (profile_stage_capture_directory), so a blob chosen above it later is
- * refused at its own admission. Nothing is read from the disk and nothing written
- * to the object database: a writer that stops after its admissions — a dry run
- * — leaves the repository as it found it.
+ * capture (profile_capture_directory), so a blob chosen above it later is refused
+ * at its own admission. Nothing is read from the disk and nothing written to
+ * the object database: a writer that stops after its admissions — a dry run —
+ * leaves the repository as it found it.
  *
  * Every admission precedes the commit's edits. The tree's half is asked of the
  * tree the stage opened and the names admitted since, never of the stage's own
@@ -892,7 +892,7 @@ profile_t *profile_stage_base(const profile_stage_t *stage);
  * Reader: cmds/add.c — its walk (add_collect), which skips a name refused
  * ERR_CONFLICT, and its argument arm (cmd_add), which refuses it.
  *
- * @param stage The stage (must not be NULL)
+ * @param draft The draft (must not be NULL)
  * @param kind What would stand at the name: a blob (FILE) or a directory
  * @param storage_path A storage path the writer composed or validated (must not
  *                     be NULL)
@@ -900,11 +900,7 @@ profile_t *profile_stage_base(const profile_stage_t *stage);
  *         admission's tree or a subtree of the base that will not load; or NULL,
  *         the name admitted
  */
-error_t profile_stage_admit(
-    profile_stage_t *stage,
-    path_kind_t kind,
-    const char *storage_path
-);
+error_t profile_admit(profile_draft_t *draft, path_kind_t kind, const char *storage_path);
 
 /**
  * The claim of `kind` at `storage_path`, gone from the commit
@@ -921,16 +917,12 @@ error_t profile_stage_admit(
  * took; and cmds/update.c update_profile, each deletion it commits, by the item's
  * kind.
  *
- * @param stage The stage (must not be NULL)
+ * @param draft The draft (must not be NULL)
  * @param kind A file's claim or a directory's
  * @param storage_path A validated storage path (must not be NULL)
  * @return Error or NULL on success
  */
-error_t profile_stage_remove(
-    profile_stage_t *stage,
-    path_kind_t kind,
-    const char *storage_path
-);
+error_t profile_remove(profile_draft_t *draft, path_kind_t kind, const char *storage_path);
 
 /**
  * A file captured from the disk, at its name in the commit: its entry, and its
@@ -944,7 +936,7 @@ error_t profile_stage_remove(
  * moves:
  *   - the claim off the look (core/metadata.h metadata_capture_file): an owner
  *     or a group this host cannot name, ERR_NOT_FOUND;
- *   - the admission (profile_stage_t): the sheet's half, ERR_CONFLICT "Cannot
+ *   - the admission (profile_draft_t): the sheet's half, ERR_CONFLICT "Cannot
  *     stage '%s': '%s' is a directory profile '%s' claims beneath it", naming
  *     the byte-least such claim; then the tree's, the put's own (sys/stage.h
  *     stage_put, ERR_CONFLICT or ERR_INVALID_ARG), which writes the blob only
@@ -956,14 +948,14 @@ error_t profile_stage_remove(
  *     absence already says — the retire of the FILE item standing there.
  * An entry at the name that makes no claim, a gitlink a hand left, is replaced,
  * as Git's own add replaces one (lib/git/read-cache.c add_to_index,
- * ADD_CACHE_OK_TO_REPLACE). A failure past the put leaves a stage its writer
+ * ADD_CACHE_OK_TO_REPLACE). A failure past the put leaves a draft its writer
  * abandons (sys/stage.h).
  *
  * Readers: cmds/add.c add_capture, each file it listed, and cmds/update.c
  * update_profile, each file it captures — the one door every capture meets its
  * name through, each handing it the name its capture sealed under.
  *
- * @param stage The stage (must not be NULL)
+ * @param draft The draft (must not be NULL)
  * @param storage_path The name the entry stands at: a validated storage path,
  *                     and the one a sealed capture was made under (must not be
  *                     NULL)
@@ -977,8 +969,8 @@ error_t profile_stage_remove(
  *            alone)
  * @return Error or NULL on success
  */
-error_t profile_stage_capture_file(
-    profile_stage_t *stage,
+error_t profile_capture_file(
+    profile_draft_t *draft,
     const char *storage_path,
     const content_capture_t *capture,
     arena_t *arena,
@@ -993,20 +985,20 @@ error_t profile_stage_capture_file(
  * asked nothing of a look, core/workspace.c workspace_analyze_directory) — so
  * the claim is written tracked, its mode and ownership the look's (core/metadata.h
  * metadata_capture_directory), over the directory claim at the name whatever it
- * said, the one an admission wrote included (profile_stage_admit); a FILE item
- * no blob backs there is the other kind's, and rides. One refusal, before anything
- * moves: an owner or a group this host cannot name, ERR_NOT_FOUND — so a writer
- * may go on without the claim, which stands as it stood. Nothing is asked of
- * the base: a blob another writer committed at the name since the writer read
- * its view leaves the claim written contradicted, carried, and a claim another
- * writer took from there comes back tracked — the window every other edit of
- * that writer reads its view across.
+ * said, the one an admission wrote included (profile_admit); a FILE item no blob
+ * backs there is the other kind's, and rides. One refusal, before anything moves:
+ * an owner or a group this host cannot name, ERR_NOT_FOUND — so a writer may go
+ * on without the claim, which stands as it stood. Nothing is asked of the base:
+ * a blob another writer committed at the name since the writer read its view
+ * leaves the claim written contradicted, carried, and a claim another writer
+ * took from there comes back tracked — the window every other edit of that writer
+ * reads its view across.
  *
  * Readers: cmds/add.c cmd_add, each directory its walk entered, which refuses
  * the command where the claim cannot be made; and cmds/update.c update_profile,
  * each tracked directory whose look moved, which goes on without it.
  *
- * @param stage The stage (must not be NULL)
+ * @param draft The draft (must not be NULL)
  * @param storage_path A validated storage path (must not be NULL)
  * @param st The writer's lstat of the path, a directory's (must not be NULL):
  *           one taken through a link would capture the target's attributes
@@ -1017,8 +1009,8 @@ error_t profile_stage_capture_file(
  *            written on success alone)
  * @return Error or NULL on success
  */
-error_t profile_stage_capture_directory(
-    profile_stage_t *stage,
+error_t profile_capture_directory(
+    profile_draft_t *draft,
     const char *storage_path,
     const struct stat *st,
     arena_t *arena,
@@ -1060,15 +1052,15 @@ error_t profile_stage_capture_directory(
  * climb decides every rung it passes, so a rung two leaves share is decided at
  * each climb through it — again to the same answer where nothing moved between,
  * counting and retiring nothing. A resolve and a look a rung, every climb; the
- * rungs' spellings are the stage's arena's. The one place the stage looks at
- * the disk: the handle reads Git's alone, and the stage, which writes, reads
+ * rungs' spellings are the draft's arena's. The one place the draft looks at
+ * the disk: the handle reads Git's alone, and the draft, which writes, reads
  * the way off the machine the leaf was captured on.
  *
  * Readers: cmds/add.c cmd_add, each path it captured, under the table it named
  * them under; and cmds/update.c update_profile — each leaf it captured, and each
  * row a named run hands it.
  *
- * @param stage The stage (must not be NULL)
+ * @param draft The draft (must not be NULL)
  * @param mounts The table the leaf's name was made under, so a rung resolves
  *               back to where the leaf was read (must not be NULL)
  * @param storage_path The leaf's name, under a label — the vocabulary's
@@ -1079,8 +1071,8 @@ error_t profile_stage_capture_directory(
  * @param retired Keys the climb retired, appended as copies in the array's arena
  *                (must not be NULL; given its arena by string_array_init)
  */
-void profile_stage_capture_ancestors(
-    profile_stage_t *stage,
+void profile_capture_ancestors(
+    profile_draft_t *draft,
     const mount_table_t *mounts,
     const char *storage_path,
     size_t *captured,
@@ -1096,7 +1088,7 @@ void profile_stage_capture_ancestors(
  * the id now and stores the object past its prompt (sys/stage.h stage_put_blob);
  * its type; and what its item carries, the mode, the owner and group, the stamp.
  * In order, each refusal before the sheet moves:
- *   - the admission (profile_stage_t): the sheet's half, ERR_CONFLICT "Cannot
+ *   - the admission (profile_draft_t): the sheet's half, ERR_CONFLICT "Cannot
  *     stage '%s': '%s' is a directory profile '%s' claims beneath it", naming
  *     the byte-least such claim; then the tree's, the put's own (sys/stage.h
  *     stage_put_blob, ERR_CONFLICT or ERR_INVALID_ARG), which writes no object;
@@ -1109,11 +1101,11 @@ void profile_stage_capture_ancestors(
  *   - the claim at its own kind, written (core/metadata.h metadata_write_item):
  *     the claim's, or — where it claims nothing, a link the commit records no
  *     ownership for — the retire of the FILE item standing there.
- * A failure past the put leaves a stage its writer abandons (sys/stage.h).
+ * A failure past the put leaves a draft its writer abandons (sys/stage.h).
  *
  * Reader: cmds/revert.c cmd_revert.
  *
- * @param stage The stage (must not be NULL)
+ * @param draft The draft (must not be NULL)
  * @param claim The claim the write restores, a blob's (must not be NULL; its
  *              strings borrowed for the call)
  * @param from The profile at the commit the claim came from (must not be NULL;
@@ -1122,8 +1114,8 @@ void profile_stage_capture_ancestors(
  *                          are paired with (must not be NULL)
  * @return Error or NULL on success
  */
-error_t profile_stage_restore_file(
-    profile_stage_t *stage,
+error_t profile_restore_file(
+    profile_draft_t *draft,
     const profile_claim_t *claim,
     profile_t *from,
     const char *from_storage_path
@@ -1143,15 +1135,15 @@ error_t profile_stage_restore_file(
  * Reader: cmds/add.c cmd_add, the ignore template of a profile its commit creates
  * (core/ignore.h ignore_profile_template).
  *
- * @param stage The stage (must not be NULL)
+ * @param draft The draft (must not be NULL)
  * @param name The file's name at the tree's root or beneath it, outside the grammar
  *             (must not be NULL)
  * @param bytes Its bytes (may be NULL when size is 0)
  * @param size Byte count
  * @return Error or NULL on success: the put's own (sys/stage.h stage_put)
  */
-error_t profile_stage_put_machinery(
-    profile_stage_t *stage,
+error_t profile_put_machinery(
+    profile_draft_t *draft,
     const char *name,
     const void *bytes,
     size_t size
@@ -1160,36 +1152,36 @@ error_t profile_stage_put_machinery(
 /**
  * Whether the edits so far move the tree or the sheet
  *
- * Each document held against the one the stage opened, by its owner: the sheet
+ * Each document held against the one the draft opened, by its owner: the sheet
  * claim by claim (core/metadata.h metadata_same), then the tree entry by entry
  * (sys/stage.h stage_changed). A write of what already stands moves nothing, so
  * a writer asks it to learn whether there is anything to do before it shows what
  * it would do; nothing is written, a dry run's question too.
  *
  * Readers: cmds/revert.c cmd_revert, whose "already at target" it answers after
- * the restore; and profile_stage_commit, its gate.
+ * the restore; and profile_commit, its gate.
  *
- * @param stage The stage (must not be NULL)
+ * @param draft The draft (must not be NULL)
  * @param out Whether either document moved (must not be NULL; written on success
  *            alone)
  * @return Error or NULL on success: the tree's comparison's, which needs a store
- *         that changed beneath the stage
+ *         that changed beneath the draft
  */
-error_t profile_stage_changed(const profile_stage_t *stage, bool *out);
+error_t profile_changed(const profile_draft_t *draft, bool *out);
 
 /**
  * The commit
  *
- * Where no edit moved the tree or the sheet (profile_stage_changed), nothing:
- * no prune, no save, no commit. Otherwise the prune, against the index the commit
- * will record, its keys appended to `pruned` where one is given; the sheet saved
- * where its claims are no longer the base's; then one commit (sys/stage.h
- * stage_commit: a tree equal to the opened one is none, and a head another writer
- * moved since the open is refused ERR_CONFLICT). One commit a stage. Whether it
- * landed is answered as sys/stage answers it: false where the gate stops it,
- * and past the gate the tree write's own answer, which an edit the gate saw makes
- * true — it moved a content entry, or a claim, and a sheet whose claims moved
- * spells other bytes.
+ * Where no edit moved the tree or the sheet (profile_changed), nothing: no prune,
+ * no save, no commit. Otherwise the prune, against the index the commit will
+ * record, its keys appended to `pruned` where one is given; the sheet saved where
+ * its claims are no longer the base's; then one commit (sys/stage.h stage_commit:
+ * a tree equal to the opened one is none, and a head another writer moved since
+ * the open is refused ERR_CONFLICT). One commit a draft. Whether it landed is
+ * answered as sys/stage answers it: false where the gate stops it, and past the
+ * gate the tree write's own answer, which an edit the gate saw makes true — it
+ * moved a content entry, or a claim, and a sheet whose claims moved spells other
+ * bytes.
  *
  * Readers: cmds/add.c add_commit and cmds/update.c update_profile, which keep
  * the prune's keys and read whether the commit landed, so a capture that put
@@ -1197,7 +1189,7 @@ error_t profile_stage_changed(const profile_stage_t *stage, bool *out);
  * reports nor records it; cmds/remove.c remove_paths, which keeps the keys; and
  * cmds/revert.c cmd_revert, which keeps none.
  *
- * @param stage The stage (must not be NULL)
+ * @param draft The draft (must not be NULL)
  * @param message Commit message (must not be NULL)
  * @param out_committed Whether a commit was made (optional, can be NULL; false
  *                      where nothing moved, or on a failure)
@@ -1206,19 +1198,19 @@ error_t profile_stage_changed(const profile_stage_t *stage, bool *out);
  *               keeps none, one with no record phase
  * @return Error or NULL on success
  */
-error_t profile_stage_commit(
-    profile_stage_t *stage,
+error_t profile_commit(
+    profile_draft_t *draft,
     const char *message,
     bool *out_committed,
     string_array_t *pruned
 );
 
 /**
- * Release the stage — the admission, the copy, the base, the stage and its arena
+ * Release the draft — the admission, the copy, the base, its stage and its arena
  * — undoing nothing in the repository (sys/stage.h stage_free)
  *
- * @param stage The stage (NULL is a no-op)
+ * @param draft The draft (NULL is a no-op)
  */
-void profile_stage_free(profile_stage_t *stage);
+void profile_draft_free(profile_draft_t *draft);
 
 #endif /* DOTTA_PROFILES_H */

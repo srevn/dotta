@@ -50,7 +50,7 @@
  *
  * Strict, like every view: a profile whose sheet will not load refuses the question
  * rather than answering from the tree alone. cmd_revert reads both sheets strictly
- * before it asks — the head's at its stage's open, the commit's at its step 6 —
+ * before it asks — the head's at its draft's open, the commit's at its step 6 —
  * and the search is complete or an error (revert_select_profile), so no policy
  * is added here.
  *
@@ -581,14 +581,14 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * what the head's tree holds where the write lands, and `restored` the claim
      * the write restores, which is neither of them. The handles keep the column
      * as a prefix — the commit, its tree and the profile at it; the head's profile,
-     * the stage's base. A restore lands on the claim standing at the path, so
+     * the draft's base. A restore lands on the claim standing at the path, so
      * the standing side has no name of its own here: wherever the head holds
      * anything, its name is the write's, and where it holds nothing there is no
      * name to have. */
     error_t err = NULL;
     const char *profile = NULL;
     git_commit *target_commit = NULL;
-    profile_stage_t *stage = NULL;
+    profile_draft_t *draft = NULL;
     git_tree *target_tree = NULL;
     profile_t *target_profile = NULL;
     buffer_t rebound = BUFFER_INIT;
@@ -615,8 +615,8 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     char oid_str[8];
     git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(target_commit));
 
-    /* Step 4: the profile's next commit, opened at its head (core/profiles.h
-     * profile_stage_t). The head is the current state the preview compares against
+    /* Step 4: the profile's draft, opened at its head (core/profiles.h
+     * profile_draft_t). The head is the current state the preview compares against
      * and the parent the revert's commit will have, so a branch that moves between
      * the preview and the commit is refused at the commit, --force or not: what
      * the user confirmed is what is reverted. Its base is the profile as the
@@ -626,9 +626,9 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * sheet would discard claims for unrelated paths when the write saved its
      * replacement, so one that will not load is refused before the preview, in
      * the loader's words, as every writer refuses it. */
-    err = profile_stage_open(repo, profile, &stage);
+    err = profile_draft_open(repo, profile, &draft);
     if (err) goto cleanup;
-    profile_t *standing_profile = profile_stage_base(stage);
+    profile_t *standing_profile = profile_draft_base(draft);
 
     /* Step 5: the target commit's tree, opened once and lent to everything below
      * that reads the commit, and the profile at it. */
@@ -824,30 +824,30 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         }
     }
 
-    /* Step 15: the restore, onto the profile's next commit (core/profiles.h
-     * profile_stage_restore_file) — the admission's two halves, the entry at
-     * its id, the put rule at the name, the way the commit stood the file on,
-     * and the claim — the last thing about this revert that can be refused, and
-     * refused before the preview promises it. The sheet's half finds what the
-     * tree cannot, a directory the profile claims beneath the name; the tree's,
-     * a destination beneath a blob the head holds, which used to pass the dry
-     * run and fail after the prompt, with what the dry run should have said.
+    /* Step 15: the restore, onto the profile's draft (core/profiles.h
+     * profile_restore_file) — the admission's two halves, the entry at its id,
+     * the put rule at the name, the way the commit stood the file on, and the
+     * claim — the last thing about this revert that can be refused, and refused
+     * before the preview promises it. The sheet's half finds what the tree cannot,
+     * a directory the profile claims beneath the name; the tree's, a destination
+     * beneath a blob the head holds, which used to pass the dry run and fail
+     * after the prompt, with what the dry run should have said.
      *
      * Nothing is written to the repository: the id is one the commit already
      * holds, or one the reseal hashed and step 20 stores, so a dry run or a
-     * declined prompt frees the stage and leaves the object database as it found
-     * it. The stage's base is still the head, so every read below is the head's. */
-    err = profile_stage_restore_file(stage, &restored, target_profile, target->storage_path);
+     * declined prompt frees the draft and leaves the object database as it found
+     * it. The draft's base is still the head, so every read below is the head's. */
+    err = profile_restore_file(draft, &restored, target_profile, target->storage_path);
     if (err) goto cleanup;
 
     /* Step 16: nothing to do — the restore moved neither document. A revert
      * restores bytes, the entry's mode, the sheet's mode and ownership, and the
-     * way, so the whole write is weighed and never the blob alone: the stage
+     * way, so the whole write is weighed and never the blob alone: the draft
      * holds each document against the one it opened (core/profiles.h
-     * profile_stage_changed). A directory claim at the name the standing blob
-     * contradicts rides the write whatever it is, and moves nothing. */
+     * profile_changed). A directory claim at the name the standing blob contradicts
+     * rides the write whatever it is, and moves nothing. */
     bool changed = false;
-    err = profile_stage_changed(stage, &changed);
+    err = profile_changed(draft, &changed);
     if (err) goto cleanup;
     if (!changed) {
         output_info(
@@ -1016,7 +1016,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * from, whole. It prunes a derived claim nothing stands beneath any longer
      * — imported redundancy alone, since a restore makes no claim redundant —
      * and keeps no keys: a revert writes no record, and the next load releases
-     * one a pruned rung stood on (core/profiles.h profile_stage_t). */
+     * one a pruned rung stood on (core/profiles.h profile_draft_t). */
     char target_hex[GIT_OID_SHA1_HEXSIZE + 1];
     git_oid_tostr(target_hex, sizeof(target_hex), git_commit_id(target_commit));
     const char *paths[] = { restored.storage_path };
@@ -1028,9 +1028,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         .custom_msg    = opts->message,
         .target_commit = target_hex
     };
-    err = profile_stage_commit(
-        stage, commit_message(ctx->arena, config, &msg_ctx), NULL, NULL
-    );
+    err = profile_commit(draft, commit_message(ctx->arena, config, &msg_ctx), NULL, NULL);
     if (err) goto cleanup;
 
     /* Step 21: Report. Nothing to write: the revert moved the branch HEAD, and
@@ -1062,7 +1060,7 @@ cleanup:
     buffer_deinit(&rebound);
     profile_free(target_profile);
     if (target_tree) git_tree_free(target_tree);
-    profile_stage_free(stage);
+    profile_draft_free(draft);
     if (target_commit) git_commit_free(target_commit);
 
     return err;

@@ -64,11 +64,11 @@
  * — the blob the commit holds at the name, the triple its bytes were read with
  * (the fstat beside a file's, the lstat before a link's target; none for a
  * directory, which confirms no content), and the claim the capture answered
- * (core/profiles.h profile_stage_capture_file, profile_stage_capture_directory).
- * Set by the capture, empty until it lands, and written by the record phase
- * wherever the claim still stands (add_write_record) — every column but the stamp
- * the capture's, so the record says what dotta put there, never what a later
- * head of the branch says should be.
+ * (core/profiles.h profile_capture_file, profile_capture_directory). Set by the
+ * capture, empty until it lands, and written by the record phase wherever the
+ * claim still stands (add_write_record) — every column but the stamp the capture's,
+ * so the record says what dotta put there, never what a later head of the branch
+ * says should be.
  */
 typedef struct {
     const char *filesystem_path;  /* Where the claim stands (arena) */
@@ -94,14 +94,14 @@ typedef struct {
  * (infra/mount.h). Keys and values borrow the arena the items live in.
  *
  * `view` is the profile as this command opened it: this profile's contribution
- * alone, from its next commit's base, under this command's table. Every name
- * comes from it (core/manifest.h manifest_name, over `listing`), so does the
- * claim standing at a path (manifest_lookup_claim) — which rules reach the path
+ * alone, from its draft's base, under this command's table. Every name comes
+ * from it (core/manifest.h manifest_name, over `listing`), so does the claim
+ * standing at a path (manifest_lookup_claim) — which rules reach the path
  * (add_verdict) and what kind it must be — and so does the one refusal the
  * completed selection owes (add_refuse_moves).
  *
- * `stage` is the profile's next commit, and the walk asks it whether the commit
- * has room for a name before a byte is read (core/profiles.h profile_stage_admit):
+ * `draft` is the profile's next commit, and the walk asks it whether the commit
+ * has room for a name before a byte is read (core/profiles.h profile_admit):
  * its two documents name one namespace, the tree holding every blob — the branch's,
  * and every blob this command listed before — and the sheet the directories a
  * tree cannot, an empty one having no entry. A directory this command lists is
@@ -116,7 +116,7 @@ typedef struct {
     const gitignore_ruleset_t *rules;    /* The profile's .dottaignore layers */
     const gitignore_ruleset_t *excludes; /* The -e layer alone, what a claim meets; NULL: none */
     source_filter_t *source;             /* The source layer, the builder's; NULL: turned off */
-    profile_stage_t *stage;              /* The profile's next commit: what it has room for */
+    profile_draft_t *draft;              /* The profile's next commit: what it has room for */
     hashmap_t *listing;                  /* filesystem path -> &item->claim (borrowed both) */
     ptr_array_t files;                   /* add_path_t *: every non-directory listed */
     ptr_array_t directories;             /* add_path_t *: every directory walked into */
@@ -511,7 +511,7 @@ static error_t add_refuse_unjudged(
  *
  * Two verdicts skip a child with its subtree, each with one line at NORMAL: a
  * kind the profile's own claim at the path contradicts, and a name the commit
- * has no room for, or one Git will not hold (core/profiles.h profile_stage_admit).
+ * has no room for, or one Git will not hold (core/profiles.h profile_admit).
  * Neither may fail the command — a stale claim deep inside $HOME must not fail
  * `dotta add p ~`, and the capture that would have refused it arrives too late
  * to skip anything. What the walk could not look at refuses rather than skips —
@@ -664,16 +664,16 @@ static error_t add_collect(
             continue;
         }
 
-        /* What the commit can hold, asked of the profile's next commit before a
-         * byte is read (core/profiles.h profile_stage_admit). One producer, two
-         * voices: its refusals are ERR_CONFLICT and name what stands in the way,
-         * and the walk gives them its own — the argument arm (cmd_add) refuses
-         * the command. Only a conflict is a verdict about the path — a name the
-         * tree or the claims the commit carries have no room for, or one Git
-         * will not hold; a failure to decide is the run failing, and publishing
-         * a selection past one would commit a silently partial capture. A conflict
+        /* What the commit can hold, asked of the profile's draft before a byte
+         * is read (core/profiles.h profile_admit). One producer, two voices:
+         * its refusals are ERR_CONFLICT and name what stands in the way, and
+         * the walk gives them its own — the argument arm (cmd_add) refuses the
+         * command. Only a conflict is a verdict about the path — a name the tree
+         * or the claims the commit carries have no room for, or one Git will
+         * not hold; a failure to decide is the run failing, and publishing a
+         * selection past one would commit a silently partial capture. A conflict
          * is warned and dropped, one per child it skips. */
-        err = profile_stage_admit(walk->stage, kind, child_storage);
+        err = profile_admit(walk->draft, kind, child_storage);
         if (err) {
             if (error_code(err) != ERR_CONFLICT) return err;
             output_warning(
@@ -969,22 +969,22 @@ static void add_print_labels(const add_walk_t *walk) {
 }
 
 /**
- * Capture one listed path onto the profile's next commit
+ * Capture one listed path onto the profile's draft
  *
  * As the kind it was listed as: the occupant chooses the capture, and each capture
  * refuses the other's (infra/content.h), so a path whose kind changed after its
  * listing is refused rather than read as what it has become — and the verdict
  * the decision pass reached for a regular file is read by a regular file's capture
  * alone. Sealed as that pass decided. The capture answers with the entry's bytes
- * and the look they were read with; the stage makes both its entry and its claim
- * (core/profiles.h profile_stage_capture_file) and answers the claim as the next
- * walk shows it, and this keeps what the capture committed as the path's record
+ * and the look they were read with; the draft makes both its entry and its claim
+ * (core/profiles.h profile_capture_file) and answers the claim as the next walk
+ * shows it, and this keeps what the capture committed as the path's record
  * (path->record): the blob, the look's triple, the claim.
  *
  * @param walk The selection (must not be NULL): the context — the key manager
  *             for a seal, the arena the record's names are copied into, the output
  *             — the profile, the seal's key and the record's binding, and its
- *             next commit, which takes the capture
+ *             draft, which takes the capture
  * @param path The listed path (must not be NULL; its record is the capture's
  *             once the capture lands)
  * @return Error or NULL on success
@@ -1004,11 +1004,11 @@ static error_t add_capture(const add_walk_t *walk, add_path_t *path) {
      * and triple one inode by construction — and that stat is the claim's and
      * the record's both.
      *
-     * Then its entry and its claim on the profile's next commit, at the name
-     * the capture was made under: a sealed capture binds it (infra/content.h),
-     * so the put repeats it and never a second name. One tail past both — the
-     * bytes are released whichever refused, and the look stays readable for the
-     * record below. */
+     * Then its entry and its claim on the profile's draft, at the name the capture
+     * was made under: a sealed capture binds it (infra/content.h), so the put
+     * repeats it and never a second name. One tail past both — the bytes are
+     * released whichever refused, and the look stays readable for the record
+     * below. */
     content_capture_t capture = { 0 };
     profile_claim_t claim;
     error_t err = NULL;
@@ -1021,9 +1021,7 @@ static error_t add_capture(const add_walk_t *walk, add_path_t *path) {
         );
     }
     if (!err) {
-        err = profile_stage_capture_file(
-            walk->stage, storage_path, &capture, ctx->arena, &claim
-        );
+        err = profile_capture_file(walk->draft, storage_path, &capture, ctx->arena, &claim);
     }
     content_capture_free(&capture);
     if (err) return err;
@@ -1063,14 +1061,14 @@ static error_t add_capture(const add_walk_t *walk, add_path_t *path) {
 }
 
 /**
- * Commit the profile's next commit
+ * Commit the profile's draft
  *
  * The message names both kinds this commit carries — the message's unit is the
  * path (utils/commit.h), and a commit that claimed a directory and no file has
  * a path to name and no file — so the walk goes in, not one of its lists.
  *
  * @param walk The selection, both lists, the arena the names live in, and the
- *             profile's next commit, every capture on it (must not be NULL)
+ *             profile's draft, every capture on it (must not be NULL)
  * @param opts Command options
  * @param out_committed Whether a commit was made: false where no edit moved either
  *                      document, so a re-add of what the profile already holds
@@ -1118,8 +1116,8 @@ static error_t add_commit(
     };
 
     /* Create commit */
-    return profile_stage_commit(
-        walk->stage, commit_message(walk->ctx->arena, walk->ctx->config, &msg_ctx),
+    return profile_commit(
+        walk->draft, commit_message(walk->ctx->arena, walk->ctx->config, &msg_ctx),
         out_committed, pruned
     );
 }
@@ -1454,18 +1452,18 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     error_t err = NULL;
     ignore_rules_t *ignore_rules = NULL;
     const gitignore_ruleset_t *profile_rules = NULL;
-    profile_stage_t *stage = NULL;    /* The profile's next commit: see below */
-    manifest_t *view = NULL;          /* The profile as its next commit opened it: see below */
+    profile_draft_t *draft = NULL;    /* The profile's next commit: see below */
+    manifest_t *view = NULL;          /* The profile as its draft opened it: see below */
     add_walk_t walk = { .ctx = ctx }; /* Filled once the table and the rules are known */
     bool profile_exists = false;      /* The pre-flight's: no branch until this add brings it */
     mount_table_t *mounts = NULL;     /* The command's table: see below */
     const char *target = NULL;        /* --target, absolute: what the row stores */
 
-    /* The branch this add will write to: its stage is opened below when it is
+    /* The branch this add will write to: its draft is opened below when it is
      * there, an orphan's when it is not. Both answers are needed here, before
      * the command has any effect — a name Git's ref namespace cannot hold beside
      * the names already there is refused now, ahead of the pre-add hook and the
-     * stage, because a refusal that has already run the user's hook is not a
+     * draft, because a refusal that has already run the user's hook is not a
      * refusal.
      *
      * A branch and any branch beneath it are exclusive, which is why a base profile
@@ -1596,16 +1594,16 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
-    /* The profile's next commit, as the pre-flight above resolved it: at the
-     * branch's head when it exists, over Git's empty tree and a root commit-to-be
-     * when it does not. A branch that appeared or vanished since the pre-flight
-     * is refused by the open rather than silently taken the other way. The sheet
+    /* The profile's draft, as the pre-flight above resolved it: at the branch's
+     * head when it exists, over Git's empty tree and a root commit-to-be when
+     * it does not. A branch that appeared or vanished since the pre-flight is
+     * refused by the open rather than silently taken the other way. The sheet
      * is read at the open, strictly, so a sheet that will not load refuses the
      * add here rather than after the arguments have been diagnosed — the profile's
      * own state is the earlier question. */
     err = profile_exists
-        ? profile_stage_open(repo, opts->profile, &stage)
-        : profile_stage_orphan(repo, opts->profile, &stage);
+        ? profile_draft_open(repo, opts->profile, &draft)
+        : profile_draft_orphan(repo, opts->profile, &draft);
     if (err) goto cleanup;
 
     /* Resolve the profile-specific ruleset. Safe for both paths: existing profile
@@ -1616,23 +1614,23 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (err) goto cleanup;
 
     /* The profile as this command found it, under this command's table: one
-     * contribution, its own, built over the base its next commit opened — the
-     * sheet the open read, parsed once. Every naming question below reads it,
-     * so does the kind question, and so does the refusal the completed selection
-     * owes; the command's arena's, as every view is. */
-    err = manifest_build_profile(profile_stage_base(stage), mounts, ctx->arena, &view);
+     * contribution, its own, built over the base its draft opened — the sheet
+     * the open read, parsed once. Every naming question below reads it, so does
+     * the kind question, and so does the refusal the completed selection owes;
+     * the command's arena's, as every view is. */
+    err = manifest_build_profile(profile_draft_base(draft), mounts, ctx->arena, &view);
     if (err) goto cleanup;
 
     /* Collect every path to add, expanding directories. Each listing is named
      * once, by the claim standing at it; what the walk finds beneath one already
-     * listed is named from that claim, and admitted by the profile's next commit
-     * as it is listed. */
+     * listed is named from that claim, and admitted by the profile's draft as
+     * it is listed. */
     walk.profile = opts->profile;
     walk.view = view;
     walk.rules = profile_rules;
     walk.excludes = excludes;
     walk.source = ignore_source(ignore_rules);
-    walk.stage = stage;
+    walk.draft = draft;
     walk.listing = hashmap_borrow(ctx->arena, 0);
     ptr_array_init(&walk.files, ctx->arena);
     ptr_array_init(&walk.directories, ctx->arena);
@@ -1877,10 +1875,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * own files, whichever label names either, lies where the file stands,
          * and no apply could place both. The removal that gives the file up is
          * the way past, as at the path. The commit's admission sees the pair
-         * only where the two names share a prefix (core/profiles.h
-         * profile_stage_admit); the view sees it wherever the two stand. A walk
-         * needs no such question: it meets the file's place before anything beneath
-         * it, and the kind refusal skips it there */
+         * only where the two names share a prefix (core/profiles.h profile_admit);
+         * the view sees it wherever the two stand. A walk needs no such question:
+         * it meets the file's place before anything beneath it, and the kind
+         * refusal skips it there */
         const char *parent = arena_strndup(
             ctx->arena, filesystem_path, str_path_parent_len(filesystem_path)
         );
@@ -1925,10 +1923,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* What the commit can hold, before a byte is read (core/profiles.h
-         * profile_stage_admit). The verdict a walked entry answers with a skip
-         * is an error here: the user asked for this path by name, and working
-         * around a claim they did not mention is not this command's to do. */
-        err = profile_stage_admit(stage, kind, storage_path);
+         * profile_admit). The verdict a walked entry answers with a skip is an
+         * error here: the user asked for this path by name, and working around
+         * a claim they did not mention is not this command's to do. */
+        err = profile_admit(draft, kind, storage_path);
         if (err) {
             err = error_wrap(err, "Cannot add '%s'", file);
             goto cleanup;
@@ -1966,19 +1964,18 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* What the profile already holds under a name this command chose: a blob, a
      * file claim being one, which the tree alone holds (core/profiles.h
      * profile_entry) — a gitlink a hand left there is no claim, and the capture
-     * takes its place as Git's own add does (profile_stage_capture_file). Asked
-     * over the whole listing before a byte is read, so a refusal at the last
-     * file does not leave the first four in the object database. Keyed by the
-     * name and not by the path: at a path the profile names twice, a typed
-     * re-capture of the loser must be gated by the name the user typed, not by
-     * the row that happens to stand there. The decision pass below asks the same
-     * entry for the encryption policy's priority-3 read — two questions, one
-     * lookup each. */
+     * takes its place as Git's own add does (profile_capture_file). Asked over
+     * the whole listing before a byte is read, so a refusal at the last file
+     * does not leave the first four in the object database. Keyed by the name
+     * and not by the path: at a path the profile names twice, a typed re-capture
+     * of the loser must be gated by the name the user typed, not by the row that
+     * happens to stand there. The decision pass below asks the same entry for
+     * the encryption policy's priority-3 read — two questions, one lookup each. */
     if (!opts->force) {
         for (size_t i = 0; i < walk.files.count; i++) {
             const add_path_t *path = walk.files.entries[i];
             profile_held_t held;
-            err = profile_entry(profile_stage_base(stage), path->claim.storage_path, &held);
+            err = profile_entry(profile_draft_base(draft), path->claim.storage_path, &held);
             if (err) goto cleanup;
             if (held.kind != PROFILE_HELD_FILE) continue;
 
@@ -1993,11 +1990,11 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* The encryption decision, taken with the name and never with a source byte.
      * Its inputs are the config, the name this command chose, the request, and
-     * the blob the profile holds at that name in the tree its next commit opened
-     * at — judged by its mode and its header, never by a claim, with no key and
-     * no source file (core/profiles.h profile_entry, infra/content.h
-     * content_classify) — so it is a decision and is made with the others, before
-     * any capture runs. The capture is told (add_capture).
+     * the blob the profile holds at that name in the tree its draft opened at —
+     * judged by its mode and its header, never by a claim, with no key and no
+     * source file (core/profiles.h profile_entry, infra/content.h content_classify)
+     * — so it is a decision and is made with the others, before any capture runs.
+     * The capture is told (add_capture).
      *
      * A regular file alone: a link's entry is its target and carries no seal
      * (core/policy.h), so the policy is never asked about one; and the capture
@@ -2017,7 +2014,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
         const char *storage_path = path->claim.storage_path;
         profile_held_t prior;
-        err = profile_entry(profile_stage_base(stage), storage_path, &prior);
+        err = profile_entry(profile_draft_base(draft), storage_path, &prior);
         if (err) goto cleanup;
         content_kind_t prior_kind = CONTENT_PLAINTEXT;
         if (prior.kind == PROFILE_HELD_FILE) {
@@ -2054,23 +2051,21 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      *
      * So a preview answers what the selection answers — every name, admitted
      * together against the tree and the claims the commit would carry
-     * (core/profiles.h profile_stage_admit); the name a directory claim would
-     * abandon; the entries the profile holds under a chosen name; and each file's
-     * encryption verdict, with whether this run could seal at all — and a run
-     * refused over any of them is a preview refused in the same words. What only
-     * a source, or a later writer, can say is below: bytes that cannot be read,
-     * a plaintext that would read as ciphertext, the key a seal needs, an owner
-     * a claim cannot name, a kind that changes before its capture, the chain
-     * above each path, whether the commit moves anything, and the record
-     * (cmds/add.h).
+     * (core/profiles.h profile_admit); the name a directory claim would abandon;
+     * the entries the profile holds under a chosen name; and each file's encryption
+     * verdict, with whether this run could seal at all — and a run refused over
+     * any of them is a preview refused in the same words. What only a source,
+     * or a later writer, can say is below: bytes that cannot be read, a plaintext
+     * that would read as ciphertext, the key a seal needs, an owner a claim cannot
+     * name, a kind that changes before its capture, the chain above each path,
+     * whether the commit moves anything, and the record (cmds/add.h).
      *
      * And nothing above wrote anything of dotta's: the state was opened in the
-     * read shape and holds no lock (include/runtime.h), and the profile's next
-     * commit holds indexes in memory over the tree the open read — Git's empty
-     * tree for a profile that does not exist yet, read and never written
-     * (sys/stage.h) — and a copy of its sheet, whose admitted claims are dropped
-     * unsaved with it. The pre-add hook was told it is a dry run; the post-add
-     * hook is below. */
+     * read shape and holds no lock (include/runtime.h), and the profile's draft
+     * holds indexes in memory over the tree the open read — Git's empty tree
+     * for a profile that does not exist yet, read and never written (sys/stage.h)
+     * — and a copy of its sheet, whose admitted claims are dropped unsaved with
+     * it. The pre-add hook was told it is a dry run; the post-add hook is below. */
     if (opts->dry_run) {
         /* The captures' own lines, in their order and in the future tense: every
          * directory, then every file, by the capture its listed occupant chooses
@@ -2188,13 +2183,11 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        /* The claim off the look, on the profile's next commit. The walk entered
-         * this directory, so the claim is a tracked one: the profile tracks the
-         * path itself, scans it for new files and converges its attributes */
+        /* The claim off the look, on the profile's draft. The walk entered this
+         * directory, so the claim is a tracked one: the profile tracks the path
+         * itself, scans it for new files and converges its attributes */
         profile_claim_t claim;
-        err = profile_stage_capture_directory(
-            stage, storage_path, &dir_stat, ctx->arena, &claim
-        );
+        err = profile_capture_directory(draft, storage_path, &dir_stat, ctx->arena, &claim);
         if (err) goto cleanup;
 
         /* What the capture committed, as the record keeps it: the directory the
@@ -2220,7 +2213,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* The remedy that keeps the file, add's own: a file this command captures
      * at the name where its profile's own blob contradicts a tracked directory
      * claim takes that claim's place, the claim given up — where every other
-     * write carries it (core/profiles.h profile_stage_t, the put rule). Read
+     * write carries it (core/profiles.h profile_draft_t, the put rule). Read
      * off the view's contradicted slice: each claim at its blob's own name —
      * one beneath a blob is remove's to give up — matched to the file listed at
      * its place under that very name, since a listing under another of the
@@ -2238,7 +2231,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
         if (!listed || strcmp(listed->storage_path, at->storage_path) != 0) continue;
 
-        err = profile_stage_remove(stage, PATH_KIND_DIRECTORY, at->storage_path);
+        err = profile_remove(draft, PATH_KIND_DIRECTORY, at->storage_path);
         if (err) goto cleanup;
     }
 
@@ -2270,8 +2263,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         for (size_t i = 0; i < chains[b]->count; i++) {
             const add_path_t *path = chains[b]->entries[i];
 
-            profile_stage_capture_ancestors(
-                stage, mounts, path->claim.storage_path, &ancestors_captured,
+            profile_capture_ancestors(
+                draft, mounts, path->claim.storage_path, &ancestors_captured,
                 &ancestors_retired
             );
         }
@@ -2292,13 +2285,13 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* A new profile's .dottaignore: the template, beside the claims — the one
      * blob this commit carries that no capture wrote. Here rather than at the
      * orphan's open, where the add has decided nothing yet: the put writes the
-     * blob to the object database at once (core/profiles.h
-     * profile_stage_put_machinery), so a refusal between the two — a path that
-     * is not there, an argument the rules exclude, an unreadable file — would
-     * leave it there for a profile that was never created. */
+     * blob to the object database at once (core/profiles.h profile_put_machinery),
+     * so a refusal between the two — a path that is not there, an argument the
+     * rules exclude, an unreadable file — would leave it there for a profile
+     * that was never created. */
     if (!profile_exists) {
         const char *template = ignore_profile_template();
-        err = profile_stage_put_machinery(stage, ".dottaignore", template, strlen(template));
+        err = profile_put_machinery(draft, ".dottaignore", template, strlen(template));
         if (err) {
             err = error_wrap(
                 err, "Failed to initialize .dottaignore for profile '%s'",
@@ -2318,9 +2311,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * record phase, and the sheet saved only where its claims moved, a hand's
      * spelling kept otherwise. A commit whose edits moved nothing — every capture
      * as the profile already had it, a --force re-add of identical bytes — makes
-     * none, and the summary says so (core/profiles.h profile_stage_commit). Its
-     * two outs: whether it landed, which the receipt reads, and the derivations
-     * its prune took, by key, which the record phase settles. */
+     * none, and the summary says so (core/profiles.h profile_commit). Its two
+     * outs: whether it landed, which the receipt reads, and the derivations its
+     * prune took, by key, which the record phase settles. */
     bool committed = false;
     string_array_t pruned;
     string_array_init(&pruned, ctx->arena);
@@ -2541,10 +2534,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
 cleanup:
-    /* The profile's next commit, whatever it held — a stage never committed changes
+    /* The profile's draft, whatever it held — a draft never committed changes
      * nothing in the repository. The listing, the view and the source filter
      * are the arena's. */
-    profile_stage_free(stage);
+    profile_draft_free(draft);
 
     return err;
 }

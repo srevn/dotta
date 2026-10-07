@@ -233,11 +233,11 @@ typedef enum dotta_verbosity {
  * claim stands (`mount_resolve`: diff, ignore, remove, revert, update), a view
  * of one profile placed by it (`manifest_build_profile`: diff, export, ignore,
  * list, remove, revert, show), or a claim's ancestors climbed
- * (`profile_stage_capture_ancestors`: update). Reading a CLI path is not one of
- * those verbs: an argument's key is the normalizer's own string and no root's
- * spelling is read to make it (`infra/path.h`), so apply, whose path filter is
- * those strings, and status and sync, which filter by profile alone and compile
- * none, declare no table. add asks the verbs and declares none: it brings a binding
+ * (`profile_capture_ancestors`: update). Reading a CLI path is not one of those
+ * verbs: an argument's key is the normalizer's own string and no root's spelling
+ * is read to make it (`infra/path.h`), so apply, whose path filter is those
+ * strings, and status and sync, which filter by profile alone and compile none,
+ * declare no table. add asks the verbs and declares none: it brings a binding
  * no row need hold (`add --target`) and builds the same table with that binding
  * standing for its profile's row (`core/manifest.h` `manifest_mount_table`),
  * where the dispatcher's would be a second build of the same rows. A command
@@ -500,8 +500,8 @@ typedef struct dotta_run {
  *       - A handle's own. Made by its opener and freed by its closer: a printer's
  *         list (base/output.h output_list_t), a profile at a tree (core/profiles.h
  *         profile_open): itself, its name, its sheet and the claims it lends; a
- *         profile's next commit (core/profiles.h profile_stage_open,
- *         profile_stage_orphan): itself, the copy of the sheet it edits, and
+ *         profile's draft (core/profiles.h profile_draft_open,
+ *         profile_draft_orphan): itself, the copy of the sheet it edits, and
  *         the names its climb and its prune spell.
  *
  *   - The heap, for what dies before any scope does: a payload sized by its data

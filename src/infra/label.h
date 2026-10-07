@@ -161,9 +161,9 @@ label_split_t label_split(const char *s);
  * the filesystem shapes.
  *
  * Readers: the profile's walk (core/profiles.c profile_step), and the door a
- * profile's next commit puts dotta's own file through, which a name in the grammar
- * never passes (core/profiles.c profile_stage_put_machinery); the refspec
- * completion (cmds/completion.c refspec_emit), diff's delta selection (cmds/diff.c
+ * profile's draft puts dotta's own file through, which a name in the grammar
+ * never passes (core/profiles.c profile_put_machinery); the refspec completion
+ * (cmds/completion.c refspec_emit), diff's delta selection (cmds/diff.c
  * select_delta), the rule compiler (infra/pathspec.c compile_rule), the resolver's
  * storage arm and the question its neighbour asks of a positional whose slot is
  * undecided (infra/path.c path_input_resolve, path_input_announces_path), the
@@ -224,7 +224,7 @@ label_t label_of(const char *storage_path);
  * there (core/ignore.c ignore_verdict_negation), and the frame a walk's refusal
  * offers to leave out (cmds/add.c add_refuse_unjudged). One reader counts rather
  * than matches: the climb, whose rungs are the separators in the tail
- * (core/profiles.c profile_stage_capture_ancestors).
+ * (core/profiles.c profile_capture_ancestors).
  *
  * @param storage_path Storage path, under a label
  * @return Pointer past the label; "" for the word alone, and for a label spelled

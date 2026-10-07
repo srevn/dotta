@@ -223,8 +223,8 @@ typedef enum {
  *                       looked at, and nothing else is. A view row beneath such
  *                       a path is a deliberate through-capture: its profile's
  *                       derivation met the non-directory and claimed no rung
- *                       there (core/profiles.h profile_stage_capture_ancestors),
- *                       so the arrangement predates the row and the look is the
+ *                       there (core/profiles.h profile_capture_ancestors), so
+ *                       the arrangement predates the row and the look is the
  *                       row's own. A record's memory displaces only the orphans
  *                       beneath it — never a view row, so RECORD stands on no
  *                       DEPLOYED item.
@@ -895,12 +895,12 @@ typedef enum {
  *                            so no flag lifts it and no decision pends. One verb
  *                            — the named re-derivation whose chain meets the
  *                            squatter drops the claim ('dotta update <dir>',
- *                            core/profiles.h profile_stage_capture_ancestors).
- *                            The two arms partition what was one by the row's
- *                            class: a deployed item is a view row's (the join),
- *                            so the row is the subject and manifest_is_derived
- *                            is the whole test — the kind gating the read inside
- *                            it, a file row's tracked field being a don't-care.
+ *                            core/profiles.h profile_capture_ancestors). The
+ *                            two arms partition what was one by the row's class:
+ *                            a deployed item is a view row's (the join), so the
+ *                            row is the subject and manifest_is_derived is the
+ *                            whole test — the kind gating the read inside it, a
+ *                            file row's tracked field being a don't-care.
  *   any other divergence     CAPTURE — the user's own, bytes or a claim Git did
  *                            not move: update's to commit. A file row's file ↔
  *                            symlink stays here: the copy commits it as the new

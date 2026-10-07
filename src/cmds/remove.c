@@ -452,8 +452,8 @@ static bool remove_contradicted(
  * Resolve the arguments to the claims they take
  *
  * The claims array starts as every claim the profile makes, placed
- * (remove_list_claims, read strictly) — the base of the caller's stage
- * (core/profiles.h profile_stage_base), so the claims and the commit describe
+ * (remove_list_claims, read strictly) — the base of the caller's draft
+ * (core/profiles.h profile_draft_base), so the claims and the commit describe
  * one head; the arguments mark what they take, and the array compacts to just that.
  *
  * Where each claim stands is established before the match, not after it, because
@@ -485,7 +485,7 @@ static bool remove_contradicted(
  *
  * @param ctx Dispatch context (must not be NULL). ctx->run.mounts covers HOME,
  *            ROOT, and every enabled profile's binding.
- * @param profile The base of the caller's stage: the profile at the head the
+ * @param profile The base of the caller's draft: the profile at the head the
  *                commit will have as its parent (must not be NULL)
  * @param opts The options: the profile's name, the arguments, --force (must not
  *             be NULL)
@@ -1053,21 +1053,21 @@ static error_t remove_paths(
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t err = NULL;
-    profile_stage_t *stage = NULL;      /* the profile's next commit (owned) */
+    profile_draft_t *draft = NULL;      /* the profile's next commit (owned) */
     remove_claim_t *claims = NULL;      /* arena — the resolver's */
     size_t claim_count = 0;
     remove_overlaps_t overlaps = { 0 }; /* arena — the analysis's */
 
-    /* The profile's stage: the head everything below reads — the claims, the
+    /* The profile's draft: the head everything below reads — the claims, the
      * sheet, the judge — and the parent the commit will have, its sheet read at
-     * the open, strictly. The removal is pure tree surgery, so the stage is the
+     * the open, strictly. The removal is pure tree surgery, so the draft is the
      * whole of its Git side. */
-    err = profile_stage_open(repo, opts->profile, &stage);
+    err = profile_draft_open(repo, opts->profile, &draft);
     if (err) goto cleanup;
 
     /* The arguments resolved against the claims the profile makes at the tree
-     * the stage opened at — the head the commit will have as its parent */
-    err = remove_resolve(ctx, profile_stage_base(stage), opts, &claims, &claim_count);
+     * the draft opened at — the head the commit will have as its parent */
+    err = remove_resolve(ctx, profile_draft_base(draft), opts, &claims, &claim_count);
     if (err) goto cleanup;
 
     /* What the removal shares with the other profiles (critical safety check).
@@ -1191,10 +1191,10 @@ static error_t remove_paths(
     err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
-    /* The plan, on the stage: each claim leaves the commit by its own kind
-     * (core/profiles.h profile_stage_remove) — a FILE claim its tree entry and
-     * its item, a DIRECTORY claim its item, the whole of its Git footprint — so
-     * a directory claim at a removed file's name stays, carried, and stands again
+    /* The plan, on the draft: each claim leaves the commit by its own kind
+     * (core/profiles.h profile_remove) — a FILE claim its tree entry and its
+     * item, a DIRECTORY claim its item, the whole of its Git footprint — so a
+     * directory claim at a removed file's name stays, carried, and stands again
      * once the blob is gone. Every claim is the base's own, taken once (the
      * resolver's universe is the base's walk and the claims its tree contradicts),
      * so neither of the removal's refusals can fire. */
@@ -1215,7 +1215,7 @@ static error_t remove_paths(
     for (size_t i = 0; i < claim_count; i++) {
         const remove_claim_t *claim = &claims[i];
 
-        err = profile_stage_remove(stage, claim->kind, claim->storage_path);
+        err = profile_remove(draft, claim->kind, claim->storage_path);
         if (err) goto cleanup;
         if (claim->kind == PATH_KIND_DIRECTORY) removed_dirs++;
         else removed_files++;
@@ -1232,7 +1232,7 @@ static error_t remove_paths(
     /* One atomic commit: the file claims leave the tree, and the sheet follows
      * in the same tree write where its claims moved — pruned first of the derived
      * directory entries the removals left nothing tracked beneath, whose keys
-     * come back in `pruned` (core/profiles.h profile_stage_commit). All-or-nothing:
+     * come back in `pruned` (core/profiles.h profile_commit). All-or-nothing:
      * any failure up to here leaves every ref where it was. */
     commit_message_context_t msg_ctx = {
         .action        = COMMIT_ACTION_REMOVE,
@@ -1244,9 +1244,7 @@ static error_t remove_paths(
     };
     string_array_t pruned;   /* Directory entries the commit's prune took (storage paths) */
     string_array_init(&pruned, ctx->arena);
-    err = profile_stage_commit(
-        stage, commit_message(ctx->arena, config, &msg_ctx), NULL, &pruned
-    );
+    err = profile_commit(draft, commit_message(ctx->arena, config, &msg_ctx), NULL, &pruned);
     if (err) goto cleanup;
     if (pruned.count > 0) {
         output_info(
@@ -1381,7 +1379,7 @@ cleanup:
      * is active, so it safely closes any partially-begun record-update transaction
      * on error paths. */
     state_rollback(state);
-    profile_stage_free(stage);
+    profile_draft_free(draft);
 
     return err;
 }

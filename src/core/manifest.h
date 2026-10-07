@@ -402,8 +402,8 @@ error_t manifest_build(
  * selected (cmds/show.c cmd_show, cmds/list.c list_file_history, which ask it
  * manifest_claim_name); revert's two questions of a tree, the claim standing at
  * a path and the second-name admission (cmds/revert.c revert_claim_standing,
- * revert_refuse_second_name); add, which builds one over its next commit's base
- * (core/profiles.h profile_stage_base) and asks it every naming question for
+ * revert_refuse_second_name); add, which builds one over its draft's base
+ * (core/profiles.h profile_draft_base) and asks it every naming question for
  * the length of the command (cmds/add.c cmd_add); `ignore --test`'s named arm
  * (cmds/ignore.c ignore_test); and the two cross-profile searches, which build
  * one per local profile (cmds/revert.c revert_select_profile, through

@@ -465,16 +465,16 @@ error_t profile_contradicted(
  * What a profile holds, counted: the claims its walk shows, by kind
  *
  * Every blob a file, and every tracked directory claim the walk shows a directory.
- * An ancestor claim is the way to content, never content, and counting the spine
- * would inflate the number the screens call "directories" past anything the user
- * named.
+ * An ancestor claim is the way to content, never content, and counting it would
+ * inflate the number the screens call "directories" past anything the user named.
  *
  * Counted from the profile, not from the view: the listings that print it name
- * available profiles too, and a profile nothing has enabled owns no rows. Shown
- * the walk's claims, a profile that wins every path it claims counts here as
- * its rows do there. `status -v` counts something else, the view's rows a profile
- * wins (cmds/status.c status_print_profiles): the holds/wins split, and the two
- * are free to disagree (docs/profiles.md).
+ * available profiles too, and a profile nothing has enabled owns no rows. The
+ * view's rows a profile wins are what `status -v` counts, by the same rule, a
+ * derived row no directory (cmds/status.c status_print_profiles), so a profile
+ * that wins every path it claims counts there as it counts here: the holds/wins
+ * split, and the two part only where another profile wins a path
+ * (docs/profiles.md).
  *
  * A count reads no blob. The bytes the files stand for are a listing's to fold,
  * beside the rows that must sum to them (cmds/list.c list_size_claim).

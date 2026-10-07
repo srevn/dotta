@@ -254,10 +254,12 @@ static inline bool manifest_is_claim(
  * second name for one path, where a derived claim names nothing and so blocks
  * nothing (cmds/add.c cmd_add, cmds/revert.c revert_refuse_second_name); add's
  * rule question, where it claims nothing either and so is a discovery, meeting
- * every rule (cmds/add.c add_verdict); and the walk that enters such a directory
- * for the claims beneath it (cmds/add.c add_collect). Every other `tracked` read
- * in the tree stands where the kind is already settled and asks the field's own
- * meaning, not this predicate.
+ * every rule (cmds/add.c add_verdict); the walk that enters such a directory
+ * for the claims beneath it (cmds/add.c add_collect); and the per-profile counts
+ * `status -v` prints, where a derived row is no directory the profile tracks
+ * (cmds/status.c status_print_profiles). Every other `tracked` read in the tree
+ * stands where the kind is already settled and asks the field's own meaning,
+ * not this predicate.
  */
 static inline bool manifest_is_derived(const manifest_row_t *row) {
     return row && row->type == PATH_TYPE_DIRECTORY && !row->tracked;

@@ -106,8 +106,11 @@ static void status_print_profiles(
             const workspace_item_t *item = active.entries[j];
             if (strcmp(item->profile, profile) != 0) continue;
 
-            if (item->item_kind == PATH_KIND_DIRECTORY) dir_count++;
-            else file_count++;
+            /* A directory the profile tracks, as what it holds is counted
+             * (core/profiles.h profile_counts_t): a derived row is the way to a
+             * tracked path, never a directory of the profile's own */
+            if (item->item_kind == PATH_KIND_FILE) file_count++;
+            else if (!manifest_is_derived(item->row)) dir_count++;
 
             if (item->record && strcmp(item->record->profile, profile) == 0 &&
                 item->record->deployed_at > profile_deploy_time) {

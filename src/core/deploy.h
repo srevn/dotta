@@ -28,7 +28,13 @@
  *   is derived from the fate, never stored twice
  * - A dry run is the preview: the caller reads the verdicts and calls no executor,
  *   so there is no dry-run flag beneath the plan
- * - Removals are single-node: what stands at a planned path, never a tree
+ * - Removals are single-node: what stands at a planned path, never a tree, and
+ *   only to land the row's own node there. A write that fails after its clear
+ *   leaves the path empty, and any record there is the cleared node's, of another
+ *   kind than the row's: the next load reads the path apply's to fill
+ *   (core/workspace.c classify_absent) — unless a claim of the cleared node's
+ *   kind stands there again first, which reads [deleted] until a plain apply
+ *   makes it
  * - Directories are materialized in two phases: held at a working mode (recorded
  *   mode, owner rwx on: deploy_working_mode) while the run writes beneath them,
  *   then released to the exact recorded mode, deepest-first — the same way
@@ -130,8 +136,8 @@ typedef struct {
  * rung). The workspace's own presence rule (occupant != FS_OCCUPANT_NONE,
  * workspace.h) assumes an unstattable path present; this is deploy's stricter
  * reading, for judgments — one producer, read by occupant_conflicts (the ladder's
- * type rung) and deploy_file (the symlink arm's clear) in deploy.c, and by
- * cmds/apply.c apply_print_deploy_preview (the overwrite count).
+ * type rung) in deploy.c, and by cmds/apply.c apply_print_deploy_preview (the
+ * overwrite count).
  */
 static inline bool deploy_occupant_present(fs_occupant_t occ) {
     return occ != FS_OCCUPANT_NONE && occ != FS_OCCUPANT_UNKNOWN;
@@ -745,19 +751,19 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  *   the remedy is a run that reaches it, or, for a claim the run cannot reach
  *   at all because nothing plans it, a re-derivation of the chain.
  * - Landing — the write must be able to land. Every arm of the executor writes
- *   through the *parent* — a temp file renamed over the target, a symlink unlinked
- *   and re-made, a mkdir — so the path's own permissions are never the question,
- *   and a directory being converged in place asks nothing at all. The question
- *   goes to the nearest present ancestor alone: everything absent beneath it is
- *   created by this run at a working mode and cannot refuse. A deployable or
- *   holdable claimed directory there is dotta's and never refuses; any other
- *   directory's bits must not deny the run a new entry (fs_denied) or the row
- *   is skipped (PERMISSION) — what refuses every identity there denies the run
- *   nothing, and is the write's to meet; a non-directory squatter at a path no
- *   row claims skips it too (ANCESTOR — the claimed ones were the ancestry rung's).
- *   Ancestors are not items, so this is the one fresh probe preflight takes;
- *   the mechanism (ensure_parents) asks the same questions of the same ancestor,
- *   so this predicts the run rather than modelling it.
+ *   through the *parent* — a temp file or a link renamed over the target, a mkdir
+ *   — so the path's own permissions are never the question, and a directory being
+ *   converged in place asks nothing at all. The question goes to the nearest
+ *   present ancestor alone: everything absent beneath it is created by this run
+ *   at a working mode and cannot refuse. A deployable or holdable claimed directory
+ *   there is dotta's and never refuses; any other directory's bits must not deny
+ *   the run a new entry (fs_denied) or the row is skipped (PERMISSION) — what
+ *   refuses every identity there denies the run nothing, and is the write's to
+ *   meet; a non-directory squatter at a path no row claims skips it too (ANCESTOR
+ *   — the claimed ones were the ancestry rung's). Ancestors are not items, so
+ *   this is the one fresh probe preflight takes; the mechanism (ensure_parents)
+ *   asks the same questions of the same ancestor, so this predicts the run rather
+ *   than modelling it.
  * - Type — the occupant the workspace's look found at the planned path, both
  *   kinds (workspace_item_t.occupant; a row planned beneath a squatter this run
  *   replaces is absent, and asked nothing). A different kind at the path — a

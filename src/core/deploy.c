@@ -612,8 +612,8 @@ static void check_ancestry(
  *
  * One question per planned row, present or absent alike, and never about the
  * path itself: nothing deploy writes needs permission on the path.
- * fs_write_file_raw renames a temp file over it, fs_create_symlink unlinks and
- * re-links it, deploy_directory mkdirs it — every one of those is an operation
+ * fs_write_file_raw renames a temp file over it, fs_replace_symlink renames a
+ * link over it, deploy_directory mkdirs it — every one of those is an operation
  * on the *parent*. A read-only file, or a symlink pointing into a read-only store,
  * is no obstacle at all.
  *
@@ -980,16 +980,15 @@ error_t deploy_preflight(
             occupant = item->occupant;
 
             /* The rungs, first match wins — the enum's own order. Every write
-             * lands a new entry through the parent — a temp file renamed over
-             * the path, a link unlinked and re-made, a directory created or put
-             * where a squatter stood — whether or not something is already at
-             * the path, so one question covers them all, and it is never about
-             * the path itself (the landing). A directory already standing at a
-             * directory row is converged in place instead, and fchmod and fchown
-             * ask for the node's owner, the owner the load's look found (FOREIGN).
-             * A row the workspace could not settle is asked too, and skipped on
-             * its own account only when the landing had nothing to say (the
-             * leftover, below). */
+             * lands a new entry through the parent — a temp file or a link renamed
+             * over the path, a directory created or put where a squatter stood
+             * — whether or not something is already at the path, so one question
+             * covers them all, and it is never about the path itself (the landing).
+             * A directory already standing at a directory row is converged in
+             * place instead, and fchmod and fchown ask for the node's owner,
+             * the owner the load's look found (FOREIGN). A row the workspace
+             * could not settle is asked too, and skipped on its own account only
+             * when the landing had nothing to say (the leftover, below). */
             if (item->item_kind != PATH_KIND_DIRECTORY ||
                 deploy_convergence(occupant) != DEPLOY_CONVERGE_FIX) {
                 check_landing(ws, verdicts, path, &skip);
@@ -1449,8 +1448,8 @@ cleanup:
  * applies, and this lands it — missing parents first, then the one arm the row's
  * type calls for. Nothing here looks at the disk to decide anything; a path the
  * world has moved under since preflight meets the mechanism's refusal (rename
- * over a directory is EISDIR, symlink over anything is EEXIST, rmdir of a directory
- * that filled up is ENOTEMPTY) and the refusal is the row's outcome.
+ * over a directory is EISDIR, rmdir of a directory that filled up is ENOTEMPTY)
+ * and the refusal is the row's outcome.
  *
  * The row:
  * - file->type: which arm — a symlink is re-linked from its blob, anything else
@@ -1498,20 +1497,23 @@ static error_t deploy_file(
         );
         if (err) goto cleanup;
 
-        /* symlink(2) refuses an occupied path outright, so whatever stands there
-         * goes first — mechanism, not policy: an occupant of the link's own kind
-         * too, which is no conflict and needed no --force. The one the verdict
+        /* fs_replace_symlink lands the link as fs_write_file_raw lands a file's
+         * content, by rename(2) of a temporary over the target: it replaces a
+         * regular file, a link (the link itself, not what it points to — of the
+         * row's own kind, no conflict and no --force) or a device in place, and
+         * makes the path where nothing stands — but never replaces a directory
+         * (EISDIR). Only that one case needs clearing first: the node the verdict
          * named, never one found by a fresh look from down here. */
-        if (deploy_occupant_present(v->occupant)) {
+        if (v->occupant == FS_OCCUPANT_DIRECTORY) {
             err = clear_occupant(file->filesystem_path, v->occupant);
             if (err) goto cleanup;
         }
 
-        /* Create the link with the ownership the verdict resolved: the one node
-         * without a descriptor, so the primitive applies the pair itself. */
-        err = fs_create_symlink(
-            target_str, file->filesystem_path, v->uid, v->gid
-        );
+        /* The link lands with the ownership the verdict resolved — the one node
+         * without a descriptor, so the primitive applies the pair itself, to
+         * the temporary — and what stood at the path stands until it does: a
+         * link that cannot be made leaves the path as it was. */
+        err = fs_replace_symlink(target_str, file->filesystem_path, v->uid, v->gid);
         goto cleanup;
     }
 

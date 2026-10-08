@@ -1057,11 +1057,6 @@ static error_t materialize_entries(
             }
 
             case EXPORT_ENTRY_SYMLINK:
-                /* Blob content is the target path; recreate the link. symlink(2)
-                 * cannot overwrite — clear any stale entry. */
-                err = fs_remove_file(e->dest_path);
-                if (err) return err;
-
                 /* The one-entry copy's destination is the user's own path, and
                  * its parent is created here exactly as fs_write_file_raw creates
                  * one for a file (sys/filesystem.h). Inside a tree copy every
@@ -1070,7 +1065,10 @@ static error_t materialize_entries(
                 err = fs_ensure_parent_dirs(e->dest_path);
                 if (err) return err;
 
-                err = fs_create_symlink(
+                /* Blob content is the target path; recreate the link, renamed
+                 * over a stale entry as a file's write is — what stood there
+                 * stands until the link does (fs_replace_symlink). */
+                err = fs_replace_symlink(
                     (const char *) e->content.data, e->dest_path,
                     (uid_t) -1, (gid_t) -1      /* no claim: the export's own */
                 );

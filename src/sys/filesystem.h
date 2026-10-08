@@ -816,6 +816,10 @@ error_t fs_expand_tilde(const char *path, arena_t *arena, const char **out);
 /**
  * Create symbolic link
  *
+ * Where nothing stands: symlink(2) refuses a path anything stands at (EEXIST),
+ * so a link made here never takes the place of what arrived since its caller
+ * looked — fs_replace_symlink puts one in the place of a node.
+ *
  * With its ownership: a link carries no mode (symlink(2) takes none, and most
  * filesystems ignore one) but it has an owner, and that matters for auditing
  * and consistency. The link is the one node without a descriptor to fchown, so
@@ -833,6 +837,40 @@ error_t fs_expand_tilde(const char *path, arena_t *arena, const char **out);
  * @return Error or NULL on success
  */
 error_t fs_create_symlink(
+    const char *target,
+    const char *linkpath,
+    uid_t uid,
+    gid_t gid
+);
+
+/**
+ * Put a symbolic link in the place of what stands at a path
+ *
+ * One strategy, fs_write_file_raw's: the link is made in the path's own directory
+ * under a temporary name, given its ownership there, and rename(2)d over the
+ * path. So what stood there — a regular file, a device, or a link itself rather
+ * than what it points at — stands until the new link does, which then stands
+ * owned as it was asked; a link that cannot be made, owned or renamed leaves
+ * the path as it was, and no temporary behind. The permission it needs is
+ * write+search on the parent, never on the path. Where nothing stands the rename
+ * makes the path; a caller that must refuse whatever arrives there makes it with
+ * fs_create_symlink, whose symlink(2) refuses a path anything stands at.
+ * Directories are the one thing rename cannot replace (EISDIR): clear them first.
+ *
+ * The temporary's name is fs_write_file_raw's template, its six Xs drawn fresh
+ * (sys/entropy) until symlink(2) takes one: a name another holds is EEXIST, and
+ * the next is drawn — the exclusivity mkstemp's open gives a file's temporary.
+ *
+ * The target and the ownership are fs_create_symlink's: the target as it stands,
+ * and lchown on the link itself, -1 for either half leaving it as created.
+ *
+ * @param target Link target (must not be NULL)
+ * @param linkpath The path the link is put at (must not be NULL)
+ * @param uid Owner to set on the link, or (uid_t) -1 to leave it
+ * @param gid Group to set on the link, or (gid_t) -1 to leave it
+ * @return Error or NULL on success
+ */
+error_t fs_replace_symlink(
     const char *target,
     const char *linkpath,
     uid_t uid,

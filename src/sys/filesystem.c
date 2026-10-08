@@ -21,6 +21,7 @@
 #include "base/error.h"
 #include "base/heap.h"
 #include "base/string.h"
+#include "sys/entropy.h"
 #include "sys/identity.h"
 
 /* Buffer size for file I/O */
@@ -30,8 +31,14 @@
 #define FS_MAX_READ_SIZE ((size_t) 256 * 1024 * 1024)
 
 /* A write's temp file, beside its target: the target's directory, then this —
- * mkstemp's template, whose six Xs fs_mkstemp reads */
+ * mkstemp's template, whose six Xs fs_mkstemp reads, and fs_replace_symlink draws
+ * for a link's */
 #define FS_TMP_SUFFIX "/.dotta-tmp-XXXXXX"
+
+/* How many names a link's temporary draws before the directory's refusal is the
+ * answer (fs_replace_symlink): six characters of sixty-two, drawn fresh, meet a
+ * name another holds by malice alone */
+#define FS_TMP_DRAWS 32
 
 /**
  * The kernel's calls on managed paths
@@ -1415,6 +1422,73 @@ error_t fs_create_symlink(
                 errno, "Failed to set ownership on symlink '%s'", linkpath
             );
         }
+    }
+
+    return NULL;
+}
+
+error_t fs_replace_symlink(
+    const char *target, const char *linkpath,
+    uid_t uid, gid_t gid
+) {
+    CHECK_NULL(target);
+    CHECK_NULL(linkpath);
+
+    /* The temporary in the path's own directory, as fs_write_file_raw's: two
+     * names in one directory are on one filesystem, so the rename below never
+     * meets EXDEV */
+    char *parent = fs_parent_dir(linkpath);
+    char tmp_path[PATH_MAX];
+    int n = snprintf(tmp_path, sizeof(tmp_path), "%s" FS_TMP_SUFFIX, parent);
+    free(parent);
+    if (n < 0 || (size_t) n >= sizeof(tmp_path)) {
+        return error_create(ERR_FS, "Path too long for an atomic link at '%s'", linkpath);
+    }
+
+    /* A fresh name each draw until symlink(2) takes one: a name another holds
+     * is EEXIST and the next is drawn, and any other refusal is the link's own,
+     * said as the link that was never made */
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    char *xs = tmp_path + n - 6;
+
+    for (int draws = 1;; draws++) {
+        uint8_t draw[6];
+        error_t err = entropy_fill(draw, sizeof(draw));
+        if (err) {
+            return error_wrap(
+                err, "Failed to create symlink '%s' -> '%s'", linkpath, target
+            );
+        }
+        for (size_t i = 0; i < sizeof(draw); i++) {
+            xs[i] = alphabet[draw[i] % (sizeof(alphabet) - 1)];
+        }
+
+        if (fs_symlink(target, tmp_path) == 0) break;
+        if (errno != EEXIST || draws == FS_TMP_DRAWS) {
+            return error_errno(
+                errno, "Failed to create symlink '%s' -> '%s'", linkpath, target
+            );
+        }
+    }
+
+    /* Owned before it stands where the path is read: lchown on the temporary,
+     * the link itself */
+    if ((uid != (uid_t) -1 || gid != (gid_t) -1) && fs_lchown(tmp_path, uid, gid) < 0) {
+        int saved_errno = errno;
+        fs_unlink(tmp_path);
+
+        return error_errno(
+            saved_errno, "Failed to set ownership on symlink '%s'", linkpath
+        );
+    }
+
+    /* The swap: what stood at the path stands until the link does */
+    if (fs_rename(tmp_path, linkpath) < 0) {
+        int saved_errno = errno;
+        fs_unlink(tmp_path);
+
+        return error_errno(saved_errno, "Failed to replace '%s'", linkpath);
     }
 
     return NULL;

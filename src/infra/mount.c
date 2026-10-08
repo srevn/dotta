@@ -50,7 +50,9 @@ error_t mount_validate_target(const char *target) {
                 ERR_INVALID_ARG, "Target '%s' is a link to nothing", target
             );
         }
-        return error_create(ERR_INVALID_ARG, "Target directory does not exist: '%s'", target);
+        return error_create(
+            ERR_INVALID_ARG, "Target directory does not exist: '%s'", target
+        );
     }
     if (!S_ISDIR(st.st_mode)) {
         return error_create(
@@ -269,7 +271,9 @@ const mount_root_t *mount_root_of(
 ) {
     for (size_t i = 0; i < table->root_count; i++) {
         const mount_root_t *m = &table->roots[i];
-        if (m->label == label && namespace_holds(profile, m)) return m;
+        if (m->label == label && namespace_holds(profile, m)) {
+            return m;
+        }
     }
 
     return NULL;

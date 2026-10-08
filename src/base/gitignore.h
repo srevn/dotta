@@ -226,8 +226,10 @@ void gitignore_ruleset_append_rules(
  *
  * A rule appended to the copy never reaches `from`, nor one appended to `from`
  * the copy. The strings are borrowed as an append borrows them: every arena `from`
- * borrows from must outlive the copy. Never fails. Reader: core/ignore.c
- * ignore_compose, which starts every composition from the baseline as compiled.
+ * borrows from must outlive the copy. Never fails. Readers: core/ignore.c
+ * ignore_compose, which starts every composition from the baseline as compiled;
+ * cmds/add.c add_refuse_excluded, which appends the -e's a refusal offers to a
+ * copy of the rules the path meets.
  *
  * @param arena Arena the copy lives in (must not be NULL)
  * @param from  Ruleset to copy (must not be NULL)

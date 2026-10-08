@@ -379,12 +379,12 @@ static error_t add_spell(
  * the path, where one of theirs does, else the source tree's: within each an
  * excluded directory is final, so the climb ends at the first rung a rule excludes
  * and never reaches the rules below it (core/ignore.h ignore_verdict). Clearing
- * that one can uncover the next, beneath it or in the layer below: the refusal
- * offers the `-e` re-opening exactly that rung, and the next refusal names the
- * next (add_refuse_excluded). A source layer that cannot answer, where no rung
- * is excluded, answers its failure, and the path is refused rather than read as
- * excluded by nothing — what could not be read may be what git excludes — named
- * or walked (add_refuse_unjudged).
+ * that one can uncover the next, beneath it or in the layer below, so a refusal
+ * asks again past each and offers every one's -e (add_refuse_excluded). A source
+ * layer that cannot answer, where no rung is excluded, answers its failure, and
+ * the path is refused rather than read as excluded by nothing — what could not
+ * be read may be what git excludes — named (add_refuse_excluded) or walked
+ * (add_refuse_unjudged).
  *
  * @return The source layer's failure, where no rung is excluded; NULL otherwise
  */
@@ -719,58 +719,112 @@ static error_t add_collect(
 }
 
 /**
- * Refuse a path named on the command line that a rule excludes
+ * Refuse a path named on the command line that a rule excludes, or answer NULL
+ * where none does
  *
- * The refusal names the rule — the layer, and for Git's rules the file and line
- * it was read at (core/ignore.h ignore_verdict_describe) — and, as a clause,
- * the -e that re-opens exactly the rung it closed (ignore_verdict_negation):
- * clearing it can uncover the next rung, which the next refusal names. The
- * operation's own -e is named and offered nothing, since this command said it.
- * Where no -e reaches the rung, the refusal says so, and for Git's rules names
- * the switch that turns them off; the four's rule is named in the fact, its own
- * way past.
+ * The path's verdict is asked here (add_verdict), and the refusal names its rule
+ * — the outermost that closes the path: the layer, and for Git's rules the file
+ * and line it was read at (core/ignore.h ignore_verdict_describe), as git names
+ * the outermost directory it will not enter — and, as a clause, the -e re-opening
+ * exactly each rung that closes the path (ignore_verdict_negation): found by
+ * asking as the command they make would ask, so the command offered is the one
+ * that runs. Where every rung is Git's, the switch that turns them off stands
+ * beside them, which dotta does not write.
+ *
+ * A rung no -e may re-open is named alone, wherever the asking meets it, since
+ * the -e's before it re-open nothing while it stands: the operation's own -e,
+ * offered nothing because this command said it, and a rung no pattern reaches,
+ * which the refusal says — for Git's rules naming the switch, for the four's
+ * naming the rule, its own way past.
  *
  * The argument is echoed as typed, and every -e it offers is quoted for the shell
  * the user types it back into (base/string.h str_shell_quote).
+ *
+ * @return The refusal, or the failure Git's rules gave; NULL where no rule closes
+ *         the path
  */
 static error_t add_refuse_excluded(
-    const add_walk_t *walk, const char *file, const char *storage_path, path_kind_t kind,
-    const ignore_verdict_t *verdict
+    const add_walk_t *walk, const char *file, const manifest_row_t *held,
+    const char *filesystem_path, const char *storage_path, path_kind_t kind
 ) {
     arena_t *arena = walk->ctx->arena;
-    const char *rule = ignore_verdict_describe(arena, verdict);
 
-    /* The operation's own -e: this command said it, and nothing is offered. */
-    if (verdict->origin == IGNORE_ORIGIN_CLI) {
-        return error_create(ERR_INVALID_ARG, "'%s' is ignored by %s", file, rule);
-    }
+    ignore_verdict_t verdict;
+    error_t err = add_verdict(walk, held, filesystem_path, storage_path, kind, &verdict);
 
-    /* The -e re-opening the rung, where a pattern reaches it: beside the switch
-     * for Git's rules, which dotta does not write, and alone for the four's. */
-    const char *negation = ignore_verdict_negation(arena, verdict, storage_path, kind);
-    if (negation && verdict->origin == IGNORE_ORIGIN_SOURCE) {
-        return error_create(
-            ERR_INVALID_ARG, "'%s' is ignored by %s; -e %s re-opens it, or "
-            "respect_gitignore = false turns Git's rules off", file, rule,
-            str_shell_quote(arena, negation)
+    /* The rule the refusal names: the first the ladder meets, the outermost that
+     * closes the path. Git's rules close every rung where they close this one:
+     * the four answer before them, and an -e that re-opens closes nothing. */
+    const ignore_verdict_t first = verdict;
+
+    /* The -e re-opening each rung that closes the path: appended to a copy of
+     * the rules, and the path asked again, which names another rung or none
+     * (core/ignore.h ignore_verdict_negation). A claim meets the -e layer alone,
+     * which only the operation's own -e closes, so what is copied is the profile's
+     * rules. */
+    string_array_t offered;
+    string_array_init(&offered, arena);
+    gitignore_ruleset_t *reopened = NULL;
+    while (!err && verdict.origin != IGNORE_ORIGIN_NONE) {
+        const char *rule = ignore_verdict_describe(arena, &verdict);
+
+        /* The operation's own -e: this command said it, and nothing is offered. */
+        if (verdict.origin == IGNORE_ORIGIN_CLI) {
+            return error_create(ERR_INVALID_ARG, "'%s' is ignored by %s", file, rule);
+        }
+
+        /* No pattern reaches the rung: the switch is Git's rules' way past, and
+         * the four's is the rule the fact names. */
+        const char *negation = ignore_verdict_negation(arena, &verdict, storage_path, kind);
+        if (!negation && verdict.origin == IGNORE_ORIGIN_SOURCE) {
+            return error_create(
+                ERR_INVALID_ARG, "'%s' is ignored by %s, which no -e re-opens; "
+                "respect_gitignore = false turns Git's rules off", file, rule
+            );
+        }
+        if (!negation) {
+            return error_create(
+                ERR_INVALID_ARG, "'%s' is ignored by %s, which no -e re-opens", file, rule
+            );
+        }
+
+        string_array_push(&offered, str_shell_quote(arena, negation));
+
+        /* A `!` before a literal is one rule (base/gitignore.h gitignore_literal),
+         * so the append cannot refuse it. */
+        if (!reopened) reopened = gitignore_ruleset_clone(arena, walk->rules);
+        (void) gitignore_ruleset_append_pattern(
+            reopened, negation, (gitignore_origin_t) IGNORE_ORIGIN_CLI
+        );
+        err = ignore_verdict(
+            reopened, walk->source, storage_path, filesystem_path, kind, &verdict
         );
     }
-    if (negation) {
-        return error_create(
-            ERR_INVALID_ARG, "'%s' is ignored by %s; -e %s re-opens it", file, rule,
-            str_shell_quote(arena, negation)
-        );
-    }
 
-    /* No pattern reaches the rung: the switch is Git's rules' way past, and the
-     * four's is the rule the fact names. */
-    if (verdict->origin == IGNORE_ORIGIN_SOURCE) {
-        return error_create(
-            ERR_INVALID_ARG, "'%s' is ignored by %s, which no -e re-opens; "
-            "respect_gitignore = false turns Git's rules off", file, rule
+    /* Git's rules could not be read for the path, where no rule closes it — at
+     * the first ask, or with every rung above re-opened: never read as admitted,
+     * since what could not be read may be what git excludes. The failure names
+     * what could not be read; the way past is the repository's to mend, or the
+     * switch, the refusal's clause. No -e is offered: a `!` at a rung that cannot
+     * be read re-opens it (core/ignore.h ignore_verdict), which would admit what
+     * git may exclude, and a repository that fails whole fails at every rung
+     * inside it. */
+    if (err) {
+        return error_wrap(
+            err, "Cannot tell whether '%s' is ignored by Git's ignore rules; "
+            "respect_gitignore = false turns Git's rules off", file
         );
     }
-    return error_create(ERR_INVALID_ARG, "'%s' is ignored by %s, which no -e re-opens", file, rule);
+    if (offered.count == 0) return NULL;
+
+    return error_create(
+        ERR_INVALID_ARG, "'%s' is ignored by %s; -e %s %s it%s", file,
+        ignore_verdict_describe(arena, &first),
+        string_array_join(arena, &offered, " -e "),
+        offered.count == 1 ? "re-opens" : "re-open",
+        first.origin == IGNORE_ORIGIN_SOURCE
+            ? ", or respect_gitignore = false turns Git's rules off" : ""
+    );
 }
 
 /**
@@ -1852,34 +1906,15 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         /* A path named on the command line meets the rules the walk would ask
          * of it, but a verdict against it is an error, not a silent skip: the
          * user asked for it by name, and the answer says which rule stands in
-         * the way and how to get past it (add_refuse_excluded). A claim meets
-         * -e alone, so no rule of discovery refuses it. The source tree's rules
-         * read where the path physically stands and not the name, over every
-         * rung of it, so a root standing inside a repository whose rules name
-         * it, or name a directory above it, is refused here as any ignored
+         * the way and how to get past every one (add_refuse_excluded). A claim
+         * meets -e alone, so no rule of discovery refuses it. The source tree's
+         * rules read where the path physically stands and not the name, over
+         * every rung of it, so a root standing inside a repository whose rules
+         * name it, or name a directory above it, is refused here as any ignored
          * directory is, unless the profile already tracks it; at "/" the path
          * names no entry and asks nothing. */
-        ignore_verdict_t verdict;
-        err = add_verdict(&walk, held, filesystem_path, storage_path, kind, &verdict);
-        if (err) {
-            /* Git's rules could not be read for the path, the four having excluded
-             * nothing: never read as admitted, since what could not be read may
-             * be what git excludes. The failure names what could not be read;
-             * the way past is the repository's to mend, or the switch, the
-             * refusal's clause. No -e is offered: a `!` at a rung that cannot
-             * be read re-opens it (core/ignore.h ignore_verdict), which would
-             * admit what git may exclude, and a repository that fails whole fails
-             * at every rung inside it. */
-            err = error_wrap(
-                err, "Cannot tell whether '%s' is ignored by Git's ignore rules; "
-                "respect_gitignore = false turns Git's rules off", file
-            );
-            goto cleanup;
-        }
-        if (verdict.origin != IGNORE_ORIGIN_NONE) {
-            err = add_refuse_excluded(&walk, file, storage_path, kind, &verdict);
-            goto cleanup;
-        }
+        err = add_refuse_excluded(&walk, file, held, filesystem_path, storage_path, kind);
+        if (err) goto cleanup;
 
         /* A kind the claim contradicts: what stands there now is not what the
          * profile holds there. The removal is name-shaped: it takes that claim

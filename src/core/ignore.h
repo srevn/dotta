@@ -386,14 +386,20 @@ const char *ignore_verdict_describe(arena_t *arena, const ignore_verdict_t *verd
 /**
  * The negation that re-opens the rung a verdict names: `!` and the rule naming
  * that rung of the path's name and nothing else (base/gitignore.h
- * gitignore_literal) — what -e takes to let the path past it. Clearing the rung
- * can uncover the next, beneath it or in the layer below, which the verdict asked
- * again names.
+ * gitignore_literal) — what -e takes to let the path past it.
+ *
+ * Appended to the rules the verdict was asked of, it re-opens that rung in the
+ * four and against Git's rules, and closes nothing (ignore_verdict): asked again,
+ * the verdict names another rung, or none. So each verdict's negation in turn,
+ * appended and the path asked again, meets every rung that closes the path, each
+ * once — the four's, then Git's, which answer only where the four exclude nothing,
+ * so a rung met later may stand above one met earlier — until the path stands
+ * open, or a verdict names a rung no negation reaches.
  *
  * NULL where no pattern reaches the rung: IGNORE_RUNG_UNNAMED, a root's own rung
  * (its tail is empty, and no rule reaches it), or a name no line of the grammar
  * holds (a newline in it, or a file's final carriage return). Reader: cmds/add.c
- * add_refuse_excluded.
+ * add_refuse_excluded, which offers every rung's.
  *
  * @param arena        Arena the negation lives in (must not be NULL)
  * @param verdict      A verdict that excludes the path (must not be NULL)

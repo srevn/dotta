@@ -127,9 +127,11 @@ typedef struct ignore_rules ignore_rules_t;
  *
  * Declared in ascending precedence so a larger numeric value means "this layer
  * overrides lower ones." Values round-trip through gitignore_origin_t (8-bit):
- * a layer's rules are tagged at its compile, and again where the builder composes
- * it. The source layer's are not: sys/source reads its own rules, and the verdict
- * names their layer (ignore_verdict).
+ * a layer's rules are tagged at its compile, and the config's and the CLI's again
+ * where the builder copies them in — utils/config compiles with no tag — while
+ * the baseline's are copied as compiled (ignore_compose). The source layer's
+ * are not: sys/source reads its own rules, and the verdict names their layer
+ * (ignore_verdict).
  */
 typedef enum {
     IGNORE_ORIGIN_NONE = 0,   /* No rule matched */

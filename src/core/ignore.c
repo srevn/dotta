@@ -8,12 +8,13 @@
  * Subsequent calls with the same profile name return the cached pointer —
  * memoisation lives in the builder, not in any caller bookkeeping.
  *
- * A compiled layer is composed by copying (gitignore_ruleset_append_rules): each
- * per-profile ruleset copies the baseline's, the config's and the CLI's rules
- * around the profile's own .dottaignore and borrows their strings, so what was
- * read once is not read again. The layers make one ruleset, not four verdicts:
- * a later layer's `!` has to be asked at the same rung as the earlier layer's
- * directory it re-opens (ignore.h).
+ * A compiled layer is composed by copying: each per-profile ruleset starts as a
+ * copy of the baseline, tagged when it was compiled (gitignore_ruleset_clone),
+ * and copies the config's and the CLI's rules after the profile's own .dottaignore
+ * (gitignore_ruleset_append_rules), borrowing their strings, so what was read
+ * once is not read again. The layers make one ruleset, not four verdicts: a later
+ * layer's `!` has to be asked at the same rung as the earlier layer's directory
+ * it re-opens (ignore.h).
  *
  * The source layer (sys/source.h) is not compiled with them: it reads the rules
  * of the repositories a path physically stands in, each rung of its own, so it
@@ -156,8 +157,7 @@ struct ignore_rules {
     git_repository *repo;                      /* borrowed; profile blobs */
 
     /* The layers every profile shares (ignore_rules_create) */
-    const gitignore_ruleset_t *baseline_rules; /* compiled at creation */
-    ignore_origin_t baseline_origin;           /* BASELINE, or BUILTIN */
+    const gitignore_ruleset_t *baseline_rules; /* compiled at creation, BASELINE or BUILTIN */
     const gitignore_ruleset_t *config_rules;   /* borrowed; compiled at load */
     const gitignore_ruleset_t *cli_rules;      /* borrowed; NULL when no -e */
     source_filter_t *source;                   /* the source layer; NULL: turned off */
@@ -193,9 +193,9 @@ static error_t ignore_ref_text(
 /**
  * Compose a fresh ruleset for `profile` in the builder's arena.
  *
- * Appends the four layers in precedence order (baseline/builtin, profile, config,
- * CLI) — the baseline's, the config's and the CLI's compiled rules copied, the
- * profile's .dottaignore read. A rung is read last rule first
+ * The four layers in precedence order (baseline/builtin, profile, config, CLI)
+ * — the baseline's compiled rules copied whole, the profile's .dottaignore read,
+ * the config's and the CLI's copied behind it. A rung is read last rule first
  * (gitignore_ruleset_find), so CLI wins last-match and the ordering here
  * establishes the documented precedence for free.
  *
@@ -204,12 +204,9 @@ static error_t ignore_ref_text(
 static error_t ignore_compose(
     ignore_rules_t *r, const char *profile, gitignore_ruleset_t **out
 ) {
-    gitignore_ruleset_t *rs = gitignore_ruleset_create(r->arena, GITIGNORE_CASE_SENSITIVE);
-
-    /* 1. Baseline / builtin fallback (lowest precedence). */
-    gitignore_ruleset_append_rules(
-        rs, r->baseline_rules, (gitignore_origin_t) r->baseline_origin
-    );
+    /* 1. Baseline / builtin fallback (lowest precedence): the set as compiled,
+     *    each rule under the origin its compile gave it. */
+    gitignore_ruleset_t *rs = gitignore_ruleset_clone(r->arena, r->baseline_rules);
 
     /* 2. Profile-specific `.dottaignore` (if the profile was named and has a
      *    blob on its branch). A missing branch / missing file / empty blob is
@@ -376,9 +373,9 @@ error_t ignore_rules_create(
     error_t err = ignore_ref_text(repo, BASELINE_REF, &blob);
     if (err) return err;
 
-    ignore_origin_t origin = blob.size ? IGNORE_ORIGIN_BASELINE : IGNORE_ORIGIN_BUILTIN;
     gitignore_ruleset_append_file(
-        baseline, blob.size ? blob.data : DEFAULT_DOTTAIGNORE, (gitignore_origin_t) origin
+        baseline, blob.size ? blob.data : DEFAULT_DOTTAIGNORE,
+        (gitignore_origin_t) (blob.size ? IGNORE_ORIGIN_BASELINE : IGNORE_ORIGIN_BUILTIN)
     );
     buffer_deinit(&blob);
 
@@ -388,7 +385,6 @@ error_t ignore_rules_create(
     r->arena = arena;
     r->repo = repo;
     r->baseline_rules = baseline;
-    r->baseline_origin = origin;
     r->config_rules = config ? config->ignore_ruleset : NULL;
     r->cli_rules = cli_rules;
 

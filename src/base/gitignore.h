@@ -61,7 +61,9 @@
  * And a ruleset takes a third input, which the grammar never reads again: the
  * rules another ruleset compiled (gitignore_ruleset_append_rules), copied in
  * order and re-tagged, their strings borrowed — how a caller compiles a layer
- * once and composes it into as many rulesets as it needs.
+ * once and composes it into as many rulesets as it needs. A set copied whole
+ * keeps every rule's tag (gitignore_ruleset_clone): a composition's own copy,
+ * to append to without reaching the set it came from.
  *
  * Lifetime: every ruleset and rule is arena-backed, and there is no separate
  * free. A rule's strings live in the arena it was parsed into; a ruleset composed
@@ -216,6 +218,22 @@ void gitignore_ruleset_append_rules(
     const gitignore_ruleset_t *from,
     gitignore_origin_t origin
 );
+
+/**
+ * A copy of `from`: every record, in order, each keeping the origin its set gave
+ * it — where gitignore_ruleset_append_rules re-tags — in a set that compares
+ * letters as `from` does.
+ *
+ * A rule appended to the copy never reaches `from`, nor one appended to `from`
+ * the copy. The strings are borrowed as an append borrows them: every arena `from`
+ * borrows from must outlive the copy. Never fails. Reader: core/ignore.c
+ * ignore_compose, which starts every composition from the baseline as compiled.
+ *
+ * @param arena Arena the copy lives in (must not be NULL)
+ * @param from  Ruleset to copy (must not be NULL)
+ * @return The copy, the arena's; never NULL
+ */
+gitignore_ruleset_t *gitignore_ruleset_clone(arena_t *arena, const gitignore_ruleset_t *from);
 
 /**
  * Evaluate `path` against the ruleset: exclusion, as git reads it — the rule

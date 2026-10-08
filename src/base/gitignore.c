@@ -658,6 +658,20 @@ void gitignore_ruleset_append_rules(
         push_rule(set, from->rules[i], origin);
 }
 
+gitignore_ruleset_t *gitignore_ruleset_clone(arena_t *arena, const gitignore_ruleset_t *from) {
+    CHECK_NULL(arena);
+    CHECK_NULL(from);
+
+    /* Each record through the one way a rule enters a set, under the tag it
+     * carries, into a set that compares letters as `from` does: every rule reads
+     * as it read there. */
+    gitignore_ruleset_t *set = gitignore_ruleset_create(arena, from->casing);
+    for (size_t i = 0; i < from->count; i++)
+        push_rule(set, from->rules[i], from->rules[i].origin);
+
+    return set;
+}
+
 gitignore_match_t gitignore_eval(
     const gitignore_ruleset_t *set, const char *path, bool is_dir
 ) {

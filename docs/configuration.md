@@ -150,7 +150,7 @@ Dotta uses a multi-layered ignore system (in precedence order):
 4. **Baseline `.dottaignore`** -- repository-wide, machine-local, version-controlled
 5. **Git's ignore rules** -- each `.gitignore`, `.git/info/exclude` and `core.excludesFile`, read where each path physically stands (lowest priority)
 
-The layers decide what is new: what `dotta add` picks up while it walks a directory, and what `status` offers beneath a tracked one. A path a profile already tracks is not new to it, so `dotta add` re-captures it whatever the patterns say, as `dotta update` does; only the command's own `--exclude` leaves it out, as it does for `apply` and `update`.
+The layers decide what is new: what `dotta add` picks up while it walks a directory, and what `status` offers beneath a tracked one. A path a profile already holds is not new to it, and the patterns never reach it: `dotta add` leaves it as it stands — `--force` re-captures it — and `dotta update` captures a change to it, whatever the patterns say; only the command's own `--exclude` leaves it out, as it does for `apply` and `update`.
 
 Where Git's rules cannot be read — a `.gitignore` that is a directory, a repository whose configuration does not parse — nothing is taken to be admitted: `dotta add` refuses the path and says what it could not read, `status` and `update` list what the scan could not judge and never offer it, and `dotta ignore --test` says it could not tell; `respect_gitignore = false` turns Git's rules off.
 

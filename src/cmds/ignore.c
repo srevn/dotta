@@ -583,13 +583,13 @@ static path_kind_t ignore_kind(
  * asker and its entries are what a pattern can name.
  *
  * The verdicts are the answer, and no line sums them into a forecast: the rules
- * decide discovery (core/ignore.h, what the rules reach), and a path its profile
- * tracks is re-captured by add and update whatever they say. So where the argument
- * is a path its asker tracks, a verdict that excludes it is followed by a note
- * saying so; a storage name builds no view to know, and says nothing. An asker
- * whose Git's rules cannot be read for the path could not tell, and says why —
- * never NOT IGNORED, which what could not be read may belie — and the note follows
- * that answer too, which the rules do not decide for a tracked path either.
+ * decide discovery (core/ignore.h, what the rules reach), and never reach a path
+ * its profile holds. So where the argument is a path its asker holds, a verdict
+ * that excludes it is followed by a note saying so; a storage name builds no
+ * view to know, and says nothing. An asker whose Git's rules cannot be read for
+ * the path could not tell, and says why — never NOT IGNORED, which what could
+ * not be read may belie — and the note follows that answer too, which the rules
+ * do not decide for a held path either.
  *
  * Cost: a filesystem argument pays a manifest build — a tree walk and a sheet
  * load per enabled profile — where it read the table alone. cmds/completion.c
@@ -812,17 +812,17 @@ static error_t ignore_test(
             continue;
         }
 
-        /* A path this asker tracks is no discovery: add and update re-capture
-         * it whatever the rules say, and only an -e leaves it out. Said beneath
-         * the verdicts that would read otherwise, where a view names the path —
-         * a claim, never a directory the asker only passes through. */
+        /* A path this asker holds is no discovery: the rules never reach it,
+         * and only an -e leaves it out. Said beneath the verdicts that would
+         * read otherwise, where a view names the path — a claim, never a directory
+         * the asker only passes through. */
         const manifest_row_t *held = view
             ? manifest_lookup_claim(view, asker, filesystem_path) : NULL;
         if (held && !manifest_is_derived(held)) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "  Profile '%s' tracks it: add and update re-capture it whatever these "
-                "rules say", asker
+                "  Profile '%s' holds it: these rules decide what is new, never what "
+                "a profile holds", asker
             );
         }
     }

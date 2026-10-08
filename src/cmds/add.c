@@ -83,15 +83,21 @@ typedef struct {
  *
  * `listing` is this command's own claims, which is exactly the layer
  * manifest_name reads as `pending`: filesystem path -> &item->claim, one entry per
- * path this command settled and every entry a claim (add_list). So overlapping
- * CLI arguments (~/.config and ~/.config/fish) list each path once — a directory
- * already walked is skipped with its subtree, a file already listed is not listed
- * again — and every path beneath one already listed is named from its claim,
- * which is why no name is carried down the walk. The key is the path, so two
- * spellings of one argument — `~/x` beside its absolute, `./x` beside `~/x` from
- * inside HOME — are one key; a link is a component, so a path through one and
- * the path around it are two, as two claims through and around it are two claims
- * (infra/mount.h). Keys and values borrow the arena the items live in.
+ * path this command settled and every entry a claim (add_list) — a claim the
+ * profile already holds among them, which this command leaves and which names
+ * what the profile's own row names. So overlapping CLI arguments (~/.config and
+ * ~/.config/fish) list each path once — a directory already walked is skipped
+ * with its subtree, a file already listed is not listed again — and every path
+ * beneath one already listed is named from its claim, which is why no name is
+ * carried down the walk. The key is the path, so two spellings of one argument
+ * — `~/x` beside its absolute, `./x` beside `~/x` from inside HOME — are one
+ * key; a link is a component, so a path through one and the path around it are
+ * two, as two claims through and around it are two claims (infra/mount.h). Keys
+ * and values borrow the arena the items live in.
+ *
+ * `files` and `directories` are what the command captures: every path it listed,
+ * a claim among them under `force` alone (add_list). Every phase after the
+ * selection reads the two lists, and so reads captures alone.
  *
  * `view` is the profile as this command opened it: this profile's contribution
  * alone, from its draft's base, under this command's table. Every name comes
@@ -117,9 +123,10 @@ typedef struct {
     const gitignore_ruleset_t *excludes; /* The -e layer alone, what a claim meets; NULL: none */
     source_filter_t *source;             /* The source layer, the builder's; NULL: turned off */
     profile_draft_t *draft;              /* The profile's next commit: what it has room for */
+    bool force;                          /* --force: a claim listed is captured, never left */
     hashmap_t *listing;                  /* filesystem path -> &item->claim (borrowed both) */
-    ptr_array_t files;                   /* add_path_t *: every non-directory listed */
-    ptr_array_t directories;             /* add_path_t *: every directory walked into */
+    ptr_array_t files;                   /* add_path_t *: every non-directory captured */
+    ptr_array_t directories;             /* add_path_t *: every directory captured */
 } add_walk_t;
 
 /**
@@ -418,10 +425,19 @@ static error_t add_verdict(
  * a link among them — so the kind and the occupant the capture is chosen by are
  * one fact. The kind chooses the bucket: the walk is the sole source of directory
  * tracking, and every phase after reads the two lists apart.
+ *
+ * A claim is no discovery, and no capture either: what the profile already holds
+ * at the path — `held`, its row there, a derived one claiming nothing — is left
+ * as the profile holds it, its bytes, its claim and its record, and takes no
+ * bucket, unless --force re-captures it from disk. It is indexed all the same:
+ * the command has settled it, so an argument that reaches it again moves on,
+ * and as the namer's `pending` it names what the profile's own row names — the
+ * group answering first where the profile names the path twice (core/manifest.c
+ * manifest_standing).
  */
 static void add_list(
     add_walk_t *walk, const char *filesystem_path, const char *storage_path,
-    fs_occupant_t occupant
+    fs_occupant_t occupant, const manifest_row_t *held
 ) {
     arena_t *arena = walk->ctx->arena;
 
@@ -433,10 +449,14 @@ static void add_list(
     };
     path->occupant = occupant;
 
-    ptr_array_push(
-        path->claim.kind == PATH_KIND_DIRECTORY ? &walk->directories : &walk->files,
-        path
-    );
+    /* A capture takes its bucket: a path the profile holds nothing at, or only
+     * passes through, and under --force a claim too */
+    if (!held || manifest_is_derived(held) || walk->force) {
+        ptr_array_push(
+            path->claim.kind == PATH_KIND_DIRECTORY ? &walk->directories : &walk->files,
+            path
+        );
+    }
     hashmap_set(walk->listing, path->filesystem_path, &path->claim);
 }
 
@@ -602,12 +622,14 @@ static error_t add_collect(
         );
 
         /* What the profile already claims at the path, asked before any rule: a
-         * claim is no discovery, and meets the -e layer alone (add_verdict).
-         * The row is the path's own authority on kind too, a derived one included
-         * — it says the profile holds a subtree beneath the path, which a path
-         * that became a file cannot carry — and it is the one reading that sees
-         * a claim with nothing beneath it for either of the profile's documents
-         * to find, where the admission below covers the rest, by the name. */
+         * claim is no discovery, and meets the -e layer alone (add_verdict) —
+         * nor a capture, left as it stands unless --force re-captures it
+         * (add_list). The row is the path's own authority on kind too, a derived
+         * one included — it says the profile holds a subtree beneath the path,
+         * which a path that became a file cannot carry — and it is the one reading
+         * that sees a claim with nothing beneath it for either of the profile's
+         * documents to find, where the admission below covers the rest, by the
+         * name. */
         const manifest_row_t *held = manifest_lookup_claim(
             walk->view, walk->profile, child_fs
         );
@@ -684,9 +706,10 @@ static error_t add_collect(
             continue;
         }
 
-        add_list(walk, child_fs, child_storage, occupant);
+        add_list(walk, child_fs, child_storage, occupant, held);
 
-        /* Settled, so the descent is one statement. */
+        /* Settled, captured or left, so the descent is one statement: what is
+         * new beneath a directory the profile tracks is this add's to take. */
         err = kind == PATH_KIND_DIRECTORY
             ? add_collect(walk, scratch, child_fs, depth + 1) : NULL;
         if (err) return err;
@@ -780,8 +803,10 @@ static error_t add_refuse_excluded(
  * leaves this one refused as it was — the names still move, which is the whole
  * question.
  *
- * Not liftable by --force: --force overwrites bytes under a name the profile
- * holds, which is not what abandoning a name is.
+ * Not liftable by --force, which re-captures bytes under a name the profile holds
+ * — not what abandoning a name is. It makes the one way past instead, a capture:
+ * every path asked of here is a claim, the profile naming it, and a claim is
+ * captured under --force alone (add_list).
  */
 static error_t add_refuse_moves(const add_walk_t *walk) {
     manifest_unkept_t unkept = manifest_unkept(walk->view);
@@ -796,9 +821,10 @@ static error_t add_refuse_moves(const add_walk_t *walk) {
         if (strcmp(kept, next) == 0) continue;   /* nothing moved here */
 
         /* The one selection that may move a name: the command captured the path
-         * under the very name the next settle will keep. */
+         * under the very name the next settle will keep — a claim, the profile
+         * naming it, which it captures under --force alone (add_list). */
         const manifest_claim_t *listed = hashmap_get(walk->listing, filesystem_path);
-        if (listed && strcmp(listed->storage_path, next) == 0) continue;
+        if (walk->force && listed && strcmp(listed->storage_path, next) == 0) continue;
 
         /* The path is the one path in the sentence the user never typed, so it
          * is spelled the way the shell spells it — as the screen that reports
@@ -1625,13 +1651,15 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* Collect every path to add, expanding directories. Each listing is named
      * once, by the claim standing at it; what the walk finds beneath one already
      * listed is named from that claim, and admitted by the profile's draft as
-     * it is listed. */
+     * it is listed. --force is read here once, into the walk: whether a claim
+     * listed is captured is one fact, and every reader asks the walk. */
     walk.profile = opts->profile;
     walk.view = view;
     walk.rules = profile_rules;
     walk.excludes = excludes;
     walk.source = ignore_source(ignore_rules);
     walk.draft = draft;
+    walk.force = opts->force;
     walk.listing = hashmap_borrow(ctx->arena, 0);
     ptr_array_init(&walk.files, ctx->arena);
     ptr_array_init(&walk.directories, ctx->arena);
@@ -1810,12 +1838,13 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
 
         /* What the profile already claims at the path, asked before any rule: a
-         * claim is no discovery, and meets the -e layer alone (add_verdict).
-         * The row is the path's own authority on kind too, a derived one included
-         * — it says the profile holds a subtree beneath the path, which a path
-         * that became a file cannot carry — and it is the one reading that sees
-         * a claim with nothing beneath it for either document to find, where
-         * the name's own admission below covers the rest. */
+         * claim is no discovery, and meets the -e layer alone (add_verdict) —
+         * nor a capture, left as it stands unless --force re-captures it
+         * (add_list). The row is the path's own authority on kind too, a derived
+         * one included — it says the profile holds a subtree beneath the path,
+         * which a path that became a file cannot carry — and it is the one reading
+         * that sees a claim with nothing beneath it for either document to find,
+         * where the name's own admission below covers the rest. */
         const manifest_row_t *held = manifest_lookup_claim(
             view, opts->profile, filesystem_path
         );
@@ -1823,13 +1852,13 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         /* A path named on the command line meets the rules the walk would ask
          * of it, but a verdict against it is an error, not a silent skip: the
          * user asked for it by name, and the answer says which rule stands in
-         * the way and how to get past it (add_refuse_excluded). A re-capture of
-         * a claim meets -e alone, so no rule of discovery refuses it. The source
-         * tree's rules read where the path physically stands and not the name,
-         * over every rung of it, so a root standing inside a repository whose
-         * rules name it, or name a directory above it, is refused here as any
-         * ignored directory is, unless the profile already tracks it; at "/"
-         * the path names no entry and asks nothing. */
+         * the way and how to get past it (add_refuse_excluded). A claim meets
+         * -e alone, so no rule of discovery refuses it. The source tree's rules
+         * read where the path physically stands and not the name, over every
+         * rung of it, so a root standing inside a repository whose rules name
+         * it, or name a directory above it, is refused here as any ignored
+         * directory is, unless the profile already tracks it; at "/" the path
+         * names no entry and asks nothing. */
         ignore_verdict_t verdict;
         err = add_verdict(&walk, held, filesystem_path, storage_path, kind, &verdict);
         if (err) {
@@ -1903,8 +1932,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         /* The name, by the profile's own claims — the authority on names. A typed
          * name is the one input the namer did not produce, so it is the one place
          * a second name for one path can be born; a name the profile already
-         * holds is a re-capture, gated by --force at the pre-flight, and a derived
-         * claim names nothing and blocks nothing (core/manifest.h
+         * holds is its claim, left unless --force re-captures it (add_list),
+         * and a derived claim names nothing and blocks nothing (core/manifest.h
          * manifest_is_derived). The clause spells the re-capture under the name
          * the profile has, because --force on the name typed is refused here as
          * well: a refusal is not a confirmation. revert.c revert_refuse_second_name
@@ -1933,7 +1962,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        add_list(&walk, filesystem_path, storage_path, occupant);
+        add_list(&walk, filesystem_path, storage_path, occupant, held);
 
         if (kind == PATH_KIND_DIRECTORY) {
             /* The walk's one scratch, freed whatever the walk met: every frame's
@@ -1962,31 +1991,14 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     err = add_refuse_moves(&walk);
     if (err) goto cleanup;
 
-    /* What the profile already holds under a name this command chose: a blob, a
-     * file claim being one, which the tree alone holds (core/profiles.h
-     * profile_entry) — a gitlink a hand left there is no claim, and the capture
-     * takes its place as Git's own add does (profile_capture_file). Asked over
-     * the whole listing before a byte is read, so a refusal at the last file
-     * does not leave the first four in the object database. Keyed by the name
-     * and not by the path: at a path the profile names twice, a typed re-capture
-     * of the loser must be gated by the name the user typed, not by the row that
-     * happens to stand there. The decision pass below asks the same entry for
-     * the encryption policy's priority-3 read — two questions, one lookup each. */
-    if (!opts->force) {
-        for (size_t i = 0; i < walk.files.count; i++) {
-            const add_path_t *path = walk.files.entries[i];
-            profile_held_t held;
-            err = profile_entry(profile_draft_base(draft), path->claim.storage_path, &held);
-            if (err) goto cleanup;
-            if (held.kind != PROFILE_HELD_FILE) continue;
-
-            err = error_create(
-                ERR_EXISTS, "File '%s' (as '%s') already exists in profile '%s'; "
-                "--force overwrites it", path->filesystem_path,
-                path->claim.storage_path, opts->profile
-            );
-            goto cleanup;
-        }
+    /* Nothing new: every path the arguments reach is a claim the profile already
+     * holds, left as it stands (add_list), so nothing is decided, captured,
+     * committed or recorded — a preview and a run end here alike, in one line.
+     * The post-add hook follows an add that took something, and this one took
+     * nothing; the dispatcher's rollback ends a transaction nothing wrote in. */
+    if (walk.files.count == 0 && walk.directories.count == 0) {
+        output_info(out, OUTPUT_NORMAL, "Nothing new to add to profile '%s'", opts->profile);
+        goto cleanup;                                    /* err is NULL */
     }
 
     /* The encryption decision, taken with the name and never with a source byte.
@@ -2002,13 +2014,14 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * a link was listed for is the link's — a regular file standing there by
      * then is refused by it, never stored under a verdict nobody reached.
      *
-     * After the held-entry gate, so a blob is met here only under --force; with
-     * none — a name new to the profile, or a gitlink, which places nothing —
-     * there are no prior bytes, and priorities 4 and 5 decide. A blob that cannot
-     * be read is an error, not "not encrypted": a sniff that defaulted would
-     * flip the policy silently. And a verdict that seals is refused here when
-     * this run can never seal — encryption turned off — rather than at a capture
-     * the others would already have preceded into the object database. */
+     * A file the profile holds is captured under --force alone (add_list), so a
+     * blob is met here only then; with none — a name new to the profile, or a
+     * gitlink, which places nothing — there are no prior bytes, and priorities
+     * 4 and 5 decide. A blob that cannot be read is an error, not "not encrypted":
+     * a sniff that defaulted would flip the policy silently. And a verdict that
+     * seals is refused here when this run can never seal — encryption turned
+     * off — rather than at a capture the others would already have preceded into
+     * the object database. */
     for (size_t i = 0; i < walk.files.count; i++) {
         add_path_t *path = walk.files.entries[i];
         if (path->occupant == FS_OCCUPANT_SYMLINK) continue;
@@ -2053,13 +2066,14 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * So a preview answers what the selection answers — every name, admitted
      * together against the tree and the claims the commit would carry
      * (core/profiles.h profile_admit); the name a directory claim would abandon;
-     * the entries the profile holds under a chosen name; and each file's encryption
-     * verdict, with whether this run could seal at all — and a run refused over
-     * any of them is a preview refused in the same words. What only a source,
-     * or a later writer, can say is below: bytes that cannot be read, a plaintext
-     * that would read as ciphertext, the key a seal needs, an owner a claim cannot
-     * name, a kind that changes before its capture, the chain above each path,
-     * whether the commit moves anything, and the record (cmds/add.h).
+     * what is new to the profile, and what it holds and the add leaves; and each
+     * file's encryption verdict, with whether this run could seal at all — and
+     * a run refused over any of them is a preview refused in the same words.
+     * What only a source, or a later writer, can say is below: bytes that cannot
+     * be read, a plaintext that would read as ciphertext, the key a seal needs,
+     * an owner a claim cannot name, a kind that changes before its capture, the
+     * chain above each path, whether the commit moves anything, and the record
+     * (cmds/add.h).
      *
      * And nothing above wrote anything of dotta's: the state was opened in the
      * read shape and holds no lock (include/runtime.h), and the profile's draft
@@ -2216,12 +2230,12 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * claim takes that claim's place, the claim given up — where every other
      * write carries it (core/profiles.h profile_draft_t, the put rule). Read
      * off the view's contradicted slice: each claim at its blob's own name —
-     * one beneath a blob is remove's to give up — matched to the file listed at
-     * its place under that very name, since a listing under another of the
+     * one beneath a blob is remove's to give up — matched to the file captured
+     * at its place under that very name, since a listing under another of the
      * profile's names captures elsewhere, and a claim this machine cannot place
-     * is listed nowhere. At such a name only --force gets here, the held-entry
-     * gate refusing a name whose blob stands. A derived claim there rides the
-     * capture to the commit's prune. */
+     * is listed nowhere. The file at such a name is the profile's own claim,
+     * captured under --force alone (add_list), so the remedy is --force's. A
+     * derived claim there rides the capture to the commit's prune. */
     const manifest_contradicted_t contradicted = manifest_contradicted(view);
     for (size_t i = 0; i < contradicted.count; i++) {
         const manifest_contradicted_claim_t *at = &contradicted.entries[i];
@@ -2230,7 +2244,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         const manifest_claim_t *listed = hashmap_get(
             walk.listing, mount_resolve(ctx->arena, mounts, opts->profile, at->storage_path)
         );
-        if (!listed || strcmp(listed->storage_path, at->storage_path) != 0) continue;
+        if (!walk.force || !listed || strcmp(listed->storage_path, at->storage_path) != 0) {
+            continue;
+        }
 
         err = profile_remove(draft, PATH_KIND_DIRECTORY, at->storage_path);
         if (err) goto cleanup;
@@ -2310,11 +2326,11 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * claimed, a climb that authored or retired, the claim the remedy above gave
      * up — its prune taking what nothing stands on any longer, its keys for the
      * record phase, and the sheet saved only where its claims moved, a hand's
-     * spelling kept otherwise. A commit whose edits moved nothing — every capture
-     * as the profile already had it, a --force re-add of identical bytes — makes
-     * none, and the summary says so (core/profiles.h profile_commit). Its two
-     * outs: whether it landed, which the receipt reads, and the derivations its
-     * prune took, by key, which the record phase settles. */
+     * spelling kept otherwise. A commit whose edits moved nothing — a --force
+     * re-capture of what the profile already had, byte for byte — makes none,
+     * and the summary says so (core/profiles.h profile_commit). Its two outs:
+     * whether it landed, which the receipt reads, and the derivations its prune
+     * took, by key, which the record phase settles. */
     bool committed = false;
     string_array_t pruned;
     string_array_init(&pruned, ctx->arena);
@@ -2360,15 +2376,16 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * rolled back — and not a lock nothing will use again. */
     hook_fire_post(config, out, &hook_inv);
 
-    /* Show summary on success. Every argument lists itself or ends the command,
-     * and both capture loops are total over their lists, so there is always
-     * something to report here. */
+    /* Show summary on success. The selection captured something — one that captured
+     * nothing ended there — and both capture loops are total over their lists,
+     * so there is always something to report here. */
 
-    /* What the capture took, both kinds. A commit that moved nothing names what
-     * it found already standing, both kinds in one phrase — the directories were
-     * captured as surely as the files were. One that landed names its files on
-     * the ✓ line and its directories beneath them, or on a ✓ line of their own
-     * when they are all it took. */
+    /* What the capture took, both kinds. A commit that moved nothing — --force's,
+     * every capture what the profile already held — names what it found already
+     * standing, both kinds in one phrase: the directories were captured as surely
+     * as the files were. One that landed names its files on the ✓ line and its
+     * directories beneath them, or on a ✓ line of their own when they are all
+     * it took. */
     if (!committed) {
         char counts[64];
         output_format_counts(
@@ -2444,9 +2461,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     } else if (state_enabled(state, opts->profile)) {
         /* What the record took of what the capture listed. The unit is the path
          * — one row per managed path, both kinds — and the kinds are named where
-         * they were captured, above. Never zero: every argument lists itself or
-         * ends the command (cmd_add's loop), so the count line and the notes
-         * below always have a capture to speak of. */
+         * they were captured, above. Never zero: an add that captured nothing
+         * ended at its selection, so the count line and the notes below always
+         * have a capture to speak of. */
         const size_t captured = walk.files.count + walk.directories.count;
         const bool whole = receipt.anchored == captured;
 
@@ -2523,9 +2540,11 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * the run here — the tree is shaped and enable is what gives it a place
      * (add_print_enable, which the preview's screen reads too). A row that does
      * hold it leaves only a failure to answer, and the retry is this add again
-     * with --force over a profile that now holds the bytes: an apply re-earns
-     * the event for the files it adopts and never for a directory, and an unowned
-     * directory is released at scope exit where an owned one is pruned. */
+     * with --force over a profile that now holds the bytes — re-capturing from
+     * disk every claim the arguments reach, those this run left among them: an
+     * apply re-earns the event for the files it adopts and never for a directory,
+     * and an unowned directory is released at scope exit where an owned one is
+     * pruned. */
     if (!state_enabled(state, opts->profile)) {
         add_print_enable(out, opts->profile, opts->target, view);
     } else if (record_err) {
@@ -2643,7 +2662,7 @@ static const args_opt_t add_opts[] = {
     ARGS_FLAG(
         "f force",
         cmd_add_options_t,           force,
-        "Overwrite existing entries in the profile"
+        "Re-capture from disk what the profile already holds"
     ),
     ARGS_FLAG(
         "n dry-run",
@@ -2659,7 +2678,7 @@ static const args_opt_t add_opts[] = {
         "encrypt",
         cmd_add_options_t,           encrypt_mode,
         ENCRYPTION_REQUEST_ENCRYPT,
-        "Force encryption for the given files"
+        "Force encryption for the files the add captures"
     ),
     ARGS_FLAG_SET(
         "no-encrypt",
@@ -2687,7 +2706,8 @@ const args_command_t spec_add = {
         "stored under a prefix for where it lives: home/ under your home\n"
         "directory, root/ anywhere else, custom/ under the profile's target.\n"
         "\n"
-        "A path the profile already has keeps the name it has, and a new path\n"
+        "A path the profile already has is left as the profile holds it, and\n"
+        "--force re-captures it from disk under the name it has. A new path\n"
         "inside a directory the profile tracks is stored under that directory.\n"
         "So names stay put as targets come and go.\n"
         "\n"

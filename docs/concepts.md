@@ -76,7 +76,7 @@ A tracked home is just a tracked directory: `apply` restores its permissions, `u
 
 Ignore patterns cannot exclude a root. A pattern is matched against the stored name with `home/`, `root/` or `custom/` stripped off, and a root's name is just that word, so nothing is left to match. `dotta add web ~ -e '*'` tracks the home directory and nothing inside it. One exception: Git's ignore rules are read where a path physically stands, so a root that a repository around it excludes — a target inside a project's ignored directory — is refused, and no `-e` reaches it; `respect_gitignore = false` is the one way past.
 
-Use `add --force` to update an existing entry. To give the same pathname another stored name, remove its entry first.
+`add` takes what is new and leaves an existing entry as it is: `add --force` re-captures it from disk, and `dotta update` captures a change to it. To give the same pathname another stored name, remove its entry first.
 
 Each profile chooses its own names. For example, `web` can store `~/jail/etc/x` as `custom/etc/x` while `global` stores it as `home/jail/etc/x`. Because both deploy to the same pathname, [profile precedence](profiles.md#layering-and-precedence) decides which one wins.
 
@@ -105,7 +105,7 @@ Dotta remembers two kinds of directory, and treats them very differently.
 
 **A directory dotta passed through** on its way to an added file is just a recipe for re-creating it. When dotta has to make that directory to put a file in it, it uses the permissions it saw at the time, and the owner too where that was not the user running `dotta`; a directory that already exists is never touched, never checked and never searched. And if part of the path was a symlink when the file was added, dotta records nothing for that component at all — a symlinked config directory is left alone, and dotta writes straight through it.
 
-Dotta only revisits any of this when asked. Adding or updating a file refreshes the directories above it, and pointing `dotta update` at a directory — `dotta update ~/.config` — refreshes everything beneath it. That is also the fix when things move. Swap a passed-through directory for a symlink and `apply` refuses to write through it (`~/.config/nvim is not a directory`); `dotta update <dir>` drops the stale expectation, and the next `apply` trusts the arrangement on disk.
+Dotta only revisits any of this when asked. Capturing a file — adding a new one, or updating one — refreshes the directories above it, and pointing `dotta update` at a directory — `dotta update ~/.config` — refreshes everything beneath it. That is also the fix when things move. Swap a passed-through directory for a symlink and `apply` refuses to write through it (`~/.config/nvim is not a directory`); `dotta update <dir>` drops the stale expectation, and the next `apply` trusts the arrangement on disk.
 
 ## Repository Structure
 

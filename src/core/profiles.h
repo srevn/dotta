@@ -634,10 +634,8 @@ typedef struct {
  * what the preview diffs; core/workspace.c workspace_orphan_authority, for a
  * file record, folding a failure to UNVERIFIED; the encryption policy's prior —
  * the blob the profile holds at the name in the tree its draft opened at, judged
- * by its own bytes, and none where no blob stands — at each capture
- * (cmds/update.c update_capture) and in add's decision pass (cmds/add.c cmd_add);
- * and add's held-entry gate before it (cmds/add.c cmd_add), what the profile
- * holds under a name the command chose, a file claim being a blob.
+ * by its own bytes, and none where no blob stands — at each capture (cmds/update.c
+ * update_capture) and in add's decision pass (cmds/add.c cmd_add).
  *
  * @param profile Handle (must not be NULL); its sheet is never read
  * @param storage_path A validated storage path (must not be NULL)
@@ -682,18 +680,16 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * remove's directory offer, which offers a claim where no blob stands at its
  * name (cmds/remove.c remove_offer_directory); and a profile's draft, at each
  * rung of the way a restore brings back, where whatever the base holds keeps
- * the rung (profile_restore_file). A reader not on this list is a bug. Four
+ * the rung (profile_restore_file). A reader not on this list is a bug. Three
  * neighbours ask profile_entry instead, the tree alone: revert's read of the
  * head at the name it writes (cmds/revert.c cmd_revert, step 11), where a directory
  * claim is never refused — it gives way to the write where it stands, and rides
  * it where the head's blob contradicts it; the orphan probe's file arm
  * (core/workspace.c workspace_orphan_authority), which asks whether a blob still
  * backs a file record, a subtree and a gitlink standing at a name without making
- * a file claim — its directory arm asking profile_find; the encryption prior of
- * update's captures and of add's decision pass (cmds/update.c update_capture,
- * cmds/add.c cmd_add), a blob's bytes or none; and add's held-entry gate
- * (cmds/add.c cmd_add), a blob at a name the command chose — a gitlink there is
- * no claim, and the capture takes its place without --force.
+ * a file claim — its directory arm asking profile_find; and the encryption prior
+ * of update's captures and of add's decision pass (cmds/update.c update_capture,
+ * cmds/add.c cmd_add), a blob's bytes or none.
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
  *                tree is silent
@@ -861,13 +857,13 @@ error_t profile_draft_orphan(git_repository *repo, const char *name, profile_dra
  * The profile as the draft opened it: the base, lent until profile_draft_free
  *
  * Readers: cmds/add.c cmd_add, for the view every naming and kind question of
- * the run reads (core/manifest.h manifest_build_profile), the held-entry gate
- * and each file's encryption prior; cmds/remove.c remove_paths, for the claims
- * its arguments are matched against (remove_resolve); cmds/revert.c cmd_revert,
- * for every question of the branch as it stands — the claim standing at a path,
- * a second name, and what the tree holds where the restore writes; and
- * cmds/update.c update_profile, for a capture's prior and the name its seal is
- * keyed by (update_capture).
+ * the run reads (core/manifest.h manifest_build_profile), and each file's
+ * encryption prior; cmds/remove.c remove_paths, for the claims its arguments
+ * are matched against (remove_resolve); cmds/revert.c cmd_revert, for every
+ * question of the branch as it stands — the claim standing at a path, a second
+ * name, and what the tree holds where the restore writes; and cmds/update.c
+ * update_profile, for a capture's prior and the name its seal is keyed by
+ * (update_capture).
  *
  * @param draft The draft (must not be NULL)
  * @return The base; never NULL
@@ -893,10 +889,12 @@ profile_t *profile_draft_base(const profile_draft_t *draft);
  * at its own admission. Never captured, it is committed so — tracked, claiming
  * no attributes — over a derived claim at its name or where none stood; a tracked
  * claim there keeps its own. add, the one writer that admits, captures every
- * directory it admits or refuses its command (cmds/add.c cmd_add); a writer that
- * went on past a failed capture would commit that claim. Nothing is read from
- * the disk and nothing written to the object database: a writer that stops after
- * its admissions — a dry run — leaves the repository as it found it.
+ * directory it admits — but one its profile already tracks, which it leaves,
+ * the claim keeping its own (cmds/add.c add_list) — or refuses its command
+ * (cmds/add.c cmd_add); a writer that went on past a failed capture would commit
+ * that claim. Nothing is read from the disk and nothing written to the object
+ * database: a writer that stops after its admissions — a dry run — leaves the
+ * repository as it found it.
  *
  * Every admission precedes the commit's edits. The tree's half is asked of the
  * tree the stage opened and the names admitted since, never of the stage's own

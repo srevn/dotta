@@ -27,7 +27,7 @@ typedef struct {
     const char *message;     /* Commit message (optional) */
     char **exclude_patterns; /* Exclude patterns (glob) - read-only */
     size_t exclude_count;    /* Number of exclude patterns */
-    bool force;              /* Overwrite existing files in profile */
+    bool force;              /* Re-capture what the profile holds, from disk */
     bool dry_run;            /* Preview without writing */
     int verbosity;           /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     int encrypt_mode;        /* encryption_request_t (int for ARGS_FLAG_SET) */
@@ -40,9 +40,12 @@ typedef struct {
 /**
  * Add files to a profile
  *
- * Stages every file onto the profile branch and commits once. Creates the profile
- * branch if it doesn't exist; a re-add of what the profile already holds commits
- * nothing and says so.
+ * Captures onto the profile's branch what is new to it, and commits once: a path
+ * the profile already holds — a file, a directory it tracks — is left as it stands,
+ * its bytes, its claim and its record, unless --force re-captures it from disk.
+ * Creates the profile branch if it doesn't exist; an add that finds nothing new
+ * ends at its selection, and a --force re-capture of what the profile already
+ * holds commits nothing; each says so.
  *
  * What the walk lists: every regular file and symlink it finds, and every directory
  * it enters. A special file — a FIFO, a socket, a device — is no entry a profile
@@ -69,15 +72,15 @@ typedef struct {
  * **What the ignore rules reach** is what this add discovers: a path the profile
  * does not claim. A claim — a file the profile holds, a directory it tracks —
  * meets the command's own `-e` alone, the filter apply and update ask of what
- * they hold, so no rule of discovery refuses its re-capture or skips it in a
- * walk (core/ignore.h). What a walk finds beneath a tracked directory that the
- * profile does not claim is discovered like any other path, and a directory the
- * profile only passes through claims nothing: naming one makes a new claim. It
- * holds the claims beneath it all the same, so a walk that finds one excluded
- * enters it for them wherever the command's own `-e` admits it — and lists it
- * nowhere, every entry beneath but a claim meeting the rule that closed it. A
- * path Git's rules cannot be read for refuses the add, named or walked: what
- * git would exclude there is unknown, and collection precedes capture.
+ * they hold, so no rule of discovery refuses it or skips it in a walk
+ * (core/ignore.h). What a walk finds beneath a tracked directory that the profile
+ * does not claim is discovered like any other path, and a directory the profile
+ * only passes through claims nothing: naming one makes a new claim. It holds
+ * the claims beneath it all the same, so a walk that finds one excluded enters
+ * it for them wherever the command's own `-e` admits it — and lists it nowhere,
+ * every entry beneath but a claim meeting the rule that closed it. A path Git's
+ * rules cannot be read for refuses the add, named or walked: what git would exclude
+ * there is unknown, and collection precedes capture.
  *
  * **The chosen name is the subject of two matchers**, its label stripped: the
  * `.dottaignore` layers and the auto-encryption patterns (core/ignore,
@@ -95,12 +98,14 @@ typedef struct {
  * **What the selection promises**: a command that succeeds captures every path
  * it listed, files and directories alike, each as the kind it was listed as — a
  * path whose kind changed after its listing is refused by its capture, never
- * read as the other. That is what lets the listing stand in for the commit while
- * the command is still naming — and it is load-bearing, since a directory this
- * command lists is the name its walk composed beneath. So one refusal is owed
- * by the completed selection and cannot be reached path by path: where the
- * command's own directory claims would move which of a profile's two names stands
- * at a path, the name that will stand must be a name this command captured.
+ * read as the other — but a claim, which it leaves as the profile holds it unless
+ * --force re-captures it. That is what lets the listing stand in for the commit
+ * while the command is still naming, a claim standing there as the profile holds
+ * it — and it is load-bearing, since a directory this command lists is the name
+ * its walk composed beneath. So one refusal is owed by the completed selection
+ * and cannot be reached path by path: where the command's own directory claims
+ * would move which of a profile's two names stands at a path, the name that will
+ * stand must be a name this command captured.
  *
  * What the commit guarantees: its two documents name one namespace. The tree
  * holds every blob and the sheet holds the directories a tree cannot — an empty
@@ -138,32 +143,35 @@ typedef struct {
  * and writing it is an ownership event — the path was put there from disk, so
  * the record binds the blob the stage wrote to the stat the capture took (the
  * next status takes its fast path), beside the node the capture read and the
- * claim it authored. Every path the walk listed earns one, a directory included,
- * whose record carries no content; the ancestry's rungs, claims the command only
- * passes through, earn none. The view the record phase builds says whose each
- * path is, and nothing the record says: a capture whose path another profile's
- * row wins, or another name of this profile's own, takes no ownership event,
- * and neither does one whose name another writer's commit removed since; the
- * receipt says which. Bytes, a claim or a kind another writer committed since
- * are Git's move past the capture, which the next load reads as [stale] — never
- * as bytes dotta put there. The record phase is not the command: a failure leaves
- * Git's commit standing, leaves the record exactly as it was, says so, and names
- * the retry — `--force`, over a profile that now holds the name, because an apply
- * re-earns the event for a file it adopts and never for a directory.
+ * claim it authored. Every path the command captured earns one, a directory
+ * included, whose record carries no content; a claim it left keeps the record
+ * it had, and the ancestry's rungs, claims the command only passes through, earn
+ * none. The view the record phase builds says whose each path is, and nothing
+ * the record says: a capture whose path another profile's row wins, or another
+ * name of this profile's own, takes no ownership event, and neither does one
+ * whose name another writer's commit removed since; the receipt says which. Bytes,
+ * a claim or a kind another writer committed since are Git's move past the capture,
+ * which the next load reads as [stale] — never as bytes dotta put there. The
+ * record phase is not the command: a failure leaves Git's commit standing, leaves
+ * the record exactly as it was, says so, and names the retry — `--force`, over
+ * a profile that now holds the name, re-capturing every claim the arguments reach,
+ * because an apply re-earns the event for a file it adopts and never for a
+ * directory.
  *
  * **-n previews the add and writes nothing of dotta's.** Every decision this
  * command makes runs and no capture does, so an add refused over a name is a
- * preview refused in the same words and with the same status: the listing, the
- * admission of every name together, the name a directory claim would abandon,
- * the entries a chosen name already holds, and each file's encryption verdict.
- * What only a source or a later writer can say is the run's alone — bytes that
- * cannot be read, the key a seal needs, an owner a claim cannot name, a kind
- * that changed since its listing, the chain above each path, whether the commit
- * moves anything, and the record. Its lines are the capture's in the future tense;
- * it captures no file's contents, writes no object, ref, row or database, and
- * takes no write lock (include/runtime.h), so it neither blocks a run nor waits
- * for one. The pre-add hook runs under DOTTA_DRY_RUN=1 and the post-add hook
- * does not (utils/hooks.h).
+ * preview refused in the same words and with the same status: the listing — what
+ * is new to the profile, and what it holds and the add leaves, so an add that
+ * finds nothing new says so in the run's words — the admission of every name
+ * together, the name a directory claim would abandon, and each file's encryption
+ * verdict. What only a source or a later writer can say is the run's alone —
+ * bytes that cannot be read, the key a seal needs, an owner a claim cannot name,
+ * a kind that changed since its listing, the chain above each path, whether the
+ * commit moves anything, and the record. Its lines are the capture's in the future
+ * tense; it captures no file's contents, writes no object, ref, row or database,
+ * and takes no write lock (include/runtime.h), so it neither blocks a run nor
+ * waits for one. The pre-add hook runs under DOTTA_DRY_RUN=1 and the post-add
+ * hook does not (utils/hooks.h).
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

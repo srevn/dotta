@@ -135,12 +135,12 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out);
  * Readers: the base of a profile's draft (core/profiles.c profile_draft_seed),
  * whose claims remove's arguments are matched against, of which revert asks the
  * branch as it stood — the claim at a path, the entry at a name, a second name
- * — update a capture's prior, and add its view, its held-entry gate and its prior;
- * and the file an edit session opens on (cmds/ignore.c ignore_edit, ignore_modify,
- * cmds/bootstrap.c bootstrap_edit), read from the tree the session commits on.
- * Never NULL: an orphan's stage stands on the empty tree, and a profile's draft
- * — the one reader that opens one, for add — reads it as a profile with nothing
- * in it yet, no entry and no sheet. Borrowed; valid until stage_free.
+ * — update a capture's prior, and add its view and its prior; and the file an
+ * edit session opens on (cmds/ignore.c ignore_edit, ignore_modify, cmds/bootstrap.c
+ * bootstrap_edit), read from the tree the session commits on. Never NULL: an
+ * orphan's stage stands on the empty tree, and a profile's draft — the one reader
+ * that opens one, for add — reads it as a profile with nothing in it yet, no
+ * entry and no sheet. Borrowed; valid until stage_free.
  *
  * @param st Stage (must not be NULL)
  * @return The opened tree

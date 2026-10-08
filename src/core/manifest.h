@@ -878,15 +878,16 @@ error_t manifest_holder(
  * the profile never held; revert's two questions of a tree, the claim standing
  * at a path and the second-name admission (cmds/revert.c revert_claim_standing,
  * revert_refuse_second_name), the first asked of every local profile by its search
- * (revert_select_profile); add's two questions of a path it names or walks
+ * (revert_select_profile); add's three questions of a path it names or walks
  * (cmds/add.c cmd_add and add_collect): which rules reach it — a claim meets
- * the -e layer alone, no rule of discovery (add_verdict) — and whether the
- * profile's own claim agrees with what stands there now — the one reading that
- * sees an explicit claim with nothing beneath it for either of the profile's
- * documents to find, and a derived row included, since a profile holding a subtree
- * beneath a path is a statement a path that became a file contradicts; and `ignore
- * --test`'s note beneath a verdict that excludes a path its asker tracks, which
- * add and update re-capture whatever the rules say (cmds/ignore.c ignore_test).
+ * the -e layer alone, no rule of discovery (add_verdict) — whether the profile's
+ * own claim agrees with what stands there now — the one reading that sees an
+ * explicit claim with nothing beneath it for either of the profile's documents
+ * to find, and a derived row included, since a profile holding a subtree beneath
+ * a path is a statement a path that became a file contradicts — and whether the
+ * add captures it, a claim being left as it stands but under --force (add_list);
+ * and `ignore --test`'s note beneath a verdict that excludes a path its asker
+ * holds, which the rules never reach (cmds/ignore.c ignore_test).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,

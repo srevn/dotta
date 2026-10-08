@@ -1563,11 +1563,13 @@ cleanup:
 /**
  * Materialize one planned tracked directory to its expected state.
  *
- * Mechanism only, by the verdict's occupant: a squatter is cleared (one node,
- * the one the verdict named), an absent path gets its missing parents, and then
- * the create-or-fix, which is idempotent — a planned directory whose reality
- * healed meanwhile is simply confirmed, and one a prompt-window race turned into
- * a symlink is refused by O_NOFOLLOW rather than chmod'd through.
+ * Mechanism only, by the verdict's convergence (deploy_convergence): a fix
+ * converges the directory standing there in place; a create or a replace lands
+ * a new entry — its landing opened, a replace's squatter cleared (one node, the
+ * one the verdict named) — and then the create-or-fix, which is idempotent: a
+ * planned directory whose reality healed meanwhile is simply confirmed, and one
+ * a prompt-window race turned into a symlink is refused by O_NOFOLLOW rather
+ * than chmod'd through.
  *
  * The directory lands at its working mode and is released to its exact recorded
  * mode once the run is over (deploy_working_mode, release_directories), so a
@@ -1580,35 +1582,30 @@ cleanup:
  */
 static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
     const char *path = v->item->filesystem_path;
-    error_t err = NULL;
+    const deploy_convergence_t convergence = deploy_convergence(v->occupant);
 
-    switch (v->occupant) {
-        case FS_OCCUPANT_DIRECTORY:
-            /* Converged in place below */
-            break;
-
-        case FS_OCCUPANT_NONE:
-            /* Absent — or beneath a non-directory, which preflight blocked when
-             * unplanned and the directory pass replaces when planned (prefix
-             * order); one still there is ensure_parents' named error. */
-            err = ensure_parents(run, path);
-            break;
-
-        case FS_OCCUPANT_UNKNOWN:
-            /* Not a verdict: preflight turned it into a skip, and a skip never
-             * enters the verdict arrays. Said here rather than unlinked. */
-            CHECK_ARG(false, "a look that failed never enters the verdicts");
-
-        case FS_OCCUPANT_REGULAR:
-        case FS_OCCUPANT_SYMLINK:
-        case FS_OCCUPANT_OTHER:
-            /* A single node in the way, cleared before the mkdir — the node the
-             * verdict named. It can never be a directory (that is the first arm),
-             * and --force was preflight's question. */
-            err = clear_occupant(path, v->occupant);
-            break;
+    /* A create or a replace lands a new entry through the parent — the replace's
+     * after its clear — so the landing is opened first, the one check_landing
+     * predicted, as deploy_file opens its own (ensure_parents): the missing parents
+     * made, the nearest present one held where it is ours and refuses. A squatter's
+     * parent stands, the squatter being in it, and nothing is made — the final
+     * component is the path itself. An absent path beneath a non-directory is
+     * one preflight blocked when unplanned and the directory pass replaces when
+     * planned (prefix order); one still there is ensure_parents' named error. A
+     * fix converges in place, through the directory's own descriptor: no new
+     * entry lands, so there is no landing to open. */
+    if (convergence != DEPLOY_CONVERGE_FIX) {
+        error_t err = ensure_parents(run, path);
+        if (err) return err;
     }
-    if (err) return err;
+
+    /* A replace's squatter, cleared before the mkdir through the landing just
+     * opened — the single node the verdict named. It is never a directory (that
+     * is a fix), and --force was preflight's question. */
+    if (convergence == DEPLOY_CONVERGE_REPLACE) {
+        error_t err = clear_occupant(path, v->occupant);
+        if (err) return err;
+    }
 
     /* Create-or-fix with atomic ownership and permissions (fchown/fchmod on the
      * directory fd — no window with wrong metadata). Idempotent. */

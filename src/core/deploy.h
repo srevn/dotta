@@ -144,15 +144,17 @@ static inline bool deploy_occupant_present(fs_occupant_t occ) {
  * directory did → fixed, converged in place, no new entry lands; anything else
  * → replaced, one node cleared and then created. One producer for the mapping
  * deploy_verdict_t documents and deploy_receipt_t's verbs derive from, so the
- * preview, the receipt, apply's record phase and the executor's own poison rule
- * read one answer and cannot drift. Two facts ride on it and are read as it: a
- * new entry lands iff the convergence is not a fix (preflight's landing question,
- * and poisoned_above's "no directory stands"), and dotta made the directory iff
- * the convergence is not a fix (the record phase's ownership gate).
+ * preview, the receipt, apply's record phase and the executor read one answer
+ * and cannot drift. Two facts ride on it and are read as it: a new entry lands
+ * iff the convergence is not a fix (preflight's landing question, the executor's
+ * landing in deploy_directory, and poisoned_above's "no directory stands"), and
+ * dotta made the directory iff the convergence is not a fix (the record phase's
+ * ownership gate).
  *
  * Total over fs_occupant_t, so a new occupant is a build error here and not a
  * silent REPLACE. UNKNOWN is answered — preflight asks before it skips such a
- * row (UNREADABLE) — and never reaches a verdict, so no receipt folds it.
+ * row (UNREADABLE) — and never reaches a verdict, so no receipt folds it and no
+ * executor meets it.
  */
 typedef enum {
     DEPLOY_CONVERGE_CREATE,   /* Nothing stood at the path */

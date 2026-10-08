@@ -390,10 +390,10 @@ static void update_partition(
  * becomes its entry and its claim, a directory's its claim. The chain rides the
  * capture: after the walk, every captured leaf's ancestry is re-derived on the
  * same commit — the content now comes from this machine, and so does its way —
- * and a named run hands in the profile's in-scope rows, each a leaf whose chain
- * is climbed whether or not anything about it diverged. The walk ends with the
- * commit, which prunes what nothing stands on any longer and saves the sheet
- * where a claim moved.
+ * and a named run hands in the profile's in-scope rows the load could look along,
+ * each a leaf whose chain is climbed whether or not anything about it diverged.
+ * The walk ends with the commit, which prunes what nothing stands on any longer
+ * and saves the sheet where a claim moved.
  *
  * Success means committed or untouched, and the bookkeeping says which
  * (commit->committed, the commit's own answer): a walk whose edits moved nothing
@@ -410,7 +410,8 @@ static void update_partition(
  * @param items The profile's share of the run's work, in filter order (empty
  *              where the profile has only chains to re-derive)
  * @param rows The named run's in-scope view rows for this profile, each the leaf
- *             of a chain to re-derive (empty on a bare run, which names no paths)
+ *             of a chain to re-derive, none beneath a squatter the view keeps
+ *             (empty on a bare run, which names no paths)
  * @param opts Update options (must not be NULL)
  * @param commit The commit's bookkeeping, zero-filled by the caller; the walk
  *               fills it (must not be NULL)
@@ -637,8 +638,10 @@ static error_t update_profile(
      * are the leaves the run's paths named, each climbed whether or not anything
      * about it diverged — naming is consent, and this is the derivation's one
      * route to a retire (a captured leaf's chain cannot hold a squatted rung; a
-     * named one can, and naming it is the remedy). A row the walk also captured
-     * climbs twice for free: the derivation counts only differences. */
+     * named one can where the squatter is the user's at a rung, and naming it
+     * is the remedy — no leaf beneath any other squatter is handed in, cmd_update).
+     * A row the walk also captured climbs twice for free: the derivation counts
+     * only differences. */
     for (size_t i = 0; i < rows.count; i++) {
         profile_capture_ancestors(
             draft, ctx->run.mounts, rows.entries[i]->storage_path,
@@ -926,8 +929,8 @@ cleanup:
  * @param work The run's work: the accepted items, less the new files where the
  *             user declined them (empty where a named run has only chains to
  *             re-derive)
- * @param derive_rows The named run's in-scope view rows, the chains to re-derive
- *                    (empty on a bare run)
+ * @param derive_rows The named run's in-scope view rows, the chains to re-derive,
+ *                    none beneath a squatter the view keeps (empty on a bare run)
  * @param opts Update options (must not be NULL)
  * @param total_updated Output: total items committed across all profiles (must
  *                      not be NULL)
@@ -1581,32 +1584,50 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * guarantees exist. The exclude gate binds here (the user excluded the path
      * from this operation), where the chain riding a captured leaf stays
      * scope-blind like add's — an exclusion names a path, never the way to it.
-     * A bare run names nothing and derives nothing. The leaves grow as the walk
-     * finds them rather than into room for the whole view: a named path picks a
-     * few rows out of all of them. */
+     * A bare run names nothing and derives nothing. The rows are walked as the
+     * active items, one a row, each carrying the look the load took at it; the
+     * leaves grow as the walk finds them rather than into room for the whole
+     * view: a named path picks a few rows out of all of them. */
     manifest_rows_t derive_rows = { 0 };
     if (opts->file_count > 0) {
-        manifest_rows_t rows = manifest_rows(manifest);
+        workspace_items_t active = workspace_active(ws);
         const manifest_row_t **leaves = NULL;
         size_t leaf_count = 0;
         size_t leaf_capacity = 0;
 
-        for (size_t i = 0; i < rows.count; i++) {
-            const manifest_row_t *row = rows.entries[i];
+        for (size_t i = 0; i < active.count; i++) {
+            const workspace_item_t *item = active.entries[i];
 
-            if (manifest_is_derived(row)) {
+            if (manifest_is_derived(item->row)) {
                 continue;
             }
             if (!scope_accepts_entry(
-                scope, row->profile,
-                row->filesystem_path, row->storage_path, path_type_kind(row->type)
+                scope, item->profile, item->filesystem_path, item->storage_path,
+                item->item_kind
                 )) {
                 continue;
             }
+
+            /* The climb reads the disk rung by rung (core/profiles.h
+             * profile_capture_ancestors), so a leaf the load looked at nothing
+             * along — beneath a squatter, whose look answers for the occupant
+             * (core/workspace.h workspace_displaced_t) — is climbed only beneath
+             * the user's squatter at a rung: the climb's own retire of that rung
+             * is the remedy, and past it the arrangement is the user's. Beneath
+             * any other the view keeps its claim at the squatter — a row the
+             * profile tracks, or dotta's own copy Git moved past — and a climb
+             * would commit what the occupant answers as the user's word about
+             * the chain: a rung retired, or a link target's attributes, on every
+             * machine. */
+            if (item->displaced != WORKSPACE_DISPLACED_NONE &&
+                item->displaced != WORKSPACE_DISPLACED_DERIVED) {
+                continue;
+            }
+
             leaves = arena_grow(
                 ctx->arena, leaves, &leaf_capacity, leaf_count + 1, sizeof(*leaves)
             );
-            leaves[leaf_count++] = row;
+            leaves[leaf_count++] = item->row;
         }
 
         derive_rows = (manifest_rows_t){ .entries = leaves, .count = leaf_count };

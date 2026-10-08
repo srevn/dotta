@@ -273,10 +273,12 @@ typedef enum {
  * no look decides or disproves rides, and the ORPHANED arm's rider), cmds/status.c
  * status_print_workspace's Issues hint, and cmds/diff.c
  * get_status_message_from_item and show_file_diff_from_workspace (the colour
- * ladder and the content gate), should_show_item_for_direction beside them; and
- * core/deploy.c check_ancestry, off the squatted directory itself — a caller
- * that needs the squatter, which no item carries, is lent it whole, the claim
- * this class is copied from (workspace_squatted_ancestor), so apply's remedy
+ * ladder and the content gate), should_show_item_for_direction beside them;
+ * cmds/update.c cmd_update (the named derivation's leaves, climbed beneath the
+ * user's squatter at a rung alone, the one squatter the climb's retire answers
+ * for); and core/deploy.c check_ancestry, off the squatted directory itself — a
+ * caller that needs the squatter, which no item carries, is lent it whole, the
+ * claim this class is copied from (workspace_squatted_ancestor), so apply's remedy
  * and status's section cannot name two claimants for one squatter.
  */
 typedef enum {

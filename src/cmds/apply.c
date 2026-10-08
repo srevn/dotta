@@ -34,13 +34,14 @@
  *
  * The skips are reported and the run goes on: the verdicts already exclude them,
  * so nothing downstream re-checks. One section for every skip, both kinds, in
- * decision order — a skipped squatter precedes the rows beneath it, which is
- * the reading order — capped like every preview list (one skipped squatter takes
- * its whole subtree with it, so this one has a multiplier cleanup's uncapped
- * block does not). The header is the block's only prose, as it is in every block
- * on both sides: no one sentence covers both families here — the consent skips
- * --force lifts and the hard blocks it does not — and "not deployed" would say
- * the header again. Each row names its own reason, and the remedies close.
+ * path order, the order preflight decides them in — a skipped squatter precedes
+ * the rows beneath it, which is the reading order — capped like every preview
+ * list (one skipped squatter takes its whole subtree with it, so this one has a
+ * multiplier cleanup's uncapped block does not). The header is the block's only
+ * prose, as it is in every block on both sides: no one sentence covers both
+ * families here — the consent skips --force lifts and the hard blocks it does
+ * not — and "not deployed" would say the header again. Each row names its own
+ * reason, and the remedies close.
  *
  * Two line families. The landing and occupancy reasons keep their exact
  * parentheticals — facts about the path's surroundings, no profile. The row-fact

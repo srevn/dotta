@@ -126,10 +126,10 @@ typedef struct {
  *
  * FS_OCCUPANT_UNKNOWN deliberately answers no. Deploy judges nothing it could
  * not see: an occupant it failed to stat conflicts with nothing, and the row is
- * skipped as unreadable rather than judged on a guess (the ladders' leftover
+ * skipped as unreadable rather than judged on a guess (the ladder's leftover
  * rung). The workspace's own presence rule (occupant != FS_OCCUPANT_NONE,
  * workspace.h) assumes an unstattable path present; this is deploy's stricter
- * reading, for judgments — one producer, read by occupant_conflicts (both ladders'
+ * reading, for judgments — one producer, read by occupant_conflicts (the ladder's
  * type rung) and deploy_file (the symlink arm's clear) in deploy.c, and by
  * cmds/apply.c apply_print_deploy_preview (the overwrite count).
  */
@@ -189,9 +189,9 @@ static inline deploy_convergence_t deploy_convergence(fs_occupant_t occ) {
  * moved them: a claim is never an edit (core/workspace.h workspace_item_route,
  * whose STALE arm rests on this).
  *
- * Two readers, two files: the file ladder's consent rung (deploy_preflight),
- * and the forced preview's counterweight (cmds/apply.c apply_print_deploy_preview)
- * — a verdict overwrites local content iff something stands at its path AND this
+ * Two readers, two files: the ladder's content rung (deploy_preflight), and the
+ * forced preview's counterweight (cmds/apply.c apply_print_deploy_preview) — a
+ * verdict overwrites local content iff something stands at its path AND this
  * answers yes, so the preview reads it beside deploy_occupant_present. Each hands
  * it the row's item, which every fate carries (deploy_verdict_t).
  *
@@ -385,20 +385,20 @@ typedef struct {
 /**
  * Preflight: the skips, the anomalies, and the verdicts
  *
- * The verdicts are the *how*, one per row the run WILL deploy, in plan order —
- * directories parents-first, the order deploy_execute converges them in — and
- * then the ancestors: the directory rows outside the plan that the run may make
- * on the way to a planned path — either class, since the plan holds the tracked
- * ones and the ancestors pass is where a derived claim is ever acted on at all
- * (see deploy_preflight). Every array is always allocated, so a consumer reads
- * counts and needs no NULL guard. A value of the arena it was decided in, as
- * every array it holds is: nothing frees one.
+ * The verdicts are the *how*, one per row the run WILL deploy, each kind in path
+ * order — the order deploy_execute acts in within a kind, the directories first,
+ * parents before the paths beneath them — and then the ancestors: the directory
+ * rows outside the plan that the run may make on the way to a planned path —
+ * either class, since the plan holds the tracked ones and the ancestors pass is
+ * where a derived claim is ever acted on at all (see deploy_preflight). Every
+ * array is always allocated, so a consumer reads counts and needs no NULL guard.
+ * A value of the arena it was decided in, as every array it holds is: nothing
+ * frees one.
  */
 typedef struct {
-    /* The rows the run does not deploy, both kinds, in decision order — directories
-     * parents-first, then files. A squatted directory therefore precedes the
-     * rows beneath it. With the verdicts below this is a partition of the plan's
-     * pending rows:
+    /* The rows the run does not deploy, both kinds, in path order, the order
+     * they are decided in: a squatted directory therefore precedes the rows beneath
+     * it. With the verdicts below this is a partition of the plan's pending rows:
      *
      *   files.pending ∪ directories.pending = verdicts(files ∪ directories) ∪
      *       skipped
@@ -457,12 +457,12 @@ typedef struct {
  * partition per kind. A value of the arena it was built in: nothing frees one.
  *
  * Both kinds' items arrive ordered by filesystem_path (workspace_directories,
- * workspace_files), so a tracked parent precedes its tracked children within
- * directories.pending. Two consumers lean on that: preflight decides a directory
- * row after its ancestors' fates (the ancestry rung reads them), and the execute
- * loop converges a parent before the paths beneath it — which is what lets a
- * replaced directory settle its subtree for the rows that follow (see
- * deploy_preflight, deploy_execute).
+ * workspace_files), so within each kind's pending a row precedes every path beneath
+ * it. Two consumers lean on that: preflight merges the two into one path order
+ * and decides every row after its ancestors' fates, of either kind (the ancestry
+ * rung and the landing read them), and the execute loop converges a parent before
+ * the paths beneath it — which is what lets a replaced directory settle its subtree
+ * for the rows that follow (see deploy_preflight, deploy_execute).
  */
 typedef struct {
     deploy_partition_t files;         /* The file items */
@@ -722,11 +722,12 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
 /**
  * Decide the fate of every planned row: a verdict, or a skip
  *
- * Decided in the order the run acts — the directory rows parents-first, then
- * the files, then the ancestors — so every fate is decided after the fates of
- * whatever the run reaches before it: a file's tracked ancestors are directory
- * rows, converged before anything is written beneath them. The skips and the
- * warnings come out in that order too.
+ * Decided in path order, both kinds in one walk, and then the ancestors — so
+ * every row's fate is decided after the fate of every one of its ancestors, of
+ * either kind, which is all the rungs read of the fates decided so far. The skips
+ * and the warnings come out in that order too. The run acts in another — the
+ * directories, then the files (deploy_execute) — each kind's verdicts in path
+ * order within it.
  *
  * One fate per pending row (the totality equation, deploy_preflight_t), each
  * question asked of its one authority, the first skip reason that applies winning
@@ -795,8 +796,8 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * partition of its own: whether such a row is created turns on facts only preflight
  * holds — that the path is absent, and that something deployable stands beneath it.
  *
- * The deployable gate rests on an invariant the ladders establish rather than
- * check: beneath a squatter this run does not converge, every planned row is
+ * The deployable gate rests on an invariant the ladder establishes rather than
+ * checks: beneath a squatter this run does not converge, every planned row is
  * skipped. Where the squatter stands at a skipped pending row, in that skip's
  * class, whatever its reason — the rung reads the ancestor's own fate; where it
  * stands at an ancestor outside the run's reach, by ANCESTOR; where a skipped

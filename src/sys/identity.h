@@ -288,9 +288,8 @@ bool identity_may_chown(const identity_t *id, uid_t uid, gid_t gid);
  * way.
  *
  * Readers: core/deploy.c holdable_directory (a landing directory the run may
- * hold at a working mode) and deploy_preflight's directory ladder (a planned
- * directory converged in place, DEPLOY_SKIP_FOREIGN). A reader not on this list
- * is a bug.
+ * hold at a working mode) and deploy_preflight's ladder (a planned directory
+ * converged in place, DEPLOY_SKIP_FOREIGN). A reader not on this list is a bug.
  *
  * @param id The identity (must not be NULL)
  * @param owner The node's owner (its st_uid)

@@ -2764,7 +2764,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * 1 tracked directory and prune 3 orphaned files?". No part means every
          * pending action is state-only reclamation (e.g. an all-absent orphan
          * set) — non-destructive, no consent needed. The one destructive deploy
-         * verb, a replace, never reaches this prompt: it needs --force, and --force
+         * verb, a replace, reaches this prompt only over dotta's own untouched
+         * copy, Git having moved past it, which loses nothing (core/deploy.c
+         * deploy_preflight's type rung); any other needs --force, and --force
          * is the consent. */
         size_t deploy_count = deploy_verdicts->files.count;
         size_t converge_count = deploy_verdicts->directories.count;

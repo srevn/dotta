@@ -197,11 +197,13 @@ static inline deploy_convergence_t deploy_convergence(fs_occupant_t occ) {
  * moved them: a claim is never an edit (core/workspace.h workspace_item_route,
  * whose STALE arm rests on this).
  *
- * Two readers, two files: the ladder's content rung (deploy_preflight), and the
- * forced preview's counterweight (cmds/apply.c apply_print_deploy_preview) — a
- * verdict overwrites local content iff something stands at its path AND this
- * answers yes, so the preview reads it beside deploy_occupant_present. Each hands
- * it the row's item, which every fate carries (deploy_verdict_t).
+ * Three readers, two files: the ladder's content rung and its type rung's consent
+ * (deploy_preflight) — an occupant of another kind is replaced unasked where
+ * Git moved past dotta's copy (STALE) and this answers no — and the forced
+ * preview's counterweight (cmds/apply.c apply_print_deploy_preview) — a verdict
+ * overwrites local content iff something stands at its path AND this answers
+ * yes, so the preview reads it beside deploy_occupant_present. Each hands it
+ * the row's item, which every fate carries (deploy_verdict_t).
  *
  * @param item The row's workspace verdict (must not be NULL)
  */
@@ -308,10 +310,12 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
 /**
  * The claim standing at the squatted ancestor an ANCESTOR skip names
  *
- * One reason, one exit — but the remedy is the claimant's. A tracked row out of
- * the run's reach is planned by a wider scope, and the squatter is then that
- * row's own TYPE skip to lift (--force). An ancestor claim is never planned, so
- * no scope and no flag helps: the consent-preserving cure is the named
+ * One reason, one exit — but the remedy is the claimant's. A row a plan holds,
+ * out of the run's reach, is planned by a wider scope, which then replaces the
+ * squatter: a tracked row's under --force, and dotta's own copy at a rung, Git
+ * having moved past it (promoted, deploy_plan_build), unasked where the copy is
+ * untouched. An ancestor claim the user's own squatter holds is never planned,
+ * so no scope and no flag helps: the consent-preserving cure is the named
  * re-derivation ('dotta update <dir>'), which drops a claim the disk contradicts
  * and leaves the arrangement the user's. A squatter nothing claims is the landing
  * check's find past the rung: by hand is all there is. A record that alone
@@ -324,8 +328,9 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  * (check_ancestry), off the claim the load noted beside the squatter
  * (core/workspace.h workspace_squatted_t) — the claim every path beneath it carries
  * as its displaced class, so the remedy here and status's Displaced paths section
- * cannot name two claimants for one squatter; UNCLAIMED by the landing check
- * (check_landing), the one class it can find. Read by cmds/apply.c
+ * cannot name two claimants for one squatter: DERIVED where the user's own squatter
+ * holds an ancestor claim, TRACKED for every other view claim; UNCLAIMED by the
+ * landing check (check_landing), the one class it can find. Read by cmds/apply.c
  * apply_print_deploy_skips, whose remedies part on it.
  *
  * The class answers for ANCESTOR, where the reason is one and the cure is not —
@@ -338,8 +343,8 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  */
 typedef enum {
     DEPLOY_ANCESTOR_NONE = 0,  /* Another reason, or a squatter with a skip of its own */
-    DEPLOY_ANCESTOR_TRACKED,   /* A tracked row holds the squatted path */
-    DEPLOY_ANCESTOR_DERIVED,   /* An ancestor claim holds it */
+    DEPLOY_ANCESTOR_TRACKED,   /* A row a plan holds stands there: tracked, or promoted */
+    DEPLOY_ANCESTOR_DERIVED,   /* An ancestor claim the user's own squatter holds */
     DEPLOY_ANCESTOR_UNCLAIMED  /* Nothing claims it — the landing check's find */
 } deploy_ancestor_class_t;
 
@@ -398,10 +403,10 @@ typedef struct {
  * parents before the paths beneath them — and then the ancestors: the directory
  * rows outside the plan that the run may make on the way to a planned path —
  * either class, since the plan holds the tracked ones and the ancestors pass is
- * where a derived claim is ever acted on at all (see deploy_preflight). Every
- * array is always allocated, so a consumer reads counts and needs no NULL guard.
- * A value of the arena it was decided in, as every array it holds is: nothing
- * frees one.
+ * where a derived claim is acted on, save one the plan promoted (see
+ * deploy_plan_build, deploy_preflight). Every array is always allocated, so a
+ * consumer reads counts and needs no NULL guard. A value of the arena it was
+ * decided in, as every array it holds is: nothing frees one.
  */
 typedef struct {
     /* The rows the run does not deploy, both kinds, in path order, the order
@@ -432,7 +437,9 @@ typedef struct {
  * and path dimensions lands in exactly one bucket, or nowhere: one that is both
  * clean and excluded enters none (neither work nor apply's to own). Out-of-scope
  * items are invisible, and so is an ancestor claim, which is no convergence of
- * the run's — the plan drops it before scope (deploy_plan_build).
+ * the run's — the plan drops it before scope (deploy_plan_build) — save one dotta's
+ * own copy squats, Git having moved past it, which the plan holds as it holds a
+ * tracked row: promoted, and always work.
  *
  * Two buckets carry work the run deliberately does not do. They differ by reason,
  * and the reason is the only thing a consumer needs from them — so the bucket
@@ -456,7 +463,7 @@ typedef struct {
      * and converges its metadata in place — so skipping one would preserve nothing
      * and would instead strand the tracked children the flag exists to deploy.
      * Its one destructive act, replacing a squatter, is force-gated at preflight
-     * already. */
+     * already, save over dotta's own untouched copy, which loses nothing. */
     workspace_items_t skipped_existing;
 } deploy_partition_t;
 
@@ -474,7 +481,7 @@ typedef struct {
  */
 typedef struct {
     deploy_partition_t files;         /* The file items */
-    deploy_partition_t directories;   /* The tracked directory items */
+    deploy_partition_t directories;   /* The tracked directory items, and promoted rungs */
 } deploy_plan_t;
 
 /**
@@ -652,11 +659,13 @@ typedef struct {
 /**
  * Build the deployment plan
  *
- * Walks the workspace's directory items and file items once — a directory only
- * where its profile tracks it, an ancestor claim being no convergence of the
- * run's — gating each on scope_accepts_profile ∧ scope_accepts_path(kind), then
- * classifying it by deploy's work predicate (missing, or diverged in content /
- * mode / ownership / type / stale) and by the reasons its work is skipped:
+ * Walks the workspace's directory items and file items once — a directory where
+ * its profile tracks it, an ancestor claim being no convergence of the run's
+ * save where dotta's own copy squats it, Git having moved past that copy (STALE:
+ * the squatter is Git's pending move, which the run converges — promoted, a
+ * replace) — gating each on scope_accepts_profile ∧ scope_accepts_path(kind),
+ * then classifying it by deploy's work predicate (missing, or diverged in content
+ * / mode / ownership / type / stale) and by the reasons its work is skipped:
  * scope_is_excluded(kind), then skip_existing. Every item was analyzed — neither
  * kind is a load's to decline (workspace_load) — so a clean one is a path the
  * load looked at and found agreeing.
@@ -747,9 +756,10 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  *   own fates (check_ancestry): an ancestor the directory pass converges first
  *   means the row is planned absent and asked nothing else; one the pass skips
  *   means the row takes that skip's class, ancestor named; one the run never
- *   acts on (scope, -p, -e, an ancestor claim) is ANCESTOR — an incapacity, and
- *   the remedy is a run that reaches it, or, for a claim the run cannot reach
- *   at all because nothing plans it, a re-derivation of the chain.
+ *   acts on (scope, -p, -e, an ancestor claim the plan does not hold) is ANCESTOR
+ *   — an incapacity, and the remedy is a run that reaches it, or, for a claim
+ *   the run cannot reach at all because nothing plans it, a re-derivation of
+ *   the chain.
  * - Landing — the write must be able to land. Every arm of the executor writes
  *   through the *parent* — a temp file or a link renamed over the target, a mkdir
  *   — so the path's own permissions are never the question, and a directory being
@@ -768,8 +778,9 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  *   kinds (workspace_item_t.occupant; a row planned beneath a squatter this run
  *   replaces is absent, and asked nothing). A different kind at the path — a
  *   non-directory where a directory belongs, the reverse, or a file row's other
- *   kind — is skipped unless --force (TYPE), save a file row's occupant the
- *   workspace proved is dotta's own copy with only its kind moved by Git (STALE):
+ *   kind — is skipped unless --force (TYPE), save an occupant, under either kind
+ *   of row, the workspace proved is dotta's own copy with its kind moved by Git
+ *   alone (STALE, and no edit of the user's beside it: deploy_content_conflicts):
  *   that one is replaced unasked, as a STALE row's bytes are overwritten. A
  *   directory holding untracked paths is skipped either way (OCCUPIED), because
  *   deploy removes single nodes and never a tree. A row the workspace could not
@@ -794,7 +805,7 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  *   fail strict_ownership.
  *
  * Then the ancestors: every directory row the plan does not act on — an ancestor
- * claim, which the plan never holds, or a tracked row out of scope or skipped —
+ * claim it does not hold, a tracked or promoted row out of scope or skipped —
  * absent as the plan reads it (the workspace's occupant, or beneath a squatter
  * this run replaces) and standing above a *deployable* row. ensure_parents creates
  * exactly these on the way to a planned path (the parents beside them that no

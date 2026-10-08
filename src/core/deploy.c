@@ -37,10 +37,10 @@
  * bit, ENCRYPTION (core/workspace.h divergence_type_t) — no path bit survives
  * absence, so the two missing states answer from state alone.
  *
- * Kind-agnostic: directory analysis tags only MODE / OWNERSHIP / TYPE / UNVERIFIED,
- * so the DEPLOYED arm's test already covers every directory verdict — no
- * kind-specific arm. A file row can carry ENCRYPTION beside any of those; the
- * arm masks it either way.
+ * Kind-agnostic: directory analysis tags only MODE / OWNERSHIP / CLAIM_MOVED /
+ * TYPE / STALE / UNVERIFIED, so the DEPLOYED arm's test already covers every
+ * directory verdict — no kind-specific arm. A file row can carry ENCRYPTION beside
+ * any of those; the arm masks it either way.
  *
  * The planner walks the active items, so the four states an orphan or a scan
  * item takes never reach this: their arms name the owner that does handle them,
@@ -219,10 +219,19 @@ deploy_plan_t *deploy_plan_build(
          * cannot see — and does nothing at all to one that already stands. Neither
          * bucket, therefore: not pending, since there is no convergence to perform;
          * not clean, since there is nothing to adopt or acknowledge (an apply
-         * must not take ownership of a parent it found already there). Prior to
-         * scope, because scope decides reach and this decides whether there is
-         * anything to reach for. */
-        if (!item->row->tracked) continue;
+         * must not take ownership of a parent it found already there). Save a
+         * claim dotta's own copy squats, Git having moved past it — STALE, the
+         * workspace's proof (core/workspace.c workspace_analyze_directory), alone
+         * where the copy is untouched and beside TYPE where it was edited: that
+         * squatter is Git's pending move, the run's to converge as a tracked
+         * row's squatter is — cleared at its own rung in the directory pass,
+         * parents first, so nothing beneath it is written through what stood
+         * there, and made in its place, the type rung deciding whether unasked
+         * or under --force (deploy_preflight). Its convergence is always a replace:
+         * STALE stands on a directory row only where another kind does. Prior
+         * to scope, because scope decides reach and this decides whether there
+         * is anything to reach for. */
+        if (!item->row->tracked && !(item->divergence & DIVERGENCE_STALE)) continue;
 
         if (!scope_accepts_profile(scope, item->profile) ||
             !scope_accepts_path(
@@ -311,10 +320,10 @@ typedef enum {
  *
  * Consent is the first half. Clearing an occupant is the destructive reading of
  * "overwrite modified files", so it is --force's to give — unless nothing of
- * the user's stands there: a file row's occupant the workspace proved is the
- * very copy dotta confirmed, Git having moved the kind beneath it, is replaced
- * unasked, as a STALE row's bytes are overwritten (the ladder's type rung, which
- * hands the proof in).
+ * the user's stands there: an occupant the workspace proved is the very copy
+ * dotta confirmed, Git having moved the kind past it, is replaced unasked under
+ * a file row and a directory row alike, as a STALE row's bytes are overwritten
+ * (the ladder's type rung, which hands the proof in).
  *
  * The second half is a limit no consent lifts. What deploy replaces is the tracked
  * path the user named: one node, whose disappearance is exactly what the preview
@@ -337,8 +346,8 @@ typedef enum {
  *
  * @param path Planned path (must not be NULL)
  * @param occ Its occupant, as the workspace's look found it
- * @param consent Whether replacing it is consented: --force, or on a file row
- *        the workspace's proof that the occupant is dotta's own copy
+ * @param consent Whether replacing it is consented: --force, or the workspace's
+ *        proof that the occupant is dotta's own copy, untouched
  */
 static clearance_t path_clearance(const char *path, fs_occupant_t occ, bool consent) {
     if (occ == FS_OCCUPANT_DIRECTORY && !fs_is_directory_empty(path)) {
@@ -552,7 +561,9 @@ static bool directory_is_deployable(
  *                 an incapacity. The skip carries which claim holds the squatter
  *                 — the load's own note of it, lent with the path — because the
  *                 remedies part ways there: a wider scope plans a tracked row,
- *                 the named re-derivation drops an ancestor claim
+ *                 and a rung dotta's own copy squats, Git having moved past it
+ *                 (promoted, deploy_plan_build); the named re-derivation drops
+ *                 an ancestor claim the user's own squatter holds
  *
  * The claimant is written in the no-fate arm alone — a row beneath a skipped
  * squatter leaves the class NONE, its remedy being that squatter's own line's
@@ -601,10 +612,12 @@ static void check_ancestry(
     }
 
     /* No fate: ANCESTOR, and the claim the load noted beside the squatter — the
-     * view's face lends a view claim alone, TRACKED or DERIVED */
+     * view's face lends a view claim alone. A wider scope plans every squatter
+     * but one: the user's own at a rung (DERIVED), which no plan holds and the
+     * named re-derivation answers for */
     skip->reason = DEPLOY_SKIP_ANCESTOR;
-    skip->ancestor_class = above->claim == WORKSPACE_DISPLACED_TRACKED
-        ? DEPLOY_ANCESTOR_TRACKED : DEPLOY_ANCESTOR_DERIVED;
+    skip->ancestor_class = above->claim == WORKSPACE_DISPLACED_DERIVED
+        ? DEPLOY_ANCESTOR_DERIVED : DEPLOY_ANCESTOR_TRACKED;
 }
 
 /**
@@ -1000,27 +1013,29 @@ error_t deploy_preflight(
                 if (occupant_conflicts(occupant, item->row->type)) {
                     /* Type: what stands at the path decides the remedy, and whose
                      * it is decides the consent. STALE on a kind the row does
-                     * not have is the workspace's proof that the occupant is
-                     * exactly the copy dotta confirmed, Git having retyped the
-                     * path beneath it (the file analysis's second question, asked
-                     * under the base's kind): replacing it loses nothing, so it
-                     * needs no --force, as a STALE row's bytes never do
-                     * (deploy_content_conflicts). The proof is the bit and never
-                     * an absence of conflict: the workspace's analyses read every
-                     * kind mismatch it can see off the look, before any read
-                     * and whatever the key (core/workspace.c
-                     * workspace_analyze_file), so one without STALE carries TYPE
-                     * and asks for --force.
+                     * not have is the workspace's proof that Git retyped the
+                     * path past the copy dotta confirmed, and TYPE that disk
+                     * left that copy — the user's edit of the kind — beside it
+                     * or alone (the frame across kinds, either row kind:
+                     * core/workspace.c workspace_analyze_file,
+                     * workspace_analyze_directory). So the consent is the content
+                     * rung's own question: Git's move with no edit of the user's
+                     * beside it loses nothing, and needs no --force, as a STALE
+                     * row's bytes never do; an edit asks for --force, both sides
+                     * moved or the user's alone (deploy_content_conflicts). The
+                     * proof is the bit and never an absence of conflict: the
+                     * analyses read every kind mismatch they can see off the
+                     * look, before any read and whatever the key, so a mismatch
+                     * without STALE carries TYPE and asks for --force.
                      *
                      * A directory row's squatter is a non-directory (the link
                      * itself, so a symlink to a directory counts), replaced one
                      * node at a time, and never a directory — that is the row
                      * converging in place — so it never meets REFUSED: TYPE is
-                     * its one refusal, and "use --force" always the true remedy.
-                     * Its consent is --force alone: the directory analysis reads
-                     * no base, so no directory row carries the proof. */
+                     * its one refusal, and "use --force" always the true remedy. */
                     switch (path_clearance(
-                        path, occupant, opts->force || (item->divergence & DIVERGENCE_STALE)
+                        path, occupant, opts->force || ((item->divergence & DIVERGENCE_STALE)
+                        && !deploy_content_conflicts(item))
                         )) {
                         case CLEARANCE_OK:
                             break;
@@ -1038,8 +1053,9 @@ error_t deploy_preflight(
                      * type: a path holding something else has no content to compare
                      * — the mask's TYPE arm cannot fire here, a conflicting
                      * occupant took the TYPE rung above; it is load-bearing at
-                     * the preview's other read. A directory row never carries
-                     * CONTENT: a directory claims no content at all. */
+                     * that rung's consent and at the preview's other read. A
+                     * directory row never carries CONTENT: a directory claims
+                     * no content at all. */
                     skip.reason = DEPLOY_SKIP_CONTENT;
                 }
             }

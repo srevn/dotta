@@ -129,18 +129,31 @@ static const char *get_status_message_from_item(
 
     /* Beneath a squatted directory: nothing there was looked at, so no sentence
      * below is true of the path and it carries no bit for one to be read off,
-     * and the way there is the claimant's — the route's two arms, said in a
-     * comparison's own words. The predicate opens the line, as it does on every
-     * screen that speaks of such a path (core/workspace.h workspace_displaced_t).
-     * Upstream only in practice: the downstream filter admits nothing but the
-     * capture route. */
-    if (item->displaced == WORKSPACE_DISPLACED_TRACKED) {
-        return "not looked at, beneath a squatted directory "
-               "(apply --force replaces it, then writes this fresh)";
-    }
-    if (item->displaced == WORKSPACE_DISPLACED_DERIVED) {
-        return "not looked at, beneath a squatted directory "
-               "('dotta update <dir>' re-derives the way there)";
+     * and the way there is the squatter's own route — the route's four arms,
+     * said in a comparison's own words, dotta's own copy in its own state's.
+     * The predicate opens the line, as it does on every screen that speaks of
+     * such a path (core/workspace.h workspace_displaced_t). Total over the classes,
+     * so a class added there is a build error here and never an admitted item
+     * without a sentence. Upstream only in practice: the downstream filter admits
+     * nothing but the capture route. */
+    switch (item->displaced) {
+        case WORKSPACE_DISPLACED_TRACKED:
+            return "not looked at, beneath a squatted directory "
+                   "(apply --force replaces it, then writes this fresh)";
+        case WORKSPACE_DISPLACED_DERIVED:
+            return "not looked at, beneath a squatted directory "
+                   "('dotta update <dir>' re-derives the way there)";
+        case WORKSPACE_DISPLACED_STALE:
+            return "not looked at, beneath a squatted directory changed in Git "
+                   "(apply replaces it, then writes this fresh)";
+        case WORKSPACE_DISPLACED_CONFLICT:
+            return "not looked at, beneath a squatted directory changed in Git and "
+                   "on disk (apply --force replaces it, then writes this fresh)";
+        case WORKSPACE_DISPLACED_RECORD:
+        case WORKSPACE_DISPLACED_NONE:
+            /* A record's memory displaces no view row (the reach rule), and the
+             * rest were looked at: the sentences below are theirs */
+            break;
     }
 
     /* A look that failed: no bit below was settled, so neither verb's sentence
@@ -168,20 +181,22 @@ static const char *get_status_message_from_item(
         }
     }
 
-    /* Handle divergence-based messages for deployed items */
+    /* Both sides moved — the route's CONFLICT: the user's bytes or kind beside
+     * a move Git made, to the bytes, the kind or a claim. The one spelling of
+     * the fact, read where apply's skip label, update's census and status's section
+     * read it, and ahead of the kind's own sentence, which a kind both sides
+     * moved would otherwise take. Upstream only in practice: the downstream filter
+     * admits neither this nor the STALE arm below. */
+    if (workspace_item_route(item) == WORKSPACE_ROUTE_CONFLICT) {
+        return "changed in Git and on disk (apply --force <path> keeps Git's)";
+    }
+
+    /* Handle divergence-based messages for deployed items: a kind the user changed,
+     * Git having moved nothing past it */
     if (item->divergence & DIVERGENCE_TYPE) {
         return direction == DIFF_UPSTREAM
                 ? "type would change on apply"
                 : "type changed locally";
-    }
-
-    /* Both sides moved — the route's CONFLICT: the user's bytes beside a move
-     * Git made, to the bytes or to a claim. The one spelling of the fact, read
-     * where apply's skip label, update's census and status's section read it.
-     * Upstream only in practice: the downstream filter admits neither this nor
-     * the arm below. */
-    if (workspace_item_route(item) == WORKSPACE_ROUTE_CONFLICT) {
-        return "changed in Git and on disk (apply --force <path> keeps Git's)";
     }
 
     /* Git moved past the bytes dotta last confirmed, and disk did not follow. A

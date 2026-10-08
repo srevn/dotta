@@ -189,13 +189,15 @@ static inline deploy_convergence_t deploy_convergence(fs_occupant_t occ) {
  * so the load-time verdict is the only authority there is — no lstat can improve
  * on it.
  *
- * A TYPE verdict counts, because it means the compare never produced a content
- * verdict at all: whatever stood at the path was never measured against the row.
- * A Git move without CONTENT — STALE, the bytes, or CLAIM_MOVED, a claim — never
- * conflicts: the bytes on disk are the ones dotta confirmed, so the overwrite
- * loses nothing. Mode, ownership and encryption divergence never conflict, whoever
- * moved them: a claim is never an edit (core/workspace.h workspace_item_route,
- * whose STALE arm rests on this).
+ * A TYPE verdict counts: another kind than the row's stands, and it is not the
+ * copy dotta confirmed — disk left that copy on the kind, the content's axis
+ * across kinds (core/workspace.h divergence_type_t) — so whatever stands there
+ * is the user's, never measured against the row. A Git move without an edit —
+ * STALE, the bytes or the kind, or CLAIM_MOVED, a claim — never conflicts: what
+ * stands on disk is what dotta confirmed, so the overwrite loses nothing. Mode,
+ * ownership and encryption divergence never conflict, whoever moved them: a claim
+ * is never an edit (core/workspace.h workspace_item_route, whose STALE arm rests
+ * on this).
  *
  * Three readers, two files: the ladder's content rung and its type rung's consent
  * (deploy_preflight) — an occupant of another kind is replaced unasked where

@@ -484,7 +484,7 @@ static void apply_print_deploy_preview(
 
     if (replaced > 0) {
         output_print(
-            out, OUTPUT_NORMAL, "  {yellow}%zu{reset} tracked director%s will be replaced\n",
+            out, OUTPUT_NORMAL, "  {yellow}%zu{reset} director%s will be replaced\n",
             replaced, replaced == 1 ? "y" : "ies"
         );
 
@@ -565,10 +565,11 @@ static void apply_print_reassignments(
 /**
  * Report the work the plans withheld, by flag
  *
- * -e (files, tracked directories, orphans) and --skip-existing (files) both mean
- * "in scope, needed work, deliberately not done" — the user's own flags, decided
- * at plan time, which is what "withheld" names against preflight's "skipped".
- * The two flags take two lines, and -e's line splits its count by kind at verbose.
+ * -e (files, the plan's directories, orphans) and --skip-existing (files) both
+ * mean "in scope, needed work, deliberately not done" — the user's own flags,
+ * decided at plan time, which is what "withheld" names against preflight's
+ * "skipped". The two flags take two lines, and -e's line splits its count by
+ * kind at verbose.
  *
  * Printed once, above the nothing-to-do exit — so a run that does nothing else
  * still says what it withheld — and therefore also above the confirmation prompt,
@@ -615,7 +616,7 @@ static void apply_print_withheld(
             }
             if (deploy_plan->directories.excluded.count > 0) {
                 output_print(
-                    out, OUTPUT_VERBOSE, "  • %zu tracked director%s not converged\n",
+                    out, OUTPUT_VERBOSE, "  • %zu director%s not converged\n",
                     deploy_plan->directories.excluded.count,
                     deploy_plan->directories.excluded.count == 1 ? "y" : "ies"
                 );
@@ -666,10 +667,12 @@ static void apply_print_withheld(
  *
  * Categories (each semantically distinct):
  * - deployed: Files written to disk (green)
- * - created / fixed / replaced: Tracked directories, by what the verdict said
- *   stood at the path — one line each, so the squatter --force displaced is named
+ * - created / fixed / replaced: the plan's directories, by what the verdict said
+ *   stood at the path — one line each, so the squatter a replace cleared is named
  *   at every verbosity (green; the replaced count yellow, as cleanup colours a
- *   removal)
+ *   removal). Created and fixed count tracked rows alone, and say so; a replace
+ *   can count a rung promoted over dotta's own copy (core/deploy.h
+ *   deploy_plan_build), and says "directories"
  * - ancestors: Directories the run made on the way to a planned path, outside
  *   the plan — either class, since a claimed rung is created at its claim whether
  *   the profile tracks it or only passes through it. Verbose only — the preview
@@ -829,7 +832,7 @@ static void apply_print_deploy_receipt(
     }
 
     if (replaced > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Replaced tracked directories");
+        output_section(out, OUTPUT_VERBOSE, "Replaced directories");
         for (size_t i = 0; i < converged.count; i++) {
             const deploy_verdict_t *v = converged.entries[i].verdict;
 
@@ -896,7 +899,7 @@ static void apply_print_deploy_receipt(
 
         if (replaced > 0) {
             output_print(
-                out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} tracked director%s\n",
+                out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} director%s\n",
                 replaced, replaced == 1 ? "y" : "ies"
             );
         }
@@ -2192,8 +2195,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_print(
             out, OUTPUT_VERBOSE, "  %zu %s convergence\n",
             deploy_plan->directories.pending.count,
-            deploy_plan->directories.pending.count == 1 ? "tracked directory needs"
-                                                        : "tracked directories need"
+            deploy_plan->directories.pending.count == 1 ? "directory needs"
+                                                        : "directories need"
         );
     }
     if (deploy_plan->directories.clean.count > 0) {
@@ -2761,11 +2764,11 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         size_t prune_dir_count = cleanup_verdicts->prunable_dirs.count;
 
         /* Compose the prompt from the non-zero parts — "Deploy 2 files, converge
-         * 1 tracked directory and prune 3 orphaned files?". No part means every
-         * pending action is state-only reclamation (e.g. an all-absent orphan
-         * set) — non-destructive, no consent needed. The one destructive deploy
-         * verb, a replace, reaches this prompt only over dotta's own untouched
-         * copy, Git having moved past it, which loses nothing (core/deploy.c
+         * 1 directory and prune 3 orphaned files?". No part means every pending
+         * action is state-only reclamation (e.g. an all-absent orphan set) —
+         * non-destructive, no consent needed. The one destructive deploy verb,
+         * a replace, reaches this prompt only over dotta's own untouched copy,
+         * Git having moved past it, which loses nothing (core/deploy.c
          * deploy_preflight's type rung); any other needs --force, and --force
          * is the consent. */
         size_t deploy_count = deploy_verdicts->files.count;
@@ -2781,7 +2784,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
         if (converge_count > 0) {
             snprintf(
-                parts[part_count++], sizeof(parts[0]), "converge %zu tracked director%s",
+                parts[part_count++], sizeof(parts[0]), "converge %zu director%s",
                 converge_count, converge_count == 1 ? "y" : "ies"
             );
         }

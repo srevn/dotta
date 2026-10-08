@@ -575,11 +575,17 @@ static void workspace_add_unscanned(
  *
  * Readers of the notes: workspace_squatter_above, asked here before each look;
  * and core/deploy.c check_ancestry, lent them through workspace_squatted_ancestor.
+ * The note is handed back to the analysis whose look made it, which alone may
+ * refine a view row's class from the base before any look beneath reads it (the
+ * directory analysis; the file analysis and the orphans' looks have nothing to
+ * refine, and drop it).
  *
  * @param ws Workspace (must not be NULL)
  * @param item The item to look at (must not be NULL)
+ * @return The squatted directory this look noted at the item's own path, or NULL
+ *         where it noted none
  */
-static void workspace_look(workspace_t *ws, workspace_item_t *item) {
+static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *item) {
     /* No look beneath a squatter: it would answer for the squatter — a link's
      * target, a file's ENOTDIR — and nothing it said would be this path's. The
      * item takes the claim's class instead and keeps UNKNOWN, a look nobody took.
@@ -590,7 +596,7 @@ static void workspace_look(workspace_t *ws, workspace_item_t *item) {
     );
     if (above) {
         item->displaced = above->claim;
-        return;
+        return NULL;
     }
 
     /* One lstat into the item, errno read at once: it is lstat's until anything
@@ -601,7 +607,7 @@ static void workspace_look(workspace_t *ws, workspace_item_t *item) {
     /* Absence squats nothing, and a look that failed proves nothing */
     if (item->occupant == FS_OCCUPANT_DIRECTORY || item->occupant == FS_OCCUPANT_NONE ||
         item->occupant == FS_OCCUPANT_UNKNOWN) {
-        return;
+        return NULL;
     }
 
     /* A squatter is a directory claim with another kind of node in its place, a
@@ -614,11 +620,13 @@ static void workspace_look(workspace_t *ws, workspace_item_t *item) {
      * the way squatted directories are. */
     if (item->item_kind != PATH_KIND_DIRECTORY && (item->occupant != FS_OCCUPANT_SYMLINK ||
         !workspace_orphan_beneath(ws, item->filesystem_path))) {
-        return;
+        return NULL;
     }
 
     /* Held by the item's claim: a directory row's class, or a record's memory —
-     * a directory record's own, or the orphans' beneath a link */
+     * a directory record's own, or the orphans' beneath a link. A view row's is
+     * the user's squatter until the analysis that asked for this look reads the
+     * base (workspace_analyze_directory). */
     workspace_displaced_t claim = WORKSPACE_DISPLACED_RECORD;
     if (item->row && item->item_kind == PATH_KIND_DIRECTORY) {
         claim = item->row->tracked ? WORKSPACE_DISPLACED_TRACKED : WORKSPACE_DISPLACED_DERIVED;
@@ -627,11 +635,13 @@ static void workspace_look(workspace_t *ws, workspace_item_t *item) {
     /* Noted where it was found, for every later look to ask; the looks' order
      * makes that soon enough — the directories before the files, parents first
      * (workspace_kind_order), and every row before any orphan (workspace_load). */
-    ws->squatted[ws->squatted_count++] = (workspace_squatted_t){
+    workspace_squatted_t *squatted = &ws->squatted[ws->squatted_count++];
+    *squatted = (workspace_squatted_t){
         .filesystem_path = item->filesystem_path,
         .len = strlen(item->filesystem_path),
         .claim = claim,
     };
+    return squatted;
 }
 
 /**
@@ -745,9 +755,10 @@ static void workspace_analyze_claim(workspace_item_t *item) {
  * Is disk the record's own pair? — the one question a record asks of the look
  * it meets
  *
- * Asked by the file analysis's second question (ours against the base) and by
- * an orphan's comparison (its copy against its record), of one record under one
- * look, so the two cannot answer it apart — they have before, on the kind (the
+ * Asked by the file analysis's second question (ours against the base), by the
+ * directory analysis's under a squatter (the frame across kinds), and by an
+ * orphan's comparison (its copy against its record), of one record under one
+ * look, so the three cannot answer it apart — two have before, on the kind (the
  * second question once read the base under the row's) and on the order of the
  * rungs. Every rung is put to the record's own kind, bytes and binding, never
  * the row's.
@@ -761,7 +772,7 @@ static void workspace_analyze_claim(workspace_item_t *item) {
  *
  * @param ws Workspace (its content reader)
  * @param item The item whose record is asked (must not be NULL): the record carries
- *             a confirmed blob — both callers' gate — and the look found something
+ *             a confirmed blob — every caller's gate — and the look found something
  *             standing there
  * @param out The verdict, set wherever NULL is returned
  * @return The read's error, or NULL
@@ -825,10 +836,11 @@ static error_t workspace_compare_base(
  *
  * The content's verdict is three-way, with the record's confirmed pair as base
  * (see the content and type analysis below): DIVERGENCE_STALE says Git moved
- * past the pair dotta last confirmed, DIVERGENCE_CONTENT says disk left it. Each
- * is a verdict in its own right — STALE without CONTENT is apply-side work that
- * overwrites nothing of the user's; CONTENT without STALE is a local edit Git
- * has not raced; both together is a conflict.
+ * past the pair dotta last confirmed, DIVERGENCE_CONTENT says disk left it —
+ * DIVERGENCE_TYPE where another kind than the row's stands, the kind being the
+ * content's axis across kinds. Each is a verdict in its own right — STALE without
+ * CONTENT is apply-side work that overwrites nothing of the user's; CONTENT without
+ * STALE is a local edit Git has not raced; both together is a conflict.
  *
  * The claim's verdict is one question per axis (workspace_analyze_claim): did
  * Git move it past the claim the record last reconciled? DIVERGENCE_CLAIM_MOVED
@@ -968,11 +980,11 @@ static void workspace_analyze_file(
      * that rule lives, and the two readings of it below — this bool, and the
      * fast path's whole verdict — are its.
      *
-     * When ours ≠ theirs: CONTENT iff user_edited, STALE iff git_moved. STALE
-     * without CONTENT means "overwrite loses nothing"; CONTENT without STALE
-     * means "Git has not moved since dotta last confirmed it"; both means both
-     * sides moved. Without a base there is no second question — any difference
-     * from theirs is the user's.
+     * When ours ≠ theirs: CONTENT iff user_edited — TYPE where ours is another
+     * kind than theirs — and STALE iff git_moved. STALE without CONTENT means
+     * "overwrite loses nothing"; CONTENT without STALE means "Git has not moved
+     * since dotta last confirmed it"; both means both sides moved. Without a
+     * base there is no second question — any difference from theirs is the user's.
      *
      * Source of truth for the base: the record (the path_records row's blob). A
      * path with no record, or one observed but never confirmed (zero blob), has
@@ -1167,9 +1179,9 @@ static void workspace_analyze_file(
          * as another kind with nothing read.
          *
          * A failed look answers nothing and leaves disk_at_base false: the edit
-         * is taken as real (CONTENT), the conservative answer — STALE still holds,
-         * because git_moved is a fact about two OIDs. Its error is dropped, at
-         * most one per path. */
+         * is taken as real (CONTENT, or TYPE across kinds), the conservative
+         * answer — STALE still holds, because git_moved is a fact about two OIDs.
+         * Its error is dropped, at most one per path. */
         if (git_moved && (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
             compare_result_t at_base;
             err = workspace_compare_base(ws, item, &at_base);
@@ -1193,20 +1205,29 @@ static void workspace_analyze_file(
 
         case CMP_TYPE_DIFF:
             /* The occupant is not the row's kind (file ↔ symlink, or a directory,
-             * FIFO, socket or device standing on the row). When Git moved the
-             * kind out from under an untouched deployment, the second question
-             * above answers it: an occupant that is exactly what dotta confirmed,
-             * kind and content, diverges by Git's move alone. STALE — and this
-             * is the arm the fast path lands in for that same state, having
-             * answered the comparison off the base's pair instead of a read.
-             * One question, asked under the base's own kind, whichever path asked
-             * it.
+             * FIFO, socket or device standing on the row): ours ≠ theirs on the
+             * kind, the content's axis across kinds — the frame across kinds,
+             * which names which side moved as the bytes' arm above does, TYPE
+             * in CONTENT's place. When Git moved the kind out from under an
+             * untouched deployment, the second question above answers it: an
+             * occupant that is exactly what dotta confirmed, kind and content,
+             * diverges by Git's move alone — STALE, and this is the arm the fast
+             * path lands in for that same state, having answered the comparison
+             * off the base's pair instead of a read. At the base Git moved by
+             * construction: the base is then the occupant's kind, which is not
+             * the row's. Git moved and disk left the base too — the base's kind
+             * with other bytes, a third kind of node, a read that failed — is
+             * both sides moved: TYPE, the kind the copy would commit, beside
+             * STALE, the move it would commit over (the route's CONFLICT). No
+             * base, or none Git moved past, is the user's kind alone: TYPE. One
+             * question, asked under the base's own kind, whichever path asked it.
              *
-             * Anything else is a blocking condition: TYPE. Either way the look
-             * stands at another kind than the row's, so the claim is not asked
-             * of it; the sources ride along, the same shape as every early return,
-             * so a pending reassignment does not vanish behind a type change. */
-            item->divergence |= disk_at_base ? DIVERGENCE_STALE : DIVERGENCE_TYPE;
+             * Either way the look stands at another kind than the row's, so the
+             * claim is not asked of it; the sources ride along, the same shape
+             * as every early return, so a pending reassignment does not vanish
+             * behind a type change. */
+            if (!disk_at_base) item->divergence |= DIVERGENCE_TYPE;
+            if (git_moved) item->divergence |= DIVERGENCE_STALE;
             return;
 
         case CMP_MISSING:
@@ -2749,7 +2770,9 @@ static error_t workspace_analyze_untracked(
  * Detects, for a directory row:
  * - DELETED state: Directory removed from filesystem
  * - DIVERGENCE_UNVERIFIED: Directory could not be stat'd (inaccessible)
- * - DIVERGENCE_TYPE: Something other than a directory stands at the path
+ * - DIVERGENCE_TYPE, DIVERGENCE_STALE: Something other than a directory stands
+ *   at the path — the user's (TYPE), dotta's own copy Git moved past (STALE),
+ *   or that copy edited since (both): the frame across kinds, the record its base
  *
  * and for a tracked row alone — the profile's word about a directory it tracks,
  * where an ancestor claim has none to give (the split is at the line itself):
@@ -2802,9 +2825,9 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
      *   — nothing can be at the path either
      * - UNKNOWN: Inaccessible — state undeterminable, not absent
      * - Anything but DIRECTORY: Type changed (file, symlink - including broken
-     *   ones)
+     *   ones) — a squatter, which the look notes and hands back
      * - DIRECTORY: Actual directory, check metadata */
-    workspace_look(ws, item);
+    workspace_squatted_t *squatted = workspace_look(ws, item);
 
     if (item->displaced != WORKSPACE_DISPLACED_NONE) return;
 
@@ -2832,23 +2855,45 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
         return;
     }
 
-    /* Verify it's actually a directory (type may have changed)
+    /* Another kind where the row claims a directory (dir -> file, dir -> symlink:
+     * the occupant is the link itself, never its target) — the squatter, noted
+     * by the look that found it, the row's class the claim, and handed back here
+     * (workspace_look): absence and an unstattable path are ruled out above, so
+     * something real stands here and no look beneath this path is taken at all.
+     * DEPLOYED, as the partition made it: the path exists, just another kind.
      *
-     * Type changes (dir -> file, dir -> symlink) are detected here because
-     * the occupant is the link itself, never its target.
-     *
-     * Record DIVERGENCE_TYPE to enable:
-     * - status shows [type] divergence
-     * - preflight blocks without --force
-     * - apply clears and recreates with --force
-     */
+     * Who moved it is the frame across kinds, the file analysis's three-way asked
+     * under a directory row. The base is the record where it confirmed a blob —
+     * a file's or a link's; a directory record holds none — and Git moved past
+     * any base by construction, a directory claiming no content. The second
+     * question, put to the base's own kind and binding (workspace_compare_base),
+     * says whether disk left it. Asked of both classes, above the line where
+     * the profile's word about a tracked directory begins: a squatter is a fact
+     * about the path, and a rung dotta's own copy squats is the plan's to converge
+     * (core/deploy.h deploy_plan_build). The note takes the verdict's class before
+     * any look beneath is taken — the directories are looked at parents first
+     * (workspace_kind_order) — so every path beneath carries the squatter's
+     * verb. */
     if (item->occupant != FS_OCCUPANT_DIRECTORY) {
-        /* The squatter, noted by the look that found it, the row's class the
-         * claim (workspace_look): absence and an unstattable path are ruled out
-         * above, so something real stands here and no look beneath this path is
-         * taken at all. DEPLOYED, as the partition made it: the path exists,
-         * just the wrong type. */
-        item->divergence = DIVERGENCE_TYPE;
+        const state_record_t *base =
+            record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;
+        compare_result_t at_base;
+
+        if (!base) {
+            /* No base, no frame: the user's squatter, the look's class kept */
+            item->divergence = DIVERGENCE_TYPE;
+        } else if (!workspace_compare_base(ws, item, &at_base) && at_base == CMP_EQUAL) {
+            /* At the base: dotta's own copy, untouched — Git's move alone, apply's
+             * to replace unasked (core/deploy.h deploy_content_conflicts) */
+            item->divergence = DIVERGENCE_STALE;
+            squatted->claim = WORKSPACE_DISPLACED_STALE;
+        } else {
+            /* Off it — the base's kind with other bytes, a third kind of node,
+             * a read that failed, the conservative answer the file analysis gives:
+             * both sides moved, the route's CONFLICT */
+            item->divergence = DIVERGENCE_TYPE | DIVERGENCE_STALE;
+            squatted->claim = WORKSPACE_DISPLACED_CONFLICT;
+        }
         return;
     }
 
@@ -2857,8 +2902,8 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
      * of a directory the path is owed its observation, of either class, which
      * the flush makes off this look (workspace_flush), as it does a file's: where
      * there is none, and in the place of one of another kind, whose node the
-     * look found gone — this analysis reads no base, so no verdict here is that
-     * record's.
+     * look found gone — this analysis reads a base only where another kind stands,
+     * so no verdict here is that record's.
      *
      * An ancestor claim is a creation template, not a convergence target, and
      * this is the line the profile's word about the path begins at. Every question
@@ -3343,35 +3388,40 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
 
     /* A squatter the view claims stands above the path, so nothing there was
      * looked at and no bit below can be this path's — deploy's ANCESTOR rung
-     * and cleanup_verdict's displaced arm rank the same fact the same way. RECORD
-     * never stands on a deployed item (the reach rule), so the two view classes
-     * are the whole test and falling through is what a record's memory says of
-     * a view row. */
-    if (item->displaced == WORKSPACE_DISPLACED_TRACKED)
-        return WORKSPACE_ROUTE_DISPLACED_TRACKED;
-    if (item->displaced == WORKSPACE_DISPLACED_DERIVED)
-        return WORKSPACE_ROUTE_DISPLACED_DERIVED;
+     * and cleanup_verdict's displaced arm rank the same fact the same way. The
+     * class is the squatter's own route, inherited. RECORD never stands on a
+     * deployed item (the reach rule), so the four view classes are the whole
+     * test and falling through is what a record's memory says of a view row. */
+    switch (item->displaced) {
+        case WORKSPACE_DISPLACED_TRACKED:  return WORKSPACE_ROUTE_DISPLACED_TRACKED;
+        case WORKSPACE_DISPLACED_DERIVED:  return WORKSPACE_ROUTE_DISPLACED_DERIVED;
+        case WORKSPACE_DISPLACED_STALE:    return WORKSPACE_ROUTE_DISPLACED_STALE;
+        case WORKSPACE_DISPLACED_CONFLICT: return WORKSPACE_ROUTE_DISPLACED_CONFLICT;
+        case WORKSPACE_DISPLACED_RECORD:
+        case WORKSPACE_DISPLACED_NONE:     break;
+    }
 
     /* A bit the analysis could not settle outranks the ones it could */
     if (divergence & DIVERGENCE_UNVERIFIED) return WORKSPACE_ROUTE_UNVERIFIABLE;
 
-    /* Git's side that disk did not follow — the bytes Git moved past what dotta
-     * last reconciled (STALE), a claim it moved past the record's or one this
-     * host cannot resolve (CLAIM_MOVED): a real edit beside it means both sides
-     * moved; alone — the user's own claims riding included, since a claim is
-     * never an edit — it is apply's to bring */
+    /* Git's side that disk did not follow — the bytes or the kind Git moved past
+     * what dotta last reconciled (STALE), a claim it moved past the record's or
+     * one this host cannot resolve (CLAIM_MOVED): a real edit beside it — of
+     * the bytes (CONTENT) or of the kind (TYPE) — means both sides moved; alone
+     * — the user's own claims riding included, since a claim is never an edit —
+     * it is apply's to bring */
     if (divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
-        return (divergence & DIVERGENCE_CONTENT) ? WORKSPACE_ROUTE_CONFLICT
-                                                 : WORKSPACE_ROUTE_STALE;
+        return (divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE))
+               ? WORKSPACE_ROUTE_CONFLICT : WORKSPACE_ROUTE_STALE;
     }
 
-    /* A kind mismatch is a capture only through the one pair the copy can commit:
-     * file ↔ symlink on a file row. Every other occupant is no verb's default,
-     * and a directory row's splits by the claim that holds the path: a tracked
-     * row is the plan's (--force replaces the squatter), a derived rung is never
-     * planned (the named re-derivation drops the claim). A deployed item is a
-     * view row's (the join), so the row holds; a file row's tracked field is a
-     * don't-care, so the kind gates the read. */
+    /* A kind mismatch of the user's alone is a capture only through the one pair
+     * the copy can commit: file ↔ symlink on a file row. Every other occupant
+     * is no verb's default, and a directory row's splits by the claim that holds
+     * the path: a tracked row is the plan's (--force replaces the squatter), a
+     * derived rung is never planned (the named re-derivation drops the claim).
+     * A deployed item is a view row's (the join), so the row holds; a file row's
+     * tracked field is a don't-care, so the kind gates the read. */
     if ((divergence & DIVERGENCE_TYPE) &&
         (item->item_kind == PATH_KIND_DIRECTORY ||
         (item->occupant != FS_OCCUPANT_REGULAR &&
@@ -3526,13 +3576,13 @@ bool workspace_item_tags(
                 }
 
                 if (item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
-                    /* Git moved past what dotta last reconciled — the bytes or
-                     * a claim, one tag for either: the axis tags beside it say
-                     * what differs, not who moved each, since apply converges
-                     * them alike. Alone it is apply-side work — the same CYAN
-                     * as [undeployed], none of the user's bytes is overwritten;
-                     * next to [modified] it names a conflict and the primary
-                     * tag's colour stands. */
+                    /* Git moved past what dotta last reconciled — the bytes,
+                     * the kind or a claim, one tag for any: the axis tags beside
+                     * it say what differs, not who moved each, since apply
+                     * converges them alike. Alone it is apply-side work — the
+                     * same CYAN as [undeployed], none of the user's bytes is
+                     * overwritten; next to [modified] or [type] it names a conflict
+                     * and the primary tag's colour stands. */
                     if (tag_count == 0) {
                         *color_out = OUTPUT_COLOR_CYAN;
                     }
@@ -4006,14 +4056,15 @@ error_t workspace_flush(workspace_t *ws) {
              * found gone — a link the user replaced with the row's file, a file
              * where the row's directory now stands — wherever no verdict reads
              * that record: under a directory row always, the directory analysis
-             * reading no base; under a file row where the record holds no confirmed
-             * pair, or where the load learned the row's content, which leaves
-             * its pair nothing to decide. Never owned: that record's stamp vouches
-             * for a node dotta never wrote here, and apply adopts a file as it
-             * adopts one with no record. A pair the load measured a difference
-             * from, or could not read past, stays: it is the base both sides of
-             * a conflict moved from, or the next readable load's
-             * (workspace_analyze_file). */
+             * reading no base where the directory stands (it reads one only where
+             * another kind does, the frame across kinds); under a file row where
+             * the record holds no confirmed pair, or where the load learned the
+             * row's content, which leaves its pair nothing to decide. Never owned:
+             * that record's stamp vouches for a node dotta never wrote here,
+             * and apply adopts a file as it adopts one with no record. A pair
+             * the load measured a difference from, or could not read past, stays:
+             * it is the base both sides of a conflict moved from, or the next
+             * readable load's (workspace_analyze_file). */
             base = workspace_observation(item->row);
         } else if (record && (item->confirmation != DIVERGENCE_NONE || record->ordered_at > 0)) {
             /* The record the load read, where the analyses noted an axis it lacks

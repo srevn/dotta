@@ -85,11 +85,11 @@
 
 /* The most tags one item's line carries — six, on a deployed item: [modified],
  * [stale], [mode], [ownership], [unencrypted] and [reassigned]. A kind that
- * changed, a look that failed and a look not taken end the measure, so [type],
- * the fault's tag and [displaced] ride beside the last two alone, and agreement's
- * one tag — [clean], or [ancestor] on a derived rung — stands alone
- * (workspace_item_tags, whose Tag Priority this counts; a tag added there is
- * counted here). */
+ * changed, a look that failed and a look not taken end the measure, so the fault's
+ * tag and [displaced] ride beside the last two alone, and [type] beside them
+ * and [stale], where Git moved the kind too, and agreement's one tag — [clean],
+ * or [ancestor] on a derived rung — stands alone (workspace_item_tags, whose
+ * Tag Priority this counts; a tag added there is counted here). */
 #define WORKSPACE_ITEM_MAX_TAGS 6
 
 /**
@@ -135,12 +135,16 @@ typedef enum {
  *
  * Who moved. On the content axis two bits split a difference by its mover: CONTENT
  * that disk left what dotta last confirmed there (any difference, where nothing
- * was), STALE that Git moved past it — both, a conflict. On a claim axis the
- * axis bit says what differs, and CLAIM_MOVED beside it that the claim is Git's
- * to bring: the record last reconciled another (workspace_claims_moved) — Git
- * moved it since, or a run left the path short of it, the record saying the mode
- * the run left (workspace_learn_mode) — or it names an owner this host cannot
- * resolve, which no move of disk's can satisfy (core/workspace.c
+ * was), STALE that Git moved past it — both, a conflict. The kind is the content's
+ * axis across kinds, and TYPE its CONTENT: another kind than the row's stands,
+ * and it is not the copy dotta confirmed (any, where nothing was) — the frame
+ * across kinds, under a file row and a directory row alike (core/workspace.c
+ * workspace_analyze_file, workspace_analyze_directory). On a claim axis the axis
+ * bit says what differs, and CLAIM_MOVED beside it that the claim is Git's to
+ * bring: the record last reconciled another (workspace_claims_moved) — Git moved
+ * it since, or a run left the path short of it, the record saying the mode the
+ * run left (workspace_learn_mode) — or it names an owner this host cannot resolve,
+ * which no move of disk's can satisfy (core/workspace.c
  * workspace_compare_ownership); without it the difference is the user's. Only
  * Git's side is asked of a claim: apply converges every claim whoever moved it
  * (core/deploy.h deploy_content_conflicts), so the user's side would name a state
@@ -162,10 +166,10 @@ typedef enum {
  * ownership", never "permissions", which is one word for two axes. STALE and
  * CLAIM_MOVED are one word: [stale] on a tag, and "changed in Git" in a sentence
  * — update's census, apply's count, diff's status line — "changed in Git and on
- * disk" where CONTENT stands beside them (the route's CONFLICT). The words are
- * the three-way frame's, true whatever moved the base: the record is what dotta
- * last left at the path, and Git's side is the side that differs from it — a
- * claim a run could not land among it.
+ * disk" where CONTENT or TYPE stands beside them (the route's CONFLICT). The
+ * words are the three-way frame's, true whatever moved the base: the record is
+ * what dotta last left at the path, and Git's side is the side that differs from
+ * it — a claim a run could not land among it.
  *
  * A path bit names its axis — CONTENT the bytes, MODE the mode, OWNERSHIP the
  * owner and group — so a mask of them can name axes where no difference is meant:
@@ -186,8 +190,8 @@ typedef enum {
 } divergence_type_t;
 
 /**
- * Whose claim holds the squatter standing above a path — the displaced fact,
- * with its reach
+ * Whose claim holds the squatter standing above a path, and who moved it — the
+ * displaced fact, with its reach
  *
  * A directory is squatted when a claim says a directory belongs at the path and
  * the load's look found something else standing there — or, where the view claims
@@ -210,9 +214,19 @@ typedef enum {
  * Two authorities can make the claim, and they reach differently — the reach rule:
  *
  *   TRACKED / DERIVED   the view claims the path — a directory row of either
- *                       class (core/manifest.h): nothing beneath it is looked
+ *   STALE / CONFLICT    class (core/manifest.h): nothing beneath it is looked
  *                       at, a row's or a record's. A view claim displaces
- *                       everything beneath it.
+ *                       everything beneath it. The four say who moved the squatter,
+ *                       and so whose verb removes it: the user's own node, at a
+ *                       row the profile tracks (TRACKED, apply --force) or at a
+ *                       rung it only passes through (DERIVED, the named
+ *                       re-derivation); or dotta's own copy, which the record
+ *                       proves Git moved past, at a row of either class — untouched
+ *                       (STALE, apply, unasked) or edited since (CONFLICT, apply
+ *                       --force). The class is the squatter's own route, inherited
+ *                       (workspace_item_route: KIND, KIND_DERIVED, STALE,
+ *                       CONFLICT), so every screen that speaks of a path beneath
+ *                       it names the squatter's verb.
  *   RECORD              only a record remembers a directory there — the view
  *                       claims none — and none stands there: a record of a
  *                       directory with another kind of node in its place, or a
@@ -231,21 +245,26 @@ typedef enum {
  *
  * NONE on every item looked at at its own path, the squatter's own included:
  * the ask is of proper ancestors, so a squatter is never its own answer and carries
- * its own TYPE verdict instead.
+ * its own verdict instead — TYPE, STALE, or both (the frame across kinds).
  *
- * Noted by the look that found the squatter, and written by every look it withholds
- * (workspace.c workspace_look), which asks the same scan before it takes one
- * (workspace_squatter_above) — so the class is total, and both halves of the
- * fact are one function: an item that carries one is an item with nothing measured.
+ * Noted by the look that found the squatter — a view row's class refined once,
+ * from the base, by the directory analysis that took that look, before any look
+ * beneath (workspace.c workspace_analyze_directory: STALE, CONFLICT) — and written
+ * by every look it withholds (workspace.c workspace_look), which asks the same
+ * scan before it takes one (workspace_squatter_above) — so the class is total,
+ * and both halves of the fact are one function: an item that carries one is an
+ * item with nothing measured.
  *
  * The words on screen, so the sentences cannot drift apart again: the directory
  * another kind stands at is *squatted*, the path beneath it is *displaced* —
  * the tag, status's section, this class — and every sentence about such a path
  * opens "not looked at", the predicate its neighbours spell "locked", "cannot
  * be read" and "could not be verified". The four that name the squatter say
- * "beneath a squatted directory" (cmds/update.c cmd_update's two census lines,
+ * "beneath a squatted directory" (cmds/update.c cmd_update's four census lines,
  * cmds/diff.c get_status_message_from_item, cmds/sync.c cmd_sync's note,
- * cmds/status.c status_print_workspace's Issues hint); the Displaced paths header,
+ * cmds/status.c status_print_workspace's Issues hint), and where the squatter
+ * is dotta's own copy the first two add its state in the squatter's own words —
+ * "changed in Git", "changed in Git and on disk"; the Displaced paths header,
  * where the word is grounded, spells the squatter out instead.
  *
  * Readers: workspace_item_route, core/cleanup.c cleanup_verdict, core/deploy.c
@@ -262,8 +281,10 @@ typedef enum {
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */
-    WORKSPACE_DISPLACED_TRACKED,   /* Beneath a squatter a tracked row claims */
-    WORKSPACE_DISPLACED_DERIVED,   /* Beneath a squatter an ancestor claim holds */
+    WORKSPACE_DISPLACED_TRACKED,   /* Beneath the user's squatter a tracked row claims */
+    WORKSPACE_DISPLACED_DERIVED,   /* Beneath the user's squatter an ancestor claim holds */
+    WORKSPACE_DISPLACED_STALE,     /* Beneath dotta's own copy Git moved past, untouched */
+    WORKSPACE_DISPLACED_CONFLICT,  /* Beneath dotta's own copy Git moved past, edited since */
     WORKSPACE_DISPLACED_RECORD     /* Beneath a squatter only a record remembers — orphans alone */
 } workspace_displaced_t;
 
@@ -817,16 +838,18 @@ typedef struct {
  * arm alone.
  */
 typedef enum {
-    WORKSPACE_ROUTE_CLEAN,             /* No divergence, no reassignment */
-    WORKSPACE_ROUTE_DISPLACED_TRACKED, /* Through a squatter a tracked row claims (apply --force) */
-    WORKSPACE_ROUTE_DISPLACED_DERIVED, /* … an ancestor claim holds ('dotta update <dir>') */
-    WORKSPACE_ROUTE_UNVERIFIABLE,      /* DIVERGENCE_UNVERIFIED — dotta could not look */
-    WORKSPACE_ROUTE_CONFLICT,          /* (STALE ∨ CLAIM_MOVED) ∧ CONTENT — both sides moved */
-    WORKSPACE_ROUTE_STALE,             /* STALE ∨ CLAIM_MOVED alone — Git moved, disk did not */
-    WORKSPACE_ROUTE_KIND,              /* TYPE the copy cannot commit, on a row a plan can hold */
-    WORKSPACE_ROUTE_KIND_DERIVED,      /* … on a rung dotta only passes through — never planned */
-    WORKSPACE_ROUTE_CAPTURE,           /* Any other divergence — update's to commit */
-    WORKSPACE_ROUTE_REASSIGNED         /* No divergence; the record names another profile */
+    WORKSPACE_ROUTE_CLEAN,              /* No divergence, no reassignment */
+    WORKSPACE_ROUTE_DISPLACED_TRACKED,  /* Beneath the user's squatter a tracked row claims (apply --force) */
+    WORKSPACE_ROUTE_DISPLACED_DERIVED,  /* … an ancestor claim holds ('dotta update <dir>') */
+    WORKSPACE_ROUTE_DISPLACED_STALE,    /* … dotta's own copy Git moved past, untouched (apply) */
+    WORKSPACE_ROUTE_DISPLACED_CONFLICT, /* … that copy, edited since (apply --force) */
+    WORKSPACE_ROUTE_UNVERIFIABLE,       /* DIVERGENCE_UNVERIFIED — dotta could not look */
+    WORKSPACE_ROUTE_CONFLICT,           /* (STALE ∨ CLAIM_MOVED) ∧ (CONTENT ∨ TYPE) — both moved */
+    WORKSPACE_ROUTE_STALE,              /* STALE ∨ CLAIM_MOVED alone — Git moved, disk did not */
+    WORKSPACE_ROUTE_KIND,               /* TYPE alone the copy cannot commit, a row a plan can hold */
+    WORKSPACE_ROUTE_KIND_DERIVED,       /* … on a rung dotta only passes through — never planned */
+    WORKSPACE_ROUTE_CAPTURE,            /* Any other divergence — update's to commit */
+    WORKSPACE_ROUTE_REASSIGNED          /* No divergence; the record names another profile */
 } workspace_route_t;
 
 /* The table's arity, for an array with one slot per arm. A macro, not an
@@ -840,19 +863,29 @@ typedef enum {
  * Pure in the fields the load wrote once — the displaced class, divergence, kind,
  * occupant, reassignment. No syscall, no options; first match wins:
  *
- *   displaced, TRACKED       DISPLACED_TRACKED — a squatter a tracked row
- *                            claims stands above the path, so nothing there was
- *                            looked at and the item carries no bit for the arms
- *                            below to rank: no verdict can outrank the fact that
- *                            voided every look (deploy's ANCESTOR rung and
+ *   displaced, TRACKED       DISPLACED_TRACKED — the user's squatter a tracked
+ *                            row claims stands above the path, so nothing there
+ *                            was looked at and the item carries no bit for the
+ *                            arms below to rank: no verdict can outrank the fact
+ *                            that voided every look (deploy's ANCESTOR rung and
  *                            cleanup_verdict's displaced arm rank it the same
  *                            way). apply --force replaces the squatter and writes
  *                            the row fresh beneath it.
- *   displaced, DERIVED       DISPLACED_DERIVED — the same, beneath a rung
- *                            dotta only passes through, which no plan holds:
- *                            'dotta update <dir>' re-derives the way there. RECORD
- *                            stands on no deployed item (the reach rule,
- *                            workspace_displaced_t), so the two view classes
+ *   displaced, DERIVED       DISPLACED_DERIVED — the same, beneath the user's
+ *                            squatter at a rung dotta only passes through, which
+ *                            no plan holds: 'dotta update <dir>' re-derives the
+ *                            way there.
+ *   displaced, STALE         DISPLACED_STALE — the same, beneath dotta's own copy
+ *                            Git moved past, untouched, at a row of either class:
+ *                            apply replaces it unasked (a rung's promoted into
+ *                            the plan, core/deploy.h deploy_plan_build) and writes
+ *                            the row fresh beneath it.
+ *   displaced, CONFLICT      DISPLACED_CONFLICT — the same, beneath that copy
+ *                            edited since: apply --force replaces it. Each class
+ *                            is its squatter's own route inherited (KIND,
+ *                            KIND_DERIVED, STALE, CONFLICT below). RECORD stands
+ *                            on no deployed item (the reach rule,
+ *                            workspace_displaced_t), so the four view classes
  *                            are the whole test.
  *   DIVERGENCE_UNVERIFIED    UNVERIFIABLE — a bit the analysis could not
  *                            settle outranks the ones it could (the precedence
@@ -868,11 +901,13 @@ typedef enum {
  *                            it, is the item's fault (workspace_fault_t); the
  *                            route does not read it — one verb, three words.
  *   (STALE ∨ CLAIM_MOVED)    CONFLICT — both sides moved since dotta last
- *     ∧ CONTENT              reconciled: the edit is real, but update will not
- *                            commit over a move Git made — its capture takes
- *                            the item whole, bytes and claims — and apply skips
- *                            the row rather than overwrite the edit without
- *                            --force. Neither verb's by default; the user decides.
+ *     ∧ (CONTENT ∨ TYPE)     reconciled: the edit is real — of the bytes, or of
+ *                            the kind (TYPE beside STALE, the frame across kinds)
+ *                            — but update will not commit over a move Git made
+ *                            — its capture takes the item whole, bytes and claims
+ *                            — and apply skips the row rather than overwrite
+ *                            the edit without --force. Neither verb's by default;
+ *                            the user decides.
  *   STALE ∨ CLAIM_MOVED      STALE — Git moved past what dotta last reconciled,
  *     alone                  the bytes or a claim, and disk did not follow:
  *                            overwriting loses nothing, so it is apply's to bring,
@@ -882,16 +917,17 @@ typedef enum {
  *                            A claim naming an owner this host cannot resolve
  *                            reads here too: no run here brings it, and apply
  *                            is the verb that says why every time it is run.
- *   TYPE, non-capturable     KIND — a kind mismatch the copy cannot commit, on
- *                            a row a plan can hold: a tracked directory row's
- *                            type change (the walk's race guard refuses it — a
- *                            symlink would stat as its target and launder the
- *                            target's attributes into metadata), or a file row
- *                            occupied by a directory, FIFO, socket, or device.
- *                            Resolution is explicit and the user's: apply --force
- *                            replaces what the run converges, remove untracks it.
- *   TYPE on a derived rung   KIND_DERIVED — the same mismatch on a directory
- *                            dotta only passes through: neither planned nor named,
+ *   TYPE alone,              KIND — the user's kind mismatch (no base, or none
+ *     non-capturable         Git moved) that the copy cannot commit, on a row a
+ *                            plan can hold: a tracked directory row's type change
+ *                            (the walk's race guard refuses it — a symlink would
+ *                            stat as its target and launder the target's attributes
+ *                            into metadata), or a file row occupied by a directory,
+ *                            FIFO, socket, or device. Resolution is explicit
+ *                            and the user's: apply --force replaces what the
+ *                            run converges, remove untracks it.
+ *   TYPE alone on a          KIND_DERIVED — the same mismatch on a directory
+ *     derived rung           dotta only passes through: neither planned nor named,
  *                            so no flag lifts it and no decision pends. One verb
  *                            — the named re-derivation whose chain meets the
  *                            squatter drops the claim ('dotta update <dir>',
@@ -903,8 +939,8 @@ typedef enum {
  *                            file row's tracked field being a don't-care.
  *   any other divergence     CAPTURE — the user's own, bytes or a claim Git did
  *                            not move: update's to commit. A file row's file ↔
- *                            symlink stays here: the copy commits it as the new
- *                            kind.
+ *                            symlink Git did not move stays here: the copy commits
+ *                            it as the new kind.
  *   none, record disagrees   REASSIGNED — a pending reassignment apply
  *                            acknowledges.
  *   none                     CLEAN.
@@ -1243,10 +1279,13 @@ const workspace_item_t *workspace_find(
  * row whose class names the claim, over a directory record no row stands at that
  * another kind of node stands in the place of, or over any path it looks at — a
  * record's or a row's — where a link stands with an orphan beneath it, noted
- * where it was found, so the claim is the producer's and is never re-derived:
- * an item the squatted directory reaches carries it as its displaced class —
- * the outermost's, where two reach the item — and a caller holding a path is
- * lent the element itself (workspace_squatted_ancestor).
+ * where it was found, so the claim is the producer's and is never re-derived: a
+ * view row's is refined once by the directory analysis that took the look, before
+ * any look beneath — dotta's own copy Git moved past, untouched or edited
+ * (workspace.c workspace_analyze_directory) — and an item the squatted directory
+ * reaches carries it as its displaced class — the outermost's, where two reach
+ * the item — and a caller holding a path is lent the element itself
+ * (workspace_squatted_ancestor).
  *
  * The workspace's own list element, lent: the list is one arena block, sized by
  * the partition for every item that could note one and never grown, so a pointer
@@ -1258,7 +1297,7 @@ const workspace_item_t *workspace_find(
 typedef struct {
     const char *filesystem_path;  /* The row's or the record's (borrowed) */
     size_t len;                   /* strlen(filesystem_path): the prefix of every path beneath it */
-    workspace_displaced_t claim;  /* TRACKED / DERIVED (a view row's), RECORD (a record's) */
+    workspace_displaced_t claim;  /* A view row's class, TRACKED to CONFLICT; RECORD, a record's */
 } workspace_squatted_t;
 
 /**
@@ -1342,8 +1381,8 @@ const workspace_squatted_t *workspace_squatted_ancestor(
  *   1. "type" (RED) - File type changed (symlink ↔ regular), most severe
  *   2. "modified" (YELLOW) - Disk content moved away from what dotta confirmed
  *   3. "stale" (CYAN when alone: apply-side work, like "undeployed") - Git moved
- *      past what dotta last reconciled, the bytes or a claim; next to "modified"
- *      it names a conflict and the primary tag's colour stands
+ *      past what dotta last reconciled, the bytes, the kind or a claim; next to
+ *      "modified" or "type" it names a conflict and the primary tag's colour stands
  *   4. Secondary: "mode", "ownership" - the claim axes that differ, whoever moved
  *      them; "unencrypted" - the blob against the policy, beside "displaced" too
  *   5. "locked" / "unreadable" / "unverified" (MAGENTA when still the default) -
@@ -1558,21 +1597,21 @@ error_t workspace_learn_mode(
  *   is the path's first write; where one of another kind stands — a node the
  *   look found gone — it is written whole over that record wherever no verdict
  *   reads it: under a directory row always, the directory analysis reading no
- *   base; under a file row where the record holds no confirmed pair, or where
- *   the load learned the row's content, which leaves the pair nothing to decide.
- *   A gone node's pair the load measured a difference from, or could not read
- *   past, stays: it is the base both sides of a conflict moved from, or the next
- *   readable load's (core/workspace.c workspace_analyze_file), and the path is
- *   observed once a load finds disk the row's, or apply writes it. Never owned:
- *   a gone node's stamp vouches for a node dotta never wrote there, and apply
- *   adopts a file as it adopts one with no record. A node of another kind than
- *   the row's is no observation: the record would name the row's kind, and the
- *   absence rung reads that as the node dotta saw. The record's one observation,
- *   the load's, because the analysis is where presence is established: every
- *   active path whose look found its row's own kind holds a record of that kind
- *   once the flush has run, but where a gone node's pair is the verdict's base,
- *   and a path the run makes afterwards is an ownership event (workspace_anchor),
- *   not an observation.
+ *   base where the directory stands; under a file row where the record holds no
+ *   confirmed pair, or where the load learned the row's content, which leaves
+ *   the pair nothing to decide. A gone node's pair the load measured a difference
+ *   from, or could not read past, stays: it is the base both sides of a conflict
+ *   moved from, or the next readable load's (core/workspace.c
+ *   workspace_analyze_file), and the path is observed once a load finds disk
+ *   the row's, or apply writes it. Never owned: a gone node's stamp vouches for
+ *   a node dotta never wrote there, and apply adopts a file as it adopts one
+ *   with no record. A node of another kind than the row's is no observation:
+ *   the record would name the row's kind, and the absence rung reads that as
+ *   the node dotta saw. The record's one observation, the load's, because the
+ *   analysis is where presence is established: every active path whose look found
+ *   its row's own kind holds a record of that kind once the flush has run, but
+ *   where a gone node's pair is the verdict's base, and a path the run makes
+ *   afterwards is an ownership event (workspace_anchor), not an observation.
  *
  *   The learning — what the analyses established that the record lacks, by axis
  *   (workspace_item_t's confirmation), onto the record the load read or the

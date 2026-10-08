@@ -222,10 +222,12 @@ typedef struct {
  * Settle the candidates a removal let go — the one spelling of the fate rule
  *
  * For each candidate the subject is its record: one whose path the view that
- * remains still provides is a fallback — kept, it reads [reassigned] until apply
- * acknowledges it; one the view no longer provides takes the fate the user chose
- * — --delete-files orders the copy pruned at the next apply, the default releases
- * (the record retires, and the copy stays on disk — core/state.h state_retire).
+ * remains still provides is a fallback — kept, it reads [reassigned], or [stale]
+ * where the row that stays is of another kind (dotta's own copy the row replaces),
+ * until apply acknowledges or replaces it; one the view no longer provides takes
+ * the fate the user chose — --delete-files orders the copy pruned at the next
+ * apply, the default releases (the record retires, and the copy stays on disk —
+ * core/state.h state_retire).
  *
  * Asked under the caller's lock, of candidates read under it: the fates are written
  * blind (state_order_prune, state_retire), so the record they are decided from
@@ -919,7 +921,7 @@ static void remove_print_overlaps(
     } else if (delete_files) {
         /* The record rule in one clause: the fate applies only where nothing
          * still provides the path — a remaining claimant makes it a fallback,
-         * reassigned on apply, not pruned. */
+         * reassigned or replaced on apply, never pruned. */
         output_info(
             out, OUTPUT_NORMAL,
             "Paths deployed from '%s' will be pruned on the next 'dotta apply' "

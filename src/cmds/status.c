@@ -293,17 +293,19 @@ static void status_print_profiles(
         if (contradicted_shown) {
             /* Keyed to the shape the -v line names, one remedy a line. The
              * directory is kept by taking the file, which names a blob and takes
-             * it alone (cmds/remove.c remove_resolve); a machine whose disk holds
-             * the file moves it aside by hand, or the file's record stays under
-             * the directory's row as the user's squatter and apply lands nothing
-             * beneath it. The file is kept by taking the directory: by its own
-             * path where it lies beneath the file — a path that names no blob —
-             * and, where the two are one path, which would name the file, by
-             * capturing the file over it. */
+             * it alone (cmds/remove.c remove_resolve); on a machine whose disk
+             * holds the file, its record stays under the directory's row as dotta's
+             * own copy, which apply replaces with the directory — unasked where
+             * the copy is untouched, under --force where it was edited (the frame
+             * across kinds, core/workspace.h workspace_displaced_t). The file
+             * is kept by taking the directory: by its own path where it lies
+             * beneath the file — a path that names no blob — and, where the two
+             * are one path, which would name the file, by capturing the file
+             * over it. */
             output_hintline(
                 out, OUTPUT_NORMAL,
                 "  contradicted  - 'dotta remove <profile> <file>' keeps the directory, "
-                "the file moved aside by hand where it stands"
+                "which apply then makes in the file's place"
             );
             output_hintline(
                 out, OUTPUT_NORMAL,
@@ -495,6 +497,8 @@ static void status_print_workspace(
                 switch (workspace_item_route(item)) {
                     case WORKSPACE_ROUTE_DISPLACED_TRACKED:
                     case WORKSPACE_ROUTE_DISPLACED_DERIVED:
+                    case WORKSPACE_ROUTE_DISPLACED_STALE:
+                    case WORKSPACE_ROUTE_DISPLACED_CONFLICT:
                         /* Not looked at, so no path bit of its own — the squatter's
                          * section names the way out */
                         workspace_buckets_add(buckets, item, &displaced);
@@ -619,13 +623,13 @@ static void status_print_workspace(
     }
 
     /* Section 1: Conflicts — the buckets no default verb resolves lead; this
-     * one's header carries the remedy, true of every row beneath it (content
-     * moved on both sides, or a kind the copy cannot commit on a row a plan can
-     * hold — a squatted rung dotta only passes through has the next section,
-     * since no flag lifts it). `add --force` is qualified because it takes one
-     * of the two and not the other: a kind change is a re-shaping of the tree
-     * and add refuses it by the claim standing at the path, naming `dotta remove`
-     * (cmds/add.c) */
+     * one's header carries the remedy, true of every row beneath it (content or
+     * a kind moved on both sides, or a kind of the user's the copy cannot commit
+     * on a row a plan can hold — a rung dotta only passes through, which the
+     * user squats, has the next section, since no flag lifts it). `add --force`
+     * is qualified because it takes one of the two and not the other: a kind
+     * change is a re-shaping of the tree and add refuses it by the claim standing
+     * at the path, naming `dotta remove` (cmds/add.c) */
     if (conflicts.count > 0) {
         output_list_t *list = output_list_create(
             out, "Conflicts",
@@ -697,21 +701,23 @@ static void status_print_workspace(
     }
 
     /* Section 3: Displaced paths — beneath a squatter one of the two sections
-     * above holds (the route's DISPLACED_* arms, the claimant's): nothing there
-     * was looked at, so the line shows [displaced] and only what no look decides
-     * or disproves beside it (the blob's verdict, a reassignment), and the header
-     * sends the user to the squatter, whose own section names its verb. The header
-     * opens with the predicate, as every sentence about such a path does, and
-     * spells the squatter out where the other four name it with the word — this
-     * is where the word is grounded (core/workspace.h workspace_displaced_t).
-     * Named by section rather than "above": under -p the squatter's row may be
-     * filtered while a child is not, and the bare status lists both. */
+     * above holds, or Undeployed changes below where it is dotta's own copy Git
+     * moved past, untouched (the route's DISPLACED_* arms, the squatter's own
+     * route inherited): nothing there was looked at, so the line shows [displaced]
+     * and only what no look decides or disproves beside it (the blob's verdict,
+     * a reassignment), and the header sends the user to the squatter, whose own
+     * section names its verb. The header opens with the predicate, as every
+     * sentence about such a path does, and spells the squatter out where the
+     * other four name it with the word — this is where the word is grounded
+     * (core/workspace.h workspace_displaced_t). Named by section rather than
+     * "above": under -p the squatter's row may be filtered while a child is not,
+     * and the bare status lists both. */
     if (displaced.count > 0) {
         output_list_t *list = output_list_create(
             out, "Displaced paths",
             "not looked at: a different kind stands at a directory above "
             "them; resolve that directory first (\"dotta status\" lists "
-            "it under Conflicts or Squatted ancestors)"
+            "it under Conflicts, Squatted ancestors or Undeployed changes)"
         );
 
         for (size_t i = 0; i < displaced.count; i++) {

@@ -1534,10 +1534,13 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * the conflicts update refuses and the user must decide; it reports,
          * and never blocks on, what no verb takes by default and what one named
          * verb resolves. A squatted tracked directory is a decision (--force,
-         * add --force, remove) and blocks; a squatted rung dotta only passes
-         * through has one verb and no decision — the same fact that gives it
-         * its own status section — and blocks nothing; and a child beneath either
-         * is not an edit a pull can conflict with, so it blocks nothing either. */
+         * add --force, remove) and blocks, as dotta's own copy does where the
+         * user edited it and Git moved past it, at a rung as anywhere; a rung
+         * dotta only passes through that the user squats has one verb and no
+         * decision — the same fact that gives it its own status section — and
+         * blocks nothing, as dotta's own copy untouched does, apply's; and a
+         * child beneath any of them is not an edit a pull can conflict with, so
+         * it blocks nothing either. */
         size_t uncommitted_count = 0; /* CAPTURE — update's to commit */
         size_t conflict_count = 0;    /* CONFLICT ∪ KIND — status's Conflicts: no default verb */
         size_t deleted_count = 0;     /* DELETED state — update's to commit */
@@ -1558,6 +1561,8 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                     switch (workspace_item_route(item)) {
                         case WORKSPACE_ROUTE_DISPLACED_TRACKED:
                         case WORKSPACE_ROUTE_DISPLACED_DERIVED:
+                        case WORKSPACE_ROUTE_DISPLACED_STALE:
+                        case WORKSPACE_ROUTE_DISPLACED_CONFLICT:
                             /* Beneath a squatter: nothing there was looked at,
                              * so there is no local edit here for a pull to conflict
                              * with — the squatter's own row is the work, and it
@@ -1577,9 +1582,12 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                         case WORKSPACE_ROUTE_CONFLICT:
                         case WORKSPACE_ROUTE_KIND:
                             /* Neither verb's by default (status's Conflicts):
-                             * both sides moved, or a kind the copy cannot commit.
-                             * update refuses these, so the hints below must not
-                             * send them there. */
+                             * both sides moved — the bytes or the kind, at a
+                             * rung as anywhere: dotta's copy the user edited
+                             * where Git moved past it is the user's decision —
+                             * or a kind the copy cannot commit. update refuses
+                             * these, so the hints below must not send them
+                             * there. */
                             conflict_count++;
                             break;
 
@@ -1780,11 +1788,14 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                     output_info(out, OUTPUT_NORMAL, "Sync cancelled");
                 }
                 if (conflict_count > 0) {
+                    /* The status Conflicts header's remedies, a kind both sides
+                     * moved among the conflicts: add keeps disk's only where the
+                     * kind matches */
                     output_hint(
                         out, OUTPUT_NORMAL,
-                        "Resolve conflicts first: 'dotta diff' shows both sides; "
-                        "'dotta apply --force' keeps Git's, 'dotta add --force' keeps "
-                        "disk's, 'dotta remove' untracks; 'dotta update' commits the rest"
+                        "Resolve conflicts first: 'dotta diff' compares; 'dotta apply "
+                        "--force' keeps Git's, 'dotta add --force' keeps disk's when the "
+                        "kind matches, 'dotta remove' untracks; 'dotta update' commits the rest"
                     );
                 } else {
                     output_hint(

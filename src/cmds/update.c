@@ -1405,13 +1405,16 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     /* What the filter refused, said once — above the exit below, so a workspace
      * whose only divergence is stale explains itself, and above the prompt. One
      * line per refusing arm, read off the partition's counts in the table's order
-     * (workspace_item_route), each naming its route's way out. Two pairs arrive
-     * split from the route by the claim that holds the offender — the same split
-     * apply prints from the fate-borne ancestor_class: the displaced pair
-     * (DISPLACED_TRACKED beneath a planned squatter --force replaces,
-     * DISPLACED_DERIVED beneath a rung the named re-derivation drops) and the
-     * retyped pair (KIND on a row a plan can hold, KIND_DERIVED on a rung dotta
-     * only passes through). */
+     * (workspace_item_route), each naming its route's way out. The displaced
+     * four are the squatter's own route inherited, each naming the squatter's
+     * verb — the split apply prints from the fate-borne ancestor_class:
+     * DISPLACED_TRACKED beneath the user's squatter a plan holds, which --force
+     * replaces; DISPLACED_DERIVED beneath the user's squatter at a rung, which
+     * the named re-derivation drops; DISPLACED_STALE and DISPLACED_CONFLICT beneath
+     * dotta's own copy Git moved past, said in the squatter's own words, which
+     * apply replaces unasked and under --force. And the retyped pair arrives
+     * split from the route by the claim that holds the offender (KIND on a row
+     * a plan can hold, KIND_DERIVED on a rung dotta only passes through). */
     const size_t *refused = partition.refused;
 
     if (refused[WORKSPACE_ROUTE_DISPLACED_TRACKED] > 0) {
@@ -1430,6 +1433,24 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             "'dotta update <dir>' re-derives the way there",
             refused[WORKSPACE_ROUTE_DISPLACED_DERIVED],
             refused[WORKSPACE_ROUTE_DISPLACED_DERIVED] == 1 ? "" : "s"
+        );
+    }
+    if (refused[WORKSPACE_ROUTE_DISPLACED_STALE] > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu path%s skipped: not looked at, beneath a squatted directory changed "
+            "in Git — 'dotta apply' replaces the squatter first",
+            refused[WORKSPACE_ROUTE_DISPLACED_STALE],
+            refused[WORKSPACE_ROUTE_DISPLACED_STALE] == 1 ? "" : "s"
+        );
+    }
+    if (refused[WORKSPACE_ROUTE_DISPLACED_CONFLICT] > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu path%s skipped: not looked at, beneath a squatted directory changed "
+            "in Git and on disk — 'dotta apply --force' replaces the squatter first",
+            refused[WORKSPACE_ROUTE_DISPLACED_CONFLICT],
+            refused[WORKSPACE_ROUTE_DISPLACED_CONFLICT] == 1 ? "" : "s"
         );
     }
     if (refused[WORKSPACE_ROUTE_UNVERIFIABLE] > 0) {
@@ -1474,11 +1495,14 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
     }
     if (refused[WORKSPACE_ROUTE_CONFLICT] > 0) {
+        /* The status Conflicts header's own words, a kind both sides moved among
+         * them: a directory row's too, and add keeps disk's only where the kind
+         * matches, refusing a change across file and directory */
         output_info(
             out, OUTPUT_NORMAL,
-            "%zu file%s skipped: changed in Git and on disk — 'dotta diff' shows "
-            "Git's version against disk, 'dotta apply --force' keeps Git's, "
-            "'dotta add --force' keeps disk's",
+            "%zu path%s skipped: changed in Git and on disk — 'dotta diff' compares, "
+            "'dotta apply --force' keeps Git's, 'dotta add --force' keeps disk's "
+            "when the kind matches, 'dotta remove' untracks",
             refused[WORKSPACE_ROUTE_CONFLICT],
             refused[WORKSPACE_ROUTE_CONFLICT] == 1 ? "" : "s"
         );

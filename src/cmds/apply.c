@@ -38,25 +38,27 @@
  * the rows beneath it, which is the reading order — capped like every preview
  * list (one skipped squatter takes its whole subtree with it, so this one has a
  * multiplier cleanup's uncapped block does not). The header is the block's only
- * prose, as it is in every block on both sides: no one sentence covers both
- * families here — the consent skips --force lifts and the hard blocks it does
- * not — and "not deployed" would say the header again. Each row names its own
- * reason, and the remedies close.
+ * prose, as it is in every block on both sides: no one sentence covers the three
+ * classes here — the consent skips --force lifts, the deferral the next run lifts
+ * by itself, and the hard blocks no flag lifts (core/deploy.h deploy_skip_reason_t)
+ * — and "not deployed" would say the header again. Each row names its own reason,
+ * and the remedies close.
  *
- * Two line families. The landing and occupancy reasons keep their exact
- * parentheticals — facts about the path's surroundings, no profile. The row-fact
- * reasons read the way cleanup's skip block three lines away reads: a short label,
- * then the profile whose claim goes undelivered — red where content or type moved
- * away from the row, yellow where dotta cannot vouch for what stands there. A
- * CONTENT label reads the row's route (workspace_item_route — one producer for
- * the characterization; deploy keeps its decision): modified locally where only
- * disk moved, changed in Git and on disk where both sides did. An UNREADABLE
- * label reads the item's fault the same way (workspace_fault_t — locked,
- * unreadable, or the plain "cannot verify"). Every skip carries its row's item
- * (deploy_skip_t), and both reasons are path rungs, asked only where the ancestry
- * did not answer, so each reads a look at the row's own path — a CONTENT one
- * DEPLOYED, since no path bit survives absence, which makes the route read total
- * here.
+ * Two line families. The landing, occupancy and ancestry reasons keep their exact
+ * parentheticals — facts about the path's surroundings, no profile — a row waiting
+ * beneath a link this run places among them, its glyph the cyan of no failure
+ * (THROUGH, the link named). The row-fact reasons read the way cleanup's skip
+ * block three lines away reads: a short label, then the profile whose claim goes
+ * undelivered — red where content or type moved away from the row, yellow where
+ * dotta cannot vouch for what stands there. A CONTENT label reads the row's route
+ * (workspace_item_route — one producer for the characterization; deploy keeps
+ * its decision): modified locally where only disk moved, changed in Git and on
+ * disk where both sides did. An UNREADABLE label reads the item's fault the same
+ * way (workspace_fault_t — locked, unreadable, or the plain "cannot verify").
+ * Every skip carries its row's item (deploy_skip_t), and both reasons are path
+ * rungs, asked only where the ancestry did not answer, so each reads a look at
+ * the row's own path — a CONTENT one DEPLOYED, since no path bit survives absence,
+ * which makes the route read total here.
  *
  * The remedies close the block, indented under the rows the way every block closes,
  * each gated by what is actually present — the reasons, and for a named squatter
@@ -83,9 +85,12 @@
  * row (cmds/update.c update_partition's kind refusal). It stops there: the 'dotta
  * add --force' a Git-moved row needs is what update's own refusal says at the
  * moment the user meets it, and '-e' is how to ignore a skip, not how to remedy
- * one. The block sits between the deploy preview and cleanup's, so each engine
- * tells its story the same way — what it will do, then what it will not and why.
- * No total-count line: the exit error's message is the count's one home.
+ * one. The deferral's closer follows the consent's and precedes the hand's: what
+ * the next run takes, 'dotta apply' once the link stands — true of a preview
+ * too, which places no link — and then what is the user's to do. The block sits
+ * between the deploy preview and cleanup's, so each engine tells its story the
+ * same way — what it will do, then what it will not and why. No total-count line:
+ * the exit error's message is the count's one home.
  */
 static void apply_print_deploy_skips(
     output_t *out, const config_t *config, const deploy_preflight_t *verdicts
@@ -93,11 +98,12 @@ static void apply_print_deploy_skips(
     if (verdicts->skipped.count == 0) return;
 
     /* The block opens at the level of its lowest row: a row the run could not
-     * deliver is one the exit counts (core/deploy.h deploy_skip_needs_force),
-     * told at every level, and a row --force would take is the report's */
+     * deliver is one the exit counts (core/deploy.h deploy_skip_undelivered),
+     * told at every level, and a row --force or the next run would take is the
+     * report's */
     output_verbosity_t header_level = OUTPUT_NORMAL;
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
-        if (!deploy_skip_needs_force(verdicts->skipped.entries[i].reason)) {
+        if (deploy_skip_undelivered(verdicts->skipped.entries[i].reason)) {
             header_level = OUTPUT_QUIET;
             break;
         }
@@ -110,10 +116,18 @@ static void apply_print_deploy_skips(
 
         /* The row's level, by the split the exit reads: one it counts names its
          * own path and cause, at every level */
-        const output_verbosity_t row_level = deploy_skip_needs_force(s->reason)
-            ? OUTPUT_NORMAL : OUTPUT_QUIET;
+        const output_verbosity_t row_level = deploy_skip_undelivered(s->reason)
+            ? OUTPUT_QUIET : OUTPUT_NORMAL;
 
         switch (s->reason) {
+            case DEPLOY_SKIP_THROUGH: {
+                output_print(
+                    out, row_level, "  {cyan}→{reset} %s (beneath %.*s, a link this run places)\n",
+                    path, (int) s->ancestor, path
+                );
+                break;
+            }
+
             case DEPLOY_SKIP_PERMISSION: {
                 if (s->ancestor) {
                     output_print(
@@ -247,18 +261,20 @@ static void apply_print_deploy_skips(
     }
 
     /* The remedies, one line per family, each printed once: the consent line
-     * when any skip is --force's to lift (the class the exit contract reads,
+     * when any skip is --force's to lift (the consent class,
      * deploy_skip_needs_force), naming its cost; the disk-wins direction only
      * when a CONTENT skip is present — 'dotta update' refuses a retyped row
      * (cmds/update.c update_partition's kind refusal), so a TYPE-only block must
-     * not be told to use it; the incapacities a hand can fix split by the claim
-     * the skip carries (ancestor_class) — widening the scope plans a tracked
-     * ancestor, and PERMISSION, OCCUPIED and a squatter nothing claims read the
-     * same line; a derived claim is never planned, so its second way out is the
-     * named re-derivation, whose own preview names what the re-capture would
-     * commit. Last, UNREADABLE's closing — an unreadable path is not "in the
-     * way", and a fix-or-widen instruction would misname a refusal to judge what
-     * could not be seen. */
+     * not be told to use it; the deferral's line when a row waits beneath a link
+     * this run places, what the next run takes before what a hand does; the
+     * incapacities a hand can fix split by the claim the skip carries
+     * (ancestor_class) — widening the scope plans a tracked ancestor, and
+     * PERMISSION, OCCUPIED and a squatter nothing claims read the same line; a
+     * derived claim is never planned, so its second way out is the named
+     * re-derivation, whose own preview names what the re-capture would commit.
+     * Last, UNREADABLE's closing — an unreadable path is not "in the way", and
+     * a fix-or-widen instruction would misname a refusal to judge what could
+     * not be seen. */
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         if (deploy_skip_needs_force(verdicts->skipped.entries[i].reason)) {
             output_info(
@@ -273,6 +289,15 @@ static void apply_print_deploy_skips(
             output_info(
                 out, OUTPUT_NORMAL,
                 "  To keep what is on disk instead: 'dotta update <path>'"
+            );
+            break;
+        }
+    }
+    for (size_t i = 0; i < verdicts->skipped.count; i++) {
+        if (verdicts->skipped.entries[i].reason == DEPLOY_SKIP_THROUGH) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  Run 'dotta apply' once the link stands to deploy them through it"
             );
             break;
         }
@@ -2933,24 +2958,26 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     hook_fire_post(config, out, &hook_inv);
 
     /* The receipt is printed; what remains is the return value. The plan is the
-     * run's promise: a row the user's own flags withheld (-e, --skip-existing)
-     * or that dotta skipped for want of consent (--force) was never promised,
+     * run's promise: a row the user's own flags withheld (-e, --skip-existing),
+     * that dotta skipped for want of consent (--force), or that waits for the
+     * next run's look beneath a link this run placed (THROUGH) was never promised,
      * and the receipt is the whole of its report; a row the run planned and could
-     * not deliver was promised, and the exit code says so — the incapacity skips,
-     * and the rows the run could not land (the receipt's failed bucket) — as
-     * does a directory the run widened for its writes and could not narrow back
-     * (the receipt's held), a path the run leaves off its claim as surely as a
-     * row it could not land, and an orphan the run tried to prune and could not
-     * (failed_prunes, off cleanup's receipt): one clause per engine. The execution
-     * halves are facts a dry run does not have, so `apply -n` predicts the
-     * preflight half alone. Every skip and failure was already rendered where
-     * it happened, so the error carries the one fact the receipt does not — that
-     * the run did not keep its promise. ERR_FS, not ERR_CONFLICT: the class is
-     * filesystem incapacity, and a conflict no longer ends the run. */
+     * not deliver was promised, and the exit code says so — the incapacity skips
+     * (core/deploy.h deploy_skip_undelivered), and the rows the run could not
+     * land (the receipt's failed bucket) — as does a directory the run widened
+     * for its writes and could not narrow back (the receipt's held), a path the
+     * run leaves off its claim as surely as a row it could not land, and an orphan
+     * the run tried to prune and could not (failed_prunes, off cleanup's receipt):
+     * one clause per engine. The execution halves are facts a dry run does not
+     * have, so `apply -n` predicts the preflight half alone. Every skip and failure
+     * was already rendered where it happened, so the error carries the one fact
+     * the receipt does not — that the run did not keep its promise. ERR_FS, not
+     * ERR_CONFLICT: the class is filesystem incapacity, and a conflict no longer
+     * ends the run. */
     size_t undelivered = deploy_receipt->failed.count + deploy_receipt->held.count;
 
     for (size_t i = 0; i < deploy_verdicts->skipped.count; i++) {
-        if (!deploy_skip_needs_force(deploy_verdicts->skipped.entries[i].reason)) {
+        if (deploy_skip_undelivered(deploy_verdicts->skipped.entries[i].reason)) {
             undelivered++;
         }
     }

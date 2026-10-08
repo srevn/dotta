@@ -526,15 +526,26 @@ static bool directory_is_deployable(
 }
 
 /**
- * The fate a squatted ancestor imposes on a planned row
+ * The fate a planned row takes from what the run leaves above it
  *
- * The one question the ladder asks before any probe of its own, because a squatted
- * directory row above the path invalidates every probe beneath it — the landing
- * check's included: a symlink squatting a claimed directory points somewhere
- * real and writable, so the landing probe would wave the write through and the
- * run would deploy INTO the link's target, over whatever the user keeps there.
- * The workspace lends the offender whole (workspace_squatted_ancestor — the
- * outermost, fate-blind, with the claim the load noted beside it); this splits
+ * The one question the ladder asks before any probe of its own, because what
+ * the run does above the path decides whether any look at it holds. Two things
+ * above a path void the look, each asked of the fates decided so far: a link
+ * this run places, then a squatted directory.
+ *
+ * A link this run places above the path moves it to where the link leads, a place
+ * no look of this load has seen: the look the load took beneath it answers for
+ * the place the link moves the path from. Nothing beneath it is decided this
+ * run — THROUGH, the link named: the row waits for the next run's look, which
+ * goes through the link, and no flag lifts it, none being needed (the deferral,
+ * deploy_skip_reason_t).
+ *
+ * A squatted directory row above the path invalidates every probe beneath it —
+ * the landing check's included: a symlink squatting a claimed directory points
+ * somewhere real and writable, so the landing probe would wave the write through
+ * and the run would deploy INTO the link's target, over whatever the user keeps
+ * there. The workspace lends the offender whole (workspace_squatted_ancestor —
+ * the outermost, fate-blind, with the claim the load noted beside it); this splits
  * the answer by what the run itself decided about that ancestor, the premise
  * the plan carried by scope now asked of the verdicts, so it is exactly true.
  * One arm per fate, in decision order, each writing what it decides:
@@ -568,24 +579,44 @@ static bool directory_is_deployable(
  * The claimant is written in the no-fate arm alone — a row beneath a skipped
  * squatter leaves the class NONE, its remedy being that squatter's own line's
  * (deploy_ancestor_class_t). Called before check_landing by the ladder, and once
- * more per ancestor candidate; the ladder decides in path order, so a squatted
- * ancestor's own fate is always already taken when a row beneath it is reached.
- * The skip and *out_absent are written only when an ancestor decides — the caller's
- * zero skip and false stand otherwise, and the row judges itself.
+ * more per ancestor candidate; the ladder decides in path order, so the fate of
+ * a placed link or a squatted ancestor is always already taken when a row beneath
+ * it is reached. The skip and *out_absent are written only when an ancestor decides
+ * — the caller's zero skip and false stand otherwise, and the row judges itself.
  *
  * @param ws Workspace, for the squatted-ancestor answer (must not be NULL)
  * @param verdicts The fates decided so far (must not be NULL)
+ * @param links The links this run places that move their path, decided so far,
+ *        each its verdict's item (must not be NULL)
  * @param path Planned path (must not be NULL)
- * @param skip The row's skip in the making (must not be NULL): the reason — TYPE
- *        or ANCESTOR — the named squatter's prefix length, and where the run
- *        gave the squatter no fate the claim at it
+ * @param skip The row's skip in the making (must not be NULL): the reason —
+ *        THROUGH, TYPE or ANCESTOR — the named link's or squatter's prefix length,
+ *        and where the run gave the squatter no fate the claim at it
  * @param out_absent Whether the run empties the path before writing it (must
  *        not be NULL)
  */
 static void check_ancestry(
-    const workspace_t *ws, const deploy_preflight_t *verdicts, const char *path,
-    deploy_skip_t *skip, bool *out_absent
+    const workspace_t *ws, const deploy_preflight_t *verdicts, const ptr_array_t *links,
+    const char *path, deploy_skip_t *skip, bool *out_absent
 ) {
+    /* A link this run places above the path, asked before the squatter: one the
+     * run replaces above the link empties the path only down to the link, which
+     * is made in the new directory and still stands between the row and its write.
+     * At most one stands above a path — a link beneath another's path waits itself,
+     * and is never placed — so the first found is the one. A link the run does
+     * not place leaves the load's look standing: through the link where it stands,
+     * in whatever stands at its path where it does not. */
+    for (size_t i = 0; i < links->count; i++) {
+        const workspace_item_t *link = links->entries[i];
+        size_t len = strlen(link->filesystem_path);
+
+        if (str_path_beneath(path, link->filesystem_path, len)) {
+            skip->reason = DEPLOY_SKIP_THROUGH;
+            skip->ancestor = len;
+            return;
+        }
+    }
+
     const workspace_squatted_t *above = workspace_squatted_ancestor(ws, path);
 
     if (!above) return;
@@ -943,20 +974,26 @@ error_t deploy_preflight(
         arena, files.count + dirs.count, sizeof(deploy_skip_t)
     );
 
+    /* The links this run places that move their path, noted as the walk decides
+     * them: what a row beneath one waits on (check_ancestry). Empty on a run
+     * that places none, so the ask is a scan of nothing. */
+    ptr_array_t links;
+    ptr_array_init(&links, arena);
+
     /* Every planned row, in path order, either kind; then the ancestors. A fate
      * is a prediction of what the run will find at the row's path and on the
      * way to it, so it is decided after the fate of every one of the row's
      * ancestors, of either kind — which is all the rungs ask of the fates decided
-     * so far: the squatted directory above the row (check_ancestry) and the
-     * deployable directory its landing stands in (check_landing) are ancestors
-     * of it. The plan's two pending slices are each in path order
-     * (workspace_kind_order), so the walk merges them, and an ancestor, a prefix
-     * of every path beneath it, comes first. core/cleanup's preflight decides
-     * in the order its fates read each other too — there children before parents,
-     * so a directory reads the fates of everything it holds. The verdicts fill
-     * per kind, each in path order, the order deploy_execute acts in within a
-     * kind; the skips and the warnings come out in path order, so a skipped
-     * squatter precedes the rows beneath it.
+     * so far: the link this run places above the row and the squatted directory
+     * above it (check_ancestry), and the deployable directory its landing stands
+     * in (check_landing), are ancestors of it. The plan's two pending slices
+     * are each in path order (workspace_kind_order), so the walk merges them,
+     * and an ancestor, a prefix of every path beneath it, comes first.
+     * core/cleanup's preflight decides in the order its fates read each other
+     * too — there children before parents, so a directory reads the fates of
+     * everything it holds. The verdicts fill per kind, each in path order, the
+     * order deploy_execute acts in within a kind; the skips and the warnings
+     * come out in path order, so a skipped squatter precedes the rows beneath it.
      *
      * The ancestors come last though the run creates them first: which directory
      * rows it may make on the way is derived from the planned rows as a whole,
@@ -971,16 +1008,17 @@ error_t deploy_preflight(
 
         const char *path = item->filesystem_path;
 
-        /* Its ancestry first, before any probe: a squatted directory row above
-         * this path invalidates every look taken beneath it, the landing check's
-         * included. The walk is in path order, so such an ancestor's own fate
-         * is already taken. The row is decided into its skip: each rung that
-         * refuses writes it — the reason, and the ancestor it names with the
-         * claim there — and the row is skipped iff one did. */
+        /* Its ancestry first, before any probe: a link this run places above
+         * this path, or a squatted directory row above it, invalidates every
+         * look taken beneath it, the landing check's included. The walk is in
+         * path order, so such an ancestor's own fate is already taken. The row
+         * is decided into its skip: each rung that refuses writes it — the reason,
+         * and the ancestor it names with the claim there — and the row is skipped
+         * iff one did. */
         deploy_skip_t skip = { .item = item };
         bool absent = false;
 
-        check_ancestry(ws, verdicts, path, &skip, &absent);
+        check_ancestry(ws, verdicts, &links, path, &skip, &absent);
 
         /* The path's rungs, unless its ancestry answered. A row planned as absent
          * is asked none of them: the path is empty once the directory pass has
@@ -1109,6 +1147,17 @@ error_t deploy_preflight(
         v->occupant = occupant;
         v->uid = uid;
         v->gid = gid;
+
+        /* A link placed where its path led elsewhere or nowhere moves every path
+         * beneath it to a place no look of this load has seen (check_ancestry):
+         * one made where no link stood, the occupant it replaces or none, or
+         * the row's own link leading elsewhere (CONTENT, STALE — the one way a
+         * link's target moves). A link the look found leading where the row says
+         * is re-placed for its owner or group alone, and moves nothing. */
+        if (item->row->type == PATH_TYPE_SYMLINK && (occupant != FS_OCCUPANT_SYMLINK ||
+            (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE)))) {
+            ptr_array_push(&links, item);
+        }
     }
 
     /* The ancestors: every directory row the run does not act on, absent as the
@@ -1124,9 +1173,10 @@ error_t deploy_preflight(
      * Every gate reads the verdicts, not the plan: a skipped directory row flows
      * past the first into the candidate pool, and the later gates keep it out —
      * one skipped beneath a squatted ancestor that stays is not a parent this
-     * run can make (the rung's reason), a TYPE-, FOREIGN- or UNREADABLE-skipped
-     * row is not absent (present, as its item read), and a landing-skipped one
-     * has no deployable row beneath it (the invariant, deploy_preflight's doc). */
+     * run can make, nor one beneath a link this run places, never made through
+     * it (the rung's reason), a TYPE-, FOREIGN- or UNREADABLE-skipped row is
+     * not absent (present, as its item read), and a landing-skipped one has no
+     * deployable row beneath it (the invariant, deploy_preflight's doc). */
     for (size_t i = 0; i < all_dirs.count; i++) {
         const workspace_item_t *item = all_dirs.entries[i];
         const char *path = item->filesystem_path;
@@ -1141,9 +1191,9 @@ error_t deploy_preflight(
         deploy_skip_t skip = { .item = item };
         bool absent = false;
 
-        check_ancestry(ws, verdicts, path, &skip, &absent);
+        check_ancestry(ws, verdicts, &links, path, &skip, &absent);
         if (skip.reason != DEPLOY_SKIP_NONE) {
-            continue;   /* skipped beneath a squatted ancestor that stays */
+            continue;   /* beneath a squatted ancestor that stays, or a placed link */
         }
 
         if (!(absent || item->occupant == FS_OCCUPANT_NONE) ||

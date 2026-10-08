@@ -220,12 +220,17 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * listed in precedence order, and the reason is the first that applies, so a
  * row several reasons claim is reported under the one that outranks the rest.
  *
- * Two classes, and the class is the whole of what a consumer needs beyond the
- * label (deploy_skip_needs_force):
+ * Three classes, and the class is the whole of what a consumer needs beyond the
+ * label (deploy_skip_needs_force, deploy_skip_undelivered):
  *
  *   consent      dotta could act and did not, because nothing said to —
  *                TYPE, CONTENT. --force lifts them; the run kept its promise,
  *                so they do not reach the exit code.
+ *   deferral     dotta acts on the next run's look — THROUGH, a row beneath a
+ *                link this run places, beyond which no look of this load went.
+ *                No flag lifts it and none is needed: the next run looks through
+ *                the link. The run kept its promise, so it does not reach the
+ *                exit code either.
  *   incapacity   dotta could not act — PERMISSION, FOREIGN, ANCESTOR,
  *                OCCUPIED, UNREADABLE, OWNERSHIP. No flag lifts them (the posture
  *                cleanup takes towards a released file and a directory's
@@ -238,47 +243,53 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  *                squashes root). What refuses every identity — a read-only
  *                filesystem, an immutable flag — is no skip: the write meets it.
  *
- * The split is deploy's exit contract, and workspace_item_route's UNVERIFIABLE
- * arm (workspace.h) restates its incapacity half from the route side — a change
- * here keeps that description true. cleanup_receipt_t draws the same table from
- * its side, with a third column between these two — attempted, and the world
- * moved — where the engines part: deploy's execute-time refusal (EEXIST, EISDIR,
- * ENOTEMPTY) is a failed row, cleanup's a skipped directory, and both headers
- * say why.
+ * The incapacity class is deploy's exit contract, and workspace_item_route's
+ * UNVERIFIABLE arm (workspace.h) restates it from the route side — a change here
+ * keeps that description true. cleanup_receipt_t draws the exit's table from
+ * its side, with a column between what was never attempted and what errored —
+ * attempted, and the world moved — where the engines part: deploy's execute-time
+ * refusal (EEXIST, EISDIR, ENOTEMPTY) is a failed row, cleanup's a skipped
+ * directory, and both headers say why.
  *
- * Precedence. ANCESTOR ranks first: a look taken through a squatted claimed
- * ancestor is void, so no judgment made through it can outrank the fact — the
- * ancestry rung (check_ancestry) asks it before any probe of the row's own, the
- * landing check included, whose access(2) resolves through a squatting symlink
- * and answers for the target's tree. The reason spans both producers: a squatter
- * at a path no row claims is the landing check's find, one at a directory row's
- * is the rung's — and, since the rung's reach is the view's directory rows rather
- * than the walk's, whether it is the rung that answers no longer depends on how
- * the user spelled the add. The two producers stay one reason and one exit
- * contribution; what a consumer may tell apart is the claim that holds the
- * squatter, which the skip carries (deploy_ancestor_class_t) — the remedy differs
- * by claimant where the refusal does not. And why UNREADABLE ranks after every
- * path rung where its siblings (cleanup_skip_reason, workspace_item_route) rank
- * the same fact first: the landing check, when it has something to say, names
- * the ancestry that refused the look — the actionable half of the very same fact.
- * UNREADABLE is what is left when the landing had nothing to say. FOREIGN is
- * the landing's twin for a directory already there: a create or a replace lands
- * a new entry through its parent, which PERMISSION asks, where a fix converges
- * the node in place, which only its owner may do — so a row takes one question
- * or the other, never both, and FOREIGN stands beside PERMISSION. OWNERSHIP ranks
- * last of all, an incapacity behind the consent reasons, because it is the row's
- * rung and not the path's: the ownership is resolved for a row every other rung
- * passed (a skipped row can neither warn nor fail strict_ownership —
- * deploy_preflight's invariant), so the question is never asked of a row another
- * reason already holds, and its place in the order is the place the decision takes.
+ * Precedence. THROUGH ranks first: a link this run places above the path moves
+ * it to a place no look of this load has seen, so no judgment of the path can
+ * stand, its ancestry's included — a squatted directory the run replaces above
+ * the link empties the path only down to the link, which is made in the new
+ * directory and still leads where no look went. ANCESTOR ranks next: a look taken
+ * through a squatted claimed ancestor is void, so no judgment made through it
+ * can outrank the fact — the ancestry rung (check_ancestry) asks it before any
+ * probe of the row's own, the landing check included, whose access(2) resolves
+ * through a squatting symlink and answers for the target's tree. No placed link
+ * stands beneath such a squatter: a link there takes the squatter's fate, and
+ * places nothing. The reason spans both producers: a squatter at a path no row
+ * claims is the landing check's find, one at a directory row's is the rung's —
+ * and, since the rung's reach is the view's directory rows rather than the walk's,
+ * whether it is the rung that answers no longer depends on how the user spelled
+ * the add. The two producers stay one reason and one exit contribution; what a
+ * consumer may tell apart is the claim that holds the squatter, which the skip
+ * carries (deploy_ancestor_class_t) — the remedy differs by claimant where the
+ * refusal does not. And why UNREADABLE ranks after every path rung where its
+ * siblings (cleanup_skip_reason, workspace_item_route) rank the same fact first:
+ * the landing check, when it has something to say, names the ancestry that refused
+ * the look — the actionable half of the very same fact. UNREADABLE is what is
+ * left when the landing had nothing to say. FOREIGN is the landing's twin for a
+ * directory already there: a create or a replace lands a new entry through its
+ * parent, which PERMISSION asks, where a fix converges the node in place, which
+ * only its owner may do — so a row takes one question or the other, never both,
+ * and FOREIGN stands beside PERMISSION. OWNERSHIP ranks last of all, an incapacity
+ * behind the consent reasons, because it is the row's rung and not the path's:
+ * the ownership is resolved for a row every other rung passed (a skipped row
+ * can neither warn nor fail strict_ownership — deploy_preflight's invariant),
+ * so the question is never asked of a row another reason already holds, and its
+ * place in the order is the place the decision takes.
  *
  * Each reason is a sentence about the row that carries it, read off that skip's
  * own fields (cmds/apply.c apply_print_deploy_skips): the ancestor it names
- * (PERMISSION, ANCESTOR, a TYPE that names one), its own occupant (TYPE, OCCUPIED),
- * its own item (CONTENT, UNREADABLE, and FOREIGN, the owner its look found),
- * its own claim (OWNERSHIP). So a row beneath a skipped squatter takes the
- * squatter's class and never its reason (check_ancestry): the squatter's sentence
- * is about the squatter, whatever reason a later rung adds.
+ * (THROUGH, PERMISSION, ANCESTOR, a TYPE that names one), its own occupant (TYPE,
+ * OCCUPIED), its own item (CONTENT, UNREADABLE, and FOREIGN, the owner its look
+ * found), its own claim (OWNERSHIP). So a row beneath a skipped squatter takes
+ * the squatter's class and never its reason (check_ancestry): the squatter's
+ * sentence is about the squatter, whatever reason a later rung adds.
  *
  * Symlink rows need no arm of their own: a foreign kind at a link row's path is
  * TYPE (deploy.c occupant_conflicts), a retargeted link is CONTENT (the target
@@ -287,6 +298,7 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  */
 typedef enum {
     DEPLOY_SKIP_NONE = 0,     /* Not skipped — the row has a verdict */
+    DEPLOY_SKIP_THROUGH,      /* Beneath a link this run places: the next run looks through it */
     DEPLOY_SKIP_ANCESTOR,     /* A non-directory squats an ancestor this run does not converge */
     DEPLOY_SKIP_PERMISSION,   /* The landing's bits deny the run: an ancestor not ours, or none reachable */
     DEPLOY_SKIP_FOREIGN,      /* A directory another owns stands at the path: only its owner converges it */
@@ -298,15 +310,48 @@ typedef enum {
 } deploy_skip_reason_t;
 
 /**
- * Is --force the remedy for this skip?
+ * Is --force the remedy for this skip? — the consent class
  *
- * The consent/incapacity split, as a value. "Needs force" is the module's own
- * word (CLEARANCE_NEEDS_FORCE) and the screen's ("Use --force to overwrite or
- * replace them"). Two consumers in different places — apply's closing hints and
- * apply's exit contract — so one producer.
+ * "Needs force" is the module's own word (CLEARANCE_NEEDS_FORCE) and the screen's
+ * ("Use --force to overwrite or replace them"). Not the deferral, which the next
+ * run lifts by itself, nor an incapacity, which no flag lifts
+ * (deploy_skip_undelivered).
+ *
+ * Readers: cmds/apply.c apply_print_deploy_skips (the --force line) and
+ * core/deploy.c check_ancestry (the class a row beneath a skipped squatter takes).
+ * A reader not on this list is a bug.
  */
 static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
     return reason == DEPLOY_SKIP_TYPE || reason == DEPLOY_SKIP_CONTENT;
+}
+
+/**
+ * Did the run promise this row and not deliver it? — the incapacity class
+ *
+ * The skips the exit counts, told at every level: what dotta could not act on,
+ * no flag lifting it. Not the consent skips --force lifts
+ * (deploy_skip_needs_force), nor the deferral the next run lifts by itself
+ * (THROUGH): the run kept its promise over both. Total over the reasons, so a
+ * new one is classed here or the build fails.
+ *
+ * Readers: cmds/apply.c apply_print_deploy_skips (the block's level and each
+ * row's) and cmd_apply (the exit). A reader not on this list is a bug.
+ */
+static inline bool deploy_skip_undelivered(deploy_skip_reason_t reason) {
+    switch (reason) {
+        case DEPLOY_SKIP_THROUGH:
+        case DEPLOY_SKIP_TYPE:
+        case DEPLOY_SKIP_CONTENT:    return false;
+        case DEPLOY_SKIP_ANCESTOR:
+        case DEPLOY_SKIP_PERMISSION:
+        case DEPLOY_SKIP_FOREIGN:
+        case DEPLOY_SKIP_OCCUPIED:
+        case DEPLOY_SKIP_UNREADABLE:
+        case DEPLOY_SKIP_OWNERSHIP:  return true;
+        case DEPLOY_SKIP_NONE:       break;
+    }
+
+    CHECK_ARG(false, "a skip is classed by its reason");
 }
 
 /**
@@ -356,28 +401,31 @@ typedef enum {
  * The shape deploy_verdict_t gives a row the run does deploy: the row's item,
  * and the facts decided about it. `ancestor` is the path the reason names — the
  * ancestor that refused, the non-directory in the way, the squatted directory
- * above the row. Every such path is an ancestor of the row's own, and so a prefix
- * of the item's filesystem_path by construction (check_landing truncates the
- * planned path; a squatted directory stands strictly above every row that names
- * it, and the load lends its length with it — core/workspace.h
- * workspace_squatted_t) — carried as the byte length of that prefix, not a copy.
- * 0 where the reason has no ancestor to name: it is about the planned path itself
- * (OWNERSHIP always is), or (PERMISSION alone) the ancestry could not even be
- * reached to name its refusing node. `ancestor_class` says which claim holds
- * the named path where the skip is the squatter's only report — ANCESTOR's alone,
- * and NONE on a row beneath a skipped squatter (deploy_ancestor_class_t).
+ * above the row, the link this run places above it. Every such path is an ancestor
+ * of the row's own, and so a prefix of the item's filesystem_path by construction
+ * (check_landing truncates the planned path; a squatted directory stands strictly
+ * above every row that names it, and the load lends its length with it —
+ * core/workspace.h workspace_squatted_t; a placed link is a row decided above
+ * every row that names it) — carried as the byte length of that prefix, not a
+ * copy. 0 where the reason has no ancestor to name: it is about the planned path
+ * itself (OWNERSHIP always is), or (PERMISSION alone) the ancestry could not
+ * even be reached to name its refusing node. `ancestor_class` says which claim
+ * holds the named path where the skip is the squatter's only report — ANCESTOR's
+ * alone, and NONE on a row beneath a skipped squatter (deploy_ancestor_class_t).
  *
  * The item is the verdict's: the one the row's bucket holds, and never NULL
- * (deploy_verdict_t). Whether it holds a look is the row's ancestry's to say,
- * and the item says so itself: a row its ancestry answered for — beneath a squatter
- * that stays, or planned absent and then refused by the row's rung — carries an
- * item nothing looked at, occupant UNKNOWN and no path bit (the displaced class
- * every reader of an item reads, core/workspace.h workspace_displaced_t), never
- * a blanked pointer. So a reader consults the look only where the reason is a
- * sentence about it — a CONTENT skip's route, an UNREADABLE skip's fault, a FOREIGN
- * skip's owner: path rungs, asked only where the ancestry did not answer.
- * OWNERSHIP, the row's rung, reads its claim off the row and never the item's
- * look, which a row planned absent does not have.
+ * (deploy_verdict_t). Whether it holds a look of the path is the row's ancestry's
+ * to say, and the item says so itself: a row beneath a squatter — one that stays,
+ * or one the run replaces, the row planned absent and then refused by its own
+ * rung — carries an item nothing looked at, occupant UNKNOWN and no path bit
+ * (the displaced class every reader of an item reads, core/workspace.h
+ * workspace_displaced_t), never a blanked pointer; a row beneath a link this
+ * run places carries the look the load took where the link moves the path from,
+ * which answers for no place the run leaves (THROUGH). So a reader consults the
+ * look only where the reason is a sentence about it — a CONTENT skip's route,
+ * an UNREADABLE skip's fault, a FOREIGN skip's owner: path rungs, asked only
+ * where the ancestry did not answer. OWNERSHIP, the row's rung, reads its claim
+ * off the row and never the item's look, which a row planned absent does not have.
  *
  * Nothing here is owned: the item is borrowed (workspace lifetime), as every
  * item and row in this module is.
@@ -746,12 +794,20 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * either kind, which is all the rungs read of the fates decided so far. The skips
  * and the warnings come out in that order too. The run acts in another — the
  * directories, then the files (deploy_execute) — each kind's verdicts in path
- * order within it.
+ * order within it, and the decision holds for it: no verdict stands beneath a
+ * link the run moves (THROUGH), so a write beneath a link lands where the row's
+ * look went, the link re-placed, if at all, for its owner or group alone.
  *
  * One fate per pending row (the totality equation, deploy_preflight_t), each
  * question asked of its one authority, the first skip reason that applies winning
  * (deploy_skip_reason_t):
- * - Ancestry — the look must bind. A squatted directory row above the path
+ * - Ancestry — the look must bind, and stay bound through what the run does above
+ *   the path. A link this run places above it — where nothing stood, over the
+ *   directory it replaces, or re-pointed — moves the path to a place no look of
+ *   this load has seen, so the row waits for the next run's look, which goes
+ *   through the link (THROUGH, the link named: no flag lifts it, and none is
+ *   needed); a link re-placed for its owner or group alone leads where it led,
+ *   and moves nothing. A squatted directory row above the path
  *   (workspace_squatted_ancestor) voids every probe taken beneath it, the landing
  *   check's included — the workspace took none there at all, so the row arrives
  *   with nothing measured — so this rung runs first and answers from the run's
@@ -818,14 +874,17 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * holds — that the path is absent, and that something deployable stands beneath it.
  *
  * The deployable gate rests on an invariant the ladder establishes rather than
- * checks: beneath a squatter this run does not converge, every planned row is
- * skipped. Where the squatter stands at a skipped pending row, in that skip's
- * class, whatever its reason — the rung reads the ancestor's own fate; where it
- * stands at an ancestor outside the run's reach, by ANCESTOR; where a skipped
- * chain is absent instead, by the row's own landing check — presence is monotone
- * up a path, so every planned row beneath meets the same refusing ancestor (an
+ * checks: beneath a squatter this run does not converge, and beneath a link it
+ * places, every planned row is skipped. Beneath the link by THROUGH, every row;
+ * where the squatter stands at a skipped pending row, in that skip's class,
+ * whatever its reason — the rung reads the ancestor's own fate; where it stands
+ * at an ancestor outside the run's reach, by ANCESTOR; where a skipped chain is
+ * absent instead, by the row's own landing check — presence is monotone up a
+ * path, so every planned row beneath meets the same refusing ancestor (an
  * unreadable one leaves its descendants' probes to fail the same way). So the
- * ancestors loop can never plan a parent for a subtree the run skips.
+ * ancestors loop can never plan a parent for a subtree the run skips, and the
+ * rung it asks of each candidate keeps one beneath a placed link from being made
+ * through it.
  *
  * Only rows the run will touch are consulted — the deployable ones, and the
  * ancestors it will make; a directory the run leaves alone cannot skip anything.

@@ -53,11 +53,16 @@ const char *str_path_under(const char *path, const char *dir, size_t dir_len) {
 }
 
 size_t str_path_parent_len(const char *path) {
-    const char *slash = strrchr(path, '/');
+    return str_path_parent_len_n(path, strlen(path));
+}
 
-    if (!slash) return 0;
+size_t str_path_parent_len_n(const char *path, size_t len) {
+    /* Back to the last separator among the first len bytes: len then ends just
+     * past it, and the parent before it — but the root's own, the first byte,
+     * which the parent keeps */
+    while (len > 0 && path[len - 1] != '/') len--;
 
-    return (slash == path) ? 1 : (size_t) (slash - path);
+    return len > 1 ? len - 1 : len;
 }
 
 char *str_path_join(arena_t *arena, const char *dir, const char *name) {

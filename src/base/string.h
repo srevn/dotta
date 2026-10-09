@@ -97,15 +97,29 @@ const char *str_path_under(const char *path, const char *dir, size_t dir_len);
  * Length of an absolute path's parent
  *
  * The index of the last separator, or 1 for a path directly beneath the root:
- * "/etc/hosts" → 4, "/etc" → 1 (the root keeps its slash). A path with no separator
- * answers 0 — not absolute, which a caller handed canonical paths never meets
- * and reads as "cannot happen". Pure in the string; whether the parent is there
- * is the caller's question.
+ * "/etc/hosts" → 4, "/etc" → 1 (the root keeps its slash), and "/" → 1, the root
+ * directory its own parent. A path with no separator answers 0 — not absolute,
+ * which a caller handed canonical paths never meets and reads as "cannot happen".
+ * Pure in the string; whether the parent is there is the caller's question.
  *
  * @param path Canonical absolute path
  * @return The parent's length, or 0 when the path has no separator
  */
 size_t str_path_parent_len(const char *path);
+
+/**
+ * Length of the parent of the path `path`'s first `len` bytes spell
+ *
+ * str_path_parent_len over a prefix, so a climb reads each rung off the key's
+ * own bytes by its length and copies nothing (base/hashmap.h hashmap_get_n):
+ * "/a/b/c" over 6, 4, 2 and 1 answers 4, 2, 1 and 1 — the root directory is its
+ * own parent, so the climb stops where the length stops shrinking.
+ *
+ * @param path A path at least `len` bytes long
+ * @param len The span of `path` asked about
+ * @return The parent's length, or 0 when the span has no separator
+ */
+size_t str_path_parent_len_n(const char *path, size_t len);
 
 /**
  * Join a directory and a name, into an arena

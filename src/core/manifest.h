@@ -15,12 +15,14 @@
  *
  * The view has two layers. A **contribution** is one profile's claims placed
  * under this machine's topology: its tree's blobs and its sheet's directory items,
- * one row per path *within the profile*, with what this machine cannot place
- * recorded beside it (manifest_unbound) and what the profile names twice recorded
+ * two decisions per path *within the profile* — the explicit claim standing there,
+ * and the derived claim placed there first — with what this machine cannot place
+ * recorded beside them (manifest_unbound) and what the profile names twice recorded
  * against the name it kept (manifest_unkept). A contribution is what one profile
  * says about this machine, precedence aside. The **index** is precedence over
- * settled contributions: one winning row per path, a later profile's explicit
- * claim taking a held path and a derived one only filling an empty one.
+ * settled contributions, its two decisions made apart: one winning row per path,
+ * the highest profile's explicit claim where one names the path, and where none
+ * does the lowest profile's derived claim.
  *
  * Everything that asks *who wins* reads the index — manifest_lookup, manifest_rows,
  * manifest_lookup_storage, manifest_holder, manifest_diff: deployment, the record's
@@ -99,8 +101,10 @@
  *     nothing is held past its lifetime
  *   - Precedence-aware over settled contributions — a profile's claims are placed
  *     whole before any of them is compared with another's: one row per path,
- *     the winner's kind, later profiles overriding earlier, except that a derived
- *     directory claim only ever fills an empty slot (manifest_row_t's `tracked`)
+ *     the winner's kind, the explicit claims decided before the derived — a later
+ *     profile's explicit claim overriding an earlier one's, and a derived directory
+ *     claim filling only a path no claim holds, the earliest profile's first
+ *     (manifest_row_t's `tracked`)
  *
  * Workflow:
  *   Commands → manifest_build → rows → workspace / deploy / cleanup
@@ -234,16 +238,16 @@ static inline bool manifest_is_claim(
  * composes them beneath a blob, where the namer composes beneath the root's label
  * instead.
  *
- * What reads it: the projection of a row into a claim gives it none, a contribution
- * lets an explicit claim of the same profile take its slot, the index lets it
- * fill an empty path and never take a held one, and a search reads it as "the
- * profile holds a subtree beneath here" — one of possibly several chains, never
- * a name (manifest_lookup_claim's note). False on every other kind, where `tracked`
- * is false and nothing reads it.
+ * What reads it: a contribution keeps it apart from the profile's explicit claims,
+ * and keeps it where one of them stands at its path too, for the layer to hide;
+ * the index lets it fill a path no claim holds and never take a held one; and a
+ * search reads it as "the profile holds a subtree beneath here" — one of possibly
+ * several chains, never a name (manifest_lookup_claim's note). False on every
+ * other kind, where `tracked` is false and nothing reads it.
  *
- * Readers: the projection a namer reads a row through, a claim's placement, the
- * layering and the name test (core/manifest.c manifest_row_claim,
- * manifest_place_claim, manifest_layer, manifest_holds_name);
+ * Readers: a claim's placement, the cut of a contribution's rows and the layering's
+ * two passes (core/manifest.c manifest_place_claim, manifest_contribute,
+ * manifest_layer);
  * the reassignment predicate, the absence rule and the route table's derived
  * arm (core/workspace.h workspace_reassigned, core/workspace.c classify_absent,
  * workspace_item_route); the untracked scan's word at a child, a rung being the
@@ -322,15 +326,18 @@ typedef struct manifest manifest_t;
  *
  * Per profile, in order: the claims its walk shows (core/profiles.h profile_walk)
  * — the tree's blobs first, then the DIRECTORY items of its metadata.json — are
- * placed into that profile's own contribution — the within-profile rule (the
- * two layers, above): an explicit claim outranks a derived one, a DIRECTORY item
- * whose name the tree holds a blob at or above is contradicted and claims nothing,
- * and two explicit names at one path are decided when the contribution is whole,
- * the fresh name kept and every other recorded (manifest_unkept). Only then does
- * precedence run: across profiles the later (higher) claim takes the path whatever
- * its kind, a derived one filling an empty one alone, so the view holds one row
- * per path, the winner's kind. A profile without metadata.json contributes no
- * directories and is skipped, not an error.
+ * placed into that profile's own contribution, the explicit and the derived each
+ * in an index of its own — the within-profile rule (the two layers, above): a
+ * DIRECTORY item whose name the tree holds a blob at or above is contradicted
+ * and claims nothing, two explicit names at one path are decided when the
+ * contribution is whole, the fresh name kept and every other recorded
+ * (manifest_unkept), and a derived claim is held apart, the first of two chains
+ * through one path. Only then does precedence run, in two passes: the explicit
+ * claims, the later (higher) profile's taking the path whatever its kind, and
+ * then the derived claims, each filling a path no claim holds, the earlier
+ * profile's first — so an explicit claim outranks a derived one within a profile
+ * as across them, and the view holds one row per path, the winner's kind. A profile
+ * without metadata.json contributes no directories and is skipped, not an error.
  *
  * Row order is unspecified; consumers that need parent-before-child sort their
  * own pointer arrays (the workspace does). The oracle is a set. What order there
@@ -845,8 +852,9 @@ error_t manifest_holder(
 );
 
 /**
- * The row `profile` holds at `filesystem_path` in its own contribution — the
- * claim it placed there, whether or not it wins the path in the index.
+ * The row `profile` holds at `filesystem_path` in its own contribution — its
+ * explicit claim there, else the derived claim it placed there first — whether
+ * or not it wins the path in the index.
  *
  * NULL when the profile is not in the view, holds nothing there, or is NULL —
  * the API's own return convention, a pointer-returning lookup having no CHECK_NULL
@@ -920,11 +928,12 @@ const manifest_row_t *manifest_lookup_claim(
  * under an uncommitted claim, and manifest_name can answer what the next settle
  * will keep.
  *
- * A name this answers true for has a row standing at its path: the group's kept
- * member is explicit, an uncontested one is explicit by the clause above, and
- * the layering inserts every explicit row of every contribution — whoever wins
- * it. So a caller that asks this first may read manifest_lookup's answer without
- * asking whether there is one.
+ * A name this answers true for has a row standing at its path: the profile holds
+ * an explicit claim there — the group's kept member, or an uncontested one, its
+ * derived claims held apart — and the layering's first pass stands a row at every
+ * path some contribution claims explicitly, whoever's it is. So a caller that
+ * asks this first may read manifest_lookup's answer without asking whether there
+ * is one.
  *
  * Readers: add's typed-argument admission and its record join (cmds/add.c), and
  * revert's restore admission (cmds/revert.c). The two admissions spell one rule:
@@ -962,12 +971,13 @@ bool manifest_holds_name(
  *
  * The two layers a namer reads speak this one shape. A claim a verb has admitted
  * in this command and not yet committed — add's listing, the `pending` map — is
- * one; a row of the profile's own contribution projects into the other, a derived
- * row being no claim at all (it names neither itself nor what lies beneath:
- * manifest_is_derived) and every other row naming its own path, with its kind
- * saying whether anything can be named beneath it. A DIRECTORY the command admitted
- * is a claim it made — an argument, or a directory its walk entered; a verb that
- * would admit a derived claim has no business naming through it.
+ * one; an explicit claim of the profile's own contribution projects into the
+ * other, naming its own path with its kind saying whether anything can be named
+ * beneath it. A derived row is no claim at all (it names neither itself nor what
+ * lies beneath: manifest_is_derived), and the contribution keeps it apart, where
+ * no namer reads it. A DIRECTORY the command admitted is a claim it made — an
+ * argument, or a directory its walk entered; a verb that would admit a derived
+ * claim has no business naming through it.
  *
  * The nearer layer answers alone for a place the profile names at most once.
  * Where it names a place more than once, *which* of its names stands there is

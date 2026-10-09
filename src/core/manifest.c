@@ -10,12 +10,13 @@
  *
  * Key patterns:
  *   - Two layers, built in two moves (core/manifest.h): manifest_contribute places
- *     one profile's claims whole into that profile's own contribution — one row
- *     per path within it, the within-profile rule settled by manifest_settle —
- *     and manifest_layer then runs precedence over the settled contributions,
- *     once, into the view's index. Nothing published is ever rewritten: a row
- *     that loses a path keeps its own row and simply leaves the slice, which is
- *     what lets a lower profile's claim be read after a higher one wins
+ *     one profile's claims whole into that profile's own contribution — its
+ *     explicit claims, the within-profile rule settled by manifest_settle, and
+ *     its derived claims apart from them — and manifest_layer then runs precedence
+ *     over the settled contributions, once, into the view's index: the explicit
+ *     claims first, then the derived. Nothing published is ever rewritten: a
+ *     row that loses a path keeps its own row and simply leaves the slice, which
+ *     is what lets a lower profile's claim be read after a higher one wins
  *     (manifest_lookup_claim) and what makes an index the one thing that says
  *     who stands where.
  *   - One decode, placed: the per-profile step walks the profile it is handed
@@ -58,19 +59,28 @@
 /**
  * One profile's claims, placed under the topology, precedence aside
  *
- * One row per path within the profile, and its own index over them. `rows` is
- * allocated once at the step's tail, sized exactly from the index, and nothing
- * on it is ever rewritten: a name that lost the path and a derived claim an
- * explicit one retook stay in the arena and simply leave the slice.
+ * Two decisions, kept apart from placement on, each in an index of its own: the
+ * explicit claim that stands at a path — a blob of any type, a tracked directory
+ * — one a path, the settle deciding where the profile names one twice; and the
+ * derived claim placed there first, the profile's chain through the path. A derived
+ * row is no claim at all, naming neither itself nor what lies beneath it
+ * (core/manifest.h manifest_is_derived), so it never contends and no namer reads
+ * it. It is kept whatever the profile claims explicitly at its path: whether it
+ * stands is the layer's question, asked of every profile at once (manifest_layer).
  *
- * Both indexes are the build's arena's, as the view's own is; their keys borrow
+ * `rows` is allocated once at the step's tail, sized exactly from the two indexes,
+ * and nothing on it is ever rewritten: a name that lost the path, and a second
+ * chain through one, stay in the arena and simply leave the slice.
+ *
+ * Every index is the build's arena's, as the view's own is; their keys borrow
  * the arena-backed path each row carries.
  */
 typedef struct {
     const char *profile;           /* Arena-backed; the same pointer every row of it carries */
-    manifest_row_t **rows;         /* The rows standing, in claim order (arena, exact) */
-    size_t count;                  /* Rows standing */
-    hashmap_t *index;              /* path → the row standing there (arena) */
+    manifest_row_t **rows;         /* Every row standing in the index of its class, in claim order (arena, exact) */
+    size_t count;                  /* Rows in it */
+    hashmap_t *explicit;           /* path → the explicit claim standing there (arena) */
+    hashmap_t *derived;            /* path → the derived claim placed there first (arena) */
 
     /* Every name the profile holds at a path it names more than once: the settle's
      * own group, NULL-terminated, in name order. NULL until a settle happens —
@@ -80,9 +90,8 @@ typedef struct {
      * which name the next settle keeps, and manifest_holds_name reads it to answer
      * whether a name is one the profile already holds.
      *
-     * Every member is an explicit row. A contender is pushed only against a held
-     * explicit claim — manifest_place_claim states that placement rule once,
-     * for both kinds — so no reader of a group filters derived. */
+     * Every member is an explicit row: a derived claim never contends, held apart
+     * (manifest_place_claim), so no reader of a group filters derived. */
     hashmap_t *contested;          /* path → manifest_row_t ** (arena) */
 } contribution_t;
 
@@ -91,9 +100,9 @@ typedef struct {
  *
  * The contributions, in precedence order, and the index precedence leaves over
  * them. Rows are allocated one by one from the caller's arena and are stable
- * from the moment they are allocated, so both indexes store row pointers directly.
+ * from the moment they are allocated, so every index stores row pointers directly.
  * Each spine — a contribution's and the view's — is cut once, exactly, from what
- * its index points at; there is no growth and no reallocation, and manifest_rows
+ * its indexes point at; there is no growth and no reallocation, and manifest_rows
  * hands the view's out as the public slice.
  *
  * The health channel's slices — what the build could not make a row of — are
@@ -156,7 +165,7 @@ struct manifest {
  * - contribution: the profile's own, borrowed from manifest_contribute: its
  *             arena-backed name (every row of this profile borrows the pointer,
  *             and the table is keyed by it to place a custom/ claim) and its
- *             path index
+ *             two indexes
  * - placed / contenders: the step's build-local lists, borrowed — every row this
  *             profile placed, and the rows that arrived at a path it had already
  *             named. Both are spent when manifest_contribute returns.
@@ -167,7 +176,7 @@ struct manifest {
  */
 typedef struct {
     manifest_t *manifest;         /* Target view (modified by the visitor) */
-    contribution_t *contribution; /* The profile's own claims and their index */
+    contribution_t *contribution; /* The profile's own claims and their indexes */
     ptr_array_t *placed;          /* Every row this step placed, in claim order */
     ptr_array_t *contenders;      /* The rows that met a path already named */
     arena_t *arena;               /* Arena for allocations (must not be NULL) */
@@ -177,17 +186,17 @@ typedef struct {
  * A row of this contribution at `filesystem_path`: allocated and on the list of
  * everything the profile placed
  *
- * Whether it *stands* at the path is the caller's next line — the index takes
- * it, or the contest does. Nothing here is ever reset or overwritten: a name
- * that loses keeps its own row and leaves the slice at the settle, which is what
- * lets a lower profile's claim be read after a higher one wins the path
- * (manifest_lookup_claim) and what makes an index the one thing that says who
- * stands where.
+ * Whether it *stands* at the path is the caller's next line: the index of its
+ * class takes it, the contest does, or — a second chain through a path — neither
+ * does. Nothing here is ever reset or overwritten: a name that loses keeps its
+ * own row and leaves the slice at the settle, which is what lets a lower profile's
+ * claim be read after a higher one wins the path (manifest_lookup_claim) and
+ * what makes an index the one thing that says who stands where.
  *
  * `filesystem_path` is arena-borrowed from mount_resolve; the cast discards the
  * const qualifier its output type carries. The row keeps it as its key for the
  * view's life. Two names at one path produce two arena strings with equal content,
- * and both indexes key by content — no string is shared, and a hashmap_set that
+ * and every index keys by content — no string is shared, and a hashmap_set that
  * replaces a value keeps the key pointer it was first given, which stays valid
  * and equal for the arena's lifetime.
  *
@@ -384,14 +393,14 @@ static const char *manifest_ascend(const naming_t *n, const char *filesystem_pat
 /**
  * A row as a namer reads it
  *
- * The projection both layers meet in (core/manifest.h manifest_claim_t): a derived
- * row is no claim at all, naming neither itself nor what lies beneath it, and
- * every other row names its own path with its kind saying whether anything can
- * be named beneath. NULL projects to nothing standing, which is the answer a
- * path the profile holds nothing at is owed.
+ * The projection both layers meet in (core/manifest.h manifest_claim_t): a row
+ * names its own path, its kind saying whether anything can be named beneath —
+ * every row a namer reads is an explicit claim, the contribution holding the
+ * derived apart (contribution_t). NULL projects to nothing standing, which is
+ * the answer a path the profile holds nothing at is owed.
  */
 static manifest_claim_t manifest_row_claim(const manifest_row_t *row) {
-    if (!row || manifest_is_derived(row)) return (manifest_claim_t){ 0 };
+    if (!row) return (manifest_claim_t){ 0 };
 
     return (manifest_claim_t){
         .storage_path = row->storage_path,
@@ -497,7 +506,7 @@ static manifest_claim_t manifest_standing(const naming_t *n, const char *filesys
         n->pending ? hashmap_get(n->pending, filesystem_path) : NULL;
     if (staged) return *staged;
 
-    return manifest_row_claim(c ? hashmap_get(c->index, filesystem_path) : NULL);
+    return manifest_row_claim(c ? hashmap_get(c->explicit, filesystem_path) : NULL);
 }
 
 /**
@@ -621,8 +630,8 @@ static int name_order(const void *a, const void *b) {
  * home/ over the absolute root/. Every other name is recorded against the one
  * that stood (manifest_note_unkept).
  *
- * The group is the index's holder plus the run, sorted whole, so the holder is
- * a member and not a special case: every loser reads bytewise, the first-arrived
+ * The group is the path's holder plus the run, sorted whole, so the holder is a
+ * member and not a special case: every loser reads bytewise, the first-arrived
  * included. No comparator carries `fresh` and no bool survives the loop.
  *
  * Two rows of one group can never share a name, so the order is total: the tree
@@ -685,13 +694,13 @@ static void manifest_settle(
          * slot past them stays NULL — the group outlives this loop, and every
          * reader of it walks to the terminator. */
         manifest_row_t **group = arena_calloc(arena, count + 2, sizeof(*group));
-        group[0] = hashmap_get(c->index, filesystem_path);
+        group[0] = hashmap_get(c->explicit, filesystem_path);
         for (size_t g = 0; g < count; g++) group[g + 1] = rows[i + g];
         qsort(group, count + 1, sizeof(*group), name_order);
 
         manifest_row_t *kept = manifest_decide(&n, filesystem_path, group);
 
-        hashmap_set(c->index, filesystem_path, kept);
+        hashmap_set(c->explicit, filesystem_path, kept);
 
         /* The group, kept against the path it contended for. Indexed after the
          * winner is in place, so a deeper group's ascent — which reaches this
@@ -716,7 +725,8 @@ static void manifest_settle(
  * The whole of the per-profile step the profile's walk drives (core/profiles.h
  * profile_walk): one decoded claim at a time — its blobs first, then its directory
  * claims — a finished manifest_row_t or nothing. In order: the name kept, the
- * path it resolves to, a derived claim's yield to a held path, the row, and the
+ * path it resolves to, the row, and where it stands — a derived claim held apart,
+ * the first of two chains through one path, and an explicit one by the
  * within-profile placement rule that says whether it stands or contends.
  *
  * @param claim One claim, decoded (borrowed — valid for the call only)
@@ -757,12 +767,30 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
         return NULL;
     }
 
-    const manifest_row_t *held = hashmap_get(c->index, filesystem_path);
+    /* The row is the claim, placed: one profile's, and fresh — nothing is reset
+     * or rewritten any more, so each field is written once, from the claim. Its
+     * mode is the claim's or its type's floor (core/profiles.h profile_claim_mode),
+     * so the row leaves the build total; the strings it keeps are the arena's,
+     * the profile's being the name the step duplicated. A contender is a finished
+     * row and takes its own claim like any other, and so is a second chain. */
+    manifest_row_t *row = manifest_place(walk->placed, filesystem_path, walk->arena);
+    row->storage_path = storage_path;
+    row->profile = c->profile;
+    row->type = claim->type;
+    git_oid_cpy(&row->blob_oid, &claim->blob_oid);
+    row->mode = profile_claim_mode(claim);
+    row->owner = arena_strdup(walk->arena, claim->owner);
+    row->group = arena_strdup(walk->arena, claim->group);
+    row->encrypted = claim->encrypted;
+    row->tracked = claim->tracked;
 
-    /* A derived claim never takes a held slot: it is a consequence of an older
-     * name, not a source of new ones. Explicit outranks derived within one profile
-     * as across them, so a tracked claim falls through to the placement rule
-     * below and takes a derived row's slot there.
+    /* Then where it stands, in the index of its class: the two never meet here,
+     * and which stands where the profile holds both is the layer's question,
+     * asked across every profile at once (manifest_layer).
+     *
+     * A derived claim takes a path no chain of the profile's runs through yet,
+     * and a second chain through one is held nowhere: a derived claim is a
+     * consequence of an older name, not a source of new ones.
      *
      * Ancestors are structurally shared where claims are per-profile and
      * precedence-resolved, and two profiles that traverse the same directory
@@ -782,38 +810,21 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
      * tie is stated here rather than decided — by the names alone, which no
      * spelling of the document moves. Nothing is recorded either: manifest_unkept
      * is names, and a derived claim named nothing. */
-    if (held && claim->type == PATH_TYPE_DIRECTORY && !claim->tracked) return NULL;
+    if (manifest_is_derived(row)) {
+        hashmap_add(c->derived, filesystem_path, row);
+        return NULL;
+    }
 
-    /* The row is the claim, placed: one profile's, and fresh — nothing is reset
-     * or rewritten any more, so each field is written once, from the claim. Its
-     * mode is the claim's or its type's floor (core/profiles.h profile_claim_mode),
-     * so the row leaves the build total; the strings it keeps are the arena's,
-     * the profile's being the name the step duplicated. A contender is a finished
-     * row and takes its own claim like any other. */
-    manifest_row_t *row = manifest_place(walk->placed, filesystem_path, walk->arena);
-    row->storage_path = storage_path;
-    row->profile = c->profile;
-    row->type = claim->type;
-    git_oid_cpy(&row->blob_oid, &claim->blob_oid);
-    row->mode = profile_claim_mode(claim);
-    row->owner = arena_strdup(walk->arena, claim->owner);
-    row->group = arena_strdup(walk->arena, claim->group);
-    row->encrypted = claim->encrypted;
-    row->tracked = claim->tracked;
-
-    /* Then say whether it stands. The blobs arrive first, so while they do every
-     * row of the contribution is a blob, and the first arm is exactly "nothing
-     * stands here" and the second exactly "a second name of this profile", for
-     * the settle to decide; a directory claim after them takes a derived row's
-     * slot or contends with an explicit one. A directory claim at a blob's own
-     * name never arrives — the profile drops it — which is what keeps the settle's
-     * group free of two rows under one name. The sibling rule across profiles
-     * is manifest_layer's, where an explicit claim takes a held path outright:
-     * that is the whole difference between precedence and a profile naming one
-     * place twice. */
-    if (!held || manifest_is_derived(held)) {
-        hashmap_set(c->index, filesystem_path, row);
-    } else {
+    /* An explicit claim takes a path the profile names nothing at explicitly,
+     * and contends where it names one: the blobs arrive first, so while they do
+     * the second arm is exactly "a second name of this profile", for the settle
+     * to decide, and a tracked directory claim after them contends with an explicit
+     * one. A directory claim at a blob's own name never arrives — the profile
+     * drops it — which is what keeps the settle's group free of two rows under
+     * one name. The sibling rule across profiles is manifest_layer's, where the
+     * highest explicit claim takes the path: that is the whole difference between
+     * precedence and a profile naming one place twice. */
+    if (!hashmap_add(c->explicit, filesystem_path, row)) {
         ptr_array_push(walk->contenders, row);
     }
 
@@ -825,9 +836,9 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
  *
  * The per-profile step both builders run, and the whole of the within-profile
  * rule. The contribution is registered here — its arena-backed name (every row
- * of it borrows the pointer), its own path index, and its slot in the view's
- * parallel arrays — so one function owns one profile's claims from the name to
- * the settled spine, and the builders hand over a profile.
+ * of it borrows the pointer), its two indexes, and its slot in the view's parallel
+ * arrays — so one function owns one profile's claims from the name to the settled
+ * spine, and the builders hand over a profile.
  *
  * The profile's walk shows every claim the profile makes, decoded (core/profiles.h
  * profile_walk) — its blobs, then the directory claims its own tree does not
@@ -836,7 +847,7 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
  * (manifest_note_unbound), and standing or contending. The tracked claims its
  * tree does contradict are noted on the view's health beside them
  * (manifest_note_contradicted). The settle then decides every path this profile
- * named twice, and the tail cuts the spine to what stands.
+ * named twice, and the tail cuts the spine to what stands in each index.
  *
  * The walk reads the profile's own sheet, strictly: a sheet that will not load
  * fails the build rather than read as "no claims", so no caller of a builder
@@ -862,12 +873,13 @@ static error_t manifest_contribute(
 ) {
     /* Register the contribution before anything can fail into it: the name is
      * arena-backed so the view never depends on the profile or on the state's
-     * row cache, and the index is the arena's too, so a build that stops partway
+     * row cache, and the indexes are the arena's too, so a build that stops partway
      * leaves nothing behind but the arena's bytes. */
     contribution_t *c = &manifest->contributions[manifest->profile_count];
 
     c->profile = arena_strdup(arena, profile_name(profile));
-    c->index = hashmap_borrow(arena, 128);
+    c->explicit = hashmap_borrow(arena, 128);
+    c->derived = hashmap_borrow(arena, 32);
     manifest->profiles[manifest->profile_count++] = c->profile;
 
     /* The step's two lists, read only while it runs: every row this profile placed,
@@ -908,15 +920,20 @@ static error_t manifest_contribute(
     /* Every path this profile named twice, decided once. */
     manifest_settle(manifest, c, &contenders, arena);
 
-    /* The contribution's rows: what the index points at, in claim order. A name
-     * that lost and a derived claim an explicit one retook stay in the arena
-     * and leave the slice. Sized exactly — the index is the count. */
-    size_t standing = hashmap_size(c->index);
+    /* The contribution's rows: every row standing in the index of its class, in
+     * claim order. A name that lost and a second chain stay in the arena and
+     * leave the slice; a derived claim the profile's own explicit claim shadows
+     * stays in it, for the layer to hide. Sized exactly — the two indexes are
+     * the count. */
+    size_t standing = hashmap_size(c->explicit) + hashmap_size(c->derived);
     if (standing > 0) {
         c->rows = arena_calloc(arena, standing, sizeof(*c->rows));
         for (size_t j = 0; j < placed.count; j++) {
             manifest_row_t *row = placed.entries[j];
-            if (hashmap_get(c->index, row->filesystem_path) == row) {
+            const manifest_row_t *held = hashmap_get(
+                manifest_is_derived(row) ? c->derived : c->explicit, row->filesystem_path
+            );
+            if (held == row) {
                 c->rows[c->count++] = row;
             }
         }
@@ -928,13 +945,15 @@ static error_t manifest_contribute(
 /**
  * Precedence over the settled contributions, and the winners' spine
  *
- * Today's cross-profile rule, applied to finished contributions instead of to
- * rows mid-build: for each contribution in precedence order, an explicit row
- * takes the path whatever stands there, and a derived one only fills an empty
- * one — two profiles that traverse the same directory derive it identically,
- * their claims carry no intent to conflict, and the first to name the path holds
- * it, so the row's owner does not move when a profile above it is enabled and
- * no reassignment churn appears in the receipts over a directory nobody named.
+ * The two decisions, in two passes over the finished contributions. The explicit
+ * claims first, highest precedence first: a row takes a path no claim before it
+ * holds, so the highest explicit claim stands. Then the derived claims, lowest
+ * precedence first: a row fills a path nothing holds — two profiles that traverse
+ * the same directory derive it identically, their claims carry no intent to
+ * conflict, and the first to name the path holds it, so the row's owner does
+ * not move when a profile above it is enabled and no reassignment churn appears
+ * in the receipts over a directory nobody named. A derived claim its own profile's
+ * explicit claim shadows meets that claim here and is hidden like any other.
  *
  * The spine is then cut once, exactly, from what the index points at, in claim
  * order across the contributions — so a path a higher profile overrides sits at
@@ -948,18 +967,27 @@ static error_t manifest_contribute(
  * @param arena Arena for the spine (must not be NULL)
  */
 static void manifest_layer(manifest_t *manifest, arena_t *arena) {
+    /* The explicit claims, highest precedence first: a row takes a path no claim
+     * before it holds. */
+    for (size_t i = manifest->profile_count; i-- > 0;) {
+        const contribution_t *c = &manifest->contributions[i];
+        for (size_t j = 0; j < c->count; j++) {
+            manifest_row_t *row = c->rows[j];
+            if (manifest_is_derived(row)) continue;
+
+            hashmap_add(manifest->index, row->filesystem_path, row);
+        }
+    }
+
+    /* The derived claims, lowest precedence first: a row fills a path nothing
+     * holds. */
     for (size_t i = 0; i < manifest->profile_count; i++) {
         const contribution_t *c = &manifest->contributions[i];
         for (size_t j = 0; j < c->count; j++) {
             manifest_row_t *row = c->rows[j];
+            if (!manifest_is_derived(row)) continue;
 
-            /* A derived row only fills an empty path; an explicit one takes
-             * whatever stands there. */
-            if (manifest_is_derived(row)) {
-                hashmap_add(manifest->index, row->filesystem_path, row);
-            } else {
-                hashmap_set(manifest->index, row->filesystem_path, row);
-            }
+            hashmap_add(manifest->index, row->filesystem_path, row);
         }
     }
 
@@ -986,7 +1014,7 @@ static void manifest_layer(manifest_t *manifest, arena_t *arena) {
  * so is the index, which borrows its keys from the rows it points at
  * (hashmap_borrow); each contribution fills its own slot as it is registered
  * (manifest_contribute). No spine is allocated here: each is cut once, exactly,
- * from the index that decides it.
+ * from the indexes that decide it.
  */
 static manifest_t *manifest_allocate(
     arena_t *arena,
@@ -1270,8 +1298,12 @@ const manifest_row_t *manifest_lookup_claim(
     if (!manifest || !filesystem_path) return NULL;
 
     const contribution_t *c = manifest_contribution(manifest, profile);
+    if (!c) return NULL;
 
-    return c ? hashmap_get(c->index, filesystem_path) : NULL;
+    /* The explicit claim standing there, else the derived claim placed there */
+    const manifest_row_t *row = hashmap_get(c->explicit, filesystem_path);
+
+    return row ? row : hashmap_get(c->derived, filesystem_path);
 }
 
 /**
@@ -1300,10 +1332,9 @@ bool manifest_holds_name(
         return false;
     }
 
-    const manifest_row_t *row = hashmap_get(c->index, filesystem_path);
+    const manifest_row_t *row = hashmap_get(c->explicit, filesystem_path);
 
-    return row && !manifest_is_derived(row) &&
-           strcmp(row->storage_path, storage_path) == 0;
+    return row && strcmp(row->storage_path, storage_path) == 0;
 }
 
 /**

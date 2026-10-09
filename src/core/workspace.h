@@ -53,13 +53,13 @@
  *   path but one: where each row and each orphan record stands, indexed by the
  *   (dev, ino) the load's own look at that path found, for the two verbs that
  *   act on an entry through a string and could otherwise act on a spelling the
- *   load knows the entry by another name of — cleanup's unlink (an owned, backed
- *   orphan whose entry a row stands on is a stale key: released, never pruned)
- *   and the scan's offer (a child whose entry a row or a record stands on is no
- *   discovery). An entry is a name in a directory; a key is one spelling of it,
- *   and a filesystem can reach one entry through as many spellings as there are
- *   links above it, folds it performs on the name, and roots the table spells
- *   two ways (infra/mount.h).
+ *   load knows the entry by another name of — cleanup's unlink (an orphan whose
+ *   entry a row stands on is a stale key, whatever its order, its owner or Git's
+ *   answer: released, never pruned) and the scan's offer (a child whose entry a
+ *   row or a record stands on is no discovery). An entry is a name in a directory;
+ *   a key is one spelling of it, and a filesystem can reach one entry through
+ *   as many spellings as there are links above it, folds it performs on the name,
+ *   and roots the table spells two ways (infra/mount.h).
  *
  *   The scan's roots read identity for a third reason of their own — one walk
  *   per directory (workspace_analyze_untracked) — and read it off that same look.
@@ -531,8 +531,8 @@ typedef struct {
  *
  * The same division one layer down, over a stat: infra/compare.c mode_stands,
  * under a git filemode, and core/state.h state_stat_matches, under the record's
- * kind. core/workspace.c claim_stands asks a coarser question of its own: a
- * directory or not.
+ * kind. core/workspace.c workspace_claim_stands asks a coarser question of its
+ * own: a directory or not.
  *
  * Readers: the rung's, named above; workspace_observation (the kind a row's record
  * is born with); workspace_flush (the observation, owed only where the row's

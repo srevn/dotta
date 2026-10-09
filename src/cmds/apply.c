@@ -2365,11 +2365,11 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * deploy_plan->files.clean IS "in scope ∧ no work" — no gates re-derived
      * here. Which is what decides the row a release left standing: the workspace's
      * guard releases the record of a path a row stands on under another spelling
-     * (core/workspace.c standing_row), and this loop adopts that row only where
-     * it reads clean. A release beside a [modified] row, or a conflict, adopts
-     * nothing, and the path leaves the ownership gate until a forced apply or
-     * an update converges it; [stale] alone is deployed and anchored by the same
-     * run.
+     * (core/workspace.c workspace_row_stands), and this loop adopts that row
+     * only where it reads clean. A release beside a [modified] row, or a conflict,
+     * adopts nothing, and the path leaves the ownership gate until a forced apply
+     * or an update converges it; [stale] alone is deployed and anchored by the
+     * same run.
      *
      * No row beneath a squatter reaches either loop, and none needs a gate: the
      * workspace looked at nothing there, so such a row carries a displaced item,

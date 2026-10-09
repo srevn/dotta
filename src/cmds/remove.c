@@ -245,7 +245,9 @@ typedef struct {
  * the gate answers, and it is read here because the record that carries it is
  * about to retire: dotta takes back what it created on the way in and leaves
  * what it merely found. The flag stays a ceiling over both — a plain remove
- * promises release and deletes nothing, whoever made the path.
+ * promises release and deletes nothing, whoever made the path. And no order
+ * outranks a row: cleanup reads it behind the identity guard, so a copy a row
+ * stands on under another spelling is released, the path being in the view.
  *
  * One loop for both routes because the rule drifted while each spelled its own:
  * a let-go record's fate must not turn on which removal retired it. The gate

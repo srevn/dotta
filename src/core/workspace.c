@@ -145,8 +145,8 @@ struct workspace {
      * ino) that look found: the load's one look at the disk by identity, for
      * the two verbs that act on an entry through a string: cleanup's unlink (the
      * orphan analysis's guard) and the scan's offer (the leaf probe). Sorted by
-     * identity; built by index_entries only on a load one of the two may ask
-     * in, else NULL and none. */
+     * identity; built by workspace_index_entries only on a load one of the two
+     * may ask in, else NULL and none. */
     const workspace_item_t **entries;            /* Arena; sorted by (dev, ino) */
     size_t entry_count;
 };
@@ -893,8 +893,8 @@ static void workspace_analyze_file(
     /* The load's one look at this path, taken into the item (workspace_look):
      * the existence question, the kind the comparisons verify, the mode and
      * ownership the metadata checks read — and, after this analysis has run,
-     * the identity index_entries reads. Nothing below retakes it, and nothing
-     * after the join does either. */
+     * the identity workspace_index_entries reads. Nothing below retakes it, and
+     * nothing after the join does either. */
     workspace_look(ws, item);
 
     /* Beneath a squatter the view claims, no look was taken. A look here would
@@ -1351,7 +1351,7 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
              * could not take the entry back out of it. A stale entry can only
              * keep a new file standing on the reused inode from being offered
              * for one run — the direction every false answer of the index takes
-             * (index_entries). */
+             * (workspace_index_entries). */
             break;
     }
 
@@ -1554,7 +1554,7 @@ static orphan_authority_t workspace_orphan_authority(
  *
  * The pair one lstat names. Compared and never subtracted: dev_t is signed on
  * some platforms and unsigned on others, and a difference is not an order. The
- * one rule entry_order sorts by and find_entries searches by.
+ * one rule entry_order sorts by and workspace_find_entries searches by.
  */
 static int identity_order(const struct stat *a, const struct stat *b) {
     if (a->st_dev != b->st_dev) return a->st_dev < b->st_dev ? -1 : 1;
@@ -1566,8 +1566,9 @@ static int identity_order(const struct stat *a, const struct stat *b) {
 /**
  * The entries' order (qsort's): by the identity each item's look found
  *
- * An entry is an item, standing where its look found it (index_entries), so every
- * entry standing on one file is adjacent and find_entries reads the run.
+ * An entry is an item, standing where its look found it (workspace_index_entries),
+ * so every entry standing on one file is adjacent and workspace_find_entries
+ * reads the run.
  *
  * No axis in the name, where workspace_kind_order carries one: an item can be
  * ordered by any of the things it holds, and an entry by its identity alone.
@@ -1600,7 +1601,7 @@ static int entry_order(const void *a, const void *b) {
  * @param count Receives how many entries stand there (must not be NULL)
  * @return The first of the run, or NULL when none stands there
  */
-static const workspace_item_t *const *find_entries(
+static const workspace_item_t *const *workspace_find_entries(
     const workspace_t *ws, const struct stat *st, size_t *count
 ) {
     size_t lo = 0;
@@ -1701,68 +1702,69 @@ static bool same_entry(const char *path, const char *other, const struct stat *s
 }
 
 /**
- * The winning row standing on the entry a path names, under another spelling
+ * Does a row of the view stand on the entry a path names, under another spelling?
  *
  * The partition asked by string — no row stands at the path, or it would not be
  * an orphan; the scan's leaf probe asked the view by the walk's spelling — and
  * this asks of the entry: is there a row of the view whose file is this file
- * (find_entries), whose key is a spelling of this very entry (same_entry)? `st`
- * is the caller's own lstat of `path`, which both readers hold, so an ask costs
- * a binary search and, for a hard link, two stats of parents. It allocates nothing
- * and cannot fail: a failure here would have to read as "no row", which on the
- * orphan arm means prunable.
+ * (workspace_find_entries), whose key is a spelling of this very entry
+ * (same_entry)? `st` is the caller's own lstat of `path`, which both readers of
+ * the entries hold, so an ask costs a binary search and, for a hard link, two
+ * stats of parents. It allocates nothing and cannot fail: a failure here would
+ * have to read as "no row", which on the orphan arm means prunable.
  *
- * Any row that pairs, in an order the sort does not fix: the reader asks whether
- * one stands, never which — a scan root is a selection with a winner
- * (workspace_find_root); this is not. An active item carries its row and an orphan
- * none (the partition bears an orphan with no row, and nothing gives it one),
- * which is how this tells the view's entries from the record's — and why the
- * orphan asking, which the index holds on its own entry, is never its own answer.
+ * Whether one stands, never which: any row that pairs, in an order the sort does
+ * not fix — a scan root is a selection with a winner (workspace_find_root); this
+ * is not. An active item carries its row and an orphan none (the partition bears
+ * an orphan with no row, and nothing gives it one), which is how this tells the
+ * view's entries from the record's — and why the orphan asking, which the index
+ * holds on its own entry, is never its own answer.
  *
- * Reader: the orphan analysis's BACKED arm — a stale key of an active path is
- * released, never pruned, whoever's row; the row the record's binding names
- * standing on the same entry was the special case of this the compare here used
- * to make.
+ * Reader: the orphan analysis's guard, ahead of every arm that would remove the
+ * copy — a stale key of an active path is released, never pruned, whatever its
+ * order, its owner or Git's answer, and whoever's row; the row the record's binding
+ * names standing on the same entry was the special case of this the compare here
+ * used to make.
  */
-static const manifest_row_t *standing_row(
+static bool workspace_row_stands(
     const workspace_t *ws, const char *path, const struct stat *st
 ) {
     size_t count = 0;
-    const workspace_item_t *const *entries = find_entries(ws, st, &count);
+    const workspace_item_t *const *entries = workspace_find_entries(ws, st, &count);
 
     for (size_t i = 0; i < count; i++) {
         if (entries[i]->row && same_entry(path, entries[i]->filesystem_path, st)) {
-            return entries[i]->row;
+            return true;
         }
     }
 
-    return NULL;
+    return false;
 }
 
 /**
- * The item standing on the entry a path names, under another spelling
+ * Does any item stand on the entry a path names, under another spelling?
  *
- * standing_row's question asked of every item, a row's or a record's: a path
- * the view claims or the record remembers is no discovery, and this is that rule
- * read by identity — a row or an orphan record at another spelling of the child's
- * entry keeps the child undiscovered, exactly as the same row or record at the
- * child's own spelling does. Without it one screen promised a commit and a deletion
- * of one file. Any item that pairs, in an order the sort does not fix: the reader
- * asks whether one stands, never which.
+ * workspace_row_stands' question asked of every item, a row's or a record's: a
+ * path the view claims or the record remembers is no discovery, and this is that
+ * rule read by identity — a row or an orphan record at another spelling of the
+ * child's entry keeps the child undiscovered, exactly as the same row or record
+ * at the child's own spelling does. Without it one screen promised a commit and
+ * a deletion of one file. Whether one stands, never which: any item that pairs,
+ * in an order the sort does not fix.
  *
  * Reader: the untracked scan's leaf probe.
  */
-static const workspace_item_t *standing_item(
+static bool workspace_item_stands(
     const workspace_t *ws, const char *path, const struct stat *st
 ) {
     size_t count = 0;
-    const workspace_item_t *const *entries = find_entries(ws, st, &count);
+    const workspace_item_t *const *entries = workspace_find_entries(ws, st, &count);
 
     for (size_t i = 0; i < count; i++) {
-        if (same_entry(path, entries[i]->filesystem_path, st)) return entries[i];
+        if (same_entry(path, entries[i]->filesystem_path, st)) return true;
     }
 
-    return NULL;
+    return false;
 }
 
 /**
@@ -1785,13 +1787,13 @@ static const workspace_item_t *standing_item(
  *     alone — that one answers for ancestors, so a claim whose own path is squatted
  *     is one rung past its reach.
  *
- * Read by index_entries' two passes, over each item's own kind — a row's or a
- * record's — and by the orphan analysis's retyped arm over the record's alone —
- * where the answer is not whether the key may vouch but whether what dotta put
- * there is gone (workspace_analyze_orphans). The scan's roots ask a narrower
- * question of their own items directly: over the directory items the kind is a
- * constant, and what they want is a directory to enumerate. Over path_kind_t,
- * which is coarser than the node a type stands as (core/workspace.h
+ * Read by workspace_index_entries' two passes, over each item's own kind — a
+ * row's or a record's — and by the orphan analysis's retyped arm over the record's
+ * alone — where the answer is not whether the key may vouch but whether what
+ * dotta put there is gone (workspace_analyze_orphans). The scan's roots ask a
+ * narrower question of their own items directly: over the directory items the
+ * kind is a constant, and what they want is a directory to enumerate. Over
+ * path_kind_t, which is coarser than the node a type stands as (core/workspace.h
  * workspace_type_occupant), and on purpose: a link at a file key names the entry
  * it stands on, and a retyped record is released only where a directory and a
  * non-directory swapped. core/deploy.c occupant_conflicts reads the finer kind
@@ -1801,8 +1803,10 @@ static const workspace_item_t *standing_item(
  * @param occupant What the look found (workspace_item_t)
  * @param kind The kind the claim names — the item's own, a row's or a record's
  */
-static bool claim_stands(fs_occupant_t occupant, path_kind_t kind) {
-    if (occupant == FS_OCCUPANT_NONE || occupant == FS_OCCUPANT_UNKNOWN) return false;
+static bool workspace_claim_stands(fs_occupant_t occupant, path_kind_t kind) {
+    if (occupant == FS_OCCUPANT_NONE || occupant == FS_OCCUPANT_UNKNOWN) {
+        return false;
+    }
 
     return (occupant == FS_OCCUPANT_DIRECTORY) == (kind == PATH_KIND_DIRECTORY);
 }
@@ -1857,19 +1861,19 @@ static void workspace_look_orphans(workspace_t *ws) {
  * facts the load holds about a path — a row of the view, a record — are keyed
  * by spelling. This is the one place the load reads the entry itself: each item
  * whose look found its claim's kind standing, sorted by the (dev, ino) that look
- * found, so a reader's ask is a binary search (find_entries). Built once per
- * load for the two verbs that act on an entry through a string, and met by identity
- * and never by string: both readers asked the strings first, and this answers
- * only where they could not.
+ * found, so a reader's ask is a binary search (workspace_find_entries). Built
+ * once per load for the two verbs that act on an entry through a string, and
+ * met by identity and never by string: both readers asked the strings first,
+ * and this answers only where they could not.
  *
  * Two passes over two disjoint arrays — the active items, each standing at its
  * row's key, and the orphans, each exactly a record no row stands at — so an
  * entry is a row's or a record's and never both: an active item carries its row,
- * an orphan none, which is how standing_row tells them apart. Whether a key may
- * vouch at all is claim_stands, one rule read over both; every false answer drops
- * rather than keeps — a release where a prune was right or an offer deferred a
- * run, never an active file pruned or offered twice — which is the direction a
- * third reading would have to be argued in.
+ * an orphan none, which is how workspace_row_stands tells them apart. Whether a
+ * key may vouch at all is workspace_claim_stands, one rule read over both; every
+ * false answer drops rather than keeps — a release where a prune was right or
+ * an offer deferred a run, never an active file pruned or offered twice — which
+ * is the direction a third reading would have to be argued in.
  *
  * No look is taken here: each item's is the one the phase that owns it took —
  * the walk over the active items for the rows, workspace_look_orphans for the
@@ -1885,12 +1889,12 @@ static void workspace_look_orphans(workspace_t *ws) {
  *
  * One allocation sized by the two arrays, and a sort.
  *
- * Readers: standing_row (the orphan analysis's BACKED arm), standing_item (the
- * untracked scan's leaf probe).
+ * Readers: workspace_row_stands (the orphan analysis's guard),
+ * workspace_item_stands (the untracked scan's leaf probe).
  *
  * @param ws Workspace (must not be NULL)
  */
-static void index_entries(workspace_t *ws) {
+static void workspace_index_entries(workspace_t *ws) {
     size_t active_count = ws->dir_count + ws->file_count;
 
     ws->entries = arena_calloc(
@@ -1900,7 +1904,7 @@ static void index_entries(workspace_t *ws) {
     for (size_t i = 0; i < active_count; i++) {
         const workspace_item_t *item = ws->active[i];
 
-        if (claim_stands(item->occupant, item->item_kind)) {
+        if (workspace_claim_stands(item->occupant, item->item_kind)) {
             ws->entries[ws->entry_count++] = item;
         }
     }
@@ -1908,7 +1912,7 @@ static void index_entries(workspace_t *ws) {
     for (size_t i = 0; i < ws->orphan_count; i++) {
         const workspace_item_t *item = ws->orphans[i];
 
-        if (claim_stands(item->occupant, item->item_kind)) {
+        if (workspace_claim_stands(item->occupant, item->item_kind)) {
             ws->entries[ws->entry_count++] = item;
         }
     }
@@ -1968,8 +1972,8 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  * is here is stored anywhere. Both kinds walk one loop; the record's kind says
  * which questions apply.
  *
- * Per orphan, in order — the ancestry, presence, the occupant's kind, the prune
- * order, the ownership gate, then Git authority:
+ * Per orphan, in order — the ancestry, presence, the occupant's kind, the entry,
+ * the prune order, the ownership gate, then Git authority:
  *   - the ancestry: a squatter above the copy — a directory row of the view, a
  *     directory record the looker found squatted, or a link over a record beneath
  *     it — means no look was taken at all, and the record is released with nothing
@@ -1983,12 +1987,22 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *     — what dotta put there is gone, the same sentence as LOST below — and the
  *     node in its place is not dotta's to remove: unlink cannot take a directory,
  *     rmdir cannot take a file, and nothing authorizes either. Released, tagged
- *     [type]. Decided ahead of the prune order and the gate, because an order
- *     to prune a copy that is no longer there is moot and no tree needs asking.
- *     A file ↔ symlink ↔ device swap is not this: unlink undoes a one-node swap
- *     under --force, and the divergence names it TYPE. An occupant that could
- *     not be stat'd is not taken for another kind — it may be dotta's own
- *     directory, unreachable;
+ *     [type]. Decided ahead of the entry, the prune order and the gate, because
+ *     no entry stands for a copy that is no longer there, an order to prune it
+ *     is moot, and no tree needs asking. A file ↔ symlink ↔ device swap is not
+ *     this: unlink undoes a one-node swap under --force, and the divergence names
+ *     it TYPE. An occupant that could not be stat'd is not taken for another
+ *     kind — it may be dotta's own directory, unreachable;
+ *   - the entry: a row of the view standing on the record's very entry under
+ *     another spelling of its path — whoever's — makes the record a stale key
+ *     of an active path, RELEASED, so the one copy is never pruned as the old
+ *     one (workspace_row_stands). A target bound through a symlink, a HOME spelled
+ *     two ways, a name the volume folds; apply adopts the row under its spelling
+ *     and retires the key. Asked ahead of every arm that would remove the copy:
+ *     its reason is a fact about the entry, which outranks every reason about
+ *     the record or about Git — an order to prune the copy lives only while its
+ *     path is out of the view (core/state.h), and the view holds this one under
+ *     another spelling;
  *   - the prune order (remove --delete-files): the user chose the fate of the
  *     deployed copy, and Git is not asked. Honoured only with a reference to
  *     measure the copy against — a directory (cleanup's emptiness rule decides)
@@ -2009,19 +2023,15 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *     elsewhere in the view carries the class of the namespace the claim lands
  *     in (workspace_relocation_t), read where the row is found and the row not
  *     kept, and that class picks the fate (cleanup_verdict). Elsewhere is another
- *     entry, never merely another string, and the guard is asked first: a row
- *     standing on the record's very entry under another spelling of its path —
- *     whoever's — makes the record a stale key, RELEASED, so the one copy is
- *     never pruned as the old one (standing_row). A target bound through a symlink,
- *     a HOME spelled two ways, a name the volume folds; apply adopts the row
- *     under its spelling and retires the key; UNVERIFIED keeps the orphan skipped
- *     until Git answers — either kind: LOST would retire the record, BACKED would
- *     remove the copy, and neither is a guess to make about an empty directory
- *     any more than about a file. Skipped and not measured: no reader shows a
- *     bit beside UNVERIFIED, so a compare would only give the item a second reason
- *     for the one fate it already has. The probe raises nothing, so a lookup it
- *     could not make is this orphan's skip and never the load's — the rule the
- *     file analysis takes for its own looks.
+ *     entry, never merely another string: a row standing on the record's very
+ *     entry was the entry's arm above. UNVERIFIED keeps the orphan skipped until
+ *     Git answers — either kind: LOST would retire the record, BACKED would remove
+ *     the copy, and neither is a guess to make about an empty directory any more
+ *     than about a file. Skipped and not measured: no reader shows a bit beside
+ *     UNVERIFIED, so a compare would only give the item a second reason for the
+ *     one fate it already has. The probe raises nothing, so a lookup it could
+ *     not make is this orphan's skip and never the load's — the rule the file
+ *     analysis takes for its own looks.
  *
  * Divergence for a prunable file is disk against what dotta last deployed — the
  * record (workspace_compare_orphan). A prunable directory's verdict is cleanup's
@@ -2098,22 +2108,48 @@ static void workspace_analyze_orphans(workspace_t *ws) {
         /* Another kind of path where dotta's copy was (see the doc above): a
          * directory at a file record's path, anything but a directory at a
          * directory record's — the claim's kind failing to stand at its key,
-         * which is claim_stands' own question over the record's kind. An occupant
-         * that could not be stat'd is not taken for another kind, which is the
-         * first term. claim_stands answers the same of an absent record — nothing
-         * standing vouches for nothing — which is why the absence arm above decides
-         * first. The record's own kind, not the ancestry's: whether a squatter
-         * stands above the copy was asked before the look
-         * (workspace_squatter_above), and no record that reached here is beneath
-         * one; a directory record that is retyped here is the squatter
-         * workspace_look_orphans noted when it took this very look.
+         * which is workspace_claim_stands' own question over the record's kind.
+         * An occupant that could not be stat'd is not taken for another kind,
+         * which is the first term. workspace_claim_stands answers the same of
+         * an absent record — nothing standing vouches for nothing — which is
+         * why the absence arm above decides first. The record's own kind, not
+         * the ancestry's: whether a squatter stands above the copy was asked
+         * before the look (workspace_squatter_above), and no record that reached
+         * here is beneath one; a directory record that is retyped here is the
+         * squatter workspace_look_orphans noted when it took this very look.
          *
          * What dotta put there is gone, and what stands there is not dotta's to
          * remove. Released, [type]: the record retires, the path stays. */
         if (item->occupant != FS_OCCUPANT_UNKNOWN &&
-            !claim_stands(item->occupant, item->item_kind)) {
+            !workspace_claim_stands(item->occupant, item->item_kind)) {
             item->state = WORKSPACE_STATE_RELEASED;
             item->divergence = DIVERGENCE_TYPE;
+            continue;
+        }
+
+        /* The guard, ahead of every arm that would remove the copy: a row of
+         * the view stands on this very entry under another spelling of its path
+         * — this profile's own claim after its root was re-spelled, another
+         * profile's through a link no binding names, a name the volume folds.
+         * The record is a stale key of an active path, not a copy left behind —
+         * released, and the path stays for the row standing on it; what becomes
+         * of that row is apply's adoption, which reads its own gates
+         * (cmds/apply.c). Its reason is a fact about the entry, never about the
+         * record or Git, so it outranks both: an order to prune the copy lives
+         * only while its path is out of the view (core/state.h), and the view
+         * holds this one; the gate would release on a reason of its own; and
+         * Git's answer would only choose between a prune and a hold the entry
+         * has already ruled out.
+         *
+         * By the entry and never by a name compare: a volume that folds case or
+         * normalization stands one entry at two strings, and cleanup was measured
+         * deleting an active file through that fold. An occupant that could not
+         * be stat'd is not asked and falls through: the item's stat is meaningful
+         * for a present occupant alone (workspace_item_t), so the two conjuncts
+         * keep this order. */
+        if (item->occupant != FS_OCCUPANT_UNKNOWN &&
+            workspace_row_stands(ws, item->filesystem_path, &item->st)) {
+            item->state = WORKSPACE_STATE_RELEASED;
             continue;
         }
 
@@ -2121,7 +2157,8 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * the removal named or a copy dotta deployed, the only births an order
          * has (state_order_prune); Git is not asked. Read ahead of the ownership
          * gate below by design: a named path must go whether dotta deployed it
-         * or only ever found it. Divergence still protects an edited copy —
+         * or only ever found it — and behind the guard above, so the copy is
+         * one no row stands on. Divergence still protects an edited copy —
          * cleanup's skip reasons read the same bits.
          *
          * Only where the copy can be measured at all: a directory against cleanup's
@@ -2168,26 +2205,6 @@ static void workspace_analyze_orphans(workspace_t *ws) {
                 break;
         }
 
-        /* The guard — BACKED only, which is all that reaches here. A row of the
-         * view stands on this very entry under another spelling of its path:
-         * this profile's own claim after its root was re-spelled, another profile's
-         * through a link no binding names, a name the volume folds. The record
-         * is a stale key of an active path, not a copy left behind — released,
-         * and the path stays for the row standing on it; what becomes of that
-         * row is apply's adoption, which reads its own gates (cmds/apply.c).
-         *
-         * By the entry and never by a name compare: a volume that folds case or
-         * normalization stands one entry at two strings, and cleanup was measured
-         * deleting an active file through that fold. An occupant that could not
-         * be stat'd is not asked and falls through: the item's stat is meaningful
-         * for a present occupant alone (workspace_item_t), so the two conjuncts
-         * keep this order. */
-        if (item->occupant != FS_OCCUPANT_UNKNOWN &&
-            standing_row(ws, item->filesystem_path, &item->st)) {
-            item->state = WORKSPACE_STATE_RELEASED;
-            continue;
-        }
-
         /* The relocation read: a relocated orphan is an orphan whose claim still
          * has a row, standing at another file. The record's own (profile, storage
          * path) pair is asked of the view; a row found here always projects to
@@ -2208,15 +2225,15 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          *
          * The class is read here, where the row is found, and the row is not
          * kept: an orphan item carries none, which is how the entries tell a
-         * view's item from a record's (standing_row), and nothing reads the new
-         * location. Which of the two kinds of relocation it is, is the mounting
-         * rule of the namespace the claim is named in — the label alone, and no
-         * place: a root's binder answers which profile bound that one root, where
-         * the question here is whether the namespace is anyone's to re-target
-         * (infra/mount.h mount_root_t). The record's name and the row's are one
-         * string (manifest_lookup_storage matches it exactly), and a name the
-         * view holds was validated where the profile was read, so the projection
-         * below asserts nothing not already established. */
+         * view's item from a record's (workspace_row_stands), and nothing reads
+         * the new location. Which of the two kinds of relocation it is, is the
+         * mounting rule of the namespace the claim is named in — the label alone,
+         * and no place: a root's binder answers which profile bound that one
+         * root, where the question here is whether the namespace is anyone's to
+         * re-target (infra/mount.h mount_root_t). The record's name and the row's
+         * are one string (manifest_lookup_storage matches it exactly), and a
+         * name the view holds was validated where the profile was read, so the
+         * projection below asserts nothing not already established. */
         if (manifest_lookup_storage(ws->manifest, item->storage_path, item->profile)) {
             switch (label_of(item->storage_path)) {
                 case LABEL_HOME:
@@ -2259,10 +2276,10 @@ static void workspace_analyze_orphans(workspace_t *ws) {
  * — a walk stops at any of them it meets, by whichever string — and the walks:
  * the driver enumerates each once, in a walk of its own.
  *
- * The entries index (index_entries) reads the same look off the same items, for
- * the two verbs that act on an entry through a string, and the two are not one
- * structure: a root is a selection with a winner and a mutable registration, an
- * entry a look with a run of equals.
+ * The entries index (workspace_index_entries) reads the same look off the same
+ * items, for the two verbs that act on an entry through a string, and the two
+ * are not one structure: a root is a selection with a winner and a mutable
+ * registration, an entry a look with a run of equals.
  *
  * Asked by the driver as it registers each tracked directory — is one already
  * standing here? — and by the walk of every directory child — is this another
@@ -2501,7 +2518,7 @@ static workspace_fault_t workspace_scan(
                 continue;
             }
         } else if (claim || workspace_find_item(ws->orphans, ws->orphan_count, child) ||
-            standing_item(ws, child, &st)) {
+            workspace_item_stands(ws, child, &st)) {
             /* Whether anything already speaks for the leaf — by its spelling
              * and then by its entry, in descending order of standing. The view
              * holds it: after the question above only a rung can stand here, an
@@ -2519,10 +2536,10 @@ static workspace_fault_t workspace_scan(
              * volume folds — is active or remembered however it is spelled, and
              * offering it would commit one file twice or promise a commit of a
              * copy cleanup is about to prune. All three are the load's own facts,
-             * built before the scan runs (workspace_partition, index_entries),
-             * so status, sync and update read one answer whatever else each ran.
-             * The identity probe is paid only for a child neither string claimed
-             * — the offers. */
+             * built before the scan runs (workspace_partition,
+             * workspace_index_entries), so status, sync and update read one answer
+             * whatever else each ran. The identity probe is paid only for a child
+             * neither string claimed — the offers. */
             continue;
         }
 
@@ -2623,10 +2640,10 @@ static error_t workspace_analyze_untracked(
      * that is a link now is the [type] the directory analysis said, and enumerating
      * the link's target would offer that directory's files as this row's. The
      * kind test is the walk's own question, not the index's — is there a directory
-     * here to enumerate, where claim_stands asks whether a claim's kind stands
-     * — and over the directory items the kind is a constant. Registered in the
-     * view's order, lowest profile first, so a later profile's row standing at
-     * a directory an earlier one already stands at takes it, owner and spelling
+     * here to enumerate, where workspace_claim_stands asks whether a claim's
+     * kind stands — and over the directory items the kind is a constant. Registered
+     * in the view's order, lowest profile first, so a later profile's row standing
+     * at a directory an earlier one already stands at takes it, owner and spelling
      * together — the index's own rule for a contested path (core/manifest.c
      * manifest_layer), applied where the keys differ — and within one profile
      * the later row in path order. The consequence: where two tracked rows stand
@@ -3112,7 +3129,7 @@ error_t workspace_load(
      * whose guard reads the index; and only where a reader may ask, which is
      * this gate said once for both — the orphan analysis returns at its first
      * line with no orphan, and the scan asks per offer. Every ask below is
-     * therefore made on a load this built the index in (find_entries).
+     * therefore made on a load this built the index in (workspace_find_entries).
      *
      * The left arm is the orphan analysis's own precondition for reading an
      * orphan's look, so an analysis that reads one ran under this block by
@@ -3123,7 +3140,7 @@ error_t workspace_load(
      * line. */
     if ((opts->analyze_orphans && ws->orphan_count > 0) || opts->analyze_untracked) {
         workspace_look_orphans(ws);
-        index_entries(ws);
+        workspace_index_entries(ws);
     }
 
     /* Optional: the orphans analyzed (records of either kind the view lacks) —

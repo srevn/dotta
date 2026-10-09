@@ -901,10 +901,12 @@ error_t state_retire(state_t *state, const char *filesystem_path);
  * fate of a copy nothing backs any more — one the removal named, or one dotta
  * deployed; never a copy dotta merely found under an unnamed path (the gate the
  * one settle loop enforces, cmds/remove remove_settle) — and apply is to prune
- * it — a clean copy; cleanup's skip reasons still protect a modified one. A missing
- * record is a no-op success: the UPDATE matches no row, since nothing was ever
- * observed at the path. At birth an ordered path is out of the view by construction
- * — the settle loop runs only over paths the post-commit view lacks, whichever
+ * it: a clean copy no row stands on under another spelling, whose record the
+ * workspace's orphan analysis releases ahead of the order, the path being in
+ * the view; cleanup's skip reasons still protect a modified one. A missing record
+ * is a no-op success: the UPDATE matches no row, since nothing was ever observed
+ * at the path. At birth an ordered path is out of the view by construction —
+ * the settle loop runs only over paths the post-commit view lacks, whichever
  * remove route called it. A repeated order re-stamps: the order standing is the
  * latest.
  *

@@ -1053,15 +1053,18 @@ error_t profile_capture_directory(
  *   - a directory claims its attributes, counted in `captured` only where the
  *     claim moved, so a re-derivation that found nothing new rewrites nothing
  *     and drives no commit;
- *   - anything else retires a standing derived claim there, its key appended to
- *     `retired`;
+ *   - anything else retires every derived claim the profile holds at that place,
+ *     under each name a root of the profile's strictly above it gives the place,
+ *     each key appended to `retired`: the disk answers about a place, and a profile
+ *     bound after its first captures derives one place under two names
+ *     (core/manifest.h manifest_lookup_claim's note);
  *   - no answer — an unbound custom/ name, nothing there, nothing this host could
  *     see, an owner it cannot name — leaves the rung as it is: no answer is not
  *     an answer of "no".
  * The two outs are shaped by what a writer can do with them: a claim authored
  * has no consequence beyond the sheet, so its count is the whole report, while
  * a claim retired leaves the view by the commit and its record behind, and only
- * the key names that.
+ * the key names that — one key a name, so two keys can place one path.
  *
  * Total and idempotent: nothing refuses the climb and no rung stops it, and each
  * climb decides every rung it passes, so a rung two leaves share is decided at
@@ -1083,8 +1086,9 @@ error_t profile_capture_directory(
  *                     meets with a name it composed or validated (must not be NULL)
  * @param captured Count of rungs whose claim the climb authored or changed, added
  *                 to (must not be NULL)
- * @param retired Keys the climb retired, appended as copies in the array's arena
- *                (must not be NULL; given its arena by string_array_init)
+ * @param retired Keys the climb retired, every name of each place it retired
+ *                at, appended as copies in the array's arena (must not be NULL;
+ *                given its arena by string_array_init)
  */
 void profile_capture_ancestors(
     profile_draft_t *draft,

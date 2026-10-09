@@ -1484,7 +1484,9 @@ static error_t add_write_record(
         for (size_t i = 0; i < let_go[b]->count; i++) {
             /* Placed by the table the walk named through, which the view lends
              * back (manifest_mounts): a name let go stands nowhere until it gives
-             * one */
+             * one. Two can give one path — the climb drops a place under every
+             * name the profile derives it by — and the second retire there finds
+             * no record, which is no failure (core/state.h state_retire) */
             const char *filesystem_path = mount_resolve(
                 ctx->arena, manifest_mounts(walk->view), profile, let_go[b]->entries[i]
             );

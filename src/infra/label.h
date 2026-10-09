@@ -66,10 +66,12 @@ typedef enum {
 } label_t;
 
 /**
- * The labels' arity, for a walk over them (the grammar's own, and cmds/add.c
- * add_print_labels) and for an array with one slot per label (label_words itself,
- * and that receipt's counts). A macro, not an enumerator, so the type holds no
- * sentinel: every label_t a reader holds subscripts label_words in range.
+ * The labels' arity, for a walk over them (the grammar's own, cmds/add.c
+ * add_print_labels, core/profiles.c profile_needs_target and profile_capture_rung)
+ * and for an array with one slot per label (label_words itself, that receipt's
+ * counts, and the labels profile_needs_target notes). A macro, not an enumerator,
+ * so the type holds no sentinel: every label_t a reader holds subscripts
+ * label_words in range.
  */
 #define LABEL_COUNT (LABEL_CUSTOM + 1)
 
@@ -272,9 +274,12 @@ error_t label_validate_storage(const char *storage_path);
  * directory, a key like any name. `tail` must not be NULL, checked as the two
  * projections check the same rule read from the other side.
  *
- * Reader: the last rung of the namer's ascent, which is the one place in the
- * tree a filesystem path becomes a name (core/manifest.c manifest_ascend), over
- * the root the table found for it (infra/mount.h mount_root_above).
+ * Readers: the last rung of the namer's ascent, which is the one place in the
+ * tree a filesystem path is given a name (core/manifest.c manifest_ascend), over
+ * the root the table found for it (infra/mount.h mount_root_above); and the climb,
+ * which gives none — it spells every name a place has under the profile's roots,
+ * to find the claims the disk contradicts there (core/profiles.c
+ * profile_capture_rung, over infra/mount.h mount_root_of).
  *
  * @param arena Arena that owns the answer (must not be NULL)
  * @param label The namespace the name is in

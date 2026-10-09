@@ -94,16 +94,17 @@
  *     search itself, asked once per name by the view's ascent. A name is what
  *     that root's label and that tail spell — the word alone where the path *is*
  *     the root — and the ascent spells it there (core/manifest.c manifest_ascend):
- *     the table hands out what it found and composes nothing, one reader being
- *     no reason to own the sentence.
+ *     the table hands out what it found and composes nothing, a name being the
+ *     grammar's to spell (infra/label.h label_compose).
  *   - Where the asker's root of a label stands: mount_root_of, by label rather
- *     than by place — the view's contribution, add's receipt, and whether a profile
- *     needs a target.
+ *     than by place — the view's contribution, add's receipt, whether a profile
+ *     needs a target, and every name a place has under the asker's roots, which
+ *     the climb spells where the disk contradicts its claims there.
  *   - Where a profile's claim stands (profile + storage -> filesystem):
  *     mount_resolve — that second find, then the join. A name is composed beneath
  *     a root, so resolving one places it back at the very path it was composed
  *     from. This verb composes where the ascent's does not, because its join
- *     has many readers and the name's has one.
+ *     has many readers, and a name has its composer in the grammar already.
  *
  * No verb answers "is this path a root". Naming is total over the paths a root
  * encloses, so a reader that used to meet the namer's absence and ask that question
@@ -374,9 +375,11 @@ const mount_root_t *mount_root_above(
  * gives the binding the tie. Never fails, allocates nothing.
  *
  * Readers: add's receipt, which names the place the custom/ names it captured
- * went under (cmds/add.c add_print_labels); and the target mark, which asks the
- * table no state row can produce for each label a profile claims under
- * (core/profiles.c profile_needs_target).
+ * went under (cmds/add.c add_print_labels); the target mark, which asks the table
+ * no state row can produce for each label a profile claims under (core/profiles.c
+ * profile_needs_target); and the climb, which spells the name a place has under
+ * each of the profile's roots strictly above it, to retire every derived claim
+ * the disk contradicts there (core/profiles.c profile_capture_rung).
  */
 const mount_root_t *mount_root_of(
     const mount_table_t *table,

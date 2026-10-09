@@ -1282,15 +1282,16 @@ error_t profile_capture_directory(
 }
 
 /**
- * Author, refresh or retire the derived claim at one rung of a chain
+ * Author, refresh or retire the derived claims at one rung of a chain
  *
  * One component of a leaf's name, spelled by the climb, standing where its own
  * name resolves under the table the leaf was named under — the profile the base's,
  * whose bindings place a custom/ rung. The rule is the sheet's own, read one
  * level up: an item exists iff it claims something, so a rung the disk answers
  * "directory" for claims its attributes, a rung it answers anything else for
- * retires the claim that said otherwise, and a rung it does not answer at all
- * leaves the copy exactly as it found it.
+ * retires every claim that said otherwise — the answer is about the place, which
+ * the profile can derive under more than one name — and a rung it does not answer
+ * at all leaves the copy exactly as it found it.
  *
  * Derived throughout: this rule authors the way, never intent. And it cannot
  * fail: every answer the disk gives is one of the three, and the one the capture
@@ -1298,12 +1299,12 @@ error_t profile_capture_directory(
  *
  * Reader: profile_capture_ancestors, each rung of each leaf it climbs.
  *
- * @param draft The draft: the copy the rung's claim is read and written in, and
- *              the arena the rung's place is spelled into
+ * @param draft The draft: the copy the rung's claims are read and written in,
+ *              and the arena the rung's place and its names are spelled into
  * @param mounts The table the rung's name resolves through
  * @param rung The rung's name
  * @param captured Incremented where the rung's claim moved
- * @param retired Receives the name where the rung's claim goes
+ * @param retired Receives each name whose claim goes
  */
 static void profile_capture_rung(
     profile_draft_t *draft, const mount_table_t *mounts, const char *rung,
@@ -1349,17 +1350,46 @@ static void profile_capture_rung(
     }
 
     /* Something stands here that is not a directory, so the profile passes through
-     * no directory at this rung and a claim that says it does has just been
+     * no directory at this place and every claim that says it does has just been
      * contradicted by the disk. The case that matters is a symlink the user put
      * there after the first capture: writing through it is what they asked for,
-     * and dropping the claim is what lets dotta — the row leaves the view with
-     * the claim, and the caller retires the record that named the path (the two
-     * halves core/workspace reads to call a directory displaced). A symlink that
-     * was there at capture time never authored a claim to drop; this is the same
-     * consent, one command later. */
+     * and dropping the claims is what lets dotta — the row leaves the view with
+     * them, and the caller retires the record that named the path (the two halves
+     * core/workspace reads to call a directory displaced). A symlink that was
+     * there at capture time never authored a claim to drop; this is the same
+     * consent, one command later.
+     *
+     * The answer is about the place, and a profile can derive one place under
+     * more than one name: one bound after its first captures derives a chain
+     * under each of its roots that encloses the place (core/manifest.h
+     * manifest_lookup_claim's note). So every derived claim the profile holds
+     * here goes, under each name a root of its own strictly above the place gives
+     * it — the rung's own among them, the place being where that name resolves.
+     * A tracked one is the walk's word under any name, and stays; and a root's
+     * own word is no rung's, the climb deriving nothing there
+     * (profile_capture_ancestors). */
     if (occupant != FS_OCCUPANT_DIRECTORY) {
-        if (metadata_remove_item(draft->sheet, PATH_KIND_DIRECTORY, rung)) {
-            string_array_push(retired, rung);
+        for (label_t label = LABEL_HOME; label < LABEL_COUNT; label++) {
+            /* The profile's root of this label, where it has one here — a custom/
+             * bound nowhere has none — and the place's tail past it, where that
+             * root encloses the place */
+            const mount_root_t *root = mount_root_of(mounts, draft->base->name, label);
+            if (!root) continue;
+
+            const char *tail = str_path_beneath(
+                filesystem_path, root->filesystem_path, strlen(root->filesystem_path)
+            );
+            if (!tail) continue;
+
+            /* The place's name under that root, retired where the profile derives it */
+            const char *name = label_compose(draft->arena, label, tail);
+            const metadata_item_t *claim = metadata_find_item(
+                draft->sheet, PATH_KIND_DIRECTORY, name
+            );
+            if (claim && !claim->tracked) {
+                metadata_remove_item(draft->sheet, PATH_KIND_DIRECTORY, name);
+                string_array_push(retired, name);
+            }
         }
         return;
     }

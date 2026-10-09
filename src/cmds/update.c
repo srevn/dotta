@@ -17,6 +17,7 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/hashmap.h"
 #include "base/output.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
@@ -838,9 +839,22 @@ static error_t update_write_record(
         /* What the commit let go: the deleted items by their own path, the keys
          * — the pruned entries and the dropped ancestor claims — by the path
          * this profile deploys them at (UNBOUND names nothing on this machine:
-         * nothing to release). */
+         * nothing to release). Each path once, whichever entry places it: the
+         * climb drops a place under every name the profile derives it by
+         * (core/profiles.h profile_capture_ancestors), and a deleted directory
+         * can stand where the prune takes a rung named under another label, so
+         * two entries can place one path — one record, settled once, as remove
+         * joins what its commit let go (cmds/remove.c remove_paths_candidates),
+         * and the receipt counts paths. */
+        hashmap_t *settled = hashmap_borrow(
+            ctx->arena,
+            commit->deleted_count + commit->pruned.count + commit->ancestors_retired.count
+        );
+
         for (size_t i = 0; i < commit->deleted_count; i++) {
             const workspace_item_t *item = commit->deleted[i];
+            if (!hashmap_add(settled, item->filesystem_path, NULL)) continue;
+
             const manifest_row_t *row = manifest_lookup(manifest, item->filesystem_path);
 
             if (!row) {
@@ -863,8 +877,11 @@ static error_t update_write_record(
                 /* An unbound claim resolves nowhere on this machine: no filesystem
                  * path, so nothing to look up and no record of this run's to
                  * retire. Whatever record a once-bound era may have left is an
-                 * orphan the next load's analysis settles. */
-                if (!filesystem_path) continue;
+                 * orphan the next load's analysis settles. A path an entry before
+                 * this one placed is settled already. */
+                if (!filesystem_path || !hashmap_add(settled, filesystem_path, NULL)) {
+                    continue;
+                }
 
                 const manifest_row_t *row = manifest_lookup(manifest, filesystem_path);
                 if (!row) {
@@ -1612,13 +1629,13 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
              * profile_capture_ancestors), so a leaf the load looked at nothing
              * along — beneath a squatter, whose look answers for the occupant
              * (core/workspace.h workspace_displaced_t) — is climbed only beneath
-             * the user's squatter at a rung: the climb's own retire of that rung
-             * is the remedy, and past it the arrangement is the user's. Beneath
-             * any other the view keeps its claim at the squatter — a row the
-             * profile tracks, or dotta's own copy Git moved past — and a climb
-             * would commit what the occupant answers as the user's word about
-             * the chain: a rung retired, or a link target's attributes, on every
-             * machine. */
+             * the user's squatter at a rung: the climb's own retire there — under
+             * every name its profile derives the place by — is the remedy, and
+             * past it the arrangement is the user's. Beneath any other the view
+             * keeps its claim at the squatter — a row the profile tracks, or
+             * dotta's own copy Git moved past — and a climb would commit what
+             * the occupant answers as the user's word about the chain: a rung
+             * retired, or a link target's attributes, on every machine. */
             if (item->displaced != WORKSPACE_DISPLACED_NONE &&
                 item->displaced != WORKSPACE_DISPLACED_DERIVED) {
                 continue;

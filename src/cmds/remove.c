@@ -215,19 +215,21 @@ typedef struct {
 typedef struct {
     size_t ordered;    /* Prune ordered — staged for the next apply */
     size_t released;   /* Record retired, the copy left standing */
-    size_t fallback;   /* Record kept — a lower profile still provides the path */
+    size_t fallback;   /* Record kept — another profile's row provides the path */
 } remove_settlement_t;
 
 /**
  * Settle the candidates a removal let go — the one spelling of the fate rule
  *
- * For each candidate the subject is its record: one whose path the view that
- * remains still provides is a fallback — kept, it reads [reassigned], or [stale]
- * where the row that stays is of another kind (dotta's own copy the row replaces),
- * until apply acknowledges or replaces it; one the view no longer provides takes
- * the fate the user chose — --delete-files orders the copy pruned at the next
- * apply, the default releases (the record retires, and the copy stays on disk —
- * core/state.h state_retire).
+ * For each candidate the subject is its record: one whose path another profile's
+ * row now provides is a fallback — kept, it reads [reassigned], or [stale] where
+ * the row that stays is of another kind (dotta's own copy the row replaces),
+ * until apply acknowledges or replaces it; one the removing profile still provides,
+ * under another of its names at the place, is kept and counted nowhere, as update's
+ * record phase keeps it (cmds/update.c update_write_record); one the view no
+ * longer provides takes the fate the user chose — --delete-files orders the copy
+ * pruned at the next apply, the default releases (the record retires, and the
+ * copy stays on disk — core/state.h state_retire).
  *
  * Asked under the caller's lock, of candidates read under it: the fates are written
  * blind (state_order_prune, state_retire), so the record they are decided from
@@ -281,8 +283,14 @@ static error_t remove_settle(
     for (size_t i = 0; i < count; i++) {
         const remove_candidate_t *candidate = &candidates[i];
 
-        if (manifest_lookup(after, candidate->path)) {
-            settlement->fallback++;
+        /* A row standing keeps the record: another profile's is a fallback, and
+         * the removing profile's own — another of its names at the place — leaves
+         * the path its, with nothing to count */
+        const manifest_row_t *row = manifest_lookup(after, candidate->path);
+        if (row) {
+            if (strcmp(row->profile, candidate->record->profile) != 0) {
+                settlement->fallback++;
+            }
         } else if (delete_files && (candidate->named || candidate->record->deployed_at > 0)) {
             err = state_order_prune(ctx->run.state, candidate->path, now);
             if (err) return err;

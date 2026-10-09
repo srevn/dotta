@@ -156,14 +156,14 @@ static error_t update_capture(
  * the capture answered — so the record loop writes what this commit put there,
  * never what a later head of the branch says should be. Its names are the item's
  * (workspace lifetime) and the command arena's (the claim's, which the capture
- * answers there). Deleted items are borrowed; the pruned and retired keys are
- * storage paths their writers copy out, resolved through the mount table by the
- * record loop — the same route remove's record loop takes. The derivation's two
- * outs are shaped by what a reader can do with them (core/profiles.h
- * profile_capture_ancestors): an authored claim has no consequence beyond the
- * sheet, so `ancestors_captured` is the count the receipt reads, while a dropped
- * claim leaves the view by this commit and only its key can settle the record
- * it strands.
+ * answers there). What the commit let go is kept by key — the deleted claims,
+ * the pruned entries and the dropped ancestor claims, storage paths their writers
+ * copy out — and resolved through the mount table by the record loop, the same
+ * route remove's record loop takes. The derivation's two outs are shaped by what
+ * a reader can do with them (core/profiles.h profile_capture_ancestors): an
+ * authored claim has no consequence beyond the sheet, so `ancestors_captured`
+ * is the count the receipt reads, while a dropped claim leaves the view by this
+ * commit and only its key can settle the record it strands.
  *
  * Memory: every member is the command arena's, and nothing frees a commit.
  */
@@ -172,8 +172,7 @@ typedef struct {
     bool committed;                    /* Whether the commit landed: the commit's own answer */
     state_record_t *captured;          /* What each capture committed, as the record keeps it */
     size_t captured_count;
-    const workspace_item_t **deleted;  /* Items whose deletion the commit recorded */
-    size_t deleted_count;
+    string_array_t deleted;            /* Claims the deletions took (storage paths) */
     string_array_t pruned;             /* Directory entries dropped as redundant (storage paths) */
     size_t ancestors_captured;         /* Ancestor claims the derivation authored or refreshed */
     string_array_t ancestors_retired;  /* Ancestor claims the derivation dropped (storage paths) */
@@ -440,7 +439,7 @@ static error_t update_profile(
     /* The capture and deletion lists can each hold every item; the walk fills
      * them with the ones that landed, a rows-only call's at none */
     commit->captured = arena_calloc(ctx->arena, items.count, sizeof(*commit->captured));
-    commit->deleted = arena_calloc(ctx->arena, items.count, sizeof(*commit->deleted));
+    string_array_init(&commit->deleted, ctx->arena, items.count);
 
     /* One walk, one edit per item on the profile's draft, each filling the
      * bookkeeping beside it */
@@ -464,7 +463,7 @@ static error_t update_profile(
                 out, OUTPUT_VERBOSE, "  Removed: %s%s", item->filesystem_path,
                 path_kind_suffix(item->item_kind)
             );
-            commit->deleted[commit->deleted_count++] = item;
+            string_array_push(&commit->deleted, item->storage_path);
             continue;
         }
 
@@ -671,7 +670,7 @@ static error_t update_profile(
      * pruned-keys precedent, so a derivation that only refreshed names nothing
      * and the message's path list says so. */
     size_t named_count =
-        commit->captured_count + commit->deleted_count + commit->ancestors_retired.count;
+        commit->captured_count + commit->deleted.count + commit->ancestors_retired.count;
     const char **storage_paths = arena_calloc(
         ctx->arena, named_count, sizeof(*storage_paths)
     );
@@ -680,8 +679,8 @@ static error_t update_profile(
     for (size_t i = 0; i < commit->captured_count; i++) {
         storage_paths[named++] = commit->captured[i].storage_path;
     }
-    for (size_t i = 0; i < commit->deleted_count; i++) {
-        storage_paths[named++] = commit->deleted[i]->storage_path;
+    for (size_t i = 0; i < commit->deleted.count; i++) {
+        storage_paths[named++] = commit->deleted.entries[i];
     }
     for (size_t i = 0; i < commit->ancestors_retired.count; i++) {
         storage_paths[named++] = commit->ancestors_retired.entries[i];
@@ -836,39 +835,24 @@ static error_t update_write_record(
             synced++;
         }
 
-        /* What the commit let go: the deleted items by their own path, the keys
-         * — the pruned entries and the dropped ancestor claims — by the path
-         * this profile deploys them at (UNBOUND names nothing on this machine:
-         * nothing to release). Each path once, whichever entry places it: the
-         * climb drops a place under every name the profile derives it by
-         * (core/profiles.h profile_capture_ancestors), and a deleted directory
-         * can stand where the prune takes a rung named under another label, so
-         * two entries can place one path — one record, settled once, as remove
-         * joins what its commit let go (cmds/remove.c remove_paths_candidates),
-         * and the receipt counts paths. */
+        /* What the commit let go, by key — the deleted claims, the pruned entries
+         * and the dropped ancestor claims — each at the path this profile deploys
+         * it at (UNBOUND names nothing on this machine: nothing to release).
+         * Each path once, whichever key places it: the climb drops a place under
+         * every name the profile derives it by (core/profiles.h
+         * profile_capture_ancestors), and a deleted directory can stand where
+         * the prune takes a rung named under another label, so two keys can place
+         * one path — one record, settled once, as remove joins what its commit
+         * let go (cmds/remove.c remove_paths_candidates), and the receipt counts
+         * paths. */
+        const string_array_t *let_go[] = {
+            &commit->deleted, &commit->pruned, &commit->ancestors_retired
+        };
         hashmap_t *settled = hashmap_borrow(
             ctx->arena,
-            commit->deleted_count + commit->pruned.count + commit->ancestors_retired.count
+            commit->deleted.count + commit->pruned.count + commit->ancestors_retired.count
         );
 
-        for (size_t i = 0; i < commit->deleted_count; i++) {
-            const workspace_item_t *item = commit->deleted[i];
-            if (!hashmap_add(settled, item->filesystem_path, NULL)) continue;
-
-            const manifest_row_t *row = manifest_lookup(manifest, item->filesystem_path);
-
-            if (!row) {
-                err = state_retire(state, item->filesystem_path);
-                if (err) goto cleanup;
-                removed++;
-            } else if (strcmp(row->profile, commit->profile) != 0) {
-                fallbacks++;
-            }
-            /* else: still this profile's row — the commit did not remove it;
-             * not ours to count. */
-        }
-
-        const string_array_t *let_go[] = { &commit->pruned, &commit->ancestors_retired };
         for (size_t b = 0; b < sizeof(let_go) / sizeof(let_go[0]); b++) {
             for (size_t i = 0; i < let_go[b]->count; i++) {
                 const char *filesystem_path = mount_resolve(
@@ -877,7 +861,7 @@ static error_t update_write_record(
                 /* An unbound claim resolves nowhere on this machine: no filesystem
                  * path, so nothing to look up and no record of this run's to
                  * retire. Whatever record a once-bound era may have left is an
-                 * orphan the next load's analysis settles. A path an entry before
+                 * orphan the next load's analysis settles. A path a key before
                  * this one placed is settled already. */
                 if (!filesystem_path || !hashmap_add(settled, filesystem_path, NULL)) {
                     continue;
@@ -891,6 +875,8 @@ static error_t update_write_record(
                 } else if (strcmp(row->profile, commit->profile) != 0) {
                     fallbacks++;
                 }
+                /* else: still this profile's row — the commit did not remove
+                 * it; not ours to count. */
             }
         }
     }
@@ -988,7 +974,7 @@ static error_t update_execute(
 
     /* One profile's items and chains, gathered afresh for each profile into two
      * arrays sized once to the whole run's: update_profile keeps no pointer into
-     * either — the bookkeeping holds each item it deleted, and each capture its
+     * either — the bookkeeping holds each deletion's key, and each capture its
      * record — so a landed commit keeps its own when the next profile refills
      * them */
     const workspace_item_t **items = arena_calloc(ctx->arena, work.count, sizeof(*items));
@@ -1055,7 +1041,7 @@ static error_t update_execute(
          * caller's whatever a later profile meets. Its user items are what it
          * captured and deleted; a derivation-only commit carries none. */
         commits[(*out_commit_count)++] = bookkeeping;
-        size_t processed = bookkeeping.captured_count + bookkeeping.deleted_count;
+        size_t processed = bookkeeping.captured_count + bookkeeping.deleted.count;
         *total_updated += processed;
 
         if (!output_is_verbose(out)) {

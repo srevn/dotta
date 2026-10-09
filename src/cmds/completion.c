@@ -517,11 +517,9 @@ bool completion_paths_under(
 
     /* At the root or beneath it the command reads the token as typed, so the
      * path is the shell's: add_spell's escape test over the same two strings,
-     * positive. The root's own slash is its separator, so as a prefix it is ""
-     * — the table's spelling of it (infra/mount.h) — every absolute token is
-     * inside it and a relative one lists beneath it. */
-    size_t root_len = root[1] ? strlen(root) : 0;
-    if (strcmp(current, root) == 0 || str_path_beneath(current, root, root_len)) {
+     * positive (base/string.h str_path_under). Every absolute token lies under
+     * a root of "/", and a relative one lists beneath it. */
+    if (str_path_under(current, root, strlen(root))) {
         return false;
     }
 
@@ -538,10 +536,13 @@ bool completion_paths_under(
 
     /* The listing and every path built from it are the arena's and abandoned,
      * the module's idiom (cmds/add.c add_inside): nothing here is freed, so no
-     * candidate's path has a free to get wrong. */
-    const char *dir = arena_str_format(
-        ctx->arena, "%.*s/%.*s", (int) root_len, root, (int) dir_len, rel
-    );
+     * candidate's path has a free to get wrong. The token's directory is joined
+     * beneath the root as the command joins an argument there (add_spell), one
+     * separator at the seam, the root directory's own included (base/string.h
+     * str_path_join). */
+    const char *dir = dir_len > 0
+        ? str_path_join(ctx->arena, root, arena_strndup(ctx->arena, rel, dir_len))
+        : root;
 
     string_array_t listing;
     err = fs_list_dir(dir, ctx->arena, &listing);
@@ -552,7 +553,7 @@ bool completion_paths_under(
         if (strncmp(entry, name, name_len) != 0) continue;
         if (entry[0] == '.' && name[0] != '.') continue;
 
-        const char *path = arena_str_format(ctx->arena, "%s%s", dir, entry);
+        const char *path = str_path_join(ctx->arena, dir, entry);
 
         fprintf(
             out, "%s%.*s%s%s\n", leading, (int) dir_len, rel, entry,

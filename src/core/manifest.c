@@ -571,15 +571,12 @@ static const char *manifest_ascend(const naming_t *n, const char *filesystem_pat
         const char *above = manifest_claim_beneath(manifest_standing(n, rung));
         if (!above) continue;
 
-        /* Past the rung and its separator — which the root directory, being its
-         * own separator, does not have: the boundary infra/mount.c tail_under_root
-         * reads at a root and infra/label.c label_split at a word, read here at
-         * a rung. Off `filesystem_path`, because the truncation above took `rung`'s
-         * byte at that offset. */
-        const char *past = filesystem_path + len;
-        if (*past == '/') past++;
-
-        return arena_str_format(n->arena, "%s/%s", above, past);
+        /* What lies beneath the rung (base/string.h str_path_beneath), read off
+         * `filesystem_path`, because the truncation above took `rung`'s byte at
+         * that offset. */
+        return arena_str_format(
+            n->arena, "%s/%s", above, str_path_beneath(filesystem_path, rung, len)
+        );
     }
 
     /* Nothing of the profile's above it: the root's own label, and the tail —

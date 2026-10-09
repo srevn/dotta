@@ -67,11 +67,11 @@
  *
  * So a root is a path wherever it is read — printed, compared to an argument,
  * measured against a rung. The root directory is the one root that *is* its own
- * separator, and the table's two string verbs read it one byte shorter: "" is
- * the prefix that joins a tail with one slash and encloses every absolute path
- * at depth zero, and it is where the sentinel, a HOME of "/" (a container's bare
+ * separator, which the path verbs the table reads it through already know: every
+ * absolute path lies under it (base/string.h str_path_under), and a tail joins
+ * beneath it with one separator (str_path_join). So it is held and read as "/"
+ * like any root, and it is where the sentinel, a HOME of "/" (a container's bare
  * uid) and a binding whose target is "/" (a container's own root) all stand.
- * That reading is made in one place and nowhere published (mount.c join_prefix).
  *
  * One table, one reading
  * ----------------------

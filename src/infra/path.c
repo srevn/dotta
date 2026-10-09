@@ -139,12 +139,13 @@ error_t path_input_resolve(
  * directory reached through a link no root names keeps the kernel's spelling of
  * that link's target, as a typed absolute path would.
  *
- * HOME has two spellings, or it has one: the kernel's is the rule's, or it is
- * the filesystem root (a HOME linking to `/` would spell the machine under it),
- * or it encloses the rule's — a HOME reached through a link to its own ancestor,
- * where the substitution would nest the tail beneath itself; the other direction
- * is a link to its own descendant, which the kernel refuses as a loop. In each,
- * the directory stands as the shell spelled it.
+ * HOME has two spellings, or it has one: the kernel's is the rule's, or it encloses
+ * the rule's — the filesystem root, where a HOME linking to `/` would spell the
+ * machine under it, or a HOME reached through a link to its own ancestor, where
+ * the substitution would nest the tail beneath itself; the other direction is a
+ * link to its own descendant, which the kernel refuses as a loop. Both are one
+ * test, the rule's spelling under the kernel's (base/string.h str_path_under).
+ * In each, the directory stands as the shell spelled it.
  */
 static error_t path_working_directory(arena_t *arena, const char **out) {
     const char *cwd = NULL;
@@ -157,11 +158,10 @@ static error_t path_working_directory(arena_t *arena, const char **out) {
     if (!physical) return NULL;
 
     size_t len = strlen(physical);
-    if (strcmp(home, physical) == 0 || physical[1] == '\0' ||
-        str_path_beneath(home, physical, len)) {
+    if (str_path_under(home, physical, len)) {
         return NULL;
     }
-    if (strcmp(cwd, physical) != 0 && !str_path_beneath(cwd, physical, len)) {
+    if (!str_path_under(cwd, physical, len)) {
         return NULL;
     }
 

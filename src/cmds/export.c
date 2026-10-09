@@ -376,15 +376,13 @@ static error_t export_collect_claim(const profile_claim_t *claim, void *payload)
     export_walk_t *walk = payload;
 
     /* Where the claim stands in the copy: at its own name in the whole profile,
-     * past the name and its separator beneath a name, and nowhere at the name
-     * itself, which is the copy's root rather than an entry beneath it */
-    const char *rel = claim->storage_path;
-    if (walk->base) {
-        if (!str_path_beneath(claim->storage_path, walk->base, walk->base_len)) {
-            return NULL;
-        }
-        rel += walk->base_len + 1;
-    }
+     * at what lies beneath the name beneath a name (base/string.h
+     * str_path_beneath), and nowhere at the name itself, which is the copy's
+     * root rather than an entry beneath it */
+    const char *rel = walk->base
+        ? str_path_beneath(claim->storage_path, walk->base, walk->base_len)
+        : claim->storage_path;
+    if (!rel) return NULL;
 
     /* The entry, its name copied out of the walk's loan into the command's arena
      * — after the walk's gate and shape check, so nothing the walk passes over
@@ -626,14 +624,10 @@ static error_t export_collect_filesystem(
         return error_wrap(err, "Cannot export '%s'", filesystem_path);
     }
 
-    /* The path as a prefix: the filesystem root is spelled "" — the one prefix
-     * every absolute path is beneath, as the table spells it and the pathspec
-     * reads it (infra/pathspec.c prefix_filesystem). The row standing at the
-     * path is taken by the path itself, before the prefix is asked, so the root's
-     * "" — which encloses "/" as well as everything under it — cannot claim it
-     * twice. */
-    const char *base = strcmp(filesystem_path, "/") == 0 ? "" : filesystem_path;
-    size_t base_len = strlen(base);
+    /* The rows at the path and beneath it: the row standing at the path is taken
+     * by the path itself, and every other row beneath it is taken beneath the
+     * root directory as beneath any directory (base/string.h str_path_beneath) */
+    const size_t len = strlen(filesystem_path);
     list->basename = path_basename(filesystem_path);
 
     const manifest_row_t *at = NULL;
@@ -644,7 +638,7 @@ static error_t export_collect_filesystem(
         const manifest_row_t *row = rows.entries[i];
         if (strcmp(row->filesystem_path, filesystem_path) == 0) {
             at = row;
-        } else if (str_path_beneath(row->filesystem_path, base, base_len)) {
+        } else if (str_path_beneath(row->filesystem_path, filesystem_path, len)) {
             ptr_array_push(&beneath, row);
         }
     }
@@ -702,10 +696,9 @@ static error_t export_collect_filesystem(
     for (size_t i = 0; i < beneath.count; i++) {
         const manifest_row_t *row = beneath.entries[i];
         export_entry_t e = export_entry_from_row(row);
-        /* Past the base and its separator — borrowed from the row, whose string
-         * is the arena's. For the filesystem root the base is "" and the '+ 1'
-         * steps over the leading slash. */
-        e.rel_path = row->filesystem_path + base_len + 1;
+        /* What lies beneath the path — borrowed from the row, whose string is
+         * the arena's */
+        e.rel_path = str_path_beneath(row->filesystem_path, filesystem_path, len);
         entry_list_append(list, arena, &e);
     }
 

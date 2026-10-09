@@ -338,11 +338,9 @@ static error_t add_spell(
      * outside. The subject is folded (path_input_filesystem_path), so the whole
      * test is a string's, where the boundary above had to be asked per prefix
      * on the bytes as typed. A tilde path is HOME's and is read against no target,
-     * even one beneath HOME. The root's own slash is its separator, so as a prefix
-     * it is "" — the table's spelling of it (infra/mount.h) — and every absolute
-     * path is beneath it. */
-    if (target && input[0] != '~' && strcmp(spelled, target) != 0 &&
-        !str_path_beneath(spelled, target, target[1] ? strlen(target) : 0)) {
+     * even one beneath HOME. Every absolute path lies under a target of "/"
+     * (base/string.h str_path_under). */
+    if (target && input[0] != '~' && !str_path_under(spelled, target, strlen(target))) {
         return error_create(
             ERR_INVALID_ARG, "Path '%s' resolves outside target root '%s', and a path "
             "spelled from here or walking out with '..' cannot escape the target",

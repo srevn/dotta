@@ -48,24 +48,50 @@ bool str_starts_with(const char *str, const char *prefix);
 bool str_ends_with(const char *str, const char *suffix);
 
 /**
- * Is `path` strictly beneath directory `dir`?
+ * What lies strictly beneath directory `dir` in `path`: the tail past `dir` and
+ * the separator that ends it, or NULL where `path` is not beneath it
  *
  * A prefix and then a separator, so "/a/bc" is not beneath "/a/b" — and neither
- * is "/a/b" itself. strncmp == 0 guarantees `path` has at least dir_len bytes,
- * so reading path[dir_len] is in bounds: it is either the terminator or a real
- * character.
+ * is "/a/b" itself. The root directory is the one directory whose spelling is
+ * its separator, so every absolute path but "/" lies beneath "/", its tail past
+ * that one byte: "/etc/hosts" beneath "/" is "etc/hosts". strncmp == 0 guarantees
+ * `path` has at least dir_len bytes, so reading the byte past them is in bounds:
+ * it is either the terminator or a real character.
  *
- * `dir` carries no trailing separator — the boundary byte is read at dir_len.
- * `path` is read as written: a prefix and then a separator is beneath, whatever
- * else the spelling holds, so a caller testing an argument before it is folded
- * gets the lexical answer it asked for.
+ * `dir` is a directory as a key spells it: no trailing separator but the root's,
+ * which is all it is. `path` is read as written: a prefix and then a separator
+ * is beneath, whatever else the spelling holds — "/a/b/" lies beneath "/a/b",
+ * its tail empty — so a caller testing an argument before it is folded gets the
+ * lexical answer it asked for. A name lies beneath a name alike ("home/x" beneath
+ * "home"), and a relative path beneath no absolute directory.
+ *
+ * NULL is the one answer "not beneath" has, so a caller that wants the test alone
+ * reads the answer as one.
  *
  * @param path Candidate path
  * @param dir Directory path
  * @param dir_len strlen(dir), passed so a caller testing many pairs hoists it
- * @return true if path is strictly beneath dir
+ * @return The tail beneath `dir`, aliasing `path`; NULL where it is not beneath
  */
-bool str_path_beneath(const char *path, const char *dir, size_t dir_len);
+const char *str_path_beneath(const char *path, const char *dir, size_t dir_len);
+
+/**
+ * What lies at or beneath directory `dir` in `path`: "" where `path` is `dir`
+ * itself, the tail beneath it otherwise (str_path_beneath), or NULL where it is
+ * neither
+ *
+ * The inclusive reading of the same boundary: "/a/b" lies under "/a/b" and "/a/bc"
+ * does not, and "/" lies under "/" as every absolute path does. The empty tail
+ * aliases `path`'s terminator, so every tail starts where `dir`'s spelling ends
+ * or just past it: of two directories one path lies under, the deeper one's tail
+ * starts further into the path, and pointer order is depth order.
+ *
+ * @param path Candidate path
+ * @param dir Directory path
+ * @param dir_len strlen(dir), as str_path_beneath takes it
+ * @return The tail at or beneath `dir`, aliasing `path`; NULL where it is neither
+ */
+const char *str_path_under(const char *path, const char *dir, size_t dir_len);
 
 /**
  * Length of an absolute path's parent

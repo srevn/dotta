@@ -492,8 +492,8 @@ const mount_table_t *manifest_mounts(const manifest_t *manifest);
  *
  * The same derivation manifest_build runs before it places a row — each enabled
  * profile's (name, target) from the state's row cache, augmented with this
- * machine's $HOME and the empty-prefix root sentinel (infra/mount.h) — offered
- * without a view, for a command that declares `mounts` and not `manifest`
+ * machine's $HOME and the root sentinel at "/" (infra/mount.h) — offered without
+ * a view, for a command that declares `mounts` and not `manifest`
  * (include/runtime.h). A command declaring both reads manifest_mounts instead
  * and gets the view's own: one build, one value. Rule 1, never cache a cache.
  *

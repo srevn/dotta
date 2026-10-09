@@ -11,6 +11,7 @@
 
 #include "base/arena.h"
 #include "base/error.h"
+#include "base/string.h"
 
 /**
  * The word of each label — the single source of truth.
@@ -32,21 +33,16 @@ label_split_t label_split(const char *s) {
 
     for (label_t label = LABEL_HOME; label < LABEL_COUNT; label++) {
         const char *word = label_words[label];
-        size_t word_len = strlen(word);
-        if (strncmp(s, word, word_len) != 0) continue;
 
         /* The word, then its separator or its end: a name beneath the label
          * ("home/x"), or the word alone ("home"), which is the namespace's own
          * directory and a name like any other. A directory spelling ("home/")
          * is the word with an empty tail too, and the shed is the reader's
          * (infra/path.c path_input_resolve). "homework" stands under none. The
-         * boundary infra/mount.c tail_under_root reads at a root, read here at
-         * a label. */
-        const char *tail = s + word_len;
-        if (*tail == '/') tail++;
-        else if (*tail != '\0') continue;
-
-        return (label_split_t){ .label = label, .tail = tail };
+         * word is read as the directory it names, under which a path lies as
+         * under any (base/string.h str_path_under). */
+        const char *tail = str_path_under(s, word, strlen(word));
+        if (tail) return (label_split_t){ .label = label, .tail = tail };
     }
 
     return (label_split_t){ 0 };

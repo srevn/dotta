@@ -92,56 +92,13 @@ static bool namespace_holds(const char *profile, const mount_root_t *m) {
     return !m->profile || (profile && strcmp(m->profile, profile) == 0);
 }
 
-/**
- * The prefix a path is matched against and joined beneath.
- *
- * A root is a path wherever it is read (infra/mount.h), and the root directory
- * is the one root that *is* its separator: the two string verbs read it one byte
- * shorter, as "", which is the prefix that joins a tail with one slash and encloses
- * every absolute path at depth zero. Every other root is its own prefix, the
- * same pointer. The reading is made here and nowhere else — the sentinel, a HOME
- * of "/" and a binding whose target is "/" all reach it — so the build stores
- * one string per root and no consumer of a root can hold the form that is not a
- * path.
- *
- * Two readers: the search over the roots (mount_root_above) and the join
- * (mount_resolve).
- */
-static const char *join_prefix(const mount_root_t *root) {
-    return root->filesystem_path[1] ? root->filesystem_path : "";
-}
-
-/**
- * The tail of `filesystem_path` past `prefix`, on a component boundary.
- *
- *   /home/user encloses /home/user/.bashrc; it does NOT enclose
- *   /home/username/.bashrc
- *
- * `prefix` is a root's, as join_prefix reads it — never a `--target` as such.
- * Returns NULL when it does not enclose `filesystem_path` or the boundary fails;
- * otherwise a pointer into it — the empty string when the two name one directory,
- * the tail past it otherwise. The root directory's "" encloses every absolute
- * path at depth zero, and only those: a relative path's first byte is no boundary.
- */
-static const char *tail_under_root(const char *filesystem_path, const char *prefix) {
-    size_t prefix_len = strlen(prefix);
-    if (strncmp(filesystem_path, prefix, prefix_len) != 0) return NULL;
-
-    /* Boundary: next character must be '/' or '\0'. */
-    char boundary = filesystem_path[prefix_len];
-    if (boundary != '/' && boundary != '\0') return NULL;
-
-    const char *tail = filesystem_path + prefix_len;
-    if (*tail == '/') tail++;
-
-    return tail;  /* "" when the two name one directory, non-empty otherwise */
-}
-
 /* The search, whose contract — the tie, the boundary, the absence — is the header's
- * (infra/mount.h). A root encloses the path iff its prefix is a prefix of it on
- * a component boundary (tail_under_root), the root itself included with the empty
- * tail: every key is a string of the rows' own, so no second spelling of a root
- * is owed a match. */
+ * (infra/mount.h). A root encloses the path iff the path lies under it on a
+ * component boundary, the root itself included with the empty tail (base/string.h
+ * str_path_under): /home/user encloses /home/user/.bashrc and not
+ * /home/username/.bashrc, "/" every absolute path and no relative one. Every
+ * key is a string of the rows' own, so no second spelling of a root is owed a
+ * match. */
 const mount_root_t *mount_root_above(
     const mount_table_t *table, const char *profile, const char *filesystem_path,
     const char **out_tail
@@ -156,16 +113,18 @@ const mount_root_t *mount_root_above(
          * directory in this namespace, and never competes on depth. */
         if (!namespace_holds(profile, m)) continue;
 
-        const char *tail = tail_under_root(filesystem_path, join_prefix(m));
+        const char *tail = str_path_under(
+            filesystem_path, m->filesystem_path, strlen(m->filesystem_path)
+        );
         if (!tail) continue;
 
-        /* Every tail points into the subject at its root's length, so pointer
-         * order is depth order. The tie reads as the incumbent's veto and holds
-         * under any row order: it keeps an equal depth when it is a binding —
-         * the more specific statement, the row's own fact — or when the challenger
-         * is HOME, which the portable name outranks. The one comparison a label
-         * is load-bearing for, a HOME of "/" and the sentinel standing at one
-         * directory with neither owned. */
+        /* Every tail starts where its root's spelling ends or just past it, so
+         * pointer order is depth order. The tie reads as the incumbent's veto
+         * and holds under any row order: it keeps an equal depth when it is a
+         * binding — the more specific statement, the row's own fact — or when
+         * the challenger is HOME, which the portable name outranks. The one
+         * comparison a label is load-bearing for, a HOME of "/" and the sentinel
+         * standing at one directory with neither owned. */
         if (winner && tail < deepest) continue;
         if (winner && tail == deepest &&
             (winner->profile || m->label == LABEL_HOME)) {
@@ -212,8 +171,9 @@ error_t mount_table_build(
      * holds no other shape (core/state.c), and a command's own binding passed
      * mount_validate_target — so one arriving is a caller's bug, refused as a
      * nameless binding is, naming the profile. Establishing both here is what
-     * lets mount_resolve join every root with one separator, unconditionally.
-     * NULL contributes no mount: the profile is bound nowhere in this table,
+     * makes every path mount_resolve answers a key: the root as it stands for
+     * the word alone, and the root joined with the tail beneath it for any other
+     * name. NULL contributes no mount: the profile is bound nowhere in this table,
      * which the view records (core/manifest.h manifest_unbound). */
     size_t n = 0;
     for (size_t i = 0; i < mount_count; i++) {
@@ -234,10 +194,9 @@ error_t mount_table_build(
         /* Copied like the name: the table keeps nothing of the caller's past
          * the call, so it stands for the arena's lifetime whatever happens to
          * the rows it was built from. A target of "/" is kept as it stands, as
-         * HOME and the sentinel are below — a root is a path here, and the one
-         * that is its own separator is read a byte shorter where it is matched
-         * and joined (join_prefix); the tie between the three is
-         * mount_root_above's. */
+         * HOME and the sentinel are below — a root is a path here, the one that
+         * is its own separator included, and the path verbs read it as any
+         * (base/string.h); the tie between the three is mount_root_above's. */
         const char *filesystem_path = arena_strdup(arena, raw);
         const char *profile = arena_strdup(arena, mounts[i].profile);
         roots[n++] = (mount_root_t){
@@ -300,18 +259,19 @@ const char *mount_resolve(
     const mount_root_t *root = mount_root_of(table, profile, split.label);
     if (!root) return NULL;
 
-    /* The root's own directory for the word alone — a key already, and the spelling
-     * every producer of a key agrees on — and beneath it the join: the root's
-     * prefix, "/", the tail. Uniform across the three labels, the root directory
-     * reading as "" (join_prefix):
-     *   ROOT:   "" + "/" + "etc/hosts"         -> "/etc/hosts"
-     *   HOME:   "/home/user" + "/" + ".bashrc" -> "/home/user/.bashrc"
-     *   CUSTOM: "/jail/web" + "/" + "etc/foo"  -> "/jail/web/etc/foo"
-     *   the word alone                         -> the root itself, "/" included
-     * No prefix ends in a slash — the root directory's is "", HOME is folded by
-     * the identity (sys/identity), and a target is absolute and folded, the build's
-     * own refusal (mount_table_build) — so the join is unconditional. */
+    /* The root's own directory for the word alone, and beneath it the join: the
+     * root, one separator, the tail (base/string.h str_path_join, which folds
+     * the root directory's own separator into the seam). Uniform across the three
+     * labels:
+     *   ROOT:   "/" and "etc/hosts"          -> "/etc/hosts"
+     *   HOME:   "/home/user" and ".bashrc"   -> "/home/user/.bashrc"
+     *   CUSTOM: "/jail/web" and "etc/foo"    -> "/jail/web/etc/foo"
+     *   the word alone                       -> the root itself, "/" included
+     * Every root is a key already — the sentinel's literal, HOME folded by the
+     * identity (sys/identity), a target absolute and folded by the build's own
+     * refusal (mount_table_build) — and a tail is a name's, so either answer is
+     * the spelling every producer of a key agrees on. */
     return *split.tail
-        ? arena_str_format(arena, "%s/%s", join_prefix(root), split.tail)
+        ? str_path_join(arena, root->filesystem_path, split.tail)
         : arena_strdup(arena, root->filesystem_path);
 }

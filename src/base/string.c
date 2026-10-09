@@ -34,8 +34,22 @@ bool str_ends_with(const char *str, const char *suffix) {
     return strcmp(str + (str_len - suffix_len), suffix) == 0;
 }
 
-bool str_path_beneath(const char *path, const char *dir, size_t dir_len) {
-    return strncmp(path, dir, dir_len) == 0 && path[dir_len] == '/';
+const char *str_path_beneath(const char *path, const char *dir, size_t dir_len) {
+    if (strncmp(path, dir, dir_len) != 0) return NULL;
+
+    /* The separator the tail starts past: the root directory's own, which is
+     * all its spelling holds — so something must follow it, "/" lying beneath
+     * nothing — else the byte past any other directory */
+    if (dir_len == 1 && dir[0] == '/') return path[1] ? path + 1 : NULL;
+
+    return path[dir_len] == '/' ? path + dir_len + 1 : NULL;
+}
+
+const char *str_path_under(const char *path, const char *dir, size_t dir_len) {
+    /* The directory itself, nothing past it; else what lies beneath it */
+    return strncmp(path, dir, dir_len) == 0 && path[dir_len] == '\0'
+        ? path + dir_len
+        : str_path_beneath(path, dir, dir_len);
 }
 
 size_t str_path_parent_len(const char *path) {

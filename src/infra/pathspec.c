@@ -25,7 +25,7 @@
  * string. `key` is the vocabulary its subject is read in, decided by the input's
  * shape and never by an asker; its domain is two, as the argument's is. An exact
  * entry keeps the spelling it names in `prefix`, its length hoisted, for the
- * beneath test the matcher and the attribution share; a filesystem rule keeps
+ * test the matcher and the attribution both ask of it; a filesystem rule keeps
  * its anchor there, the rung past which it reads; a storage rule keeps none.
  * Every byte is the arena's. */
 typedef struct {
@@ -33,7 +33,7 @@ typedef struct {
     path_key_t key;                  /* the vocabulary its subject is read in: FILESYSTEM or STORAGE */
     gitignore_rule_t *rule;          /* the rule; NULL for an exact entry */
     const char *prefix;              /* an exact entry's spelling, or a filesystem rule's anchor; NULL for a storage rule */
-    size_t prefix_len;               /* strlen(prefix), hoisted for the beneath test */
+    size_t prefix_len;               /* strlen(prefix), hoisted for the boundary tests */
 } entry_t;
 
 struct pathspec {
@@ -44,14 +44,14 @@ struct pathspec {
 
 /* --- Compile ---------------------------------------------------------- */
 
-/* A filesystem path as an entry's prefix. The root is spelled "" as the table
- * spells it: the one prefix every absolute path is beneath at depth zero
- * (str_path_beneath reads the leading slash alone), and the one a rule anchored
- * there reads past with the same arithmetic as any other anchor. */
+/* A filesystem path as an entry's prefix, the root directory's as it stands:
+ * every absolute path lies under "/" as under any directory, and a rule anchored
+ * there reads past it as past any anchor (base/string.h str_path_under,
+ * str_path_beneath). */
 static void prefix_filesystem(entry_t *e, const char *filesystem_path) {
     e->key = PATH_KEY_FILESYSTEM;
-    e->prefix = strcmp(filesystem_path, "/") == 0 ? "" : filesystem_path;
-    e->prefix_len = strlen(e->prefix);
+    e->prefix = filesystem_path;
+    e->prefix_len = strlen(filesystem_path);
 }
 
 /* A name as an entry's prefix — the word alone included, which every name of
@@ -223,17 +223,9 @@ static const char *own_subject(
     return e->key == PATH_KEY_FILESYSTEM ? filesystem_path : storage_path;
 }
 
-/* Is the subject the exact entry, or beneath it? The one test both tiers of readers
- * share — the matcher and the coverage attribution. The root's "" equals nothing
- * and encloses every absolute path. */
-static bool exact_covers(const entry_t *e, const char *subject) {
-    return strcmp(subject, e->prefix) == 0 ||
-           str_path_beneath(subject, e->prefix, e->prefix_len);
-}
-
 /* What a rule reads at a rung of its own subject: a storage rule the rung itself;
- * a filesystem rule the rung past its anchor — the pattern is rooted there —
- * and nothing at or above the anchor. */
+ * a filesystem rule what lies beneath its anchor — the pattern is rooted there
+ * (base/string.h str_path_beneath) — and nothing at or above the anchor. */
 static const char *rule_subject(const entry_t *e, const char *rung) {
     if (!rung) {
         return NULL;
@@ -241,9 +233,7 @@ static const char *rule_subject(const entry_t *e, const char *rung) {
     if (e->key == PATH_KEY_STORAGE) {
         return rung;
     }
-    return str_path_beneath(rung, e->prefix, e->prefix_len)
-           ? rung + e->prefix_len + 1
-           : NULL;
+    return str_path_beneath(rung, e->prefix, e->prefix_len);
 }
 
 /* One subject's rungs above the leaf, deepest first: a copy of the subject,
@@ -330,11 +320,12 @@ bool pathspec_matches(
     /* NULL pathspec matches all (no filter applied). */
     if (!spec) return true;
 
-    /* The exact tier: the path, or one beneath an entry, in the entry's own key. */
+    /* The exact tier: the path, or one beneath an entry, in the entry's own key
+     * (base/string.h str_path_under). */
     for (size_t i = 0; i < spec->count; i++) {
         const entry_t *e = &spec->entries[i];
         const char *subject = own_subject(e, filesystem_path, storage_path);
-        if (!e->rule && subject && exact_covers(e, subject)) {
+        if (!e->rule && subject && str_path_under(subject, e->prefix, e->prefix_len)) {
             return true;
         }
     }
@@ -390,7 +381,7 @@ bool pathspec_entry_matches_at(
     if (!subject) return false;
 
     if (!e->rule) {
-        return exact_covers(e, subject);
+        return str_path_under(subject, e->prefix, e->prefix_len) != NULL;
     }
 
     /* The rule at the leaf, then at every rung above it; a match either way is

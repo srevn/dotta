@@ -106,18 +106,18 @@ error_t pathspec_create(
  * alone.
  *
  * The exact entries first: the filesystem path against a filesystem entry, itself
- * or beneath it (an entry of "/" is beneath everything); the storage path against
- * a storage entry likewise, down to its label. An exact hit selects whatever
- * any rule says: two tiers, one policy. Then the rules, one program over both
- * subjects, read rung by rung from the leaf (`kind` says whether the leaf is a
- * directory; every rung above it is): the rules in reverse insertion order, each
- * read at the rung of its own vocabulary — a storage rule the storage rung, a
- * filesystem rule the filesystem rung past its anchor and nothing at or above
- * it — and the first to match decides. In one sentence, the nearest rung at which
- * any rule matches decides, and at that rung the later input wins, a negation
- * deciding "not in scope". The rungs of the two subjects are counted from the
- * leaf — the tail is one tail under two roots — and the storage subject runs
- * out at its label while the filesystem subject climbs to the root, so
+ * or beneath it (every absolute path lies beneath an entry of "/"); the storage
+ * path against a storage entry likewise, down to its label. An exact hit selects
+ * whatever any rule says: two tiers, one policy. Then the rules, one program
+ * over both subjects, read rung by rung from the leaf (`kind` says whether the
+ * leaf is a directory; every rung above it is): the rules in reverse insertion
+ * order, each read at the rung of its own vocabulary — a storage rule the storage
+ * rung, a filesystem rule the filesystem rung past its anchor and nothing at or
+ * above it — and the first to match decides. In one sentence, the nearest rung
+ * at which any rule matches decides, and at that rung the later input wins, a
+ * negation deciding "not in scope". The rungs of the two subjects are counted
+ * from the leaf — the tail is one tail under two roots — and the storage subject
+ * runs out at its label while the filesystem subject climbs to the root, so
  * `~/etc/<star>.conf` followed by `!<star>.conf` excludes what the first selected
  * whichever vocabulary each is written in, which two rulesets OR'd would have
  * broken. The last storage rung is the label, as gitignore's walk stops at the

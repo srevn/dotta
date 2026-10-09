@@ -1934,18 +1934,15 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        /* One rung up, the same refusal: a path beneath one of the profile's
-         * own files, whichever label names either, lies where the file stands,
-         * and no apply could place both. The removal that gives the file up is
-         * the way past, as at the path. The commit's admission sees the pair
+        /* Above it, the same refusal: a path beneath one of the profile's own
+         * files, whichever label names either, lies where the file stands, and
+         * no apply could place both. The removal that gives the file up is the
+         * way past, as at the path. The commit's admission sees the pair
          * only where the two names share a prefix (core/profiles.h profile_admit);
          * the view sees it wherever the two stand. A walk needs no such question:
          * it meets the file's place before anything beneath it, and the kind
          * refusal skips it there */
-        const char *parent = arena_strndup(
-            ctx->arena, filesystem_path, str_path_parent_len(filesystem_path)
-        );
-        const manifest_row_t *above = manifest_blob_above(view, parent, ctx->arena);
+        const manifest_row_t *above = manifest_blob_above(view, filesystem_path);
         if (above) {
             char shown[PATH_MAX], beneath[PATH_MAX];
             output_format_path(

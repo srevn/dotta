@@ -747,7 +747,7 @@ const manifest_row_t *manifest_lookup(
 );
 
 /**
- * The blob the view holds at a path, or at a rung above it — the row, or NULL
+ * The blob the view holds strictly above a path — the row, or NULL
  *
  * A blob leaves no room at its place or beneath it on this machine, whichever
  * label names either: the namespace rule over locations, where core/profiles.c
@@ -758,33 +758,35 @@ const manifest_row_t *manifest_lookup(
  * (manifest_is_derived), which is why a derived row at one key is no answer about
  * the other.
  *
+ * Strictly above: a blob at the path itself is the path's own row, which
+ * manifest_lookup answers and its kind settles, so no reader asks it here.
+ *
  * The rungs are the path's own key cut at each separator — a root's spelling
- * and a shorter tail, whichever label named it (infra/mount.h) — each strictly
- * shorter than the one before it. The root directory is read and ends the climb,
- * because a claim can stand there — `root` spells it, and `home` or `custom` on
- * a machine whose HOME or target is one (infra/label.h) — and the view places a
- * blob at any of the three as a FILE row at that directory (core/manifest.c
- * manifest_place_claim). The namer's ascent over these very rungs floors on the
- * asker's own root (manifest_name): it names a path for one profile, and nothing
- * of that profile's stands above its root. This climb has no asker — it asks
- * what stands at a path, whoever holds it — so the root directory is its floor,
- * as it is deploy's (core/deploy.c nearest_ancestor). The copy the climb truncates
- * is `scratch`'s, one per ask, and abandoned.
+ * and a shorter tail, whichever label named it (infra/mount.h) — nearest first,
+ * each read off the key's own bytes by its length (base/string.h
+ * str_path_parent_len_n, base/hashmap.h hashmap_get_n), so nothing is copied.
+ * The root directory is read and ends the climb, because a claim can stand there
+ * — `root` spells it, and `home` or `custom` on a machine whose HOME or target
+ * is one (infra/label.h) — and the view places a blob at any of the three as a
+ * FILE row at that directory (core/manifest.c manifest_place_claim). The namer's
+ * ascent over these very rungs floors on the asker's own root (manifest_name):
+ * it names a path for one profile, and nothing of that profile's stands above
+ * its root. This climb has no asker — it asks what stands at a path, whoever
+ * holds it — so the root directory is its floor, as it is deploy's (core/deploy.c
+ * nearest_ancestor), and "/" itself has nothing above it.
  *
  * Readers: core/workspace.c workspace_analyze_untracked, of every tracked directory
- * its scan is about to enumerate; and cmds/add.c cmd_add, of the parent of the
- * path an argument names — a capture beneath one of the profile's own files,
- * whichever label names either, over the one profile's view its names come from.
+ * its scan is about to enumerate; and cmds/add.c cmd_add, of the path an argument
+ * names — a capture beneath one of the profile's own files, whichever label names
+ * either, over the one profile's view its names come from.
  *
  * @param manifest Manifest (must not be NULL)
  * @param filesystem_path Where to ask, absolute: a key (must not be NULL)
- * @param scratch Arena the climb's copy is taken in (must not be NULL)
- * @return The blob row standing at the path or over it, or NULL
+ * @return The nearest blob row standing over the path, or NULL
  */
 const manifest_row_t *manifest_blob_above(
     const manifest_t *manifest,
-    const char *filesystem_path,
-    arena_t *scratch
+    const char *filesystem_path
 );
 
 /**

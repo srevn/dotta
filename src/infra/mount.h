@@ -33,7 +33,7 @@
  * agree because they read the same strings: mount_resolve (a root's spelling
  * and a claim's tail), the argument's reading (an argument, folded; infra/path.h
  * path_input_filesystem_path), a walk's join (a parent and a name) and a climb's
- * cut — a key truncated at a separator, which is a root's spelling and a shorter
+ * cut — a key cut short at a separator, which is a root's spelling and a shorter
  * tail whichever label named it, so an ancestor's key is never manufactured a
  * second way (core/manifest.c manifest_ascend and manifest_blob_above,
  * core/cleanup.c, infra/pathspec.c). So two spellings are one path iff they are

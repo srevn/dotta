@@ -2706,11 +2706,12 @@ static error_t workspace_analyze_untracked(
     for (size_t r = 0; r < root_count; r++) {
         const workspace_item_t *root = roots[r];
 
-        /* A blob the view holds at this directory or over it, asked once for
-         * the whole walk beneath it: an offer under a blob is one no apply can
-         * place, whoever would name it, and committing it turns a view-versus-disk
-         * conflict the user can resolve into a view-versus-view one only `remove`
-         * can. Said on its own screen rather than here — the file analysis stands
+        /* A blob the view holds over this directory — the row at its own key is
+         * the tracked one the walk starts from — asked once for the whole walk
+         * beneath it: an offer under a blob is one no apply can place, whoever
+         * would name it, and committing it turns a view-versus-disk conflict
+         * the user can resolve into a view-versus-view one only `remove` can.
+         * Said on its own screen rather than here — the file analysis stands
          * the [type] at the blob's own path, with the remedies beside it. The
          * same question at a root the driver reached directly: an independent
          * scan root beneath a file claim is as much beneath it as a child the
@@ -2722,7 +2723,7 @@ static error_t workspace_analyze_untracked(
          * key is its row's own, which mount_resolve spelled, and a child joined
          * onto a key is a key (infra/mount.h), so it asks the view at each child's
          * own key, and every rung over that key is this one (workspace_scan). */
-        if (manifest_blob_above(ws->manifest, root->filesystem_path, ws->arena)) continue;
+        if (manifest_blob_above(ws->manifest, root->filesystem_path)) continue;
 
         /* The owner's ruleset (memoised in the builder). Fatal on failure: scanning
          * a profile without its ignore rules risks reporting genuinely ignored

@@ -1412,34 +1412,26 @@ const manifest_row_t *manifest_lookup(
 }
 
 /**
- * The blob the view holds at a path, or at a rung above it
- *
- * Each rung is the last separator's index, or 1 for a rung beneath the root
- * directory (base/string.h str_path_parent_len), so a rung is strictly shorter
- * than the one before it.
+ * The blob the view holds strictly above a path
  */
 const manifest_row_t *manifest_blob_above(
     const manifest_t *manifest,
-    const char *filesystem_path,
-    arena_t *scratch
+    const char *filesystem_path
 ) {
     CHECK_NULL(manifest);
     CHECK_NULL(filesystem_path);
-    CHECK_NULL(scratch);
 
-    char *rung = arena_strdup(scratch, filesystem_path);
+    /* Each rung the path's own key cut at a separator and asked by its length
+     * (base/string.h str_path_parent_len_n), nearest first: the root directory,
+     * its own parent, is the last rung read, the length no shorter after it. */
+    for (size_t len = strlen(filesystem_path); len > 1;) {
+        len = str_path_parent_len_n(filesystem_path, len);
 
-    /* The guard is on the truncation and not on the read, because the root
-     * directory is its own parent (base/string.h str_path_parent_len): a climb
-     * that tested before reading would never read it, and one that truncated
-     * after it would never leave. */
-    for (;;) {
-        const manifest_row_t *row = manifest_lookup(manifest, rung);
+        const manifest_row_t *row = hashmap_get_n(manifest->index, filesystem_path, len);
         if (row && row->type != PATH_TYPE_DIRECTORY) return row;
-        if (!rung[1]) return NULL;
-
-        rung[str_path_parent_len(rung)] = '\0';
     }
+
+    return NULL;
 }
 
 /**

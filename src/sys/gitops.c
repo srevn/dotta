@@ -489,7 +489,7 @@ error_t gitops_list_refs(
     int rc = git_reference_iterator_glob_new(&iter, repo, glob);
     if (rc < 0) return error_git(rc, "Cannot list the references under '%s'", namespace);
     string_array_t names;
-    string_array_init(&names, arena);
+    string_array_init(&names, arena, 0);
 
     for (;;) {
         /* Classified, not compared: GIT_ITEROVER is the enumeration finished,
@@ -922,7 +922,7 @@ error_t gitops_fetch_branches(
      * entries are an argv as they stand. */
     arena_t *frame = arena_create(0);
     string_array_t refspecs;
-    string_array_init_cap(&refspecs, frame, branches->count);
+    string_array_init(&refspecs, frame, branches->count);
 
     error_t err = NULL;
     for (size_t i = 0; i < branches->count; i++) {
@@ -1150,7 +1150,7 @@ error_t gitops_list_remote_branches(
     const size_t prefix_len = sizeof(heads_prefix) - 1;
 
     string_array_t branches;
-    string_array_init(&branches, arena);
+    string_array_init(&branches, arena, 0);
     for (size_t i = 0; i < refs_len; i++) {
         const char *refname = refs[i]->name;
 

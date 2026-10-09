@@ -163,7 +163,7 @@ static string_array_t remove_hook_paths(
     arena_t *arena, const remove_claim_t *claims, size_t claim_count
 ) {
     string_array_t paths;
-    string_array_init(&paths, arena);
+    string_array_init(&paths, arena, 0);
 
     /* Each path once, by a seen-set's one probe over the claims' own strings
      * (base/hashmap.h hashmap_add); the list keeps copies, the shape the hook
@@ -1243,7 +1243,7 @@ static error_t remove_paths(
         .target_commit = NULL
     };
     string_array_t pruned;   /* Directory entries the commit's prune took (storage paths) */
-    string_array_init(&pruned, ctx->arena);
+    string_array_init(&pruned, ctx->arena, 0);
     err = profile_commit(draft, commit_message(ctx->arena, config, &msg_ctx), NULL, &pruned);
     if (err) goto cleanup;
     if (pruned.count > 0) {

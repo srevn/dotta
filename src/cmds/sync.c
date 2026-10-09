@@ -226,7 +226,7 @@ static error_t sync_fetch_phase(
      * not "never pushed", and read as that it left the profile out of the fetch
      * without a word. */
     string_array_t branch_names;
-    string_array_init(&branch_names, ctx->arena);
+    string_array_init(&branch_names, ctx->arena, 0);
 
     error_t err = NULL;
     for (size_t i = 0; i < profiles->count; i++) {
@@ -1789,8 +1789,8 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 }
                 if (conflict_count > 0) {
                     /* The status Conflicts header's remedies, a kind both sides
-                     * moved among the conflicts: add keeps disk's only where the
-                     * kind matches */
+                     * moved among the conflicts: add keeps disk's only where
+                     * the kind matches */
                     output_hint(
                         out, OUTPUT_NORMAL,
                         "Resolve conflicts first: 'dotta diff' compares; 'dotta apply "

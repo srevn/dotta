@@ -889,8 +889,8 @@ static error_t manifest_contribute(
      * row placed. */
     ptr_array_t placed;
     ptr_array_t contenders;
-    ptr_array_init(&placed, arena);
-    ptr_array_init(&contenders, arena);
+    ptr_array_init(&placed, arena, 0);
+    ptr_array_init(&contenders, arena, 0);
 
     claim_walk_t walk = {
         .manifest     = manifest,
@@ -1484,7 +1484,7 @@ error_t manifest_holder(
      * contribution — and joined in the caller's arena, where nothing is owed a
      * release. */
     string_array_t named;
-    string_array_init_cap(&named, arena, holders);
+    string_array_init(&named, arena, holders);
     for (size_t i = 0; i < manifest->count; i++) {
         const manifest_row_t *row = manifest->rows[i];
         if (strcmp(row->storage_path, storage_path) != 0) continue;

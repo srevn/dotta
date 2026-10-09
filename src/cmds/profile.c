@@ -188,7 +188,7 @@ static error_t profile_list(
 
     /* Separate into enabled and available */
     string_array_t available;
-    string_array_init(&available, ctx->arena);
+    string_array_init(&available, ctx->arena, 0);
     for (size_t i = 0; i < profiles.count; i++) {
         const char *profile = profiles.entries[i];
         if (state_enabled(state, profile)) continue;
@@ -319,7 +319,7 @@ static error_t profile_list(
             } else if (remote_branches.count > 0) {
                 /* Filter out branches that already exist locally */
                 string_array_t remote_only;
-                string_array_init_cap(&remote_only, ctx->arena, remote_branches.count);
+                string_array_init(&remote_only, ctx->arena, remote_branches.count);
                 for (size_t ri = 0; ri < remote_branches.count; ri++) {
                     if (!string_array_contains(&profiles, remote_branches.entries[ri])) {
                         string_array_push(&remote_only, remote_branches.entries[ri]);
@@ -399,7 +399,7 @@ static error_t profile_fetch(
      * the remote holds is the rest of the fact. */
     if (!opts->all_profiles) {
         string_array_t missing;
-        string_array_init(&missing, ctx->arena);
+        string_array_init(&missing, ctx->arena, 0);
         for (size_t i = 0; i < opts->profile_count; i++) {
             if (!string_array_contains(&remote_branches, opts->profiles[i])) {
                 string_array_push(&missing, opts->profiles[i]);
@@ -588,7 +588,7 @@ static error_t profile_enable(
         profile_order(&to_enable);
     } else {
         /* Enable the profiles the line names, one at least (profile_post_parse) */
-        string_array_init_cap(&to_enable, ctx->arena, opts->profile_count);
+        string_array_init(&to_enable, ctx->arena, opts->profile_count);
         for (size_t i = 0; i < opts->profile_count; i++) {
             string_array_push(&to_enable, opts->profiles[i]);
         }
@@ -613,7 +613,7 @@ static error_t profile_enable(
      * with a differing --target, which is a retarget and stays in the run's work.
      * The surviving set lands in to_enable_validated. */
     string_array_t to_enable_validated;
-    string_array_init(&to_enable_validated, ctx->arena);
+    string_array_init(&to_enable_validated, ctx->arena, 0);
 
     for (size_t i = 0; i < to_enable.count; i++) {
         const char *name = to_enable.entries[i];
@@ -943,7 +943,7 @@ static error_t profile_disable(
      * borrowed from opts->profiles, which outlive it. */
     hashmap_t *seen_set = hashmap_borrow(ctx->arena, 0);
     string_array_t to_disable_validated;
-    string_array_init(&to_disable_validated, ctx->arena);
+    string_array_init(&to_disable_validated, ctx->arena, 0);
 
     if (opts->all_profiles) {
         /* --all: every currently enabled profile is, by definition, valid. */
@@ -1205,7 +1205,7 @@ static error_t profile_reorder(
 
     /* Update state with new order */
     string_array_t order;
-    string_array_init_cap(&order, ctx->arena, opts->profile_count);
+    string_array_init(&order, ctx->arena, opts->profile_count);
     for (size_t i = 0; i < opts->profile_count; i++) {
         string_array_push(&order, opts->profiles[i]);
     }
@@ -1272,7 +1272,7 @@ static error_t profile_validate(
 
     /* Check 1: Enabled profiles exist as branches */
     string_array_t missing;
-    string_array_init(&missing, ctx->arena);
+    string_array_init(&missing, ctx->arena, 0);
 
     for (size_t i = 0; i < enabled_profiles.count; i++) {
         const char *profile = enabled_profiles.entries[i].name;
@@ -1328,7 +1328,7 @@ static error_t profile_validate(
     if (err) goto cleanup;
 
     string_array_t deleted;
-    string_array_init(&deleted, ctx->arena);
+    string_array_init(&deleted, ctx->arena, 0);
     hashmap_t *probed = hashmap_borrow(ctx->arena, 16);   /* profile → its branch gone (non-NULL) or not */
 
     for (size_t i = 0; i < record_count; i++) {

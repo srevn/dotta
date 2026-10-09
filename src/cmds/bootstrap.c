@@ -263,7 +263,7 @@ static error_t bootstrap_run(
     /* Single-pass filter: collect profiles that actually have a script. Display
      * list and pass straight into bootstrap_fire — no double tree-walk. */
     string_array_t found;
-    string_array_init(&found, ctx->arena);
+    string_array_init(&found, ctx->arena, 0);
     for (size_t i = 0; i < profiles->count; i++) {
         if (bootstrap_exists(repo, profiles->entries[i])) {
             string_array_push(&found, profiles->entries[i]);
@@ -380,7 +380,7 @@ error_t cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opt
     if (opts->profile_count > 0) {
         /* Explicit profiles: each must be here — a script asked for by a name
          * that is not a profile is a typo, not a skip */
-        string_array_init_cap(&profiles, ctx->arena, opts->profile_count);
+        string_array_init(&profiles, ctx->arena, opts->profile_count);
         for (size_t i = 0; i < opts->profile_count; i++) {
             err = profile_require(repo, opts->profiles[i]);
             if (err) return err;

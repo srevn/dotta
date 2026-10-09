@@ -48,7 +48,7 @@ static void bootstrap_env(
 ) {
     extern char **environ;
 
-    string_array_init(env, arena);
+    string_array_init(env, arena, 0);
 
     /* DOTTA_DRY_RUN is the live path's: a dry run spawns nothing */
     string_array_pushf(env, "DOTTA_REPO_DIR=%s", repo_dir);
@@ -204,7 +204,7 @@ bootstrap_receipt_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) 
     arena_t *frame = arena_create(0);
     const char *all_profiles = string_array_join(frame, profiles, " ");
     string_array_t failed;
-    string_array_init(&failed, frame);
+    string_array_init(&failed, frame, 0);
     bootstrap_receipt_t receipt = { 0 };
 
     for (size_t i = 0; i < profiles->count; i++) {

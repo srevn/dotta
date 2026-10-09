@@ -627,7 +627,7 @@ static error_t update_profile(
      * retires: a leaf beneath a squatted rung was refused at the filter (the
      * route's displaced arms), whichever profile's claim the squatter displaced,
      * so a chain that reaches here holds directories at every claimed rung. */
-    string_array_init(&commit->ancestors_retired, ctx->arena);
+    string_array_init(&commit->ancestors_retired, ctx->arena, 0);
     for (size_t i = 0; i < commit->captured_count; i++) {
         profile_capture_ancestors(
             draft, ctx->run.mounts, commit->captured[i].storage_path,
@@ -707,7 +707,7 @@ static error_t update_profile(
      * the commit's own answer, false for captures that put back what the profile
      * holds, which a hook rewriting a file between the decision and the capture
      * makes */
-    string_array_init(&commit->pruned, ctx->arena);
+    string_array_init(&commit->pruned, ctx->arena, 0);
     error_t err = profile_commit(
         draft, commit_message(ctx->arena, ctx->config, &msg_ctx), &commit->committed,
         &commit->pruned

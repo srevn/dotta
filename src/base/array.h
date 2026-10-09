@@ -31,25 +31,17 @@
 /* === string_array_t — names, each a copy in the arena it was made in === */
 
 /**
- * Make an empty string array whose spine and copies live in `arena`
+ * Make an empty string array with room for `room` strings, its spine and its
+ * copies in `arena`
+ *
+ * Pushes up to `room` move nothing (string_array_reserve).
  *
  * @param arr   Array to initialize (must not be NULL)
  * @param arena Arena every growth and every copy takes its room from (must not
  *              be NULL)
+ * @param room  Strings to make room for (0 makes none)
  */
-void string_array_init(string_array_t *arr, arena_t *arena);
-
-/**
- * Make an empty string array with room for `cap` strings, in `arena`
- *
- * Pushes up to `cap` move nothing: string_array_init, then string_array_reserve.
- *
- * @param arr   Array to initialize (must not be NULL)
- * @param arena Arena every growth and every copy takes its room from (must not
- *              be NULL)
- * @param cap   Strings to make room for (0 makes none)
- */
-void string_array_init_cap(string_array_t *arr, arena_t *arena, size_t cap);
+void string_array_init(string_array_t *arr, arena_t *arena, size_t room);
 
 /**
  * Append a copy of `str`, made in the array's arena
@@ -146,23 +138,15 @@ char *string_array_join(arena_t *arena, const string_array_t *arr, const char *d
 /* === ptr_array_t — borrowed pointers, in the arena it was made in === */
 
 /**
- * Make an empty pointer array whose spine lives in `arena`
+ * Make an empty pointer array with room for `room` pointers, its spine in `arena`
+ *
+ * Pushes up to `room` move nothing (ptr_array_reserve).
  *
  * @param arr   Array to initialize (must not be NULL)
  * @param arena Arena every growth takes its room from (must not be NULL)
+ * @param room  Pointers to make room for (0 makes none)
  */
-void ptr_array_init(ptr_array_t *arr, arena_t *arena);
-
-/**
- * Make an empty pointer array with room for `cap` pointers, in `arena`
- *
- * Pushes up to `cap` move nothing: ptr_array_init, then ptr_array_reserve.
- *
- * @param arr   Array to initialize (must not be NULL)
- * @param arena Arena every growth takes its room from (must not be NULL)
- * @param cap   Pointers to make room for (0 makes none)
- */
-void ptr_array_init_cap(ptr_array_t *arr, arena_t *arena, size_t cap);
+void ptr_array_init(ptr_array_t *arr, arena_t *arena, size_t room);
 
 /**
  * Append a pointer, borrowed

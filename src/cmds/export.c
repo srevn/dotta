@@ -632,7 +632,7 @@ static error_t export_collect_filesystem(
 
     const manifest_row_t *at = NULL;
     ptr_array_t beneath;
-    ptr_array_init(&beneath, arena);
+    ptr_array_init(&beneath, arena, 0);
     manifest_rows_t rows = manifest_rows(view);
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];

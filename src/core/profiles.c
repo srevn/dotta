@@ -95,7 +95,7 @@ string_array_t profile_detect(arena_t *arena, const string_array_t *available) {
     CHECK_NULL(available);
 
     string_array_t profiles;
-    string_array_init(&profiles, arena);
+    string_array_init(&profiles, arena, 0);
 
     /* 1. "global" — always first if present */
     if (string_array_contains(available, "global")) {

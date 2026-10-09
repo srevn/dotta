@@ -952,7 +952,7 @@ error_t deploy_preflight(
      * items they borrow: nothing frees them, and a failure below leaves a partial
      * preflight as the arena's bytes. */
     deploy_preflight_t *verdicts = arena_calloc(arena, 1, sizeof(*verdicts));
-    string_array_init(&verdicts->warnings, arena);
+    string_array_init(&verdicts->warnings, arena, 0);
 
     /* One slot per pending item — verdict or skip, so the skip array's bound is
      * both kinds together — and one per directory item for the ancestors (an
@@ -978,7 +978,7 @@ error_t deploy_preflight(
      * them: what a row beneath one waits on (check_ancestry). Empty on a run
      * that places none, so the ask is a scan of nothing. */
     ptr_array_t links;
-    ptr_array_init(&links, arena);
+    ptr_array_init(&links, arena, 0);
 
     /* Every planned row, in path order, either kind; then the ancestors. A fate
      * is a prediction of what the run will find at the row's path and on the
@@ -1764,7 +1764,7 @@ deploy_receipt_t *deploy_execute(
         .receipt  = receipt,
         .arena    = arena,
     };
-    ptr_array_init(&run.holds, arena);
+    ptr_array_init(&run.holds, arena, 0);
 
     /* Directories first: parents before the files beneath them, and under --force
      * a squatting symlink is gone before anything is written through it. Verdict

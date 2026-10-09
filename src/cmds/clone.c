@@ -372,7 +372,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     /* Determine which profiles to fetch */
     string_array_t fetched_profiles;
-    string_array_init(&fetched_profiles, ctx->arena);
+    string_array_init(&fetched_profiles, ctx->arena, 0);
 
     if (opts->profiles && opts->profile_count > 0) {
         /* Explicit profile management */
@@ -460,7 +460,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * fails the clone whole and rolls the store back, as the build in
      * initialize_state did for a portable profile and now does for every one. */
     string_array_t to_enable;
-    string_array_init(&to_enable, ctx->arena);
+    string_array_init(&to_enable, ctx->arena, 0);
     for (size_t i = 0; i < fetched_profiles.count; i++) {
         const char *name = fetched_profiles.entries[i];
         profile_t *profile = NULL;
@@ -509,7 +509,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * .bootstrap script into `bootstrap_found`, then display, prompt, and
      * (conditionally) fire; what the run did is its receipt. */
     string_array_t bootstrap_found;
-    string_array_init(&bootstrap_found, ctx->arena);
+    string_array_init(&bootstrap_found, ctx->arena, 0);
     bool run_bootstrap = false;
     bootstrap_receipt_t bootstrap = { 0 };
 

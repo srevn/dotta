@@ -268,7 +268,7 @@ static void move_down(view_t *view) {
 /* Phase: collect enabled rows in display order. Pure view sweep; no state
  * interaction. */
 static void plan_collect(view_t *view, plan_t *plan) {
-    string_array_init(&plan->new_order, view->arena);
+    string_array_init(&plan->new_order, view->arena, 0);
 
     if (view->item_count > 0) {
         plan->new_order_items = arena_calloc(

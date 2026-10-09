@@ -268,7 +268,7 @@ void completion_refspecs(
 
     string_array_t profiles;
     if (pinned) {
-        string_array_init(&profiles, ctx->arena);
+        string_array_init(&profiles, ctx->arena, 0);
         string_array_push(&profiles, pinned);
     } else {
         error_t err = gitops_list_branches(repo, ctx->arena, &profiles);

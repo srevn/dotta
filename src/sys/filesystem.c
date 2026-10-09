@@ -1173,7 +1173,7 @@ error_t fs_list_dir(const char *path, arena_t *arena, string_array_t *out) {
 
     /* errno cleared before every readdir: a NULL is the end, or the error it names */
     string_array_t names;
-    string_array_init(&names, arena);
+    string_array_init(&names, arena, 0);
     struct dirent *entry;
     for (errno = 0; (entry = readdir(dir)) != NULL; errno = 0) {
         /* Skip . and .. - no caller ever wants these */

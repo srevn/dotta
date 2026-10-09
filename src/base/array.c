@@ -21,16 +21,12 @@
 
 /* === string_array_t — names, each a copy in the arena it was made in === */
 
-void string_array_init(string_array_t *arr, arena_t *arena) {
+void string_array_init(string_array_t *arr, arena_t *arena, size_t room) {
     CHECK_NULL(arr);
     CHECK_NULL(arena);
 
     *arr = (string_array_t){ .arena = arena };
-}
-
-void string_array_init_cap(string_array_t *arr, arena_t *arena, size_t cap) {
-    string_array_init(arr, arena);
-    string_array_reserve(arr, cap);
+    string_array_reserve(arr, room);
 }
 
 /* The one way a string enters the array: a string its arena already holds, at
@@ -102,7 +98,7 @@ void string_array_clone(
     CHECK_NULL(src);
     CHECK_NULL(dst);
 
-    string_array_init_cap(dst, arena, src->count);
+    string_array_init(dst, arena, src->count);
     for (size_t i = 0; i < src->count; i++) {
         string_array_push(dst, src->entries[i]);
     }
@@ -181,16 +177,12 @@ char *string_array_join(
 
 /* === ptr_array_t — borrowed pointers, in the arena it was made in === */
 
-void ptr_array_init(ptr_array_t *arr, arena_t *arena) {
+void ptr_array_init(ptr_array_t *arr, arena_t *arena, size_t room) {
     CHECK_NULL(arr);
     CHECK_NULL(arena);
 
     *arr = (ptr_array_t){ .arena = arena };
-}
-
-void ptr_array_init_cap(ptr_array_t *arr, arena_t *arena, size_t cap) {
-    ptr_array_init(arr, arena);
-    ptr_array_reserve(arr, cap);
+    ptr_array_reserve(arr, room);
 }
 
 void ptr_array_push(ptr_array_t *arr, const void *p) {

@@ -59,7 +59,7 @@ error_t scope_build(
      *    scope is not an error ("Empty-enabled policy", scope.h). */
     size_t count = 0;
     const char *const *names = manifest_profiles(view, &count);
-    string_array_init_cap(&s->enabled, arena, count);
+    string_array_init(&s->enabled, arena, count);
     for (size_t i = 0; i < count; i++) {
         string_array_push(&s->enabled, names[i]);
     }
@@ -73,7 +73,7 @@ error_t scope_build(
      *    verb, one lookup paid only here: when it does not refuse, the branch
      *    is here and the fact is that it is not enabled. */
     if (in->profile_count > 0) {
-        string_array_init_cap(&s->filter, arena, in->profile_count);
+        string_array_init(&s->filter, arena, in->profile_count);
 
         for (size_t i = 0; i < in->profile_count; i++) {
             const char *name = in->profiles[i];
@@ -127,7 +127,7 @@ error_t scope_resolve_enabled(
      * gone is dropped unsaid — the health commands say it, off the view
      * (core/manifest.h manifest_missing). */
     string_array_t valid_profiles;
-    string_array_init(&valid_profiles, arena);
+    string_array_init(&valid_profiles, arena, 0);
 
     for (size_t i = 0; i < enabled_profiles.count; i++) {
         const char *profile = enabled_profiles.entries[i].name;
@@ -162,7 +162,7 @@ error_t scope_require_enabled(
      * (the header) — named in apply's words for the same fact (cmds/apply.c
      * cmd_apply's Profiles with no branch), in the arena the caller lent */
     string_array_t names;
-    string_array_init_cap(&names, arena, enabled_profiles.count);
+    string_array_init(&names, arena, enabled_profiles.count);
     for (size_t i = 0; i < enabled_profiles.count; i++) {
         string_array_push(&names, enabled_profiles.entries[i].name);
     }

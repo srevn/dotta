@@ -597,7 +597,7 @@ static error_t list_files(
          * they were listed at. The map seeks names (sys/stats.h), so the rows
          * hand it theirs, in their order */
         string_array_t names;
-        string_array_init_cap(&names, ctx->arena, walk.file_count);
+        string_array_init(&names, ctx->arena, walk.file_count);
         for (size_t i = 0; i < walk.file_count; i++) {
             string_array_push(&names, walk.files[i].storage_path);
         }

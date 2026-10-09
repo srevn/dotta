@@ -97,7 +97,7 @@ static bool hook_is_enabled(const config_t *config, hook_type_t type) {
 static void hook_env(const hook_context_t *context, arena_t *arena, string_array_t *env) {
     extern char **environ;
 
-    string_array_init(env, arena);
+    string_array_init(env, arena, 0);
 
     /* DOTTA_* surface — the store's directory, two optional, two always-on, then
      * per-file. */

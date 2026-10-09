@@ -149,7 +149,7 @@ static error_t revert_select_profile(
      * which is all the refusal for several reads. */
     const char *holder = NULL;
     string_array_t holders;
-    string_array_init(&holders, ctx->arena);
+    string_array_init(&holders, ctx->arena, 0);
     for (size_t i = 0; !err && i < profiles.count; i++) {
         profile_t *profile = NULL;
         err = profile_load(repo, profiles.entries[i], &profile);

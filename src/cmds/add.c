@@ -782,7 +782,7 @@ static error_t add_refuse_excluded(
      * which only the operation's own -e closes, so what is copied is the profile's
      * rules. */
     string_array_t offered;
-    string_array_init(&offered, arena);
+    string_array_init(&offered, arena, 0);
     gitignore_ruleset_t *reopened = NULL;
     while (!err && verdict.origin != IGNORE_ORIGIN_NONE) {
         const char *rule = ignore_verdict_describe(arena, &verdict);
@@ -1923,8 +1923,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     walk.draft = draft;
     walk.force = opts->force;
     walk.listing = hashmap_borrow(ctx->arena, 0);
-    ptr_array_init(&walk.files, ctx->arena);
-    ptr_array_init(&walk.directories, ctx->arena);
+    ptr_array_init(&walk.files, ctx->arena, 0);
+    ptr_array_init(&walk.directories, ctx->arena, 0);
 
     /* Process each input path. Two parsing heads — a storage shape and a filesystem
      * shape — and one ladder beneath them: what stands at the path, this command's
@@ -2521,7 +2521,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      */
     size_t ancestors_captured = 0;
     string_array_t ancestors_retired;
-    string_array_init(&ancestors_retired, ctx->arena);
+    string_array_init(&ancestors_retired, ctx->arena, 0);
     const ptr_array_t *chains[] = { &walk.files, &walk.directories };
     for (size_t b = 0; b < sizeof(chains) / sizeof(chains[0]); b++) {
         for (size_t i = 0; i < chains[b]->count; i++) {
@@ -2580,7 +2580,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * took, by key, which the record phase settles. */
     bool committed = false;
     string_array_t pruned;
-    string_array_init(&pruned, ctx->arena);
+    string_array_init(&pruned, ctx->arena, 0);
     err = add_commit(&walk, opts, &committed, &pruned);
     if (err) goto cleanup;
     if (pruned.count > 0) {

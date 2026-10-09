@@ -704,6 +704,28 @@ static inline bool workspace_reassigned(
 }
 
 /**
+ * The frame's base: the record, where it confirmed a blob — or NULL
+ *
+ * What the three-way frame reads dotta's last confirmed content from: a record
+ * carrying a blob dotta verified on disk, a file's or a link's (core/state.h
+ * state_record_t). A directory record confirms none, and neither does a first
+ * observation, so neither is a base for content — what a claim is measured against
+ * is the record of the row's kind, a directory's among them (workspace_claims_moved
+ * below). A value and not a verdict: whose the record is, and whether the node
+ * standing at the path now is the one it confirmed, are the reader's to ask
+ * (core/workspace.c workspace_compare_base).
+ *
+ * Readers: core/workspace.c workspace_analyze_file (the frame's base),
+ * workspace_analyze_directory (whose a squatter is: dotta's copy where a base
+ * stands, the user's where none does), workspace_flush (a first observation owed
+ * where none stands) and workspace_analyze_orphans (an order measured against a
+ * confirmed blob). A reader not on this list is a bug.
+ */
+static inline const state_record_t *workspace_base(const state_record_t *record) {
+    return record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;
+}
+
+/**
  * Stale: Git advanced past what dotta confirmed — the join's content word
  *
  * The row's content is not the confirmed pair's: another blob, or the same blob

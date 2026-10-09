@@ -993,13 +993,14 @@ static void workspace_analyze_file(
      */
     compare_result_t cmp_result;
 
-    /* The base: the record, where it carries a confirmed blob. It compares under
-     * its own binding, never the row's: a blob opens under one (profile, storage
-     * path) pair and no other, and the record carries the one its blob was
-     * confirmed under (core/state.h state_record_t) — a row the binding does
-     * not name is one the record has yet to follow, and reading the base under
-     * it authenticates a ciphertext against a tree path it was never sealed at. */
-    const state_record_t *base = record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;
+    /* The base: the record, where it carries a confirmed blob (core/workspace.h
+     * workspace_base). It compares under its own binding, never the row's: a
+     * blob opens under one (profile, storage path) pair and no other, and the
+     * record carries the one its blob was confirmed under (core/state.h
+     * state_record_t) — a row the binding does not name is one the record has
+     * yet to follow, and reading the base under it authenticates a ciphertext
+     * against a tree path it was never sealed at. */
+    const state_record_t *base = workspace_base(record);
 
     /* The first question of the three-way frame is answered from the row and
      * the base alone; the second (disk_at_base — ours == base) is answered by
@@ -2188,7 +2189,7 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * record its blob, so for files this discriminates only when deployed_at
          * == 0 — a prune-ordered record dotta never deployed. */
         if (record->ordered_at > 0 &&
-            (item->item_kind == PATH_KIND_DIRECTORY || !git_oid_is_zero(&record->blob_oid))) {
+            (item->item_kind == PATH_KIND_DIRECTORY || workspace_base(record))) {
             workspace_measure(ws, item);
             continue;
         }
@@ -2876,8 +2877,7 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
      * (workspace_kind_order) — so every path beneath carries the squatter's
      * verb. */
     if (item->occupant != FS_OCCUPANT_DIRECTORY) {
-        const state_record_t *base =
-            record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;
+        const state_record_t *base = workspace_base(record);
         compare_result_t at_base;
 
         if (!base) {
@@ -3860,46 +3860,46 @@ bool workspace_item_tags(
 }
 
 /**
- * The record a learning writes: `base` with the row's words on each axis named
+ * The record a learning writes: `onto` with the row's words on each axis named
  *
  * The content (DIVERGENCE_CONTENT) is the row's blob, with the stat the load
  * distilled where its comparison stood (workspace_item_t's stat); the mode
  * (DIVERGENCE_MODE) and the owner and group (DIVERGENCE_OWNERSHIP) are the row's
- * claim. Every other column is the base's own — the node and the binding it was
- * read under, the stamp — and the order none: the item is active, so the view
- * has taken the path back (the void). The node needs no word of the row's: a
- * learning of the content starts from a base of the row's kind, since a record
- * of another kind gives way to the row's first observation before anything is
- * learned onto it (workspace_flush), so the blob is confirmed as the node the
- * base already names. A file row's blob is Git's and never zero, so a learning
- * of the content always confirms one.
+ * claim. Every other column is the one it is written onto — the node and the
+ * binding that record was read under, the stamp — and the order none: the item
+ * is active, so the view has taken the path back (the void). The node needs no
+ * word of the row's: a learning of the content is written onto a record of the
+ * row's kind, since a record of another kind gives way to the row's first
+ * observation before anything is learned onto it (workspace_flush), so the blob
+ * is confirmed as the node that record already names. A file row's blob is Git's
+ * and never zero, so a learning of the content always confirms one.
  *
  * Three callers, which would otherwise drift apart: workspace_flush, over what
  * the analyses noted; workspace_learn, over the claims apply's fix set; and
- * workspace_learn_mode, over none — the base whole, its order void — before it
- * sets the mode a run left.
+ * workspace_learn_mode, over none — the record whole, its order void — before
+ * it sets the mode a run left.
  */
 static state_record_t workspace_learning(
-    state_record_t base,
+    state_record_t onto,
     const workspace_item_t *item,
     divergence_type_t axes
 ) {
     const manifest_row_t *row = item->row;
 
     if (axes & DIVERGENCE_CONTENT) {
-        base.blob_oid = row->blob_oid;
-        base.stat = item->stat;
+        onto.blob_oid = row->blob_oid;
+        onto.stat = item->stat;
     }
     if (axes & DIVERGENCE_MODE) {
-        base.mode = row->mode;
+        onto.mode = row->mode;
     }
     if (axes & DIVERGENCE_OWNERSHIP) {
-        base.owner = row->owner;
-        base.group = row->group;
+        onto.owner = row->owner;
+        onto.group = row->group;
     }
-    base.ordered_at = 0;
+    onto.ordered_at = 0;
 
-    return base;
+    return onto;
 }
 
 /**
@@ -4032,14 +4032,14 @@ error_t workspace_flush(workspace_t *ws) {
         workspace_item_t *item = ws->active[i];
         const state_record_t *record = item->record;
 
-        /* What the write starts from — a value, not a verdict: the row's first
-         * observation, the record the load read, or nothing, where the load owes
-         * the record nothing */
+        /* What the learning is written onto — a value, not a verdict: the row's
+         * first observation, the record the load read, or nothing, where the
+         * load owes the record nothing */
         const fs_occupant_t kind = workspace_type_occupant(item->row->type);
 
-        state_record_t base;
+        state_record_t onto;
         if (item->occupant == kind && (!record || record->kind != kind) &&
-            (!record || kind == FS_OCCUPANT_DIRECTORY || git_oid_is_zero(&record->blob_oid) ||
+            (!workspace_base(record) || kind == FS_OCCUPANT_DIRECTORY ||
             (item->confirmation & DIVERGENCE_CONTENT))) {
             /* The row's first observation: the look found the row's own node,
              * and dotta holds no record of it — file and directory rows alike,
@@ -4066,7 +4066,7 @@ error_t workspace_flush(workspace_t *ws) {
              * the load measured a difference from, or could not read past, stays:
              * it is the base both sides of a conflict moved from, or the next
              * readable load's (workspace_analyze_file). */
-            base = workspace_observation(item->row);
+            onto = workspace_observation(item->row);
         } else if (record && (item->confirmation != DIVERGENCE_NONE || record->ordered_at > 0)) {
             /* The record the load read, where the analyses noted an axis it lacks
              * (the item's confirmation), or where it stands on an order: an order
@@ -4078,7 +4078,7 @@ error_t workspace_flush(workspace_t *ws) {
              * it; voided — the write carries no order — a later discovered
              * departure executes as a release, which is the stated policy for
              * every discovered departure. */
-            base = *record;
+            onto = *record;
         } else {
             /* Nothing is owed: a record the load learned nothing new of, standing
              * on no order — a gone node's pair the verdict reads among them —
@@ -4094,7 +4094,7 @@ error_t workspace_flush(workspace_t *ws) {
             learnings = arena_calloc(ws->arena, active_count, sizeof(*learnings));
         }
         state_record_t *learning = arena_alloc(ws->arena, sizeof(*learning));
-        *learning = workspace_learning(base, item, item->confirmation);
+        *learning = workspace_learning(onto, item, item->confirmation);
         learnings[i] = learning;
     }
 

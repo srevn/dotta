@@ -781,12 +781,12 @@ const char *state_target(
  *     print) rest on
  *   - cmds/profile.c profile_validate: the deleted profiles in first-seen order,
  *     so the report is reproducible
- *   - cmds/add.c add_write_record (the takeover note), cmds/remove.c
- *     remove_paths_candidates (the settle's candidates, read before the lock
- *     and under it), and core/manifest.c manifest_diff (a departed row's orphan
- *     split, handed the array by cmds/profile.c profile_enable, profile_disable
- *     and cmds/sync.c cmd_sync): by path, through state_find_record, which rests
- *     on strcmp order
+ *   - cmds/add.c add_write_record (the takeover note) and add_refuse_ancestry
+ *     (whose node a link above a capture is), cmds/remove.c remove_paths_candidates
+ *     (the settle's candidates, read before the lock and under it), and
+ *     core/manifest.c manifest_diff (a departed row's orphan split, handed the
+ *     array by cmds/profile.c profile_enable, profile_disable and cmds/sync.c
+ *     cmd_sync): by path, through state_find_record, which rests on strcmp order
  *   - cmds/remove.c remove_profile_candidates (every record naming the profile,
  *     read before the prompt and under the lock) and cmds/sync.c cmd_sync's apply
  *     hint (every record against the view the Git phase produced, with no workspace
@@ -815,9 +815,10 @@ error_t state_records(
  * one in another order misses what it holds. The empty snapshot — NULL, count 0
  * — holds nothing.
  *
- * Readers: cmds/add.c add_write_record (the takeover note), cmds/remove.c
- * remove_paths_candidates (the settle's candidates), core/manifest.c manifest_diff
- * (a departed row's orphan split).
+ * Readers: cmds/add.c add_write_record (the takeover note) and add_refuse_ancestry
+ * (whose node a link above a capture is), cmds/remove.c remove_paths_candidates
+ * (the settle's candidates), core/manifest.c manifest_diff (a departed row's
+ * orphan split).
  *
  * @param records The snapshot (NULL when count is 0)
  * @param count Records in it

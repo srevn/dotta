@@ -169,6 +169,22 @@ static inline const char *path_kind_suffix(path_kind_t kind) {
 }
 
 /**
+ * The noun a path's type reads as on a screen: "file", "symlink" or "directory"
+ *
+ * An executable is a file, its bit being the claim's mode, and a link is named
+ * as a look names one (sys/filesystem.h fs_stat_noun), so a sentence that sets
+ * a claim beside what stands there says one word for one kind.
+ *
+ * Readers: cmds/add.c cmd_add (the kind refusal and the blob-above refusal) and
+ * add_collect (the walk's skip); cmds/export.c export_collect_filesystem (the
+ * blob that leaves the copy no room).
+ */
+static inline const char *path_type_noun(path_type_t type) {
+    return type == PATH_TYPE_DIRECTORY ? "directory" :
+           type == PATH_TYPE_SYMLINK ? "symlink" : "file";
+}
+
+/**
  * Occupant — what stands at a path, as one look finds it
  *
  * The link itself, never its target: a symlink is a distinct occupant, not the

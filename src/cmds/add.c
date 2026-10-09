@@ -27,6 +27,7 @@
 #include "core/policy.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "core/workspace.h"
 #include "infra/content.h"
 #include "infra/label.h"
 #include "infra/mount.h"
@@ -175,6 +176,27 @@ typedef struct {
     size_t unkept;         /* Captures another name of this profile holds */
     size_t gone;           /* Captures whose name the profile no longer holds at the path */
 } add_receipt_t;
+
+/**
+ * The enabled set's view and the record, as the ancestry refusal reads them
+ *
+ * Read at the first link among an argument's ancestors (add_refuse_ancestry)
+ * and kept for every argument after it, so an add with no link above any argument
+ * reads neither. Both are the store as the command found it, before its commit,
+ * and so never the record phase's, whose view is built after its binding is written
+ * (add_write_record) — which is why the capturing profile's own claims are read
+ * off the walk's view instead. The command's, beside its other resources, and
+ * not the walk's: no frame of the walk reads them, and the record phase, which
+ * takes the walk, must never meet a view built before its own binding. Lazy only
+ * where no link stands above the paths added: where one stands above HOME
+ * (FreeBSD's /home) every add reads both, and builds the view twice, here and
+ * in its record phase.
+ */
+typedef struct {
+    manifest_t *manifest;          /* The enabled set's view; NULL until a link is met */
+    state_record_t *records;       /* The record, as state_records read it */
+    size_t record_count;           /* Records in it */
+} add_enabled_t;
 
 /**
  * Is this argument the target, or beneath it?
@@ -679,8 +701,7 @@ static error_t add_collect(
                 out, OUTPUT_NORMAL,
                 "Skipping '%s': profile '%s' holds it as the %s '%s', and a "
                 "%s stands there now", child_fs, walk->profile,
-                held->type == PATH_TYPE_DIRECTORY ? "directory" : "file",
-                held->storage_path, fs_stat_noun(&st)
+                path_type_noun(held->type), held->storage_path, fs_stat_noun(&st)
             );
             continue;
         }
@@ -823,6 +844,192 @@ static error_t add_refuse_excluded(
         first.origin == IGNORE_ORIGIN_SOURCE
             ? ", or respect_gitignore = false turns Git's rules off" : ""
     );
+}
+
+/**
+ * Refuse a capture read through a link an enabled profile claims, or answer NULL
+ * where none stands above it
+ *
+ * Git's "beyond a symbolic link" (lib/git/pathspec.c parse_pathspec), scoped to
+ * the paths dotta answers for: a link at a strict ancestor of the path, at a
+ * place an enabled profile claims, would have the capture read the bytes the
+ * link's target holds as the claim's, and the next apply convert the link — a
+ * large effect from a small command. A link no enabled profile claims is the
+ * machine's, and the capture reads through it as the kernel resolves it.
+ *
+ * One admission: the user's own link where every claim at the place is the
+ * capturing profile's derived one, and the place lies on the chain of the name
+ * captured — strictly beneath the root its label resolves to, where the capture's
+ * climb goes (core/profiles.h profile_capture_ancestors). The climb retires every
+ * derived claim the profile holds at a link it meets, under any name, so after
+ * the commit nothing requires a directory there. A link where dotta confirmed a
+ * copy (the frame's base, core/workspace.h workspace_base) is never the user's
+ * to read through: Git moved past what dotta placed, apply replaces it, and a
+ * capture through it would undo half of Git's move.
+ *
+ * The capturing profile's claims are read off the walk's view — its own, under
+ * the command's table, the run's binding in it, which the enabled view lacks on
+ * the add that first binds it — and only while it is enabled: a disabled profile's
+ * claims bind nothing here. Every other profile's are read off the enabled view
+ * (add_enabled_t), whose table agrees for them.
+ *
+ * Every strict ancestor, outermost first: a claimed link beneath the machine's
+ * own is still claimed, and the refusal names the first one in the way. Its words
+ * follow the claim standing at the link and the base, in the order the load classes
+ * the node there (core/workspace.c workspace_analyze_directory): a blob — a link
+ * a profile claims, or a file — then dotta's copy, a tracked directory, a derived
+ * one, each with its way out.
+ *
+ * Stated: a disabled profile's own rung off the chain is admitted, and the capture
+ * is displaced at the profile's enable, where status names the rung and `dotta
+ * update <dir>` drops it; an enabled profile's sheet that will not load refuses
+ * an add with a link above it, as it refuses the verbs that build the view; and
+ * the reading is by spelling, so a case fold or a second spelling of a claimed
+ * link escapes it, as it escapes the view.
+ *
+ * @return The refusal, or the failure the enabled view or the record gave; NULL
+ *         where no link above the path is one a claim names
+ */
+static error_t add_refuse_ancestry(
+    const add_walk_t *walk, add_enabled_t *enabled, const char *filesystem_path,
+    const char *storage_path
+) {
+    const dotta_ctx_t *ctx = walk->ctx;
+
+    /* The places the capture's climb visits: strictly beneath the root the name's
+     * own label resolves to for the profile, under the command's table */
+    const mount_root_t *root = mount_root_of(
+        manifest_mounts(walk->view), walk->profile, label_of(storage_path)
+    );
+
+    /* Every strict ancestor, root first, each a cut of one copy of the key put
+     * back once the look is taken (profile_capture_ancestors' idiom): a key cut
+     * at a separator is a key, the spelling every lookup below reads */
+    char *rung = arena_strdup(ctx->arena, filesystem_path);
+    for (char *cut = strchr(rung + 1, '/'); cut; cut = strchr(cut + 1, '/')) {
+        *cut = '\0';
+        const fs_occupant_t occupant = fs_lstat_occupant(rung, NULL);
+        *cut = '/';
+        if (occupant != FS_OCCUPANT_SYMLINK) continue;
+
+        /* A link above the path, its own spelling copied for the questions below:
+         * few ancestors are links */
+        const char *link = arena_strndup(ctx->arena, rung, (size_t) (cut - rung));
+
+        /* The enabled set's view and the record, read at the first link above
+         * any argument and kept for the rest */
+        if (!enabled->manifest) {
+            error_t err = manifest_build(
+                ctx->run.repo, ctx->run.state, ctx->arena, &enabled->manifest
+            );
+            if (!err) {
+                err = state_records(
+                    ctx->run.state, ctx->arena, &enabled->records, &enabled->record_count
+                );
+            }
+            if (err) {
+                return error_wrap(
+                    err, "Cannot tell whether a profile claims the link at '%s'", link
+                );
+            }
+        }
+
+        /* Every claim an enabled profile holds at the link: the capturing profile's
+         * off its own view, and the first other profile's off the enabled one,
+         * which is enough to refuse */
+        const manifest_row_t *held = state_enabled(ctx->run.state, walk->profile)
+            ? manifest_lookup_claim(walk->view, walk->profile, link) : NULL;
+        const manifest_row_t *other = NULL;
+        size_t profile_count = 0;
+        const char *const *profiles = manifest_profiles(enabled->manifest, &profile_count);
+        for (size_t i = 0; i < profile_count && !other; i++) {
+            if (strcmp(profiles[i], walk->profile) == 0) continue;
+            other = manifest_lookup_claim(enabled->manifest, profiles[i], link);
+        }
+
+        /* No claim: the machine's link, read through as the kernel resolves it */
+        if (!held && !other) continue;
+
+        /* Whose node the link is: dotta's copy where its record confirmed one,
+         * as the load decides it (core/workspace.h workspace_base) */
+        const state_record_t *base = workspace_base(
+            state_find_record(enabled->records, enabled->record_count, link)
+        );
+
+        /* The admission: the user's link, every claim at it the capturing profile's
+         * derived one, at a rung the capture's climb visits — and so retires,
+         * under every name */
+        if (!other && manifest_is_derived(held) && !base &&
+            str_path_beneath(link, root->filesystem_path, strlen(root->filesystem_path))) {
+            continue;
+        }
+
+        /* The refusal, in the words of the claim standing at the link: the enabled
+         * view's row, or the capturing profile's own where that view places none
+         * of its claims yet — the add that first binds it */
+        const manifest_row_t *row = manifest_lookup(enabled->manifest, link);
+        if (!row) row = held;
+
+        char shown[PATH_MAX], beneath[PATH_MAX];
+        output_format_path(link, identity()->home, shown, sizeof(shown));
+        output_format_path(filesystem_path, identity()->home, beneath, sizeof(beneath));
+
+        /* A link's row: the link is a profile's own claim, and leaves no room
+         * beneath it — the capture belongs where the link leads, or its claimant
+         * ships the directory's files where it ships the link */
+        if (row->type == PATH_TYPE_SYMLINK) {
+            return error_create(
+                ERR_INVALID_ARG, "'%s' would be read through the link at '%s', which "
+                "profile '%s' claims as '%s'; add it where the link leads, or ship the "
+                "directory's files in '%s' in place of the link", beneath, shown,
+                row->profile, row->storage_path, row->profile
+            );
+        }
+
+        /* A file's row, a link standing where it claims: the file leaves no room
+         * beneath it either — the capture belongs where the link leads, or the
+         * file claim is given up */
+        if (row->type != PATH_TYPE_DIRECTORY) {
+            return error_create(
+                ERR_INVALID_ARG, "'%s' would be read through the link at '%s', where "
+                "profile '%s' claims the file '%s'; add it where the link leads, or "
+                "dotta remove %s %s gives that claim up", beneath, shown, row->profile,
+                row->storage_path, row->profile, row->storage_path
+            );
+        }
+
+        /* A directory, where dotta last confirmed a copy of its own: apply replaces
+         * the link unasked where it is that copy untouched, and names --force
+         * where it is not */
+        if (base) {
+            return error_create(
+                ERR_INVALID_ARG, "'%s' would be read through the link at '%s', where "
+                "dotta last confirmed a copy and profile '%s' now claims a directory; "
+                "dotta apply replaces the link first", beneath, shown, row->profile
+            );
+        }
+
+        /* A directory a profile tracks, the user's link standing at it */
+        if (row->tracked) {
+            return error_create(
+                ERR_INVALID_ARG, "'%s' would be read through the link at '%s', where "
+                "profile '%s' tracks a directory; dotta apply --force replaces the "
+                "link, or move it aside", beneath, shown, row->profile
+            );
+        }
+
+        /* A directory a profile only passes through: another profile's rung, or
+         * one of the capturing profile's own off the chain, which its climb never
+         * meets — the named update drops it, as status says of the squatter */
+        return error_create(
+            ERR_INVALID_ARG, "'%s' would be read through the link at '%s', where "
+            "profile '%s' passes through a directory; dotta update %s re-derives "
+            "the way there, or move the link aside", beneath, shown, row->profile,
+            shown
+        );
+    }
+
+    return NULL;
 }
 
 /**
@@ -1536,6 +1743,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     profile_draft_t *draft = NULL;    /* The profile's next commit: see below */
     manifest_t *view = NULL;          /* The profile as its draft opened it: see below */
     add_walk_t walk = { .ctx = ctx }; /* Filled once the table and the rules are known */
+    add_enabled_t enabled = { 0 };    /* The enabled set's view, at the first link met */
     bool profile_exists = false;      /* The pre-flight's: no branch until this add brings it */
     mount_table_t *mounts = NULL;     /* The command's table: see below */
     const char *target = NULL;        /* --target, absolute: what the row stores */
@@ -1928,8 +2136,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             err = error_create(
                 ERR_INVALID_ARG, "Profile '%s' holds '%s' as the %s '%s', and a %s "
                 "stands there now; dotta remove %s %s gives that claim up%s",
-                opts->profile, shown,
-                held->type == PATH_TYPE_DIRECTORY ? "directory" : "file",
+                opts->profile, shown, path_type_noun(held->type),
                 held->storage_path, fs_stat_noun(&st), opts->profile, held->storage_path,
                 held->type == PATH_TYPE_DIRECTORY ? ", and everything beneath it" : ""
             );
@@ -1954,9 +2161,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 filesystem_path, identity()->home, beneath, sizeof(beneath)
             );
             err = error_create(
-                ERR_INVALID_ARG, "Profile '%s' holds '%s' as the file '%s', and '%s' "
+                ERR_INVALID_ARG, "Profile '%s' holds '%s' as the %s '%s', and '%s' "
                 "lies beneath it; dotta remove %s %s gives that claim up", opts->profile,
-                shown, above->storage_path, beneath, opts->profile, above->storage_path
+                shown, path_type_noun(above->type), above->storage_path, beneath,
+                opts->profile, above->storage_path
             );
             goto cleanup;
         }
@@ -1983,6 +2191,13 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             );
             goto cleanup;
         }
+
+        /* What the capture reads through: no link an enabled profile claims
+         * (add_refuse_ancestry). After the refusals the profile's own view gives,
+         * and before its admission and the walk, which enters no link
+         * (add_collect), so the argument's ancestors are every walked path's. */
+        err = add_refuse_ancestry(&walk, &enabled, filesystem_path, storage_path);
+        if (err) goto cleanup;
 
         /* What the commit can hold, before a byte is read (core/profiles.h
          * profile_admit). The verdict a walked entry answers with a skip is an

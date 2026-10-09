@@ -192,9 +192,11 @@ bool label_prefixes(const char *s);
  * home/ always does and root/ and custom/ do unless the invoker is root
  * (core/metadata.c metadata_capture_ownership), and which rule placed the root
  * a relocated claim lands under (core/workspace.c workspace_analyze_orphans) —
- * and two that only index by it: add's receipt counting names by their label
- * (cmds/add.c add_print_labels), and a profile's need of a target noting the
- * labels it claims under (core/profiles.c profile_note_label).
+ * and three that only index by it: add's receipt counting names by their label
+ * (cmds/add.c add_print_labels), a profile's need of a target noting the labels
+ * it claims under (core/profiles.c profile_note_label), and add's ancestry refusal
+ * asking for the root a captured name's label resolves to (cmds/add.c
+ * add_refuse_ancestry).
  */
 label_t label_of(const char *storage_path);
 

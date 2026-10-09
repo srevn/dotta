@@ -259,7 +259,9 @@ static inline bool manifest_is_claim(
  * nothing (cmds/add.c cmd_add, cmds/revert.c revert_refuse_second_name); add's
  * rule question, where it claims nothing either and so is a discovery, meeting
  * every rule (cmds/add.c add_verdict); the walk that enters such a directory
- * for the claims beneath it (cmds/add.c add_collect); and the per-profile counts
+ * for the claims beneath it (cmds/add.c add_collect); add's ancestry refusal,
+ * where the capturing profile's derived claim at the user's link is the one its
+ * climb retires (cmds/add.c add_refuse_ancestry); and the per-profile counts
  * `status -v` prints, where a derived row is no directory the profile tracks
  * (cmds/status.c status_print_profiles). Every other `tracked` read in the tree
  * stands where the kind is already settled and asks the field's own meaning,
@@ -458,10 +460,14 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
  * Every enabled profile whose branch existed at build, lowest precedence first
  * — the set the rows came from, as the enabled set reads once the branches that
  * are gone (and contributed nothing) are left out; for one profile's view, its
- * one profile. The untracked scan's registration reads it (core/workspace.c
- * workspace_analyze_untracked): a later profile's tracked directory takes a
- * directory an earlier one stands at, the index's own rule read from the same
- * order.
+ * one profile.
+ *
+ * Readers: the scope, whose enabled set this is (core/scope.c scope_build); the
+ * untracked scan's registration (core/workspace.c workspace_analyze_untracked),
+ * where a later profile's tracked directory takes a directory an earlier one
+ * stands at, the index's own rule read from the same order; and add's ancestry
+ * refusal, which asks every profile but the capturing one for its claim at a
+ * link (cmds/add.c add_refuse_ancestry).
  *
  * Pure value return — no allocation, no error path. The names are the arena's,
  * the same pointers the rows carry, valid for the arena's lifetime.
@@ -482,10 +488,11 @@ const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
  * and needs the topology it was placed by reads it here rather than building a
  * second table from the same rows, so the names it places and the rows it selects
  * read one value. Readers: the dispatcher (`run.mounts` for a command that declares
- * the view, include/runtime.h); a filesystem argument to `ignore --test` and
- * add's label receipt, each of which builds a view of its own and reads the table
- * back from it rather than beside it. Show and list build one too and ask it
- * nothing: their arm reads the view by key alone.
+ * the view, include/runtime.h); a filesystem argument to `ignore --test`, and
+ * add's label receipt, its let-go and its ancestry refusal (cmds/add.c
+ * add_print_labels, add_write_record, add_refuse_ancestry), each of which builds
+ * a view of its own and reads the table back from it rather than beside it. Show
+ * and list build one too and ask it nothing: their arm reads the view by key alone.
  *
  * Pure value return — no allocation, no error path.
  *
@@ -896,8 +903,10 @@ error_t manifest_holder(
  * to find, and a derived row included, since a profile holding a subtree beneath
  * a path is a statement a path that became a file contradicts — and whether the
  * add captures it, a claim being left as it stands but under --force (add_list);
- * and `ignore --test`'s note beneath a verdict that excludes a path its asker
- * holds, which the rules never reach (cmds/ignore.c ignore_test).
+ * every claim an enabled profile holds at a link above a capture, the capturing
+ * profile's off its own view and every other's off the enabled one (cmds/add.c
+ * add_refuse_ancestry); and `ignore --test`'s note beneath a verdict that excludes
+ * a path its asker holds, which the rules never reach (cmds/ignore.c ignore_test).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,

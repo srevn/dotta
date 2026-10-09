@@ -307,15 +307,16 @@ typedef enum dotta_verbosity {
  * Who does not: a command for which the view is incidental (one lookup or one
  * count on one of its paths — `show`, `list`, `key status`, `completion`, `export`
  * and `ignore --test`, the last two reading one profile's own view where the
- * enabled set is not the subject, and `ignore`'s other four surfaces building
- * nothing) or that must run on a set the build refuses (`profile disable`;
- * `remove` — its warning bit and its record phase each build a view where needed
- * and degrade when the build fails) builds its own where it needs it, with the
- * failure handling that path wants. A command that moves Git or the enabled set
- * (add, update, remove, sync, profile enable / disable, clone, interactive) builds
- * the post-mutation view itself — the builder called again over the rows as they
- * now stand: `run.manifest` is the view at dispatch and is never rebuilt — see
- * "Members not welcome" #1 on the run.
+ * enabled set is not the subject, `ignore`'s other four surfaces building nothing,
+ * and `add`, before its commit, at a link above an argument alone) or that must
+ * run on a set the build refuses (`profile disable`; `remove` — its warning bit
+ * and its record phase each build a view where needed and degrade when the build
+ * fails) builds its own where it needs it, with the failure handling that path
+ * wants. A command that moves Git or the enabled set (add, update, remove, sync,
+ * profile enable / disable, clone, interactive) builds the post-mutation view
+ * itself — the builder called again over the rows as they now stand: `run.manifest`
+ * is the view at dispatch and is never rebuilt — see "Members not welcome" #1
+ * on the run.
  *
  * tolerant
  * --------

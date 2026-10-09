@@ -676,8 +676,7 @@ static error_t export_collect_filesystem(
                 ERR_CONFLICT,
                 "Cannot export '%s': '%s' is a %s in profile '%s' and '%s' stands "
                 "beneath it — one filesystem cannot hold both",
-                filesystem_path, at->storage_path,
-                at->type == PATH_TYPE_SYMLINK ? "symlink" : "file",
+                filesystem_path, at->storage_path, path_type_noun(at->type),
                 profile_name(profile), first->storage_path
             );
         }

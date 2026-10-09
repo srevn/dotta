@@ -127,6 +127,17 @@ typedef struct {
  * place first — and `--force` lifts neither: overwriting bytes under a name the
  * profile holds is not re-shaping the tree.
  *
+ * **What a capture reads through**: every directory above it, as the kernel
+ * resolves the path — so a link at a place an enabled profile claims refuses
+ * the capture: the bytes it reaches would be committed as the claim's, and the
+ * next apply would convert the link. One such link is read through, the user's
+ * own at a rung of the captured name's own chain, every claim there the capturing
+ * profile's derived one, which the capture's climb retires under every name the
+ * profile holds the place by. A link no enabled profile claims is the machine's,
+ * and read through. The refusal names the claim standing at the link and the
+ * verb that clears it, and the walk enters no link, so an argument's ancestors
+ * are every listed path's.
+ *
  * **THE KEY INVARIANT**: for every path this command lists, `mount_resolve` of
  * the claim it was listed under is the filesystem path it was read at. A typed
  * name is resolved into its path by construction; a walked one is named from
@@ -163,15 +174,15 @@ typedef struct {
  * preview refused in the same words and with the same status: the listing — what
  * is new to the profile, and what it holds and the add leaves, so an add that
  * finds nothing new says so in the run's words — the admission of every name
- * together, the name a directory claim would abandon, and each file's encryption
- * verdict. What only a source or a later writer can say is the run's alone —
- * bytes that cannot be read, the key a seal needs, an owner a claim cannot name,
- * a kind that changed since its listing, the chain above each path, whether the
- * commit moves anything, and the record. Its lines are the capture's in the future
- * tense; it captures no file's contents, writes no object, ref, row or database,
- * and takes no write lock (include/runtime.h), so it neither blocks a run nor
- * waits for one. The pre-add hook runs under DOTTA_DRY_RUN=1 and the post-add
- * hook does not (utils/hooks.h).
+ * together, what each argument is read through, the name a directory claim would
+ * abandon, and each file's encryption verdict. What only a source or a later
+ * writer can say is the run's alone — bytes that cannot be read, the key a seal
+ * needs, an owner a claim cannot name, a kind that changed since its listing,
+ * the chain above each path, whether the commit moves anything, and the record.
+ * Its lines are the capture's in the future tense; it captures no file's contents,
+ * writes no object, ref, row or database, and takes no write lock
+ * (include/runtime.h), so it neither blocks a run nor waits for one. The pre-add
+ * hook runs under DOTTA_DRY_RUN=1 and the post-add hook does not (utils/hooks.h).
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

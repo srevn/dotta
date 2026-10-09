@@ -719,7 +719,8 @@ static inline bool workspace_reassigned(
  * workspace_analyze_directory (whose a squatter is: dotta's copy where a base
  * stands, the user's where none does), workspace_flush (a first observation owed
  * where none stands) and workspace_analyze_orphans (an order measured against a
- * confirmed blob). A reader not on this list is a bug.
+ * confirmed blob); cmds/add.c add_refuse_ancestry (whose a link above a capture
+ * is, as the directory analysis asks it). A reader not on this list is a bug.
  */
 static inline const state_record_t *workspace_base(const state_record_t *record) {
     return record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;

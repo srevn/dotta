@@ -739,22 +739,25 @@ static error_t update_profile(
  * landed since moves what Git holds past the capture, which the next load reads
  * as Git's move ([stale]), never as a capture of it. A path the commit let go —
  * a deleted item, a directory entry the commit's prune dropped as redundant, or
- * an ancestor claim the derivation dropped — left Git by this commit: with no
- * row left at the path its record retires (nothing backs it now); with a lower
- * profile's row at the path it is a fallback — the record stays and reads
- * [reassigned] until apply deploys it. The rule "write only where the row IS
- * the captured claim" is the same one add applies (core/manifest.h's
- * manifest_is_claim): a row another profile won is its own, and so is one a second
- * claim of this very profile won. Both kinds: a directory's claim (mode, ownership)
- * is captured from disk exactly as add captures it, so the capture owns the
- * directory the same way — the ownership the orphan gate asks for on scope exit
- * — with no stat triple, a directory having no content to confirm.
+ * an ancestor claim the derivation dropped — left Git by this commit, and the
+ * record there is the commit's to settle where it is this profile's, as remove
+ * settles its own (cmds/remove.c remove_paths_candidates): with no row left at
+ * the path it retires (nothing backs it now); under another profile's row it is
+ * a fallback, kept until apply settles it against that row. A record naming another
+ * profile is that profile's, which its own load decides. The rule "write only
+ * where the row IS the captured claim" is the same one add applies
+ * (core/manifest.h's manifest_is_claim): a row another profile won is its own,
+ * and so is one a second claim of this very profile won. Both kinds: a directory's
+ * claim (mode, ownership) is captured from disk exactly as add captures it, so
+ * the capture owns the directory the same way — the ownership the orphan gate
+ * asks for on scope exit — with no stat triple, a directory having no content
+ * to confirm.
  *
  * Algorithm:
  *   1. No commit landed: nothing to write, and no lock taken to write it
  *   2. Begin write transaction on caller's handle
  *   3. Build the post-commit view once, under the lock; one lookup per committed
- *      path
+ *      path, and the record read under the same lock where a commit let a key go
  *   4. Commit transaction
  *
  * Preconditions:
@@ -775,7 +778,8 @@ static error_t update_profile(
  *     can continue to post-update hook and cleanup deterministically
  *   - Caller should warn user
  *
- * Performance: one view build + O(N) point lookups, N = committed paths
+ * Performance: one view build + O(N) point lookups, N = committed paths, and
+ * one read of the record per commit that let a key go
  *
  * @param ctx Dispatch context (must not be NULL; the repository, the state handle
  *            and the mount table come off the run, the view is built into
@@ -844,15 +848,23 @@ static error_t update_write_record(
          * the prune takes a rung named under another label, so two keys can place
          * one path — one record, settled once, as remove joins what its commit
          * let go (cmds/remove.c remove_paths_candidates), and the receipt counts
-         * paths. */
+         * records. */
         const string_array_t *let_go[] = {
             &commit->deleted, &commit->pruned, &commit->ancestors_retired
         };
-        hashmap_t *settled = hashmap_borrow(
-            ctx->arena,
-            commit->deleted.count + commit->pruned.count + commit->ancestors_retired.count
-        );
+        const size_t key_count =
+            commit->deleted.count + commit->pruned.count + commit->ancestors_retired.count;
+        if (key_count == 0) continue;
 
+        /* Whose record each path holds: the record under the lock, beside the
+         * view, read only where a commit let a key go — an update that only
+         * captured reads none */
+        state_record_t *records = NULL;
+        size_t record_count = 0;
+        err = state_records(state, ctx->arena, &records, &record_count);
+        if (err) goto cleanup;
+
+        hashmap_t *settled = hashmap_borrow(ctx->arena, key_count);
         for (size_t b = 0; b < sizeof(let_go) / sizeof(let_go[0]); b++) {
             for (size_t i = 0; i < let_go[b]->count; i++) {
                 const char *filesystem_path = mount_resolve(
@@ -866,6 +878,20 @@ static error_t update_write_record(
                 if (!filesystem_path || !hashmap_add(settled, filesystem_path, NULL)) {
                     continue;
                 }
+
+                /* This profile's record alone, the join remove's candidates make:
+                 * a record naming another profile is that profile's, which its
+                 * own load decides. A retire here would have its scope exit forget
+                 * the copy dotta made and, where a link took the place, look
+                 * through it at the orphans the record displaces (core/workspace.h
+                 * workspace_displaced_t, RECORD). A fallback is one of this
+                 * profile's records kept under another profile's row: a path
+                 * whose row was another's before the commit, its record with
+                 * it, falls back from nothing. */
+                const state_record_t *record = state_find_record(
+                    records, record_count, filesystem_path
+                );
+                if (!record || strcmp(record->profile, commit->profile) != 0) continue;
 
                 const manifest_row_t *row = manifest_lookup(manifest, filesystem_path);
                 if (!row) {

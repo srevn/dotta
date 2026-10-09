@@ -781,12 +781,15 @@ const char *state_target(
  *     print) rest on
  *   - cmds/profile.c profile_validate: the deleted profiles in first-seen order,
  *     so the report is reproducible
- *   - cmds/add.c add_write_record (the takeover note) and add_refuse_ancestry
- *     (whose node a link above a capture is), cmds/remove.c remove_paths_candidates
- *     (the settle's candidates, read before the lock and under it), and
- *     core/manifest.c manifest_diff (a departed row's orphan split, handed the
- *     array by cmds/profile.c profile_enable, profile_disable and cmds/sync.c
- *     cmd_sync): by path, through state_find_record, which rests on strcmp order
+ *   - cmds/add.c add_write_record (the takeover note, and whose record a path
+ *     its commit let go holds) and add_refuse_ancestry (whose node a link above
+ *     a capture is), cmds/update.c update_write_record (whose record a path a
+ *     commit let go holds, read under the phase's lock), cmds/remove.c
+ *     remove_paths_candidates (the settle's candidates, read before the lock
+ *     and under it), and core/manifest.c manifest_diff (a departed row's orphan
+ *     split, handed the array by cmds/profile.c profile_enable, profile_disable
+ *     and cmds/sync.c cmd_sync): by path, through state_find_record, which rests
+ *     on strcmp order
  *   - cmds/remove.c remove_profile_candidates (every record naming the profile,
  *     read before the prompt and under the lock) and cmds/sync.c cmd_sync's apply
  *     hint (every record against the view the Git phase produced, with no workspace
@@ -815,8 +818,9 @@ error_t state_records(
  * one in another order misses what it holds. The empty snapshot — NULL, count 0
  * — holds nothing.
  *
- * Readers: cmds/add.c add_write_record (the takeover note) and add_refuse_ancestry
- * (whose node a link above a capture is), cmds/remove.c remove_paths_candidates
+ * Readers: cmds/add.c add_write_record (the takeover note, and the let-go's join)
+ * and add_refuse_ancestry (whose node a link above a capture is), cmds/update.c
+ * update_write_record (the let-go's join), cmds/remove.c remove_paths_candidates
  * (the settle's candidates), core/manifest.c manifest_diff (a departed row's
  * orphan split).
  *
@@ -882,12 +886,13 @@ error_t state_write(state_t *state, const state_record_t *record);
  * needs no look at disk first, which is what lets add and update retire the records
  * their commits let go without asking whether anything still stands.
  *
- * A missing record is success: the callers name paths that may have no record —
- * never seen here, nothing to retire. Readers: apply's record phase, for every
- * orphan it settles (cmds/apply.c apply_write_record); remove's settle and update's
- * record phase, for what their commits let go (cmds/remove.c remove_settle,
- * cmds/update.c update_write_record); and add's record phase, for the ancestor
- * claims its own commit dropped (cmds/add.c add_write_record).
+ * A missing record is success, the DELETE matching nothing: add's record phase
+ * can name one place twice, its climb dropping the place under each of its names,
+ * and the second retire finds the first one's done. Readers: apply's record phase,
+ * for every orphan it settles (cmds/apply.c apply_write_record); and the verbs,
+ * each for its own profile's records at what its commit let go — remove's settle,
+ * update's record phase and add's (cmds/remove.c remove_settle, cmds/update.c
+ * update_write_record, cmds/add.c add_write_record).
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose record retires (must not be NULL)

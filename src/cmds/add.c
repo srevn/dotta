@@ -1429,7 +1429,7 @@ static error_t add_commit(
  *   2. Build the view; anchor each capture where its own claim stands at the
  *      path the walk read it at, its record the capture's; settle what the commit
  *      let go — the ancestor claims the climb retired, and the derivations the
- *      commit's prune took
+ *      commit's prune took — where the record there is this profile's
  *   3. Commit the transaction (state_save), and finish it either way
  *
  * CRITICAL ORDER: step 1 must precede step 2. The builder's own table is built
@@ -1482,8 +1482,8 @@ static error_t add_commit(
  *   file it adopts and never for a directory, whose ownership is the capture's
  *   alone (cmds/apply.c, the adoption loop).
  *
- * Performance: one view build and one read of the record, then each captured
- * path looked up in both — O(N log A), N = paths captured, A = records
+ * Performance: one view build and one read of the record, then each path captured
+ * or let go looked up in both — O(N log A), N = those paths, A = records
  *
  * @param walk The selection (must not be NULL): the context — the repository,
  *             the state and the command arena — the profile added to, the files
@@ -1565,15 +1565,18 @@ static error_t add_write_record(
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 
-    if (state_enabled(state, profile)) {
-        /* The record as it stands first, read before the write that rewrites
-         * it, so a takeover is known — looked up by path in the read
-         * (state_find_record). */
-        state_record_t *records = NULL;
-        size_t record_count = 0;
-        err = state_records(state, ctx->arena, &records, &record_count);
-        if (err) goto cleanup;
+    /* The record as it stands first, read before the write that rewrites it, so
+     * a takeover is known, and so is whose record each path the commit let go
+     * holds — for a disabled profile as for an enabled one — looked up by path
+     * in the read (state_find_record). One read serves both: the anchor pass
+     * writes only where a capture's row stands, and the let-go acts only where
+     * none does. */
+    state_record_t *records = NULL;
+    size_t record_count = 0;
+    err = state_records(state, ctx->arena, &records, &record_count);
+    if (err) goto cleanup;
 
+    if (state_enabled(state, profile)) {
         time_t now = time(NULL);
 
         /* Both lists, one rule and one count: each capture's record is what it
@@ -1698,6 +1701,17 @@ static error_t add_write_record(
                 ctx->arena, manifest_mounts(walk->view), profile, let_go[b]->entries[i]
             );
             if (!filesystem_path || manifest_lookup(manifest, filesystem_path)) continue;
+
+            /* This profile's record alone, the join remove's candidates make
+             * (cmds/remove.c remove_paths_candidates): a record naming another
+             * profile is that profile's, which its own load decides. A retire
+             * here would have its scope exit forget the copy dotta made and,
+             * where a link took the place, look through it at the orphans the
+             * record displaces (core/workspace.h workspace_displaced_t, RECORD) */
+            const state_record_t *record = state_find_record(
+                records, record_count, filesystem_path
+            );
+            if (!record || strcmp(record->profile, profile) != 0) continue;
 
             err = state_retire(state, filesystem_path);
             if (err) goto cleanup;

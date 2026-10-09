@@ -36,10 +36,11 @@
  *   record through state.h directly, against the post-commit view they build
  *   with manifest_build: add and update what their captures committed, where
  *   that view says the claim stands, and each the retirements — remove's orders
- *   too — of what its commit let go. add and remove load no workspace, and nothing
- *   reads update's after its record write, so there is no snapshot for the write
- *   to desync. profile enable / disable write only the enabled set, sync writes
- *   nothing, and completion reads the dispatcher's view alone.
+ *   too — of its own profile's records at what its commit let go. add and remove
+ *   load no workspace, and nothing reads update's after its record write, so
+ *   there is no snapshot for the write to desync. profile enable / disable write
+ *   only the enabled set, sync writes nothing, and completion reads the
+ *   dispatcher's view alone.
  *
  *   The workspace's products (rows, records, verdicts) are read through the
  *   workspace; the run's resources (the repository, the content cache) are read

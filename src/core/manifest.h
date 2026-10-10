@@ -280,18 +280,19 @@ static inline bool manifest_is_claim(
  * one claim that settles nothing about the path it stands at (core/workspace.c
  * workspace_scan); the tags' clean arm, where a rung nothing diverged
  * on reads [ancestor] (core/workspace.c workspace_item_tags);
- * update's derive-scope slice (cmds/update.c cmd_update); the two refusals of a
- * second name for one path, where a derived claim names nothing and so blocks
- * nothing (cmds/add.c cmd_add, cmds/revert.c revert_refuse_second_name); add's
- * rule question, where it claims nothing either and so is a discovery, meeting
- * every rule (cmds/add.c add_verdict); the walk that enters such a directory
- * for the claims beneath it (cmds/add.c add_collect); add's ancestry refusal,
- * where the capturing profile's derived claim at the user's link is the one its
- * climb retires (cmds/add.c add_refuse_ancestry); and the per-profile counts
- * `status -v` prints, where a derived row is no directory the profile tracks
- * (cmds/status.c status_print_profiles). Every other `tracked` read in the tree
- * stands where the kind is already settled and asks the field's own meaning,
- * not this predicate.
+ * update's derive-scope slice, a leaf's row and the claim each profile holds
+ * where the user's node squats above it (cmds/update.c cmd_update); the two
+ * refusals of a second name for one path, where a derived claim names nothing
+ * and so blocks nothing (cmds/add.c cmd_add, cmds/revert.c
+ * revert_refuse_second_name); add's rule question, where it claims nothing either
+ * and so is a discovery, meeting every rule (cmds/add.c add_verdict); the walk
+ * that enters such a directory for the claims beneath it (cmds/add.c add_collect);
+ * add's ancestry refusal, where the capturing profile's derived claim at the
+ * user's link is the one its climb retires (cmds/add.c add_refuse_ancestry);
+ * and the per-profile counts `status -v` prints, where a derived row is no
+ * directory the profile tracks (cmds/status.c status_print_profiles). Every other
+ * `tracked` read in the tree stands where the kind is already settled and asks
+ * the field's own meaning, not this predicate.
  */
 static inline bool manifest_is_derived(const manifest_row_t *row) {
     return row && row->type == PATH_TYPE_DIRECTORY && !row->tracked;
@@ -502,9 +503,11 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
  * Readers: the scope, whose enabled set this is (core/scope.c scope_build); the
  * untracked scan's registration (core/workspace.c workspace_analyze_untracked),
  * where a later profile's tracked directory takes a directory an earlier one
- * stands at, the index's own rule read from the same order; and add's ancestry
- * refusal, which asks every profile but the capturing one for its claim at a
- * link (cmds/add.c add_refuse_ancestry).
+ * stands at, the index's own rule read from the same order; add's ancestry refusal,
+ * which asks every profile but the capturing one for its claim at a link
+ * (cmds/add.c add_refuse_ancestry); and update's named derivation, which asks
+ * every profile for an explicit claim where the user's node squats above a leaf
+ * (cmds/update.c cmd_update).
  *
  * Pure value return — no allocation, no error path. The names are the arena's,
  * the same pointers the rows carry, valid for the arena's lifetime.
@@ -987,10 +990,13 @@ error_t manifest_holder(
  * counts it overridden rather than departed (manifest_diff); whether a commit
  * that let a claim go left its profile holding the path all the same, which keeps
  * the record a row would (cmds/add.c add_write_record, cmds/update.c
- * update_write_record, cmds/remove.c remove_settle); whether the untracked scan's
- * owner holds a blob at a child no row of its own stands at (core/workspace.c
- * workspace_scan); and `ignore --test`'s note beneath a verdict that excludes a
- * path its asker holds, which the rules never reach (cmds/ignore.c ignore_test).
+ * update_write_record, cmds/remove.c remove_settle); whether any profile holds
+ * an explicit claim where the user's node squats above a named update's leaf, a
+ * lost blob's place no re-derivation frees (cmds/update.c cmd_update); whether
+ * the untracked scan's owner holds a blob at a child no row of its own stands
+ * at (core/workspace.c workspace_scan); and `ignore --test`'s note beneath a
+ * verdict that excludes a path its asker holds, which the rules never reach
+ * (cmds/ignore.c ignore_test).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,

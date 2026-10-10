@@ -398,7 +398,8 @@ static workspace_fault_t workspace_error_fault(error_t err) {
  * Readers: workspace_look, before every look the load takes — it takes them all,
  * and writes the answer onto the item it withholds the look from — and
  * workspace_squatted_ancestor, the view-only face that lends the answer whole
- * to a caller that needs the squatter itself (core/deploy.c check_ancestry).
+ * to a caller that needs the squatter itself (core/deploy.c check_ancestry,
+ * cmds/update.c cmd_update).
  *
  * @param ws Workspace (must not be NULL)
  * @param path The asker's path (must not be NULL)
@@ -574,11 +575,11 @@ static void workspace_add_unscanned(
  * (core/cleanup.h), and it cannot fail: the partition made room for every note.
  *
  * Readers of the notes: workspace_squatter_above, asked here before each look;
- * and core/deploy.c check_ancestry, lent them through workspace_squatted_ancestor.
- * The note is handed back to the analysis whose look made it, which alone may
- * refine a view row's class from the base before any look beneath reads it (the
- * directory analysis; the file analysis and the orphans' looks have nothing to
- * refine, and drop it).
+ * and core/deploy.c check_ancestry and cmds/update.c cmd_update, lent them through
+ * workspace_squatted_ancestor. The note is handed back to the analysis whose
+ * look made it, which alone may refine a view row's class from the base before
+ * any look beneath reads it (the directory analysis; the file analysis and the
+ * orphans' looks have nothing to refine, and drop it).
  *
  * @param ws Workspace (must not be NULL)
  * @param item The item to look at (must not be NULL)

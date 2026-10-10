@@ -640,9 +640,9 @@ static error_t update_profile(
      * about it diverged — naming is consent, and this is the derivation's one
      * route to a retire (a captured leaf's chain cannot hold a squatted rung; a
      * named one can where the squatter is the user's at a rung, and naming it
-     * is the remedy — no leaf beneath any other squatter is handed in, cmd_update).
-     * A row the walk also captured climbs twice for free: the derivation counts
-     * only differences. */
+     * is the remedy — no leaf beneath any other squatter is handed in, nor beneath
+     * one at a lost blob's place, cmd_update). A row the walk also captured climbs
+     * twice for free: the derivation counts only differences. */
     for (size_t i = 0; i < rows.count; i++) {
         profile_capture_ancestors(
             draft, ctx->run.mounts, rows.entries[i]->storage_path,
@@ -1453,10 +1453,10 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * apply replaces unasked and under --force. And the retyped pair arrives
      * split from the route by the claim that holds the offender (KIND on a row
      * a plan can hold, KIND_DERIVED on a rung dotta only passes through). A run
-     * that names paths is the named re-derivation itself, climbing the leaves
-     * beneath the user's squatter at a rung, so its two DERIVED lines say what
-     * was skipped and name no remedy: what came of the climb is the run's own
-     * outcome to say. */
+     * that names paths is the named re-derivation itself, so its two DERIVED
+     * lines say what was skipped and name no remedy: what came of the climb beneath
+     * the user's squatter at a rung is the run's own outcome to say — its receipt,
+     * or, at a lost blob's place, the line below the leaves' gather. */
     const size_t *refused = partition.refused;
 
     if (refused[WORKSPACE_ROUTE_DISPLACED_TRACKED] > 0) {
@@ -1636,6 +1636,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         const manifest_row_t **leaves = NULL;
         size_t leaf_count = 0;
         size_t leaf_capacity = 0;
+        size_t refused_leaves = 0;
 
         for (size_t i = 0; i < active.count; i++) {
             const workspace_item_t *item = active.entries[i];
@@ -1666,6 +1667,33 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 continue;
             }
 
+            /* Nor beneath the user's squatter at a lost blob's place
+             * (core/manifest.c manifest_layer): the rung standing there makes
+             * the squatter DERIVED, but the blob's explicit claim names the path,
+             * so the view requires the directory whatever any sheet holds and
+             * no retire is the remedy. Every enabled profile is asked for an
+             * explicit claim there, whatever the run's -p, and a leaf beneath
+             * it is counted for the line below */
+            if (item->displaced == WORKSPACE_DISPLACED_DERIVED) {
+                const workspace_squatted_t *above = workspace_squatted_ancestor(
+                    ws, item->filesystem_path
+                );
+                size_t profile_count = 0;
+                const char *const *profiles = manifest_profiles(manifest, &profile_count);
+
+                size_t p = 0;
+                for (; p < profile_count; p++) {
+                    const manifest_row_t *held = manifest_lookup_claim(
+                        manifest, profiles[p], above->filesystem_path
+                    );
+                    if (held && !manifest_is_derived(held)) break;
+                }
+                if (p < profile_count) {
+                    refused_leaves++;
+                    continue;
+                }
+            }
+
             leaves = arena_grow(
                 ctx->arena, leaves, &leaf_capacity, leaf_count + 1, sizeof(*leaves)
             );
@@ -1673,6 +1701,19 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
 
         derive_rows = (manifest_rows_t){ .entries = leaves, .count = leaf_count };
+
+        /* The leaves at a lost blob's place, said once and above the exit below,
+         * so a run that re-derives nothing says why: the census's DERIVED lines
+         * name no remedy in a named run, and moving the squatter aside is the
+         * one there is */
+        if (refused_leaves > 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "%zu path%s not re-derived: a profile needs the squatted directory — "
+                "move what stands there aside",
+                refused_leaves, refused_leaves == 1 ? "" : "s"
+            );
+        }
     }
 
     /* Check if we have anything to update — or, on a named run, any chains to

@@ -233,7 +233,12 @@ typedef enum {
  *                       --force). The class is the squatter's own route, inherited
  *                       (workspace_item_route: KIND, KIND_DERIVED, STALE,
  *                       CONFLICT), so every screen that speaks of a path beneath
- *                       it names the squatter's verb.
+ *                       it names the squatter's verb. At a lost blob's place
+ *                       (core/manifest.c manifest_layer) no re-derivation frees
+ *                       a DERIVED squatter, the blob's explicit claim naming
+ *                       the path: the named one says to move the node aside instead
+ *                       (cmds/update.c cmd_update), one hop past the verb the
+ *                       screens name.
  *   RECORD              only a record remembers a directory there — the view
  *                       claims none — and none stands there: a record of a
  *                       directory with another kind of node in its place, or a
@@ -286,10 +291,11 @@ typedef enum {
  * ladder and the content gate), should_show_item_for_direction beside them;
  * cmds/update.c cmd_update (the named derivation's leaves, climbed beneath the
  * user's squatter at a rung alone, the one squatter the climb's retire answers
- * for); and core/deploy.c check_ancestry, off the squatted directory itself — a
- * caller that needs the squatter, which no item carries, is lent it whole, the
- * claim this class is copied from (workspace_squatted_ancestor), so apply's remedy
- * and status's section cannot name two claimants for one squatter.
+ * for — but at a lost blob's place); and core/deploy.c check_ancestry, off the
+ * squatted directory itself — a caller that needs the squatter, which no item
+ * carries, is lent it whole, the claim this class is copied from
+ * (workspace_squatted_ancestor), so apply's remedy and status's section cannot
+ * name two claimants for one squatter.
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */
@@ -1362,10 +1368,12 @@ typedef struct {
  * the orphans beneath it alone (the reach rule, workspace_displaced_t), and every
  * orphan carries the fact on itself. This probe is for a caller that needs the
  * squatter itself, which no item carries: the fate of a planned row (core/deploy.c
- * check_ancestry). A view row beneath a record-remembered squatter is read through
- * it, no enabled claim naming the squatter's path (workspace_displaced_t, RECORD).
- * So the answer is the view's claims alone, and its claim is exactly the displaced
- * class a view row's item beneath it carries.
+ * check_ancestry), and whether the user's node squats a lost blob's place
+ * (cmds/update.c cmd_update). A view row beneath a record-remembered squatter
+ * is read through it, no enabled claim naming the squatter's path
+ * (workspace_displaced_t, RECORD). So the answer is the view's claims alone,
+ * and its claim is exactly the displaced class a view row's item beneath it
+ * carries.
  *
  * The answer is noted by the look that found each squatter (workspace.c
  * workspace_look), and every directory row is looked at before any file row or
@@ -1377,11 +1385,14 @@ typedef struct {
  * against this answer (check_ancestry).
  *
  * Lent whole, as the load noted it (workspace_squatted_t): the one search, handed
- * out, with nothing re-derived from it. Reader: core/deploy.c check_ancestry,
+ * out, with nothing re-derived from it. Readers: core/deploy.c check_ancestry,
  * which reads all three — the path, to find the fate this run gave the squatted
  * directory's row; the length, to name it on the skip of a row it holds
  * (core/deploy.h deploy_skip_t); the claim, for the remedy where the run gave
- * that row no fate (deploy_ancestor_class_t).
+ * that row no fate (deploy_ancestor_class_t) — and cmds/update.c cmd_update,
+ * the path alone, above a named leaf the user's squatter displaces: whether a
+ * profile holds an explicit claim there, a lost blob's place no re-derivation
+ * frees.
  *
  * @param ws Workspace (NULL returns NULL)
  * @param path Path to test (NULL returns NULL); proper ancestors only, so a

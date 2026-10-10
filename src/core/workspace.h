@@ -1315,6 +1315,26 @@ const workspace_item_t *workspace_find(
 );
 
 /**
+ * Does an active path lie strictly beneath `path`?
+ *
+ * Whether the view holds a row beneath the path, at any depth — every directory
+ * above an active path is its ancestor, not its parent alone — on disk or not:
+ * read off each kind's active items in their order, one lower bound per kind —
+ * workspace_find's search, asked of the paths beneath a path rather than of the
+ * path. The root included: every row but one at "/" lies beneath it. Pure value
+ * return — no look, no allocation, no error path.
+ *
+ * Readers: core/cleanup.c cleanup_preflight (an orphaned directory the view holds
+ * a row beneath is the ancestor of an enabled row, and permanent). A reader not
+ * on this list is a bug.
+ *
+ * @param ws Workspace (NULL answers false)
+ * @param path Directory to ask about, as a key spells one (NULL answers false)
+ * @return true where an active path lies strictly beneath it
+ */
+bool workspace_active_beneath(const workspace_t *ws, const char *path);
+
+/**
  * A squatted directory, and whose claim holds it
  *
  * A claim says a directory belongs at the path and the load's look found another

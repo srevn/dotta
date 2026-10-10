@@ -87,25 +87,27 @@ struct workspace {
 
     /* The active items: one per row of the view, the directories and then the
      * files, each in strcmp order (workspace_kind_order) — the order they are
-     * looked at in, the one a path is found by (workspace_find_active), and the
-     * one they are lent in, whole and by kind (workspace_active,
-     * workspace_directories, workspace_files). Pointers into one arena block,
-     * never moved. Never NULL (workspace_partition). */
+     * looked at in, the one a path is found by (workspace_find_active) and the
+     * paths beneath one (workspace_active_beneath), and the one they are lent
+     * in, whole and by kind (workspace_active, workspace_directories,
+     * workspace_files). Pointers into one arena block, never moved. Never NULL
+     * (workspace_partition). */
     workspace_item_t **active;                   /* Arena; active[0 .. dir_count) the directories */
     size_t dir_count;                            /* The directory items */
     size_t file_count;                           /* The file items, active[dir_count ..] */
 
     /* The orphan items: the records whose path the view lacks, in the snapshot's
      * strcmp order, which workspace_look_orphans' parents-first walk and their
-     * search (workspace_find_item) rest on. Read-only — no row names an orphan's
-     * path, so no writer ever reaches one; the orphan analysis asks Git why each
-     * is here. Each is looked at by workspace_look_orphans, which runs where
-     * one of its readers will (workspace_load); an orphan no look reached reads
-     * a look nobody took, and no reader is lent one. Nor is one the load looked
-     * at and never analyzed — a load with the orphan analysis declined looks at
-     * them for the entries index alone — so the diverged items list, and a path
-     * finds, the analyzed prefix and no other, which is every orphan or none
-     * (workspace_list, workspace_find). Never NULL (workspace_partition). */
+     * searches (workspace_find_item, workspace_item_beneath) rest on. Read-only
+     * — no row names an orphan's path, so no writer ever reaches one; the orphan
+     * analysis asks Git why each is here. Each is looked at by
+     * workspace_look_orphans, which runs where one of its readers will
+     * (workspace_load); an orphan no look reached reads a look nobody took, and
+     * no reader is lent one. Nor is one the load looked at and never analyzed —
+     * a load with the orphan analysis declined looks at them for the entries
+     * index alone — so the diverged items list, and a path finds, the analyzed
+     * prefix and no other, which is every orphan or none (workspace_list,
+     * workspace_find). Never NULL (workspace_partition). */
     workspace_item_t **orphans;                  /* Arena; singles, never moved */
     size_t orphan_count;                         /* Number of orphans */
     size_t analyzed_count;                       /* orphans[0 .. analyzed_count): the ones the load analyzed */
@@ -163,8 +165,8 @@ struct workspace {
  * workspace_files), deploy's directories before its files; is deploy's
  * parent-before-child walk within each; is what the untracked scan's registration
  * reads for the tie among one profile's rows standing at one directory; and is
- * the one each kind's search rests on (workspace_find_item). The view holds one
- * row per path, so the order is total.
+ * the one each kind's searches rest on (workspace_find_item,
+ * workspace_item_beneath). The view holds one row per path, so the order is total.
  */
 static int workspace_kind_order(const void *a, const void *b) {
     const workspace_item_t *ia = *(const workspace_item_t *const *) a;
@@ -218,33 +220,48 @@ static workspace_item_t *workspace_find_active(const workspace_t *ws, const char
 }
 
 /**
- * Does an orphan stand beneath `path`?
+ * Does an item of one sorted array — one kind's active items, or the orphans —
+ * lie strictly beneath `path`?
  *
- * The orphans are in strcmp order, and every key a path prefixes sorts after it
- * in one block — the keys beneath it, the path and a separator, and the siblings
- * it merely prefixes, "x.bak" before "x/y" and "x0" after, '/' being neither
- * the least byte nor the greatest. So the first key at or past the path and a
- * separator is beneath the path, or none is: one lower bound answers.
+ * The array is in strcmp order, and every key beneath a path opens with one prefix,
+ * the path's spelling and a separator — the root's spelling is its separator
+ * already (base/string.h str_path_beneath) — so those keys sort in one block
+ * past the siblings the path merely prefixes, "x.bak" before "x/y" and "x0" after,
+ * '/' being neither the least byte nor the greatest. The prefix itself is the
+ * one key that opens so and lies beneath nothing, the root's own "/". So the
+ * first key past the prefix and a byte is beneath the path, or none is: one lower
+ * bound answers — workspace_find_item's search, asked of the paths beneath a
+ * path rather than of the path.
  *
- * Reader: workspace_look, of a path a link stands at — a row's or a record's —
- * whether a record beneath it would be looked at through the link.
+ * Readers: workspace_look, over the orphans, of a path a link stands at — a row's
+ * or a record's — whether a record beneath it would be looked at through the
+ * link; workspace_active_beneath, over each kind's active items.
  *
- * @param ws Workspace (must not be NULL; its orphans made)
- * @param path The looked-at item's key (must not be NULL)
+ * @param items One sorted array of the workspace's (never NULL:
+ *              workspace_partition)
+ * @param count Its items
+ * @param path The directory asked about (must not be NULL)
  */
-static bool workspace_orphan_beneath(const workspace_t *ws, const char *path) {
+static bool workspace_item_beneath(
+    workspace_item_t *const *items, size_t count, const char *path
+) {
+    /* The prefix's stem: the path's spelling, less the root's separator, which
+     * is the prefix's own */
     const size_t len = strlen(path);
+    const size_t stem = path[len - 1] == '/' ? len - 1 : len;
     size_t lo = 0;
-    size_t hi = ws->orphan_count;
+    size_t hi = count;
 
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        const char *key = ws->orphans[mid]->filesystem_path;
+        const char *key = items[mid]->filesystem_path;
 
-        /* The key against the path and a separator: the prefix, then the byte
-         * after it, where a key the path is all of reads its terminator */
-        int order = strncmp(key, path, len);
-        if (order == 0) order = (unsigned char) key[len] - '/';
+        /* The key against the prefix and a byte: the stem, then the separator
+         * after it, where a key the stem is all of reads its terminator, then
+         * the byte past the separator, which only the prefix itself lacks */
+        int order = strncmp(key, path, stem);
+        if (order == 0) order = (unsigned char) key[stem] - '/';
+        if (order == 0) order = key[stem + 1] ? 1 : -1;
 
         if (order < 0) {
             lo = mid + 1;
@@ -253,7 +270,7 @@ static bool workspace_orphan_beneath(const workspace_t *ws, const char *path) {
         }
     }
 
-    return lo < ws->orphan_count && str_path_beneath(ws->orphans[lo]->filesystem_path, path, len);
+    return lo < count && str_path_beneath(items[lo]->filesystem_path, path, len);
 }
 
 /**
@@ -619,7 +636,7 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
      * absence. Noted only where an orphan would be looked at so, since links
      * are no rarity the way squatted directories are. */
     if (item->item_kind != PATH_KIND_DIRECTORY && (item->occupant != FS_OCCUPANT_SYMLINK ||
-        !workspace_orphan_beneath(ws, item->filesystem_path))) {
+        !workspace_item_beneath(ws->orphans, ws->orphan_count, item->filesystem_path))) {
         return NULL;
     }
 
@@ -3387,6 +3404,18 @@ const workspace_item_t *workspace_find(
     const workspace_item_t *item = workspace_find_active(ws, filesystem_path);
 
     return item ? item : workspace_find_item(ws->orphans, ws->analyzed_count, filesystem_path);
+}
+
+/**
+ * Does an active path lie strictly beneath `path`?
+ */
+bool workspace_active_beneath(const workspace_t *ws, const char *path) {
+    if (!ws || !path) return false;
+
+    /* Each kind's half in its own order, as workspace_find_active asks one path:
+     * the directory items, then the file items */
+    return workspace_item_beneath(ws->active, ws->dir_count, path) ||
+           workspace_item_beneath(ws->active + ws->dir_count, ws->file_count, path);
 }
 
 /**

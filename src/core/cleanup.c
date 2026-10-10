@@ -318,34 +318,6 @@ static bool vouch_entry(const char *child, void *ctx) {
 }
 
 /**
- * Does the view claim a path beneath this directory?
- *
- * An active path beneath an orphaned directory makes the directory the ancestor
- * of an enabled row — one ensure_parents would make anyway — and nothing dotta
- * does empties it: permanent, whether the row is on disk yet or not. The readdir
- * meets the rows already deployed (an active path's entry is permanent,
- * vouch_entry); this answers for the ones deployment will put there — this run,
- * or a later one that reaches them — which is exactly why the disk cannot answer
- * it. Read from the view, not from the deployment plan, so the answer does not
- * move with -p, -e or a path filter: scope decides reach, never verdict.
- *
- * Every directory above an active path is its ancestor, not just the immediate
- * parent: the ones deployment creates on the way count too.
- */
-static bool cleanup_active_beneath(const workspace_t *ws, const char *dir) {
-    size_t len = strlen(dir);
-    workspace_items_t active = workspace_active(ws);
-
-    for (size_t i = 0; i < active.count; i++) {
-        if (str_path_beneath(active.entries[i]->filesystem_path, dir, len)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-/**
  * Is this run denied the removal?
  *
  * unlink(2) and rmdir(2) ask nothing of the path itself: the entry is the parent's,
@@ -506,13 +478,24 @@ cleanup_preflight_t *cleanup_preflight(
                 /* A directory the workspace saw and can read (the occupant is
                  * DIRECTORY: anything else in its place was released above).
                  * What is left in it after this run, and then the run's reach,
-                 * finish the verdict. An active path beneath it is known from
-                 * the view before any look at the disk; otherwise one readdir,
-                 * which stops at the first permanent entry and notes any skipped
-                 * one it passed. UNREADABLE is a directory that was readable at
-                 * load and is not now — the world moved, and it is skipped like
-                 * a refusal on removal, not released. */
-                if (cleanup_active_beneath(ws, path)) {
+                 * finish the verdict.
+                 *
+                 * An active path beneath it, on disk yet or not, makes it the
+                 * ancestor of an enabled row — one ensure_parents would make
+                 * anyway — and nothing dotta does empties it: permanent, known
+                 * from the view before any look at the disk. The readdir meets
+                 * the rows deployed already (an active path's entry is permanent,
+                 * vouch_entry); the view answers for the ones deployment will
+                 * put there, this run or a later one that reaches them, which
+                 * is why the disk cannot. Read from the view and never the
+                 * deployment plan, so -p, -e or a path filter cannot move it:
+                 * scope decides reach, never verdict.
+                 *
+                 * Otherwise one readdir, which stops at the first permanent entry
+                 * and notes any skipped one it passed. UNREADABLE is a directory
+                 * that was readable at load and is not now — the world moved,
+                 * and it is skipped like a refusal on removal, not released. */
+                if (workspace_active_beneath(ws, path)) {
                     fate = FATE_PERMANENT;
                 } else {
                     walk_t walk = { .fates = fates, .ws = ws, .skipped = false };

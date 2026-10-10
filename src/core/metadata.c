@@ -71,9 +71,9 @@ struct metadata {
  * The entries are in strcmp order, and every key a name prefixes sorts after it
  * in one block — the claims beneath it, the name and a separator, and the siblings
  * it merely prefixes, "x.bak" before "x/y" and "x0" after, '/' being neither
- * the least byte nor the greatest (core/workspace.c workspace_orphan_beneath,
- * the same block over the orphans). So one lower bound answers each place the
- * sheet asks of its order: `byte` NUL, where the name itself stands or would;
+ * the least byte nor the greatest (core/workspace.c workspace_item_beneath, the
+ * same block over the workspace's items). So one lower bound answers each place
+ * the sheet asks of its order: `byte` NUL, where the name itself stands or would;
  * '/', the first claim beneath it; '/' + 1, the first key past those — no byte
  * lies between the two. Nothing is spelled to search.
  *

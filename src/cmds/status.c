@@ -993,19 +993,31 @@ static void status_print_workspace(
     if (orphaned.count > 0) {
         output_list_t *list = output_list_create(
             out, "Issues",
-            "run \"dotta apply\" to prune orphaned paths"
+            "run \"dotta apply\" to prune them, where no key below says otherwise"
         );
 
-        /* The header promises a prune; a clean orphaned file gets one and needs
-         * no more words. Every other hint is keyed below by the exact tags its
-         * line shows, once per distinct tag string, so the key reads back against
-         * the list it follows. The verdict is cleanup's (cleanup_verdict, the
-         * one producer the preview reads too) — this only names it. PRUNABLE is
-         * the one verdict status cannot finish — the remainder and the run's
-         * reach are preflight's, from the disk — and the directory hint says
-         * so; it shares the bare [orphaned] key with the files, so the sentence
-         * is written to be true of both. */
-        struct { char tags[64]; const char *hint; } legend[16];
+        /* The header promises a prune wherever no key below says otherwise, so
+         * a clean orphaned file, which gets one, needs no key of its own. Every
+         * other hint is keyed below by the exact tags its line shows, once per
+         * distinct tag string, so the key reads back against the list it follows.
+         * The tag is the item's state and the key its verdict, so two lines can
+         * name one fate under two tags — an [orphaned] [displaced] line and a
+         * [released] one are both released — and that is the design: the tag
+         * says what the item is, the key what apply does with it. The verdict
+         * is cleanup's (cleanup_verdict, the one producer the preview reads too)
+         * — this only names it. PRUNABLE is the one verdict status cannot finish
+         * — the remainder and the run's reach are preflight's, from the disk —
+         * and the directory hint says so; it shares the bare [orphaned] key with
+         * the files, so the sentence is written to be true of both.
+         *
+         * [orphaned] and one of eleven — absence, a squatter, one of three failed
+         * looks, the kind, the content, one claim axis or both, or nothing —
+         * the last nine with or without [relocated], which no absent or displaced
+         * orphan carries; and [released] with or without [type]: twenty-two keys
+         * bound the domain (core/workspace.c workspace_item_tags, its ORPHANED
+         * and RELEASED arms). A legend that held fewer would drop a key in silence,
+         * and the header would promise its line a prune. */
+        struct { char tags[64]; const char *hint; } legend[22];
         size_t legend_count = 0;
         size_t legend_width = 0;
 
@@ -1160,7 +1172,8 @@ static void status_print_workspace(
             while (slot < legend_count && strcmp(legend[slot].tags, key) != 0) {
                 slot++;
             }
-            if (slot == legend_count && legend_count < 16) {
+            if (slot == legend_count &&
+                legend_count < sizeof(legend) / sizeof(legend[0])) {
                 size_t len = strlen(key);
                 memcpy(legend[legend_count].tags, key, len + 1);
                 legend[legend_count].hint = hint;

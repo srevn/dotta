@@ -1642,7 +1642,7 @@ static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
 }
 
 /**
- * The failed directory whose absence poisons this path, or NULL
+ * The poison a planned path's write meets, or NULL
  *
  * Deploy's order is parents-first and its mechanism creates on the way down, so
  * per-row failure needs the preflight invariant's execution mirror: a failed
@@ -1654,12 +1654,15 @@ static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
  * met again at execution time). A failed converge-in-place poisons nothing: the
  * directory stands, and children land in it or fail on their own merits. Scanned
  * in verdict order, so the first match is the outermost failed ancestor — the
- * offender every deeper row is named against. The failed bucket is empty on every
- * healthy run, which is what makes the scan free.
+ * offender every deeper row is named against, in the error the row fails with,
+ * spelled here once for both loops. The failed bucket is empty on every healthy
+ * run, which is what makes the scan free.
  */
-static const char *poisoned_above(const deploy_receipt_t *receipt, const char *path) {
-    for (size_t i = 0; i < receipt->failed.count; i++) {
-        const deploy_verdict_t *v = receipt->failed.entries[i].verdict;
+static error_t poisoned_above(const deploy_run_t *run, const char *path) {
+    const deploy_outcomes_t *failed = &run->receipt->failed;
+
+    for (size_t i = 0; i < failed->count; i++) {
+        const deploy_verdict_t *v = failed->entries[i].verdict;
         const char *dir = v->item->filesystem_path;
 
         if (v->item->item_kind != PATH_KIND_DIRECTORY ||
@@ -1667,7 +1670,7 @@ static const char *poisoned_above(const deploy_receipt_t *receipt, const char *p
             continue;
         }
         if (str_path_beneath(path, dir, strlen(dir))) {
-            return dir;
+            return error_create(ERR_FS, "'%s' was not converged", dir);
         }
     }
 
@@ -1735,10 +1738,9 @@ deploy_receipt_t *deploy_execute(
      * the replace has made that true. */
     for (size_t i = 0; i < verdicts->directories.count; i++) {
         const deploy_verdict_t *v = &verdicts->directories.entries[i];
-        const char *above = poisoned_above(receipt, v->item->filesystem_path);
 
-        error_t err = above ? error_create(ERR_FS, "'%s' was not converged", above)
-                            : deploy_directory(&run, v);
+        error_t err = poisoned_above(&run, v->item->filesystem_path);
+        if (!err) err = deploy_directory(&run, v);
         if (err) {
             /* The row's own outcome; the cause already names its subject */
             deploy_outcome_t *o = &receipt->failed.entries[receipt->failed.count++];
@@ -1760,10 +1762,9 @@ deploy_receipt_t *deploy_execute(
     for (size_t i = 0; i < verdicts->files.count; i++) {
         const deploy_verdict_t *v = &verdicts->files.entries[i];
         deploy_outcome_t *o = &receipt->deployed.entries[receipt->deployed.count];
-        const char *above = poisoned_above(receipt, v->item->filesystem_path);
 
-        error_t err = above ? error_create(ERR_FS, "'%s' was not converged", above)
-                            : deploy_file(&run, v, &o->stat);
+        error_t err = poisoned_above(&run, v->item->filesystem_path);
+        if (!err) err = deploy_file(&run, v, &o->stat);
         if (err) {
             /* The row's own outcome, as above. The deployed slot stays untaken:
              * count never covers it, and its stat is UNSET on every deploy_file

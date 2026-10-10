@@ -120,7 +120,7 @@ struct manifest {
 
     /* Precedence over the settled contributions: the index, one winning row per
      * path, and the spine cut once from it at layering (manifest_layer). */
-    manifest_row_t **rows;                       /* Arena, exact; the winners */
+    const manifest_row_t **rows;                 /* Arena, exact; the winners */
     size_t count;                                /* Rows in the spine */
     hashmap_t *index;                            /* Arena; path → the winning row */
 
@@ -166,9 +166,11 @@ struct manifest {
  *             arena-backed name (every row of this profile borrows the pointer,
  *             and the table is keyed by it to place a custom/ claim) and its
  *             two indexes
- * - placed / contenders: the step's build-local lists, borrowed — every row this
- *             profile placed, and the rows that arrived at a path it had already
- *             named. Both are spent when manifest_contribute returns.
+ * - placed: the step's build-local list, borrowed — every row this profile placed,
+ *             spent when manifest_contribute returns
+ * - contenders: the rows that arrived at a path the profile had already named,
+ *             grown in the arena as rows (arena_grow), so the settle sorts them
+ *             where they are; spent with the walk
  * - arena: borrowed, must not be NULL; per-row strings are abandoned to it
  *
  * The claims arrive decoded and lent for the visit (core/profiles.h profile_walk),
@@ -178,7 +180,9 @@ typedef struct {
     manifest_t *manifest;         /* Target view (modified by the visitor) */
     contribution_t *contribution; /* The profile's own claims and their indexes */
     ptr_array_t *placed;          /* Every row this step placed, in claim order */
-    ptr_array_t *contenders;      /* The rows that met a path already named */
+    manifest_row_t **contenders;  /* The rows that met a path already named */
+    size_t contender_count;
+    size_t contender_capacity;
     arena_t *arena;               /* Arena for allocations (must not be NULL) */
 } claim_walk_t;
 
@@ -600,24 +604,28 @@ static const char *manifest_ascend(const naming_t *n, const char *filesystem_pat
  * before every extension, so lexicographic order settles a contested parent before
  * a deeper group's ascent reads it. The name breaks the tie, so the order is
  * total and the runs are stable whatever qsort does with equals.
+ *
+ * Over a list of rows (manifest_row_t **), each slot read as the row pointer it
+ * holds — never a pointer spine (include/types.h ptr_array_t).
  */
 static int filesystem_order(const void *a, const void *b) {
-    const manifest_row_t *const *ra = a;
-    const manifest_row_t *const *rb = b;
+    const manifest_row_t *ra = *(manifest_row_t *const *) a;
+    const manifest_row_t *rb = *(manifest_row_t *const *) b;
 
-    int by_path = strcmp((*ra)->filesystem_path, (*rb)->filesystem_path);
+    int by_path = strcmp(ra->filesystem_path, rb->filesystem_path);
 
-    return by_path ? by_path : strcmp((*ra)->storage_path, (*rb)->storage_path);
+    return by_path ? by_path : strcmp(ra->storage_path, rb->storage_path);
 }
 
 /**
- * Bytewise by name: the order a path's group is decided and reported in.
+ * Bytewise by name: the order a path's group is decided and reported in, over a
+ * group of rows as filesystem_order reads one.
  */
 static int name_order(const void *a, const void *b) {
-    const manifest_row_t *const *ra = a;
-    const manifest_row_t *const *rb = b;
+    const manifest_row_t *ra = *(manifest_row_t *const *) a;
+    const manifest_row_t *rb = *(manifest_row_t *const *) b;
 
-    return strcmp((*ra)->storage_path, (*rb)->storage_path);
+    return strcmp(ra->storage_path, rb->storage_path);
 }
 
 /**
@@ -651,16 +659,19 @@ static int name_order(const void *a, const void *b) {
  * @param manifest Target view — the mount table, and the unkept slice (must not
  *                 be NULL)
  * @param c The contribution being settled (must not be NULL)
- * @param contenders The rows that met a path already named (must not be NULL)
+ * @param contenders The rows that met a path already named, sorted here in place
+ *                   (NULL where there are none)
+ * @param contender_count How many
  * @param arena Arena for the groups and the composed names (must not be NULL)
  */
 static void manifest_settle(
     manifest_t *manifest,
     contribution_t *c,
-    ptr_array_t *contenders,
+    manifest_row_t **contenders,
+    size_t contender_count,
     arena_t *arena
 ) {
-    if (contenders->count == 0) return;
+    if (contender_count == 0) return;
 
     /* The index of the groups, allocated where the first one is about to exist:
      * a contribution with no contender never has one, and the readers test the
@@ -677,25 +688,23 @@ static void manifest_settle(
         .arena   = arena,
     };
 
-    /* The contest, typed once: a ptr_array holds void *, and every read below
-     * is a row's path or its name. */
-    manifest_row_t **rows = (manifest_row_t **) contenders->entries;
+    /* The contest by path, so the rows contending for one path form a run and a
+     * parent's run comes before its children's (filesystem_order) */
+    qsort(contenders, contender_count, sizeof(*contenders), filesystem_order);
 
-    qsort(rows, contenders->count, sizeof(*rows), filesystem_order);
-
-    for (size_t i = 0; i < contenders->count;) {
-        const char *filesystem_path = rows[i]->filesystem_path;
+    for (size_t i = 0; i < contender_count;) {
+        const char *filesystem_path = contenders[i]->filesystem_path;
 
         size_t count = 0;
-        while (i + count < contenders->count &&
-            strcmp(rows[i + count]->filesystem_path, filesystem_path) == 0) count++;
+        while (i + count < contender_count &&
+            strcmp(contenders[i + count]->filesystem_path, filesystem_path) == 0) count++;
 
         /* The group: the name that arrived first, and the ones that met it. One
          * slot past them stays NULL — the group outlives this loop, and every
          * reader of it walks to the terminator. */
         manifest_row_t **group = arena_calloc(arena, count + 2, sizeof(*group));
         group[0] = hashmap_get(c->explicit, filesystem_path);
-        for (size_t g = 0; g < count; g++) group[g + 1] = rows[i + g];
+        for (size_t g = 0; g < count; g++) group[g + 1] = contenders[i + g];
         qsort(group, count + 1, sizeof(*group), name_order);
 
         manifest_row_t *kept = manifest_decide(&n, filesystem_path, group);
@@ -825,7 +834,11 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
      * highest explicit claim takes the path: that is the whole difference between
      * precedence and a profile naming one place twice. */
     if (!hashmap_add(c->explicit, filesystem_path, row)) {
-        ptr_array_push(walk->contenders, row);
+        walk->contenders = arena_grow(
+            walk->arena, walk->contenders, &walk->contender_capacity,
+            walk->contender_count + 1, sizeof(*walk->contenders)
+        );
+        walk->contenders[walk->contender_count++] = row;
     }
 
     return NULL;
@@ -883,20 +896,17 @@ static error_t manifest_contribute(
     manifest->profiles[manifest->profile_count++] = c->profile;
 
     /* The step's two lists, read only while it runs: every row this profile placed,
-     * in claim order, and the rows that met a path it had already named. The
-     * second is empty on every profile that names each of its paths once. Both
-     * are the build's arena's, left there when the step returns: a pointer per
-     * row placed. */
+     * in claim order, and the rows that met a path it had already named, which
+     * the walk grows itself. The second is empty on every profile that names
+     * each of its paths once. Both are the build's arena's, left there when the
+     * step returns: a pointer per row placed. */
     ptr_array_t placed;
-    ptr_array_t contenders;
     ptr_array_init(&placed, arena, 0);
-    ptr_array_init(&contenders, arena, 0);
 
     claim_walk_t walk = {
         .manifest     = manifest,
         .contribution = c,
         .placed       = &placed,
-        .contenders   = &contenders,
         .arena        = arena
     };
 
@@ -918,7 +928,7 @@ static error_t manifest_contribute(
     if (err) return err;
 
     /* Every path this profile named twice, decided once. */
-    manifest_settle(manifest, c, &contenders, arena);
+    manifest_settle(manifest, c, walk.contenders, walk.contender_count, arena);
 
     /* The contribution's rows: every row kept in the index of its class, in claim
      * order. A name that lost and a second chain stay in the arena and leave
@@ -1191,14 +1201,13 @@ error_t manifest_build_profile(
 /**
  * Every winning row of the view, both kinds, unordered
  *
- * The cast adds const at both pointer levels (T ** → const T *const *) — legal
- * per the C standard's qualifier-conversion rule, no diagnostic required. Mirrors
- * workspace_files's identical bridge cast.
+ * The spine holds its rows const, so it is lent as it is: the slice adds const
+ * to the pointers alone, the one conversion C makes with no cast (C11 6.5.16.1).
  */
 manifest_rows_t manifest_rows(const manifest_t *manifest) {
     if (!manifest) return (manifest_rows_t){ 0 };
     return (manifest_rows_t){
-        .entries = (const manifest_row_t *const *) manifest->rows,
+        .entries = manifest->rows,
         .count = manifest->count,
     };
 }

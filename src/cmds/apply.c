@@ -1757,14 +1757,15 @@ static error_t apply_write_record(
      * presence at the boundary, and nothing here walks the disk to establish it
      * again.
      *
-     * A deployed file — or a converged directory — whose item read [reassigned]
-     * has its record replaced by one under the row's profile, by the write that
-     * records it, so each is counted before its write, and a write that lands
-     * nothing counts nothing: a deployment the receipt names failed has no write
-     * here at all. The clean ones the adoption and acknowledgement loops re-stamped
-     * were said where they were written. Ancestors' ownership events stay
-     * uncounted: they are outside the plan, so no writer named them for the
-     * preview, and an acknowledgement that rides one heals the record silently. */
+     * A deployed file — or a converged directory — whose verdict reads a pending
+     * reassignment, as the preview named it, has its record replaced by one under
+     * the row's profile, by the write that records it, so each is counted before
+     * its write, and a write that lands nothing counts nothing: a deployment
+     * the receipt names failed has no write here at all. The clean ones the
+     * adoption and acknowledgement loops re-stamped were said where they were
+     * written. Ancestors' ownership events stay uncounted: they are outside the
+     * plan, so no writer named them for the preview, and an acknowledgement that
+     * rides one heals the record silently. */
     deploy_outcomes_t deployed = deploy_receipt->deployed;
 
     for (size_t i = 0; i < deployed.count; i++) {
@@ -1772,9 +1773,9 @@ static error_t apply_write_record(
         const workspace_item_t *item = o->verdict->item;
 
         /* Counted before the write below replaces the item's record, which the
-         * reassignment is read from; a refusal ends the phase, and the count
-         * with it */
-        if (workspace_reassigned(item->row, item->record, item->occupant)) {
+         * reassignment is read from, against the verdict's occupant, as the preview
+         * named it; a refusal ends the phase, and the count with it */
+        if (workspace_reassigned(item->row, item->record, o->verdict->occupant)) {
             (*acknowledged)++;
         }
 
@@ -1788,8 +1789,9 @@ static error_t apply_write_record(
         const workspace_item_t *item = v->item;
 
         /* Counted before either write: each replaces the record the reassignment
-         * is read from — an ownership event, and a learning. */
-        if (workspace_reassigned(item->row, item->record, item->occupant)) {
+         * is read from — an ownership event, and a learning — against the verdict's
+         * occupant, as the files' are. */
+        if (workspace_reassigned(item->row, item->record, v->occupant)) {
             (*acknowledged)++;
         }
 
@@ -2300,9 +2302,11 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * is reported and acknowledged there too.
      *
      * A reassignment is the workspace's reading of the record against the row
-     * and the look — the record dotta owns names one profile, the row another,
-     * and describes the row's node, or a node of its own still standing
-     * (core/workspace.h workspace_reassigned). */
+     * and what stands at the path — the record dotta owns names one profile,
+     * the row another, and describes the row's node, or a node of its own still
+     * standing (core/workspace.h workspace_reassigned): the item's look for the
+     * clean ones, the verdict's occupant for the pending, what the run will find
+     * there. */
     size_t clean_reassignment_count = 0;
     reassignment_t *clean_reassignments = arena_calloc(
         ctx->arena,
@@ -2702,8 +2706,12 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * this is printed, so nothing is lost by naming it late, and the preview
      * names exactly what the record phase acknowledges behind a write that lands.
      * The item is the verdict's, verbatim (deploy_verdict_t): never NULL, and
-     * its join facts sound on every one. The ancestors are outside the plan and
-     * stay uncounted, as the record phase leaves them. */
+     * its join facts sound on every one. What stands at the path is the verdict's
+     * word, never the item's look: a row planned absent beneath a squatter the
+     * run replaces finds nothing there, so a record of another kind names no
+     * node its deployment takes over (core/workspace.h workspace_reassigned).
+     * The ancestors are outside the plan and stay uncounted, as the record phase
+     * leaves them. */
     size_t pending_reassignment_count = 0;
     reassignment_t *pending_reassignments = arena_calloc(
         ctx->arena,
@@ -2718,12 +2726,12 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
         for (size_t i = 0; i < kinds[k]->count; i++) {
-            const workspace_item_t *item = kinds[k]->entries[i].item;
+            const deploy_verdict_t *v = &kinds[k]->entries[i];
 
-            if (workspace_reassigned(item->row, item->record, item->occupant)) {
+            if (workspace_reassigned(v->item->row, v->item->record, v->occupant)) {
                 pending_reassignments[pending_reassignment_count++] = (reassignment_t){
-                    .item = item,
-                    .from = item->record->profile,
+                    .item = v->item,
+                    .from = v->item->record->profile,
                 };
             }
         }

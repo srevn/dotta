@@ -636,10 +636,14 @@ static inline compare_result_t workspace_compare_confirmed(
  * not, and describes the node the row's deployment takes over
  *
  * The join over its two subjects — a view row and the record at its path — and
- * the look at that path, since a record describes a node and only a look says
- * whether one stands; an item-shaped caller passes item->row, item->record and
- * item->occupant. NULL on either side is no reassignment: an orphan item carries
- * no row, and a path dotta has no record of has no owner to reassign it from.
+ * what stands at that path, since a record describes a node and only a look says
+ * whether one stands: an item-shaped caller passes item->row, item->record and
+ * item->occupant, the load's look; a fate-shaped caller, holding a deploy verdict,
+ * passes the verdict's occupant instead, what the run will find at the path
+ * (core/deploy.h deploy_verdict_t) — nothing, for a row planned absent, whose
+ * item holds a look the run does not stand on. NULL on either side is no
+ * reassignment: an orphan item carries no row, and a path dotta has no record
+ * of has no owner to reassign it from.
  *
  * The record's kind decides what the look is asked (the ladder's first rung,
  * workspace_type_occupant above). Of the row's kind, the record is the row's
@@ -688,15 +692,15 @@ static inline compare_result_t workspace_compare_confirmed(
  * tags (workspace_item_tags), with the item's; diff's filter, its "acknowledged
  * by apply" line and its status colour (cmds/diff.c), with the item's; apply's
  * two acknowledgement loops — the writers that move the record onto the row's
- * profile — its pending reassignments off the verdicts, and its record phase,
- * each with the item's (cmds/apply.c cmd_apply, apply_write_record); and sync's
- * apply hint, with none, which asks it of the record against the view with no
- * workspace at all, workspace_stale answering first across kinds (cmds/sync.c).
- * A record's WRITER asks the whole binding — profile and storage path both —
- * which is manifest_is_claim; this is the half the screens name and the receipts
- * count. Not manifest_diff_stats_t's `reassigned`, which counts one transition's
- * own delta between two views; this is the record against the view, standing
- * from whenever it began.
+ * profile — with the item's, and its pending reassignments off the verdicts and
+ * its record phase, with the verdict's (cmds/apply.c cmd_apply,
+ * apply_write_record); and sync's apply hint, with none, which asks it of the
+ * record against the view with no workspace at all, workspace_stale answering
+ * first across kinds (cmds/sync.c). A record's WRITER asks the whole binding —
+ * profile and storage path both — which is manifest_is_claim; this is the half
+ * the screens name and the receipts count. Not manifest_diff_stats_t's
+ * `reassigned`, which counts one transition's own delta between two views; this
+ * is the record against the view, standing from whenever it began.
  *
  * The record against the view has three words, and this is the binding's — the
  * one of the three that reads the look; workspace_stale below is the content's,

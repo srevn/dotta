@@ -1452,7 +1452,11 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * dotta's own copy Git moved past, said in the squatter's own words, which
      * apply replaces unasked and under --force. And the retyped pair arrives
      * split from the route by the claim that holds the offender (KIND on a row
-     * a plan can hold, KIND_DERIVED on a rung dotta only passes through). */
+     * a plan can hold, KIND_DERIVED on a rung dotta only passes through). A run
+     * that names paths is the named re-derivation itself, climbing the leaves
+     * beneath the user's squatter at a rung, so its two DERIVED lines say what
+     * was skipped and name no remedy: what came of the climb is the run's own
+     * outcome to say. */
     const size_t *refused = partition.refused;
 
     if (refused[WORKSPACE_ROUTE_DISPLACED_TRACKED] > 0) {
@@ -1466,8 +1470,9 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
     if (refused[WORKSPACE_ROUTE_DISPLACED_DERIVED] > 0) {
         output_info(
-            out, OUTPUT_NORMAL,
-            "%zu path%s skipped: not looked at, beneath a squatted directory — "
+            out, OUTPUT_NORMAL, opts->file_count > 0
+                ? "%zu path%s skipped: not looked at, beneath a squatted directory"
+                : "%zu path%s skipped: not looked at, beneath a squatted directory — "
             "'dotta update <dir>' re-derives the way there",
             refused[WORKSPACE_ROUTE_DISPLACED_DERIVED],
             refused[WORKSPACE_ROUTE_DISPLACED_DERIVED] == 1 ? "" : "s"
@@ -1566,8 +1571,10 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
     if (refused[WORKSPACE_ROUTE_KIND_DERIVED] > 0) {
         output_info(
-            out, OUTPUT_NORMAL,
-            "%zu path%s skipped: a different kind stands at a directory dotta "
+            out, OUTPUT_NORMAL, opts->file_count > 0
+                ? "%zu path%s skipped: a different kind stands at a directory dotta "
+            "only passes through"
+                : "%zu path%s skipped: a different kind stands at a directory dotta "
             "only passes through — 'dotta update <dir>' re-derives %s",
             refused[WORKSPACE_ROUTE_KIND_DERIVED],
             refused[WORKSPACE_ROUTE_KIND_DERIVED] == 1 ? "" : "s",

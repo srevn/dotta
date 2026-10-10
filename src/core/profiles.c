@@ -207,14 +207,10 @@ mode_t profile_claim_mode(const profile_claim_t *claim) {
 
     /* Else the floor its type stands at */
     switch (claim->type) {
-        case PATH_TYPE_FILE:
-            return 0644;
-        case PATH_TYPE_EXECUTABLE:
-            return 0755;
-        case PATH_TYPE_SYMLINK:
-            return 0;   /* the row's don't-care: no mode stands on a link */
-        case PATH_TYPE_DIRECTORY:
-            return DIR_MODE_DEFAULT;
+        case PATH_TYPE_FILE:       return 0644;
+        case PATH_TYPE_EXECUTABLE: return 0755;
+        case PATH_TYPE_SYMLINK:    return 0;   /* the row's don't-care: no mode stands on a link */
+        case PATH_TYPE_DIRECTORY:  return DIR_MODE_DEFAULT;
     }
 
     CHECK_ARG(false, "a path type no enumerator names");
@@ -320,9 +316,7 @@ error_t profile_load_sheet(profile_t *profile) {
  * @return The claim, by value: a function of its four inputs, which cannot fail
  */
 static profile_claim_t profile_decode_blob(
-    const char *path,
-    const git_oid *id,
-    git_filemode_t filemode,
+    const char *path, const git_oid *id, git_filemode_t filemode,
     const metadata_item_t *item
 ) {
     /* The blob's identity: its id, and the type its filemode says — libgit2
@@ -419,9 +413,7 @@ static profile_claim_t profile_decode_directory(const metadata_item_t *item) {
  *         under "Cannot read '%s' in profile '%s'", naming the claim's name
  */
 static error_t profile_blob_above(
-    profile_t *profile,
-    const char *storage_path,
-    size_t *out
+    profile_t *profile, const char *storage_path, size_t *out
 ) {
     *out = 0;
 
@@ -494,9 +486,7 @@ static error_t profile_blob_above(
  *         '%s'"; the sheet's (STRICT), in the loader's words
  */
 static error_t profile_directory_item(
-    profile_t *profile,
-    profile_read_t read,
-    const char *storage_path,
+    profile_t *profile, profile_read_t read, const char *storage_path,
     const metadata_item_t **out
 ) {
     *out = NULL;

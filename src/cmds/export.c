@@ -86,7 +86,6 @@
 
 #include <errno.h>
 #include <git2.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -94,7 +93,6 @@
 
 #include "base/arena.h"
 #include "base/args.h"
-#include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -592,7 +590,7 @@ static export_entry_t export_entry_from_row(
  * beneath it.
  *
  * One profile's view at the tree (core/manifest.h manifest_build_profile), built
- * under the run's table — so a path keys against a row by strcmp, both being
+ * under the run's table — so a path keys against a row by its bytes, both being
  * spellings (infra/mount.h) — and read for two questions: what stands at the
  * path, and what stands strictly beneath it. Everything the entries carry is
  * the rows': the mode is the claim or the floor, which the builder resolved by
@@ -602,16 +600,18 @@ static export_entry_t export_entry_from_row(
  * the contribution did not keep is no row and is not copied — the copy is what
  * the profile would place, and that is what the view answers.
  *
- * The row standing at the path decides the shape. A directory row is a root at
- * its mode, a claim where the profile holds it — the layer's rung is a root it
- * holds no claim at (core/manifest.h manifest_holds_row); no row at all is an
- * unclaimed root at the default, the same rung complete_directories supplies. A
- * blob is the single-entry copy — and a blob with rows beneath it refuses the
- * copy, one filesystem being unable to hold both where a profile can, two of
- * its names reaching one chain (core/manifest.h manifest_lookup_claim). A root
- * of this machine's topology is a path like any other here: rows beneath it,
- * and nothing standing at it unless a claim or the layer's rung does. The rungs
- * between the rows are complete_directories'.
+ * The row standing at the path decides the shape, as the claim at a name decides
+ * the name arm's. A blob is the single-entry copy, and nothing stands beneath
+ * it: the view stands no row beneath a standing blob, and where the profile's
+ * own blob and its claims beneath it meet under two labels, the side its fresh
+ * name spells stands, the other contradicted (core/manifest.h). Anything else
+ * is a directory's shape. A directory row is a root at its mode, a claim where
+ * the profile holds it — the layer's rung is a root it holds no claim at
+ * (core/manifest.h manifest_holds_row); no row at all is an unclaimed root at
+ * the default, the same rung complete_directories supplies. A root of this
+ * machine's topology is a path like any other here: rows beneath it, and nothing
+ * standing at it unless a claim or the layer's rung does. The rungs between the
+ * rows are complete_directories'.
  */
 static error_t export_collect_filesystem(
     const dotta_ctx_t *ctx,
@@ -632,30 +632,47 @@ static error_t export_collect_filesystem(
         return error_wrap(err, "Cannot export '%s'", filesystem_path);
     }
 
-    /* The rows at the path and beneath it: the row standing at the path is taken
-     * by the path itself, and every other row beneath it is taken beneath the
-     * root directory as beneath any directory (base/string.h str_path_beneath) */
-    const size_t len = strlen(filesystem_path);
+    /* The argument's last segment: the resolver's string, the command's arena */
     list->basename = path_basename(filesystem_path);
 
-    const manifest_row_t *at = NULL;
-    ptr_array_t beneath;
-    ptr_array_init(&beneath, arena, 0);
+    /* A blob at the path is the single-entry copy, the row as the view placed it */
+    const manifest_row_t *at = manifest_lookup(view, filesystem_path);
+    if (at && at->type != PATH_TYPE_DIRECTORY) {
+        export_entry_t e = export_entry_from_row(view, at);
+        e.rel_path = list->basename;
+        entry_list_append(list, arena, &e);
+        return NULL;
+    }
+
+    /* Anything else is a directory's shape, its root the directory row at the
+     * path — a claim where the profile holds it — or a root claiming nothing,
+     * where no row stands there */
+    append_root(
+        list, arena, at ? at->storage_path : NULL,
+        at ? at->mode : DIR_MODE_DEFAULT, manifest_holds_row(view, at)
+    );
+
+    /* Every row strictly beneath the path — beneath the root directory as beneath
+     * any directory (base/string.h str_path_beneath) — at what lies beneath it,
+     * borrowed from the row, whose string is the arena's */
+    const size_t len = strlen(filesystem_path);
     manifest_rows_t rows = manifest_rows(view);
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];
-        if (strcmp(row->filesystem_path, filesystem_path) == 0) {
-            at = row;
-        } else if (str_path_beneath(row->filesystem_path, filesystem_path, len)) {
-            ptr_array_push(&beneath, row);
-        }
+        const char *rel = str_path_beneath(row->filesystem_path, filesystem_path, len);
+        if (!rel) continue;
+
+        export_entry_t e = export_entry_from_row(view, row);
+        e.rel_path = rel;
+        entry_list_append(list, arena, &e);
     }
 
-    if (!at && beneath.count == 0) {
-        /* A claim this machine cannot place stands nowhere and is no row — the
-         * likely cause when a profile answers nothing at all, export's own case
-         * being the profile this machine does not deploy: the reason the fact
-         * then completes, its storage path the one key that names such a claim. */
+    /* A copy with nothing in it — no row at the path and none beneath. A claim
+     * this machine cannot place stands nowhere and is no row — the likely cause
+     * when a profile answers nothing at all, export's own case being the profile
+     * this machine does not deploy: the reason the fact then completes, its storage
+     * path the one key that names such a claim. */
+    if (!at && list->count == 1) {
         if (manifest_unbound(view).count > 0) {
             return error_create(
                 ERR_NOT_FOUND, "Profile '%s'%s places nothing at '%s'; some of its "
@@ -669,63 +686,26 @@ static error_t export_collect_filesystem(
         );
     }
 
-    if (at && at->type != PATH_TYPE_DIRECTORY) {
-        if (beneath.count > 0) {
-            /* The least path, so the refusal names one thing and names the same
-             * one every run: row order is the view's own business. */
-            const manifest_row_t *first = beneath.entries[0];
-            for (size_t i = 1; i < beneath.count; i++) {
-                const manifest_row_t *row = beneath.entries[i];
-                if (strcmp(row->filesystem_path, first->filesystem_path) < 0) {
-                    first = row;
-                }
-            }
-            return error_create(
-                ERR_CONFLICT,
-                "Cannot export '%s': '%s' is a %s in profile '%s' and '%s' stands "
-                "beneath it — one filesystem cannot hold both",
-                filesystem_path, at->storage_path, path_type_noun(at->type),
-                profile_name(profile), first->storage_path
-            );
-        }
-
-        export_entry_t e = export_entry_from_row(view, at);
-        e.rel_path = list->basename;
-        entry_list_append(list, arena, &e);
-        return NULL;
-    }
-
-    append_root(
-        list, arena, at ? at->storage_path : NULL,
-        at ? at->mode : DIR_MODE_DEFAULT, manifest_holds_row(view, at)
-    );
-
-    for (size_t i = 0; i < beneath.count; i++) {
-        const manifest_row_t *row = beneath.entries[i];
-        export_entry_t e = export_entry_from_row(view, row);
-        /* What lies beneath the path — borrowed from the row, whose string is
-         * the arena's */
-        e.rel_path = str_path_beneath(row->filesystem_path, filesystem_path, len);
-        entry_list_append(list, arena, &e);
-    }
-
     return NULL;
 }
 
 /**
- * Complete the copy into a tree: every directory it needs is an entry, and nothing
- * stands beneath a file.
+ * Complete the copy into a tree: every directory it needs is an entry.
  *
  * The census holds every collected entry by its relative path. The climb reads
  * each proper prefix of each entry — every rung between the root and it — and
- * every rung must be a directory entry: one no entry names is supplied at the
- * default mode claiming nothing (core/deploy's own rule for an ancestor no verdict
- * covers), and one a file or a link stands at refuses the copy, a filesystem
- * being unable to hold both a file and paths beneath it where a profile can,
- * two of its names reaching one chain. Run after any collector, because every
- * one collects claims and never the rungs between them: the profile's walk shows
- * blobs and directory claims, never a subtree that only leads to them, and a
- * selection of rows the same.
+ * supplies one no entry names, at the default mode claiming nothing (core/deploy's
+ * own rule for an ancestor no verdict covers). A rung an entry names is a
+ * directory, because no source holds anything beneath a file: the profile's walk
+ * shows nothing beneath a blob of a tree Git writes (core/profiles.h), and its
+ * view stands no row beneath a standing blob (core/manifest.h). So a copy is a
+ * tree as it is collected, short only of the rungs between its entries. A tree
+ * a hand wrote with a blob and a tree under one name (git fsck's DUPLICATE_ENTRIES)
+ * is the repository corruption phase 2's failure window holds: the write beneath
+ * the blob fails there, on the file the copy made. Run after any collector, because
+ * every one collects claims and never the rungs between them: the profile's walk
+ * shows blobs and directory claims, never a subtree that only leads to them,
+ * and a selection of rows the same.
  *
  * What it establishes is what phase 1 goes on to trust — an lstat of every entry
  * covers every content-dictated component beneath the root, so a symlink standing
@@ -733,60 +713,36 @@ static error_t export_collect_filesystem(
  * are the user's typed destination and follow normal resolution (cp semantics);
  * this is about the paths content dictates.
  *
- * The census holds each entry by index rather than by pointer — the spine moves
- * when a rung is appended, an index does not — so a refusal can name the entry
- * standing in the way, and index zero (the root) stays distinct from absence by
- * the customary +1. Only the collected entries climb: a supplied rung's own
- * prefixes were the climb that supplied it.
+ * Only the collected entries climb: a supplied rung's own prefixes were the climb
+ * that supplied it.
  */
-static error_t complete_directories(export_entry_list_t *list, arena_t *arena) {
+static void complete_directories(export_entry_list_t *list, arena_t *arena) {
     hashmap_t *standing = hashmap_borrow(arena, list->count);
     for (size_t i = 0; i < list->count; i++) {
-        hashmap_set(standing, list->items[i].rel_path, (void *) (uintptr_t) (i + 1));
+        hashmap_set(standing, list->items[i].rel_path, NULL);
     }
 
     size_t collected = list->count;
 
     for (size_t i = 0; i < collected; i++) {
         /* Every prefix of this entry asked of the original string, by its length
-         * (hashmap_get_n): the spine may move as a rung is appended, the string
+         * (hashmap_has_n): the spine may move as a rung is appended, the string
          * does not. */
         const char *rel_path = list->items[i].rel_path;
 
         for (const char *slash = strchr(rel_path, '/'); slash; slash = strchr(slash + 1, '/')) {
             const size_t len = (size_t) (slash - rel_path);
+            if (hashmap_has_n(standing, rel_path, len)) continue;
 
-            size_t held = (size_t) (uintptr_t) hashmap_get_n(standing, rel_path, len);
-            if (held == 0) {
-                export_entry_t e;
-                memset(&e, 0, sizeof(e));
-                e.kind = EXPORT_ENTRY_DIRECTORY;
-                e.mode = DIR_MODE_DEFAULT;
-                e.rel_path = arena_strndup(arena, rel_path, len);
-                entry_list_append(list, arena, &e);
-                hashmap_set(standing, e.rel_path, (void *) (uintptr_t) list->count);
-                continue;
-            }
-
-            /* Both subjects in the profile's own names, because the contradiction
-             * is the profile's and that is where it gets fixed. Every entry that
-             * climbs carries one: a leaf comes from a source that named it, and
-             * the root — the only collected entry without a name — holds no slash
-             * to climb. */
-            const export_entry_t *blocker = &list->items[held - 1];
-            if (blocker->kind != EXPORT_ENTRY_DIRECTORY) {
-                return error_create(
-                    ERR_CONFLICT,
-                    "Cannot export '%s': '%s' is a %s in this profile, so "
-                    "nothing can stand beneath it",
-                    list->items[i].storage_path, blocker->storage_path,
-                    blocker->kind == EXPORT_ENTRY_SYMLINK ? "symlink" : "file"
-                );
-            }
+            export_entry_t e;
+            memset(&e, 0, sizeof(e));
+            e.kind = EXPORT_ENTRY_DIRECTORY;
+            e.mode = DIR_MODE_DEFAULT;
+            e.rel_path = arena_strndup(arena, rel_path, len);
+            entry_list_append(list, arena, &e);
+            hashmap_set(standing, e.rel_path, NULL);
         }
     }
-
-    return NULL;
 }
 
 /**
@@ -823,16 +779,20 @@ static error_t resolve_destinations(
  * Phase-1 destination validation.
  *
  * lstat every entry's final path — the root among them — and refuse anything
- * that would collide by type or write through a pre-existing symlink. Below the
- * export root every intermediate directory is itself an entry
- * (complete_directories), so checking entries covers every content-dictated path
- * component; the root's own ancestors are user-typed and deliberately follow
- * normal filesystem resolution (cp semantics).
+ * that would collide by type, or land through or over a pre-existing symlink
+ * the user did not name. Below the export root every intermediate directory is
+ * itself an entry (complete_directories), so checking entries covers every
+ * content-dictated path component; the root's own ancestors are user-typed and
+ * deliberately follow normal filesystem resolution (cp semantics).
  *
- * A single-file copy — the list whose one entry is a leaf rather than a root —
- * keeps the shipped cp semantics for its user-typed destination: writing through
- * a symlink there is the user's stated intent, while content-dictated paths inside
- * a tree copy refuse symlinks outright (the escape vector).
+ * A file's write never goes through a symlink at its own path: it renames over
+ * the path, replacing the link and leaving what the link leads to untouched
+ * (sys/filesystem.h fs_write_file_raw). A single-file copy — the list whose one
+ * entry is a leaf rather than a root — replaces one at its user-typed destination,
+ * the user's stated intent, as it overwrites a file there. A tree copy refuses
+ * a symlink at any path its content dictates: at a directory's, the copy beneath
+ * would land through it (the escape vector), and at a file's it would replace a
+ * link no argument named.
  */
 static error_t validate_destinations(export_entry_list_t *list) {
     const bool single_dest = list->items[0].rel_path[0] != '\0';
@@ -880,7 +840,9 @@ static error_t validate_destinations(export_entry_list_t *list) {
                     );
                 }
                 if (S_ISLNK(st.st_mode)) {
-                    /* Follow: a link to a directory can't take a write */
+                    /* Followed, as dest_resolve follows a typed destination: a
+                     * link to a directory is the directory it leads to, which a
+                     * file does not replace */
                     if (fs_is_directory(e->dest_path)) {
                         return error_create(
                             ERR_CONFLICT, "Destination '%s' is a directory",
@@ -891,7 +853,7 @@ static error_t validate_destinations(export_entry_list_t *list) {
                         return error_create(
                             ERR_CONFLICT,
                             "'%s' is a symlink where a file must go — "
-                            "refusing to write through it", e->dest_path
+                            "refusing to replace it", e->dest_path
                         );
                     }
                 }
@@ -1321,10 +1283,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         goto cleanup;
     }
 
-    if (tree_export) {
-        err = complete_directories(&list, arena);
-        if (err) goto cleanup;
-    }
+    if (tree_export) complete_directories(&list, arena);
 
     qsort(list.items, list.count, sizeof(*list.items), export_entry_cmp);
 

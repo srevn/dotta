@@ -671,7 +671,7 @@ static hashmap_t *source_ceilings(arena_t *arena) {
         size_t len = strlen(ceiling);
         char *key = arena_str_format(arena, "%s%s", ceiling, ceiling[len - 1] == '/' ? "" : "/");
         if (!ceilings) ceilings = hashmap_borrow(arena, 0);
-        hashmap_set(ceilings, key, key);
+        hashmap_set(ceilings, key, NULL);
     }
 
     return ceilings;
@@ -789,7 +789,7 @@ static source_directory_t *source_place(source_filter_t *f, const char *physical
      * is one still asks its own `.git`), and never across a filesystem unless
      * the environment says so. git compares each level with where its walk began;
      * one level with the next meets the first change as surely. */
-    if (!d->failure && !repository && d->parent && !hashmap_get_n(f->ceilings, key, above)) {
+    if (!d->failure && !repository && d->parent && !hashmap_has_n(f->ceilings, key, above)) {
         if (rc != 0) d->dev = d->parent->dev;
         if (f->across || d->dev == d->parent->dev) {
             repository = d->parent->repository;

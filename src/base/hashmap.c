@@ -395,9 +395,16 @@ bool hashmap_find(const hashmap_t *map, const char *key, void **out) {
 
 /* Check if key exists */
 bool hashmap_has(const hashmap_t *map, const char *key) {
+    if (!map || !key) return false;
+
+    return hashmap_has_n(map, key, strlen(key));
+}
+
+/* Check if the key the span spells exists */
+bool hashmap_has_n(const hashmap_t *map, const char *key, size_t len) {
     if (!map || !key || map->count == 0) return false;
 
-    return hashmap_slot(map, key, strlen(key)) != NULL;
+    return hashmap_slot(map, key, len) != NULL;
 }
 
 /* Remove key-value pair */

@@ -197,6 +197,21 @@ bool hashmap_find(const hashmap_t *map, const char *key, void **out);
 bool hashmap_has(const hashmap_t *map, const char *key);
 
 /**
+ * Check if the key spelled by the first `len` bytes of `key` exists
+ *
+ * hashmap_get_n's span, asked of a set: its values are NULL, which hashmap_get_n
+ * answers for absence too. A climb asks each prefix of one string without copying
+ * it, and only a key exactly `len` bytes long matches — a span that is a prefix
+ * of a held key finds nothing.
+ *
+ * @param map Hash map (NULL returns false)
+ * @param key The span's first byte (NULL returns false)
+ * @param len The span's length in bytes, none of them NUL
+ * @return true if the span is a key of the map
+ */
+bool hashmap_has_n(const hashmap_t *map, const char *key, size_t len);
+
+/**
  * Remove a key-value pair
  *
  * Uses backward-shift deletion (no tombstones). An owned key stays the arena's.

@@ -642,176 +642,50 @@ static error_t remove_resolve(
 }
 
 /**
- * By filesystem path, then by profile
- *
- * Equal paths sort together, so the rows standing at one path form a contiguous
- * run; the profile breaks the tie, and the order is total because one profile
- * places one row per path. The name would not be: two profiles can hold one name
- * at one path.
- */
-static int remove_filesystem_order(const void *a, const void *b) {
-    const manifest_row_t *const *ra = a;
-    const manifest_row_t *const *rb = b;
-
-    int by_path = strcmp((*ra)->filesystem_path, (*rb)->filesystem_path);
-
-    return by_path ? by_path : strcmp((*ra)->profile, (*rb)->profile);
-}
-
-/**
- * filesystem path → the rows every local profile but `exclude` places there
- *
- * Each profile read once through its own view of its head under this machine's
- * table, so a claim is keyed by where it stands and never by what it is called:
- * two profiles bound at two targets holding one name are two paths and meet no
- * key of each other's, and one profile's two names for one path are one row and
- * one entry. A claim this machine cannot place stands nowhere and is not indexed.
- * Directory claims are indexed like any row — the profile claims the directory,
- * and a caller asking who else is at a place is owed it.
- *
- * The map, its keys — each a row's own path string — and its values, each a run
- * of the rows themselves, are the command's arena's, as the rows are: nothing
- * frees the index.
- *
- * Complete or an error: a short index is an "also in" a user reads as complete.
- * What a failure means is remove_paths' to say, and it is advisory: it says what
- * it could not read and drops the section rather than refuse the untrack, since
- * a local profile nobody enabled must not stop the repair and must not hide a
- * claim in silence either.
- *
- * Cost: one view per profile — a tree walk and a sheet load each — then O(T log
- * T) over T placed rows for the runs.
- *
- * Reader: remove_overlaps.
- *
- * @param ctx Dispatch context (must not be NULL): the repository, this machine's
- *            mount table, and the arena the index, its keys and its runs live in
- * @param exclude A profile to leave out, or NULL for every one of them
- * @param out_index filesystem path (const char *) -> manifest_rows_t * (must not
- *                  be NULL; NULL on a failure)
- * @return Error or NULL on success
- */
-static error_t remove_build_filesystem_index(
-    const dotta_ctx_t *ctx,
-    const char *exclude,
-    hashmap_t **out_index
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(out_index);
-
-    *out_index = NULL;
-
-    /* The profiles, in the arena the index lives in */
-    string_array_t profiles;
-    error_t err = gitops_list_branches(ctx->run.repo, ctx->arena, &profiles);
-    if (err) return err;
-
-    /* Every placed row of every profile, gathered before any of it is keyed:
-     * each view's rows as it lends them, a slot per listed profile — the excluded
-     * one's left empty — and how many they are, so the list below is allocated
-     * once and typed from its first slot. The rows are the arena's, as the views
-     * they came from are. */
-    manifest_rows_t *placed = arena_calloc(ctx->arena, profiles.count, sizeof(*placed));
-    size_t total = 0;
-    for (size_t i = 0; i < profiles.count; i++) {
-        if (exclude && strcmp(profiles.entries[i], exclude) == 0) continue;
-
-        profile_t *profile = NULL;
-        manifest_t *view = NULL;
-        err = profile_load(ctx->run.repo, profiles.entries[i], &profile);
-        if (!err) err = manifest_build_profile(profile, ctx->run.mounts, ctx->arena, &view);
-        profile_free(profile);
-        if (err) return err;
-
-        placed[i] = manifest_rows(view);
-        total += placed[i].count;
-    }
-
-    /* The runs: every row in the one list, sorted so the rows standing at one
-     * path are adjacent. A list of none is still a place of its own, never the
-     * NULL qsort may not be handed even with nothing to sort (C11 7.22.5). */
-    const manifest_row_t **rows = arena_calloc(ctx->arena, total, sizeof(*rows));
-    size_t row_count = 0;
-    for (size_t i = 0; i < profiles.count; i++) {
-        for (size_t j = 0; j < placed[i].count; j++) rows[row_count++] = placed[i].entries[j];
-    }
-    qsort(rows, row_count, sizeof(*rows), remove_filesystem_order);
-
-    hashmap_t *index = hashmap_borrow(ctx->arena, row_count);
-
-    for (size_t i = 0; i < row_count;) {
-        const char *filesystem_path = rows[i]->filesystem_path;
-
-        size_t n = 0;
-        while (i + n < row_count &&
-            strcmp(rows[i + n]->filesystem_path, filesystem_path) == 0) n++;
-
-        /* The value is the run itself: the rows standing at the path, every other
-         * profile's own, lent in place */
-        manifest_rows_t *run = arena_calloc(ctx->arena, 1, sizeof(*run));
-        *run = (manifest_rows_t){ rows + i, n };
-
-        /* The key is the row's own string — hashmap_borrow keeps the pointer
-         * and compares by content, and the row lives as long as the map. */
-        hashmap_set(index, filesystem_path, run);
-        i += n;
-    }
-
-    *out_index = index;
-
-    return NULL;
-}
-
-/**
  * One path this removal shares with other profiles
  *
  * The claim removed there — the first, where the removal takes two at one place:
  * two of the profile's names, or a blob and the directory claim at its own name
- * — and who else stands there under what name.
+ * — what each other profile claims there, in the order of their names, and the
+ * row the enabled view stands there.
  */
 typedef struct {
     const char *filesystem_path;
-    const char *storage_path;
-    const manifest_rows_t *others;
+    const char *storage_path;         /* the claim the removal takes there */
+    manifest_rows_t others;           /* each other profile's claim there */
+    const manifest_row_t *standing;   /* the enabled view's row there, or NULL */
 } remove_overlap_t;
 
 /**
- * The multi-profile section, as data
- *
- * One entry per path this removal shares with another profile, and the one fact
- * its closing line reads: whether the view's winner at any of those paths is a
- * different enabled profile, which is what makes a removal change nothing on disk.
+ * The multi-profile section, as data: one entry per path this removal shares
+ * with another profile
  */
 typedef struct {
     const remove_overlap_t *entries;
     size_t count;
-    bool provided_by_other;
 } remove_overlaps_t;
 
 /**
  * What this removal shares with the other profiles
  *
- * Keyed by path, not by name (remove_build_filesystem_index): two profiles bound
- * at two targets holding one name are two paths and share nothing, while a portable
- * name and a binding's name at one place do share and used to go unsaid. A claim
- * this machine places nowhere meets nothing and is skipped.
+ * Read by path, not by name: what each other local profile claims where a removed
+ * claim stands — its claim there, explicit or derived, whether or not it stands
+ * (core/manifest.h manifest_lookup_claim). So two profiles bound at two targets
+ * holding one name are two paths and share nothing, while a portable name and a
+ * binding's name at one place do share and used to go unsaid; one profile's two
+ * names for one place are its one claim there; a directory claim is met like
+ * any other — the profile claims the directory, and a caller asking who else is
+ * at a place is owed it; and a claim this machine places nowhere meets nothing.
  *
- * The index is read once per path and taken out of the map, so two claims the
- * removal takes at one place — two of the profile's names, or a blob and the
- * directory claim at its own name — are one line and one count: the data is the
- * dedup, and no seen-set or second scan is needed.
+ * Complete or an error: a short section is an "also in" a user reads as complete.
+ * What a failure means is remove_paths' to say, and it is advisory: it says what
+ * it could not read and drops the section rather than refuse the untrack, since
+ * a local profile nobody enabled must not stop the repair and must not hide a
+ * claim in silence either. Only `standing` is read tolerantly (below).
  *
- * `provided_by_other` is the view's fact, not the record's: the winner at the
- * path is another enabled profile, so the path stays as it is. It is asked only
- * where the index answered, which is sound — a winner other than this profile
- * holds a row at the path and is therefore in the index, the excluded profile
- * being this profile itself.
- *
- * The view is built here, tolerantly: remove must run on an enabled set the builder
- * refuses (that is how an offending claim gets untracked), so a failed build
- * leaves the bit false and the closing lines keep their neutral wording. The
- * index is not tolerant — a short index is an "also in" a user reads as complete
- * — and its failure is the caller's to weigh.
+ * Cost: one view per other local profile — a tree walk and a sheet load each —
+ * then one lookup per removed path per profile. Everything the section holds is
+ * the command's arena's, the views its entries borrow from included.
  */
 static error_t remove_overlaps(
     const dotta_ctx_t *ctx,
@@ -827,39 +701,71 @@ static error_t remove_overlaps(
 
     *out = (remove_overlaps_t){ 0 };
 
-    hashmap_t *index = NULL;
-    error_t err = remove_build_filesystem_index(ctx, current_profile, &index);
+    /* The other local profiles, by name: the order a line lists them in, the
+     * store listing them as its enumeration met them (sys/gitops.h
+     * gitops_list_refs) */
+    string_array_t profiles;
+    error_t err = gitops_list_branches(ctx->run.repo, ctx->arena, &profiles);
     if (err) return err;
+    string_array_remove_value(&profiles, current_profile);
+    string_array_sort(&profiles);
 
-    /* Tolerant (the header): a view the builder refuses leaves `view` NULL and
-     * the bit false, its error dropped */
-    manifest_t *view = NULL;
-    (void) manifest_build(ctx->run.repo, ctx->run.state, ctx->arena, &view);
-
-    remove_overlap_t *overlaps = arena_calloc(
-        ctx->arena, claim_count, sizeof(*overlaps)
-    );
-
-    size_t count = 0;
-    bool provided_by_other = false;
-    for (size_t i = 0; i < claim_count; i++) {
-        const remove_claim_t *claim = &claims[i];
-        if (!claim->filesystem_path) continue;
-
-        void *others = NULL;
-        if (!hashmap_remove(index, claim->filesystem_path, &others)) continue;
-
-        overlaps[count++] = (remove_overlap_t){
-            claim->filesystem_path, claim->storage_path, others
-        };
-
-        const manifest_row_t *row = manifest_lookup(view, claim->filesystem_path);
-        if (row && strcmp(row->profile, current_profile) != 0) {
-            provided_by_other = true;
-        }
+    /* Each read once, through its own view of its head under this machine's table */
+    manifest_t **views = arena_calloc(ctx->arena, profiles.count, sizeof(*views));
+    for (size_t p = 0; p < profiles.count; p++) {
+        profile_t *profile = NULL;
+        err = profile_load(ctx->run.repo, profiles.entries[p], &profile);
+        if (!err) err = manifest_build_profile(profile, ctx->run.mounts, ctx->arena, &views[p]);
+        profile_free(profile);
+        if (err) return err;
     }
 
-    *out = (remove_overlaps_t){ overlaps, count, provided_by_other };
+    /* The enabled view, built tolerantly: remove must run on an enabled set the
+     * builder refuses (that is how an offending claim gets untracked), so a build
+     * it refuses leaves `enabled` NULL and every `standing` with it, its error
+     * dropped, and the closing lines keep their neutral wording */
+    manifest_t *enabled = NULL;
+    (void) manifest_build(ctx->run.repo, ctx->run.state, ctx->arena, &enabled);
+
+    /* Each path asked once, so two claims the removal takes at one place — two
+     * of the profile's names, or a blob and the directory claim at its own name
+     * — are one line and one count: a seen-set's one probe over the claims' own
+     * strings (base/hashmap.h hashmap_add) */
+    remove_overlap_t *overlaps = arena_calloc(ctx->arena, claim_count, sizeof(*overlaps));
+    hashmap_t *asked = hashmap_borrow(ctx->arena, claim_count);
+
+    size_t count = 0;
+    for (size_t i = 0; i < claim_count; i++) {
+        const char *filesystem_path = claims[i].filesystem_path;
+        if (!filesystem_path || !hashmap_add(asked, filesystem_path, NULL)) continue;
+
+        /* Each other profile's claim at the path, in name order: the list made
+         * at the first profile that holds one, with room for every profile */
+        const manifest_row_t **others = NULL;
+        size_t other_count = 0;
+        for (size_t p = 0; p < profiles.count; p++) {
+            const manifest_row_t *other = manifest_lookup_claim(
+                views[p], profiles.entries[p], filesystem_path
+            );
+            if (!other) continue;
+
+            if (!others) others = arena_calloc(ctx->arena, profiles.count, sizeof(*others));
+            others[other_count++] = other;
+        }
+        if (other_count == 0) continue;
+
+        /* `standing` is the view's fact, not the record's, and asked at a shared
+         * path alone — which is sound: a row another enabled profile stands at
+         * the path is that profile's claim there, so it is among the others */
+        overlaps[count++] = (remove_overlap_t){
+            .filesystem_path = filesystem_path,
+            .storage_path = claims[i].storage_path,
+            .others = { others, other_count },
+            .standing = manifest_lookup(enabled, filesystem_path),
+        };
+    }
+
+    *out = (remove_overlaps_t){ overlaps, count };
 
     return NULL;
 }
@@ -870,7 +776,8 @@ static error_t remove_overlaps(
  * One line per shared path: the path, then each other profile and — where its
  * name for the place differs from the removed claim's — the name it holds it
  * under, since under two bindings one path wears two names. The closing line
- * names the fate `delete_files` chose.
+ * says what the removal changes on disk: nothing, where another enabled profile's
+ * row stands at one of the paths, and otherwise the fate `delete_files` chose.
  */
 static void remove_print_overlaps(
     output_t *out,
@@ -892,8 +799,8 @@ static void remove_print_overlaps(
         output_print(
             out, OUTPUT_NORMAL, "  {yellow}%s{reset} also in:", overlap->filesystem_path
         );
-        for (size_t j = 0; j < overlap->others->count; j++) {
-            const manifest_row_t *other = overlap->others->entries[j];
+        for (size_t j = 0; j < overlap->others.count; j++) {
+            const manifest_row_t *other = overlap->others.entries[j];
 
             output_print(out, OUTPUT_NORMAL, " {cyan}%s{reset}", other->profile);
             if (strcmp(other->storage_path, overlap->storage_path) != 0) {
@@ -913,7 +820,15 @@ static void remove_print_overlaps(
         current_profile
     );
 
-    if (overlaps->provided_by_other) {
+    /* The first path another enabled profile's row stands at: the removal changes
+     * nothing on disk there */
+    size_t provided = 0;
+    for (; provided < overlaps->count; provided++) {
+        const manifest_row_t *standing = overlaps->entries[provided].standing;
+        if (standing && strcmp(standing->profile, current_profile) != 0) break;
+    }
+
+    if (provided < overlaps->count) {
         output_warning(
             out, OUTPUT_NORMAL,
             "Some paths are provided by another enabled profile."

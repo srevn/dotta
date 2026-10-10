@@ -275,15 +275,14 @@ profile_t *profile_open(const char *name, const git_tree *tree);
  * an answer reads gitops_branch_tree and opens the profile at what it finds
  * (core/manifest.c manifest_build, core/workspace.c workspace_orphan_authority).
  *
- * Readers: cmds/remove.c remove_build_filesystem_index and cmds/revert.c
- * revert_select_profile, which load every local profile; cmds/ignore.c ignore_test;
- * the questions asked of a head by name, what it holds and whether it needs a
- * target — cmds/profile.c profile_list and profile_enable, cmds/clone.c cmd_clone,
- * cmds/interactive.c read_targets; what a profile's deletion takes, every claim
- * for its hooks and the counts for its preview (cmds/remove.c remove_profile);
- * and the directory claims a completion offers at a profile's head — export's
- * (cmds/completion.c completion_directories) and remove's own (cmds/remove.c
- * remove_complete).
+ * Readers: cmds/remove.c remove_overlaps and cmds/revert.c revert_select_profile,
+ * which load every local profile; cmds/ignore.c ignore_test; the questions asked
+ * of a head by name, what it holds and whether it needs a target — cmds/profile.c
+ * profile_list and profile_enable, cmds/clone.c cmd_clone, cmds/interactive.c
+ * read_targets; what a profile's deletion takes, every claim for its hooks and
+ * the counts for its preview (cmds/remove.c remove_profile); and the directory
+ * claims a completion offers at a profile's head — export's (cmds/completion.c
+ * completion_directories) and remove's own (cmds/remove.c remove_complete).
  *
  * @param repo Repository (must not be NULL; borrowed)
  * @param name The profile's name, which its branch is named by (must not be NULL;

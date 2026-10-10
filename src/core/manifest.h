@@ -418,7 +418,7 @@ error_t manifest_build(
  * the length of the command (cmds/add.c cmd_add); `ignore --test`'s named arm
  * (cmds/ignore.c ignore_test); and the two cross-profile searches, which build
  * one per local profile (cmds/revert.c revert_select_profile, through
- * revert_claim_standing, and cmds/remove.c remove_build_filesystem_index).
+ * revert_claim_standing, and cmds/remove.c remove_overlaps).
  *
  * Memory: every allocation produced by the call lives in the caller's arena, as
  * manifest_build's does, but the sheet the walk reads where no question has yet,
@@ -895,14 +895,16 @@ error_t manifest_holder(
  * the profile never held; revert's two questions of a tree, the claim standing
  * at a path and the second-name admission (cmds/revert.c revert_claim_standing,
  * revert_refuse_second_name), the first asked of every local profile by its search
- * (revert_select_profile); add's three questions of a path it names or walks
- * (cmds/add.c cmd_add and add_collect): which rules reach it — a claim meets
- * the -e layer alone, no rule of discovery (add_verdict) — whether the profile's
- * own claim agrees with what stands there now — the one reading that sees an
- * explicit claim with nothing beneath it for either of the profile's documents
- * to find, and a derived row included, since a profile holding a subtree beneath
- * a path is a statement a path that became a file contradicts — and whether the
- * add captures it, a claim being left as it stands but under --force (add_list);
+ * (revert_select_profile); remove's search, what every other local profile claims
+ * where a removal takes a claim, each asked of its own view (cmds/remove.c
+ * remove_overlaps); add's three questions of a path it names or walks (cmds/add.c
+ * cmd_add and add_collect): which rules reach it — a claim meets the -e layer
+ * alone, no rule of discovery (add_verdict) — whether the profile's own claim
+ * agrees with what stands there now — the one reading that sees an explicit claim
+ * with nothing beneath it for either of the profile's documents to find, and a
+ * derived row included, since a profile holding a subtree beneath a path is a
+ * statement a path that became a file contradicts — and whether the add captures
+ * it, a claim being left as it stands but under --force (add_list);
  * every claim an enabled profile holds at a link above a capture, the capturing
  * profile's off its own view and every other's off the enabled one (cmds/add.c
  * add_refuse_ancestry); and `ignore --test`'s note beneath a verdict that excludes

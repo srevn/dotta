@@ -1640,9 +1640,11 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 case WORKSPACE_STATE_UNDEPLOYED:
                 case WORKSPACE_STATE_ORPHANED:
                 case WORKSPACE_STATE_RELEASED:
-                    /* Not sync's concern — handled by apply command. RELEASED
-                     * is never emitted here anyway: it comes only from orphan
-                     * analysis, which this load switches off. */
+                case WORKSPACE_STATE_OVERRIDDEN:
+                    /* Not sync's concern — handled by apply command, or by no
+                     * verb: a copy left for the row standing over it. RELEASED
+                     * and OVERRIDDEN are never emitted here anyway: both come
+                     * only from orphan analysis, which this load switches off. */
                     break;
             }
         }
@@ -2128,7 +2130,10 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * (core/state.h state_record_t) — no disk and no second workspace load,
          * so the answer does not move with --force. Each arm claims apply has
          * work, so each names the apply that takes the claim away: a record whose
-         * path the view lacks is an orphan apply prunes, releases or reclaims;
+         * path the view lacks is an orphan apply prunes, releases or reclaims —
+         * or the copy of a claim its profile still holds there, standing nowhere,
+         * left for the row standing over it, which reads as apply's too: that
+         * row is apply's either way, the copy's directory standing in its place;
          * one whose confirmed kind and content are not the row's is stale, and
          * apply deploys the row — or, where the row's own kind already stands
          * in place of the node the record describes, lets the record go: its

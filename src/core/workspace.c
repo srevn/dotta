@@ -1461,8 +1461,10 @@ typedef enum {
  * — so the probe and the view agree on every name, a disabled profile's custom/
  * name among them, which has no binding to be placed by.
  *
- * One kind of row reaches this probe — a record whose path the view lacks — and
- * three reasons it may be there are what the probe tells apart:
+ * One kind of row reaches this probe — a record whose path the view lacks, and
+ * whose profile holds no claim there (one that does is overridden first,
+ * workspace_analyze_orphans) — and three reasons it may be there are what the
+ * probe tells apart:
  *   - the profile is disabled: it still holds the claim, and the deployed copy
  *     is dotta's to prune;
  *   - the profile moved: it is enabled, but its --target changed between a disable
@@ -1995,7 +1997,8 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  * which questions apply.
  *
  * Per orphan, in order — the ancestry, presence, the occupant's kind, the entry,
- * the prune order, the ownership gate, then Git authority:
+ * the claim its profile holds, the prune order, the ownership gate, then Git
+ * authority:
  *   - the ancestry: a squatter above the copy — a directory row of the view, a
  *     directory record the looker found squatted, or a link over a record beneath
  *     it — means no look was taken at all, and the record is released with nothing
@@ -2025,6 +2028,15 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *     the record or about Git — an order to prune the copy lives only while its
  *     path is out of the view (core/state.h), and the view holds this one under
  *     another spelling;
+ *   - the claim its profile holds: the record's profile still holds a claim at
+ *     its path — explicit or derived, under any of its names (core/manifest.h
+ *     manifest_lookup_claim) — and no row stands there, so the claim stands
+ *     nowhere. A path an enabled claim names is dotta's whether or not the claim
+ *     stands, so the copy is OVERRIDDEN: left for the row standing over it, never
+ *     pruned and never released. Behind the entry, whose stale key names no copy
+ *     of its own; ahead of the prune order, given when the claim left, which
+ *     its return has made stale; and ahead of the gate and Git authority, whose
+ *     releases each answer a claim that has gone, which this one has not;
  *   - the prune order (remove --delete-files): the user chose the fate of the
  *     deployed copy, and Git is not asked. Honoured only with a reference to
  *     measure the copy against — a directory (cleanup's emptiness rule decides)
@@ -2074,6 +2086,8 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  * - WORKSPACE_STATE_RELEASED -> Git let go, dotta never deployed it, a row of
  *   the view stands on this very entry under another spelling of its path, or
  *   (with DIVERGENCE_TYPE) another kind of path stands there; apply releases
+ * - WORKSPACE_STATE_OVERRIDDEN -> its profile still claims the path, standing
+ *   nowhere; apply leaves the copy for the row standing over it
  *
  * Presence comes first, so an absent record never reaches a RELEASED arm: whatever
  * Git would have said, it reads [orphaned] [absent] and apply reclaims it. The
@@ -2172,6 +2186,20 @@ static void workspace_analyze_orphans(workspace_t *ws) {
         if (item->occupant != FS_OCCUPANT_UNKNOWN &&
             workspace_row_stands(ws, item->filesystem_path, &item->st)) {
             item->state = WORKSPACE_STATE_RELEASED;
+            continue;
+        }
+
+        /* The record's profile still holds a claim at its path, and no row stands
+         * there: the claim stands nowhere. A path an enabled claim names is dotta's
+         * whether or not the claim stands, so the copy is overridden — left for
+         * the row standing over it, never pruned and never released, whatever
+         * an order, the gate or Git would say: each of those lets go a copy whose
+         * claim has gone, and this one's is held. By place, not by name: a derived
+         * claim names nothing, and a profile holding the path under another of
+         * its names claims the copy the record names. Nothing is measured — no
+         * reader weighs a copy left as it stands. */
+        if (manifest_lookup_claim(ws->manifest, item->profile, item->filesystem_path)) {
+            item->state = WORKSPACE_STATE_OVERRIDDEN;
             continue;
         }
 
@@ -3061,7 +3089,8 @@ static error_t workspace_partition(workspace_t *ws) {
  * none of them lists anything, so no two can list by two rules; an active item
  * none had anything to write on keeps what the partition made it — DEPLOYED,
  * nothing wrong — and is not among them. An orphan is never DEPLOYED, so every
- * analyzed one has something to say: a reclaim, a release, a prune or a skip.
+ * analyzed one has something to say: a reclaim, a release, a prune, a skip, or
+ * a copy left for the row standing over it.
  *
  * The reassignment is the one term no analysis writes: a clean row whose owned
  * record names another profile is REASSIGNED by the route, read over the item's
@@ -3849,6 +3878,21 @@ bool workspace_item_tags(
                     tags_out[tag_count++] = "type";
                 }
             }
+
+            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+            break;
+
+        case WORKSPACE_STATE_OVERRIDDEN:
+            /* Its profile still claims the path, standing nowhere, and the copy
+             * is left for the row standing over it: no verb's, and nothing was
+             * measured, so the line carries one tag, in the colour of a line
+             * that asks nothing — [ancestor]'s. What stands over it is the view's
+             * to name, and this reads the item alone: the caller adds it
+             * (cmds/status.c status_print_workspace). */
+            if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
+                tags_out[tag_count++] = "overridden";
+            }
+            *color_out = OUTPUT_COLOR_DIM;
 
             snprintf(metadata_buf, metadata_size, "from %s", item->profile);
             break;

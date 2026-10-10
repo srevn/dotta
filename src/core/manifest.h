@@ -783,9 +783,11 @@ const manifest_row_t *manifest_lookup(
  * nearest_ancestor), and "/" itself has nothing above it.
  *
  * Readers: core/workspace.c workspace_analyze_untracked, of every tracked directory
- * its scan is about to enumerate; and cmds/add.c cmd_add, of the path an argument
+ * its scan is about to enumerate; cmds/add.c cmd_add, of the path an argument
  * names — a capture beneath one of the profile's own files, whichever label names
- * either, over the one profile's view its names come from.
+ * either, over the one profile's view its names come from; and cmds/status.c
+ * status_print_workspace, of an overridden copy, whose line names what stands
+ * over it.
  *
  * @param manifest Manifest (must not be NULL)
  * @param filesystem_path Where to ask, absolute: a key (must not be NULL)
@@ -907,8 +909,11 @@ error_t manifest_holder(
  * it, a claim being left as it stands but under --force (add_list);
  * every claim an enabled profile holds at a link above a capture, the capturing
  * profile's off its own view and every other's off the enabled one (cmds/add.c
- * add_refuse_ancestry); and `ignore --test`'s note beneath a verdict that excludes
- * a path its asker holds, which the rules never reach (cmds/ignore.c ignore_test).
+ * add_refuse_ancestry); whether an orphan's profile still holds a claim at its
+ * path, which leaves the copy overridden, standing nowhere, rather than pruned
+ * or released (core/workspace.c workspace_analyze_orphans); and `ignore --test`'s
+ * note beneath a verdict that excludes a path its asker holds, which the rules
+ * never reach (cmds/ignore.c ignore_test).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,

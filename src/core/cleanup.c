@@ -47,29 +47,31 @@ cleanup_plan_t *cleanup_plan_build(
     CHECK_NULL(ws);
     CHECK_NULL(scope);
 
-    /* The plan and its three buckets are the arena's, beside the items they borrow,
+    /* The plan and its four buckets are the arena's, beside the items they borrow,
      * and nothing frees a plan. */
     cleanup_plan_t *plan = arena_calloc(arena, 1, sizeof(*plan));
 
-    /* --keep-orphans: nothing is planned, by request. The empty plan — three
-     * empty buckets — is what every later stage reads, so no stage re-encodes
-     * the flag. */
+    /* --keep-orphans: nothing is planned, by request. The empty plan — four empty
+     * buckets — is what every later stage reads, so no stage re-encodes the
+     * flag. */
     if (keep_orphans) {
         return plan;
     }
 
     /* Each orphan in scope is added to its bucket as the walk decides it, and
-     * the three are filled once the walk is done. */
+     * the four are filled once the walk is done. */
     workspace_items_t diverged = workspace_diverged(ws);
     workspace_buckets_t *buckets = workspace_buckets_create(arena);
 
     for (size_t i = 0; i < diverged.count; i++) {
         const workspace_item_t *item = diverged.entries[i];
 
-        /* Both kinds reach both states: the kind decides the bucket, the state
-         * is a verdict's input. */
+        /* Both kinds reach all three states: the kind decides the bucket and
+         * the state is a verdict's input — but an overridden copy's, which is
+         * its bucket, no verdict deciding it. */
         if (item->state != WORKSPACE_STATE_ORPHANED &&
-            item->state != WORKSPACE_STATE_RELEASED) {
+            item->state != WORKSPACE_STATE_RELEASED &&
+            item->state != WORKSPACE_STATE_OVERRIDDEN) {
             continue;
         }
 
@@ -83,8 +85,12 @@ cleanup_plan_t *cleanup_plan_build(
             continue;
         }
 
-        /* Exclude dimension: spared, reported by the caller, never touched. */
-        if (scope_is_excluded(scope, item->storage_path, item->item_kind)) {
+        /* An overridden copy: counted, never touched (cleanup_plan_t), so the
+         * exclude dimension spares it nothing — and spares the rest, reported
+         * by the caller, never touched. */
+        if (item->state == WORKSPACE_STATE_OVERRIDDEN) {
+            workspace_buckets_add(buckets, item, &plan->overridden);
+        } else if (scope_is_excluded(scope, item->storage_path, item->item_kind)) {
             workspace_buckets_add(buckets, item, &plan->excluded);
         } else if (item->item_kind == PATH_KIND_DIRECTORY) {
             workspace_buckets_add(buckets, item, &plan->directories);
@@ -255,7 +261,7 @@ static int cleanup_depth_order(const void *a, const void *b) {
 typedef enum {
     FATE_UNPLANNED = 0,
     FATE_GONE,        /* This run prunes it — the hole the walk looks through */
-    FATE_SKIPPED,     /* This run skips it — transient: update, --force, root, or the run that reaches it */
+    FATE_SKIPPED,     /* This run skips it — transient: update, --force, root, the run that reaches it, the row over it */
     FATE_PERMANENT    /* This run releases it, or never touches it — nothing of dotta's comes back for it */
 } fate_t;
 
@@ -277,13 +283,17 @@ typedef struct {
  * with it — and a permanent one stops the walk: the directory is occupied by
  * something this run will not remove and no later run will either.
  *
- * An entry outside the plan is read off the item the load holds at its path
+ * An entry the set holds no fate for — outside the plan, or a copy the plan counts
+ * and never decides — is read off the item the load holds at its path
  * (workspace_find). ORPHANED is skipped: the scope did not reach it this run
  * (-e, -p, a path filter), an unfiltered run would decide it, and scope decides
  * reach, never verdict — so a filtered run must not change its parent's fate.
- * Everything else is permanent: a RELEASED orphan stays where it is; an active
- * path (the view has a row, and a row's item is never an orphan's) stands in an
- * enabled profile's name; an entry the load holds no item for is the user's.
+ * OVERRIDDEN is skipped too, in scope or not: the copy is left for the row standing
+ * over it, a fate no run's filter set, and the directory waits with it rather
+ * than being let go around a copy dotta keeps. Everything else is permanent: a
+ * RELEASED orphan stays where it is; an active path (the view has a row, and a
+ * row's item is never an orphan's) stands in an enabled profile's name; an entry
+ * the load holds no item for is the user's.
  *
  * Membership is keyed by filesystem path, which is why the entry arrives as a
  * full path rather than a basename.
@@ -295,8 +305,9 @@ static bool vouch_entry(const char *child, void *ctx) {
     if (fate == FATE_UNPLANNED) {
         const workspace_item_t *item = workspace_find(walk->ws, child);
 
-        fate = (item && item->state == WORKSPACE_STATE_ORPHANED) ? FATE_SKIPPED
-                                                                 : FATE_PERMANENT;
+        fate = (item && (item->state == WORKSPACE_STATE_ORPHANED ||
+            item->state == WORKSPACE_STATE_OVERRIDDEN))
+            ? FATE_SKIPPED : FATE_PERMANENT;
     }
 
     if (fate == FATE_SKIPPED) {

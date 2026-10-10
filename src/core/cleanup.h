@@ -28,13 +28,15 @@
  *   (workspace_item_t.occupant). Preflight reads it and probes nothing; status
  *   reads the same item, so the two cannot disagree on whether a path is there.
  *   Execute probes once more, only to report what it found
- * - what becomes of a present orphan, either kind: cleanup_verdict, from the
- *   item — RELEASED ⇒ released (left on disk, record retires — never pruned,
- *   --force included: dotta removes what it deployed and Git still backs, and
- *   lets go of what Git lost, of what it never deployed, of a path another kind
- *   of node stands at, and of a key that spells a path a row stands on under
- *   another spelling); a relocated home/ claim ⇒ skipped unless --force,
- *   either kind (the copy is the claim's old home — see the verdict table);
+ * - what becomes of a present orphan, either kind — but an overridden copy, which
+ *   the workspace leaves for the row standing over it and the plan counts apart
+ *   (cleanup_plan_t): cleanup_verdict, from the item — RELEASED ⇒ released (left
+ *   on disk, record retires — never pruned, --force included: dotta removes what
+ *   it deployed and Git still backs, and lets go of what Git lost, of what it
+ *   never deployed, of a path another kind of node stands at, and of a key that
+ *   spells a path a row stands on under another spelling); a relocated home/
+ *   claim ⇒ skipped unless --force, either kind (the copy is the claim's old
+ *   home — see the verdict table);
  *   a file with a cleanup_skip_reason ⇒ skipped unless --force; a directory the
  *   workspace could not verify ⇒ skipped, --force included; else prunable, a
  *   directory's remainder permitting
@@ -66,9 +68,10 @@
  * are the workspace's, so none outlives the arena the workspace was loaded into.
  *
  * Integration:
- * - workspace.h: orphan detection, the occupant, Git authority, divergence; the
- *                view (the active paths beneath a directory) and the items (an
- *                entry outside the plan) for a directory's remainder
+ * - workspace.h: orphan detection, the occupant, Git authority, divergence, the
+ *                override; the view (the active paths beneath a directory) and
+ *                the items (an entry no verdict decided) for a directory's
+ *                remainder
  * - scope.h:     the three filter dimensions
  * - filesystem.h: the emptiness walk, the removals, execute's probe
  */
@@ -86,10 +89,16 @@
 /**
  * Cleanup plan — cleanup's reading of the orphan set under the scope
  *
- * Every ORPHANED / RELEASED item that passes the scope's profile and path
- * dimensions lands in exactly one bucket; out-of-scope items are invisible. The
- * exclude dimension does not drop an item, it spares it: `excluded` is reported
- * ("Skipped N paths (--exclude)") and never touched.
+ * Every ORPHANED, RELEASED or OVERRIDDEN item that passes the scope's profile
+ * and path dimensions lands in exactly one bucket; out-of-scope items are
+ * invisible. The exclude dimension does not drop an item, it spares it: `excluded`
+ * is reported ("Skipped N paths (--exclude)") and never touched.
+ *
+ * An overridden copy is no orphan cleanup settles: its profile still claims the
+ * path, and the copy is left for the row standing over it (core/workspace.h
+ * WORKSPACE_STATE_OVERRIDDEN). So it is counted — a path filter that names it
+ * has found a path dotta manages — and never decided or touched, which leaves
+ * -e nothing to spare of it.
  *
  * The path dimension reaches an orphan the way it reaches an active row: `apply
  * <file>` plans the orphan at that path, `apply <dir>` the orphans beneath it,
@@ -107,14 +116,16 @@ typedef struct {
     workspace_items_t files;         /* ORPHANED / RELEASED file items in scope */
     workspace_items_t directories;   /* ORPHANED / RELEASED directory items in scope */
     workspace_items_t excluded;      /* Both kinds, spared by -e — reported, never touched */
+    workspace_items_t overridden;    /* Both kinds, counted for the path filter's match, never touched */
 } cleanup_plan_t;
 
 /**
  * Build the cleanup plan
  *
- * Walks the workspace's diverged items once, keeping ORPHANED and RELEASED ones,
- * gating each on scope_accepts_profile ∧ scope_accepts_path(kind), then routing
- * by scope_is_excluded(kind) and item_kind.
+ * Walks the workspace's diverged items once, keeping ORPHANED, RELEASED and
+ * OVERRIDDEN ones, gating each on scope_accepts_profile ∧ scope_accepts_path(kind),
+ * then routing an overridden one to its bucket and the rest by
+ * scope_is_excluded(kind) and item_kind.
  *
  * @param arena Arena the plan and its buckets live in (must not be NULL)
  * @param ws Workspace loaded with orphan analysis (must not be NULL)
@@ -133,7 +144,8 @@ cleanup_plan_t *cleanup_plan_build(
 /**
  * True when the plan carries nothing this run may act on
  *
- * Excluded items are not work: they are reported and left alone.
+ * Excluded items are not work: they are reported and left alone. Nor are overridden
+ * ones, counted and never touched.
  */
 static inline bool cleanup_plan_is_empty(const cleanup_plan_t *plan) {
     return plan->files.count == 0 && plan->directories.count == 0;
@@ -143,15 +155,17 @@ static inline bool cleanup_plan_is_empty(const cleanup_plan_t *plan) {
  * How many items the plan classified — both kinds, every bucket
  *
  * Distinct from cleanup_plan_is_empty, which counts only *work*: a plan of nothing
- * but spared items is empty there and non-zero here. Apply reads this beside
- * deploy_plan_item_count to tell a path filter that named nothing dotta manages
- * from one whose paths are all skipped — an orphan the filter found is a match,
- * whatever its verdict.
+ * but spared or overridden items is empty there and non-zero here. Apply reads
+ * this beside deploy_plan_item_count to tell a path filter that named nothing
+ * dotta manages from one whose paths are all skipped or overridden — an orphan
+ * the filter found is a match, whatever its verdict, and so is a copy no verdict
+ * decides.
  *
  * The bucket set lives here so a consumer never has to enumerate it.
  */
 static inline size_t cleanup_plan_item_count(const cleanup_plan_t *plan) {
-    return plan->files.count + plan->directories.count + plan->excluded.count;
+    return plan->files.count + plan->directories.count +
+           plan->excluded.count + plan->overridden.count;
 }
 
 /* ── Verdicts ─────────────────────────────────────────────────────── */
@@ -303,6 +317,10 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *
  * PRUNABLE is the one verdict status cannot finish — the remainder and the reach
  * are preflight's, from the disk — and its directory hint says so.
+ *
+ * Never asked of an overridden copy: the plan counts one apart and decides nothing
+ * of it (cleanup_plan_t), and status lists it in a section of its own. The table
+ * has no row for one, and would read it as any orphan of its kind.
  */
 typedef enum {
     CLEANUP_ABSENT,      /* Not on disk at load → record retires, no filesystem effect */
@@ -373,7 +391,9 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  *               path filter) whose state is ORPHANED — transient by the same
  *               rule: scope decides reach, never verdict, so an unfiltered run
  *               would decide it and a filtered run must not change its parent's
- *               fate
+ *               fate; an overridden copy, in scope or not, which no verdict decides
+ *               — transient by its own: it is left for the row standing over
+ *               it, and the directory is not let go around a copy dotta keeps
  *   permanent   an entry this run releases (released_files, released_dirs
  *               beneath); an orphan the plan does not reach whose state is
  *               RELEASED; an active path — the view has a row beneath the
@@ -382,8 +402,9 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  *               else — the user's
  *
  *   nothing but gone left      prunable
- *   a skipped entry left       skipped   — transient: update, --force, or the
- *                                          run that reaches it
+ *   a skipped entry left       skipped   — transient: update, --force, the run
+ *                                          that reaches it, or the row standing
+ *                                          over an overridden copy
  *   a permanent entry left     released  — nothing dotta will ever do empties it
  *
  * That is what the prune arrives at by acting, read off the plan here in one

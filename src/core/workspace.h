@@ -109,7 +109,8 @@ typedef enum {
     WORKSPACE_STATE_ORPHANED,      /* A record whose path the view lacks */
     WORKSPACE_STATE_UNTRACKED,     /* Beneath a tracked directory, in neither the view nor the record */
     WORKSPACE_STATE_UNSCANNED,     /* Where the scan could not look: nothing at or beneath it is offered */
-    WORKSPACE_STATE_RELEASED       /* An orphan dotta lets go: the path stays, the record retires */
+    WORKSPACE_STATE_RELEASED,      /* An orphan dotta lets go: the path stays, the record retires */
+    WORKSPACE_STATE_OVERRIDDEN     /* An orphan its profile still claims: the path and the record stay */
 } workspace_state_t;
 
 /**
@@ -372,8 +373,9 @@ typedef enum {
  * One invariant, established at every fold and trusted downstream: `fault !=
  * NONE` iff the item carries DIVERGENCE_UNVERIFIED. Only DEPLOYED (both kinds)
  * and ORPHANED items can carry one, and UNSCANNED always does — RELEASED is born
- * of answers, never of a failed look (three that are not looks, and the relocation
- * read's inode compare, whose failure leaves the orphan where it stood), and
+ * of answers, never of a failed look (the record's ownership, Git's, a look that
+ * found another kind, and the entry's compare, which a look that failed leaves
+ * unasked), OVERRIDDEN of the view's, which asks nothing of the look, and
  * UNDEPLOYED, DELETED and UNTRACKED of looks that answered. And only a file row
  * can be LOCKED: a directory seals no content, so every fault it can carry comes
  * from an errno, and the scan reads no content at all.
@@ -432,12 +434,13 @@ typedef enum {
  * took — and assumes present either way (absence is never inferred from a failure
  * to look, and never from a look not taken). What it means is said beside it:
  * DIVERGENCE_UNVERIFIED where a look failed, a displaced class where none was
- * taken, and on a released record neither — letting a copy go needs no measurement.
- * An orphan on a load that took no look at the orphans keeps UNKNOWN, and no
- * reader is lent it — nor, whatever its look, one the load did not analyze: the
- * diverged items (workspace_diverged) and workspace_find lend an orphan only
- * where the load analyzed the orphans. Presence is
- * therefore `occupant != FS_OCCUPANT_NONE` — the workspace's rule, and cleanup's;
+ * taken, and on a released or an overridden record neither — letting a copy go
+ * needs no measurement, and neither does leaving it for the row standing over
+ * it. An orphan on a load that took no look at the orphans keeps UNKNOWN, and
+ * no reader is lent it — nor, whatever its look, one the load did not analyze:
+ * the diverged items (workspace_diverged) and workspace_find lend an orphan only
+ * where the load analyzed the orphans. Presence is therefore
+ * `occupant != FS_OCCUPANT_NONE` — the workspace's rule, and cleanup's;
  * deploy judges by the stricter one (deploy_occupant_present: UNKNOWN is not
  * present, since deploy judges nothing it could not see), and a new consumer
  * picks one of the two and says which. The divergence bits are the verdict over
@@ -853,15 +856,15 @@ typedef struct {
  * Deployed items only. Every other state routes trivially by the state itself
  * (DELETED → update's, UNDEPLOYED → apply's, UNTRACKED → update --include-new's,
  * UNSCANNED → no verb's, since the scan could not look, ORPHANED / RELEASED →
- * cleanup_verdict's) and is not drift-prone. DELETED earns that triviality
- * upstream, three times: classify_absent reads absence as a deletion only for a
- * claim that asserts its path, so an ancestor claim never arrives here; only
- * over a record of the claim's own kind, so a path where dotta only ever saw
- * another kind of node never does either; and only where a look was taken, so a
- * path whose absence the squatter above it caused is a displaced DEPLOYED item
- * instead (workspace_displaced_t). Every DELETED item can therefore bear update's
- * verb. Callers keep their state switch and read this table for the DEPLOYED
- * arm alone.
+ * cleanup_verdict's, OVERRIDDEN → no verb's, the row standing over it carrying
+ * the work) and is not drift-prone. DELETED earns that triviality upstream, three
+ * times: classify_absent reads absence as a deletion only for a claim that asserts
+ * its path, so an ancestor claim never arrives here; only over a record of the
+ * claim's own kind, so a path where dotta only ever saw another kind of node
+ * never does either; and only where a look was taken, so a path whose absence
+ * the squatter above it caused is a displaced DEPLOYED item instead
+ * (workspace_displaced_t). Every DELETED item can therefore bear update's verb.
+ * Callers keep their state switch and read this table for the DEPLOYED arm alone.
  */
 typedef enum {
     WORKSPACE_ROUTE_CLEAN,              /* No divergence, no reassignment */
@@ -991,11 +994,12 @@ typedef struct workspace workspace_t;
  * reader that may not exist:
  *
  * - analyze_orphans — every record whose path the view lacks, either kind:
- *   presence, ownership, divergence and Git authority, at one ref lookup and a
- *   lazy tree load per profile with present, owned orphans, the sheet beside it
- *   where a directory orphan needs one, and one tree lookup per such orphan.
- *   Read by core/cleanup.c cleanup_plan_build (the settle, apply's cleanup) and
- *   cmds/status.c status_print_workspace (Issues).
+ *   presence, ownership, divergence, whether its profile still claims the path,
+ *   and Git authority, at one ref lookup and a lazy tree load per profile with
+ *   present, owned orphans, the sheet beside it where a directory orphan needs
+ *   one, and one tree lookup per such orphan. Read by core/cleanup.c
+ *   cleanup_plan_build (the settle, apply's cleanup) and cmds/status.c
+ *   status_print_workspace (Issues, and Overridden copies).
  * - analyze_untracked — every regular file and symlink beneath a tracked directory
  *   that no enabled profile claims and dotta has no record of, at a readdir walk
  *   per tracked directory, and every place it could not look (UNSCANNED). Read
@@ -1122,10 +1126,11 @@ error_t workspace_load(
  * profile (workspace_reassigned: a record of another kind is a node the clean
  * row's look found gone). An active path with none of these is not among them,
  * and is lent among the active items all the same (workspace_active, and its
- * kind's: workspace_directories, workspace_files). So a load is clean iff this
- * is empty, and clean over a scope iff it holds none of the scope's items:
- * cmds/status.c status_print_workspace reads its status line that way, filtered
- * or not.
+ * kind's: workspace_directories, workspace_files). So a load holding none is
+ * clean, and one is clean over a scope iff it holds none of the scope's items
+ * but overridden copies — each listed, and no verb's: the row standing over it
+ * carries the work. cmds/status.c status_print_workspace reads its status line
+ * that way, filtered or not.
  *
  * @param ws Workspace (NULL returns an empty slice)
  * @return Borrowed slice over the diverged items
@@ -1278,13 +1283,13 @@ void workspace_buckets_fill(workspace_buckets_t *buckets);
  * item is valid for the workspace's lifetime.
  *
  * For a reader walking the disk, which meets a path cold: core/cleanup.c
- * vouch_entry, whose emptiness walk meets an entry outside the plan and asks
- * whether it is an orphan; core/deploy.c holdable_directory, whose landing climb
- * meets a present ancestor and asks whether the view names a directory there.
- * Each asks its own question of the item: an orphan carries no row, and an active
- * item is never ORPHANED. A reader holding an item — the active items, the diverged
- * items, an engine's bucket, a fate — asks nothing by path. A reader not on this
- * list is a bug.
+ * vouch_entry, whose emptiness walk meets an entry no verdict decided and asks
+ * whether it is an orphan or an overridden copy; core/deploy.c holdable_directory,
+ * whose landing climb meets a present ancestor and asks whether the view names
+ * a directory there. Each asks its own question of the item: an orphan carries
+ * no row, and an active item is never ORPHANED or OVERRIDDEN. A reader holding
+ * an item — the active items, the diverged items, an engine's bucket, a fate —
+ * asks nothing by path. A reader not on this list is a bug.
  *
  * @param ws Workspace (NULL returns NULL)
  * @param filesystem_path Path to look up (NULL returns NULL)

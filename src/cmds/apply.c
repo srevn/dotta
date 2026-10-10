@@ -1401,9 +1401,10 @@ static void apply_print_cleanup_preview(
          * left behind is not the event a file left behind is — whether the
          * workspace released it or it holds something this run will never remove
          * (cleanup.h's classes). A skipped directory holds something the run
-         * skips, could not be verified (status tags it [unverified]), sits under
-         * a moved home ([relocated] — the skip --force lifts), or sits
-         * under a parent that refuses the run (the needing-root block names it);
+         * skips or a copy left for the row standing over it, could not be verified
+         * (status tags it [unverified]), sits under a moved home ([relocated] —
+         * the skip --force lifts), or sits under a parent that refuses the run
+         * (the needing-root block names it);
          * the slash says "left alone this run" for each. */
         if (verdicts->released_dirs.count > 0) {
             output_print(
@@ -2241,7 +2242,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      *   full sync (no filter)   every orphan converges — a disabled
      *                           profile's files, and files deleted from Git under
-     *                           a profile that is still enabled
+     *                           a profile that is still enabled — but a copy
+     *                           left for the row standing over it, which the
+     *                           plan counts and never decides
      *   profile scoped (-p)     only that profile's orphans; the rest wait
      *                           for an unfiltered apply
      *   path scoped             only the orphans the filter names — the

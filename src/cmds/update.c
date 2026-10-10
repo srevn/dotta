@@ -370,9 +370,10 @@ static void update_partition(
             case WORKSPACE_STATE_UNDEPLOYED:
             case WORKSPACE_STATE_ORPHANED:
             case WORKSPACE_STATE_RELEASED:
-                /* Another verb's: not deployed yet (apply's), or a record the
-                 * view lacks (cleanup prunes or releases it; never update's to
-                 * commit) */
+            case WORKSPACE_STATE_OVERRIDDEN:
+                /* Another verb's, or none: not deployed yet (apply's), a record
+                 * the view lacks (cleanup prunes or releases it), or a copy left
+                 * for the row standing over it — never update's to commit */
                 continue;
         }
 

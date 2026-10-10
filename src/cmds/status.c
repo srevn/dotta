@@ -419,6 +419,8 @@ static void status_print_manifest(
  * the filter hides is counted beneath the sections.
  *
  * @param ws Workspace (must not be NULL, borrowed from caller)
+ * @param manifest The view the workspace was loaded over (must not be NULL; an
+ *                 overridden copy's line names what stands over it, off the view)
  * @param scope Operation scope (must not be NULL; its filter dimension drives
  *              display)
  * @param config Configuration (must not be NULL; its switch words the key's remedy)
@@ -426,6 +428,7 @@ static void status_print_manifest(
  */
 static void status_print_workspace(
     const workspace_t *ws,
+    const manifest_t *manifest,
     const scope_t *scope,
     const config_t *config,
     output_t *out
@@ -440,21 +443,24 @@ static void status_print_workspace(
      * filtered profile that reads Clean still counts the divergence it hides. */
     if (diverged.count == 0 && !output_is_verbose(out)) return;
 
-    /* The status line, one fold whatever the filter: the diverged items shown,
-     * those of them dotta could not verify, and those the filter hides. A scope
-     * is Clean iff none is shown. Invalid is reserved for what the analysis could
-     * not establish: an item carrying DIVERGENCE_UNVERIFIED (an unreadable path,
-     * a comparison that could not run, a Git probe that did not answer) is one
-     * no verb resolves by default — apply skips it and the user must look. Anything
-     * else shown is Dirty: work some verb takes, an orphan included — pending
-     * work, not an invalid workspace. With no filter every item is shown and
-     * none is hidden. */
+    /* The status line, one fold whatever the filter: the diverged items it shows,
+     * those of them dotta could not verify, and those the filter hides. It shows
+     * every item in scope but an overridden copy, which a section of its own
+     * lists and which asks nothing of the user — no verb takes it, the row standing
+     * over it carrying the work — so a filter that hides that row reads Clean
+     * over the copy. A scope is Clean iff the line shows none. Invalid is reserved
+     * for what the analysis could not establish: an item carrying
+     * DIVERGENCE_UNVERIFIED (an unreadable path, a comparison that could not
+     * run, a Git probe that did not answer) is one no verb resolves by default
+     * — apply skips it and the user must look. Anything else shown is Dirty:
+     * work some verb takes, an orphan included — pending work, not an invalid
+     * workspace. With no filter every item is in scope and none is hidden. */
     size_t shown = 0;
     size_t unverified = 0;
     size_t hidden = 0;
 
-    /* The sections, in the order they print: each item shown is added to its
-     * section's bucket as the walk decides it, and the nine are filled once the
+    /* The sections, in the order they print: each item in scope is added to its
+     * section's bucket as the walk decides it, and the ten are filled once the
      * walk is done (core/workspace.h workspace_buckets_t). They are the printer's
      * own, in a frame it frees once they are printed — nothing here outlives
      * the call (include/runtime.h "Memory"). */
@@ -469,6 +475,7 @@ static void status_print_workspace(
     workspace_items_t reassigned = { 0 };
     workspace_items_t undeployed = { 0 };
     workspace_items_t new_files = { 0 };
+    workspace_items_t overridden = { 0 };
     workspace_items_t orphaned = { 0 };
 
     for (size_t i = 0; i < diverged.count; i++) {
@@ -482,11 +489,15 @@ static void status_print_workspace(
             continue;
         }
 
-        /* The fold counts every item shown, never a section's size: an unverified
-         * orphan lists under Issues and still makes the line Invalid */
-        shown++;
-        if (item->divergence & DIVERGENCE_UNVERIFIED) {
-            unverified++;
+        /* The fold counts every item the line shows, never a section's size: an
+         * unverified orphan lists under Issues and still makes the line Invalid,
+         * and an overridden copy lists in a section of its own and leaves the
+         * line as it finds it */
+        if (item->state != WORKSPACE_STATE_OVERRIDDEN) {
+            shown++;
+            if (item->divergence & DIVERGENCE_UNVERIFIED) {
+                unverified++;
+            }
         }
 
         switch (item->state) {
@@ -567,6 +578,10 @@ static void status_print_workspace(
             case WORKSPACE_STATE_ORPHANED:
             case WORKSPACE_STATE_RELEASED:
                 workspace_buckets_add(buckets, item, &orphaned);
+                break;
+
+            case WORKSPACE_STATE_OVERRIDDEN:
+                workspace_buckets_add(buckets, item, &overridden);
                 break;
         }
     }
@@ -989,7 +1004,60 @@ static void status_print_workspace(
         output_list_free(list);
     }
 
-    /* Section 9: Issues (orphaned) */
+    /* Section 9: Overridden copies — orphans whose profile still claims the path,
+     * each left for the row standing over it: no verb takes one, so the header
+     * names none, and the line counts none. No row stands at such a copy's path,
+     * so what leaves its claim standing nowhere stands above it: the blob each
+     * line names (core/manifest.h manifest_blob_above), the profile's own or
+     * another's, read off the view, since the tags read the item alone — and
+     * the metadata, carrying its path, is sized for one. */
+    if (overridden.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Overridden copies",
+            "another claim stands over each, a file or link above it; left where they stand"
+        );
+
+        for (size_t i = 0; i < overridden.count; i++) {
+            const workspace_item_t *item = overridden.entries[i];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256 + PATH_MAX];
+            char path[PATH_MAX + 2];
+
+            if (workspace_item_tags(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                const manifest_row_t *above = manifest_blob_above(
+                    manifest, item->filesystem_path
+                );
+                size_t used = strlen(metadata);
+                if (strcmp(above->profile, item->profile) == 0) {
+                    snprintf(
+                        metadata + used, sizeof(metadata) - used, ", beneath its own %s",
+                        above->filesystem_path
+                    );
+                } else {
+                    snprintf(
+                        metadata + used, sizeof(metadata) - used, ", beneath %s's %s",
+                        above->profile, above->filesystem_path
+                    );
+                }
+                snprintf(
+                    path, sizeof(path), "%s%s", item->filesystem_path,
+                    path_kind_suffix(item->item_kind)
+                );
+                output_list_add(
+                    list, tags, tag_count, color, path, metadata
+                );
+            }
+        }
+
+        output_list_render(list);
+        output_list_free(list);
+    }
+
+    /* Section 10: Issues (orphaned) */
     if (orphaned.count > 0) {
         output_list_t *list = output_list_create(
             out, "Issues",
@@ -1574,7 +1642,7 @@ error_t cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
      * `dotta apply -p work` behavior.
      */
     if (opts->show_local) {
-        status_print_workspace(ws, scope, config, out);
+        status_print_workspace(ws, manifest, scope, config, out);
     }
 
     /* Show remote sync status (if requested): no remote configured is no section,

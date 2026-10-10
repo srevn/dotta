@@ -54,12 +54,11 @@ static void status_print_profiles(
      * not place, onto their profile's line (a count, the paths under -v), the
      * repair a legend line under the block; its sibling, the names a profile
      * holds for a path it also names otherwise, annotated and listed the same
-     * way; and the directory claims a profile's own tree contradicts, the same
-     * way again, each beside the file that contradicts it — the three say a profile
-     * carries more than it projects, for three different reasons. And the enabled
-     * profiles the build found no branch for, a line each beneath the rest: a
-     * profile the state enables is not left out of the block that lists the
-     * enabled. */
+     * way; and the claims a profile's own claims contradict, the same way again,
+     * each beside what leaves it no room — the three say a profile carries more
+     * than it projects, for three different reasons. And the enabled profiles
+     * the build found no branch for, a line each beneath the rest: a profile
+     * the state enables is not left out of the block that lists the enabled. */
     manifest_unbound_t unbound = manifest_unbound(view);
     manifest_unkept_t unkept = manifest_unkept(view);
     manifest_contradicted_t contradicted = manifest_contradicted(view);
@@ -135,8 +134,9 @@ static void status_print_profiles(
         }
         if (unused > 0) unused_shown = true;
 
-        /* Nor are the directory claims its own tree contradicts: a file of the
-         * profile stands at or above each, so the view has no row for them. */
+        /* Nor are the claims its own claims contradict: a file of the profile
+         * stands at or above each, or claims of its own beneath it take its place,
+         * so the view has no row for them. */
         size_t voided = 0;
         for (size_t j = 0; j < contradicted.count; j++) {
             if (strcmp(contradicted.entries[j].profile, profile) == 0) voided++;
@@ -174,8 +174,8 @@ static void status_print_profiles(
 
         if (voided > 0) {
             output_print(
-                out, OUTPUT_NORMAL, "  {yellow}(%zu contradicted director%s){reset}",
-                voided, voided == 1 ? "y" : "ies"
+                out, OUTPUT_NORMAL, "  {yellow}(%zu contradicted path%s){reset}",
+                voided, voided == 1 ? "" : "s"
             );
         }
 
@@ -219,19 +219,29 @@ static void status_print_profiles(
                 );
             }
 
-            /* The file is what a repair chooses against, and where it stands
-             * decides which verb keeps it: at the claim's own path, or above it
-             * (the legend below). Both by storage path: the shape is a relation
-             * of the two names, and the remedies take names. */
+            /* What leaves the claim no room is what a repair chooses against,
+             * and where it stands decides which verb keeps which (the legend
+             * below): a directory taking the claim's place, or a file at the
+             * claim's own path or above it. By storage path: the shape is a
+             * relation of the two names, and the remedies take names. */
             for (size_t j = 0; j < contradicted.count; j++) {
                 const manifest_contradicted_claim_t *claim = &contradicted.entries[j];
                 if (strcmp(claim->profile, profile) != 0) continue;
-                output_print(
-                    out, OUTPUT_NORMAL, "\n    contradicted: %s/ (%s the file %s)",
-                    claim->storage_path,
-                    strcmp(claim->storage_path, claim->blob_above) == 0
-                    ? "at" : "beneath", claim->blob_above
-                );
+
+                if (claim->place) {
+                    output_print(
+                        out, OUTPUT_NORMAL,
+                        "\n    contradicted: %s%s (the directory %s takes its place)",
+                        claim->storage_path, path_kind_suffix(claim->kind), claim->place
+                    );
+                } else {
+                    output_print(
+                        out, OUTPUT_NORMAL, "\n    contradicted: %s%s (%s the file %s)",
+                        claim->storage_path, path_kind_suffix(claim->kind),
+                        strcmp(claim->storage_path, claim->blob_above) == 0
+                        ? "at" : "beneath", claim->blob_above
+                    );
+                }
             }
         }
 
@@ -298,10 +308,11 @@ static void status_print_profiles(
              * own copy, which apply replaces with the directory — unasked where
              * the copy is untouched, under --force where it was edited (the frame
              * across kinds, core/workspace.h workspace_displaced_t). The file
-             * is kept by taking the directory: by its own path where it lies
-             * beneath the file — a path that names no blob — and, where the two
-             * are one path, which would name the file, by capturing the file
-             * over it. */
+             * is kept by taking what leaves it no room: a claim beneath it by
+             * its own path, which names that claim and never the file above it;
+             * the directory taking its place by its name, which takes every claim
+             * of the profile beneath that name; and, where the two are one path,
+             * which would name the file, by capturing the file over it. */
             output_hintline(
                 out, OUTPUT_NORMAL,
                 "  contradicted  - 'dotta remove <profile> <file>' keeps the directory, "
@@ -309,8 +320,8 @@ static void status_print_profiles(
             );
             output_hintline(
                 out, OUTPUT_NORMAL,
-                "                  'dotta remove <profile> <directory>' keeps the file "
-                "the directory is beneath"
+                "                  'dotta remove <profile> <path>' keeps the file the path "
+                "is beneath, or whose place it takes"
             );
             output_hintline(
                 out, OUTPUT_NORMAL,

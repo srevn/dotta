@@ -2075,20 +2075,24 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* The third: the directory claims a profile's own tree contradicts. A file
-     * of the same profile stands at or above each, so no row stands for them
-     * and no bucket below meets one. Which verb keeps which turns on whether
-     * the file stands at the claim's own path or above it, which only the pair
-     * shows: status -v pairs them, and its legend keys each remedy to the pair's
-     * shape, where one line here would have to be both. */
+    /* The third: the claims a profile's own claims leave no room — in its tree,
+     * a directory claim a file of the same profile stands at or above; on this
+     * machine, where two of its labels place one chain, a claim beneath its own
+     * standing file, or its own file whose place the claims beneath it take. No
+     * row stands for any of them, so nothing below lands one. Which verb keeps
+     * which turns on the pair's shape, which only the pair shows: status -v pairs
+     * them, and its legend keys each remedy to the shape, where one line here
+     * would have to be all three. */
     {
         manifest_contradicted_t contradicted = manifest_contradicted(manifest);
         if (contradicted.count > 0) {
-            output_section(out, OUTPUT_NORMAL, "Contradicted directories");
+            output_section(out, OUTPUT_NORMAL, "Contradicted paths");
             for (size_t i = 0; i < contradicted.count && i < LIST_LIMIT; i++) {
                 output_print(
-                    out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s/ {dim}(from %s){reset}\n",
-                    contradicted.entries[i].storage_path, contradicted.entries[i].profile
+                    out, OUTPUT_NORMAL, "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                    contradicted.entries[i].storage_path,
+                    path_kind_suffix(contradicted.entries[i].kind),
+                    contradicted.entries[i].profile
                 );
             }
             if (contradicted.count > LIST_LIMIT) {
@@ -2099,12 +2103,13 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
             output_info(
                 out, OUTPUT_NORMAL,
-                "  A file of the same profile stands at or above each, so nothing lands them."
+                "  Another claim of the same profile leaves each no room, so nothing "
+                "lands them."
             );
             output_info(
                 out, OUTPUT_NORMAL,
-                "  'dotta status -v' pairs each with its file, and says how to keep one or "
-                "the other"
+                "  'dotta status -v' pairs each with its file or directory, and says how to "
+                "keep one or the other"
             );
         }
     }

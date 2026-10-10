@@ -26,13 +26,14 @@
  * profile's claims are decided first, and each profile's in its own precedence,
  * which decides where its own blob and its own claims beneath it meet under two
  * labels: the blob stands where its name is the one the profile would give the
- * place fresh, and the claims beneath it where it is not. A derived claim fills
- * a path no row holds and no standing blob stands above, the lowest profile's
- * first. And where a blob lost to the claims beneath it and no derived claim
- * fills its place, the **layer's rung** stands there: the directory those claims
- * need, a row no contribution holds. So no row stands strictly beneath a standing
- * blob, and a claim that stands nowhere has a row at its path or a standing blob
- * above it.
+ * place fresh, and the claims beneath it where it is not — the side that stands
+ * nowhere contradicted by the other, a health fact, where another profile's claim
+ * standing over it is layering. A derived claim fills a path no row holds and
+ * no standing blob stands above, the lowest profile's first. And where a blob
+ * lost to the claims beneath it and no derived claim fills its place, the **layer's
+ * rung** stands there: the directory those claims need, a row no contribution
+ * holds. So no row stands strictly beneath a standing blob, and a claim that
+ * stands nowhere has a row at its path or a standing blob above it.
  *
  * Everything that asks *what stands where* reads the index — manifest_lookup,
  * manifest_rows, manifest_lookup_storage, manifest_holder, manifest_diff:
@@ -58,23 +59,25 @@
  * claim this machine cannot place stands nowhere: manifest_unbound, the repair
  * a `--target`. A claim its profile did not **keep** has one, and another name
  * of the same profile is kept there: manifest_unkept, the repair a `remove`. A
- * directory claim the profile's own tree **contradicts** — a blob of the same
- * profile at its name or at a rung above it — stands nowhere though the profile
- * holds it: manifest_contradicted, the repair a removal of one of the two, or a
- * re-capture of the file where both are one path. All three are claims the profile
- * holds and the view has no row for, for three different reasons; a claim another
- * stands over — at its path, above it, or beneath it where it is a blob — is
- * none of them: it is **overridden**, the normal shape of layering, and no health
- * question at all. A name the view did not keep is in the profile and in no row,
- * so nothing keyed by the view meets it: no filter, no record join, no divergence
- * screen, no deploy. The verbs that read a profile directly serve it as readily
- * as any other name — `dotta list -p P` lists it, `dotta show -p P` prints its
- * bytes — and none of them says it is unused, which is what the health channel
- * is for; `remove`, which reads the profile too, is the one verb that takes it
- * away. And one thing a profile can fail to be: here. An enabled profile Git
- * holds no branch for is **missing** and contributes nothing: manifest_missing,
- * the channel's fourth slice, the repair a disable, or a fetch that brings the
- * branch back.
+ * claim the profile's own claims **contradict** stands nowhere though the profile
+ * holds it — in its tree, a directory claim a blob of the same profile stands
+ * at or above; on this machine, where two of its labels place one chain, a claim
+ * beneath a standing blob of its own, or a blob of its own whose place its claims
+ * beneath take: manifest_contradicted, the repair a removal of one of the two,
+ * or a re-capture of the file where both are one path. All three are claims the
+ * profile holds and the view has no row for, for three different reasons; a claim
+ * another profile's claim stands over — at its path, above it, or beneath it
+ * where it is a blob — is none of them: it is **overridden**, the normal shape
+ * of layering, and no health question at all. A name the view did not keep is
+ * in the profile and in no row, so nothing keyed by the view meets it: no filter,
+ * no record join, no divergence screen, no deploy. The verbs that read a profile
+ * directly serve it as readily as any other name — `dotta list -p P` lists it,
+ * `dotta show -p P` prints its bytes — and none of them says it is unused, which
+ * is what the health channel is for; `remove`, which reads the profile too, is
+ * the one verb that takes it away. And one thing a profile can fail to be: here.
+ * An enabled profile Git holds no branch for is **missing** and contributes
+ * nothing: manifest_missing, the channel's fourth slice, the repair a disable,
+ * or a fetch that brings the branch back.
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_profile walks one profile
@@ -101,10 +104,10 @@
  *     (by filesystem path, O(1)), manifest_lookup_storage (by claim — a storage
  *     path under one profile, linear), manifest_holder (the one row holding a
  *     name, or a refusal naming each), manifest_lookup_claim, manifest_name,
- *     manifest_claim_name, manifest_holds_name and manifest_holds_row (one
- *     profile's own contribution, whatever stands at the path); and manifest_diff,
- *     the per-profile delta between two views that the scope-changing verbs and
- *     sync print their receipts from.
+ *     manifest_claim_name, manifest_holds_name, manifest_holds_row and
+ *     manifest_moved_place (one profile's own contribution, whatever stands at
+ *     the path); and manifest_diff, the per-profile delta between two views that
+ *     the scope-changing verbs and sync print their receipts from.
  *
  * Core Principles:
  *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
@@ -361,12 +364,13 @@ typedef struct manifest manifest_t;
  * claims, the later (higher) profile's first and each profile's in its own
  * precedence, a claim standing at a path no claim before it stands at unless a
  * standing blob stands above it or, the claim a blob, standing claims beneath
- * it need its place as a directory; then the derived claims, each filling a path
- * no row holds and no standing blob stands above, the earlier profile's first;
- * and last the layer's rung at each place a blob lost that no derived claim fills
- * — so an explicit claim outranks a derived one within a profile as across them,
- * and the view holds one row per path. A profile without metadata.json contributes
- * no directories and is skipped, not an error.
+ * it need its place as a directory — a contradiction where either is its own
+ * profile's (manifest_contradicted); then the derived claims, each filling a
+ * path no row holds and no standing blob stands above, the earlier profile's
+ * first; and last the layer's rung at each place a blob lost that no derived
+ * claim fills — so an explicit claim outranks a derived one within a profile as
+ * across them, and the view holds one row per path. A profile without metadata.json
+ * contributes no directories and is skipped, not an error.
  *
  * Row order is unspecified; consumers that need parent-before-child sort their
  * own pointer arrays (the workspace does). The oracle is a set. What order there
@@ -680,10 +684,11 @@ typedef struct {
  * one, a verb admitting only a name the profile already holds
  * (manifest_holds_name).
  *
- * Readers: the health channel's own listing (cmds/status.c), and the completed
- * selection's refusal in add (cmds/add.c) — which reads the slice as the whole
- * of what its claims can move, since no group can grow under an uncommitted claim
- * and only which member is kept can change.
+ * Readers: the health channel's own listing (cmds/status.c status_print_profiles),
+ * and the completed selection's refusal in add (cmds/add.c add_refuse_moves) —
+ * which reads the slice as every name its claims can move, since no group can
+ * grow under an uncommitted claim and only which member is kept can change; which
+ * side of a place they move is another question (manifest_moved_place).
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded names, valid for the arena's lifetime
@@ -691,22 +696,38 @@ typedef struct {
 manifest_unkept_t manifest_unkept(const manifest_t *manifest);
 
 /**
- * One directory claim a profile's own tree contradicts: a tracked claim of its
- * sheet with a blob of the same profile at its name or at a rung above it
- * (core/profiles.h profile_contradicted). The tree is the content authority, so
- * the file stands and the claim nowhere — in the profile and in no row, the third
- * way a claim fails to become one. Tracked claims alone: a derived one is the
- * way to a tracked one, recorded here, or to none, which the profile's next settle
- * prunes.
+ * One claim a profile's own claims leave no room: another claim of the same profile
+ * stands, so this one stands nowhere — in the profile and in no row, the third
+ * way a claim fails to become one. Two scopes, one word. In the profile's
+ * documents, a tracked directory claim with a blob of the same profile at its
+ * name or at a rung above it (core/profiles.h profile_contradicted): the tree
+ * is the content authority, so the blob stands and the claim nowhere. On this
+ * machine, where two of its labels place one chain (core/manifest.c
+ * manifest_layer): a claim beneath a standing blob of its own, or a blob of its
+ * own whose place its claims beneath take — which side stands decided by the
+ * name the profile would give the place fresh. Explicit claims alone: a derived
+ * one is the way to a claim, recorded here, or to none, which the profile's next
+ * settle prunes.
  *
- * The screen says **contradicted**, the decode's word, and names the file — the
- * two things a repair chooses between. Strings are the build arena's, same lifetime
- * as the rows.
+ * What leaves the claim no room is one of two, by where it stands, and the other
+ * is NULL. `blob_above` is a blob at the claim's name or at a rung above it —
+ * at its name in the documents alone, two names at one path on this machine being
+ * manifest_unkept's. `place` is the directory taking a blob's place, named as
+ * the profile names the place fresh — the spelling its claims beneath compose
+ * under, so a removal by that name takes them. A binding inside the place, or a
+ * third label, puts them under another spelling, and the name then holds none
+ * of them: the profile's listing names what does.
+ *
+ * The screen says **contradicted**, the decode's word, for both scopes, and names
+ * what leaves the claim no room — the two things a repair chooses between. Strings
+ * are the build arena's, same lifetime as the rows.
  */
 typedef struct {
     const char *profile;
-    const char *storage_path;      /* the directory claim the tree contradicts */
-    const char *blob_above;        /* the blob at its name or at a rung above it */
+    const char *storage_path;      /* the claim that stands nowhere */
+    path_kind_t kind;              /* its kind (a screen prints it with a suffix) */
+    const char *blob_above;        /* the blob at its name or at a rung above it, or NULL */
+    const char *place;             /* the directory taking its place, by name, or NULL */
 } manifest_contradicted_claim_t;
 
 /**
@@ -718,19 +739,27 @@ typedef struct {
 } manifest_contradicted_t;
 
 /**
- * The tracked directory claims the profiles' own trees contradict, grouped by
- * profile
+ * The claims the profiles' own claims leave no room, in their documents and on
+ * this machine
  *
- * Pure value return — no allocation, no error path. Entries arrive in build order,
- * one profile's contiguous, each in key order; each (profile, storage path) once,
- * the sheet holding one directory claim a key. Empty on every build whose profiles
- * contradict none of their own claims — the common case, costing the build a
- * second classification of each directory claim.
+ * Pure value return — no allocation, no error path. The documents' entries come
+ * first, in build order, one profile's contiguous, each in key order; then this
+ * machine's, in the layer's order, one profile's contiguous, the highest first,
+ * each in the order its precedence decides its claims (core/manifest.c
+ * manifest_layer). So a profile can appear once a scope, and no reader keys on
+ * the order: status filters it per profile, apply and sync list it whole. Each
+ * (profile, storage path) once: the sheet holds one directory claim a key, a
+ * claim its tree contradicts is one the walk never shows, and the layer decides
+ * each claim the walk shows once. Empty on every build whose profiles contradict
+ * none of their own claims — the common case, costing the build a second
+ * classification of each directory claim, and the layer one comparison where a
+ * blob and a claim leave each other no room.
  *
  * Readers: the health channel's listing (cmds/status.c status_print_profiles),
  * apply's section (cmds/apply.c cmd_apply) and sync's after its Git phase
  * (cmds/sync.c cmd_sync); and add's own remedy over its one profile's view, a
- * file it captures at a claim's own name taking it (cmds/add.c cmd_add).
+ * file it captures at a claim's own name taking it — a documents' entry, this
+ * machine's never meeting its blob at one name (cmds/add.c cmd_add).
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded claims, valid for the arena's lifetime
@@ -1252,6 +1281,43 @@ const char *manifest_claim_name(
     const manifest_t *manifest,
     const char *profile,
     const char *filesystem_path
+);
+
+/**
+ * The first of `profile`'s places whose side a command's claims would move —
+ * its blob, or NULL
+ *
+ * A place is a blob of the profile's own with explicit claims of its own beneath
+ * it under another label, and the name the profile would give it fresh decides
+ * which of the two stands: the blob where the claim its settle keeps there is
+ * that name, the claims beneath it where it is not (core/manifest.c
+ * manifest_layer). A directory claim this command admits above the place changes
+ * what that name composes (`pending`, as manifest_name reads it), and with it
+ * the side the next build stands — a file where apply made a directory, or the
+ * reverse, which no capture asked for. Each place is asked alone, the ascent
+ * climbing past a blob.
+ *
+ * The places are the profile's as committed. A capture moves none of them: beneath
+ * a standing blob it is refused (cmds/add.c cmd_add, through manifest_blob_above),
+ * beneath a lost one it composes under the place's fresh name, and at a place's
+ * path it names the blob, or is refused by kind where the directory stands. A
+ * place a capture makes — a blob over claims of its own under a root inside it
+ * — is decided when it arrives, over the capture's own bytes.
+ *
+ * Reader: the completed selection's refusal in add (cmds/add.c add_refuse_moves).
+ *
+ * @param arena Arena the scratch lives in (must not be NULL)
+ * @param manifest Manifest (must not be NULL)
+ * @param profile The asker (NULL holds no place)
+ * @param pending The asking profile's uncommitted claims, keyed by filesystem
+ *                path (manifest_claim_t), or NULL
+ * @return The place's blob as the view holds it, or NULL where none moves
+ */
+const manifest_row_t *manifest_moved_place(
+    arena_t *arena,
+    const manifest_t *manifest,
+    const char *profile,
+    const hashmap_t *pending
 );
 
 /**

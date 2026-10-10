@@ -15,11 +15,12 @@
  *     its derived claims apart from them — and manifest_layer then runs precedence
  *     over the settled contributions, once, into the view's index: the explicit
  *     claims first, each contribution's in its own precedence, then the derived,
- *     then the layer's rung at each place a blob lost. Nothing published is ever
- *     rewritten: a claim that stands nowhere keeps its own row and simply leaves
- *     the slice, which is what lets a claim be read after another stands over
- *     it (manifest_lookup_claim) and what makes an index the one thing that says
- *     who stands where.
+ *     then the layer's rung at each place a blob lost, noting each claim a
+ *     profile's own claims leave no room where its check finds it. Nothing
+ *     published is ever rewritten: a claim that stands nowhere keeps its own
+ *     row and simply leaves the slice, which is what lets a claim be read after
+ *     another stands over it (manifest_lookup_claim) and what makes an index
+ *     the one thing that says who stands where.
  *   - One decode, placed: the per-profile step walks the profile it is handed
  *     (core/profiles.h profile_walk), which reads its own tree's sheet — no caller
  *     supplies one — and shows each claim decoded, the blob's identity read off
@@ -160,7 +161,7 @@ struct manifest {
  * and the contribution being filled, and the two lists the step spends. Handed
  * to each profile's walk once and read at O(1) per claim — and to its second
  * question, the claims its tree contradicts, whose visitor reads the view, the
- * profile's name and the arena alone (manifest_note_contradicted).
+ * profile's name and the arena alone (manifest_note_claim).
  *
  * Memory ownership:
  * - manifest: borrowed, caller retains ownership — the mount table and the unbound
@@ -304,42 +305,49 @@ static void manifest_note_unkept(
 }
 
 /**
- * Walk visitor that records one directory claim the profile's own tree contradicts
+ * Record one claim a profile's own claims leave no room
  *
- * The health primitive the per-profile step spends profile_contradicted's claims
- * through: a tracked one is appended — its profile, its name and the blob above
- * it — to the view's slice; a derived one records nothing. No dedup, and none
- * possible: the sheet holds one directory claim a key. A visitor and not a recorder
- * beside the other two, since the claims arrive by a walk and no second caller
- * records one. The claim and its strings are lent for the visit (core/profiles.h),
- * so the two names are copied into the arena the view lives in.
+ * The health primitive both of the slice's producers spend through: the documents',
+ * a tracked claim the profile's own tree contradicts (manifest_note_claim), and
+ * this machine's, a claim the layer finds beneath a standing blob of its own or
+ * a blob of its own whose place its claims beneath take (manifest_layer). Appends
+ * (profile, name, kind) against what leaves it no room, which is one of two by
+ * where it stands — the blob at or above it, or the directory taking its place
+ * — the other NULL. No dedup, and none needed: a claim the tree contradicts is
+ * one the walk never shows, and the layer decides each claim the walk shows once.
  *
- * @param claim One claim the profile's tree contradicts (borrowed — valid for
- *              the call only)
- * @param payload The claim walk (claim_walk_t)
- * @return NULL: recording a claim fails nowhere
+ * The slice grows in the arena, as the others do. Every string must be arena-backed
+ * by the caller; the entry borrows them for the view's lifetime.
+ *
+ * @param manifest Target view (must not be NULL)
+ * @param profile Arena-backed profile name (must not be NULL)
+ * @param storage_path The claim that stands nowhere (must not be NULL)
+ * @param kind Its kind
+ * @param blob_above The blob at its name or at a rung above it, or NULL
+ * @param place The name the directory taking its place has, or NULL
+ * @param arena Arena for the array growth (must not be NULL)
  */
-static error_t manifest_note_contradicted(const profile_claim_t *claim, void *payload) {
-    claim_walk_t *walk = payload;
-    manifest_t *manifest = walk->manifest;
-
-    /* A derived claim is the way to a tracked one, recorded in its own right,
-     * or to none, which the profile's next settle prunes: the repair is a tracked
-     * claim's */
-    if (!claim->tracked) return NULL;
-
+static void manifest_note_contradicted(
+    manifest_t *manifest,
+    const char *profile,
+    const char *storage_path,
+    path_kind_t kind,
+    const char *blob_above,
+    const char *place,
+    arena_t *arena
+) {
     manifest->contradicted = arena_grow(
-        walk->arena, manifest->contradicted, &manifest->contradicted_capacity,
+        arena, manifest->contradicted, &manifest->contradicted_capacity,
         manifest->contradicted_count + 1, sizeof(*manifest->contradicted)
     );
 
     manifest->contradicted[manifest->contradicted_count++] = (manifest_contradicted_claim_t){
-        .profile = walk->contribution->profile,
-        .storage_path = arena_strdup(walk->arena, claim->storage_path),
-        .blob_above = arena_strdup(walk->arena, claim->blob_above),
+        .profile = profile,
+        .storage_path = storage_path,
+        .kind = kind,
+        .blob_above = blob_above,
+        .place = place,
     };
-
-    return NULL;
 }
 
 /**
@@ -603,6 +611,33 @@ static const char *manifest_ascend(const naming_t *n, const char *filesystem_pat
 }
 
 /**
+ * Is the claim kept at a place the name the profile would give the place fresh?
+ *
+ * The rule a place is decided by — a blob of the profile's own, claims of its
+ * own beneath it under another label: the blob is decided first where it is,
+ * and last, losing the place to the claims beneath it, where it is not. Both
+ * ends of the naming rule, read at one path: the profile's ascent there and the
+ * claim its settle keeps there (manifest_kept) — the place's blob, nothing pending,
+ * and under a command's claims whichever of the place's names the next settle
+ * will keep.
+ *
+ * One answer for the two readers that must agree on it: the layer's order, which
+ * stands a place's blob first or last by it (manifest_precedence), and the place
+ * a command's claims would move to the other side, asked of the committed claims
+ * and again under the command's (manifest_moved_place).
+ *
+ * @param n What the question is asked under (must not be NULL)
+ * @param filesystem_path A place: a path the profile keeps a blob at (must not
+ *                        be NULL)
+ * @return Whether the claim kept there is the fresh name
+ */
+static bool manifest_fresh(const naming_t *n, const char *filesystem_path) {
+    return strcmp(
+        manifest_ascend(n, filesystem_path), manifest_kept(n, filesystem_path).storage_path
+    ) == 0;
+}
+
+/**
  * By filesystem path, then by name
  *
  * A parent's path is a strict prefix of its child's and strcmp puts a prefix
@@ -850,6 +885,38 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
 }
 
 /**
+ * Walk visitor that notes one claim the profile's own tree contradicts
+ *
+ * The walk's second question, beside the claims it places (manifest_place_claim):
+ * profile_contradicted shows each directory claim a blob of the profile's tree
+ * stands at or above, and a tracked one is noted against that blob
+ * (manifest_note_contradicted); a derived one records nothing. The claim and
+ * its strings are lent for the visit (core/profiles.h), so the two names are
+ * copied into the arena the view lives in.
+ *
+ * @param claim One claim the profile's tree contradicts (borrowed — valid for
+ *              the call only)
+ * @param payload The claim walk (claim_walk_t)
+ * @return NULL: noting a claim fails nowhere
+ */
+static error_t manifest_note_claim(const profile_claim_t *claim, void *payload) {
+    claim_walk_t *walk = payload;
+
+    /* A derived claim is the way to a tracked one, recorded in its own right,
+     * or to none, which the profile's next settle prunes: the repair is a tracked
+     * claim's */
+    if (!claim->tracked) return NULL;
+
+    manifest_note_contradicted(
+        walk->manifest, walk->contribution->profile,
+        arena_strdup(walk->arena, claim->storage_path), PATH_KIND_DIRECTORY,
+        arena_strdup(walk->arena, claim->blob_above), NULL, walk->arena
+    );
+
+    return NULL;
+}
+
+/**
  * One profile's contribution: the claims its walk shows, placed
  *
  * The per-profile step both builders run, and the whole of the within-profile
@@ -863,9 +930,9 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
  * contradict — and each is placed as it arrives (manifest_place_claim): resolved
  * against the mount table, recorded where this machine cannot place it
  * (manifest_note_unbound), and kept or contending. The tracked claims its tree
- * does contradict are noted on the view's health beside them
- * (manifest_note_contradicted). The settle then decides every path this profile
- * named twice, and the tail cuts the spine to what each index keeps.
+ * does contradict are noted on the view's health beside them (manifest_note_claim).
+ * The settle then decides every path this profile named twice, and the tail cuts
+ * the spine to what each index keeps.
  *
  * The walk reads the profile's own sheet, strictly: a sheet that will not load
  * fails the build rather than read as "no claims", so no caller of a builder
@@ -926,10 +993,10 @@ static error_t manifest_contribute(
     if (err) return err;
 
     /* The tracked claims its own tree contradicts, which no row stands for, noted
-     * on the view's health (manifest_note_contradicted): the sheet the walk read,
-     * each directory claim classified again — the walk shows a claim or does
-     * not, and says nothing of the ones it does not */
-    err = profile_contradicted(profile, PROFILE_READ_STRICT, manifest_note_contradicted, &walk);
+     * on the view's health (manifest_note_claim): the sheet the walk read, each
+     * directory claim classified again — the walk shows a claim or does not,
+     * and says nothing of the ones it does not */
+    err = profile_contradicted(profile, PROFILE_READ_STRICT, manifest_note_claim, &walk);
     if (err) return err;
 
     /* Every path this profile named twice, decided once. */
@@ -1083,13 +1150,12 @@ static size_t manifest_places(const contribution_t *c, manifest_row_t **places) 
  * A contribution's explicit claims, in the order its own precedence decides them
  *
  * A place is decided by its fresh name: the profile's own ascent there, nothing
- * pending (manifest_ascend) — the rule the settle decides two names at one path
- * by. A place's blob that name spells comes first, outermost first, so while it
- * stands it leaves no room for the profile's claims beneath it; every other
- * explicit claim follows, in claim order; a place's blob another name spells
- * comes last, so the profile's claims beneath it stand first and need its place
- * as a directory. The frame's order, never the cut's, so the spine keeps claim
- * order.
+ * pending — the rule the settle decides two names at one path by (manifest_fresh).
+ * A place's blob that name spells comes first, outermost first, so while it stands
+ * it leaves no room for the profile's claims beneath it; every other explicit
+ * claim follows, in claim order; a place's blob another name spells comes last,
+ * so the profile's claims beneath it stand first and need its place as a directory.
+ * The frame's order, never the cut's, so the spine keeps claim order.
  *
  * @param manifest The view, for the table the ascent reads (must not be NULL)
  * @param c The contribution (must not be NULL)
@@ -1118,7 +1184,7 @@ static size_t manifest_precedence(
     size_t count = 0;
     for (size_t p = 0; p < place_count; p++) {
         manifest_row_t *blob = places[p];
-        if (strcmp(manifest_ascend(&n, blob->filesystem_path), blob->storage_path) == 0) {
+        if (manifest_fresh(&n, blob->filesystem_path)) {
             order[count++] = blob;
         } else {
             later[later_count++] = blob;
@@ -1208,6 +1274,12 @@ static manifest_row_t *manifest_rung(
  * Last, at each place a blob lost and no derived claim filled, the layer's rung
  * (manifest_rung): the directory the claims beneath it need.
  *
+ * Where what leaves a claim no room is its own profile's — a blob of its own
+ * above it, or the claims of its own beneath it — the profile places one chain
+ * under two labels, and the claim is contradicted: noted where its check finds
+ * it, beside what leaves it no room (manifest_note_contradicted). Another profile's
+ * claim standing over it is layering, and noted nowhere.
+ *
  * After it no row stands strictly beneath a standing blob, so whatever hides a
  * claim that stands nowhere is read off its position: the row at its path, else
  * the blob above it.
@@ -1244,8 +1316,19 @@ static void manifest_layer(manifest_t *manifest, arena_t *arena) {
         for (size_t j = 0; j < count; j++) {
             manifest_row_t *row = order[j];
 
-            /* Above it: a standing blob leaves it no room */
-            if (manifest_index_blob_above(manifest->index, interior, row->filesystem_path)) {
+            /* Above it: a standing blob leaves it no room — its own profile's,
+             * by the pointer every row of a contribution carries, a contradiction
+             * noted beside that blob; another's, layering */
+            const manifest_row_t *above = manifest_index_blob_above(
+                manifest->index, interior, row->filesystem_path
+            );
+            if (above) {
+                if (above->profile == c->profile) {
+                    manifest_note_contradicted(
+                        manifest, c->profile, row->storage_path, path_type_kind(row->type),
+                        above->storage_path, NULL, arena
+                    );
+                }
                 continue;
             }
 
@@ -1254,13 +1337,21 @@ static void manifest_layer(manifest_t *manifest, arena_t *arena) {
 
             /* Beneath it, the claim a blob: standing explicit claims need its
              * place as a directory, the lowest contribution with one there read
-             * now, at the loss, to name and own the rung */
+             * now, at the loss, to name and own the rung — its own, a contradiction
+             * noted beside the name the place takes, the rung's */
             const contribution_t *beneath = row->type == PATH_TYPE_DIRECTORY
                 ? NULL : hashmap_get(interior, row->filesystem_path);
             if (beneath) {
-                ptr_array_push(
-                    &rungs, manifest_rung(manifest, beneath, row->filesystem_path, arena)
+                manifest_row_t *rung = manifest_rung(
+                    manifest, beneath, row->filesystem_path, arena
                 );
+                ptr_array_push(&rungs, rung);
+                if (beneath == c) {
+                    manifest_note_contradicted(
+                        manifest, c->profile, row->storage_path, path_type_kind(row->type),
+                        NULL, rung->storage_path, arena
+                    );
+                }
                 continue;
             }
 
@@ -1721,6 +1812,57 @@ const char *manifest_claim_name(
 
     return row ? arena_strdup(arena, row->storage_path)
                : manifest_name(arena, manifest, profile, filesystem_path, NULL);
+}
+
+/**
+ * The first of `profile`'s places whose side a command's claims would move
+ *
+ * The profile's places as the layer finds them (manifest_places), each asked
+ * the layer's own question twice (manifest_fresh): of the claims committed, and
+ * under the command's. A side moves where the two answers part. The places and
+ * the ascents are scratch in the caller's arena, the module's idiom; the answer
+ * is the view's row.
+ */
+const manifest_row_t *manifest_moved_place(
+    arena_t *arena,
+    const manifest_t *manifest,
+    const char *profile,
+    const hashmap_t *pending
+) {
+    CHECK_NULL(arena);
+    CHECK_NULL(manifest);
+
+    const contribution_t *c = manifest_contribution(manifest, profile);
+    if (!c) return NULL;
+
+    manifest_row_t **places = arena_calloc(arena, c->count, sizeof(*places));
+    const size_t place_count = manifest_places(c, places);
+
+    /* The profile as committed, and as this command would leave it */
+    const naming_t before = {
+        .c       = c,
+        .mounts  = manifest->mounts,
+        .profile = c->profile,
+        .pending = NULL,
+        .arena   = arena,
+    };
+    const naming_t after = {
+        .c       = c,
+        .mounts  = manifest->mounts,
+        .profile = c->profile,
+        .pending = pending,
+        .arena   = arena,
+    };
+
+    for (size_t p = 0; p < place_count; p++) {
+        const char *filesystem_path = places[p]->filesystem_path;
+        if (manifest_fresh(&before, filesystem_path) !=
+            manifest_fresh(&after, filesystem_path)) {
+            return places[p];
+        }
+    }
+
+    return NULL;
 }
 
 /**

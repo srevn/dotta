@@ -443,7 +443,7 @@ error_t profile_walk(
  * after the walk (cmds/remove.c remove_complete, through remove_offer_directory);
  * and the tracked claims the view's health names, each with its blob, read STRICT
  * after the walk (core/manifest.c manifest_contribute, through
- * manifest_note_contradicted).
+ * manifest_note_claim).
  *
  * @param profile Handle (must not be NULL); its sheet read through it
  * @param read The sheet's policy for this question

@@ -1046,7 +1046,8 @@ static error_t add_refuse_ancestry(
 }
 
 /**
- * Refuse a selection that moves a name without capturing the one it moves to
+ * Refuse a selection that moves a name without capturing the one it moves to,
+ * or a place's side at all
  *
  * A path this profile names twice is decided by the settle, and this command's
  * own claims can change that decision: a directory claim admitted above such a
@@ -1056,7 +1057,7 @@ static error_t add_refuse_ancestry(
  * deploys bytes this command never read — over the ones it just committed under
  * the other name.
  *
- * The subject is exactly manifest_unkept's slice: no verb can give a profile a
+ * The groups are exactly manifest_unkept's slice: no verb can give a profile a
  * second name for a path it already names (manifest_holds_name), and a listing
  * that is not typed takes the namer's own answer — so the groups are the profile's,
  * and only which member stands can move. Asked once, with the selection complete,
@@ -1079,6 +1080,16 @@ static error_t add_refuse_ancestry(
  * — not what abandoning a name is. It makes the one way past instead, a capture:
  * every path asked of here is a claim, the profile naming it, and a claim is
  * captured under --force alone (add_list).
+ *
+ * A place is the same rule read beneath a path: a blob of the profile's own with
+ * claims of its own beneath it under another label, the name the profile gives
+ * the place fresh deciding which of the two stands (core/manifest.h
+ * manifest_moved_place). A directory claim admitted above it can move that name,
+ * and with it the side: the next apply would make the file where the directory
+ * stands, or the directory where the file does, which nothing this command captured
+ * asked for. No capture holds a side — at the place's path a capture names the
+ * blob, or is refused by kind — so nothing lifts this one, and its way out is a
+ * removal of either side: with the place gone, nothing moves.
  */
 static error_t add_refuse_moves(const add_walk_t *walk) {
     manifest_unkept_t unkept = manifest_unkept(walk->view);
@@ -1115,7 +1126,25 @@ static error_t add_refuse_moves(const add_walk_t *walk) {
         );
     }
 
-    return NULL;
+    /* The places, each asked whether this command's claims would move its side;
+     * the first that would is refused, its blob named by the noun its type takes,
+     * as the kind refusal names one */
+    const manifest_row_t *moved = manifest_moved_place(
+        walk->ctx->arena, walk->view, walk->profile, walk->listing
+    );
+    if (!moved) return NULL;
+
+    char shown[PATH_MAX];
+    output_format_path(moved->filesystem_path, identity()->home, shown, sizeof(shown));
+
+    return error_create(
+        ERR_INVALID_ARG, "Profile '%s' holds '%s' as the %s '%s' and claims of its "
+        "own beneath it under another label, and this command's directory claims "
+        "would change which of them stands there; dotta remove %s %s gives the %s "
+        "up, or remove the claims beneath it", walk->profile, shown,
+        path_type_noun(moved->type), moved->storage_path, walk->profile,
+        moved->storage_path, path_type_noun(moved->type)
+    );
 }
 
 /**
@@ -2528,8 +2557,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * claim takes that claim's place, the claim given up — where every other
      * write carries it (core/profiles.h profile_draft_t, the put rule). Read
      * off the view's contradicted slice: each claim at its blob's own name —
-     * one beneath a blob is remove's to give up — matched to the file captured
-     * at its place under that very name, since a listing under another of the
+     * one beneath a blob is remove's to give up, and one this machine's labels
+     * contradict is never at its blob's name — matched to the file captured at
+     * its place under that very name, since a listing under another of the
      * profile's names captures elsewhere, and a claim this machine cannot place
      * is listed nowhere. The file at such a name is the profile's own claim,
      * captured under --force alone (add_list), so the remedy is --force's. A
@@ -2537,7 +2567,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const manifest_contradicted_t contradicted = manifest_contradicted(view);
     for (size_t i = 0; i < contradicted.count; i++) {
         const manifest_contradicted_claim_t *at = &contradicted.entries[i];
-        if (strcmp(at->blob_above, at->storage_path) != 0) continue;
+        if (!str_equal(at->blob_above, at->storage_path)) continue;
 
         const manifest_claim_t *listed = hashmap_get(
             walk.listing, mount_resolve(ctx->arena, mounts, opts->profile, at->storage_path)

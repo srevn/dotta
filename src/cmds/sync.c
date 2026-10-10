@@ -2084,7 +2084,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             }
             output_info(
                 out, OUTPUT_NORMAL,
-                "  Another name of the same profile stands at each of these places; "
+                "  The same profile names each of these places otherwise; "
                 "'dotta status -v' pairs them."
             );
             output_info(

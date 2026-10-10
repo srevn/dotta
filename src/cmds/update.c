@@ -743,16 +743,16 @@ static error_t update_profile(
  * an ancestor claim the derivation dropped — left Git by this commit, and the
  * record there is the commit's to settle where it is this profile's, as remove
  * settles its own (cmds/remove.c remove_paths_candidates): with no row left at
- * the path it retires (nothing backs it now); under another profile's row it is
- * a fallback, kept until apply settles it against that row. A record naming another
- * profile is that profile's, which its own load decides. The rule "write only
- * where the row IS the captured claim" is the same one add applies
- * (core/manifest.h's manifest_is_claim): a row another profile won is its own,
- * and so is one a second claim of this very profile won. Both kinds: a directory's
- * claim (mode, ownership) is captured from disk exactly as add captures it, so
- * the capture owns the directory the same way — the ownership the orphan gate
- * asks for on scope exit — with no stat triple, a directory having no content
- * to confirm.
+ * the path and no claim of this profile's standing nowhere there, it retires
+ * (nothing backs it now); under another profile's row it is a fallback, kept
+ * until apply settles it against that row. A record naming another profile is
+ * that profile's, which its own load decides. The rule "write only where the
+ * row IS the captured claim" is the same one add applies (core/manifest.h's
+ * manifest_is_claim): a row another profile won is its own, and so is one a second
+ * claim of this very profile won. Both kinds: a directory's claim (mode, ownership)
+ * is captured from disk exactly as add captures it, so the capture owns the
+ * directory the same way — the ownership the orphan gate asks for on scope exit
+ * — with no stat triple, a directory having no content to confirm.
  *
  * Algorithm:
  *   1. No commit landed: nothing to write, and no lock taken to write it
@@ -894,7 +894,12 @@ static error_t update_write_record(
                 );
                 if (!record || strcmp(record->profile, commit->profile) != 0) continue;
 
+                /* The row standing at the path, else the profile's own claim
+                 * there standing nowhere — beneath a blob, another of its names
+                 * at the place — which keeps the record as a row does
+                 * (core/manifest.h manifest_lookup_claim) */
                 const manifest_row_t *row = manifest_lookup(manifest, filesystem_path);
+                if (!row) row = manifest_lookup_claim(manifest, commit->profile, filesystem_path);
                 if (!row) {
                     err = state_retire(state, filesystem_path);
                     if (err) goto cleanup;
@@ -902,8 +907,8 @@ static error_t update_write_record(
                 } else if (strcmp(row->profile, commit->profile) != 0) {
                     fallbacks++;
                 }
-                /* else: still this profile's row — the commit did not remove
-                 * it; not ours to count. */
+                /* else: still this profile's claim — the commit did not let the
+                 * path go; not ours to count. */
             }
         }
     }

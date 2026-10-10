@@ -117,7 +117,10 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out) {
  *
  * Directory claims are offered whichever class they are: an ancestor claim is
  * an active path, and the update remedy ('dotta update <dir>') names exactly
- * such a path — a completer that hid the spine would hide the cure.
+ * such a path — a completer that hid the spine would hide the cure. The layer's
+ * rung is offered with them, an active path apply converges, under the name its
+ * profile would give the place and holds no claim at (core/manifest.h
+ * manifest_holds_row).
  */
 void completion_files(
     const dotta_ctx_t *ctx, FILE *out,

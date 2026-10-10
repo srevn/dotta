@@ -612,12 +612,12 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
 
     /* A squatter is a directory claim with another kind of node in its place, a
      * view row's or a record's. For the orphans alone, so is a link at any other
-     * path the load looks at — a record's, or a row's of another kind, whose
-     * claim says nothing of what lies beneath it — with an orphan beneath it:
-     * the orphan's node stood in a directory there, and a link is the one node
-     * a key beneath resolves through — a file or a device answers ENOTDIR, absence.
-     * Noted only where an orphan would be looked at so, since links are no rarity
-     * the way squatted directories are. */
+     * path the load looks at — a record's, or a row's of another kind, beneath
+     * which no row stands (core/manifest.c manifest_layer) — with an orphan beneath
+     * it: the orphan's node stood in a directory there, and a link is the one
+     * node a key beneath resolves through — a file or a device answers ENOTDIR,
+     * absence. Noted only where an orphan would be looked at so, since links
+     * are no rarity the way squatted directories are. */
     if (item->item_kind != PATH_KIND_DIRECTORY && (item->occupant != FS_OCCUPANT_SYMLINK ||
         !workspace_orphan_beneath(ws, item->filesystem_path))) {
         return NULL;
@@ -2439,10 +2439,18 @@ typedef struct {
  *
  * One arrangement the blob rule does not reach, and need not: where a later
  * profile's explicit DIRECTORY claim wins a path an earlier one holds a blob
- * at, the index answers with the directory row. That row is necessarily tracked
- * — a derived row never takes a held path — so the question above settles the
- * child by the view's own word, and the directory is the winner's to enumerate,
- * under the winner's name, in a walk of its own.
+ * at, the index answers with the directory row, tracked, so the question above
+ * settles the child by the view's own word, and the directory is the winner's
+ * to enumerate, under the winner's name, in a walk of its own. A derived row
+ * stands at a path an explicit claim names in one arrangement alone: a blob that
+ * lost its place to the claims beneath it, the place the directory they need
+ * (core/manifest.c manifest_layer). Where that blob is the walk's owner's own,
+ * the walk does not enter the place. Where the blob's name is the one the owner
+ * would give the place fresh, names beneath would compose beneath it, and the
+ * stage would refuse them, taking the owner's whole update down; where another
+ * name spells the place, they would compose under that name and be admitted,
+ * and are not offered — a limit `dotta add <profile> <file>` answers, the name
+ * it takes composing past the blob.
  *
  * What kept the frame from looking beneath its directory is its answer, for whoever
  * entered it to say — the driver at a root, the frame above at a child
@@ -2508,6 +2516,14 @@ static workspace_fault_t workspace_scan(
          * what no claim names at all. */
         const manifest_row_t *claim = manifest_lookup(ws->manifest, child);
         if (claim && !manifest_is_derived(claim)) continue;
+
+        /* The owner's own blob at the child: past the question above a derived
+         * row stands there, or none — and none would put a standing blob above
+         * the child, which no walk runs beneath — so the blob lost its place to
+         * the claims beneath it, a place the walk does not enter (the arrangement
+         * above) */
+        const manifest_row_t *held = manifest_lookup_claim(ws->manifest, scan->profile, child);
+        if (held && held->type != PATH_TYPE_DIRECTORY) continue;
 
         /* One lstat names what stands there — its kind, and for a directory its
          * identity: a symlink is never a directory here. Absence is a skip —

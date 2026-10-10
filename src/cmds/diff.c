@@ -611,11 +611,13 @@ static int print_diff_line_cb(
  *
  * The commit-to-workspace comparison: every file row of the view
  * manifest_build_profile computed from the profile at the commit, compared against
- * what stands at its path now. A directory row — a claim of the tree's own
- * metadata.json — has no content to diff and is passed over by its type, the
- * test core/manifest.h leaves to a reader that wants files. Each row carries
- * the profile whose claim it is, the commit's, and its blob opens under the row's
- * own binding.
+ * what stands at its path now — the profile's own places settled, so a file of
+ * it beneath its own standing blob is no row, nor a blob that lost its place to
+ * its claims beneath. A directory row — a claim of the tree's own metadata.json,
+ * or the layer's rung at a lost blob's place — has no content to diff and is
+ * passed over by its type, the test core/manifest.h leaves to a reader that wants
+ * files. Each row carries the profile whose claim it is, the commit's, and its
+ * blob opens under the row's own binding.
  *
  * @param view The commit's view (must not be NULL; its rows are the command arena's
  *             and live until command end)

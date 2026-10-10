@@ -544,15 +544,21 @@ static error_t export_collect_storage(
  *
  * The projection the path arm reads a row through, the twin of the claim's
  * (export_entry_from_claim) over what the view placed the claim as. Every directory
- * row is a claim of the profile, derived or tracked alike — the file header's
- * own argument: every directory an export produces is one it creates, and creation
- * is what both classes bind. `encrypted` is the row's own — the sheet's stamp
- * as the view projects it — and says which blobs phase 1 reads (validate_content).
- * A link row carries neither a mode nor a stamp and needs neither: its bytes
- * are its target (core/manifest.h). The name is the row's own, which the command's
- * arena keeps.
+ * row the profile holds is a claim of it, derived or tracked alike — the file
+ * header's own argument: every directory an export produces is one it creates,
+ * and creation is what both classes bind. The one directory row it does not hold
+ * is the layer's rung, at a place its own blob lost to its claims beneath where
+ * no derived claim of its own fills it (core/manifest.h manifest_holds_row):
+ * made at its default mode, as a rung the copy completes is, and no claim to
+ * list or count. `encrypted` is the row's own — the sheet's stamp as the view
+ * projects it — and says which blobs phase 1 reads (validate_content). A link
+ * row carries neither a mode nor a stamp and needs neither: its bytes are its
+ * target (core/manifest.h). The name is the row's own, which the command's arena
+ * keeps.
  */
-static export_entry_t export_entry_from_row(const manifest_row_t *row) {
+static export_entry_t export_entry_from_row(
+    const manifest_t *view, const manifest_row_t *row
+) {
     export_entry_t e;
     memset(&e, 0, sizeof(e));
     e.storage_path = row->storage_path;
@@ -561,7 +567,7 @@ static export_entry_t export_entry_from_row(const manifest_row_t *row) {
         case PATH_TYPE_DIRECTORY:
             e.kind = EXPORT_ENTRY_DIRECTORY;
             e.mode = row->mode;
-            e.claimed = true;
+            e.claimed = manifest_holds_row(view, row);
             break;
 
         case PATH_TYPE_SYMLINK:
@@ -596,14 +602,16 @@ static export_entry_t export_entry_from_row(const manifest_row_t *row) {
  * the contribution did not keep is no row and is not copied — the copy is what
  * the profile would place, and that is what the view answers.
  *
- * The row standing at the path decides the shape. A directory row is a claimed
- * root at its mode; no row at all is an unclaimed root at the default, the same
- * rung complete_directories supplies. A blob is the single-entry copy — and a
- * blob with rows beneath it refuses the copy, one filesystem being unable to
- * hold both where a profile can, two of its names reaching one chain
- * (core/manifest.h manifest_lookup_claim). A root of this machine's topology is
- * a path like any other here: rows beneath it, and nothing standing at it unless
- * a claim does. The rungs between the rows are complete_directories'.
+ * The row standing at the path decides the shape. A directory row is a root at
+ * its mode, a claim where the profile holds it — the layer's rung is a root it
+ * holds no claim at (core/manifest.h manifest_holds_row); no row at all is an
+ * unclaimed root at the default, the same rung complete_directories supplies. A
+ * blob is the single-entry copy — and a blob with rows beneath it refuses the
+ * copy, one filesystem being unable to hold both where a profile can, two of
+ * its names reaching one chain (core/manifest.h manifest_lookup_claim). A root
+ * of this machine's topology is a path like any other here: rows beneath it,
+ * and nothing standing at it unless a claim or the layer's rung does. The rungs
+ * between the rows are complete_directories'.
  */
 static error_t export_collect_filesystem(
     const dotta_ctx_t *ctx,
@@ -681,7 +689,7 @@ static error_t export_collect_filesystem(
             );
         }
 
-        export_entry_t e = export_entry_from_row(at);
+        export_entry_t e = export_entry_from_row(view, at);
         e.rel_path = list->basename;
         entry_list_append(list, arena, &e);
         return NULL;
@@ -689,12 +697,12 @@ static error_t export_collect_filesystem(
 
     append_root(
         list, arena, at ? at->storage_path : NULL,
-        at ? at->mode : DIR_MODE_DEFAULT, at != NULL
+        at ? at->mode : DIR_MODE_DEFAULT, manifest_holds_row(view, at)
     );
 
     for (size_t i = 0; i < beneath.count; i++) {
         const manifest_row_t *row = beneath.entries[i];
-        export_entry_t e = export_entry_from_row(row);
+        export_entry_t e = export_entry_from_row(view, row);
         /* What lies beneath the path — borrowed from the row, whose string is
          * the arena's */
         e.rel_path = str_path_beneath(row->filesystem_path, filesystem_path, len);

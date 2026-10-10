@@ -14,10 +14,11 @@
  *     explicit claims, the within-profile rule settled by manifest_settle, and
  *     its derived claims apart from them — and manifest_layer then runs precedence
  *     over the settled contributions, once, into the view's index: the explicit
- *     claims first, then the derived. Nothing published is ever rewritten: a
- *     row that loses a path keeps its own row and simply leaves the slice, which
- *     is what lets a lower profile's claim be read after a higher one wins
- *     (manifest_lookup_claim) and what makes an index the one thing that says
+ *     claims first, each contribution's in its own precedence, then the derived,
+ *     then the layer's rung at each place a blob lost. Nothing published is ever
+ *     rewritten: a claim that stands nowhere keeps its own row and simply leaves
+ *     the slice, which is what lets a claim be read after another stands over
+ *     it (manifest_lookup_claim) and what makes an index the one thing that says
  *     who stands where.
  *   - One decode, placed: the per-profile step walks the profile it is handed
  *     (core/profiles.h profile_walk), which reads its own tree's sheet — no caller
@@ -50,6 +51,7 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
+#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/label.h"
@@ -118,11 +120,12 @@ struct manifest {
     const char **profiles;                       /* Arena; their names, the rows' own pointers */
     size_t profile_count;                        /* Both arrays' count */
 
-    /* Precedence over the settled contributions: the index, one winning row per
-     * path, and the spine cut once from it at layering (manifest_layer). */
-    const manifest_row_t **rows;                 /* Arena, exact; the winners */
+    /* Precedence over the settled contributions: the index, one row standing
+     * per path — a claim, or the layer's rung — and the spine cut once from it
+     * at layering (manifest_layer). */
+    const manifest_row_t **rows;                 /* Arena, exact; the rows standing */
     size_t count;                                /* Rows in the spine */
-    hashmap_t *index;                            /* Arena; path → the winning row */
+    hashmap_t *index;                            /* Arena; path → the row standing there */
 
     /* The table the rows were placed by, lent back by manifest_mounts: the build's
      * own, derived from the rows it read, or, for one profile's view, the
@@ -529,9 +532,11 @@ static manifest_claim_t manifest_kept(const naming_t *n, const char *filesystem_
  * (manifest_claim_beneath). An ancestor claim names nothing, and a blob names
  * its own path and nothing under it — a name beneath its own is one the stage
  * refuses, and a path beneath its place one its writer refuses before it names
- * anything (cmds/add.c cmd_add, through manifest_blob_above) — so both are climbed
- * past. Where no claim above gave a name, the root's label and the tail spell
- * one (infra/label.h label_compose), the word alone at the root itself.
+ * anything while the blob stands (cmds/add.c cmd_add, through manifest_blob_above),
+ * and names past it where the blob lost the place to the claims beneath it — so
+ * both are climbed past. Where no claim above gave a name, the root's label and
+ * the tail spell one (infra/label.h label_compose), the word alone at the root
+ * itself.
  *
  * The root is the floor and not a per-rung test, because no root of the profile
  * can stand strictly between it and the path — one that did would enclose the
@@ -953,52 +958,340 @@ static error_t manifest_contribute(
 }
 
 /**
+ * The nearest blob an index holds strictly above a path, or NULL
+ *
+ * The rungs are the path's own key cut at each separator, nearest first, each
+ * read off the key's bytes by its length (base/string.h str_path_parent_len_n,
+ * base/hashmap.h hashmap_get_n), so nothing is copied: the root directory, the
+ * path's last parent, is the last rung read, and "/" has none above it. A directory
+ * row of either class stops nothing.
+ *
+ * Where `interior` is given, a rung it holds ends the climb with none: a standing
+ * explicit claim lies beneath that rung, and no row stands strictly beneath a
+ * standing blob, so none stands at the rung or above it. That makes the interior
+ * the climb's memo while the layer decides: a claim whose parent a sibling marked
+ * asks one probe.
+ *
+ * Readers: the layer's two passes, over the view's index with its interior
+ * (manifest_layer); one contribution's places, over its own explicit claims
+ * (manifest_places); and manifest_blob_above, over the view built — both with none.
+ *
+ * @param index The index climbed (must not be NULL)
+ * @param interior The layer's interior, or NULL
+ * @param filesystem_path Where to ask, absolute: a key (must not be NULL)
+ * @return The nearest blob row above the path, as the index holds it, or NULL
+ */
+static manifest_row_t *manifest_index_blob_above(
+    const hashmap_t *index, const hashmap_t *interior, const char *filesystem_path
+) {
+    for (size_t len = strlen(filesystem_path); len > 1;) {
+        len = str_path_parent_len_n(filesystem_path, len);
+
+        /* A standing claim beneath this rung: no blob stands at it or above */
+        if (interior && hashmap_get_n(interior, filesystem_path, len)) return NULL;
+
+        manifest_row_t *row = hashmap_get_n(index, filesystem_path, len);
+        if (row && row->type != PATH_TYPE_DIRECTORY) return row;
+    }
+
+    return NULL;
+}
+
+/**
+ * Mark every strict ancestor of a claim the layer just stood as interior, to
+ * its contribution
+ *
+ * Nearest first, to the root directory, and stopping at the first rung the
+ * contribution marked already: an earlier climb of its own marked that rung and
+ * every one above it. A mark is overwritten, never removed, and the contributions
+ * are decided highest first, so an interior path carries the lowest contribution
+ * with a standing explicit claim beneath it so far — the side a blob lost there
+ * loses to (manifest_layer).
+ *
+ * The map owns its keys: the one copy of the path, taken at the first rung written,
+ * is cut in place from there up, and the map copies a rung it is new to.
+ */
+static void manifest_mark_interior(
+    hashmap_t *interior, contribution_t *c, const char *filesystem_path, arena_t *frame
+) {
+    char *rung = NULL;
+
+    for (size_t len = strlen(filesystem_path); len > 1;) {
+        len = str_path_parent_len_n(filesystem_path, len);
+        if (hashmap_get_n(interior, filesystem_path, len) == c) return;
+
+        if (!rung) rung = arena_strdup(frame, filesystem_path);
+        rung[len] = '\0';
+        hashmap_set(interior, rung, c);
+    }
+}
+
+/**
+ * A contribution's places, in path order: each blob of its own that one of its
+ * own explicit claims lies strictly beneath, so an outer place precedes an inner
+ * one
+ *
+ * Under another label, necessarily: one label holds no such pair, the stage
+ * refusing a name beneath a blob of its own tree (sys/stage.c admit_tree_path),
+ * so a contribution whose explicit claims keep to one label is not climbed at
+ * all. Each explicit claim climbs the contribution's own explicit claims for
+ * the nearest blob above it, so a nested pair names its inner blob too; a blob
+ * two claims meet is kept once.
+ *
+ * Readers: the order a contribution's claims are decided in (manifest_precedence),
+ * and the freshness a command's claims would move (manifest_moved_place).
+ *
+ * @param c The contribution (must not be NULL)
+ * @param places Room for one blob per row of `c` (must not be NULL)
+ * @return How many places `places` holds
+ */
+static size_t manifest_places(const contribution_t *c, manifest_row_t **places) {
+    /* The label the first explicit claim names, and the first claim naming another */
+    size_t j = 0;
+    while (j < c->count && manifest_is_derived(c->rows[j])) j++;
+    if (j == c->count) return 0;
+
+    const label_t label = label_of(c->rows[j]->storage_path);
+    while (j < c->count &&
+        (manifest_is_derived(c->rows[j]) || label_of(c->rows[j]->storage_path) == label)) {
+        j++;
+    }
+    if (j == c->count) return 0;
+
+    /* The nearest blob of its own above each explicit claim, by path: a blob
+     * two claims meet is adjacent then, and kept once */
+    size_t count = 0;
+    for (j = 0; j < c->count; j++) {
+        if (manifest_is_derived(c->rows[j])) continue;
+
+        manifest_row_t *blob = manifest_index_blob_above(
+            c->explicit, NULL, c->rows[j]->filesystem_path
+        );
+        if (blob) places[count++] = blob;
+    }
+    if (count > 1) qsort(places, count, sizeof(*places), filesystem_order);
+
+    size_t kept = 0;
+    for (size_t p = 0; p < count; p++) {
+        if (kept == 0 || places[kept - 1] != places[p]) places[kept++] = places[p];
+    }
+
+    return kept;
+}
+
+/**
+ * A contribution's explicit claims, in the order its own precedence decides them
+ *
+ * A place is decided by its fresh name: the profile's own ascent there, nothing
+ * pending (manifest_ascend) — the rule the settle decides two names at one path
+ * by. A place's blob that name spells comes first, outermost first, so while it
+ * stands it leaves no room for the profile's claims beneath it; every other
+ * explicit claim follows, in claim order; a place's blob another name spells
+ * comes last, so the profile's claims beneath it stand first and need its place
+ * as a directory. The frame's order, never the cut's, so the spine keeps claim
+ * order.
+ *
+ * @param manifest The view, for the table the ascent reads (must not be NULL)
+ * @param c The contribution (must not be NULL)
+ * @param frame The layer's frame, for the places and the ascents (must not be NULL)
+ * @param order Room for one row per row of `c` (must not be NULL)
+ * @return How many claims `order` holds
+ */
+static size_t manifest_precedence(
+    const manifest_t *manifest, const contribution_t *c, arena_t *frame,
+    manifest_row_t **order
+) {
+    manifest_row_t **places = arena_calloc(frame, c->count, sizeof(*places));
+    const size_t place_count = manifest_places(c, places);
+
+    /* The places a fresh name spells, first; the others wait for the claims beneath
+     * them */
+    const naming_t n = {
+        .c       = c,
+        .mounts  = manifest->mounts,
+        .profile = c->profile,
+        .pending = NULL,
+        .arena   = frame,
+    };
+    manifest_row_t **later = arena_calloc(frame, place_count, sizeof(*later));
+    size_t later_count = 0;
+    size_t count = 0;
+    for (size_t p = 0; p < place_count; p++) {
+        manifest_row_t *blob = places[p];
+        if (strcmp(manifest_ascend(&n, blob->filesystem_path), blob->storage_path) == 0) {
+            order[count++] = blob;
+        } else {
+            later[later_count++] = blob;
+        }
+    }
+
+    /* Every other explicit claim, in claim order: a place's blob in its place's
+     * turn */
+    for (size_t j = 0; j < c->count; j++) {
+        manifest_row_t *row = c->rows[j];
+        if (manifest_is_derived(row)) continue;
+        if (place_count > 0 &&
+            bsearch(&row, places, place_count, sizeof(*places), filesystem_order)) {
+            continue;
+        }
+        order[count++] = row;
+    }
+
+    for (size_t k = 0; k < later_count; k++) order[count++] = later[k];
+
+    return count;
+}
+
+/**
+ * The layer's rung at a lost blob's place: the directory the claims beneath it need
+ *
+ * Named by the overriding side's own ascent — never manifest_name, whose leaf
+ * clause would answer a name that side holds at the place — and attributed to
+ * it: the contribution whose standing claims beneath made the blob lose, the
+ * lowest of them when it lost. So a rung never takes the lost claim's own name.
+ * A blob decided before any claim of its own beneath it can lose only to a higher
+ * profile, which names the rung; one decided after them loses to its own, whose
+ * ascent there is the fresh name the blob's is not (manifest_precedence). At a
+ * root of that side the name is its label's word alone (infra/label.h
+ * label_compose), a directory row at a root like any other. Its mode is the
+ * default, with no owner and no group, absence's word (core/metadata.h).
+ *
+ * @param manifest The view, for the table the ascent reads (must not be NULL)
+ * @param beneath The contribution the blob lost to (must not be NULL)
+ * @param filesystem_path The place, the lost blob's own key (must not be NULL)
+ * @param arena Arena for the row and its name: it may stand (must not be NULL)
+ * @return The rung, a derived directory row no contribution holds
+ */
+static manifest_row_t *manifest_rung(
+    const manifest_t *manifest, const contribution_t *beneath, const char *filesystem_path,
+    arena_t *arena
+) {
+    const naming_t n = {
+        .c       = beneath,
+        .mounts  = manifest->mounts,
+        .profile = beneath->profile,
+        .pending = NULL,
+        .arena   = arena,
+    };
+
+    manifest_row_t *rung = arena_calloc(arena, 1, sizeof(*rung));
+    *rung = (manifest_row_t){
+        .filesystem_path = filesystem_path,
+        .storage_path = manifest_ascend(&n, filesystem_path),
+        .profile = beneath->profile,
+        .type = PATH_TYPE_DIRECTORY,
+        .mode = DIR_MODE_DEFAULT,
+    };
+
+    return rung;
+}
+
+/**
  * Precedence over the settled contributions, and the winners' spine
  *
- * The two decisions, in two passes over the finished contributions. The explicit
- * claims first, highest precedence first: a row takes a path no claim before it
- * holds, so the highest explicit claim stands. Then the derived claims, lowest
- * precedence first: a row fills a path nothing holds — two profiles that traverse
+ * A claim stands unless a claim decided before it stands at its path, a standing
+ * blob stands above it, or — the claim a blob — explicit claims stand beneath
+ * it, which need its place as a directory: a blob leaves no room at its place
+ * or beneath it, whichever profile's claim the other is. Two decisions, in two
+ * passes over the finished contributions, and nothing either decides is ever
+ * undone.
+ *
+ * The explicit claims first, highest precedence first, and each contribution's
+ * in its own precedence (manifest_precedence), each decided against what stands
+ * so far. Then the derived claims, lowest precedence first, each filling a path
+ * no row holds and no standing blob stands above — two profiles that traverse
  * the same directory derive it identically, their claims carry no intent to
  * conflict, and the first to name the path holds it, so the row's owner does
  * not move when a profile above it is enabled and no reassignment churn appears
  * in the receipts over a directory nobody named. A derived claim its own profile's
  * explicit claim shadows meets that claim here and is hidden like any other.
+ * Last, at each place a blob lost and no derived claim filled, the layer's rung
+ * (manifest_rung): the directory the claims beneath it need.
+ *
+ * After it no row stands strictly beneath a standing blob, so whatever hides a
+ * claim that stands nowhere is read off its position: the row at its path, else
+ * the blob above it.
  *
  * The spine is then cut once, exactly, from what the index points at, in claim
  * order across the contributions — so a path a higher profile overrides sits at
- * the winner's place. Row order is unspecified and this is what there is of it.
+ * the winner's place — and the rungs that stand after them. Row order is
+ * unspecified and this is what there is of it.
  *
  * Run once at the tail of each builder, so manifest_lookup is never asked
  * mid-build. An empty view allocates no spine and manifest_rows answers an empty
  * slice.
  *
  * @param manifest The view whose contributions are all settled (must not be NULL)
- * @param arena Arena for the spine (must not be NULL)
+ * @param arena Arena for the spine and the rungs (must not be NULL)
  */
 static void manifest_layer(manifest_t *manifest, arena_t *arena) {
-    /* The explicit claims, highest precedence first: a row takes a path no claim
-     * before it holds. */
+    /* The passes' scratch, freed once both are done: the interior — every path
+     * a standing explicit claim lies strictly beneath, to the lowest contribution
+     * with one there so far — and each contribution's order. The rungs are the
+     * spine's tail, made at each blob's loss in the arena the spine is cut in. */
+    arena_t *frame = arena_create(0);
+    hashmap_t *interior = hashmap_create(frame, 128);
+    ptr_array_t rungs;
+    ptr_array_init(&rungs, arena, 0);
+
+    /* The explicit claims, highest precedence first */
     for (size_t i = manifest->profile_count; i-- > 0;) {
+        contribution_t *c = &manifest->contributions[i];
+
+        manifest_row_t **order = arena_calloc(frame, c->count, sizeof(*order));
+        const size_t count = manifest_precedence(manifest, c, frame, order);
+
+        for (size_t j = 0; j < count; j++) {
+            manifest_row_t *row = order[j];
+
+            /* Above it: a standing blob leaves it no room */
+            if (manifest_index_blob_above(manifest->index, interior, row->filesystem_path)) {
+                continue;
+            }
+
+            /* At its path: a claim decided before it stands there */
+            if (hashmap_has(manifest->index, row->filesystem_path)) continue;
+
+            /* Beneath it, the claim a blob: standing explicit claims need its
+             * place as a directory, the lowest contribution with one there read
+             * now, at the loss, to name and own the rung */
+            const contribution_t *beneath = row->type == PATH_TYPE_DIRECTORY
+                ? NULL : hashmap_get(interior, row->filesystem_path);
+            if (beneath) {
+                ptr_array_push(
+                    &rungs, manifest_rung(manifest, beneath, row->filesystem_path, arena)
+                );
+                continue;
+            }
+
+            hashmap_set(manifest->index, row->filesystem_path, row);
+            manifest_mark_interior(interior, c, row->filesystem_path, frame);
+        }
+    }
+
+    /* The derived claims, lowest precedence first: a row fills a path no row
+     * holds and no standing blob stands above */
+    for (size_t i = 0; i < manifest->profile_count; i++) {
         const contribution_t *c = &manifest->contributions[i];
         for (size_t j = 0; j < c->count; j++) {
             manifest_row_t *row = c->rows[j];
-            if (manifest_is_derived(row)) continue;
+            if (!manifest_is_derived(row) ||
+                manifest_index_blob_above(manifest->index, interior, row->filesystem_path)) {
+                continue;
+            }
 
             hashmap_add(manifest->index, row->filesystem_path, row);
         }
     }
 
-    /* The derived claims, lowest precedence first: a row fills a path nothing
-     * holds. */
-    for (size_t i = 0; i < manifest->profile_count; i++) {
-        const contribution_t *c = &manifest->contributions[i];
-        for (size_t j = 0; j < c->count; j++) {
-            manifest_row_t *row = c->rows[j];
-            if (!manifest_is_derived(row)) continue;
+    arena_free(frame);
 
-            hashmap_add(manifest->index, row->filesystem_path, row);
-        }
+    /* The rungs: a lost blob's place no derived claim filled. The first made at
+     * a place stands — the highest blob lost there — and the rest are the arena's
+     * bytes. */
+    for (size_t r = 0; r < rungs.count; r++) {
+        manifest_row_t *rung = rungs.entries[r];
+        hashmap_add(manifest->index, rung->filesystem_path, rung);
     }
 
     size_t standing = hashmap_size(manifest->index);
@@ -1012,6 +1305,12 @@ static void manifest_layer(manifest_t *manifest, arena_t *arena) {
             if (hashmap_get(manifest->index, row->filesystem_path) == row) {
                 manifest->rows[manifest->count++] = row;
             }
+        }
+    }
+    for (size_t r = 0; r < rungs.count; r++) {
+        const manifest_row_t *rung = rungs.entries[r];
+        if (hashmap_get(manifest->index, rung->filesystem_path) == rung) {
+            manifest->rows[manifest->count++] = rung;
         }
     }
 }
@@ -1199,7 +1498,7 @@ error_t manifest_build_profile(
 }
 
 /**
- * Every winning row of the view, both kinds, unordered
+ * Every row standing in the view, both kinds, unordered
  *
  * The spine holds its rows const, so it is lent as it is: the slice adds const
  * to the pointers alone, the one conversion C makes with no cast (C11 6.5.16.1).
@@ -1347,6 +1646,21 @@ bool manifest_holds_name(
 }
 
 /**
+ * Is the row a claim its profile holds, rather than the layer's rung?
+ */
+bool manifest_holds_row(const manifest_t *manifest, const manifest_row_t *row) {
+    if (!manifest || !row) return false;
+
+    /* The index of its own class holds the contribution's row by its key, as
+     * the cut reads it (manifest_contribute): the rung is in neither */
+    const contribution_t *c = manifest_contribution(manifest, row->profile);
+
+    return c && hashmap_get(
+        manifest_is_derived(row) ? c->derived : c->explicit, row->filesystem_path
+    ) == row;
+}
+
+/**
  * What `profile` calls `filesystem_path` under this view
  *
  * The leaf clause and the ascent, over the one read that answers what is kept
@@ -1430,17 +1744,7 @@ const manifest_row_t *manifest_blob_above(
     CHECK_NULL(manifest);
     CHECK_NULL(filesystem_path);
 
-    /* Each rung the path's own key cut at a separator and asked by its length
-     * (base/string.h str_path_parent_len_n), nearest first: the root directory,
-     * its own parent, is the last rung read, the length no shorter after it. */
-    for (size_t len = strlen(filesystem_path); len > 1;) {
-        len = str_path_parent_len_n(filesystem_path, len);
-
-        const manifest_row_t *row = hashmap_get_n(manifest->index, filesystem_path, len);
-        if (row && row->type != PATH_TYPE_DIRECTORY) return row;
-    }
-
-    return NULL;
+    return manifest_index_blob_above(manifest->index, NULL, filesystem_path);
 }
 
 /**
@@ -1476,12 +1780,14 @@ error_t manifest_holder(
     CHECK_NULL(out_row);
 
     /* The holders counted, the last one kept: one is the answer, and none is an
-     * answer too. */
+     * answer too. A row holds its name where its profile holds the row, so the
+     * layer's rung, under a name no profile holds, is no holder. */
     size_t holders = 0;
     const manifest_row_t *held = NULL;
     for (size_t i = 0; i < manifest->count; i++) {
-        if (strcmp(manifest->rows[i]->storage_path, storage_path) == 0) {
-            held = manifest->rows[i];
+        const manifest_row_t *row = manifest->rows[i];
+        if (strcmp(row->storage_path, storage_path) == 0 && manifest_holds_row(manifest, row)) {
+            held = row;
             holders++;
         }
     }
@@ -1496,7 +1802,9 @@ error_t manifest_holder(
     string_array_init(&named, arena, holders);
     for (size_t i = 0; i < manifest->count; i++) {
         const manifest_row_t *row = manifest->rows[i];
-        if (strcmp(row->storage_path, storage_path) != 0) continue;
+        if (strcmp(row->storage_path, storage_path) != 0 || !manifest_holds_row(manifest, row)) {
+            continue;
+        }
         string_array_pushf(&named, "%s (%s)", row->profile, row->filesystem_path);
     }
 

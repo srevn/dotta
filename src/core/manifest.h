@@ -2,16 +2,15 @@
  * manifest.h - The view: every enabled profile's claims, placed and layered
  *
  * The manifest is the precedence-resolved view of every enabled profile at HEAD:
- * one row per active filesystem path, both kinds, the winning profile's claim
- * already applied (manifest_row_t, below). It is computed from Git at every load
- * and never stored — Git × the state's rows × this machine's $HOME → rows is a
- * pure function; the enabled set and each profile's target are read from the
- * state handle's row cache (core/state.h), the mount table is derived from them
- * inside the build, and nothing here writes. Surface is two-fold — builders and
- * readers — with one function beside them: manifest_mount_table, the build's
- * own table derivation on its own, for a command that needs this machine's topology
- * without a view (include/runtime.h) or with a binding of its own the rows do
- * not hold yet.
+ * one row per active filesystem path, both kinds, the claim standing there already
+ * applied (manifest_row_t, below). It is computed from Git at every load and
+ * never stored — Git × the state's rows × this machine's $HOME → rows is a pure
+ * function; the enabled set and each profile's target are read from the state
+ * handle's row cache (core/state.h), the mount table is derived from them inside
+ * the build, and nothing here writes. Surface is two-fold — builders and readers
+ * — with one function beside them: manifest_mount_table, the build's own table
+ * derivation on its own, for a command that needs this machine's topology without
+ * a view (include/runtime.h) or with a binding of its own the rows do not hold yet.
  *
  * The view has two layers. A **contribution** is one profile's claims placed
  * under this machine's topology: its tree's blobs and its sheet's directory items,
@@ -20,16 +19,27 @@
  * recorded beside them (manifest_unbound) and what the profile names twice recorded
  * against the name it kept (manifest_unkept). A contribution is what one profile
  * says about this machine, precedence aside. The **index** is precedence over
- * settled contributions, its two decisions made apart: one winning row per path,
- * the highest profile's explicit claim where one names the path, and where none
- * does the lowest profile's derived claim.
+ * settled contributions, its two decisions made apart, one row standing per path.
+ * An explicit claim stands unless a claim decided before it stands at its path,
+ * a standing blob stands above it, or — the claim a blob — explicit claims stand
+ * beneath it: a blob leaves no room at its place or beneath it. The highest
+ * profile's claims are decided first, and each profile's in its own precedence,
+ * which decides where its own blob and its own claims beneath it meet under two
+ * labels: the blob stands where its name is the one the profile would give the
+ * place fresh, and the claims beneath it where it is not. A derived claim fills
+ * a path no row holds and no standing blob stands above, the lowest profile's
+ * first. And where a blob lost to the claims beneath it and no derived claim
+ * fills its place, the **layer's rung** stands there: the directory those claims
+ * need, a row no contribution holds. So no row stands strictly beneath a standing
+ * blob, and a claim that stands nowhere has a row at its path or a standing blob
+ * above it.
  *
- * Everything that asks *who wins* reads the index — manifest_lookup, manifest_rows,
- * manifest_lookup_storage, manifest_holder, manifest_diff: deployment, the record's
- * join, the workspace, every screen. Everything that asks *what does this profile
- * call this path* reads that profile's own contribution — manifest_lookup_claim,
- * manifest_name, manifest_claim_name: a path P lost to a higher profile is still
- * named by what P holds.
+ * Everything that asks *what stands where* reads the index — manifest_lookup,
+ * manifest_rows, manifest_lookup_storage, manifest_holder, manifest_diff:
+ * deployment, the record's join, the workspace, every screen. Everything that
+ * asks *what does this profile call this path* reads that profile's own
+ * contribution — manifest_lookup_claim, manifest_name, manifest_claim_name: a
+ * claim of P that stands nowhere is still named by what P holds.
  *
  * Within one profile, at one path: an explicit claim (a blob of any type, a
  * `tracked` directory item) outranks a derived one whichever arrives first, and
@@ -52,18 +62,19 @@
  * profile at its name or at a rung above it — stands nowhere though the profile
  * holds it: manifest_contradicted, the repair a removal of one of the two, or a
  * re-capture of the file where both are one path. All three are claims the profile
- * holds and the view has no row for, for three different reasons; a claim
- * precedence hides is none of them — it is **overridden**, the normal shape of
- * layering, and no health question at all. A name the view did not keep is in
- * the profile and in no row, so nothing keyed by the view meets it: no filter,
- * no record join, no divergence screen, no deploy. The verbs that read a profile
- * directly serve it as readily as any other name — `dotta list -p P` lists it,
- * `dotta show -p P` prints its bytes — and none of them says it is unused, which
- * is what the health channel is for; `remove`, which reads the profile too, is
- * the one verb that takes it away. And one thing a profile can fail to be: here.
- * An enabled profile Git holds no branch for is **missing** and contributes
- * nothing: manifest_missing, the channel's fourth slice, the repair a disable,
- * or a fetch that brings the branch back.
+ * holds and the view has no row for, for three different reasons; a claim another
+ * stands over — at its path, above it, or beneath it where it is a blob — is
+ * none of them: it is **overridden**, the normal shape of layering, and no health
+ * question at all. A name the view did not keep is in the profile and in no row,
+ * so nothing keyed by the view meets it: no filter, no record join, no divergence
+ * screen, no deploy. The verbs that read a profile directly serve it as readily
+ * as any other name — `dotta list -p P` lists it, `dotta show -p P` prints its
+ * bytes — and none of them says it is unused, which is what the health channel
+ * is for; `remove`, which reads the profile too, is the one verb that takes it
+ * away. And one thing a profile can fail to be: here. An enabled profile Git
+ * holds no branch for is **missing** and contributes nothing: manifest_missing,
+ * the channel's fourth slice, the repair a disable, or a fetch that brings the
+ * branch back.
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_profile walks one profile
@@ -84,15 +95,16 @@
  *     include/runtime.h); a command that moves Git or the enabled set builds
  *     the post-mutation view itself.
  *
- *   - Readers: manifest_rows (every winning row, both kinds, unordered),
+ *   - Readers: manifest_rows (every row standing, both kinds, unordered),
  *     manifest_profiles (the profiles the rows came from, in precedence order),
  *     manifest_mounts (the table the rows were placed by, lent), manifest_lookup
  *     (by filesystem path, O(1)), manifest_lookup_storage (by claim — a storage
  *     path under one profile, linear), manifest_holder (the one row holding a
  *     name, or a refusal naming each), manifest_lookup_claim, manifest_name,
- *     manifest_claim_name and manifest_holds_name (one profile's own contribution,
- *     whoever won the path); and manifest_diff, the per-profile delta between
- *     two views that the scope-changing verbs and sync print their receipts from.
+ *     manifest_claim_name, manifest_holds_name and manifest_holds_row (one
+ *     profile's own contribution, whatever stands at the path); and manifest_diff,
+ *     the per-profile delta between two views that the scope-changing verbs and
+ *     sync print their receipts from.
  *
  * Core Principles:
  *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
@@ -101,10 +113,11 @@
  *     nothing is held past its lifetime
  *   - Precedence-aware over settled contributions — a profile's claims are placed
  *     whole before any of them is compared with another's: one row per path,
- *     the winner's kind, the explicit claims decided before the derived — a later
- *     profile's explicit claim overriding an earlier one's, and a derived directory
- *     claim filling only a path no claim holds, the earliest profile's first
- *     (manifest_row_t's `tracked`)
+ *     the explicit claims decided before the derived — a later profile's explicit
+ *     claim overriding an earlier one's at its path, a standing blob leaving no
+ *     room beneath it and losing its place to the claims standing beneath it,
+ *     and a derived directory claim filling only a path no claim holds, the
+ *     earliest profile's first (manifest_row_t's `tracked`)
  *
  * Workflow:
  *   Commands → manifest_build → rows → workspace / deploy / cleanup
@@ -133,7 +146,9 @@ typedef struct profile profile_t;
  *
  * A row in the view means the path is active: the enabled set, in precedence
  * order, names exactly one profile for it, and that profile's tree (or, for a
- * directory, its metadata.json) says what the path is. Every field is Git-derived;
+ * directory, its metadata.json) says what the path is — but at the layer's rung,
+ * a directory the claims beneath a lost blob's place need, which no document of
+ * its profile holds (core/manifest.c manifest_layer). Every field is Git-derived;
  * nothing here records what dotta did — the record dotta keeps of a path
  * (state_record_t, core/state.h) is written from one of these.
  *
@@ -143,9 +158,11 @@ typedef struct profile profile_t;
  *                 encrypted is the metadata-projected cache of the blob's own
  *                 bytes (docs/encryption-spec.md). A link row carries neither:
  *                 see Totality below
- *   DIRECTORY   — claimed from metadata alone: blob_oid is zero, encrypted is
- *                 false, owner/group are the item's, mode is the claim or
- *                 DIR_MODE_DEFAULT, and tracked is the item's class
+ *   DIRECTORY   — claimed from metadata alone, or required by the layer at a
+ *                 place a blob lost: blob_oid is zero, encrypted is false,
+ *                 owner/group are the item's, mode is the claim or
+ *                 DIR_MODE_DEFAULT, and tracked is the item's class — the rung's
+ *                 the default with no owner, group or class
  *
  * Two kinds of directory row, and `tracked` is the whole difference between them.
  * Every directory row asserts that a path must exist and says what it looks like
@@ -157,7 +174,8 @@ typedef struct profile profile_t;
  * tracking it of the tracked ones alone (the untracked scan, the directory
  * divergence, the deploy plan). The second kind is an ancestor claim — derived
  * from the chain above a tracked path, so what it carries binds dotta's own
- * creation of that path and nothing else (core/metadata.h). It is false on every
+ * creation of that path and nothing else (core/metadata.h) — or the layer's rung,
+ * which no chain derives and which binds the same creation. It is false on every
  * other kind, where nothing reads it.
  *
  * Totality: after build, mode is THE mode for every non-link row — floor or claim,
@@ -172,10 +190,12 @@ typedef struct profile profile_t;
  * permission bits — a hand-edit that contradicts the x-bit across the two is
  * resolved by that contract, not detected per-read.
  *
- * Winner or not: `profile` is the profile whose claim the row is, and a row is
- * never rewritten when a higher profile takes its path. A row read through the
- * view's index stands there; a row read through manifest_lookup_claim is one
- * profile's claim at a path whether or not it stands.
+ * Standing or not: `profile` is the profile whose claim the row is — for the
+ * layer's rung, the profile whose standing claims beneath made the blob lose,
+ * which holds no claim there — and a row is never rewritten when another claim
+ * stands over it. A row read through the view's index stands there; a row read
+ * through manifest_lookup_claim is one profile's claim at a path whether or not
+ * it stands.
  *
  * Strings are arena-backed by the producer; rows are read through `const
  * manifest_row_t *` and live for the producer's arena. The builders below produce
@@ -185,7 +205,7 @@ typedef struct manifest_row {
     /* Identity */
     const char *filesystem_path; /* Deployed path (/home/user/.bashrc), as spelled */
     const char *storage_path;   /* Path in profile (home/.bashrc) */
-    const char *profile;        /* The profile whose claim the row is */
+    const char *profile;        /* The profile whose claim the row is; the rung's, its owner */
 
     /* What stands there: manifest_diff's updated compares each field but encrypted */
     path_type_t type;           /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
@@ -228,7 +248,7 @@ static inline bool manifest_is_claim(
 
 /**
  * Is the row an ancestor claim — a directory derived from the chain above a tracked
- * path, never named by anyone?
+ * path, or the layer's rung at a lost blob's place, never named by anyone?
  *
  * The bottom of the lattice a namer reads: the one kind of row that does not
  * name its own path. Every other kind does, a blob as much as a tracked directory,
@@ -240,14 +260,17 @@ static inline bool manifest_is_claim(
  *
  * What reads it: a contribution keeps it apart from the profile's explicit claims,
  * and keeps it where the profile holds one of them at its path too, for the layer
- * to hide; the index lets it fill a path no claim holds and never take a held
- * one; and a search reads it as "the profile holds a subtree beneath here" —
- * one of possibly several chains, never a name (manifest_lookup_claim's note).
- * False on every other kind, where `tracked` is false and nothing reads it.
+ * to hide or, where that claim is a blob that lost its place, to stand; the index
+ * lets it fill a path no claim stands at and never take one a claim stands at;
+ * and a search reads it as "the profile holds a subtree beneath here" — one of
+ * possibly several chains, never a name (manifest_lookup_claim's note). False
+ * on every other kind, where `tracked` is false and nothing reads it.
  *
- * Readers: a claim's placement, the cut of a contribution's rows and the layering's
- * two passes (core/manifest.c manifest_place_claim, manifest_contribute,
- * manifest_layer);
+ * Readers: a claim's placement, the cut of a contribution's rows, the layering's
+ * two passes, the order the first decides a contribution's claims in, and the
+ * index of its own class a row is asked of (core/manifest.c manifest_place_claim,
+ * manifest_contribute, manifest_layer, manifest_places, manifest_precedence,
+ * manifest_holds_row);
  * the reassignment predicate, the absence rule and the route table's derived
  * arm (core/workspace.h workspace_reassigned, core/workspace.c classify_absent,
  * workspace_item_route); the untracked scan's word at a child, a rung being the
@@ -335,17 +358,21 @@ typedef struct manifest manifest_t;
  * contribution is whole, the fresh name kept and every other recorded
  * (manifest_unkept), and a derived claim is held apart, the first of two chains
  * through one path. Only then does precedence run, in two passes: the explicit
- * claims, the later (higher) profile's taking the path whatever its kind, and
- * then the derived claims, each filling a path no claim holds, the earlier
- * profile's first — so an explicit claim outranks a derived one within a profile
- * as across them, and the view holds one row per path, the winner's kind. A profile
- * without metadata.json contributes no directories and is skipped, not an error.
+ * claims, the later (higher) profile's first and each profile's in its own
+ * precedence, a claim standing at a path no claim before it stands at unless a
+ * standing blob stands above it or, the claim a blob, standing claims beneath
+ * it need its place as a directory; then the derived claims, each filling a path
+ * no row holds and no standing blob stands above, the earlier profile's first;
+ * and last the layer's rung at each place a blob lost that no derived claim fills
+ * — so an explicit claim outranks a derived one within a profile as across them,
+ * and the view holds one row per path. A profile without metadata.json contributes
+ * no directories and is skipped, not an error.
  *
  * Row order is unspecified; consumers that need parent-before-child sort their
  * own pointer arrays (the workspace does). The oracle is a set. What order there
  * is is each contribution's claim order, the contributions in precedence order
  * — so a path a higher profile overrides sits at the winner's place, not the
- * loser's.
+ * loser's — and the layer's rungs after them.
  *
  * Memory:
  *   - rows, per-row strings, the profile names (duplicated once per profile)
@@ -376,12 +403,13 @@ error_t manifest_build(
  * Build the manifest from one profile
  *
  * One profile's view: a manifest_row_t row for every claim the profile's walk
- * shows (core/profiles.h profile_walk) — every blob its tree exposes (machinery
- * aside: every name outside the label grammar, dotta's own files among them —
- * core/profiles.h, the decode) and every DIRECTORY item its own sheet carries
- * that the tree does not contradict — the same per-profile step manifest_build
- * runs, applied once, sheet included (the Builders note above: the walk reads
- * it, strictly, so one rule reads it). Readers that want files only test row->type.
+ * shows that stands (core/profiles.h profile_walk) — every blob its tree exposes
+ * (machinery aside: every name outside the label grammar, dotta's own files among
+ * them — core/profiles.h, the decode) and every DIRECTORY item its own sheet
+ * carries that the tree does not contradict — the same per-profile step
+ * manifest_build runs, applied once, sheet included (the Builders note above:
+ * the walk reads it, strictly, so one rule reads it). Readers that want files
+ * only test row->type.
  *
  * The profile is the caller's to open — at a tree it holds, a historical commit's
  * or a stage's or the one a verb selected (core/profiles.h profile_open), or at
@@ -400,9 +428,12 @@ error_t manifest_build(
  *
  * One contribution, settled and layered like any other, so one profile's view
  * answers manifest_lookup_claim and manifest_name for its profile exactly as an
- * enabled view answers them for one of its own. No policy enters here: no raw
- * argument, no fallback, no enabled-set question, and the profile need not be
- * enabled.
+ * enabled view answers them for one of its own, and its rows are the places the
+ * profile's own claims settle on this machine: where its blob and its claims
+ * beneath it meet under two labels, the side its fresh name spells stands, and
+ * a lost blob's place is a directory — its own derived claim there, or the layer's
+ * rung. No policy enters here: no raw argument, no fallback, no enabled-set
+ * question, and the profile need not be enabled.
  *
  * Readers: the historical diff (cmds/diff.c diff_commit_to_workspace, whose
  * comparison and coverage answer each read the whole view); export's path arm
@@ -440,17 +471,19 @@ error_t manifest_build_profile(
 );
 
 /**
- * Every winning row of the view, both kinds, unordered
+ * Every row standing in the view, both kinds, unordered
  *
- * The index's rows — what stands at each active path. A name a profile did not
- * keep and a claim a higher profile overrode are both absent: the first is
- * manifest_unkept's, the second is layering, and neither is a row.
+ * The index's rows — what stands at each active path: a claim, or the layer's
+ * rung, which no contribution holds (manifest_holds_row). A name a profile did
+ * not keep and a claim another stands over — at its path, above it, or beneath
+ * it where it is a blob — are both absent: the first is manifest_unkept's, the
+ * second is layering, and neither is a row.
  *
  * Pure value return — no allocation, no error path. The slice aliases the view's
  * own storage and is valid for the arena's lifetime.
  *
  * @param manifest Manifest (NULL returns an empty slice)
- * @return Borrowed slice over every winning row
+ * @return Borrowed slice over every row standing
  */
 manifest_rows_t manifest_rows(const manifest_t *manifest);
 
@@ -760,7 +793,9 @@ const manifest_row_t *manifest_lookup(
  * label names either: the namespace rule over locations, where core/profiles.c
  * profile_blob_above asks it over one profile's names. Whichever profile's blob
  * the view holds there, precedence applied (manifest_lookup) — over one profile's
- * view, that profile's own. A directory row of either kind stops nothing: an
+ * view, that profile's own. At most one stands above any path: the layer stands
+ * no row strictly beneath a standing blob (core/manifest.c manifest_layer), so
+ * no two standing blobs nest. A directory row of either kind stops nothing: an
  * ancestor claim names neither itself nor anything beneath it
  * (manifest_is_derived), which is why a derived row at one key is no answer about
  * the other.
@@ -791,7 +826,7 @@ const manifest_row_t *manifest_lookup(
  *
  * @param manifest Manifest (must not be NULL)
  * @param filesystem_path Where to ask, absolute: a key (must not be NULL)
- * @return The nearest blob row standing over the path, or NULL
+ * @return The blob row standing above the path, or NULL
  */
 const manifest_row_t *manifest_blob_above(
     const manifest_t *manifest,
@@ -809,11 +844,12 @@ const manifest_row_t *manifest_blob_above(
  * A caller with no profile in hand asks manifest_holder: the first of several
  * rows holding a name was never an answer.
  *
- * The winners, like every reader of the index: this asks whether a claim *wins*
- * somewhere, and a claim precedence overrode — or a name the profile did not
- * keep — wins nowhere and answers NULL. That is exactly what the workspace's
- * relocation read wants: a claim standing under another profile is not "relocated",
- * the copy at the old path is simply no longer active.
+ * The rows standing, like every reader of the index: this asks whether a claim
+ * *stands* somewhere, and a claim another stands over — at its path, above it,
+ * or beneath it where it is a blob — or a name the profile did not keep stands
+ * nowhere and answers NULL. That is exactly what the workspace's relocation read
+ * wants: a claim another stands over at its new path is not "relocated", the
+ * copy at the old path is simply no longer active.
  *
  * Linear scan — its reader asks once per BACKED orphan (the workspace's relocation
  * read, each of which already cost a Git tree probe; a lazy per-profile storage
@@ -842,8 +878,10 @@ const manifest_row_t *manifest_lookup_storage(
  * one profile's file for another's — so the refusal names each holder with the
  * path that tells it apart, in precedence order, and `*out_row` is NULL beside it.
  *
- * The winners, like manifest_lookup_storage beside it: a name that wins nowhere
- * is held by nobody here.
+ * The rows standing, like manifest_lookup_storage beside it: a name that stands
+ * nowhere is held by nobody here. And a row holds its name only where its profile
+ * holds the row (manifest_holds_row): the layer's rung stands under a name no
+ * profile holds, and is no holder.
  *
  * Linear scan, once per command. Readers: cmds/show.c cmd_show and cmds/list.c
  * list_file_history, each without a profile.
@@ -865,7 +903,11 @@ error_t manifest_holder(
 /**
  * The row `profile` holds at `filesystem_path` in its own contribution — its
  * explicit claim there, else the derived claim it placed there first — whether
- * or not it wins the path in the index.
+ * or not it stands there in the index: a claim at the path, a standing blob above
+ * it, or the claims beneath it where it is a blob can each stand over it. So at
+ * a place where the profile's own blob lost to its own claims beneath, this is
+ * the blob, where the index stands a directory: the profile holds the blob, and
+ * a reader that wants what stands asks the index (manifest_lookup).
  *
  * NULL when the profile is not in the view, holds nothing there, or is NULL —
  * the API's own return convention, a pointer-returning lookup having no CHECK_NULL
@@ -911,9 +953,13 @@ error_t manifest_holder(
  * profile's off its own view and every other's off the enabled one (cmds/add.c
  * add_refuse_ancestry); whether an orphan's profile still holds a claim at its
  * path, which leaves the copy overridden, standing nowhere, rather than pruned
- * or released (core/workspace.c workspace_analyze_orphans); and `ignore --test`'s
- * note beneath a verdict that excludes a path its asker holds, which the rules
- * never reach (cmds/ignore.c ignore_test).
+ * or released (core/workspace.c workspace_analyze_orphans); whether a commit
+ * that let a claim go left its profile holding the path all the same, which keeps
+ * the record a row would (cmds/add.c add_write_record, cmds/update.c
+ * update_write_record, cmds/remove.c remove_settle); whether the untracked scan's
+ * owner holds a blob at a child no row of its own stands at (core/workspace.c
+ * workspace_scan); and `ignore --test`'s note beneath a verdict that excludes a
+ * path its asker holds, which the rules never reach (cmds/ignore.c ignore_test).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,
@@ -946,12 +992,13 @@ const manifest_row_t *manifest_lookup_claim(
  * under an uncommitted claim, and manifest_name can answer what the next settle
  * will keep.
  *
- * A name this answers true for has a row standing at its path: the profile holds
- * an explicit claim there — the group's kept member, or an uncontested one, its
- * derived claims held apart — and the layering's first pass stands a row at every
- * path some contribution claims explicitly, whoever's it is. So a caller that
- * asks this first may read manifest_lookup's answer without asking whether there
- * is one.
+ * A name this answers true for is a claim the profile holds, standing or not:
+ * the group's kept member, or an uncontested one, its derived claims held apart.
+ * Where it stands nowhere, a row stands at its path — another claim, or, where
+ * it is a blob the claims beneath it took the place of, the directory they need
+ * — or a standing blob above it, and nothing else can stand over it (the layer,
+ * core/manifest.c manifest_layer). So a caller that asks this first reads no
+ * row at the path as a blob above it (cmds/add.c add_write_record).
  *
  * Readers: add's typed-argument admission and its record join (cmds/add.c), and
  * revert's restore admission (cmds/revert.c). The two admissions spell one rule:
@@ -977,13 +1024,38 @@ bool manifest_holds_name(
 );
 
 /**
+ * Is the row a claim its profile holds, rather than the layer's rung?
+ *
+ * True of every row a contribution holds, asked through any lookup — the index
+ * or the profile's own (manifest_lookup_claim) — and so of every row the view
+ * stands but the layer's rung (core/manifest.c manifest_layer): its profile is
+ * the one it is attributed to, and its name one that profile would give the place,
+ * never one it holds. Asked of the row's own class, as the contribution keeps
+ * it apart: a derived row is held where the profile's derived claims hold it,
+ * though the profile holds an explicit claim at the same path standing nowhere
+ * — its own blob, lost to its own claims beneath, whose place its derived claim
+ * fills.
+ *
+ * Readers: the name's holders, a rung holding no name (manifest_holder), and
+ * export's directory claims, a rung being none to count (cmds/export.c
+ * export_collect_filesystem, export_entry_from_row).
+ *
+ * @param manifest Manifest (NULL answers false)
+ * @param row A row of this view (NULL answers false)
+ * @return Whether the row's profile holds it
+ */
+bool manifest_holds_row(const manifest_t *manifest, const manifest_row_t *row);
+
+/**
  * A claim as a namer reads it: the name, and how far it reaches
  *
  * `kind` is the whole reason this is a value and not a string: a claim at a path
  * names that path whatever it is, but only a DIRECTORY names what lies beneath
  * it — nothing is named beneath a blob: a name beneath its own is one the stage
  * refuses, and a path beneath its place one its writer refuses before it names
- * anything (cmds/add.c cmd_add, through manifest_blob_above). The row is the
+ * anything while the blob stands (cmds/add.c cmd_add, through manifest_blob_above),
+ * and names past it where the blob lost the place to the claims beneath it. The
+ * row is the
  * claim entire, its mode and owner and blob (manifest_lookup_claim);
  * this pair is the claim as a namer needs it.
  *

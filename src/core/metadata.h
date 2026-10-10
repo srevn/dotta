@@ -179,11 +179,12 @@
  * its "tracked" word, never by the bits it carries, so nothing compares a mode
  * against this to read intent back out of it. Readers, each supplying the answer
  * where a claim named none: the claim's floor, which the view's rows take
- * (core/profiles.c profile_claim_mode), deploy's creation of a rung no claim
- * covers (core/deploy.c create_ancestor), and export's materialisation — each
- * arm's root and every directory the copy completes (cmds/export.c
- * export_collect_profile, export_collect_storage, export_collect_filesystem,
- * complete_directories).
+ * (core/profiles.c profile_claim_mode), the layer's rung at a place a blob lost,
+ * which no claim names (core/manifest.c manifest_rung), deploy's creation of a
+ * rung no claim covers (core/deploy.c create_ancestor), and export's
+ * materialisation — each arm's root and every directory the copy completes
+ * (cmds/export.c export_collect_profile, export_collect_storage,
+ * export_collect_filesystem, complete_directories).
  */
 #define DIR_MODE_DEFAULT 0755
 

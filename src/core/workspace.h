@@ -237,13 +237,16 @@ typedef enum {
  *                       the one node a key beneath resolves through. The orphans
  *                       beneath it, the ORPHANED and RELEASED items, are not
  *                       looked at, and nothing else is. A view row beneath such
- *                       a path is a deliberate through-capture: its profile's
- *                       derivation met the non-directory and claimed no rung
- *                       there (core/profiles.h profile_capture_ancestors), so
- *                       the arrangement predates the row and the look is the
- *                       row's own. A record's memory displaces only the orphans
- *                       beneath it — never a view row, so RECORD stands on no
- *                       DEPLOYED item.
+ *                       a path is read through it: no enabled claim names the
+ *                       path — one that did would stand there over the row as a
+ *                       blob, or lose its place to the row and leave a directory
+ *                       row there (core/manifest.c manifest_layer) — so the node
+ *                       is the machine's, which the row's profile's derivation
+ *                       met and claimed no rung at (core/profiles.h
+ *                       profile_capture_ancestors), and the look is the row's
+ *                       own. A record's memory displaces only the orphans beneath
+ *                       it — never a view row, so RECORD stands on no DEPLOYED
+ *                       item.
  *
  * NONE on every item looked at at its own path, the squatter's own included:
  * the ask is of proper ancestors, so a squatter is never its own answer and carries
@@ -1354,10 +1357,10 @@ typedef struct {
  * the orphans beneath it alone (the reach rule, workspace_displaced_t), and every
  * orphan carries the fact on itself. This probe is for a caller that needs the
  * squatter itself, which no item carries: the fate of a planned row (core/deploy.c
- * check_ancestry). A view row beneath a record-remembered squatter is the
- * through-capture the rule leaves to its own occupant. So the answer is the view's
- * claims alone, and its claim is exactly the displaced class a view row's item
- * beneath it carries.
+ * check_ancestry). A view row beneath a record-remembered squatter is read through
+ * it, no enabled claim naming the squatter's path (workspace_displaced_t, RECORD).
+ * So the answer is the view's claims alone, and its claim is exactly the displaced
+ * class a view row's item beneath it carries.
  *
  * The answer is noted by the look that found each squatter (workspace.c
  * workspace_look), and every directory row is looked at before any file row or

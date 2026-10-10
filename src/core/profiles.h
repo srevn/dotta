@@ -471,9 +471,10 @@ error_t profile_contradicted(
  * available profiles too, and a profile nothing has enabled owns no rows. The
  * view's rows a profile wins are what `status -v` counts, by the same rule, a
  * derived row no directory (cmds/status.c status_print_profiles), so a profile
- * that wins every path it claims counts there as it counts here: the holds/wins
- * split, and the two part only where another profile wins a path
- * (docs/profiles.md).
+ * whose every claim stands counts there as it counts here: the holds/wins split,
+ * and the two part only where a claim of it stands nowhere — another claim at
+ * its path, a blob above it, or claims beneath it, the profile's own among them
+ * (docs/profiles.md, core/manifest.c manifest_layer).
  *
  * A count reads no blob. The bytes the files stand for are a listing's to fold,
  * beside the rows that must sum to them (cmds/list.c list_size_claim).

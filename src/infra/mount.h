@@ -404,8 +404,10 @@ const mount_root_t *mount_root_of(
  * The path is the root, one separator and the tail — or the root itself where
  * the name is the word alone: the key of the claim either way, and the one every
  * producer of a key agrees on (the table's paragraph above). A link anywhere in
- * it is a component — a claim captured through one stands where its spelling
- * says, and so does a claim of the link itself.
+ * it is a component — a claim captured through one is keyed where its spelling
+ * says, and so is a claim of the link itself, which leaves no room for a claim
+ * keyed beneath it or loses its place to one, as any blob does (core/manifest.c
+ * manifest_layer).
  *
  * Absence is the find's own, handed on unchanged: mount_root_of answers no root
  * of the name's label for this asker, so the two have one producer and one reading

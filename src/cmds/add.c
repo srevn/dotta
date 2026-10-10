@@ -151,13 +151,20 @@ typedef struct {
  * named where they were captured, above this line.
  *
  * The four counts partition the capture exactly: a claim whose own row took the
- * event, one a higher-precedence profile's row holds, one another name of this
- * profile holds — a second name of one profile being a thing it can hold and a
- * sync can bring here (core/manifest.h manifest_unkept, whose screen word is
- * "unused path"), whose repair is the health channel's on the same screen, not
- * this receipt's — and one whose name the profile no longer holds at the path
- * at all. Nothing falls through, which is what makes the sum total and each cause
- * checked where the row that says it is in hand rather than read off a difference.
+ * event, one another claim stands over, one another name of this profile holds
+ * — a second name of one profile being a thing it can hold and a sync can bring
+ * here (core/manifest.h manifest_unkept, whose screen word is "unused path"),
+ * whose repair is the health channel's on the same screen, not this receipt's —
+ * and one whose name the profile no longer holds at the path at all. Nothing
+ * falls through, which is what makes the sum total and each cause checked where
+ * the row that says it is in hand rather than read off a difference.
+ *
+ * `overridden` is three positions, the view's own (core/manifest.c manifest_layer):
+ * another profile's claim standing at the path; a blob captured where claims
+ * stand beneath it, its place a directory row; and a capture beneath a standing
+ * blob, with no row at its path — the one of the three whose copy the record
+ * phase writes down, an observation, so it is held for the blob above it and
+ * not met as a stranger's (add_write_record).
  *
  * `unkept` is one thing only. This command cannot author a second name, and a
  * capture at a contested path lands on the name the next settle will keep —
@@ -172,7 +179,7 @@ typedef struct {
 typedef struct {
     size_t anchored;       /* Captures whose own row took the ownership event */
     size_t taken_over;     /* Of the anchored, records taken from another profile */
-    size_t overridden;     /* Captures a higher-precedence profile's row holds */
+    size_t overridden;     /* Captures another claim stands over: at, above or beneath them */
     size_t unkept;         /* Captures another name of this profile holds */
     size_t gone;           /* Captures whose name the profile no longer holds at the path */
 } add_receipt_t;
@@ -552,15 +559,18 @@ static error_t add_refuse_unjudged(
  * Two verdicts skip a child with its subtree, each with one line at NORMAL: a
  * kind the profile's own claim at the path contradicts, and a name the commit
  * has no room for, or one Git will not hold (core/profiles.h profile_admit).
- * Neither may fail the command — a stale claim deep inside $HOME must not fail
- * `dotta add p ~`, and the capture that would have refused it arrives too late
- * to skip anything. What the walk could not look at refuses rather than skips —
- * a directory that will not list, an entry that will not stat, a path past the
- * kernel's PATH_MAX among them, what Git's rules could not judge — since collection
- * precedes capture, so a refusal there costs nothing, where a skip would leave
- * the profile short of a subtree it never said it missed. Depth is no limit of
- * the walk's own: it goes as deep as the kernel resolves a path (sys/filesystem.h
- * fs_listing_t).
+ * The first is met at a place where the profile's own blob lost to its claims
+ * beneath, the view standing the directory they need (core/manifest.c
+ * manifest_layer): the walk does not enter it, and a file in it is added by name,
+ * which composes past the blob. Neither may fail the command — a stale claim
+ * deep inside $HOME must not fail `dotta add p ~`, and the capture that would
+ * have refused it arrives too late to skip anything. What the walk could not
+ * look at refuses rather than skips — a directory that will not list, an entry
+ * that will not stat, a path past the kernel's PATH_MAX among them, what Git's
+ * rules could not judge — since collection precedes capture, so a refusal there
+ * costs nothing, where a skip would leave the profile short of a subtree it never
+ * said it missed. Depth is no limit of the walk's own: it goes as deep as the
+ * kernel resolves a path (sys/filesystem.h fs_listing_t).
  *
  * On error the lists keep what was collected, in the command arena, and the scratch
  * is left as it stands, for the walk's driver to free.
@@ -878,7 +888,8 @@ static error_t add_refuse_excluded(
  * follow the claim standing at the link and the base, in the order the load classes
  * the node there (core/workspace.c workspace_analyze_directory): a blob — a link
  * a profile claims, or a file — then dotta's copy, a tracked directory, a derived
- * one, each with its way out.
+ * one, each with its way out. A claim at the link that stands nowhere, beneath
+ * a blob standing above it, has no row there, and is worded by itself.
  *
  * Stated: a disabled profile's own rung off the chain is admitted, and the capture
  * is displaced at the profile's enable, where status names the rung and `dotta
@@ -965,10 +976,12 @@ static error_t add_refuse_ancestry(
         }
 
         /* The refusal, in the words of the claim standing at the link: the enabled
-         * view's row, or the capturing profile's own where that view places none
-         * of its claims yet — the add that first binds it */
+         * view's row; else a claim found here that stands nowhere — the capturing
+         * profile's own first, where that view places none of its claims yet
+         * (the add that first binds it), else another's, a blob standing above
+         * the link (core/manifest.c manifest_layer) */
         const manifest_row_t *row = manifest_lookup(enabled->manifest, link);
-        if (!row) row = held;
+        if (!row) row = held ? held : other;
 
         char shown[PATH_MAX], beneath[PATH_MAX];
         output_format_path(link, identity()->home, shown, sizeof(shown));
@@ -1612,19 +1625,28 @@ static error_t add_write_record(
          *
          * A miss is three things, each counted where the row that says it is in
          * hand, so the receipt names the cause it checked rather than a difference:
-         * the claim lost the path — to a higher-precedence profile's row, or to
-         * another name of this very profile that the settle kept, which a machine
-         * whose roots held two names apart can commit and a sync can bring here
-         * — so the row is someone else's word, and so is the record at the path;
-         * or the profile no longer names the path by this name at all, a later
-         * commit having removed it.
+         * another claim stands over the capture — another profile's at its path,
+         * the claims beneath it where it is a blob, which leave a directory row
+         * at its place, or a blob above it, which leaves no row at its path; or
+         * another name of this very profile that the settle kept stands there,
+         * which a machine whose roots held two names apart can commit and a sync
+         * can bring here; or the profile no longer names the path by this name
+         * at all, a later commit having removed it. Where a row stands, it is
+         * someone else's word, and so is the record at the path.
          *
-         * The profile's own contribution answers which, and answering it first
-         * is what lets the arms below read the row without asking whether there
-         * is one: a name this profile holds at a path has a row at that path,
-         * the layering inserting every explicit row of every contribution
-         * (core/manifest.h manifest_holds_name). That is the gone arm's second
-         * job: it is the NULL-`row` guard the two counting arms rest on.
+         * The profile's own contribution answers whether the name is still its,
+         * first, and that is what lets the arms below read an absent row: a name
+         * the profile holds that stands nowhere has a row at its path or a standing
+         * blob above it (core/manifest.h manifest_holds_name), so no row is the
+         * blob above. The capture is overridden there, and its copy — the bytes
+         * the capture just read, which nothing deployed — is written down as an
+         * observation, the capture's record with no deployment stamp: the load
+         * holds such a copy for the blob standing over it (core/workspace.c
+         * workspace_analyze_orphans), where an unrecorded node would be a
+         * stranger's beneath it. Overridden at its own path, it stays unrecorded:
+         * there the record would be the frame's base for the row standing at
+         * the path (core/workspace.h workspace_base), and apply would replace
+         * the capture unasked as dotta's own copy.
          *
          * A refused statement ends the pass. The phase's writes are one transaction
          * and a database that refuses one write may have ended it — SQLite rolls
@@ -1645,7 +1667,11 @@ static error_t add_write_record(
                         manifest, profile, path->filesystem_path, path->claim.storage_path
                         )) {
                         receipt->gone++;
-                    } else if (strcmp(row->profile, profile) != 0) {
+                    } else if (!row) {
+                        err = state_write(state, &path->record);
+                        if (err) goto cleanup;
+                        receipt->overridden++;
+                    } else if (manifest_is_derived(row) || strcmp(row->profile, profile) != 0) {
                         receipt->overridden++;
                     } else {
                         receipt->unkept++;
@@ -1696,11 +1722,18 @@ static error_t add_write_record(
              * back (manifest_mounts): a name let go stands nowhere until it gives
              * one. Two can give one path — the climb drops a place under every
              * name the profile derives it by — and the second retire there finds
-             * no record, which is no failure (core/state.h state_retire) */
+             * no record, which is no failure (core/state.h state_retire). A row
+             * standing there keeps the record, and so does a claim the profile
+             * still holds there standing nowhere — beneath a blob, another of
+             * its names at the place — which holds the copy as a row would
+             * (core/manifest.h manifest_lookup_claim) */
             const char *filesystem_path = mount_resolve(
                 ctx->arena, manifest_mounts(walk->view), profile, let_go[b]->entries[i]
             );
-            if (!filesystem_path || manifest_lookup(manifest, filesystem_path)) continue;
+            if (!filesystem_path || manifest_lookup(manifest, filesystem_path) ||
+                manifest_lookup_claim(manifest, profile, filesystem_path)) {
+                continue;
+            }
 
             /* This profile's record alone, the join remove's candidates make
              * (cmds/remove.c remove_paths_candidates): a record naming another
@@ -2158,13 +2191,17 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* Above it, the same refusal: a path beneath one of the profile's own
-         * files, whichever label names either, lies where the file stands, and
-         * no apply could place both. The removal that gives the file up is the
-         * way past, as at the path. The commit's admission sees the pair
-         * only where the two names share a prefix (core/profiles.h profile_admit);
-         * the view sees it wherever the two stand. A walk needs no such question:
-         * it meets the file's place before anything beneath it, and the kind
-         * refusal skips it there */
+         * files standing in its view, whichever label names either, lies where
+         * the file stands, and no apply could place both. The removal that gives
+         * the file up is the way past, as at the path. The commit's admission
+         * sees the pair only where the two names share a prefix (core/profiles.h
+         * profile_admit); the view sees it wherever the two meet, and stands
+         * the file only where its name is the one the profile would give its
+         * place fresh — elsewhere the file loses the place to the claims beneath
+         * it (core/manifest.c manifest_layer), and a capture beneath it is one
+         * more of them, named under the place's fresh name. A walk needs no such
+         * question: it meets the file's place before anything beneath it, and
+         * the kind refusal skips it there */
         const manifest_row_t *above = manifest_blob_above(view, filesystem_path);
         if (above) {
             char shown[PATH_MAX], beneath[PATH_MAX];
@@ -2741,15 +2778,16 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             );
 
             /* Each cause named by the count that checked it, never by the shortfall
-             * (add_receipt_t): a row of another profile is an override, a row
-             * of this one under another of its own names is an unused path, whose
-             * repair the health channel carries on the status screen, and a name
-             * the profile no longer holds is one a later commit removed. The
-             * three sum to the shortfall exactly. */
+             * (add_receipt_t): another claim standing over a capture is an override
+             * — another profile's at its path, claims beneath it, or a blob above
+             * it, the profile's own claims among them, so the note names no profile
+             * — a row of this one under another of its own names is an unused
+             * path, whose repair the health channel carries on the status screen,
+             * and a name the profile no longer holds is one a later commit removed.
+             * The three sum to the shortfall exactly. */
             if (receipt.overridden > 0) {
                 output_info(
-                    out, OUTPUT_NORMAL,
-                    "Note: %zu path%s overridden by higher-precedence profiles",
+                    out, OUTPUT_NORMAL, "Note: %zu path%s overridden by another claim",
                     receipt.overridden, receipt.overridden == 1 ? "" : "s"
                 );
             }

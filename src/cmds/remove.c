@@ -224,12 +224,12 @@ typedef struct {
  * For each candidate the subject is its record: one whose path another profile's
  * row now provides is a fallback — kept, it reads [reassigned], or [stale] where
  * the row that stays is of another kind (dotta's own copy the row replaces),
- * until apply acknowledges or replaces it; one the removing profile still provides,
- * under another of its names at the place, is kept and counted nowhere, as update's
- * record phase keeps it (cmds/update.c update_write_record); one the view no
- * longer provides takes the fate the user chose — --delete-files orders the copy
- * pruned at the next apply, the default releases (the record retires, and the
- * copy stays on disk — core/state.h state_retire).
+ * until apply acknowledges or replaces it; one the removing profile still claims,
+ * under another of its names at the place, standing or not, is kept and counted
+ * nowhere, as update's record phase keeps it (cmds/update.c update_write_record);
+ * one nothing provides any longer takes the fate the user chose — --delete-files
+ * orders the copy pruned at the next apply, the default releases (the record
+ * retires, and the copy stays on disk — core/state.h state_retire).
  *
  * Asked under the caller's lock, of candidates read under it: the fates are written
  * blind (state_order_prune, state_retire), so the record they are decided from
@@ -283,10 +283,15 @@ static error_t remove_settle(
     for (size_t i = 0; i < count; i++) {
         const remove_candidate_t *candidate = &candidates[i];
 
-        /* A row standing keeps the record: another profile's is a fallback, and
-         * the removing profile's own — another of its names at the place — leaves
+        /* A row standing keeps the record, and so does a claim the removing profile
+         * still holds there standing nowhere — beneath a blob, another of its
+         * names at the place (core/manifest.h manifest_lookup_claim): another
+         * profile's row is a fallback, and the removing profile's own claim leaves
          * the path its, with nothing to count */
         const manifest_row_t *row = manifest_lookup(after, candidate->path);
+        if (!row) {
+            row = manifest_lookup_claim(after, candidate->record->profile, candidate->path);
+        }
         if (row) {
             if (strcmp(row->profile, candidate->record->profile) != 0) {
                 settlement->fallback++;
@@ -756,7 +761,11 @@ static error_t remove_overlaps(
 
         /* `standing` is the view's fact, not the record's, and asked at a shared
          * path alone — which is sound: a row another enabled profile stands at
-         * the path is that profile's claim there, so it is among the others */
+         * the path is that profile's claim there, so it is among the others, or
+         * the layer's rung, which no profile claims (core/manifest.h
+         * manifest_holds_row) and which stands only where every claim at the
+         * path stands nowhere, the removed one among them, so the removal moves
+         * nothing on disk there and the closing line's own clause covers it */
         overlaps[count++] = (remove_overlap_t){
             .filesystem_path = filesystem_path,
             .storage_path = claims[i].storage_path,

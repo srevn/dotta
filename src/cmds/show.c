@@ -638,7 +638,7 @@ error_t cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             storage_path = arg.storage_path;
         } else {
             /* The profile's own view of that tree, strict about its sheet, names
-             * the path: the claim standing there, else the name one would take */
+             * the path: the claim it holds there, else the name one would take */
             manifest_t *view = NULL;
             err = manifest_build_profile(profile, mounts, ctx->arena, &view);
             if (err) goto cleanup;

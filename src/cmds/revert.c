@@ -31,7 +31,7 @@
 #include "utils/commit.h"
 
 /**
- * The claim `profile` stands at `filesystem_path`, or NULL when it stands none
+ * The claim `profile` holds at `filesystem_path`, or NULL where it holds none
  *
  * One contribution of the profile, asked for the row at the path (core/manifest.h
  * manifest_build_profile, manifest_lookup_claim). The row is the arena's, as
@@ -39,14 +39,13 @@
  *
  * The row and not its name, because this file asks it three ways: the search
  * takes any claim, for whether a profile holds the path at all; the read takes
- * any claim; and the write's name takes the claim standing there whatever it is
- * called. A verb answering a string would have to pick one of them for all three,
- * which is also why revert no longer asks core/manifest.h manifest_claim_name:
- * over a past tree a name today's roots would compose is one that tree never
- * held, and for a verb that writes, composing a name would choose a deployment
- * contract. A fourth question — may this name be authored at all — is the
- * admission's, and it reads more of one view than a row
- * (revert_refuse_second_name).
+ * any claim; and the write's name takes the claim held there whatever it is called.
+ * A verb answering a string would have to pick one of them for all three, which
+ * is also why revert no longer asks core/manifest.h manifest_claim_name: over a
+ * past tree a name today's roots would compose is one that tree never held, and
+ * for a verb that writes, composing a name would choose a deployment contract.
+ * A fourth question — may this name be authored at all — is the admission's,
+ * and it reads more of one view than a row (revert_refuse_second_name).
  *
  * Strict, like every view: a profile whose sheet will not load refuses the question
  * rather than answering from the tree alone. cmd_revert reads both sheets strictly
@@ -58,11 +57,11 @@
  * @param profile The profile the claim is looked for in — at the head's tree or
  *                the target commit's (must not be NULL)
  * @param filesystem_path Where to ask (must not be NULL)
- * @param out_row The claim, or NULL where none stands and after an error (must
+ * @param out_row The claim, or NULL where it holds none and after an error (must
  *                not be NULL; the command arena's, borrowed)
  * @return Error or NULL on success
  */
-static error_t revert_claim_standing(
+static error_t revert_claim_held(
     const dotta_ctx_t *ctx,
     profile_t *profile,
     const char *filesystem_path,
@@ -157,15 +156,15 @@ static error_t revert_select_profile(
 
         const char *storage_path = NULL;
         if (arg->key == PATH_KEY_FILESYSTEM) {
-            /* A path: the claim standing there in the profile's view, a derived
-             * one included, under the name the profile holds it by — a binding's,
-             * or one kept from before the binding, never one this machine composes.
+            /* A path: the claim the profile's view holds there, a derived one
+             * included, under the name the profile holds it by — a binding's,
+             * or one from before the binding, never one this machine composes.
              * The view is placed by this machine's table, which is the enabled
              * set's (core/manifest.h manifest_mount_table): a profile nothing
              * has enabled is bound nowhere, so no path reaches its custom/ claims,
              * and their names find them as always. */
             const manifest_row_t *row = NULL;
-            err = revert_claim_standing(ctx, profile, arg->filesystem_path, &row);
+            err = revert_claim_held(ctx, profile, arg->filesystem_path, &row);
             if (row) storage_path = row->storage_path;
         } else {
             /* A name, as typed: held by either of the profile's two documents
@@ -226,16 +225,16 @@ static error_t revert_select_profile(
 /**
  * Refuse a typed name that would give the profile a second name for one path
  *
- * The head's own contribution, asked two questions: the claim standing where
- * the name resolves, and whether the profile holds the typed name at all
+ * The head's own contribution, asked two questions: the claim held where the
+ * name resolves, and whether the profile holds the typed name at all
  * (core/manifest.h manifest_holds_name). Both readings are the contribution's,
  * so they are asked of one build rather than of a row alone — the second reads
- * the names the settle recorded against the standing one, which no row carries.
+ * the names the settle recorded against the kept one, which no row carries.
  *
  * A name the profile already holds is a re-capture and authors nothing, whether
- * it is the name standing at the path or one the settle did not keep. Only a
- * name new to the profile at a path it already names is a second name, and that
- * is what this refuses — naming the first, and not skippable by --force: a refusal
+ * it is the name kept at the path or one the settle did not keep. Only a name
+ * new to the profile at a path it already names is a second name, and that is
+ * what this refuses — naming the first, and not skippable by --force: a refusal
  * is not a confirmation.
  *
  * A derived claim names nothing (manifest_is_derived), so it is not a first name
@@ -297,19 +296,19 @@ static error_t revert_refuse_second_name(
  * by its caller. Asked in the key the user named (cmds/revert.h, the two names),
  * and it never sees the head: the read's name is the commit's alone.
  *
- *   a FILESYSTEM — the claim standing at the path, whatever it is called; the
- *                  commit's two documents then say whether that claim is one file.
+ *   a FILESYSTEM — the claim held at the path, whatever it is called; the commit's
+ *                  two documents then say whether that claim is one file.
  *   a STORAGE    — the name as typed, because a name is Git's key and does not
  *                  move. Only a name the commit holds neither in its tree nor
  *                  in its sheet is a contract change to find, and then the path
  *                  is the key.
  *
  * A name is answered by both documents at once (core/profiles.h profile_holds),
- * and that is what keeps the fallback honest: a DIRECTORY claim standing at the
- * typed name with no tree entry — a tracked directory with nothing inside it,
- * an ancestor chain the tree no longer has — answers as the directory it is,
- * where reading the tree's silence as permission to search the path would answer
- * with a *different* claim's blob under the name the user typed.
+ * and that is what keeps the fallback honest: a DIRECTORY claim held at the typed
+ * name with no tree entry — a tracked directory with nothing inside it, an ancestor
+ * chain the tree no longer has — answers as the directory it is, where reading
+ * the tree's silence as permission to search the path would answer with a
+ * *different* claim's blob under the name the user typed.
  *
  * Refuses rather than answering nothing, so the caller holds a claim or an error
  * and no third state: a directory or a submodule by its own noun — under the
@@ -349,7 +348,7 @@ static error_t revert_target_claim(
     *out = NULL;
 
     /* A typed name is asked first, as typed; a path has no name until the claim
-     * standing there gives it one. The commit's two documents answer a name through
+     * held there gives it one. The commit's two documents answer a name through
      * the profile at its tree (core/profiles.h profile_holds), which reads the
      * commit's sheet where the tree is silent. */
     const char *name = arg->key == PATH_KEY_STORAGE ? arg->storage_path : NULL;
@@ -359,12 +358,12 @@ static error_t revert_target_claim(
     if (err) return err;
 
     /* Only a name the commit holds in neither document falls back to the claim
-     * standing at the path, and a path argument starts here. The claim is asked
-     * by its own name, which the commit holds in one document or the other by
+     * held at the path, and a path argument starts here. The claim is asked by
+     * its own name, which the commit holds in one document or the other by
      * construction: the row came from them. */
     if (held.kind == PROFILE_HELD_NOTHING && filesystem_path) {
         const manifest_row_t *row = NULL;
-        err = revert_claim_standing(ctx, target_profile, filesystem_path, &row);
+        err = revert_claim_held(ctx, target_profile, filesystem_path, &row);
         if (err) return err;
 
         if (row) {
@@ -440,10 +439,10 @@ static error_t revert_target_claim(
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param profile Profile name, for key derivation (must not be NULL)
- * @param standing_name The head's binding, and the label on both sides (must
- *                     not be NULL)
- * @param standing_oid The blob standing at the head (must not be NULL)
- * @param standing_mode Its filemode at the head
+ * @param head_name The head's binding, and the label on both sides (must not be
+ *                  NULL)
+ * @param head_oid The blob at the head (must not be NULL)
+ * @param head_mode Its filemode at the head
  * @param target_name The commit's binding: how its bytes open (must not be NULL)
  * @param target_oid The committed object (must not be NULL)
  * @param target_mode Its filemode at the commit
@@ -452,17 +451,17 @@ static error_t revert_target_claim(
 static error_t revert_print_diff(
     const dotta_ctx_t *ctx,
     const char *profile,
-    const char *standing_name,
-    const git_oid *standing_oid,
-    git_filemode_t standing_mode,
+    const char *head_name,
+    const git_oid *head_oid,
+    git_filemode_t head_mode,
     const char *target_name,
     const git_oid *target_oid,
     git_filemode_t target_mode
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(profile);
-    CHECK_NULL(standing_name);
-    CHECK_NULL(standing_oid);
+    CHECK_NULL(head_name);
+    CHECK_NULL(head_oid);
     CHECK_NULL(target_name);
     CHECK_NULL(target_oid);
 
@@ -475,15 +474,15 @@ static error_t revert_print_diff(
      * Each call classifies its own blob's bytes, as the entry it stands in —
      * the routing decision lives with the blob, so encryption-state changes between
      * commits are handled by the content layer with no caller participation. */
-    buffer_t standing_plaintext = BUFFER_INIT;
+    buffer_t head_plaintext = BUFFER_INIT;
     error_t err = content_get_from_blob_oid(
         repo,
-        standing_oid,
-        standing_mode,
-        standing_name,
+        head_oid,
+        head_mode,
+        head_name,
         profile,
         keymgr,
-        &standing_plaintext
+        &head_plaintext
     );
     if (err) {
         return error_wrap(err, "Failed to get current file content");
@@ -500,7 +499,7 @@ static error_t revert_print_diff(
         &target_plaintext
     );
     if (err) {
-        buffer_deinit(&standing_plaintext);
+        buffer_deinit(&head_plaintext);
         return error_wrap(err, "Failed to get target file content");
     }
 
@@ -512,15 +511,15 @@ static error_t revert_print_diff(
     git_patch *patch = NULL;
     int rc = git_patch_from_buffers(
         &patch,
-        standing_plaintext.data, standing_plaintext.size, standing_name,
-        target_plaintext.data, target_plaintext.size, standing_name,
+        head_plaintext.data, head_plaintext.size, head_name,
+        target_plaintext.data, target_plaintext.size, head_name,
         NULL  /* options */
     );
 
     if (rc < 0) {
-        buffer_deinit(&standing_plaintext);
+        buffer_deinit(&head_plaintext);
         buffer_deinit(&target_plaintext);
-        return error_git(rc, "Cannot compare the two versions of '%s'", standing_name);
+        return error_git(rc, "Cannot compare the two versions of '%s'", head_name);
     }
 
     /* Get patch stats */
@@ -534,7 +533,7 @@ static error_t revert_print_diff(
     /* Show stats */
     output_print(
         out, OUTPUT_NORMAL, "  File: {cyan}%s{reset}\n",
-        standing_name
+        head_name
     );
     output_print(
         out, OUTPUT_NORMAL, "  Changes: {green}+%zu{reset} / {red}-%zu{reset}\n",
@@ -555,7 +554,7 @@ static error_t revert_print_diff(
     git_patch_free(patch);
 
     /* Free plaintext buffers */
-    buffer_deinit(&standing_plaintext);
+    buffer_deinit(&head_plaintext);
     buffer_deinit(&target_plaintext);
 
     return NULL;
@@ -577,14 +576,14 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     output_t *out = ctx->out;
 
     /* Three columns, each one value, and no local needs a comment to say which
-     * it is in: `target` is the claim the commit holds — what is read — `standing`
+     * it is in: `target` is the claim the commit holds — what is read — `head`
      * what the head's tree holds where the write lands, and `restored` the claim
      * the write restores, which is neither of them. The handles keep the column
      * as a prefix — the commit, its tree and the profile at it; the head's profile,
-     * the draft's base. A restore lands on the claim standing at the path, so
-     * the standing side has no name of its own here: wherever the head holds
-     * anything, its name is the write's, and where it holds nothing there is no
-     * name to have. */
+     * the draft's base. A restore lands on the claim held at the path, so the
+     * head side has no name of its own here: wherever the head holds anything,
+     * its name is the write's, and where it holds nothing there is no name to
+     * have. */
     error_t err = NULL;
     const char *profile = NULL;
     git_commit *target_commit = NULL;
@@ -628,7 +627,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * the loader's words, as every writer refuses it. */
     err = profile_draft_open(repo, profile, &draft);
     if (err) goto cleanup;
-    profile_t *standing_profile = profile_draft_base(draft);
+    profile_t *head_profile = profile_draft_base(draft);
 
     /* Step 5: the target commit's tree, opened once and lent to everything below
      * that reads the commit, and the profile at it. */
@@ -647,7 +646,8 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * reader of a sheet is unless it argues otherwise (core/metadata.h): a corrupt
      * source sheet would invent attributes while claiming to restore them. A
      * commit without a sheet loads as an empty one (the tree loader's contract),
-     * so a revert to a state before any claim was written retires what stands. */
+     * so a revert to a state before any claim was written retires what the head
+     * holds. */
     err = profile_load_sheet(target_profile);
     if (err) {
         err = error_wrap(err, "Failed to load metadata from target commit %s", oid_str);
@@ -700,16 +700,17 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * commit's claim, renamed here and restamped below. A typed name is the user's
      * own choice of contract and is written as typed (cmds/add.c's storage arm
      * is the other place that choice is made). A path is answered by the claim
-     * standing there, whatever its name and whatever its kind — home/jail/etc/x
-     * under a binding at ~/jail is found by ~/jail/etc/x, and a chain the profile
-     * names nothing by is answered as the claim it is, so the head's own tree
-     * refuses a file where it holds a subtree (step 11). Where none stands, the
-     * commit's own name is what comes back: a revert restores, and a name composed
-     * from today's roots would choose a deployment contract the user did not. */
+     * the head holds there, whatever its name and whatever its kind —
+     * home/jail/etc/x under a binding at ~/jail is found by ~/jail/etc/x, and a
+     * chain the profile names nothing by is answered as the claim it is, so the
+     * head's own tree refuses a file where it holds a subtree (step 11). Where
+     * it holds none, the commit's own name is what comes back: a revert restores,
+     * and a name composed from today's roots would choose a deployment contract
+     * the user did not. */
     profile_claim_t restored = *target;
     if (arg.key == PATH_KEY_FILESYSTEM) {
         const manifest_row_t *row = NULL;
-        err = revert_claim_standing(ctx, standing_profile, filesystem_path, &row);
+        err = revert_claim_held(ctx, head_profile, filesystem_path, &row);
         if (err) goto cleanup;
 
         if (row) restored.storage_path = row->storage_path;
@@ -722,25 +723,25 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         restored.storage_path, profile
     );
 
-    /* Step 11: what stands at that name in the head. It may be nothing — a path
-     * the profile deleted is exactly what a revert brings back — and wherever
-     * it stands it is a blob, because a revert restores one file's bytes.
+    /* Step 11: what the head holds at that name. It may be nothing — a path the
+     * profile deleted is exactly what a revert brings back — and where it holds
+     * anything it is a blob, because a revert restores one file's bytes.
      *
      * The tree alone, on purpose: Git's one-entry rule about the name the write
      * uses (core/profiles.h profile_entry), by value, and a directory claim the
      * sheet holds there never stands in its way — the restore takes its place
      * where it stands, and carries it where this entry's blob contradicts it
      * (step 15). So the sheet must not answer here. */
-    profile_held_t standing;
-    err = profile_entry(standing_profile, restored.storage_path, &standing);
+    profile_held_t head;
+    err = profile_entry(head_profile, restored.storage_path, &head);
     if (err) goto cleanup;
 
-    if (standing.kind == PROFILE_HELD_DIRECTORY ||
-        standing.kind == PROFILE_HELD_SUBMODULE) {
+    if (head.kind == PROFILE_HELD_DIRECTORY ||
+        head.kind == PROFILE_HELD_SUBMODULE) {
         err = error_create(
             ERR_INVALID_ARG, "'%s' is %s in profile '%s'; revert restores one file",
             restored.storage_path,
-            standing.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule",
+            head.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule",
             profile
         );
         goto cleanup;
@@ -756,12 +757,12 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * The entry test is the authoring question and not a cost guard: a name the
      * tree already holds is not authored, and whether one it lacks is a second
      * name is the contribution's to answer. A path argument is answered *by*
-     * the claim standing there and can never be a second name, so this arm is
-     * the typed one's alone. */
+     * the claim held there and can never be a second name, so this arm is the
+     * typed one's alone. */
     if (arg.key == PATH_KEY_STORAGE &&
-        standing.kind == PROFILE_HELD_NOTHING && filesystem_path) {
+        head.kind == PROFILE_HELD_NOTHING && filesystem_path) {
         err = revert_refuse_second_name(
-            ctx, standing_profile, filesystem_path, restored.storage_path
+            ctx, head_profile, filesystem_path, restored.storage_path
         );
         if (err) goto cleanup;
     }
@@ -844,7 +845,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * restores bytes, the entry's mode, the sheet's mode and ownership, and the
      * way, so the whole write is weighed and never the blob alone: the draft
      * holds each document against the one it opened (core/profiles.h
-     * profile_changed). A directory claim at the name the standing blob contradicts
+     * profile_changed). A directory claim at the name the head's blob contradicts
      * rides the write whatever it is, and moves nothing. */
     bool changed = false;
     err = profile_changed(draft, &changed);
@@ -921,18 +922,18 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         );
     }
 
-    /* The three ways the write differs from what stands: the file comes back,
-     * everything but its bytes moves — the one thing no diff can show — or its
-     * bytes do. The middle arm is *the blob is the same and the change test said
-     * something differs*, and what is left to differ is the entry's filemode
-     * and the four fields of the claim beside it, so the sentence names those
-     * rather than two of them. */
-    if (standing.kind == PROFILE_HELD_NOTHING) {
+    /* The three ways the write differs from what the head holds: the file comes
+     * back, everything but its bytes moves — the one thing no diff can show —
+     * or its bytes do. The middle arm is *the blob is the same and the change
+     * test said something differs*, and what is left to differ is the entry's
+     * filemode and the four fields of the claim beside it, so the sentence names
+     * those rather than two of them. */
+    if (head.kind == PROFILE_HELD_NOTHING) {
         output_gap(out, OUTPUT_NORMAL);
         output_print(
             out, OUTPUT_NORMAL, "{green}Restoring a deleted file{reset}\n"
         );
-    } else if (git_oid_equal(&standing.oid, &restored.blob_oid)) {
+    } else if (git_oid_equal(&head.oid, &restored.blob_oid)) {
         output_gap(out, OUTPUT_NORMAL);
         output_print(
             out, OUTPUT_NORMAL,
@@ -946,7 +947,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
          * is handled inside revert_print_diff without caller-side metadata
          * gymnastics. */
         err = revert_print_diff(
-            ctx, profile, restored.storage_path, &standing.oid, standing.filemode,
+            ctx, profile, restored.storage_path, &head.oid, head.filemode,
             target->storage_path, &target->blob_oid, gitops_type_filemode(target->type)
         );
         if (err) {
@@ -1258,7 +1259,7 @@ const args_command_t spec_revert = {
         "Execution Order:\n"
         "  1. Find the profile that holds the argument (--profile if ambiguous).\n"
         "  2. Resolve the commit in that profile's history.\n"
-        "  3. Read what the commit holds and what stands at the branch head. A\n"
+        "  3. Read what the commit holds and what the branch head holds. A\n"
         "     file the profile has renamed since is found either way, and comes\n"
         "     back under the name the profile uses now.\n"
         "  4. Refuse a storage path that would be the profile's second name\n"

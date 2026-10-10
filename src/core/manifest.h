@@ -15,7 +15,7 @@
  *
  * The view has two layers. A **contribution** is one profile's claims placed
  * under this machine's topology: its tree's blobs and its sheet's directory items,
- * two decisions per path *within the profile* — the explicit claim standing there,
+ * two decisions per path *within the profile* — the explicit claim kept there,
  * and the derived claim placed there first — with what this machine cannot place
  * recorded beside them (manifest_unbound) and what the profile names twice recorded
  * against the name it kept (manifest_unkept). A contribution is what one profile
@@ -37,7 +37,7 @@
  * name the tree holds a blob at or above is contradicted and claims nothing, a
  * path being a tree or a blob and the tree the content authority; and two explicit
  * names are decided when the contribution is whole — **the name the profile would
- * give the path fresh** stands (manifest_name's ascent), or the bytewise-least
+ * give the path fresh** is kept (manifest_name's ascent), or the bytewise-least
  * where the profile holds no such name, and every other is recorded against it.
  * That decision is not a fact the build fixes but a rule, re-asked wherever a
  * name is read: a command's own uncommitted claims change what a path would be
@@ -46,8 +46,8 @@
  *
  * Three things a claim can fail to become, and the health channel says each. A
  * claim this machine cannot place stands nowhere: manifest_unbound, the repair
- * a `--target`. A claim the view did not **keep** has one, and another name of
- * the same profile stands there: manifest_unkept, the repair a `remove`. A
+ * a `--target`. A claim its profile did not **keep** has one, and another name
+ * of the same profile is kept there: manifest_unkept, the repair a `remove`. A
  * directory claim the profile's own tree **contradicts** — a blob of the same
  * profile at its name or at a rung above it — stands nowhere though the profile
  * holds it: manifest_contradicted, the repair a removal of one of the two, or a
@@ -239,11 +239,11 @@ static inline bool manifest_is_claim(
  * instead.
  *
  * What reads it: a contribution keeps it apart from the profile's explicit claims,
- * and keeps it where one of them stands at its path too, for the layer to hide;
- * the index lets it fill a path no claim holds and never take a held one; and a
- * search reads it as "the profile holds a subtree beneath here" — one of possibly
- * several chains, never a name (manifest_lookup_claim's note). False on every
- * other kind, where `tracked` is false and nothing reads it.
+ * and keeps it where the profile holds one of them at its path too, for the layer
+ * to hide; the index lets it fill a path no claim holds and never take a held
+ * one; and a search reads it as "the profile holds a subtree beneath here" —
+ * one of possibly several chains, never a name (manifest_lookup_claim's note).
+ * False on every other kind, where `tracked` is false and nothing reads it.
  *
  * Readers: a claim's placement, the cut of a contribution's rows and the layering's
  * two passes (core/manifest.c manifest_place_claim, manifest_contribute,
@@ -411,14 +411,14 @@ error_t manifest_build(
  * stands there, which is what manifest_lookup_claim's own note is about; the
  * path argument of `show -p` and `list -p`, named over whatever tree the verb
  * selected (cmds/show.c cmd_show, cmds/list.c list_file_history, which ask it
- * manifest_claim_name); revert's two questions of a tree, the claim standing at
- * a path and the second-name admission (cmds/revert.c revert_claim_standing,
+ * manifest_claim_name); revert's two questions of a tree, the claim held at a
+ * path and the second-name admission (cmds/revert.c revert_claim_held,
  * revert_refuse_second_name); add, which builds one over its draft's base
  * (core/profiles.h profile_draft_base) and asks it every naming question for
  * the length of the command (cmds/add.c cmd_add); `ignore --test`'s named arm
  * (cmds/ignore.c ignore_test); and the two cross-profile searches, which build
  * one per local profile (cmds/revert.c revert_select_profile, through
- * revert_claim_standing, and cmds/remove.c remove_overlaps).
+ * revert_claim_held, and cmds/remove.c remove_overlaps).
  *
  * Memory: every allocation produced by the call lives in the caller's arena, as
  * manifest_build's does, but the sheet the walk reads where no question has yet,
@@ -650,7 +650,7 @@ typedef struct {
  * Readers: the health channel's own listing (cmds/status.c), and the completed
  * selection's refusal in add (cmds/add.c) — which reads the slice as the whole
  * of what its claims can move, since no group can grow under an uncommitted claim
- * and only which member stands can change.
+ * and only which member is kept can change.
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded names, valid for the arena's lifetime
@@ -777,8 +777,8 @@ const manifest_row_t *manifest_lookup(
  * is one (infra/label.h) — and the view places a blob at any of the three as a
  * FILE row at that directory (core/manifest.c manifest_place_claim). The namer's
  * ascent over these very rungs floors on the asker's own root (manifest_name):
- * it names a path for one profile, and nothing of that profile's stands above
- * its root. This climb has no asker — it asks what stands at a path, whoever
+ * it names a path for one profile, reading that profile's claims at its root
+ * and beneath. This climb has no asker — it asks what stands at a path, whoever
  * holds it — so the root directory is its floor, as it is deploy's (core/deploy.c
  * nearest_ancestor), and "/" itself has nothing above it.
  *
@@ -877,7 +877,7 @@ error_t manifest_holder(
  * one of the chains its own names run through — a profile bound after some of
  * its files were captured legitimately derives two. A tracked row says what the
  * profile will call everything beneath it from now on, and says nothing about
- * the ones already captured: tracked `home/jail/etc` stands over `home/jail/etc/a`
+ * the ones already captured: tracked `home/jail/etc` is above `home/jail/etc/a`
  * and `custom/etc/b` alike, and its own Git subtree holds only the first. A caller
  * that wants the subtree reads the rows beneath the path, never the tree beneath
  * the name.
@@ -892,8 +892,8 @@ error_t manifest_holder(
  * Readers: the name a profile has for a path (manifest_claim_name), which asks
  * this before the namer — a derived claim is something the profile holds and
  * nothing it names, so the namer alone would climb past it and answer a name
- * the profile never held; revert's two questions of a tree, the claim standing
- * at a path and the second-name admission (cmds/revert.c revert_claim_standing,
+ * the profile never held; revert's two questions of a tree, the claim held at a
+ * path and the second-name admission (cmds/revert.c revert_claim_held,
  * revert_refuse_second_name), the first asked of every local profile by its search
  * (revert_select_profile); remove's search, what every other local profile claims
  * where a removal takes a claim, each asked of its own view (cmds/remove.c
@@ -919,8 +919,8 @@ const manifest_row_t *manifest_lookup_claim(
 /**
  * Does `profile` hold `storage_path` as a name for `filesystem_path`?
  *
- * A name in this profile's own contribution — the claim standing at the path,
- * or one the settle recorded against it (manifest_unkept) — and never the tree's
+ * A name in this profile's own contribution — the claim kept at the path, or
+ * one the settle recorded against it (manifest_unkept) — and never the tree's
  * shape: a subtree the profile's own blobs spell is not a name it holds, and an
  * empty tracked directory is a name with no tree entry at all. Both inputs are
  * why the tree cannot answer this.
@@ -960,7 +960,7 @@ const manifest_row_t *manifest_lookup_claim(
  *
  * @param manifest Manifest (NULL answers false)
  * @param profile The asker (NULL answers false)
- * @param filesystem_path Where the claim stands (NULL answers false)
+ * @param filesystem_path Where the claim is placed (NULL answers false)
  * @param storage_path The name in question (NULL answers false)
  * @return Whether this profile holds that name for that path
  */
@@ -993,21 +993,20 @@ bool manifest_holds_name(
  * claim has no business naming through it.
  *
  * The nearer layer answers alone for a place the profile names at most once.
- * Where it names a place more than once, *which* of its names stands there is
+ * Where it names a place more than once, *which* of its names is kept there is
  * the settle's question and not a single claim's, and the namer asks it again
  * under the claims admitted (manifest_name).
  *
  * The map is keyed by filesystem path in the spelling the view's own rows carry
- * — where a claim of this profile stands, which is mount_resolve's answer for
- * its name
- * (infra/mount.h). That is the key the ascent truncates to reach a rung;
- * and the map is the asking profile's own listing, a claim of it standing in
- * for that profile's committed row at the same place and for no other profile's.
+ * — where a claim of this profile is placed, which is mount_resolve's answer
+ * for its name (infra/mount.h). That is the key the ascent truncates to reach a
+ * rung; and the map is the asking profile's own listing, a claim of it standing
+ * in for that profile's committed row at the same place and for no other profile's.
  *
  * A stored claim always names: every path the verb listed carries the claim it
  * listed it under, a root's included (cmds/add.c add_list), so an entry in such
  * a map is a claim and one lookup answers both questions a reader has of it. A
- * NULL `storage_path` is nothing standing, and `kind` says nothing then.
+ * NULL `storage_path` is no claim, and `kind` says nothing then.
  */
 typedef struct {
     const char *storage_path;
@@ -1045,29 +1044,28 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  * path, exactly as it will once committed — where the blob takes the path and
  * the directory's name is the one the contribution does not keep.
  *
- * The claim standing at the path is its name; else the path is composed beneath
- * the nearest rung above it that names what lies beneath — a DIRECTORY claim of
- * either layer (manifest_claim_beneath), asked at every rung down to the profile's
- * own root and *before* that root decides, so a claim standing at the root itself
- * outranks it; else the label of the root it lies under and the tail past it
- * (infra/mount.h mount_root_above, infra/label.h label_compose), which at the
- * root itself is the word alone. An ancestor claim names nothing, and nothing
- * is named beneath a blob. The profile's own contribution is read, never the
- * index: a path it lost to a higher profile is still named by what it holds.
- * `profile` may be NULL — the shared roots alone, as the table reads one
- * (infra/mount.h).
+ * The claim kept at the path is its name; else the path is composed beneath the
+ * nearest rung above it that names what lies beneath — a DIRECTORY claim of either
+ * layer (manifest_claim_beneath), asked at every rung down to the profile's own
+ * root and *before* that root decides, so a claim kept at the root itself outranks
+ * it; else the label of the root it lies under and the tail past it (infra/mount.h
+ * mount_root_above, infra/label.h label_compose), which at the root itself is
+ * the word alone. An ancestor claim names nothing, and nothing is named beneath
+ * a blob. The profile's own contribution is read, never the index: a path it
+ * lost to a higher profile is still named by what it holds. `profile` may be
+ * NULL — the shared roots alone, as the table reads one (infra/mount.h).
  *
  * This is the rule the view itself runs when a profile names one path twice —
- * minus the leaf clause, which is the one thing a settle cannot ask, a name
- * standing there being what it is deciding. The settle takes the ascent's answer
+ * minus the leaf clause, which is the one thing a settle cannot ask, the name
+ * kept there being what it is deciding. The settle takes the ascent's answer
  * alone and keeps the name of the group that IS it; where the profile holds none
- * of it — the composed name is a name nobody committed — the bytewise-least stands
- * instead. Every other name is manifest_unkept's.
+ * of it — the composed name is a name nobody committed — the bytewise-least is
+ * kept instead. Every other name is manifest_unkept's.
  *
  * **What the next settle will keep.** At such a path this function does not report
  * that decision but re-takes it, because `pending` can change what the path's
  * ascent composes and therefore which name the settle keeps. What comes back is
- * the name the profile's next contribution will stand there, given the claims
+ * the name the profile's next contribution will keep there, given the claims
  * the asker has admitted — by induction on the rungs, top down: a path the asker
  * claims and the profile does not otherwise name has that claim and no other; a
  * path the profile names more than once is decided by the settle's own rule over
@@ -1118,8 +1116,8 @@ const char *manifest_name(
 );
 
 /**
- * The name `profile` has for `filesystem_path` under this view: the claim standing
- * there, or the name a claim there would take
+ * The name `profile` has for `filesystem_path` under this view: the claim it
+ * holds there, or the name a claim there would take
  *
  * A filesystem key, and the only one. The resolver answers two and the other is
  * already settled where the argument was read (infra/path.h): a name the user
@@ -1129,7 +1127,7 @@ const char *manifest_name(
  * is held by the profile and never by its view. What arrives here is the key
  * that needs the profile's view to answer it.
  *
- * Asked of the profile's own contribution, in this order: the row standing there
+ * Asked of the profile's own contribution, in this order: the row it holds there
  * (manifest_lookup_claim) answers with its own name whatever its kind, so
  * home/jail/etc/x under a binding at ~/jail is found by ~/jail/etc/x and the
  * chain above a file captured before the binding answers as the claim it is;
@@ -1162,8 +1160,8 @@ const char *manifest_name(
  * (the head, or the commit the user named, so a name that changed since is found
  * as of then: cmds/show.c cmd_show, cmds/list.c list_file_history). `export`
  * selects rows instead, `remove` matches its own claims, `revert` reads the claim
- * standing in the tree it edits (cmds/revert.c revert_claim_standing), and `ignore
- * --test` asks manifest_name itself.
+ * held in the tree it edits (cmds/revert.c revert_claim_held), and `ignore --test`
+ * asks manifest_name itself.
  *
  * @param arena Arena the name lives in (must not be NULL)
  * @param manifest Manifest (must not be NULL)

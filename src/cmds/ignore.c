@@ -759,9 +759,9 @@ static error_t ignore_test(
         path_kind_t kind;
         switch (arg.key) {
             case PATH_KEY_STORAGE:
-                /* One name for every asker alike, standing where this asker's
-                 * target puts it, and what stands there: a custom/ name places
-                 * only under a profile with a target. */
+                /* One name for every asker alike, placed where this asker's target
+                 * puts it, and what stands there: a custom/ name places only
+                 * under a profile with a target. */
                 name = arg.storage_path;
                 filesystem_path = mount_resolve(ctx->arena, mounts, asker, name);
                 kind = ignore_kind(who, opts->test_path, filesystem_path, argument_kind, out);

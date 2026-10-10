@@ -102,8 +102,8 @@ typedef struct {
  *
  * `view` is the profile as this command opened it: this profile's contribution
  * alone, from its draft's base, under this command's table. Every name comes
- * from it (core/manifest.h manifest_name, over `listing`), so does the claim
- * standing at a path (manifest_lookup_claim) — which rules reach the path
+ * from it (core/manifest.h manifest_name, over `listing`), so does the claim it
+ * holds at a path (manifest_lookup_claim) — which rules reach the path
  * (add_verdict) and what kind it must be — and so does the one refusal the
  * completed selection owes (add_refuse_moves).
  *
@@ -453,7 +453,7 @@ static error_t add_verdict(
  * the command has settled it, so an argument that reaches it again moves on,
  * and as the namer's `pending` it names what the profile's own row names — the
  * group answering first where the profile names the path twice (core/manifest.c
- * manifest_standing).
+ * manifest_kept).
  */
 static void add_list(
     add_walk_t *walk, const char *filesystem_path, const char *storage_path,
@@ -541,8 +541,8 @@ static error_t add_refuse_unjudged(
  * it, while beneath it every entry but a claim meets the rung that closed it;
  * as the ancestry's rungs earn no record, it earns none.
  *
- * Each child is named here, once, by the claim standing at it — this command's
- * own where it has listed one there, else the profile's own (core/manifest.h
+ * Each child is named here, once, by the claim kept at it — this command's own
+ * where it has listed one there, else the profile's own (core/manifest.h
  * manifest_name over `listing`) — and the recursion names it again for no one.
  * Another profile's target is an ordinary directory here: the walk lists it and
  * enters it, and what it finds beneath is named portably (infra/mount.h). A child
@@ -633,10 +633,10 @@ static error_t add_collect(
          * a path is reached once, whichever of the two said it. */
         if (hashmap_has(walk->listing, child_fs)) continue;
 
-        /* The crossing: what this profile calls the child — the claim standing
-         * there, this command's own or the profile's, else the composition beneath
-         * the nearest claim above it, else the label of the root it lies under,
-         * the word alone where the child is one of this profile's own roots. */
+        /* The crossing: what this profile calls the child — the claim kept there,
+         * this command's own or the profile's, else the composition beneath the
+         * nearest claim above it, else the label of the root it lies under, the
+         * word alone where the child is one of this profile's own roots. */
         const char *child_storage = manifest_name(
             scratch, walk->view, walk->profile, child_fs, walk->listing
         );
@@ -1193,13 +1193,13 @@ static void add_print_enable(
 /**
  * Say which labels the captured paths landed under
  *
- * A capture's name is the one typed for it, or the claim standing at its path —
- * this command's own, the profile's, a directory claim above it — and its root's
- * label only where none stands (cmds/add.h, the name a capture lands under). So
- * a label is the profile's history, not the command line's: `/` encloses HOME,
- * so a path beneath HOME can take two labels in any profile, and a third beneath
- * a binding. The counts above say which kinds were captured; this says where
- * their names went, and it is where a name that stayed put shows.
+ * A capture's name is the one typed for it, or the claim kept at its path — this
+ * command's own, the profile's, a directory claim above it — and its root's label
+ * only where none is (cmds/add.h, the name a capture lands under). So a label
+ * is the profile's history, not the command line's: `/` encloses HOME, so a path
+ * beneath HOME can take two labels in any profile, and a third beneath a binding.
+ * The counts above say which kinds were captured; this says where their names
+ * went, and it is where a name that stayed put shows.
  *
  * One line per label that took a path, in the labels' own order, counting paths:
  * a file and a directory are one name each, so the lines sum to the kinds the
@@ -1925,7 +1925,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (err) goto cleanup;
 
     /* Collect every path to add, expanding directories. Each listing is named
-     * once, by the claim standing at it; what the walk finds beneath one already
+     * once, by the claim kept at it; what the walk finds beneath one already
      * listed is named from that claim, and admitted by the profile's draft as
      * it is listed. --force is read here once, into the walk: whether a claim
      * listed is captured is one fact, and every reader asks the walk. */
@@ -2105,10 +2105,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         size_t dirs_before = walk.directories.count;
 
         /* The name the capture lands under: the user's own where they typed one,
-         * and otherwise what this profile calls the path — the claim standing
-         * there, this command's own or the profile's, else the composition beneath
-         * the nearest claim above it, else the label of the root it lies under,
-         * which at the root itself is the word alone. */
+         * and otherwise what this profile calls the path — the claim kept there,
+         * this command's own or the profile's, else the composition beneath the
+         * nearest claim above it, else the label of the root it lies under, which
+         * at the root itself is the word alone. */
         const char *storage_path = typed ? typed : manifest_name(
             ctx->arena, view, opts->profile, filesystem_path, walk.listing
         );

@@ -34,8 +34,8 @@
  *     and again by every namer that reads that path, because a command's own
  *     uncommitted claims change what the path would be called fresh. One claim
  *     shape beneath both: the two layers a namer reads speak manifest_claim_t,
- *     so the leaf and the rung ask one producer (manifest_standing) and differ
- *     only in which of its two projections they take.
+ *     so the leaf and the rung ask one producer (manifest_kept) and differ only
+ *     in which of its two projections they take.
  *   - Diff, not delta-tracking: what a scope transition or a sync did to the
  *     view is read off two views (manifest_diff), never recorded while it happened.
  */
@@ -60,10 +60,10 @@
  * One profile's claims, placed under the topology, precedence aside
  *
  * Two decisions, kept apart from placement on, each in an index of its own: the
- * explicit claim that stands at a path — a blob of any type, a tracked directory
- * — one a path, the settle deciding where the profile names one twice; and the
- * derived claim placed there first, the profile's chain through the path. A derived
- * row is no claim at all, naming neither itself nor what lies beneath it
+ * explicit claim kept at a path — a blob of any type, a tracked directory — one
+ * a path, the settle deciding where the profile names one twice; and the derived
+ * claim placed there first, the profile's chain through the path. A derived row
+ * is no claim at all, naming neither itself nor what lies beneath it
  * (core/manifest.h manifest_is_derived), so it never contends and no namer reads
  * it. It is kept whatever the profile claims explicitly at its path: whether it
  * stands is the layer's question, asked of every profile at once (manifest_layer).
@@ -77,17 +77,17 @@
  */
 typedef struct {
     const char *profile;           /* Arena-backed; the same pointer every row of it carries */
-    manifest_row_t **rows;         /* Every row standing in the index of its class, in claim order (arena, exact) */
+    manifest_row_t **rows;         /* Every row each index keeps, in claim order (arena, exact) */
     size_t count;                  /* Rows in it */
-    hashmap_t *explicit;           /* path → the explicit claim standing there (arena) */
+    hashmap_t *explicit;           /* path → the explicit claim kept there (arena) */
     hashmap_t *derived;            /* path → the derived claim placed there first (arena) */
 
     /* Every name the profile holds at a path it names more than once: the settle's
      * own group, NULL-terminated, in name order. NULL until a settle happens —
      * which is never, on a profile that names each of its paths once. The group
-     * outlives the contest because the decision does: manifest_standing re-asks
-     * it wherever a name is read, an asker's own claims being able to change
-     * which name the next settle keeps, and manifest_holds_name reads it to answer
+     * outlives the contest because the decision does: manifest_kept re-asks it
+     * wherever a name is read, an asker's own claims being able to change which
+     * name the next settle keeps, and manifest_holds_name reads it to answer
      * whether a name is one the profile already holds.
      *
      * Every member is an explicit row: a derived claim never contends, held apart
@@ -134,7 +134,7 @@ struct manifest {
     size_t unbound_count;
     size_t unbound_capacity;
 
-    /* The names the settle did not keep: another stands at the path (manifest_unkept) */
+    /* The names the settle did not keep: another is kept at the path (manifest_unkept) */
     manifest_unkept_claim_t *unkept;             /* Arena; grouped by profile, in build order */
     size_t unkept_count;
     size_t unkept_capacity;
@@ -153,11 +153,11 @@ struct manifest {
 /**
  * The claim walk: what one walk of one profile carries to place its claims
  *
- * Everything the walk's visitor needs to place one profile's claims where they
- * stand: the view and the contribution being filled, and the two lists the step
- * spends. Handed to each profile's walk once and read at O(1) per claim — and
- * to its second question, the claims its tree contradicts, whose visitor reads
- * the view, the profile's name and the arena alone (manifest_note_contradicted).
+ * Everything the walk's visitor needs to place one profile's claims: the view
+ * and the contribution being filled, and the two lists the step spends. Handed
+ * to each profile's walk once and read at O(1) per claim — and to its second
+ * question, the claims its tree contradicts, whose visitor reads the view, the
+ * profile's name and the arena alone (manifest_note_contradicted).
  *
  * Memory ownership:
  * - manifest: borrowed, caller retains ownership — the mount table and the unbound
@@ -186,7 +186,7 @@ typedef struct {
  * A row of this contribution at `filesystem_path`: allocated and on the list of
  * everything the profile placed
  *
- * Whether it *stands* at the path is the caller's next line: the index of its
+ * Whether it is *kept* at the path is the caller's next line: the index of its
  * class takes it, the contest does, or — a second chain through a path — neither
  * does. Nothing here is ever reset or overwritten: a name that loses keeps its
  * own row and leaves the slice at the settle, which is what lets a lower profile's
@@ -271,8 +271,8 @@ static void manifest_note_unbound(
  *
  * @param manifest Target view (must not be NULL)
  * @param profile Arena-backed profile name (must not be NULL)
- * @param row The row whose name did not stand (must not be NULL)
- * @param kept The name that did (must not be NULL)
+ * @param row The row whose name was not kept (must not be NULL)
+ * @param kept The name that was (must not be NULL)
  * @param arena Arena for the array growth (must not be NULL)
  */
 static void manifest_note_unkept(
@@ -381,13 +381,13 @@ typedef struct {
     arena_t *arena;                /* Arena that owns every composed answer */
 } naming_t;
 
-/* The ascent and the standing are one rule read from two ends, and each asks
- * the other: a name is composed from what stands above the path, and what stands
- * where the profile names one path twice is what the next settle will keep there
- * — which is the ascent's own answer under this command's claims. The pair
- * terminates because the ascent reads rungs strictly above the path it is asked
- * about, so every turn is a strictly shorter path and the depth is bounded by
- * the rungs; it is entered at all only where a group stands. */
+/* The ascent and the kept claim are one rule read from two ends, and each asks
+ * the other: a name is composed from the claims kept above the path, and the
+ * claim kept where the profile names one path twice is what the next settle will
+ * keep there — which is the ascent's own answer under this command's claims.
+ * The pair terminates because the ascent reads rungs strictly above the path it
+ * is asked about, so every turn is a strictly shorter path and the depth is bounded
+ * by the rungs; it is entered at all only at a contested path. */
 static const char *manifest_ascend(const naming_t *n, const char *filesystem_path);
 
 /**
@@ -396,8 +396,8 @@ static const char *manifest_ascend(const naming_t *n, const char *filesystem_pat
  * The projection both layers meet in (core/manifest.h manifest_claim_t): a row
  * names its own path, its kind saying whether anything can be named beneath —
  * every row a namer reads is an explicit claim, the contribution holding the
- * derived apart (contribution_t). NULL projects to nothing standing, which is
- * the answer a path the profile holds nothing at is owed.
+ * derived apart (contribution_t). NULL projects to no claim, which is the answer
+ * a path the profile holds nothing at is owed.
  */
 static manifest_claim_t manifest_row_claim(const manifest_row_t *row) {
     if (!row) return (manifest_claim_t){ 0 };
@@ -412,16 +412,16 @@ static manifest_claim_t manifest_row_claim(const manifest_row_t *row) {
  * Which of the names in a group the contribution keeps at `filesystem_path`
  *
  * The settle's last clause, on its own so that it has one body: **the name the
- * profile would give the path fresh** stands where the profile holds it, and
+ * profile would give the path fresh** is kept where the profile holds it, and
  * the bytewise-least — the group's own head, the array being sorted by name —
- * stands where it does not.
+ * is kept where it does not.
  *
  * Two askers, one answer. manifest_settle asks it over the group it has just
- * built, with no pending layer, and stores the result; manifest_standing asks
- * it again wherever a name is read, because an asker's own uncommitted claims
- * change what the path's ascent composes and therefore which name the next settle
- * will keep (209 C3 §1.10). Spelling the rule once is what keeps the name the
- * view keeps and the name a namer gives from drifting apart.
+ * built, with no pending layer, and stores the result; manifest_kept asks it
+ * again wherever a name is read, because an asker's own uncommitted claims change
+ * what the path's ascent composes and therefore which name the next settle will
+ * keep (209 C3 §1.10). Spelling the rule once is what keeps the name the view
+ * keeps and the name a namer gives from drifting apart.
  *
  * At a root of the profile the fresh name is the word the table's tie chose, so
  * a group holding both `home` and `root` on a machine whose HOME is "/" keeps
@@ -434,7 +434,7 @@ static manifest_claim_t manifest_row_claim(const manifest_row_t *row) {
  * @param filesystem_path The path the group contends for (must not be NULL)
  * @param group Every name the profile holds there, NULL-terminated, in name order
  *              (must not be NULL, and must hold at least one row)
- * @return The row whose name stands; never NULL
+ * @return The row whose name is kept; never NULL
  */
 static manifest_row_t *manifest_decide(
     const naming_t *n, const char *filesystem_path, manifest_row_t **group
@@ -449,18 +449,18 @@ static manifest_row_t *manifest_decide(
 }
 
 /**
- * The claim standing at `filesystem_path` for this asker
+ * The claim kept at `filesystem_path` for this asker
  *
  * Three arms, and the first that speaks answers. Where the profile names the
- * path more than once, **the settle answers**: which of a profile's names stands
- * somewhere is the settle's question and never a single claim's, so it is asked
- * here under this command's claims rather than read off the last build. That is
- * what makes a capture land on the name the machine will use: a claim admitted
- * above a contested path changes what the path's ascent composes, and with it
- * the name the next settle keeps (209 C3 §1.10). A verb admits at such a path
- * only a name the profile already holds (core/manifest.h manifest_holds_name),
- * so the group is the whole of what that settle will decide over and the pending
- * layer cannot add to it.
+ * path more than once, **the settle answers**: which of a profile's names is
+ * kept somewhere is the settle's question and never a single claim's, so it is
+ * asked here under this command's claims rather than read off the last build.
+ * That is what makes a capture land on the name the machine will use: a claim
+ * admitted above a contested path changes what the path's ascent composes, and
+ * with it the name the next settle keeps (209 C3 §1.10). A verb admits at such
+ * a path only a name the profile already holds (core/manifest.h
+ * manifest_holds_name), so the group is the whole of what that settle will decide
+ * over and the pending layer cannot add to it.
  *
  * Where the profile names the path once or not at all, the two layers a namer
  * reads answer, nearest first. A claim the command has admitted and not yet
@@ -470,10 +470,10 @@ static manifest_row_t *manifest_decide(
  * committed. Where the command claimed nothing the profile's own committed row
  * speaks, projected into the same pair.
  *
- * The answer is what the profile's next contribution will stand at the path,
- * given the claims the asker has admitted **so far**: naming is a snapshot taken
- * when a path is listed, and a claim a later argument admits above one already
- * named does not re-name it (cmds/add.c).
+ * The answer is what the profile's next contribution will keep at the path, given
+ * the claims the asker has admitted **so far**: naming is a snapshot taken when
+ * a path is listed, and a claim a later argument admits above one already named
+ * does not re-name it (cmds/add.c).
  *
  * With no pending layer the first arm reproduces the choice the settle already
  * made and the index already holds — a cost, never a difference — and the cost
@@ -493,9 +493,9 @@ static manifest_row_t *manifest_decide(
  *
  * @param n What the question is asked under (must not be NULL)
  * @param filesystem_path The path to read (must not be NULL)
- * @return The claim standing there, a NULL name when none does
+ * @return The claim kept there, a NULL name where none is
  */
-static manifest_claim_t manifest_standing(const naming_t *n, const char *filesystem_path) {
+static manifest_claim_t manifest_kept(const naming_t *n, const char *filesystem_path) {
     const contribution_t *c = n->c;
 
     manifest_row_t **group =
@@ -510,7 +510,7 @@ static manifest_claim_t manifest_standing(const naming_t *n, const char *filesys
 }
 
 /**
- * The name `profile` composes for `filesystem_path` from what stands above it
+ * The name `profile` composes for `filesystem_path` from what it keeps above it
  *
  * The table is asked once, up front: the deepest root of the profile enclosing
  * the path, and the tail past it (infra/mount.h mount_root_above). That one answer
@@ -518,9 +518,9 @@ static manifest_claim_t manifest_standing(const naming_t *n, const char *filesys
  * whether the path is itself a root, and the label and tail a name is spelled
  * from — where asking per rung answered the same question N+2 times.
  *
- * Then the rungs above the path, nearest first: the claim standing at each one
- * (manifest_standing — this command's own listing where it has one there, else
- * what the profile's committed claims settle on), and the path is composed beneath
+ * Then the rungs above the path, nearest first: the claim kept at each one
+ * (manifest_kept — this command's own listing where it has one there, else what
+ * the profile's committed claims settle on), and the path is composed beneath
  * the first that names what lies beneath it, a DIRECTORY claim of either layer
  * (manifest_claim_beneath). An ancestor claim names nothing, and a blob names
  * its own path and nothing under it — a name beneath its own is one the stage
@@ -533,27 +533,27 @@ static manifest_claim_t manifest_standing(const naming_t *n, const char *filesys
  * can stand strictly between it and the path — one that did would enclose the
  * path more tightly and have won the find. So `strlen(root->filesystem_path)`
  * is the one rung a root stands at, the root directory's being "/" like any other,
- * and the loop's condition says the ascent reaches it and stops. The claim standing
+ * and the loop's condition says the ascent reaches it and stops. The claim kept
  * at every rung is still read before the root decides, the root's own rung
- * included: written the other way, a typed `home/jail` standing at web's own
- * target would be climbed past, and web's name for what lies beneath it would
- * be the binding's rather than its own claim's.
+ * included: written the other way, a typed `home/jail` kept at web's own target
+ * would be climbed past, and web's name for what lies beneath it would be the
+ * binding's rather than its own claim's.
  *
  * The root directory is that rung on a machine where more than one root stands
  * at it — a HOME of "/" (a container's bare uid) or a target of one — because
  * one label takes the tie there (infra/mount.h mount_root_above) while a claim
- * keyed by any of the three words may stand at the same directory. Read, the
- * claim names what lies beneath it; skipped, the tie's label does, and a walk
- * beneath a tracked root offers its finds under a word the profile's own claim
- * contradicts.
+ * keyed by any of the three words may be placed at the same directory. Read,
+ * the claim names what lies beneath it; skipped, the tie's label does, and a
+ * walk beneath a tracked root offers its finds under a word the profile's own
+ * claim contradicts.
  *
  * The scratch copy is the arena's and abandoned, the module's idiom, and is taken
  * for every path a root encloses — at a root the loop reads nothing of it, one
  * bump an arm to skip it is not worth, a root being one path of at most three.
  * How often the rest is paid is not "once per newly listed path": the ascent
- * runs for every path nothing stands at — including one a caller goes on to exclude
- * or refuse — and again at every contested path a namer reads, and again at every
- * contested rung one of those ascents passes through.
+ * runs for every path nothing is kept at — including one a caller goes on to
+ * exclude or refuse — and again at every contested path a namer reads, and again
+ * at every contested rung one of those ascents passes through.
  *
  * @param n What the question is asked under (must not be NULL)
  * @param filesystem_path Absolute path (must not be NULL)
@@ -575,9 +575,9 @@ static const char *manifest_ascend(const naming_t *n, const char *filesystem_pat
         len = str_path_parent_len(rung);
         rung[len] = '\0';
 
-        /* What stands at this rung, and only a directory naming what lies beneath
+        /* What is kept at this rung, and only a directory naming what lies beneath
          * it. */
-        const char *above = manifest_claim_beneath(manifest_standing(n, rung));
+        const char *above = manifest_claim_beneath(manifest_kept(n, rung));
         if (!above) continue;
 
         /* What lies beneath the rung (base/string.h str_path_beneath), read off
@@ -621,14 +621,14 @@ static int name_order(const void *a, const void *b) {
 }
 
 /**
- * Decide every path this profile named twice, and record what did not stand
+ * Decide every path this profile named twice, and record what was not kept
  *
  * The within-profile rule's last clause, run once the contribution is whole so
  * the ascent reads every tracked parent the profile has. The choice itself is
  * manifest_decide's, asked here with no pending layer — beneath its tracked parent,
  * else beneath its deepest root, which is the binding's custom/ over the portable
  * home/ over the absolute root/. Every other name is recorded against the one
- * that stood (manifest_note_unkept).
+ * kept (manifest_note_unkept).
  *
  * The group is the path's holder plus the run, sorted whole, so the holder is a
  * member and not a special case: every loser reads bytewise, the first-arrived
@@ -639,11 +639,11 @@ static int name_order(const void *a, const void *b) {
  * content-authority rule contradicts the one name they can both carry at the
  * blob, before either name was resolved and long before the contest sees it.
  *
- * The group outlives this call, indexed on the contribution: what stands at a
+ * The group outlives this call, indexed on the contribution: what is kept at a
  * contested path is a rule and not a fact the build fixes, so every namer that
  * reads the path asks it again under whatever claims it has admitted
- * (manifest_standing), and the admission that keeps such a group from growing
- * asks whether a name is one of these (manifest_holds_name).
+ * (manifest_kept), and the admission that keeps such a group from growing asks
+ * whether a name is one of these (manifest_holds_name).
  *
  * Empty on every profile that names each of its paths once, which is the whole
  * cost on a branch this machine authored alone.
@@ -724,10 +724,10 @@ static void manifest_settle(
  *
  * The whole of the per-profile step the profile's walk drives (core/profiles.h
  * profile_walk): one decoded claim at a time — its blobs first, then its directory
- * claims — a finished manifest_row_t or nothing. In order: the name kept, the
- * path it resolves to, the row, and where it stands — a derived claim held apart,
+ * claims — a finished manifest_row_t or nothing. In order: the name copied, the
+ * path it resolves to, the row, and where it is kept — a derived claim held apart,
  * the first of two chains through one path, and an explicit one by the
- * within-profile placement rule that says whether it stands or contends.
+ * within-profile placement rule that says whether it is kept or contends.
  *
  * @param claim One claim, decoded (borrowed — valid for the call only)
  * @param payload The claim walk (claim_walk_t)
@@ -784,7 +784,7 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
     row->encrypted = claim->encrypted;
     row->tracked = claim->tracked;
 
-    /* Then where it stands, in the index of its class: the two never meet here,
+    /* Then where it is kept, in the index of its class: the two never meet here,
      * and which stands where the profile holds both is the layer's question,
      * asked across every profile at once (manifest_layer).
      *
@@ -796,7 +796,7 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
      * precedence-resolved, and two profiles that traverse the same directory
      * derive it identically: their claims carry no intent to conflict, so they
      * do not compete. That is manifest_layer's half of the rule; here the two
-     * chains are one profile's own, and the first placed stands — the row says
+     * chains are one profile's own, and the first placed is kept — the row says
      * the profile holds a subtree beneath the path, never which name its subtree
      * runs through.
      *
@@ -844,10 +844,10 @@ static error_t manifest_place_claim(const profile_claim_t *claim, void *payload)
  * profile_walk) — its blobs, then the directory claims its own tree does not
  * contradict — and each is placed as it arrives (manifest_place_claim): resolved
  * against the mount table, recorded where this machine cannot place it
- * (manifest_note_unbound), and standing or contending. The tracked claims its
- * tree does contradict are noted on the view's health beside them
+ * (manifest_note_unbound), and kept or contending. The tracked claims its tree
+ * does contradict are noted on the view's health beside them
  * (manifest_note_contradicted). The settle then decides every path this profile
- * named twice, and the tail cuts the spine to what stands in each index.
+ * named twice, and the tail cuts the spine to what each index keeps.
  *
  * The walk reads the profile's own sheet, strictly: a sheet that will not load
  * fails the build rather than read as "no claims", so no caller of a builder
@@ -920,14 +920,14 @@ static error_t manifest_contribute(
     /* Every path this profile named twice, decided once. */
     manifest_settle(manifest, c, &contenders, arena);
 
-    /* The contribution's rows: every row standing in the index of its class, in
-     * claim order. A name that lost and a second chain stay in the arena and
-     * leave the slice; a derived claim the profile's own explicit claim shadows
-     * stays in it, for the layer to hide. Sized exactly — the two indexes are
-     * the count. */
-    size_t standing = hashmap_size(c->explicit) + hashmap_size(c->derived);
-    if (standing > 0) {
-        c->rows = arena_calloc(arena, standing, sizeof(*c->rows));
+    /* The contribution's rows: every row kept in the index of its class, in claim
+     * order. A name that lost and a second chain stay in the arena and leave
+     * the slice; a derived claim the profile's own explicit claim shadows stays
+     * in it, for the layer to hide. Sized exactly — the two indexes are the
+     * count. */
+    size_t kept = hashmap_size(c->explicit) + hashmap_size(c->derived);
+    if (kept > 0) {
+        c->rows = arena_calloc(arena, kept, sizeof(*c->rows));
         for (size_t j = 0; j < placed.count; j++) {
             manifest_row_t *row = placed.entries[j];
             const manifest_row_t *held = hashmap_get(
@@ -1300,7 +1300,7 @@ const manifest_row_t *manifest_lookup_claim(
     const contribution_t *c = manifest_contribution(manifest, profile);
     if (!c) return NULL;
 
-    /* The explicit claim standing there, else the derived claim placed there */
+    /* The explicit claim kept there, else the derived claim placed there */
     const manifest_row_t *row = hashmap_get(c->explicit, filesystem_path);
 
     return row ? row : hashmap_get(c->derived, filesystem_path);
@@ -1321,8 +1321,8 @@ bool manifest_holds_name(
     if (!c) return false;
 
     /* Where the profile names the path more than once, the group is every name
-     * it holds there, the standing one among them — so membership is the whole
-     * question and which of them stands is not asked. */
+     * it holds there, the kept one among them — so membership is the whole question
+     * and which of them is kept is not asked. */
     manifest_row_t **group =
         c->contested ? hashmap_get(c->contested, filesystem_path) : NULL;
     if (group) {
@@ -1340,11 +1340,11 @@ bool manifest_holds_name(
 /**
  * What `profile` calls `filesystem_path` under this view
  *
- * The leaf clause and the ascent, over the one read that answers what stands
- * somewhere (manifest_standing): the claim standing at the path names it whatever
- * its kind — this command's own if it has admitted one there, since it has already
+ * The leaf clause and the ascent, over the one read that answers what is kept
+ * somewhere (manifest_kept): the claim kept at the path names it whatever its
+ * kind — this command's own if it has admitted one there, since it has already
  * named this very path, and the one the next settle will keep where the profile
- * names the path twice — and a path nothing stands at falls through to the ascent,
+ * names the path twice — and a path nothing is kept at falls through to the ascent,
  * the profile holding no row there or holding a derived one, which is no claim.
  *
  * The answer is the caller's arena's whichever rung produced it: the leaf clause
@@ -1370,7 +1370,7 @@ const char *manifest_name(
         .arena   = arena,
     };
 
-    manifest_claim_t here = manifest_standing(&n, filesystem_path);
+    manifest_claim_t here = manifest_kept(&n, filesystem_path);
     if (here.storage_path) return arena_strdup(arena, here.storage_path);
 
     return manifest_ascend(&n, filesystem_path);
@@ -1389,7 +1389,7 @@ const char *manifest_claim_name(
     CHECK_NULL(manifest);
     CHECK_NULL(filesystem_path);
 
-    /* The claim standing there, before the name one would take: a derived claim
+    /* The claim it holds there, before the name one would take: a derived claim
      * is held and names nothing, so the ascent climbs past it and would answer
      * a name the profile never held. Else the name the profile would give the
      * place — its label's word at a root of its own. Either answer is the arena's:

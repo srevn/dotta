@@ -57,9 +57,9 @@ typedef struct {
  *
  * **The name a capture lands under** is never composed here. A storage-shaped
  * argument is the user's own choice of contract and is written as typed; every
- * other path is named by the claim standing at it — this command's own where it
- * has listed one there, else the profile's, else the composition beneath the
- * nearest directory claim above it, else the label of the root it lies under
+ * other path is named by the claim kept at it — this command's own where it has
+ * listed one there, else the profile's, else the composition beneath the nearest
+ * directory claim above it, else the label of the root it lies under
  * (core/manifest.h manifest_name) — the word alone at the root itself, so `add
  * p ~` and `add p home/` name one claim. So a re-capture lands on the name the
  * profile already has, whatever binding arrived since, and a fresh path beneath
@@ -100,12 +100,12 @@ typedef struct {
  * path whose kind changed after its listing is refused by its capture, never
  * read as the other — but a claim, which it leaves as the profile holds it unless
  * --force re-captures it. That is what lets the listing stand in for the commit
- * while the command is still naming, a claim standing there as the profile holds
+ * while the command is still naming, a claim listed there as the profile holds
  * it — and it is load-bearing, since a directory this command lists is the name
  * its walk composed beneath. So one refusal is owed by the completed selection
  * and cannot be reached path by path: where the command's own directory claims
- * would move which of a profile's two names stands at a path, the name that will
- * stand must be a name this command captured.
+ * would move which of a profile's two names is kept at a path, the name that
+ * will be kept must be a name this command captured.
  *
  * What the commit guarantees: its two documents name one namespace. The tree
  * holds every blob and the sheet holds the directories a tree cannot — an empty
@@ -141,9 +141,9 @@ typedef struct {
  * **THE KEY INVARIANT**: for every path this command lists, `mount_resolve` of
  * the claim it was listed under is the filesystem path it was read at. A typed
  * name is resolved into its path by construction; a walked one is named from
- * the claim standing at the path the walk reached. That is what lets the record
- * join by the filesystem path without a round trip through the name. It holds
- * by construction and nothing moves it: a run holds the store's write lock from
+ * the claim kept at the path the walk reached. That is what lets the record join
+ * by the filesystem path without a round trip through the name. It holds by
+ * construction and nothing moves it: a run holds the store's write lock from
  * dispatch, so the rows its table was built from are the rows the record's view
  * is built from, and a key is a string of those rows' own (infra/mount.h), which
  * the disk cannot move. What can move is the name, which is Git's: the lock is

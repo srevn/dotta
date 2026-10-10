@@ -2565,10 +2565,10 @@ static workspace_fault_t workspace_scan(
             continue;
         }
 
-        /* What this profile calls the child — the claim standing there, else
-         * the composition beneath the nearest directory claim above it, else
-         * the label of the root it lies under, the word alone where the child
-         * is one of this profile's own roots. */
+        /* What this profile calls the child — the claim kept there, else the
+         * composition beneath the nearest directory claim above it, else the
+         * label of the root it lies under, the word alone where the child is
+         * one of this profile's own roots. */
         const char *name = manifest_name(scratch, ws->manifest, scan->profile, child, NULL);
 
         /* Check if ignored — the ladder's one question (core/ignore.h

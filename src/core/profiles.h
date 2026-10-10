@@ -308,7 +308,7 @@ void profile_free(profile_t *profile);
  * rows by it, and the helpers that hold a profile and ask its view by name or
  * word a refusal under it (cmds/export.c export_collect_profile,
  * export_collect_storage and export_collect_filesystem, cmds/revert.c
- * revert_claim_standing, revert_refuse_second_name and revert_target_claim);
+ * revert_claim_held, revert_refuse_second_name and revert_target_claim);
  * cmds/show.c show_file, whose bytes the profile's key opens and whose warning
  * names it; remove's universe, whose custom/ claims it places under the profile's
  * binding, and its directory offer, which describes each claim by it (cmds/remove.c
@@ -859,8 +859,8 @@ error_t profile_draft_orphan(git_repository *repo, const char *name, profile_dra
  * the run reads (core/manifest.h manifest_build_profile), and each file's
  * encryption prior; cmds/remove.c remove_paths, for the claims its arguments
  * are matched against (remove_resolve); cmds/revert.c cmd_revert, for every
- * question of the branch as it stands — the claim standing at a path, a second
- * name, and what the tree holds where the restore writes; and cmds/update.c
+ * question of the branch as it stands — the claim held at a path, a second name,
+ * and what the tree holds where the restore writes; and cmds/update.c
  * update_profile, for a capture's prior and the name its seal is keyed by
  * (update_capture).
  *

@@ -51,16 +51,16 @@ typedef struct {
  *
  * The two names. A revert restores what the commit held into the name the profile
  * holds at its head, and the key the user named is the key both trees are asked
- * in. A filesystem path asks each tree what claim stood there; a name asks each
- * tree for that name. Only a name a tree holds in neither of its two documents
+ * in. A filesystem path asks each tree what claim it holds there; a name asks
+ * each tree for that name. Only a name a tree holds in neither of its two documents
  * falls back to that tree's claim at its path — never the reverse, because a
  * path is always answerable and a name may simply not exist:
  *
  *              the write's name (the head)      the read's name (the commit)
- *   LOCATION   the claim standing at L,        the claim standing at L
+ *   LOCATION   the claim held at L,             the claim held at L
  *              else the read's own name
- *   STORAGE    the name as typed               that name in either document,
- *                                              else the claim at L
+ *   STORAGE    the name as typed                that name in either document,
+ *                                               else the claim at L
  *
  * Reading across names is safe: a name the commit held is a fact, and following
  * it is how a revert survives a contract change. Writing across them is not — a

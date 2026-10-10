@@ -2886,7 +2886,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * the run meets is an outcome on the receipt — a row's, a hold's —
              * and the run goes on to record what landed. */
             deploy_receipt = deploy_execute(
-                repo, ws, deploy_verdicts, content_cache, ctx->arena
+                ctx->arena, repo, ws, deploy_verdicts, content_cache
             );
             apply_print_deploy_receipt(out, deploy_receipt);
         } else if (deploy_verdicts->skipped.count == 0) {

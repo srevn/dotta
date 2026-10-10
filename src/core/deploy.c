@@ -1684,17 +1684,17 @@ static const char *poisoned_above(const deploy_receipt_t *receipt, const char *p
  * contract), and so do those holds; nothing is returned beside it.
  */
 deploy_receipt_t *deploy_execute(
+    arena_t *arena,
     git_repository *repo,
     const workspace_t *ws,
     const deploy_preflight_t *verdicts,
-    content_cache_t *cache,
-    arena_t *arena
+    content_cache_t *cache
 ) {
+    CHECK_NULL(arena);
     CHECK_NULL(repo);
     CHECK_NULL(ws);
     CHECK_NULL(verdicts);
     CHECK_NULL(cache);
-    CHECK_NULL(arena);
 
     /* The receipt is sized to the verdicts up front, in the arena the run is
      * handed — one slot per verdict, zeroed, filled in verdict order as each

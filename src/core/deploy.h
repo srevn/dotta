@@ -943,22 +943,22 @@ error_t deploy_preflight(
  * handles encryption transparently. The record (path_records, observations) is
  * the caller's to write, after deployment succeeds.
  *
+ * @param arena Arena the receipt, its arrays and the run's holds live in (must
+ *        not be NULL; the verdicts' own, or one they outlive)
  * @param repo Repository (must not be NULL)
  * @param ws Workspace the plan was built from (must not be NULL; the
  *        claimed-ancestor lookup for a landing directory the run may hold)
  * @param verdicts The verdicts to carry out — deployable rows only, by
  *        construction: the skips never enter these arrays (must not be NULL)
  * @param cache Content cache for batch operations (must not be NULL)
- * @param arena Arena the receipt, its arrays and the run's holds live in (must
- *        not be NULL; the verdicts' own, or one they outlive)
  * @return The receipt, the arena's; never NULL
  */
 deploy_receipt_t *deploy_execute(
+    arena_t *arena,
     git_repository *repo,
     const workspace_t *ws,
     const deploy_preflight_t *verdicts,
-    content_cache_t *cache,
-    arena_t *arena
+    content_cache_t *cache
 );
 
 #endif /* DOTTA_DEPLOY_H */

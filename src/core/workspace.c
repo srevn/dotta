@@ -79,9 +79,8 @@ struct workspace {
      * start of the command and borrowed here (ctx->run.manifest — rows and index
      * alike are the command arena's, and nothing frees a view). Rows are read-only
      * for the whole run — the record a writer patches is the one its item holds
-     * (workspace_item_t), never a row. The view's own index answers the scan,
-     * at each child it lists and each rung above a root (workspace_scan,
-     * core/manifest.h manifest_blob_above): a path is one row, and each asks
+     * (workspace_item_t), never a row. The view's own index answers the scan at
+     * each child it lists (workspace_scan): a path is one row, and each asks
      * row->type for the kind it wants. A reader outside the module asks for the
      * path's item instead, which carries its row (workspace_find). */
     const manifest_t *manifest;                  /* Borrowed */
@@ -2414,14 +2413,15 @@ typedef struct {
  * there, which only a look confirms: a record bounds what is offered, never where
  * the walk goes.
  *
- * Nothing beneath a blob the view holds is offered, and the climb that says so
- * is the driver's, asked once of the directory a walk begins at
- * (workspace_analyze_untracked, through core/manifest.h manifest_blob_above). A
- * frame adds exactly one rung to that answer — the child's own key, which is
- * the question above — and every rung over it was answered before the frame was
- * entered, no frame being entered whose directory a blob stands at or over. So
- * the rule is this walk's induction rather than a climb per child, and `directory`
- * carries it as a precondition.
+ * Nothing beneath a blob the view holds is offered: the view requires a file or
+ * a link at the blob's path, so a directory standing in its place is the file
+ * analysis's to say, with the remedies beside it, and nothing found in it is a
+ * discovery. No climb says so. A walk begins at a scan root, a tracked row, and
+ * no row stands beneath a standing blob (core/manifest.h), so no blob stands at
+ * or over a root; a frame adds exactly one rung to that — the child's own key,
+ * which is the question above — and no frame is entered whose directory a blob
+ * stands at. So the rule is the view's own, kept by this walk's induction, and
+ * `directory` carries it as a precondition.
  *
  * The order is the order. The view's word first, because a claim that names its
  * own path settles the child whatever stands there and costs no look; the lstat
@@ -2668,13 +2668,13 @@ static workspace_fault_t workspace_scan(
  * later-enabled where two stand at one — under the name that profile's own claims
  * give it (core/manifest.h manifest_name), minus what that profile's ignore layers
  * and the source tree exclude — and nothing at all beneath a path the view holds
- * a blob at, a tracked root of its own included (core/manifest.h
- * manifest_blob_above). A look that lists what it can read and says where it
- * could not — a directory it could not list, a path it could not look at, what
- * Git's ignore rules could not judge, withheld — each an unscanned item at the
- * path (workspace_add_unscanned): not a snapshot, and not an admission — what
- * the commit can hold at that name is the question a profile's draft asks at
- * update's capture (core/profiles.h profile_capture_file).
+ * a blob at: no tracked row stands beneath one, so no root does, and a walk enters
+ * no child one stands at (workspace_scan). A look that lists what it can read
+ * and says where it could not — a directory it could not list, a path it could
+ * not look at, what Git's ignore rules could not judge, withheld — each an
+ * unscanned item at the path (workspace_add_unscanned): not a snapshot, and not
+ * an admission — what the commit can hold at that name is the question a profile's
+ * draft asks at update's capture (core/profiles.h profile_capture_file).
  *
  * The driver enumerates the view's tracked directories, one scan each, and the
  * walk descends only into directories the view does not track
@@ -2751,25 +2751,6 @@ static error_t workspace_analyze_untracked(
 
     for (size_t r = 0; r < root_count; r++) {
         const workspace_item_t *root = roots[r];
-
-        /* A blob the view holds over this directory — the row at its own key is
-         * the tracked one the walk starts from — asked once for the whole walk
-         * beneath it: an offer under a blob is one no apply can place, whoever
-         * would name it, and committing it turns a view-versus-disk conflict
-         * the user can resolve into a view-versus-view one only `remove` can.
-         * Said on its own screen rather than here — the file analysis stands
-         * the [type] at the blob's own path, with the remedies beside it. The
-         * same question at a root the driver reached directly: an independent
-         * scan root beneath a file claim is as much beneath it as a child the
-         * walk would have stopped at. An owner that cannot be enumerated is not
-         * replaced: the directory stays a boundary and is not scanned, whatever
-         * a lower row standing at it under a cleaner spelling could have offered
-         * — the view's word about the directory is its owner's. The walk beneath
-         * inherits this answer and climbs nothing of its own: the directory's
-         * key is its row's own, which mount_resolve spelled, and a child joined
-         * onto a key is a key (infra/mount.h), so it asks the view at each child's
-         * own key, and every rung over that key is this one (workspace_scan). */
-        if (manifest_blob_above(ws->manifest, root->filesystem_path)) continue;
 
         /* The owner's ruleset (memoised in the builder). Fatal on failure: scanning
          * a profile without its ignore rules risks reporting genuinely ignored

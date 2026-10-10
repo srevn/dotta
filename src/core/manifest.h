@@ -849,12 +849,10 @@ const manifest_row_t *manifest_lookup(
  * holds it — so the root directory is its floor, as it is deploy's (core/deploy.c
  * nearest_ancestor), and "/" itself has nothing above it.
  *
- * Readers: core/workspace.c workspace_analyze_untracked, of every tracked directory
- * its scan is about to enumerate; cmds/add.c cmd_add, of the path an argument
- * names — a capture beneath one of the profile's own files, whichever label names
- * either, over the one profile's view its names come from; and cmds/status.c
- * status_print_workspace, of an overridden copy, whose line names what stands
- * over it.
+ * Readers: cmds/add.c cmd_add, of the path an argument names — a capture beneath
+ * one of the profile's own files, whichever label names either, over the one
+ * profile's view its names come from; and cmds/status.c status_print_workspace,
+ * of an overridden copy, whose line names what stands over it.
  *
  * @param manifest Manifest (must not be NULL)
  * @param filesystem_path Where to ask, absolute: a key (must not be NULL)

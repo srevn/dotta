@@ -1958,7 +1958,9 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * contributes nothing to either, said by status's and apply's health off
      * the view, core/manifest.h manifest_missing). A path p lost to q is p's
      * reassignment and q's claim; a path that moved between two pulled profiles
-     * is one reassignment, never a transient release.
+     * is one reassignment, never a transient release; and a claim of p's that a
+     * blob the pull brought now stands above is p's overridden, never a release
+     * either: its copy is held for the blob.
      *
      * Sync does not deploy. Apply's divergence analysis does that, which is what
      * the summary's hint points at.
@@ -1998,7 +2000,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
              * of the user, so it is not counted. */
             size_t released = s->orphans.owned + s->orphans.observed;
 
-            if (staged + released + s->reassigned == 0) continue;
+            if (staged + released + s->reassigned + s->overridden == 0) continue;
 
             if (!manifest_changed) {
                 output_section(out, OUTPUT_NORMAL, "Manifest");
@@ -2020,18 +2022,24 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 output_print(
                     out, OUTPUT_NORMAL, "%s%zu reassigned", sep, s->reassigned
                 );
+                sep = ", ";
+            }
+            if (s->overridden > 0) {
+                output_print(
+                    out, OUTPUT_NORMAL, "%s%zu overridden", sep, s->overridden
+                );
             }
             output_endline(out, OUTPUT_NORMAL);
         }
 
         /* The import's health, in the receipt's own shape and apply's: the paths
          * a profile carries that this machine will not land, a section each.
-         * The Manifest block above cannot say any of them — none is in either
-         * view's rows — so this is the import moment's only signal, and the moment
-         * the paths are worth naming rather than counting, an import being what
-         * brought them. Every repair is generic: the (from P) beside every path
-         * names the profiles, and a path holding a space would paste into a command
-         * it breaks. */
+         * The Manifest block above names none of them — it counts rows, and none
+         * of them is a row of the view after — so this is the import moment's
+         * only signal of each, and the moment the paths are worth naming rather
+         * than counting, an import being what brought them. Every repair is
+         * generic: the (from P) beside every path names the profiles, and a path
+         * holding a space would paste into a command it breaks. */
         manifest_unbound_t unbound = manifest_unbound(after);
         if (unbound.count > 0) {
             output_section(out, OUTPUT_NORMAL, "Paths with no target");

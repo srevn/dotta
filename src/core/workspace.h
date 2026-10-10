@@ -101,6 +101,11 @@
  *
  * This enum captures WHERE an item exists, separate from WHAT is wrong with it
  * (see divergence_type_t). States are mutually exclusive.
+ *
+ * OVERRIDDEN is the record against the view, standing from whenever its claim
+ * came to stand nowhere until the blob over it goes; not manifest_diff_stats_t's
+ * `overridden` (core/manifest.h), which counts one transition's own delta between
+ * two views.
  */
 typedef enum {
     WORKSPACE_STATE_DEPLOYED,      /* The view claims the path and something stands there */

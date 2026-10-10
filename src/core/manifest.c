@@ -1960,12 +1960,14 @@ error_t manifest_holder(
  * Attribute the transition between two views to profiles
  *
  * Two passes — every row of `after` for the gain side, every row of `before`
- * for the loss side — over an index of profile → stats slot, and a search of
- * the record by path for the departure split (state_find_record). Nothing is
- * written; the rule for what a departure means for apply is the record's presence
- * and ownership at the path, the same fact the workspace reads when it meets
- * the orphan. Nothing here can fail: the one thing a caller can get wrong, a
- * profile named twice, is its bug.
+ * for the loss side — over an index of profile → stats slot, the profile's own
+ * claim at a path `after` stands nothing at (manifest_lookup_claim), and a search
+ * of the record by path for the departure split (state_find_record). Nothing is
+ * written; the rule for what a row `after` lacks means for apply is the one the
+ * workspace reads when it meets the record there — a claim its profile still
+ * holds is overridden, held for the blob above it, and anything else a departure,
+ * whose record's presence and ownership say what apply does. Nothing here can
+ * fail: the one thing a caller can get wrong, a profile named twice, is its bug.
  */
 void manifest_diff(
     const manifest_t *before,
@@ -2003,8 +2005,9 @@ void manifest_diff(
         hashmap_set(stats_map, name, &out_stats[i]);
     }
 
-    /* Gain side: every row of `after`, attributed to its winner. What `before`
-     * had at the path splits claimed into added / updated / unchanged. */
+    /* Gain side: every row of `after`, attributed to the profile it stands under
+     * — a rung's, the side its blob lost to. What `before` had at the path splits
+     * claimed into added / updated / unchanged. */
     manifest_rows_t rows = manifest_rows(after);
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];
@@ -2034,8 +2037,9 @@ void manifest_diff(
 
     /* Loss side: every row of `before`, attributed to its former owner. A path
      * still in `after` under another profile is a reassignment (for user-facing
-     * "A → B" messaging); a path `after` lacks is an orphan if a record stands
-     * at it, and ownership says which kind. */
+     * "A → B" messaging); a path `after` lacks is overridden where its profile
+     * claims it still, else an orphan if a record stands at it, ownership saying
+     * which kind. */
     rows = manifest_rows(before);
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *old = rows.entries[i];
@@ -2046,6 +2050,16 @@ void manifest_diff(
         const manifest_row_t *row = manifest_lookup(after, old->filesystem_path);
         if (row) {
             if (strcmp(old->profile, row->profile) != 0) slot->reassigned++;
+            continue;
+        }
+
+        /* The profile claims the path still, and it stands nowhere: with no row
+         * at its path, a blob stands above it (manifest_layer), and its copy is
+         * held for that blob — a derived claim's as much as any, the way beneath
+         * the blob as overridden as the claims it leads to. No departure, so no
+         * record is asked. */
+        if (manifest_lookup_claim(after, old->profile, old->filesystem_path)) {
+            slot->overridden++;
             continue;
         }
 

@@ -203,16 +203,17 @@ typedef enum {
  *                                  it, and status ranks its tag — [locked],
  *                                  [unreadable] or [unverified] — the same way,
  *                                  so one item has one name in both places.
- *   a shared relocation            RELOCATED    — the item's claim stands at
- *                                  another path now, in a namespace whose
- *                                  projection is not the user's to move
+ *   a shared relocation            RELOCATED    — the item's claim moved to
+ *                                  another path, in a namespace whose projection
+ *                                  is not the user's to move
  *                                  (WORKSPACE_RELOCATION_SHARED — home/): the
  *                                  copy here is the claim's old home, skipped
- *                                  even when byte-clean, so the skip outranks
- *                                  the user-change reasons below it. The class
- *                                  is the whole test, so a re-targeted custom/
- *                                  copy — the BOUND class — never trips it and
- *                                  keeps the prune (or its own divergence reason)
+ *                                  even when byte-clean and whatever stands at
+ *                                  the new path, so the skip outranks the
+ *                                  user-change reasons below it. The class is
+ *                                  the whole test, so a re-targeted custom/ copy
+ *                                  — the BOUND class — never trips it and keeps
+ *                                  the prune (or its own divergence reason)
  *   DIVERGENCE_CONTENT             MODIFIED     — disk differs from what dotta
  *                                  deployed (the record), not from the blob Git
  *                                  may have moved on to

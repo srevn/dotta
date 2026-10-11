@@ -1706,6 +1706,31 @@ const manifest_row_t *manifest_lookup_claim(
 }
 
 /**
+ * The row `profile` holds under `storage_path` in its own contribution
+ */
+const manifest_row_t *manifest_lookup_storage(
+    const manifest_t *manifest,
+    const char *profile,
+    const char *storage_path
+) {
+    if (!manifest || !storage_path) return NULL;
+
+    const contribution_t *c = manifest_contribution(manifest, profile);
+    if (!c) return NULL;
+
+    /* The one row of its own that spells the name, standing or not: a name is
+     * one claim, placed at one path (core/manifest.h) */
+    for (size_t j = 0; j < c->count; j++) {
+        const manifest_row_t *row = c->rows[j];
+        if (strcmp(row->storage_path, storage_path) == 0) {
+            return row;
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * Does `profile` hold `storage_path` as a name for `filesystem_path`?
  */
 bool manifest_holds_name(
@@ -1887,26 +1912,6 @@ const manifest_row_t *manifest_blob_above(
     CHECK_NULL(filesystem_path);
 
     return manifest_index_blob_above(manifest->index, NULL, filesystem_path);
-}
-
-/**
- * Look up a row by its claim
- */
-const manifest_row_t *manifest_lookup_storage(
-    const manifest_t *manifest,
-    const char *storage_path,
-    const char *profile
-) {
-    if (!manifest || !storage_path || !profile) return NULL;
-
-    for (size_t i = 0; i < manifest->count; i++) {
-        const manifest_row_t *row = manifest->rows[i];
-        if (strcmp(row->profile, profile) == 0 &&
-            strcmp(row->storage_path, storage_path) == 0) {
-            return row;
-        }
-    }
-    return NULL;
 }
 
 /**

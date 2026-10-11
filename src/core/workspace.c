@@ -2070,19 +2070,19 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *     removal, a dead enabled branch, the name retyped to the other kind — is
  *     LOST, and the deployed copy is left alone (RELEASED); BACKED (a disabled
  *     profile, a moved target) is dotta's to prune, divergence permitting — and
- *     carries the relocation read: a BACKED orphan whose claim still has a row
- *     elsewhere in the view carries the class of the namespace the claim lands
- *     in (workspace_relocation_t), read where the row is found and the row not
- *     kept, and that class picks the fate (cleanup_verdict). Elsewhere is another
- *     entry, never merely another string: a row standing on the record's very
- *     entry was the entry's arm above. UNVERIFIED keeps the orphan skipped until
- *     Git answers — either kind: LOST would retire the record, BACKED would remove
- *     the copy, and neither is a guess to make about an empty directory any more
- *     than about a file. Skipped and not measured: no reader shows a bit beside
- *     UNVERIFIED, so a compare would only give the item a second reason for the
- *     one fate it already has. The probe raises nothing, so a lookup it could
- *     not make is this orphan's skip and never the load's — the rule the file
- *     analysis takes for its own looks.
+ *     carries the relocation read: a BACKED orphan whose claim its profile still
+ *     holds elsewhere, standing there or not, carries the class of the namespace
+ *     the claim lands in (workspace_relocation_t), read where the row is found
+ *     and the row not kept, and that class picks the fate (cleanup_verdict).
+ *     Elsewhere is another string, and where the row stands another entry: a
+ *     row standing on the record's very entry was the entry's arm above. UNVERIFIED
+ *     keeps the orphan skipped until Git answers — either kind: LOST would retire
+ *     the record, BACKED would remove the copy, and neither is a guess to make
+ *     about an empty directory any more than about a file. Skipped and not
+ *     measured: no reader shows a bit beside UNVERIFIED, so a compare would only
+ *     give the item a second reason for the one fate it already has. The probe
+ *     raises nothing, so a lookup it could not make is this orphan's skip and
+ *     never the load's — the rule the file analysis takes for its own looks.
  *
  * Divergence for a prunable file is disk against what dotta last deployed — the
  * record (workspace_compare_orphan). A prunable directory's verdict is cleanup's
@@ -2272,23 +2272,25 @@ static void workspace_analyze_orphans(workspace_t *ws) {
                 break;
         }
 
-        /* The relocation read: a relocated orphan is an orphan whose claim still
-         * has a row, standing at another file. The record's own (profile, storage
-         * path) pair is asked of the view; a row found here always projects to
-         * another string — the partition orphaned this record precisely because
-         * no view row stands at its filesystem path, this row included — and,
-         * after the guard above, to another entry: a root re-spelled under another
-         * name of one directory is the guard's, not a relocation. So the claim
-         * deploys at a new location now: a moved custom/ target, a different
-         * $HOME. The class picks the fate at cleanup_verdict, and root/ never
-         * gets here — its projection is fixed, so a root/ claim's old and new
-         * locations are one string and the record was never orphaned. Strictly
-         * the record's own profile: a claim shadowed by another profile at its
-         * new home is not "relocated" — the copy here is simply no longer active.
-         * And strictly its own kind: BACKED said the profile holds a claim of
-         * that kind at the name, and the view builds no row of the other kind
-         * there. Asked on this arm alone: it is a linear scan of the view, and
-         * the arms above read no row.
+        /* The relocation read: a relocated orphan is one whose claim its profile
+         * still holds at another path. The record's own (profile, storage path)
+         * pair is asked of that profile's own rows (manifest_lookup_storage),
+         * standing or not, and a row found there projects to another string:
+         * the arm of the claim its profile holds found none at the record's path,
+         * and one name places at one path. Where the row stands it projects to
+         * another entry too — a root re-spelled under another name of one directory
+         * is the guard's above, not a relocation; one standing nowhere was never
+         * looked at, and there a re-spelled root reads as a move, which can only
+         * add the class's skip. So the claim moved with its root: a re-targeted
+         * custom/ binding, a different $HOME. Whether it stands at its new path
+         * is that path's precedence, and says nothing of the copy left here.
+         * The class picks the fate at cleanup_verdict, and root/ never gets here
+         * — its projection is fixed, so a root/ claim's old and new locations
+         * are one string and the record was never orphaned. And strictly its
+         * own kind: BACKED said the profile holds a claim of that kind at the
+         * name, and the profile holds no claim of the other kind under it. Asked
+         * on this arm alone, where Git backs the name: it scans the profile's
+         * own rows, and a disabled profile has none in the view.
          *
          * The class is read here, where the row is found, and the row is not
          * kept: an orphan item carries none, which is how the entries tell a
@@ -2301,7 +2303,7 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * are one string (manifest_lookup_storage matches it exactly), and a
          * name the view holds was validated where the profile was read, so the
          * projection below asserts nothing not already established. */
-        if (manifest_lookup_storage(ws->manifest, item->storage_path, item->profile)) {
+        if (manifest_lookup_storage(ws->manifest, item->profile, item->storage_path)) {
             switch (label_of(item->storage_path)) {
                 case LABEL_HOME:
                 case LABEL_ROOT:
@@ -3838,12 +3840,11 @@ bool workspace_item_tags(
 
             /* The relocation, ridden as a secondary tag beside the divergence
              * tags (the way [reassigned] rides on DEPLOYED): the claim the record
-             * remembers still has a row, projected elsewhere. Whether there is
-             * one at all is the class against NONE, here as at every screen
+             * remembers is still its profile's, at another path. Whether there
+             * is one at all is the class against NONE, here as at every screen
              * (workspace.h). The fate stays cleanup's, and turns on which class
-             * it is (a
-             * re-targeted custom/ copy prunes, a moved home holds behind --force);
-             * this only names what the copy is. */
+             * it is (a re-targeted custom/ copy prunes, a moved home's is skipped
+             * unless --force); this only names what the copy is. */
             if (item->relocation != WORKSPACE_RELOCATION_NONE) {
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "relocated";

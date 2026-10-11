@@ -1102,12 +1102,14 @@ static void status_print_workspace(
 
         /* One sentence for every [relocated] key, wherever the verdict put the
          * item — a pruned custom/ re-target and a skipped home move share the
-         * tag string across kinds and fates, so the sentence is written to be
-         * true of all of them, the way the bare [orphaned] key's is. */
+         * tag string across kinds and fates, and a claim that moved stands at
+         * its new path or nowhere, so the sentence is written to be true of all
+         * of them, the way the bare [orphaned] key's is: it says the claim moved,
+         * never where it stands. */
         static const char relocated_hint[] =
-            "the claim deploys elsewhere now (target or home moved); "
-            "apply prunes the old copy — a moved home holds it "
-            "behind --force";
+            "the claim moved with its target or home; "
+            "apply prunes the old copy, but under a moved home "
+            "only --force does";
 
         for (size_t i = 0; i < orphaned.count; i++) {
             const workspace_item_t *item = orphaned.entries[i];

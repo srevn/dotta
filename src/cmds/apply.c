@@ -1287,10 +1287,10 @@ static void apply_print_cleanup_preview(
          * at all (core/workspace.h workspace_relocation_t against NONE, the one
          * presence question every screen asks) — a naming, not a verdict: both
          * halves are cleanup's one prunable bucket, named together in the list
-         * below, and the split only keeps each parenthetical true. A relocated
-         * prunable copy is not inactive — its claim deploys at a new filesystem
-         * path — so "(no longer active)" would lie about it. Both classes reach
-         * here: a BOUND one by its own verdict, a SHARED one under --force. */
+         * below, and the split only names the move. A relocated copy's claim
+         * moved with its target or home, standing at its new path or not, which
+         * "(no longer active)" would hide. Both classes reach here: a BOUND one
+         * by its own verdict, a SHARED one under --force. */
         size_t moved = 0;
         for (size_t i = 0; i < verdicts->prunable_files.count; i++) {
             if (verdicts->prunable_files.entries[i]->relocation != WORKSPACE_RELOCATION_NONE) {
@@ -1311,7 +1311,7 @@ static void apply_print_cleanup_preview(
             output_print(
                 out, OUTPUT_NORMAL,
                 "  {yellow}%zu{reset} file%s will be pruned "
-                "(relocated: the claim deploys at its new location)\n",
+                "(relocated: the claim moved with its target or home)\n",
                 moved, moved == 1 ? "" : "s"
             );
         }

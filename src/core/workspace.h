@@ -309,12 +309,13 @@ typedef enum {
 /**
  * The rule of the namespace a relocated claim lands in — the class of a relocation
  *
- * A relocation is an orphan whose own claim is still in the view, standing at
- * another path: the record's (profile, storage path) pair found a row that projects
- * elsewhere (workspace_analyze_orphans). What becomes of the copy left behind
- * turns on one question — did the user move the claim, or did the ground move
- * under it — and the answer is the mounting rule of the namespace the claim is
- * named in (infra/label.h), not the place either side stands at:
+ * A relocation is an orphan whose own claim its profile still holds at another
+ * path, standing there or not: the record's (profile, storage path) pair found
+ * the profile's row, which projects elsewhere (workspace_analyze_orphans). What
+ * becomes of the copy left behind turns on one question — did the user move the
+ * claim, or did the ground move under it — and the answer is the mounting rule
+ * of the namespace the claim is named in (infra/label.h), not the place either
+ * side stands at, nor what precedence stands at the new one:
  *
  *   SHARED    home/ and root/ mount where the machine says — the invoker's HOME
  *             and `/`. Neither is anyone's to re-target, so a claim that moved
@@ -327,8 +328,13 @@ typedef enum {
  *
  * A fact of the placement, not an assertion about who moved the file: the program
  * read the record and the view, never the actor. NONE on every item that is not
- * a relocation — any item with no row, and every state but ORPHANED (a RELEASED
- * record carries no row, and on a DEPLOYED item the row is the ordinary claim).
+ * a relocation — an orphan whose profile holds its name at no other path, and
+ * every state but ORPHANED (the arms that release or hold a copy decide before
+ * the read, and a DEPLOYED item's claim is at its own path). Two names a profile
+ * holds read NONE all the same, being in none of its rows: one its settle did
+ * not keep at its new path, the move landing two of its names there, and a second
+ * chain through one path. Under a moved home their copies go as any orphan's,
+ * unskipped — clean ones, which the next apply under the real home lands again.
  *
  * Assigned once, by the orphan analysis where it reads the relocation (workspace.c
  * workspace_analyze_orphans), off the label; the row it finds there is not kept,

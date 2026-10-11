@@ -36,11 +36,12 @@
  * stands nowhere has a row at its path or a standing blob above it.
  *
  * Everything that asks *what stands where* reads the index — manifest_lookup,
- * manifest_rows, manifest_lookup_storage, manifest_holder, manifest_diff:
- * deployment, the record's join, the workspace, every screen. Everything that
- * asks *what does this profile call this path* reads that profile's own
- * contribution — manifest_lookup_claim, manifest_name, manifest_claim_name: a
- * claim of P that stands nowhere is still named by what P holds.
+ * manifest_rows, manifest_holder, manifest_diff: deployment, the record's join,
+ * the workspace, every screen. Everything that asks *what does this profile hold*
+ * — its claim at a path or by a name, what it calls a path — reads that profile's
+ * own contribution — manifest_lookup_claim, manifest_lookup_storage, manifest_name,
+ * manifest_claim_name: a claim of P that stands nowhere is still found and named
+ * by what P holds.
  *
  * Within one profile, at one path: an explicit claim (a blob of any type, a
  * `tracked` directory item) outranks a derived one whichever arrives first, and
@@ -101,13 +102,13 @@
  *   - Readers: manifest_rows (every row standing, both kinds, unordered),
  *     manifest_profiles (the profiles the rows came from, in precedence order),
  *     manifest_mounts (the table the rows were placed by, lent), manifest_lookup
- *     (by filesystem path, O(1)), manifest_lookup_storage (by claim — a storage
- *     path under one profile, linear), manifest_holder (the one row holding a
- *     name, or a refusal naming each), manifest_lookup_claim, manifest_name,
+ *     (by filesystem path, O(1)), manifest_holder (the one row holding a name,
+ *     or a refusal naming each), manifest_lookup_claim and manifest_lookup_storage
+ *     (one profile's claim, at a path and by its name), manifest_name,
  *     manifest_claim_name, manifest_holds_name, manifest_holds_row and
- *     manifest_moved_place (one profile's own contribution, whatever stands at
- *     the path); and manifest_diff, the per-profile delta between two views that
- *     the scope-changing verbs and sync print their receipts from.
+ *     manifest_moved_place (one profile's own contribution, whatever stands);
+ *     and manifest_diff, the per-profile delta between two views that the
+ *     scope-changing verbs and sync print their receipts from.
  *
  * Core Principles:
  *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
@@ -864,41 +865,6 @@ const manifest_row_t *manifest_blob_above(
 );
 
 /**
- * Look up a row by its claim: the storage path under one profile
- *
- * A name keys within one profile (infra/mount.h): the pair (profile, storage
- * path) names at most one row — under home/ and root/ precedence leaves one row
- * per name, and under custom/ one profile has one target — so the lookup is exact.
- * `profile` is required; a NULL profile names no row, the API's own return
- * convention, since a pointer-returning lookup has no CHECK_NULL to refuse with.
- * A caller with no profile in hand asks manifest_holder: the first of several
- * rows holding a name was never an answer.
- *
- * The rows standing, like every reader of the index: this asks whether a claim
- * *stands* somewhere, and a claim another stands over — at its path, above it,
- * or beneath it where it is a blob — or a name the profile did not keep stands
- * nowhere and answers NULL. That is exactly what the workspace's relocation read
- * wants: a claim another stands over at its new path is not "relocated", the
- * copy at the old path is simply no longer active.
- *
- * Linear scan — its reader asks once per BACKED orphan (the workspace's relocation
- * read, each of which already cost a Git tree probe; a lazy per-profile storage
- * index inside the orphan pass's authority cache is the upgrade if a profile-wide
- * re-target ever makes the scan show up).
- *
- * @param manifest Manifest (NULL returns NULL)
- * @param storage_path Storage path to look up, e.g. "home/.bashrc" (NULL returns
- *                     NULL)
- * @param profile The claim's profile (NULL names no row)
- * @return Borrowed row pointer, or NULL when the profile holds no row at the name
- */
-const manifest_row_t *manifest_lookup_storage(
-    const manifest_t *manifest,
-    const char *storage_path,
-    const char *profile
-);
-
-/**
  * The one row holding this name, or a refusal naming every holder
  *
  * A name keys within one profile (infra/mount.h): under custom/ two profiles at
@@ -908,10 +874,11 @@ const manifest_row_t *manifest_lookup_storage(
  * one profile's file for another's — so the refusal names each holder with the
  * path that tells it apart, in precedence order, and `*out_row` is NULL beside it.
  *
- * The rows standing, like manifest_lookup_storage beside it: a name that stands
- * nowhere is held by nobody here. And a row holds its name only where its profile
- * holds the row (manifest_holds_row): the layer's rung stands under a name no
- * profile holds, and is no holder.
+ * The rows standing, where manifest_lookup_storage answers one profile's claim
+ * by its name standing or not: a name that stands nowhere is held by nobody here.
+ * And a row holds its name only where its profile holds the row
+ * (manifest_holds_row): the layer's rung stands under a name no profile holds,
+ * and is no holder.
  *
  * Linear scan, once per command. Readers: cmds/show.c cmd_show and cmds/list.c
  * list_file_history, each without a profile.
@@ -1000,6 +967,54 @@ const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,
     const char *profile,
     const char *filesystem_path
+);
+
+/**
+ * The row `profile` holds under `storage_path` in its own contribution — the
+ * claim by its name, as manifest_lookup_claim answers the claim at a path — whether
+ * or not it stands
+ *
+ * A name keys within one profile (infra/mount.h), and the profile holds it in
+ * one row at most: the name places at one path under the profile's table, it is
+ * one claim — a blob of the tree, or the sheet's one item at its key, the decode
+ * dropping an item a blob of its own name contradicts (core/profiles.h
+ * profile_contradicted) — and the contribution keeps one row of each class at a
+ * path. So the lookup is exact, and the row is the claim's own: a claim that
+ * stands nowhere — another's claim at its path, a standing blob above it, the
+ * claims beneath it where it is a blob, or its own profile's, which contradict
+ * it — answers its row here as manifest_lookup_claim answers it at its path,
+ * and a reader that wants what stands asks the index (manifest_lookup). NULL
+ * where the profile holds no row under the name: a name it does not hold, one
+ * this machine cannot place (manifest_unbound), one its settle did not keep
+ * (manifest_unkept), a second chain through one path, every name of a profile
+ * the view holds no contribution for — a disabled one's — and the pair the layer's
+ * rung carries, which no contribution holds (manifest_holds_row).
+ *
+ * `profile` is required; a NULL profile names no row, the API's own return
+ * convention, since a pointer-returning lookup has no CHECK_NULL to refuse with.
+ * A caller with no profile in hand asks manifest_holder: the first of several
+ * rows holding a name was never an answer.
+ *
+ * Linear over the profile's own rows, and nothing for a profile the view holds
+ * no contribution for, the commonest ask: a disabled profile's orphans. A
+ * relocation within an enabled profile — a moved target or HOME — scans that
+ * profile's rows once per orphan, and an index of each contribution's rows by
+ * name is the upgrade if a measure ever shows the scan.
+ *
+ * Reader: the relocation read (core/workspace.c workspace_analyze_orphans), once
+ * per BACKED orphan, each of which has already cost a Git tree probe.
+ *
+ * @param manifest Manifest (NULL returns NULL)
+ * @param profile The claim's profile (NULL names no row)
+ * @param storage_path Storage path to look up, e.g. "home/.bashrc" (NULL returns
+ *                     NULL)
+ * @return Borrowed row pointer, or NULL where the profile holds no row under
+ *         the name
+ */
+const manifest_row_t *manifest_lookup_storage(
+    const manifest_t *manifest,
+    const char *profile,
+    const char *storage_path
 );
 
 /**

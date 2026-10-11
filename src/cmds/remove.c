@@ -38,8 +38,9 @@
  *
  * The profile's claims are the argument universe of a removal — never the view:
  * a disabled profile's paths must stay removable (the view holds only enabled
- * profiles), an unbound custom claim too (the view refuses it), and a shadowed
- * claim is still the profile's to remove (the view is precedence-resolved).
+ * profiles), an unbound custom claim too (the view refuses it), and a claim that
+ * stands nowhere is still the profile's to remove (the view is
+ * precedence-resolved).
  */
 typedef struct {
     const char *storage_path;      /* arena */
@@ -1856,9 +1857,9 @@ static error_t remove_offer_directory(const profile_claim_t *claim, void *payloa
 /**
  * What can stand at the cursor, read off the buckets remove_post_parse routes:
  * a local profile in the profile slot — the first positional, unless -p took it
- * — then the claims of that profile, shadowed and disabled ones included: its
- * files, and the directory claims its own names would take, slash-marked; nothing
- * after --delete-profile, which takes no path.
+ * — then the claims of that profile, standing or not, enabled or not: its files,
+ * and the directory claims its own names would take, slash-marked; nothing after
+ * --delete-profile, which takes no path.
  */
 static args_want_t remove_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out

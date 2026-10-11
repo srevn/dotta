@@ -480,10 +480,10 @@ static manifest_row_t *manifest_decide(
  * Where the profile names the path once or not at all, the two layers a namer
  * reads answer, nearest first. A claim the command has admitted and not yet
  * committed answers alone, whatever its kind: it is the nearer statement about
- * the place, so a staged FILE names its own path and nothing under it, shadowing
- * a tracked directory the profile holds at the same path exactly as it will once
- * committed. Where the command claimed nothing the profile's own committed row
- * speaks, projected into the same pair.
+ * the place, so a staged FILE names its own path and nothing under it, standing
+ * in for a tracked directory the profile holds at the same path exactly as it
+ * will once committed. Where the command claimed nothing the profile's own
+ * committed row speaks, projected into the same pair.
  *
  * The answer is what the profile's next contribution will keep at the path, given
  * the claims the asker has admitted **so far**: naming is a snapshot taken when
@@ -1004,9 +1004,9 @@ static error_t manifest_contribute(
 
     /* The contribution's rows: every row kept in the index of its class, in claim
      * order. A name that lost and a second chain stay in the arena and leave
-     * the slice; a derived claim the profile's own explicit claim shadows stays
-     * in it, for the layer to hide. Sized exactly — the two indexes are the
-     * count. */
+     * the slice; a derived claim at the path of the profile's own explicit claim
+     * stays in it, for the layer to hide. Sized exactly — the two indexes are
+     * the count. */
     size_t kept = hashmap_size(c->explicit) + hashmap_size(c->derived);
     if (kept > 0) {
         c->rows = arena_calloc(arena, kept, sizeof(*c->rows));
@@ -1269,10 +1269,10 @@ static manifest_row_t *manifest_rung(
  * the same directory derive it identically, their claims carry no intent to
  * conflict, and the first to name the path holds it, so the row's owner does
  * not move when a profile above it is enabled and no reassignment churn appears
- * in the receipts over a directory nobody named. A derived claim its own profile's
- * explicit claim shadows meets that claim here and is hidden like any other.
- * Last, at each place a blob lost and no derived claim filled, the layer's rung
- * (manifest_rung): the directory the claims beneath it need.
+ * in the receipts over a directory nobody named. A derived claim at the path of
+ * its own profile's explicit claim meets that claim here and is hidden like any
+ * other. Last, at each place a blob lost and no derived claim filled, the layer's
+ * rung (manifest_rung): the directory the claims beneath it need.
  *
  * Where what leaves a claim no room is its own profile's — a blob of its own
  * above it, or the claims of its own beneath it — the profile places one chain

@@ -1084,8 +1084,8 @@ static error_t list_post_parse(
 /**
  * What can stand at the cursor, by the rule list_post_parse routes with: under
  * -p, a file of that profile as the one positional; without, a local profile or
- * a file of the view first, then — under a profile — a file of its own, shadowed
- * ones included. A path in the first slot was the file: nothing follows it.
+ * a file of the view first, then — under a profile — a file of its own, standing
+ * or not. A path in the first slot was the file: nothing follows it.
  */
 static args_want_t list_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out

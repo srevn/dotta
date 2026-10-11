@@ -1167,9 +1167,9 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  * claim this command has admitted and not yet committed (`pending`: the path →
  * manifest_claim_t; NULL for every other reader) speaks for the place whatever
  * its kind, and only where it says nothing does the profile's committed row speak.
- * So a staged blob shadows a tracked directory the profile holds at the same
- * path, exactly as it will once committed — where the blob takes the path and
- * the directory's name is the one the contribution does not keep.
+ * So a staged blob stands in for a tracked directory the profile holds at the
+ * same path, exactly as it will once committed — where the blob takes the path
+ * and the directory's name is the one the contribution does not keep.
  *
  * The claim kept at the path is its name; else the path is composed beneath the
  * nearest rung above it that names what lies beneath — a DIRECTORY claim of either

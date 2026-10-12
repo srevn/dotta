@@ -52,6 +52,22 @@ const char *str_path_under(const char *path, const char *dir, size_t dir_len) {
         : str_path_beneath(path, dir, dir_len);
 }
 
+int str_path_beneath_order(const char *path, const char *dir, size_t dir_len) {
+    /* Where the path parts from the directory's spelling, it sorts that way from
+     * every path beneath, each carrying the spelling whole */
+    const int order = strncmp(path, dir, dir_len);
+    if (order != 0) return order;
+
+    /* The root directory's separator is all its spelling holds: every path past
+     * it lies beneath, and "/" itself, the one it is all of, before them */
+    if (dir_len == 1 && dir[0] == '/') return path[1] ? 0 : -1;
+
+    /* Any other directory's separator is the byte past its spelling, read unsigned
+     * as strcmp reads it: a lesser byte sorts before the block, the directory's
+     * own terminator among them, and a greater one past */
+    return (unsigned char) path[dir_len] - '/';
+}
+
 size_t str_path_parent_len(const char *path) {
     return str_path_parent_len_n(path, strlen(path));
 }

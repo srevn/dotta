@@ -223,15 +223,10 @@ static workspace_item_t *workspace_find_active(const workspace_t *ws, const char
  * Does an item of one sorted array — one kind's active items, or the orphans —
  * lie strictly beneath `path`?
  *
- * The array is in strcmp order, and every key beneath a path opens with one prefix,
- * the path's spelling and a separator — the root's spelling is its separator
- * already (base/string.h str_path_beneath) — so those keys sort in one block
- * past the siblings the path merely prefixes, "x.bak" before "x/y" and "x0" after,
- * '/' being neither the least byte nor the greatest. The prefix itself is the
- * one key that opens so and lies beneath nothing, the root's own "/". So the
- * first key past the prefix and a byte is beneath the path, or none is: one lower
- * bound answers — workspace_find_item's search, asked of the paths beneath a
- * path rather than of the path.
+ * The array is in strcmp order, so the keys beneath the path sort in one block
+ * of it (base/string.h str_path_beneath_order): one lower bound answers —
+ * workspace_find_item's search, asked of the paths beneath a path rather than
+ * of the path.
  *
  * Readers: workspace_look, over the orphans, of a path a link stands at — a row's
  * or a record's — whether a record beneath it would be looked at through the
@@ -245,32 +240,23 @@ static workspace_item_t *workspace_find_active(const workspace_t *ws, const char
 static bool workspace_item_beneath(
     workspace_item_t *const *items, size_t count, const char *path
 ) {
-    /* The prefix's stem: the path's spelling, less the root's separator, which
-     * is the prefix's own */
     const size_t len = strlen(path);
-    const size_t stem = path[len - 1] == '/' ? len - 1 : len;
     size_t lo = 0;
     size_t hi = count;
 
+    /* Past every key the order puts before the block */
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        const char *key = items[mid]->filesystem_path;
 
-        /* The key against the prefix and a byte: the stem, then the separator
-         * after it, where a key the stem is all of reads its terminator, then
-         * the byte past the separator, which only the prefix itself lacks */
-        int order = strncmp(key, path, stem);
-        if (order == 0) order = (unsigned char) key[stem] - '/';
-        if (order == 0) order = key[stem + 1] ? 1 : -1;
-
-        if (order < 0) {
+        if (str_path_beneath_order(items[mid]->filesystem_path, path, len) < 0) {
             lo = mid + 1;
         } else {
             hi = mid;
         }
     }
 
-    return lo < count && str_path_beneath(items[lo]->filesystem_path, path, len);
+    /* So the first key past them opens the block, or none lies beneath */
+    return lo < count && str_path_beneath_order(items[lo]->filesystem_path, path, len) == 0;
 }
 
 /**

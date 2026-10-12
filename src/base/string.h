@@ -66,7 +66,8 @@ bool str_ends_with(const char *str, const char *suffix);
  * "home"), and a relative path beneath no absolute directory.
  *
  * NULL is the one answer "not beneath" has, so a caller that wants the test alone
- * reads the answer as one.
+ * reads the answer as one; a search over paths sorted by strcmp reads
+ * str_path_beneath_order, zero exactly where this answers a tail.
  *
  * @param path Candidate path
  * @param dir Directory path
@@ -92,6 +93,33 @@ const char *str_path_beneath(const char *path, const char *dir, size_t dir_len);
  * @return The tail at or beneath `dir`, aliasing `path`; NULL where it is neither
  */
 const char *str_path_under(const char *path, const char *dir, size_t dir_len);
+
+/**
+ * Where `path` sorts against the paths beneath directory `dir`: before them,
+ * among them, or past them all, by the sign of the answer
+ *
+ * The order a search needs over paths sorted by strcmp. Every path beneath `dir`
+ * opens with one prefix, its spelling and a separator, the root's spelling being
+ * its separator already (str_path_beneath). So those paths sort in one block
+ * past the siblings `dir` merely prefixes: "x.bak" before "x/y" and "x0" after,
+ * '/' being neither the least byte nor the greatest. The root's own "/", the
+ * one path that opens so and lies beneath nothing, sorts before the block. `path`
+ * is read as str_path_beneath reads it, each byte unsigned as strcmp reads it,
+ * and sorts where it parts from the prefix; so the answer is zero exactly where
+ * str_path_beneath answers a tail, for any `path` and `dir`, and a lower bound
+ * by "negative" finds where the block opens and one by "not positive" where it
+ * ends. A name reads as a path does ("home/x" beneath "home").
+ *
+ * Readers: core/workspace.c workspace_item_beneath (each kind's active items,
+ * the orphans). A reader not on this list is a bug.
+ *
+ * @param path Candidate path
+ * @param dir Directory path
+ * @param dir_len strlen(dir), as str_path_beneath takes it
+ * @return Negative where `path` sorts before every path beneath `dir`, zero where
+ *         it lies beneath, positive where it sorts past them all
+ */
+int str_path_beneath_order(const char *path, const char *dir, size_t dir_len);
 
 /**
  * Length of an absolute path's parent

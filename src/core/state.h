@@ -82,7 +82,9 @@
  * Field of a state_record_t: the (mtime, size, ino) triple captured at the moment
  * dotta confirmed disk content equals record.blob_oid. If a later live stat matches
  * all three fields, disk is still equal to record.blob_oid without re-hashing —
- * the same approach Git uses with its index.
+ * the same approach Git uses with its index (state_stat_matches) — and where a
+ * regular file's size is not the triple's, disk is not record.blob_oid, nothing
+ * read (state_stat_disproves).
  *
  * Sentinel: All-zero state means unset — forces the slow path (safe default).
  * mtime == 0 acts as validity gate: a file with genuine mtime=0 (epoch) simply
@@ -339,6 +341,32 @@ static inline bool state_stat_matches(const state_record_t *record, const struct
            && record->stat.mtime == (int64_t) st->st_mtime
            && record->stat.size == (int64_t) st->st_size
            && record->stat.ino == (uint64_t) st->st_ino;
+}
+
+/**
+ * Does a live look's length disprove the record's blob? — the stat's other answer
+ *
+ * True iff the record's triple is set, the record and the look are each a regular
+ * file, and the look's size is not the triple's. A set triple was taken of a
+ * node that held the record's blob — dotta's own write, or a read that found it
+ * (the two constructors above) — so its size is the blob's length, and a regular
+ * file of another length holds other bytes: a verdict with nothing loaded, nothing
+ * hashed and no key asked. Git reads its index the same way (lib/git/read-cache.c
+ * ie_modified: a recorded size the look does not share is a modification, the
+ * file never read).
+ *
+ * One direction only: an equal size proves nothing, which is the match's question
+ * above, and an UNSET triple holds no length. A link is never asked: its st_size
+ * is the filesystem's to mean (infra/compare.c compare_reference_to_disk), where
+ * a regular file's is its bytes.
+ *
+ * Readers: core/workspace.c workspace_compare_base, after its kind rung and before
+ * its read. A reader not on this list is a bug.
+ */
+static inline bool state_stat_disproves(const state_record_t *record, const struct stat *st) {
+    return record->stat.mtime != 0
+           && record->kind == FS_OCCUPANT_REGULAR && S_ISREG(st->st_mode)
+           && record->stat.size != (int64_t) st->st_size;
 }
 
 /**

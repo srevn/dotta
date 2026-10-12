@@ -808,6 +808,15 @@ static error_t workspace_compare_base(
         return NULL;
     }
 
+    /* The length, off the look too: a regular file at another size than the
+     * triple's holds other bytes (core/state.h state_stat_disproves) — the stat's
+     * disproof, where the first rung was its proof — so an edit that moved the
+     * length reads as one with no blob opened and no key asked. */
+    if (state_stat_disproves(base, &item->st)) {
+        *out = CMP_DIFFERENT;
+        return NULL;
+    }
+
     /* One read of the record's blob, as the entry its own kind names, under its
      * own binding — the pair its blob opens under (core/state.h state_record_t)
      * — judged against the caller's look, which is forwarded: the seam reads,
@@ -1180,7 +1189,9 @@ static void workspace_analyze_file(
          * against the link's target — Git hashes a target exactly as it hashes
          * content — and calls it exactly what dotta deployed. A node of neither
          * kind is not the pair dotta confirmed whatever its bytes, and answers
-         * as another kind with nothing read.
+         * as another kind with nothing read; nor is a file of the base's kind
+         * at another length than its stat holds, which answers as other bytes,
+         * with nothing read either.
          *
          * A failed look answers nothing and leaves disk_at_base false: the edit
          * is taken as real (CONTENT, or TYPE across kinds), the conservative
@@ -1292,8 +1303,8 @@ static void workspace_analyze_file(
  * - Uses the record alone (kind, blob_oid, stat, mode, owner, group)
  * - The content against the record's own pair, the question the file analysis's
  *   second question asks too (workspace_compare_base): the stat — a match means
- *   the exact node dotta wrote, no hashing — else the node's kind off the look,
- *   which needs no read, else one read of the record's blob
+ *   the exact node dotta wrote, no hashing — else the node's kind and its length
+ *   off the look, which need no read, else one read of the record's blob
  * - The claim checked against the record's: the full-bit mode, the ownership
  *   beside it
  * - Single-stat-per-file (the caller's look, which nothing below retakes)
@@ -1321,9 +1332,9 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
      * The record's own pair under the caller's look (workspace_compare_base):
      * the stat first, so the exact node dotta wrote is recognised without loading
      * or hashing anything — and the claim below is asked of that node, never of
-     * another kind's — then the kind off the look, then one read of the record's
-     * blob, the one dotta last confirmed disk against. The caller guarantees a
-     * non-zero blob, and the store holds none of another size (CHECK).
+     * another kind's — then the kind and the length off the look, then one read
+     * of the record's blob, the one dotta last confirmed disk against. The caller
+     * guarantees a non-zero blob, and the store holds none of another size (CHECK).
      */
     compare_result_t cmp_result;
     error_t err = workspace_compare_base(ws, item, &cmp_result);

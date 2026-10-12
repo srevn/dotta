@@ -382,14 +382,17 @@ error_t content_rebind(
  * The seam reads; it does not look. What the read answers is judged by
  * infra/compare.h's pair, whose one look is the caller's own, so the stat is
  * forwarded and required here for the same reason it is required there. The reader
- * asks the record's kind of that look first and calls only where it stands —
- * the record's kind being a look's word already (core/state.h state_record_t) —
- * so no blob is opened, and no key asked, to learn what the look already tells.
+ * asks the record's kind of that look first, then its length against the stat
+ * the record confirmed (core/state.h state_stat_disproves), and calls only where
+ * neither answers — the record's kind being a look's word already (core/state.h
+ * state_record_t) — so no blob is opened, and no key asked, to learn what the
+ * look already tells.
  *
  * Reader: `core/workspace.c workspace_compare_base`, the one question a record
  * asks of a look — put by the file analysis's second question (ours against the
- * base) and by an orphan's comparison (its copy against the record dotta keeps
- * of it). A reader not on this list is a bug.
+ * base), by the directory analysis under a squatter (the frame across kinds)
+ * and by an orphan's comparison (its copy against the record dotta keeps of it).
+ * A reader not on this list is a bug.
  *
  * @param cache The run's reader: its repository and its key manager (must not
  *          be NULL). The memo is neither read nor written here.

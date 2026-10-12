@@ -1277,7 +1277,7 @@ static void workspace_analyze_file(
  * Compare an orphan's copy against its record
  *
  * The file analysis's comparison (workspace_analyze_file), asked of an orphan:
- * filesystem state against what dotta last deployed.
+ * filesystem state against what dotta last confirmed there.
  *
  * An orphan asks one question — is disk still what dotta put there? — so prune
  * safety is measured against the record, never against a view blob: Git may have
@@ -1294,10 +1294,10 @@ static void workspace_analyze_file(
  * converges every claim; this analysis has no row to ask that of, and asks whether
  * disk left the claim the record reconciled — the question prune safety turns on.
  *
- * Precondition: the record carries a confirmed blob. The caller
- * (workspace_analyze_orphans) measures only a record dotta owns or one the user
- * ordered pruned against a confirmed blob; a record with nothing to measure against
- * is released, not measured.
+ * Precondition: the record carries a confirmed blob. Its one caller,
+ * workspace_measure, compares only a file whose record confirmed one — a copy
+ * dotta owns, one the user ordered pruned against it, or an overridden one —
+ * and leaves the rest unmeasured.
  *
  * Architecture:
  * - Uses the record alone (kind, blob_oid, stat, mode, owner, group)
@@ -1313,8 +1313,7 @@ static void workspace_analyze_file(
  * decides what a failure to look means, which is the rule the file analysis already
  * keeps for its own (never fatal to the load; the item holds the class and the
  * bit). Nothing is guarded here — the one caller cannot pass a NULL, and a break
- * that reached this would rather crash than be read as a silent [orphaned,
- * unverified].
+ * that reached this would rather crash than be read as a silent [unverified].
  *
  * @param ws Workspace (provides the run's content reader)
  * @param item The orphan's item: its record, with a non-zero blob_oid, and the
@@ -1959,12 +1958,15 @@ static void workspace_index_entries(workspace_t *ws) {
 }
 
 /**
- * Measure a copy dotta may prune — or say whose refusal kept it from being measured
+ * Measure a copy dotta answers for — or say whose refusal kept it from being
+ * measured
  *
- * A file: disk against what dotta last deployed (workspace_compare_orphan). A
- * directory: nothing to measure — cleanup's emptiness rule decides — only whether
- * it can be: one dotta cannot stat or cannot read is skipped, as an unstattable
- * file is, until the user can say what is in it.
+ * A file: disk against what dotta last confirmed there (workspace_compare_orphan);
+ * one whose record confirmed nothing has nothing to be measured against, and is
+ * left unmeasured. A directory: nothing to measure — what is left in it is read
+ * where its removal is decided (cleanup's emptiness rule) — only whether it can
+ * be: one dotta cannot stat or cannot read is unverified, as an unstattable file
+ * is, until the user can say what is in it.
  *
  * Each arm answers one question and only that one — whose refusal, if any — and
  * the tail answers the other for all three: a copy dotta could not measure reads
@@ -1974,10 +1976,17 @@ static void workspace_index_entries(workspace_t *ws) {
  * the one arm of the orphan analysis that writes one leaves the copy unmeasured
  * and never prunable.
  *
- * Readers: the orphan analysis's two arms that find the copy dotta's to prune —
- * the user's prune order, and Git's backing (workspace_analyze_orphans). A
- * candidacy, not cleanup's verdict, which still skips the copy for a divergence
- * or a reason of its own.
+ * A sealed file is read where its stat moved and its length did not, or where
+ * no stat was ever recorded — no learning reaches an orphan, so the read recurs
+ * at every load — so a load that may ask for the key (apply's) asks here, whatever
+ * its scope; over a pipe it reads a line of its input as the passphrase
+ * (crypto/keymgr.h).
+ *
+ * Readers: the orphan analysis's three arms that keep the copy dotta's — the
+ * user's prune order, the claim its profile still holds, and Git's backing
+ * (workspace_analyze_orphans). A fact, not a verdict: cleanup's still skips a
+ * prunable copy for a divergence or a reason of its own, and no engine reads an
+ * overridden copy's.
  *
  * @param ws Workspace (provides the run's content reader)
  * @param item The orphan's item, beneath no squatter and not absent: a present
@@ -1988,13 +1997,18 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
         /* Present but unstattable, either kind: nothing to measure the copy with,
          * and the errno says whose refusal it was. */
         item->fault = workspace_code_fault(error_errno_code(item->lstat_errno));
-    } else if (item->item_kind == PATH_KIND_FILE) {
-        item->fault = workspace_error_fault(workspace_compare_orphan(ws, item));
-    } else if (fs_eaccess(item->filesystem_path, R_OK | X_OK) < 0) {
+    } else if (item->item_kind == PATH_KIND_DIRECTORY) {
         /* A directory: read for the readdir, search for the walk's look at an
          * entry named like OS metadata (fs_directory_emptiness). Any failure
          * leaves it unmeasured, and the errno, faccessat's, says whose. */
-        item->fault = workspace_code_fault(error_errno_code(errno));
+        if (fs_eaccess(item->filesystem_path, R_OK | X_OK) < 0) {
+            item->fault = workspace_code_fault(error_errno_code(errno));
+        }
+    } else if (workspace_base(item->record)) {
+        /* A file, against the blob its record confirmed. One whose record confirmed
+         * none — a copy dotta only observed, under a claim still held — has nothing
+         * to be measured against, and stays unmeasured. */
+        item->fault = workspace_error_fault(workspace_compare_orphan(ws, item));
     }
 
     if (item->fault != WORKSPACE_FAULT_NONE) {
@@ -2047,10 +2061,11 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *     manifest_lookup_claim) — and no row stands there, so the claim stands
  *     nowhere. A path an enabled claim names is dotta's whether or not the claim
  *     stands, so the copy is OVERRIDDEN: left for the row standing over it, never
- *     pruned and never released. Behind the entry, whose stale key names no copy
- *     of its own; ahead of the prune order, given when the claim left, which
- *     its return has made stale; and ahead of the gate and Git authority, whose
- *     releases each answer a claim that has gone, which this one has not;
+ *     pruned and never released, and measured as a backed copy is. Behind the
+ *     entry, whose stale key names no copy of its own; ahead of the prune order,
+ *     given when the claim left, which its return has made stale; and ahead of
+ *     the gate and Git authority, whose releases each answer a claim that has
+ *     gone, which this one has not;
  *   - the prune order (remove --delete-files): the user chose the fate of the
  *     deployed copy, and Git is not asked. Honoured only with a reference to
  *     measure the copy against — a directory (cleanup's emptiness rule decides)
@@ -2081,15 +2096,18 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *     raises nothing, so a lookup it could not make is this orphan's skip and
  *     never the load's — the rule the file analysis takes for its own looks.
  *
- * Divergence for a prunable file is disk against what dotta last deployed — the
- * record (workspace_compare_orphan). A prunable directory's verdict is cleanup's
- * emptiness rule, so there is nothing to measure, only whether it can be: a
- * directory dotta cannot stat, read or search — the path, or a component above
- * it — is UNVERIFIED, the bit an unstattable file carries, and held until the
- * user can say what is in it. That is one fs_eaccess per present directory orphan
- * (read and search: the walk lstat's an entry named like OS metadata to see that
- * it is a file); the readdir itself stays cleanup's, because what is left in a
- * directory depends on the plan. Both are the measure's (workspace_measure).
+ * Divergence for a file the analysis measures — a prunable copy or an overridden
+ * one — is disk against what dotta last confirmed there, the record
+ * (workspace_compare_orphan); one whose record confirmed nothing is left
+ * unmeasured. A directory's verdict is what is left in it, read where its removal
+ * is decided (cleanup's emptiness rule), so there is nothing to measure, only
+ * whether it can be: a directory dotta cannot stat, read or search — the path,
+ * or a component above it — is UNVERIFIED, the bit an unstattable file carries,
+ * and held until the user can say what is in it. That is one fs_eaccess per present
+ * directory orphan (read and search: the walk lstat's an entry named like OS
+ * metadata to see that it is a file); the readdir itself stays cleanup's, because
+ * what is left in a directory depends on the plan. Both are the measure's
+ * (workspace_measure).
  *
  * This enables status to predict apply behavior (cleanup_verdict reads the same
  * item, and cleanup_skip_reason maps the same bits to the skip):
@@ -2101,7 +2119,7 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *   the view stands on this very entry under another spelling of its path, or
  *   (with DIVERGENCE_TYPE) another kind of path stands there; apply releases
  * - WORKSPACE_STATE_OVERRIDDEN -> its profile still claims the path, standing
- *   nowhere; apply leaves the copy for the row standing over it
+ *   nowhere; neither engine removes the copy, whatever its bits
  *
  * Presence comes first, so an absent record never reaches a RELEASED arm: whatever
  * Git would have said, it reads [orphaned] [absent] and apply reclaims it. The
@@ -2210,10 +2228,12 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * an order, the gate or Git would say: each of those lets go a copy whose
          * claim has gone, and this one's is held. By place, not by name: a derived
          * claim names nothing, and a profile holding the path under another of
-         * its names claims the copy the record names. Nothing is measured — no
-         * reader weighs a copy left as it stands. */
+         * its names claims the copy the record names. Measured, as a backed copy
+         * is (workspace_measure): its line says what changed or could not be
+         * read, and neither engine removes the copy whatever it says. */
         if (manifest_lookup_claim(ws->manifest, item->profile, item->filesystem_path)) {
             item->state = WORKSPACE_STATE_OVERRIDDEN;
+            workspace_measure(ws, item);
             continue;
         }
 
@@ -3740,10 +3760,17 @@ bool workspace_item_tags(
             break;
         }
 
-        case WORKSPACE_STATE_ORPHANED: {
-            /* Primary tag (always shown) */
+        case WORKSPACE_STATE_ORPHANED:
+        case WORKSPACE_STATE_OVERRIDDEN: {
+            /* The orphans the analysis may measure (workspace_measure): the state's
+             * word, then one ladder for both. An overridden copy is present and
+             * looked at by construction — its arm comes after both — so absence
+             * and [displaced] reach an orphan alone, and the skip each bit's
+             * arm names is an orphan's, cleanup's: no engine removes an overridden
+             * copy, whatever its bits. */
             if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                tags_out[tag_count++] = "orphaned";
+                tags_out[tag_count++] = item->state == WORKSPACE_STATE_ORPHANED
+                    ? "orphaned" : "overridden";
             }
 
             /* Determine color and secondary tags based on divergence */
@@ -3776,7 +3803,7 @@ bool workspace_item_tags(
             } else if (item->divergence & DIVERGENCE_UNVERIFIED) {
                 /* The failed look, worded by whose remedy it is (workspace_fault_t)
                  * — the deployed arm's switch, so one item has one name in both.
-                 * Conservative: apply skips it (CLEANUP_SKIP_UNVERIFIED, ranked
+                 * Conservative: an orphan's skip (CLEANUP_SKIP_UNVERIFIED, ranked
                  * first there as it is here — one item, one name). */
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     switch (item->fault) {
@@ -3796,7 +3823,7 @@ bool workspace_item_tags(
 
             } else if (item->divergence & DIVERGENCE_TYPE) {
                 /* A file ↔ symlink ↔ device swap at the path (a directory in a
-                 * file's place is released, not orphaned). Apply skips it
+                 * file's place is released, never measured). An orphan's skip
                  * (cleanup_skip_reason: TYPE_CHANGED); the DEPLOYED arm and apply's
                  * preview use the same word. */
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
@@ -3805,7 +3832,7 @@ bool workspace_item_tags(
                 *color_out = OUTPUT_COLOR_RED;
 
             } else if (item->divergence & DIVERGENCE_CONTENT) {
-                /* Content divergence - blocking issue Apply skips it
+                /* Content divergence - blocking issue: an orphan's skip
                  * (cleanup_skip_reason: MODIFIED). */
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "modified";
@@ -3815,7 +3842,7 @@ bool workspace_item_tags(
             } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
                 /* The claim alone — the mode, the ownership, or both — left the
                  * one the record reconciled; the content is dotta's. Warning
-                 * level: apply skips it (cleanup_skip_reason: CLAIM_CHANGED). */
+                 * level: an orphan's skip (cleanup_skip_reason: CLAIM_CHANGED). */
                 if (item->divergence & DIVERGENCE_MODE) {
                     if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                         tags_out[tag_count++] = "mode";
@@ -3829,10 +3856,13 @@ bool workspace_item_tags(
                 *color_out = OUTPUT_COLOR_YELLOW;
 
             } else {
-                /* No divergence - clean orphan File exactly matches last known
-                 * state. Apply will remove it. Use RED to indicate action will
-                 * be taken (file deletion). */
-                *color_out = OUTPUT_COLOR_RED;
+                /* No divergence: nothing moved from what dotta last confirmed —
+                 * or, on a copy dotta only observed, nothing was confirmed to
+                 * measure. RED where a removal is coming: cleanup prunes a clean
+                 * orphan. DIM on an overridden copy, which no engine removes:
+                 * the colour of a line that asks nothing ([ancestor]'s). */
+                *color_out = item->state == WORKSPACE_STATE_OVERRIDDEN
+                    ? OUTPUT_COLOR_DIM : OUTPUT_COLOR_RED;
             }
 
             /* The relocation, ridden as a secondary tag beside the divergence
@@ -3841,13 +3871,18 @@ bool workspace_item_tags(
              * is one at all is the class against NONE, here as at every screen
              * (workspace.h). The fate stays cleanup's, and turns on which class
              * it is (a re-targeted custom/ copy prunes, a moved home's is skipped
-             * unless --force); this only names what the copy is. */
+             * unless --force); this only names what the copy is. An overridden
+             * copy carries none: the relocation is read where Git backs an orphan
+             * (workspace_analyze_orphans). */
             if (item->relocation != WORKSPACE_RELOCATION_NONE) {
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "relocated";
                 }
             }
 
+            /* Whose copy it is. What stands over an overridden one is the view's
+             * to name, and this reads the item alone: the caller adds it
+             * (cmds/status.c status_print_workspace). */
             snprintf(metadata_buf, metadata_size, "from %s", item->profile);
             break;
         }
@@ -3903,21 +3938,6 @@ bool workspace_item_tags(
                     tags_out[tag_count++] = "type";
                 }
             }
-
-            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
-            break;
-
-        case WORKSPACE_STATE_OVERRIDDEN:
-            /* Its profile still claims the path, standing nowhere, and the copy
-             * is left for the row standing over it: no verb's, and nothing was
-             * measured, so the line carries one tag, in the colour of a line
-             * that asks nothing — [ancestor]'s. What stands over it is the view's
-             * to name, and this reads the item alone: the caller adds it
-             * (cmds/status.c status_print_workspace). */
-            if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                tags_out[tag_count++] = "overridden";
-            }
-            *color_out = OUTPUT_COLOR_DIM;
 
             snprintf(metadata_buf, metadata_size, "from %s", item->profile);
             break;

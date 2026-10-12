@@ -391,14 +391,13 @@ typedef enum {
  * remedy in its own fixed words, never by quoting a line another layer wrote.
  *
  * One invariant, established at every fold and trusted downstream: `fault !=
- * NONE` iff the item carries DIVERGENCE_UNVERIFIED. Only DEPLOYED (both kinds)
- * and ORPHANED items can carry one, and UNSCANNED always does — RELEASED is born
- * of answers, never of a failed look (the record's ownership, Git's, a look that
- * found another kind, and the entry's compare, which a look that failed leaves
- * unasked), OVERRIDDEN of the view's, which asks nothing of the look, and
- * UNDEPLOYED, DELETED and UNTRACKED of looks that answered. And only a file row
- * can be LOCKED: a directory seals no content, so every fault it can carry comes
- * from an errno, and the scan reads no content at all.
+ * NONE` iff the item carries DIVERGENCE_UNVERIFIED. Only DEPLOYED (both kinds),
+ * ORPHANED and OVERRIDDEN items can carry one, and UNSCANNED always does — RELEASED
+ * is born of answers, never of a failed look (the record's ownership, Git's, a
+ * look that found another kind, and the entry's compare, which a look that failed
+ * leaves unasked), and UNDEPLOYED, DELETED and UNTRACKED of looks that answered.
+ * And only a file row can be LOCKED: a directory seals no content, so every fault
+ * it can carry comes from an errno, and the scan reads no content at all.
  *
  * Readers: workspace_item_tags (the tag — [locked] / [unreadable] / [unverified],
  * the same word on every arm), status's two keys — Unverifiable's and Issues' —
@@ -454,11 +453,10 @@ typedef enum {
  * took — and assumes present either way (absence is never inferred from a failure
  * to look, and never from a look not taken). What it means is said beside it:
  * DIVERGENCE_UNVERIFIED where a look failed, a displaced class where none was
- * taken, and on a released or an overridden record neither — letting a copy go
- * needs no measurement, and neither does leaving it for the row standing over
- * it. An orphan on a load that took no look at the orphans keeps UNKNOWN, and
- * no reader is lent it — nor, whatever its look, one the load did not analyze:
- * the diverged items (workspace_diverged) and workspace_find lend an orphan only
+ * taken, and on a released record neither — letting a copy go needs no measurement.
+ * An orphan on a load that took no look at the orphans keeps UNKNOWN, and no
+ * reader is lent it — nor, whatever its look, one the load did not analyze: the
+ * diverged items (workspace_diverged) and workspace_find lend an orphan only
  * where the load analyzed the orphans. Presence is therefore
  * `occupant != FS_OCCUPANT_NONE` — the workspace's rule, and cleanup's;
  * deploy judges by the stricter one (deploy_occupant_present: UNKNOWN is not
@@ -746,9 +744,10 @@ static inline bool workspace_reassigned(
  * Readers: core/workspace.c workspace_analyze_file (the frame's base),
  * workspace_analyze_directory (whose a squatter is: dotta's copy where a base
  * stands, the user's where none does), workspace_flush (a first observation owed
- * where none stands) and workspace_analyze_orphans (an order measured against a
- * confirmed blob); cmds/add.c add_refuse_ancestry (whose a link above a capture
- * is, as the directory analysis asks it). A reader not on this list is a bug.
+ * where none stands), workspace_analyze_orphans (an order measured against a
+ * confirmed blob) and workspace_measure (a file compared only against one);
+ * cmds/add.c add_refuse_ancestry (whose a link above a capture is, as the directory
+ * analysis asks it). A reader not on this list is a bug.
  */
 static inline const state_record_t *workspace_base(const state_record_t *record) {
     return record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;
@@ -1472,6 +1471,13 @@ const workspace_squatted_t *workspace_squatted_ancestor(
  *   6. "reassigned" (CYAN when alone) - A pending reassignment
  *      (workspace_reassigned), last and beside any of the above: the record against
  *      the row, and the look only where the record is of another kind
+ *
+ * The orphans the analysis may measure — ORPHANED and OVERRIDDEN — take one ladder
+ * after their state's word: absence, [displaced], the failed look, [type],
+ * [modified], then the claim axes, with [relocated] beside them. Absence and
+ * [displaced] reach an orphan alone, an overridden copy being looked at by
+ * construction, and a clean one is RED where a prune is coming but DIM on an
+ * overridden copy, which no engine removes.
  *
  * The function handles special cases:
  *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)

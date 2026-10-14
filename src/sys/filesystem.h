@@ -518,11 +518,12 @@ error_t fs_create_dir_with_ownership(
  * the exclusivity — O_EXCL semantics, with no window in which whatever now stands
  * at the path could be re-attributed.
  *
- * For the caller whose authority is creation alone: core/deploy's ancestors pass
- * creates the absent chain above a planned path, and a path the world made present
+ * For the caller whose authority is creation alone: core/deploy makes the absent
+ * chain above a planned path (create_ancestor), and a path the world made present
  * between its probe and the mkdir is not that run's to converge — the refusal
- * is the row's outcome (deploy.h), where the idempotent sibling would have silently
- * chmod'd and chown'd what it met.
+ * is the outcome of the act that met it, and every act beneath fails naming the
+ * path (core/deploy.h deploy_execute), where the idempotent sibling would have
+ * silently chmod'd and chown'd what it met.
  *
  * Atomic sequence:
  * 1. mkdir() with restrictive mode (0700) — EEXIST is the refusal

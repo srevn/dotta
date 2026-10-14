@@ -157,10 +157,10 @@ static inline bool deploy_occupant_present(fs_occupant_t occ) {
  * deploy_verdict_t documents and deploy_receipt_t's verbs derive from, so the
  * preview, the receipt, apply's record phase and the executor read one answer
  * and cannot drift. Two facts ride on it and are read as it: a new entry lands
- * iff the convergence is not a fix (preflight's landing question, the executor's
- * landing in deploy_directory, and poisoned_above's "no directory stands"), and
- * dotta made the directory iff the convergence is not a fix (the record phase's
- * ownership gate).
+ * iff the convergence is not a fix (preflight's landing question, and the
+ * executor's in deploy_directory: the landing it opens, and the path it notes
+ * where no directory came to stand), and dotta made the directory iff the
+ * convergence is not a fix (the record phase's ownership gate).
  *
  * Total over fs_occupant_t, so a new occupant is a build error here and not a
  * silent REPLACE. UNKNOWN is answered — preflight asks before it skips such a
@@ -530,10 +530,10 @@ typedef struct {
  * UNSET as no stat (core/workspace.h workspace_anchor).
  *
  * The error is the failed bucket's tail — the row's own cause, verbatim (ENOSPC,
- * a blob that would not load, an ancestor this run did not converge) — and NULL
- * in every landed bucket: the bucket is the tag, as UNSET already is for the
- * stat. A failure has a dozen causes and the remedy differs by cause, so the
- * receipt keeps each for the caller to render, as cleanup's does
+ * a blob that would not load, an ancestor this run did not converge or make) —
+ * and NULL in every landed bucket: the bucket is the tag, as UNSET already is
+ * for the stat. A failure has a dozen causes and the remedy differs by cause,
+ * so the receipt keeps each for the caller to render, as cleanup's does
  * (cleanup_outcome_t). Borrowed, as every error is (base/error.h).
  *
  * The verdict is borrowed from the preflight, whose arrays are sized once and
@@ -877,7 +877,8 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * root holds any directory and sets any pair, save where the bits deny root as
  * well (fs_denied asks as root already). The ancestors are not asked the ownership
  * rung (a foreign-owned derived claim above a landing the invoker can write meets
- * the refusal at the create, and the row beneath carries it as its outcome).
+ * the refusal at the create: the first act whose way meets it carries it, and
+ * every later act beneath fails naming the ancestor, unattempted — deploy_execute).
  *
  * READ-ONLY: modifies neither the filesystem, the state database nor Git.
  *
@@ -924,11 +925,12 @@ error_t deploy_preflight(
  * handed back like the leaf beneath it, and no owner is borrowed from below.
  * Creation is all this pass may do: a parent the world made present after the
  * probe meets ERR_EXISTS rather than a convergence (fs_create_dir_exclusive),
- * since whatever now stands there is not this run's to fix. The claimed ones
- * land in the receipt's ancestors; the ones no row names are never reported. A
- * claimed parent the verdicts did not foresee — present at preflight, gone by
- * the time the run reaches it — is made like an unclaimed one, and the next load
- * reads whatever it has to say about its mode.
+ * since whatever now stands there is not this run's to fix, nor to land through
+ * (the failure rule below). The claimed ones land in the receipt's ancestors;
+ * the ones no row names are never reported. A claimed parent the verdicts did
+ * not foresee — present at preflight, gone by the time the run reaches it — is
+ * made like an unclaimed one, and the next load reads whatever it has to say
+ * about its mode.
  *
  * Directories are materialized in two phases. Every directory the run creates
  * or converges carries its recorded mode with the owner triad forced on while
@@ -946,13 +948,20 @@ error_t deploy_preflight(
  * let go is the receipt's (deploy_receipt_t's held).
  *
  * Individual row failures are non-fatal: the row lands in the receipt's failed
- * bucket with its cause and the run goes on — except that a failed directory
- * left without a standing directory poisons its subtree (poisoned_above, the
- * preflight invariant's execution mirror): every later verdict beneath it fails
- * against the ancestor without being attempted, since a write there would land
- * through whatever still squats the path. A failed converge-in-place poisons
- * nothing — the directory stands, and children land in it or fail on their own
- * merits.
+ * bucket with its cause and the run goes on — save the one failure that crosses
+ * rows, a place the run needed a directory at and made none: a directory row
+ * whose create or replace failed, or a parent the way could not make, claimed
+ * or not. The act that met it carries its cause; every later act beneath it fails
+ * unattempted, naming the outermost such place in a sentence minted once —
+ * "'<path>' was not converged" for a row, "'<path>' was not created" for a parent
+ * — since a write there would land through whatever stands at the place, or meet
+ * the same refusal again (poisoned_above, the preflight invariant's execution
+ * mirror). A parent the world made present after the probe is such a place too:
+ * what stands there may be a link, and nothing lands through one. A failed
+ * converge-in-place poisons nothing — the directory stands, and children land
+ * in it or fail on their own merits — nor does a refusal at a place the run did
+ * not try to make: an ancestor that is not a directory, a landing that stands
+ * and refuses its open (ensure_parents).
  *
  * Every failure is an outcome on the receipt — a row's in `failed`, the run going
  * on; a hold's in `held` — so nothing is returned beside it, as cleanup_execute

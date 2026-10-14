@@ -1199,11 +1199,11 @@ error_t deploy_preflight(
 
         /* The pair, without the ownership rung: an ancestor is outside the plan
          * and has no skip to take, and the rows beneath it are decided by now.
-         * A pair this run cannot set meets the refusal at the create, named on
-         * the row beneath as its outcome (create_ancestor) and leaving nothing
-         * behind (fs_create_dir_exclusive) — the under-approximation this pass
-         * accepts for a foreign-owned derived claim above a landing the invoker
-         * can write. */
+         * A pair this run cannot set meets the refusal at the create, leaving
+         * nothing behind (fs_create_dir_exclusive): the first act beneath carries
+         * it as its outcome, and every later one fails naming the ancestor
+         * (deploy_execute) — the under-approximation this pass accepts for a
+         * foreign-owned derived claim above a landing the invoker can write. */
         error_t err = resolve_deployment_ownership(
             item->row, opts->strict_ownership, &verdicts->warnings, &v->uid, &v->gid
         );
@@ -1219,6 +1219,22 @@ error_t deploy_preflight(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
+ * A place the run needed a directory at and made none, and the sentence every
+ * act beneath it fails with
+ *
+ * A directory row not converged, or a parent the way could not make, noted by
+ * the act that met the failure (note_unmade) and read before every act after it
+ * (poisoned_above). The path is the run's own copy, since a parent's spelling
+ * lives only in the climb that met it (ensure_parents). The sentence is minted
+ * once, when the place is noted, and borrowed by each act it fails.
+ */
+typedef struct {
+    const char *filesystem_path;  /* The place, the run's arena copy */
+    size_t len;                   /* strlen(filesystem_path): the prefix of every path beneath it */
+    error_t error;                /* "'<path>' was not <verb>", minted once (base/error.h "Lifetime") */
+} deploy_unmade_t;
+
+/**
  * One execution of the verdicts: what deploy_execute was handed, plus the state
  * the run accumulates. Lives exactly as long as deploy_execute.
  */
@@ -1227,8 +1243,13 @@ typedef struct {
     const workspace_t *ws;              /* a landing directory's item (holdable_directory) */
     const deploy_preflight_t *verdicts; /* the ancestors' metadata (create_ancestor) */
     deploy_receipt_t *receipt;          /* the receipt so far: the ancestors, then the holds left */
-    arena_t *arena;                     /* the holds live here */
-    ptr_array_t holds;                  /* deploy_hold_t *, in the order taken */
+    arena_t *arena;                     /* the holds and the places not made grow here */
+    deploy_hold_t *holds;               /* every hold taken, in the order taken (release_directories) */
+    size_t hold_count;
+    size_t hold_capacity;
+    deploy_unmade_t *unmade;            /* every place not made, in the order noted (poisoned_above) */
+    size_t unmade_count;
+    size_t unmade_capacity;
 } deploy_run_t;
 
 /**
@@ -1242,10 +1263,12 @@ typedef struct {
 static void hold_directory(deploy_run_t *run, const workspace_item_t *item, mode_t mode) {
     if (deploy_working_mode(mode) == mode) return;
 
-    deploy_hold_t *hold = arena_alloc(run->arena, sizeof(*hold));
-    *hold = (deploy_hold_t){ .item = item, .mode = mode };
+    run->holds = arena_grow(
+        run->arena, run->holds, &run->hold_capacity, run->hold_count + 1,
+        sizeof(*run->holds)
+    );
 
-    ptr_array_push(&run->holds, hold);
+    run->holds[run->hold_count++] = (deploy_hold_t){ .item = item, .mode = mode };
 }
 
 /**
@@ -1273,10 +1296,10 @@ static void release_directories(deploy_run_t *run) {
     deploy_holds_t *held = &run->receipt->held;
 
     /* Sized to the holds: every one could be refused */
-    held->entries = arena_calloc(run->arena, run->holds.count, sizeof(*held->entries));
+    held->entries = arena_calloc(run->arena, run->hold_count, sizeof(*held->entries));
 
-    for (size_t i = run->holds.count; i-- > 0;) {
-        const deploy_hold_t *hold = run->holds.entries[i];
+    for (size_t i = run->hold_count; i-- > 0;) {
+        const deploy_hold_t *hold = &run->holds[i];
         error_t err = fs_set_dir_mode(hold->item->filesystem_path, hold->mode);
         if (!err) continue;
 
@@ -1286,6 +1309,29 @@ static void release_directories(deploy_run_t *run) {
             .item = hold->item, .mode = hold->mode, .error = err,
         };
     }
+}
+
+/**
+ * Note a place the run needed a directory at and made none
+ *
+ * Called by the act that met the failure, with the verb that act failed at: a
+ * directory row's create or replace ("converged", deploy_directory) and a parent
+ * on the way, either arm of create_ancestor ("created", ensure_parents). That
+ * act keeps its own cause; the sentence is the place's, true of every act beneath
+ * it, so it is minted here once and each of them borrows it (base/error.h
+ * "Lifetime").
+ */
+static void note_unmade(deploy_run_t *run, const char *path, const char *verb) {
+    run->unmade = arena_grow(
+        run->arena, run->unmade, &run->unmade_capacity, run->unmade_count + 1,
+        sizeof(*run->unmade)
+    );
+
+    run->unmade[run->unmade_count++] = (deploy_unmade_t){
+        .filesystem_path = arena_strdup(run->arena, path),
+        .len = strlen(path),
+        .error = error_create(ERR_FS, "'%s' was not %s", path, verb),
+    };
 }
 
 /**
@@ -1336,9 +1382,10 @@ static error_t materialize_directory(
  * for the next load to read — which sees its record and its row, and, where the
  * row is tracked, says [mode] if the two disagree.
  *
- * Creation only, either class (fs_create_dir_exclusive): every path this pass
- * makes was absent when the run probed it, and one the world made present in
- * between meets ERR_EXISTS as the row's outcome — not this run's to converge,
+ * Creation only, either class (fs_create_dir_exclusive): every path it makes
+ * was absent when the run probed it, and one the world made present in between
+ * meets ERR_EXISTS as the outcome of the act that met it, and of every later
+ * act beneath it by name (ensure_parents notes it) — not this run's to converge,
  * the way a planned row would be (materialize_directory). The header's stance
  * on every mid-run surprise, applied to the make itself.
  *
@@ -1452,6 +1499,14 @@ static error_t open_landing_directory(
  * rather than a mkdir errno. A dangling symlink is one: mkdir would report EEXIST
  * for a path that leads nowhere.
  *
+ * A parent it cannot make, either arm of create_ancestor, is noted (note_unmade):
+ * the act that met the refusal carries its cause, and every later act beneath
+ * the parent fails naming it, unattempted (poisoned_above). Its two other refusals
+ * meet a place the run was not to make, and note nothing — every act beneath
+ * meets them again: an ancestor that is not a directory, and a landing that stands
+ * and refuses its open, a world that moved after the landing check asked, since
+ * a landing the run may not hold is PERMISSION at preflight (holdable_directory).
+ *
  * @param run Run context (must not be NULL)
  * @param path Planned path whose parents must exist (must not be NULL)
  * @return Error or NULL on success
@@ -1489,8 +1544,15 @@ static error_t ensure_parents(deploy_run_t *run, const char *path) {
     for (char *slash = strchr(tail, '/'); slash; slash = strchr(slash + 1, '/')) {
         *slash = '\0';
         err = create_ancestor(run, scratch);
+        if (err) {
+            /* Not created: this act fails with the cause, and every later act
+             * beneath the parent fails naming it rather than trying the make
+             * again — after ERR_EXISTS too, since what the world made there may
+             * be a link, and nothing lands through one */
+            note_unmade(run, scratch, "created");
+            goto cleanup;
+        }
         *slash = '/';
-        if (err) goto cleanup;
     }
 
 cleanup:
@@ -1620,6 +1682,10 @@ cleanup:
  * recorded mode without owner-write never refuses the tracked children written
  * after it.
  *
+ * A create or a replace that fails leaves no directory of the run's at the path,
+ * so the path is noted (note_unmade) and every act beneath it fails unattempted;
+ * a fix that fails leaves the directory standing, and notes nothing.
+ *
  * @param run Run context (must not be NULL)
  * @param v Verdict for the row (must not be NULL; the row is borrowed, read-only)
  * @return Error or NULL on success
@@ -1627,6 +1693,11 @@ cleanup:
 static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
     const char *path = v->item->filesystem_path;
     const deploy_convergence_t convergence = deploy_convergence(v->occupant);
+
+    /* A fix converges in place, through the directory's own descriptor: no new
+     * entry lands, so there is no landing to open — and refused, the directory
+     * still stands, so the acts beneath it land in it or fail on their own */
+    if (convergence == DEPLOY_CONVERGE_FIX) return materialize_directory(run, v);
 
     /* A create or a replace lands a new entry through the parent — the replace's
      * after its clear — so the landing is opened first, the one check_landing
@@ -1636,56 +1707,54 @@ static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
      * made — the final component is the path itself. An absent path beneath a
      * non-directory is one preflight blocked when unplanned and the directory
      * pass replaces when planned (prefix order); one still there is ensure_parents'
-     * named error. A fix converges in place, through the directory's own
-     * descriptor: no new entry lands, so there is no landing to open. */
-    if (convergence != DEPLOY_CONVERGE_FIX) {
-        error_t err = ensure_parents(run, path);
-        if (err) return err;
-    }
+     * named error. */
+    error_t err = ensure_parents(run, path);
 
     /* A replace's squatter, cleared before the mkdir through the landing just
      * opened — the single node the verdict named. It is never a directory (that
      * is a fix), and --force was preflight's question. */
-    if (convergence == DEPLOY_CONVERGE_REPLACE) {
-        error_t err = clear_occupant(path, v->occupant);
-        if (err) return err;
+    if (!err && convergence == DEPLOY_CONVERGE_REPLACE) {
+        err = clear_occupant(path, v->occupant);
     }
 
     /* Create-or-fix with atomic ownership and permissions (fchown/fchmod on the
      * directory fd — no window with wrong metadata). Idempotent. */
-    return materialize_directory(run, v);
+    if (!err) err = materialize_directory(run, v);
+
+    /* No directory of the run's came to stand — the create never happened, or
+     * the squatter survived its replace — so nothing beneath may land through
+     * what stands there: every later act beneath the path fails naming it */
+    if (err) note_unmade(run, path, "converged");
+
+    return err;
 }
 
 /**
- * The poison a planned path's write meets, or NULL
+ * The failure a planned path's act meets before it starts, or NULL
  *
- * Deploy's order is parents-first and its mechanism creates on the way down, so
- * per-row failure needs the preflight invariant's execution mirror: a failed
- * directory verdict whose convergence was not a fix left no directory standing
- * at its path — the create never happened, or the squatter survived its replace
- * — and a write beneath it would land through whatever stands there (ensure_parents
- * would fabricate the failed directory as an unclaimed 0755, or write through
- * the surviving squatter: the hazard the ancestry rung refuses at preflight,
- * met again at execution time). A failed converge-in-place poisons nothing: the
- * directory stands, and children land in it or fail on their own merits. Scanned
- * in verdict order, so the first match is the outermost failed ancestor — the
- * offender every deeper row is named against, in the error the row fails with,
- * spelled here once for both loops. The failed bucket is empty on every healthy
- * run, which is what makes the scan free.
+ * Deploy's order is parents first and its mechanism makes on the way down, so
+ * per-act failure needs the preflight invariant's execution mirror: a place the
+ * run needed a directory at and made none (deploy_unmade_t) — a create that never
+ * happened, a squatter that survived its replace, a parent the way could not
+ * make; never a fix refused, whose directory stands. An act beneath it would
+ * make the place again — a row's as a parent no claim names, a parent's against
+ * the same refusal — or land through whatever stands there, the hazard the ancestry
+ * rung refuses at preflight met again at execution time. So it is not attempted,
+ * and fails with the place's own sentence.
+ *
+ * The first match is the outermost: an act's way is made from the top down, a
+ * place that fails there is noted before the act's own, and no act runs beneath
+ * a noted place, so along any one path the outer place is noted first. Only the
+ * world, taking a directory away mid-run, can note an outer place after an inner
+ * one; the act fails as surely, naming the inner. The list is empty on every
+ * healthy run, which is what makes the scan free.
  */
 static error_t poisoned_above(const deploy_run_t *run, const char *path) {
-    const deploy_outcomes_t *failed = &run->receipt->failed;
+    for (size_t i = 0; i < run->unmade_count; i++) {
+        const deploy_unmade_t *unmade = &run->unmade[i];
 
-    for (size_t i = 0; i < failed->count; i++) {
-        const deploy_verdict_t *v = failed->entries[i].verdict;
-        const char *dir = v->item->filesystem_path;
-
-        if (v->item->item_kind != PATH_KIND_DIRECTORY ||
-            deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX) {
-            continue;
-        }
-        if (str_path_beneath(path, dir, strlen(dir))) {
-            return error_create(ERR_FS, "'%s' was not converged", dir);
+        if (str_path_beneath(path, unmade->filesystem_path, unmade->len)) {
+            return unmade->error;
         }
     }
 
@@ -1740,7 +1809,6 @@ deploy_receipt_t *deploy_execute(
         .receipt  = receipt,
         .arena    = arena,
     };
-    ptr_array_init(&run.holds, arena, 0);
 
     /* Directories first: parents before the files beneath them, and under --force
      * a squatting symlink is gone before anything is written through it. Verdict

@@ -5,7 +5,6 @@
 #include "core/deploy.h"
 
 #include <errno.h>
-#include <git2.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -1193,8 +1192,7 @@ error_t deploy_preflight(
  * the run accumulates. Lives exactly as long as deploy_execute.
  */
 typedef struct {
-    git_repository *repo;
-    content_cache_t *cache;
+    content_cache_t *cache;             /* every row's bytes, either kind (deploy_file) */
     const workspace_t *ws;              /* a landing directory's item (holdable_directory) */
     const deploy_preflight_t *verdicts; /* the ancestors' metadata (create_ancestor) */
     deploy_receipt_t *receipt;          /* the receipt so far: the ancestors, then the holds left */
@@ -1472,15 +1470,15 @@ cleanup:
  * Deploy a single view row to its filesystem path.
  *
  * Mechanism only: the verdict says what stands at the path and what the write
- * applies, and this lands it — missing parents first, then the one arm the row's
- * type calls for. Nothing here looks at the disk to decide anything; a path the
- * world has moved under since preflight meets the mechanism's refusal (rename
- * over a directory is EISDIR, rmdir of a directory that filled up is ENOTEMPTY)
- * and the refusal is the row's outcome.
+ * applies, and this lands it — missing parents first, then its content, then
+ * the write the row's type calls for. Nothing here looks at the disk to decide
+ * anything; a path the world has moved under since preflight meets the mechanism's
+ * refusal (rename over a directory is EISDIR, rmdir of a directory that filled
+ * up is ENOTEMPTY) and the refusal is the row's outcome.
  *
  * The row:
- * - file->type: which arm — a symlink is re-linked from its blob, anything else
- *   is written from the content cache
+ * - file->type: the entry its content is read as, and the write that lands it —
+ *   a symlink re-linked to its target, anything else written from its bytes
  * - file->encrypted: handled transparently by the content cache
  * - file->blob_oid: the tree entry's, by construction — a blob row never carries
  *   a zero OID
@@ -1506,65 +1504,36 @@ static error_t deploy_file(
 
     const manifest_row_t *file = v->item->row;
 
-    error_t err = NULL;
-    const buffer_t *content_buffer = NULL;  /* Borrowed from cache */
-    char *target_str = NULL;
-
-    /* Land the path: parents first, whichever arm writes it */
-    err = ensure_parents(run, file->filesystem_path);
+    /* Land the path: parents first, whichever kind it is */
+    error_t err = ensure_parents(run, file->filesystem_path);
     if (err) return err;
 
-    /* Handle symlinks - these are never encrypted, so handle separately */
+    /* Its content, read as the entry the row's type says it is (infra/content.h):
+     * a link's bytes are its target, never a seal, and come back the C string
+     * symlink(2) is handed, empty or not; a file's are decrypted where sealed */
+    const buffer_t *content = NULL;
+    err = content_cache_get_from_blob_oid(
+        run->cache, &file->blob_oid, gitops_type_filemode(file->type),
+        file->storage_path, file->profile, &content
+    );
+    if (err) return err;
+
+    /* Either write lands by rename(2) of a temporary over the path, which replaces
+     * a regular file, a link (the link itself, not what it points to — at a link
+     * row, no conflict and no --force) or a device in place, and makes the path
+     * where nothing stands — but never replaces a directory (EISDIR). Only that
+     * one node needs clearing first: the one the verdict named, never one found
+     * by a fresh look from down here. */
+    err = v->occupant == FS_OCCUPANT_DIRECTORY
+        ? clear_occupant(file->filesystem_path, v->occupant) : NULL;
+    if (err) return err;
+
     if (file->type == PATH_TYPE_SYMLINK) {
-        /* A link's blob is its target, never sealed (infra/content.h), so it is
-         * read raw and handed to symlink(2) as it stands. */
-        size_t target_len = 0;
-        err = gitops_read_blob_content(
-            run->repo, &file->blob_oid, (void **) &target_str, &target_len
-        );
-        if (err) goto cleanup;
-
-        /* fs_replace_symlink lands the link as fs_write_file_raw lands a file's
-         * content, by rename(2) of a temporary over the target: it replaces a
-         * regular file, a link (the link itself, not what it points to — of the
-         * row's own kind, no conflict and no --force) or a device in place, and
-         * makes the path where nothing stands — but never replaces a directory
-         * (EISDIR). Only that one case needs clearing first: the node the verdict
-         * named, never one found by a fresh look from down here. */
-        if (v->occupant == FS_OCCUPANT_DIRECTORY) {
-            err = clear_occupant(file->filesystem_path, v->occupant);
-            if (err) goto cleanup;
-        }
-
         /* The link lands with the ownership the verdict resolved — the one node
          * without a descriptor, so the primitive applies the pair itself, to
          * the temporary — and what stood at the path stands until it does: a
          * link that cannot be made leaves the path as it was. */
-        err = fs_replace_symlink(target_str, file->filesystem_path, v->uid, v->gid);
-        goto cleanup;
-    }
-
-    /* Regular files: content from the cache with transparent decryption */
-    err = content_cache_get_from_blob_oid(
-        run->cache,
-        &file->blob_oid,
-        gitops_type_filemode(file->type),
-        file->storage_path,
-        file->profile,
-        &content_buffer
-    );
-    if (err) goto cleanup;
-
-    const unsigned char *content = (const unsigned char *) content_buffer->data;
-    size_t size = content_buffer->size;
-
-    /* fs_write_file_raw lands the content by rename(2) of a temp file over the
-     * target, which replaces a regular file, a symlink (the link itself, not
-     * what it points to) or a device in place — but never a directory (EISDIR).
-     * Only that one case needs clearing first. */
-    if (v->occupant == FS_OCCUPANT_DIRECTORY) {
-        err = clear_occupant(file->filesystem_path, v->occupant);
-        if (err) goto cleanup;
+        return fs_replace_symlink(content->data, file->filesystem_path, v->uid, v->gid);
     }
 
     /* Write directly from git blob to filesystem with atomic ownership and
@@ -1575,18 +1544,16 @@ static error_t deploy_file(
      * only resolves. */
     struct stat written;
     err = fs_write_file_raw(
-        file->filesystem_path, content, size, file->mode, v->uid, v->gid, &written
+        file->filesystem_path, (const unsigned char *) content->data, content->size,
+        file->mode, v->uid, v->gid, &written
     );
-    if (err) goto cleanup;
+    if (err) return err;
 
     /* The write's own stat, distilled where the write authority is in scope:
      * authorship, not a read, vouches for the triple, so its own open second
      * needs no smudge (state_stat_from_write). */
     *out_stat = state_stat_from_write(&written);
-
-cleanup:
-    free(target_str);
-    return err;
+    return NULL;
 }
 
 /**
@@ -1688,13 +1655,11 @@ static error_t poisoned_above(const deploy_run_t *run, const char *path) {
  */
 deploy_receipt_t *deploy_execute(
     arena_t *arena,
-    git_repository *repo,
     const workspace_t *ws,
     const deploy_preflight_t *verdicts,
     content_cache_t *cache
 ) {
     CHECK_NULL(arena);
-    CHECK_NULL(repo);
     CHECK_NULL(ws);
     CHECK_NULL(verdicts);
     CHECK_NULL(cache);
@@ -1721,7 +1686,6 @@ deploy_receipt_t *deploy_execute(
     );
 
     deploy_run_t run = {
-        .repo     = repo,
         .cache    = cache,
         .ws       = ws,
         .verdicts = verdicts,

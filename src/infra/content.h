@@ -481,6 +481,9 @@ content_cache_t *content_cache_create(
  * On subsequent access for the same binding and filemode:
  * - Returns cached buffer (O(1) lookup)
  *
+ * The plaintext is a C string, as content_get_from_blob_oid's is: core/deploy.c
+ * deploy_file hands a link's target to symlink(2) so, empty or not.
+ *
  * @param cache Content cache (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)
  * @param mode The entry's filemode, as its tree or index records it

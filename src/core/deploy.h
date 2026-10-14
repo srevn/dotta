@@ -55,7 +55,6 @@
 #ifndef DOTTA_DEPLOY_H
 #define DOTTA_DEPLOY_H
 
-#include <git2.h>
 #include <types.h>
 
 #include "base/error.h"
@@ -283,7 +282,7 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * Symlink rows need no arm of their own: a foreign kind at a link row's path is
  * TYPE (deploy.c occupant_conflicts), a retargeted link is CONTENT (the target
  * compare), and the undecryptable arm of UNREADABLE cannot fire for one (a link's
- * blob is read raw, never through the content layer).
+ * bytes are its target, never a seal: infra/content.h).
  */
 typedef enum {
     DEPLOY_SKIP_NONE = 0,     /* Not skipped — the row has a verdict */
@@ -939,23 +938,22 @@ error_t deploy_preflight(
  * returns its own: the caller prints the receipt, records what landed and reads
  * the counts for its exit.
  *
- * View rows are self-contained (blob_oid, type, storage path); the content cache
- * handles encryption transparently. The record (path_records, observations) is
- * the caller's to write, after deployment succeeds.
+ * View rows are self-contained (blob_oid, type, storage path), and the content
+ * cache reads every one — a link's bytes as its target, a file's decrypted where
+ * sealed (infra/content.h). The record (path_records, observations) is the caller's
+ * to write, after deployment succeeds.
  *
  * @param arena Arena the receipt, its arrays and the run's holds live in (must
  *        not be NULL; the verdicts' own, or one they outlive)
- * @param repo Repository (must not be NULL)
  * @param ws Workspace the plan was built from (must not be NULL; the
  *        claimed-ancestor lookup for a landing directory the run may hold)
  * @param verdicts The verdicts to carry out — deployable rows only, by
  *        construction: the skips never enter these arrays (must not be NULL)
- * @param cache Content cache for batch operations (must not be NULL)
+ * @param cache Content cache, every row's bytes read through it (must not be NULL)
  * @return The receipt, the arena's; never NULL
  */
 deploy_receipt_t *deploy_execute(
     arena_t *arena,
-    git_repository *repo,
     const workspace_t *ws,
     const deploy_preflight_t *verdicts,
     content_cache_t *cache

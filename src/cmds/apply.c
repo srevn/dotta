@@ -2881,13 +2881,11 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_gap(out, OUTPUT_VERBOSE);
             output_print(out, OUTPUT_VERBOSE, "Executing deployment plan...\n");
 
-            /* The content cache was populated with decrypted content during
-             * workspace divergence analysis; deploy's fetches hit it. Every failure
+            /* Deploy reads every row's bytes through the content cache, taking
+             * back what the load decrypted to look at a sealed row. Every failure
              * the run meets is an outcome on the receipt — a row's, a hold's —
              * and the run goes on to record what landed. */
-            deploy_receipt = deploy_execute(
-                ctx->arena, repo, ws, deploy_verdicts, content_cache
-            );
+            deploy_receipt = deploy_execute(ctx->arena, ws, deploy_verdicts, content_cache);
             apply_print_deploy_receipt(out, deploy_receipt);
         } else if (deploy_verdicts->skipped.count == 0) {
             output_print(out, OUTPUT_VERBOSE, "No deployment work in scope\n");

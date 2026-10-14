@@ -29,12 +29,16 @@
  * - A dry run is the preview: the caller reads the verdicts and calls no executor,
  *   so there is no dry-run flag beneath the plan
  * - Removals are single-node: what stands at a planned path, never a tree, and
- *   only to land the row's own node there. A write that fails after its clear
- *   leaves the path empty, and any record there is the cleared node's, of another
- *   kind than the row's: the next load reads the path apply's to fill
- *   (core/workspace.c classify_absent) — unless a claim of the cleared node's
- *   kind stands there again first, which reads [deleted] until a plain apply
- *   makes it
+ *   only to land the row's own node there. A file or link row's node is made
+ *   whole beside its path before anything in its way is removed (sys/filesystem.h
+ *   fs_temp_t), so a write the world refuses — a full disk, a file-size limit,
+ *   a name the kernel will not take — removes nothing; a directory row's squatter
+ *   goes first, rename(2) putting no directory over a non-directory. Either arm's
+ *   window is the one step after its removal, the rename or the mkdir: refused
+ *   there, or killed, the run leaves the path empty over the record that stood,
+ *   which reads [deleted] wherever a claim of that record's kind asserts the
+ *   path — at once where it is the row's own kind — until a plain apply makes
+ *   it (core/workspace.c classify_absent)
  * - Directories are materialized in two phases: held at a working mode (recorded
  *   mode, owner rwx on: deploy_working_mode) while the run writes beneath them,
  *   then released to the exact recorded mode, deepest-first — the same way
@@ -550,14 +554,14 @@ typedef struct {
  *
  * The mode the release owes it with the owner triad forced on. Everything the
  * run lands beneath a directory lands through the owner's own write and search
- * bits — mkdir for a child directory, mkstemp and rename for a file, symlink
- * for a link — so a recorded mode that lacks them (0555, 0500, a 0600 captured
- * on a directory the walker could not enter) would refuse the very children it
- * was captured with. Two phases instead: materialize at the working mode, write
- * the subtree, then release each held directory to its exact mode, deepest-first
- * (deploy_hold_t). Group and other bits are never widened — a 0700 directory is
- * 0700 throughout — and the window is the owner's own, for the duration of the
- * run. cmd_export materializes a profile the same way (export.c,
+ * bits — mkdir for a child directory, a temporary made and renamed over its path
+ * for a file or a link — so a recorded mode that lacks them (0555, 0500, a 0600
+ * captured on a directory the walker could not enter) would refuse the very
+ * children it was captured with. Two phases instead: materialize at the working
+ * mode, write the subtree, then release each held directory to its exact mode,
+ * deepest-first (deploy_hold_t). Group and other bits are never widened — a 0700
+ * directory is 0700 throughout — and the window is the owner's own, for the
+ * duration of the run. cmd_export materializes a profile the same way (export.c,
  * materialize_entries); this is the same rule on the other materializer.
  *
  * One producer, read in two files: core/deploy.c — each hold's mode
@@ -897,8 +901,9 @@ error_t deploy_preflight(
  * removes exactly one node.
  *
  * A file or link row's act runs in the order a failure must stop it: its content
- * read, the way to it made, what stands in its way cleared, its write — so a
- * row whose content cannot be read makes nothing on its way and removes nothing
+ * read, the way to it made, its node made whole beside its path, what stands in
+ * its way cleared, the node published — so a row whose content cannot be read
+ * makes nothing on its way, and one whose node cannot be made removes nothing
  * in it.
  *
  * Missing parents are the mechanics of landing a planned path, created top-down

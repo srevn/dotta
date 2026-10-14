@@ -631,11 +631,11 @@ static void check_ancestry(
  * Can this planned path's write land?
  *
  * One question per planned row, present or absent alike, and never about the
- * path itself: nothing deploy writes needs permission on the path.
- * fs_write_file_raw renames a temp file over it, fs_replace_symlink renames a
- * link over it, deploy_directory mkdirs it — every one of those is an operation
- * on the *parent*. A read-only file, or a symlink pointing into a read-only store,
- * is no obstacle at all.
+ * path itself: nothing deploy writes needs permission on the path. A file's or
+ * a link's node is made beside it and renamed over it (sys/filesystem.h fs_temp_t),
+ * what stands in its way is removed from its directory, and deploy_directory
+ * mkdirs it — every one of those is an operation on the *parent*. A read-only
+ * file, or a symlink pointing into a read-only store, is no obstacle at all.
  *
  * So the question goes to the nearest present ancestor, and to it alone. Every
  * component between it and the planned path is absent, and ensure_parents creates
@@ -1471,19 +1471,20 @@ cleanup:
  *
  * Mechanism only: the verdict says what stands at the path and what the write
  * applies, and this lands it — its content first, then the way to it (the missing
- * parents made, the landing held where it refuses), then the write its type calls
- * for. Nothing here looks at the disk to decide anything; a path the world has
- * moved under since preflight meets the mechanism's refusal (rename over a
- * directory is EISDIR, rmdir of a directory that filled up is ENOTEMPTY) and
- * the refusal is the row's outcome.
+ * parents made, the landing held where it refuses), then its node made whole
+ * beside the path, then the directory in its way cleared, then the node published
+ * over the path (sys/filesystem.h fs_temp_t). Nothing here looks at the disk to
+ * decide anything; a path the world has moved under since preflight meets the
+ * mechanism's refusal (rename over a directory is EISDIR, rmdir of a directory
+ * that filled up is ENOTEMPTY) and the refusal is the row's outcome.
  *
  * A sealed row at a terminal, its key cold, is asked for the key before the way
  * to it is made, so a parent the run then cannot make costs a prompt answered
  * for nothing.
  *
  * The row:
- * - file->type: the entry its content is read as, and the write that lands it —
- *   a symlink re-linked to its target, anything else written from its bytes
+ * - file->type: the entry its content is read as, and the node that lands it —
+ *   a link to its target, anything else a file of its bytes
  * - file->encrypted: handled transparently by the content cache
  * - file->blob_oid: the tree entry's, by construction — a blob row never carries
  *   a zero OID
@@ -1525,42 +1526,50 @@ static error_t deploy_file(
     err = ensure_parents(run, file->filesystem_path);
     if (err) return err;
 
-    /* Either write lands by rename(2) of a temporary over the path, which replaces
-     * a regular file, a link (the link itself, not what it points to — at a link
-     * row, no conflict and no --force) or a device in place, and makes the path
-     * where nothing stands — but never replaces a directory (EISDIR). Only that
-     * one node needs clearing first: the one the verdict named, never one found
-     * by a fresh look from down here. */
+    /* Then its node, whole, beside the path, while what stands at the path stands:
+     * a write the world refuses — a full disk, a file-size limit, a name the
+     * kernel will not take — is refused before anything in its way moves.
+     * SECURITY: the ownership the verdict resolved lands as the node is made,
+     * and a file's mode with it, through the temporary's descriptor before its
+     * first byte, so no moment has the wrong pair — a link, the one node without
+     * a descriptor, takes it by lchown on the temporary. This is the ONLY place
+     * where ownership is applied; the verdict only resolves. */
+    fs_temp_t temp = FS_TEMP_INIT;
+    struct stat written;
+    if (file->type == PATH_TYPE_SYMLINK) {
+        err = fs_temp_symlink(&temp, content->data, file->filesystem_path, v->uid, v->gid);
+    } else {
+        err = fs_temp_file(
+            &temp, file->filesystem_path, (const unsigned char *) content->data,
+            content->size, file->mode, v->uid, v->gid, &written
+        );
+    }
+    if (err) goto cleanup;
+
+    /* Then what the publish cannot replace, a directory (EISDIR): the one the
+     * verdict named, never one found by a fresh look from down here. Refused,
+     * it stands, and the write is taken back */
     err = v->occupant == FS_OCCUPANT_DIRECTORY
         ? clear_occupant(file->filesystem_path, v->occupant) : NULL;
-    if (err) return err;
+    if (err) goto cleanup;
 
-    if (file->type == PATH_TYPE_SYMLINK) {
-        /* The link lands with the ownership the verdict resolved — the one node
-         * without a descriptor, so the primitive applies the pair itself, to
-         * the temporary — and what stood at the path stands until it does: a
-         * link that cannot be made leaves the path as it was. */
-        return fs_replace_symlink(content->data, file->filesystem_path, v->uid, v->gid);
-    }
-
-    /* Write directly from git blob to filesystem with atomic ownership and
-     * permissions.
-     * SECURITY: fs_write_file_raw atomically sets BOTH ownership and permissions
-     * via fchown() and fchmod() on the file descriptor, eliminating any security
-     * window. This is the ONLY place where ownership is applied - the verdict
-     * only resolves. */
-    struct stat written;
-    err = fs_write_file_raw(
-        file->filesystem_path, (const unsigned char *) content->data, content->size,
-        file->mode, v->uid, v->gid, &written
-    );
-    if (err) return err;
+    /* Then the publish, the one step between a removal and the path standing
+     * again: rename(2) replaces a regular file, a link (the link itself, not
+     * what it points to — at a link row, no conflict and no --force) or a device
+     * in place, and makes the path where nothing stands */
+    err = fs_temp_publish(&temp);
+    if (err) goto cleanup;
 
     /* The write's own stat, distilled where the write authority is in scope:
      * authorship, not a read, vouches for the triple, so its own open second
      * needs no smudge (state_stat_from_write). */
-    *out_stat = state_stat_from_write(&written);
-    return NULL;
+    if (file->type != PATH_TYPE_SYMLINK) *out_stat = state_stat_from_write(&written);
+
+cleanup:
+    /* However the row ended, no temporary outlives it: one made and not published
+     * is taken back */
+    fs_temp_deinit(&temp);
+    return err;
 }
 
 /**

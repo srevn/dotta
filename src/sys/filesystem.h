@@ -207,9 +207,9 @@ error_t fs_write_fd(int fd, const char *path, const void *data, size_t size);
  * owner — while the path stands as it was. The publish renames it over what stands
  * there, so a caller that must take something out of the way does it between
  * the two, and a write the world refuses — a full disk, a file-size limit, a
- * name the kernel will not take — is refused before anything at the path moves.
- * fs_write_file_raw and fs_replace_symlink are the make and the publish with
- * nothing between.
+ * name the kernel will not take — is refused before anything at the path moves
+ * (core/deploy.c deploy_file). fs_write_file_raw and fs_replace_symlink are the
+ * make and the publish with nothing between.
  *
  * Both act on the path's directory, never on the path: the permission a write
  * needs is write and search there, so a caller that must predict whether a write
@@ -225,8 +225,8 @@ error_t fs_write_fd(int fd, const char *path, const void *data, size_t size);
  * terminating_signal) — and a scan beneath a tracked directory lists it there
  * as a new file, removed by hand.
  *
- * Readers: sys/filesystem.c fs_write_file_raw and fs_replace_symlink. A reader
- * not on this list is a bug.
+ * Readers: core/deploy.c deploy_file; sys/filesystem.c fs_write_file_raw and
+ * fs_replace_symlink. A reader not on this list is a bug.
  */
 typedef struct {
     char name[PATH_MAX];   /* The temporary, beside the path; "" while none stands */
@@ -259,7 +259,9 @@ typedef struct {
  * @param out_st Optional (may be NULL): the fstat of the written descriptor,
  *        taken after the last mutation — it describes exactly the bytes and
  *        metadata this call wrote, which the publish puts at the path (rename
- *        keeps inode, size and mtime), never what a later look there would find
+ *        keeps inode, size and mtime), never what a later look there would find.
+ *        What a caller recording the write as its own act reads (core/deploy.c
+ *        deploy_file)
  * @return Error or NULL on success
  */
 error_t fs_temp_file(
@@ -346,8 +348,7 @@ void fs_temp_deinit(fs_temp_t *temp);
  * @param mode Permission mode (e.g., 0600, 0644, 0755), applied exactly
  * @param uid Owner, or (uid_t) -1 to leave it as made
  * @param gid Group, or (gid_t) -1 to leave it as made
- * @param out_st Optional (may be NULL): fs_temp_file's. What a caller recording
- *        the write as its own act reads (core/deploy)
+ * @param out_st Optional (may be NULL): fs_temp_file's
  * @return Error or NULL on success
  */
 error_t fs_write_file_raw(

@@ -42,7 +42,7 @@ error_t repo_create_target(
     if (err) return err;
 
     /* The directory holding the repository, not the repository: the clone refuses
-     * a target that is not empty, and the init makes its own leaf
+     * a target that is not empty, and the init creates its own leaf
      * (gitops_init_repository), so neither caller wants this to reach it. */
     err = fs_ensure_parent_dirs(path);
     if (err) return err;

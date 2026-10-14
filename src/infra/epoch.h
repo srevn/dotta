@@ -9,9 +9,9 @@
  * unconditionally and `dotta sync` establishes it on every remote, so a remote
  * that does not advertise it is not a dotta repository. `dotta clone` gates on
  * exactly this. The local store's identity is a different fact — the declaration
- * its maker wrote into its config (utils/repo.h) — because an absent epoch is a
- * state the store must survive: `sync` adopts the remote's over it, and `init`
- * mints over it once the census clears.
+ * a create-style command wrote into its config (utils/repo.h) — because an absent
+ * epoch is a state the store must survive: `sync` adopts the remote's over it,
+ * and `init` mints over it once the census clears.
  *
  *     refs/dotta/epoch
  *       └── commit

@@ -231,7 +231,7 @@ deploy_plan_t *deploy_plan_build(
          * the view's pending move, the run's to converge as a tracked row's
          * squatter is — cleared at its own rung in the directory pass, parents
          * first, so nothing beneath it is written through what stood there, and
-         * made in its place, the type rung deciding whether unasked or under
+         * created in its place, the type rung deciding whether unasked or under
          * --force (deploy_preflight). Its convergence is always a replace: STALE
          * stands on a directory row only where another kind does. Prior to scope,
          * because scope decides reach and this decides whether there is anything
@@ -559,19 +559,29 @@ static bool directory_is_deployable(
 }
 
 /**
- * The fate a squatted ancestor imposes on a planned row
+ * The fate an ancestor imposes on a planned row
  *
- * The one question the ladder asks before any probe of its own, because a squatted
- * directory row above the path invalidates every probe beneath it — the landing
- * check's included: a symlink squatting a claimed directory points somewhere
- * real and writable, so the landing probe would wave the write through and the
- * run would deploy INTO the link's target, over whatever the user keeps there.
- * The workspace lends the offender whole (workspace_squatted_ancestor — the
- * outermost, fate-blind, with the claim the load noted beside it); this splits
- * the answer by what the run itself decided about that ancestor, the premise
- * the plan carried by scope now asked of the verdicts, so it is exactly true.
- * One arm per fate, in decision order, each writing what it decides:
+ * What the ladder asks before any probe of its own, of the directories on the
+ * row's way whose fate the run has already decided. A pending directory row the
+ * walk skipped for its pair with nothing standing there leaves the row nothing
+ * to land in: no directory will stand there, whatever converges above it. A
+ * squatted directory row above the path invalidates every probe beneath it —
+ * the landing check's included: a symlink squatting a claimed directory points
+ * somewhere real and writable, so the landing probe would wave the write through
+ * and the run would deploy INTO the link's target, over whatever the user keeps
+ * there. The walk notes the first beside its fates (deploy_preflight_t's
+ * skipped_absent); the workspace lends the second whole
+ * (workspace_squatted_ancestor — the outermost, fate-blind, with the claim the
+ * load noted beside it), and this splits the answer by what the run itself decided
+ * about that ancestor, the premise the plan carried by scope now asked of the
+ * verdicts, so it is exactly true. One arm per fate, in the order asked, each
+ * writing what it decides:
  *
+ *   absent        the walk skipped a directory row on the way for its pair, and
+ *                 nothing stands there as the run will find it: no directory
+ *                 will stand there, so the row cannot land. OWNERSHIP, that row
+ *                 named — a sentence about the row's own way, never the named
+ *                 row's claim, which its own line says
  *   deployable    the directory pass converges the ancestor before this row is
  *                 reached — created, fixed or replaced — so from here down the
  *                 path is empty at write time. *out_absent; the row is asked
@@ -599,19 +609,20 @@ static bool directory_is_deployable(
  *                 an ancestor claim the user's own squatter holds
  *
  * The claimant is written in the no-fate arm alone — a row beneath a skipped
- * squatter leaves the class NONE, its remedy being that squatter's own line's
- * (deploy_ancestor_class_t). Called before check_landing by the ladder, and once
- * more per ancestor candidate; the ladder decides in path order, so a squatted
- * ancestor's own fate is always already taken when a row beneath it is reached.
- * The skip and *out_absent are written only when an ancestor decides — the caller's
- * zero skip and false stand otherwise, and the row judges itself.
+ * squatter leaves the ancestry NONE, its remedy being that squatter's own line's
+ * (deploy_ancestry_t). Called before check_landing by the ladder, and once more
+ * per ancestor candidate; the ladder decides in path order, so an ancestor's
+ * own fate is always already taken when a row beneath it is reached — and noted,
+ * where it was skipped for its pair with nothing standing there. The skip and
+ * *out_absent are written only when an ancestor decides — the caller's zero skip
+ * and false stand otherwise, and the row judges itself.
  *
  * @param ws Workspace, for the squatted-ancestor answer (must not be NULL)
  * @param verdicts The fates decided so far (must not be NULL)
  * @param path Planned path (must not be NULL)
- * @param skip The row's skip in the making (must not be NULL): the reason — TYPE
- *        or ANCESTOR — the named squatter's prefix length, and where the run
- *        gave the squatter no fate the claim at it
+ * @param skip The row's skip in the making (must not be NULL): the reason — TYPE,
+ *        ANCESTOR or OWNERSHIP — the named ancestor's prefix length, and where
+ *        the run gave a squatter no fate the claim at it
  * @param out_absent Whether the run empties the path before writing it (must
  *        not be NULL)
  */
@@ -619,6 +630,24 @@ static void check_ancestry(
     const workspace_t *ws, const deploy_preflight_t *verdicts, const char *path,
     deploy_skip_t *skip, bool *out_absent
 ) {
+    /* Absent: a directory row on the way that this run skipped for its pair, so
+     * no directory will stand there and nothing lands beneath it. Asked before
+     * the squatter: a squatter that stays skips every row beneath it in its own
+     * class, so a noted row stands beneath none but one the run replaces — whose
+     * arm would plan this path absent, leaving the climb to meet the pair at
+     * execute. The notes are in path order, a prefix before every path it opens,
+     * so the first that holds is the outermost, the one skipped for its own pair */
+    for (size_t i = 0; i < verdicts->skipped_absent.count; i++) {
+        const workspace_item_t *dir = verdicts->skipped_absent.entries[i];
+        const size_t len = strlen(dir->filesystem_path);
+
+        if (str_path_beneath(path, dir->filesystem_path, len)) {
+            skip->reason = DEPLOY_SKIP_OWNERSHIP;
+            skip->ancestor = len;
+            return;
+        }
+    }
+
     const workspace_squatted_t *above = workspace_squatted_ancestor(ws, path);
 
     if (!above) return;
@@ -649,8 +678,8 @@ static void check_ancestry(
      * but one: the user's own at a rung (DERIVED), which no plan holds and the
      * named re-derivation answers for */
     skip->reason = DEPLOY_SKIP_ANCESTOR;
-    skip->ancestor_class = above->claim == WORKSPACE_DISPLACED_DERIVED
-        ? DEPLOY_ANCESTOR_DERIVED : DEPLOY_ANCESTOR_TRACKED;
+    skip->ancestry = above->claim == WORKSPACE_DISPLACED_DERIVED
+        ? DEPLOY_ANCESTRY_DERIVED : DEPLOY_ANCESTRY_TRACKED;
 }
 
 /**
@@ -658,10 +687,11 @@ static void check_ancestry(
  *
  * One question per planned row, present or absent alike, and never about the
  * path itself: nothing deploy writes needs permission on the path. A file's or
- * a link's node is made beside it and renamed over it (sys/filesystem.h fs_temp_t),
- * what stands in its way is removed from its directory, and deploy_directory
- * mkdirs it — every one of those is an operation on the *parent*. A read-only
- * file, or a symlink pointing into a read-only store, is no obstacle at all.
+ * a link's node is created beside it and renamed over it (sys/filesystem.h
+ * fs_temp_t), what stands in its way is removed from its directory, and
+ * deploy_directory mkdirs it — every one of those is an operation on the *parent*.
+ * A read-only file, or a symlink pointing into a read-only store, is no obstacle
+ * at all.
  *
  * So the question goes to the nearest present ancestor, and to it alone. Every
  * component between it and the planned path is absent, and ensure_parents creates
@@ -693,11 +723,11 @@ static void check_ancestry(
  *                             ancestry, and this run will not replace it (Coherent
  *                             Scope) — skipped (ANCESTOR), by hand. The rung
  *                             ran first, so nothing the load saw claims the
- *                             squatter: the skip's class is UNCLAIMED, the one
- *                             class this producer can find — and nothing enabled
- *                             claims it at all, a claim of it leaving a directory
- *                             row there or no row beneath it (core/manifest.c
- *                             manifest_layer)
+ *                             squatter: the skip's ancestry is UNCLAIMED, the
+ *                             one ancestry this producer can find — and nothing
+ *                             enabled claims it at all, a claim of it leaving a
+ *                             directory row there or no row beneath it
+ *                             (core/manifest.c manifest_layer)
  *   unreachable               EACCES is a denial too (PERMISSION, with no
  *                             ancestor to name); any other errno is left for
  *                             the write to report
@@ -706,8 +736,8 @@ static void check_ancestry(
  * (ensure_parents), so this is a prediction of the run, not a model of it.
  *
  * The skip is written only on a refusal — the caller's zero skip stands when
- * the landing is clear — and its class only on the ANCESTOR one. The named ancestor
- * is a prefix of the planned path itself, so it travels as a byte length
+ * the landing is clear — and its ancestry only on the ANCESTOR one. The named
+ * ancestor is a prefix of the planned path itself, so it travels as a byte length
  * (deploy_skip_t). A PERMISSION with an ancestor reads "<ancestor> is not
  * writable"; without one, "ancestry cannot be reached" — the zero length is itself
  * the honest fact (the offender could not be named).
@@ -753,7 +783,7 @@ static void check_landing(
     skip->reason = is_dir ? DEPLOY_SKIP_PERMISSION : DEPLOY_SKIP_ANCESTOR;
     skip->ancestor = ancestor_len(slash);
     if (!is_dir) {
-        skip->ancestor_class = DEPLOY_ANCESTOR_UNCLAIMED;
+        skip->ancestry = DEPLOY_ANCESTRY_UNCLAIMED;
     }
 
 cleanup:
@@ -942,9 +972,10 @@ static bool above_deployable_row(
  * read them without a gate. A row planned beneath a squatter this run replaces
  * gets its verdict too — absent, nothing asked — so the executors read one shape
  * for every row; beneath a squatter this run skips, it takes that skip's class
- * instead, TYPE or ANCESTOR, and beneath one the run never reaches it is skipped
- * ANCESTOR — the ancestry rung (check_ancestry), asked before any probe of the
- * row's own.
+ * instead, TYPE or ANCESTOR, beneath one the run never reaches it is skipped
+ * ANCESTOR, and beneath a pending directory row skipped for its pair with nothing
+ * standing there it is skipped OWNERSHIP, naming that row — the ancestry rung
+ * (check_ancestry), asked before any probe of the row's own.
  */
 error_t deploy_preflight(
     const workspace_t *ws, const deploy_plan_t *plan, const deploy_options_t *opts,
@@ -960,6 +991,7 @@ error_t deploy_preflight(
      * items they borrow: nothing frees them, and a failure below leaves a partial
      * preflight as the arena's bytes. */
     deploy_preflight_t *verdicts = arena_calloc(arena, 1, sizeof(*verdicts));
+    ptr_array_init(&verdicts->skipped_absent, arena, 0);
     string_array_init(&verdicts->warnings, arena, 0);
 
     /* One slot per pending item — verdict or skip, so the skip array's bound is
@@ -986,19 +1018,19 @@ error_t deploy_preflight(
      * is a prediction of what the run will find at the row's path and on the
      * way to it, so it is decided after the fate of every one of the row's
      * ancestors, of either kind — which is all the rungs ask of the fates decided
-     * so far: the squatted directory above the row (check_ancestry) and the
-     * deployable directory its landing stands in (check_landing) are ancestors
-     * of it. The plan's two pending slices are each in path order
-     * (workspace_kind_order), so the walk merges them, and an ancestor, a prefix
-     * of every path beneath it, comes first. core/cleanup's preflight decides
-     * in the order its fates read each other too — there children before parents,
-     * so a directory reads the fates of everything it holds. The verdicts fill
-     * per kind, each in path order, the order deploy_execute acts in within a
-     * kind; the skips and the warnings come out in path order, so a skipped
-     * squatter precedes the rows beneath it.
+     * so far: the absent directory skipped for its pair and the squatted directory
+     * above the row (check_ancestry), and the deployable directory its landing
+     * stands in (check_landing), are ancestors of it. The plan's two pending
+     * slices are each in path order (workspace_kind_order), so the walk merges
+     * them, and an ancestor, a prefix of every path beneath it, comes first.
+     * core/cleanup's preflight decides in the order its fates read each other
+     * too — there children before parents, so a directory reads the fates of
+     * everything it holds. The verdicts fill per kind, each in path order, the
+     * order deploy_execute acts in within a kind; the skips and the warnings
+     * come out in path order, so a skipped squatter precedes the rows beneath it.
      *
      * The ancestors come last though the run creates them first: which directory
-     * rows it may make on the way is derived from the planned rows as a whole,
+     * rows it may create on the way is derived from the planned rows as a whole,
      * not decided row by row. */
     for (size_t d = 0, f = 0; d < dirs.count || f < files.count;) {
         /* The row next in path order: a directory row while one is left and the
@@ -1010,12 +1042,14 @@ error_t deploy_preflight(
 
         const char *path = item->filesystem_path;
 
-        /* Its ancestry first, before any probe: a squatted directory row above
-         * this path invalidates every look taken beneath it, the landing check's
-         * included. The walk is in path order, so such an ancestor's own fate
-         * is already taken. The row is decided into its skip: each rung that
-         * refuses writes it — the reason, and the ancestor it names with the
-         * claim there — and the row is skipped iff one did. */
+        /* Its ancestry first, before any probe: a directory on the way that the
+         * walk skipped for its pair, absent, leaves the row nothing to land in,
+         * and a squatted directory row above this path invalidates every look
+         * taken beneath it, the landing check's included. The walk is in path
+         * order, so such an ancestor's own fate is already taken. The row is
+         * decided into its skip: each rung that refuses writes it — the reason,
+         * and the ancestor it names with the claim there — and the row is skipped
+         * iff one did. */
         deploy_skip_t skip = { .item = item };
         bool absent = false;
 
@@ -1137,6 +1171,15 @@ error_t deploy_preflight(
         }
 
         if (skip.reason != DEPLOY_SKIP_NONE) {
+            /* A directory row skipped for a pair, nothing standing there as the
+             * run will find it, is noted: no row beneath it can land
+             * (check_ancestry). Its absence is the walk's occupant, never the
+             * item's look, which beneath a squatter the run replaces says only
+             * that nothing was looked at */
+            if (skip.reason == DEPLOY_SKIP_OWNERSHIP && item->item_kind == PATH_KIND_DIRECTORY &&
+                occupant == FS_OCCUPANT_NONE) {
+                ptr_array_push(&verdicts->skipped_absent, item);
+            }
             verdicts->skipped.entries[verdicts->skipped.count++] = skip;
             continue;
         }
@@ -1164,10 +1207,12 @@ error_t deploy_preflight(
      *
      * Every gate reads the verdicts, not the plan: a skipped directory row flows
      * past the first into the candidate pool, and the later gates keep it out —
-     * one skipped beneath a squatted ancestor that stays is not a parent this
-     * run can make (the rung's reason), a TYPE-, FOREIGN- or UNREADABLE-skipped
-     * row is not absent (present, as its item read), and a landing-skipped one
-     * has no deployable row beneath it (the invariant, deploy_preflight's doc). */
+     * one skipped beneath a squatted ancestor that stays, or beneath an absent
+     * one skipped for its pair, is not a parent this run can create (the rung's
+     * reason), a TYPE-, FOREIGN- or UNREADABLE-skipped row is not absent (present,
+     * as its item read), and a landing-skipped one, like one absent and skipped
+     * for its pair, has no deployable row beneath it (the invariant,
+     * deploy_preflight's doc). */
     for (size_t i = 0; i < all_dirs.count; i++) {
         const workspace_item_t *item = all_dirs.entries[i];
         const char *path = item->filesystem_path;
@@ -1184,7 +1229,7 @@ error_t deploy_preflight(
 
         check_ancestry(ws, verdicts, path, &skip, &absent);
         if (skip.reason != DEPLOY_SKIP_NONE) {
-            continue;   /* skipped beneath a squatted ancestor that stays */
+            continue;   /* beneath a squatter that stays, or an absent row skipped for its pair */
         }
 
         if (!(absent || item->occupant == FS_OCCUPANT_NONE) ||
@@ -1203,7 +1248,10 @@ error_t deploy_preflight(
          * nothing behind (fs_create_dir_exclusive): the first act beneath carries
          * it as its outcome, and every later one fails naming the ancestor
          * (deploy_execute) — the under-approximation this pass accepts for a
-         * foreign-owned derived claim above a landing the invoker can write. */
+         * foreign-owned claim the plan does not hold, derived or tracked outside
+         * the run, above a landing the invoker can write. A pending row the walk
+         * skipped for its pair is never here: no deployable row stands beneath
+         * it. */
         error_t err = resolve_deployment_ownership(
             item->row, opts->strict_ownership, &verdicts->warnings, &v->uid, &v->gid
         );
@@ -1219,12 +1267,12 @@ error_t deploy_preflight(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * A place the run needed a directory at and made none, and the sentence every
+ * A place the run needed a directory at and created none, and the sentence every
  * act beneath it fails with
  *
- * A directory row not converged, or a parent the way could not make, noted by
- * the act that met the failure (note_unmade) and read before every act after it
- * (poisoned_above). The path is the run's own copy, since a parent's spelling
+ * A directory row not converged, or a parent the way could not create, noted by
+ * the act that met the failure (note_uncreated) and read before every act after
+ * it (poisoned_above). The path is the run's own copy, since a parent's spelling
  * lives only in the climb that met it (ensure_parents). The sentence is minted
  * once, when the place is noted, and borrowed by each act it fails.
  */
@@ -1232,7 +1280,7 @@ typedef struct {
     const char *filesystem_path;  /* The place, the run's arena copy */
     size_t len;                   /* strlen(filesystem_path): the prefix of every path beneath it */
     error_t error;                /* "'<path>' was not <verb>", minted once (base/error.h "Lifetime") */
-} deploy_unmade_t;
+} deploy_uncreated_t;
 
 /**
  * One execution of the verdicts: what deploy_execute was handed, plus the state
@@ -1243,13 +1291,13 @@ typedef struct {
     const workspace_t *ws;              /* a landing directory's item (holdable_directory) */
     const deploy_preflight_t *verdicts; /* the ancestors' metadata (create_ancestor) */
     deploy_receipt_t *receipt;          /* the receipt so far: the ancestors, then the holds left */
-    arena_t *arena;                     /* the holds and the places not made grow here */
+    arena_t *arena;                     /* the holds and the places not created grow here */
     deploy_hold_t *holds;               /* every hold taken, in the order taken (release_directories) */
     size_t hold_count;
     size_t hold_capacity;
-    deploy_unmade_t *unmade;            /* every place not made, in the order noted (poisoned_above) */
-    size_t unmade_count;
-    size_t unmade_capacity;
+    deploy_uncreated_t *uncreated;      /* every place not created, in the order noted (poisoned_above) */
+    size_t uncreated_count;
+    size_t uncreated_capacity;
 } deploy_run_t;
 
 /**
@@ -1288,9 +1336,9 @@ static void hold_directory(deploy_run_t *run, const workspace_item_t *item, mode
  * directory is asked back to its exact mode, and the next run holds what it needs
  * afresh. Through the directory's own descriptor (fs_set_dir_mode), never a
  * chmod(2) on a path that may have become a symlink meanwhile, and never a
- * directory made anew: one the world took away has nothing left to release. Every
- * hold is attempted; one the directory refuses stays held and is the receipt's,
- * each in the order released, with its cause (deploy_receipt_t's held).
+ * directory created anew: one the world took away has nothing left to release.
+ * Every hold is attempted; one the directory refuses stays held and is the
+ * receipt's, each in the order released, with its cause (deploy_receipt_t's held).
  */
 static void release_directories(deploy_run_t *run) {
     deploy_holds_t *held = &run->receipt->held;
@@ -1312,7 +1360,7 @@ static void release_directories(deploy_run_t *run) {
 }
 
 /**
- * Note a place the run needed a directory at and made none
+ * Note a place the run needed a directory at and created none
  *
  * Called by the act that met the failure, with the verb that act failed at: a
  * directory row's create or replace ("converged", deploy_directory) and a parent
@@ -1321,13 +1369,13 @@ static void release_directories(deploy_run_t *run) {
  * it, so it is minted here once and each of them borrows it (base/error.h
  * "Lifetime").
  */
-static void note_unmade(deploy_run_t *run, const char *path, const char *verb) {
-    run->unmade = arena_grow(
-        run->arena, run->unmade, &run->unmade_capacity, run->unmade_count + 1,
-        sizeof(*run->unmade)
+static void note_uncreated(deploy_run_t *run, const char *path, const char *verb) {
+    run->uncreated = arena_grow(
+        run->arena, run->uncreated, &run->uncreated_capacity, run->uncreated_count + 1,
+        sizeof(*run->uncreated)
     );
 
-    run->unmade[run->unmade_count++] = (deploy_unmade_t){
+    run->uncreated[run->uncreated_count++] = (deploy_uncreated_t){
         .filesystem_path = arena_strdup(run->arena, path),
         .len = strlen(path),
         .error = error_create(ERR_FS, "'%s' was not %s", path, verb),
@@ -1378,16 +1426,16 @@ static error_t materialize_directory(
  *
  * The verdicts are the authority for what is claimed here, not the view: a
  * directory row preflight did not foresee as absent (present then, gone since)
- * has no metadata decided for it, is made like an unclaimed parent, and is left
- * for the next load to read — which sees its record and its row, and, where the
- * row is tracked, says [mode] if the two disagree.
+ * has no metadata decided for it, is created like an unclaimed parent, and is
+ * left for the next load to read — which sees its record and its row, and, where
+ * the row is tracked, says [mode] if the two disagree.
  *
- * Creation only, either class (fs_create_dir_exclusive): every path it makes
+ * Creation only, either class (fs_create_dir_exclusive): every path it creates
  * was absent when the run probed it, and one the world made present in between
  * meets ERR_EXISTS as the outcome of the act that met it, and of every later
  * act beneath it by name (ensure_parents notes it) — not this run's to converge,
  * the way a planned row would be (materialize_directory). The header's stance
- * on every mid-run surprise, applied to the make itself.
+ * on every mid-run surprise, applied to the create itself.
  *
  * @param run Run context (must not be NULL)
  * @param path Absent ancestor to create (must not be NULL)
@@ -1411,9 +1459,9 @@ static error_t create_ancestor(deploy_run_t *run, const char *path) {
         if (err) return err;
 
         /* On the receipt once and held once — and bounds the sized array: a parent
-         * this run made for an earlier row's write and the world removed since
-         * is re-made here, its first hold releases it, and without this scan
-         * the second re-make would write past entries[count]. */
+         * this run created for an earlier row's write and the world removed since
+         * is re-created here, its first hold releases it, and without this scan
+         * the second re-create would write past entries[count]. */
         deploy_outcomes_t *receipt = &run->receipt->ancestors;
         for (size_t j = 0; j < receipt->count; j++) {
             if (receipt->entries[j].verdict == v) {
@@ -1447,12 +1495,12 @@ static error_t create_ancestor(deploy_run_t *run, const char *path) {
  * may hold it (holdable_directory) it does, at a working mode built from its
  * current mode so that the release restores exactly what was there, recorded or
  * not (an excluded or out-of-scope row is not the plan's to converge) — set on
- * the directory that stands and never made (fs_set_dir_mode): one the world took
- * away since the climb leaves nothing to set, and the write beneath meets the
- * absence as its row's outcome. Anything else is left alone and the write reports
- * the refusal — so is what refuses every identity (a read-only filesystem, an
- * immutable flag), which denies the run nothing: the hold's chmod lifts the bits
- * and no more, and would meet the refusal as flatly as the write.
+ * the directory that stands and never created (fs_set_dir_mode): one the world
+ * took away since the climb leaves nothing to set, and the write beneath meets
+ * the absence as its row's outcome. Anything else is left alone and the write
+ * reports the refusal — so is what refuses every identity (a read-only filesystem,
+ * an immutable flag), which denies the run nothing: the hold's chmod lifts the
+ * bits and no more, and would meet the refusal as flatly as the write.
  *
  * The questions check_landing asked of the same ancestor, less the one time has
  * answered: a pending row has been converged by the directory pass before any
@@ -1499,13 +1547,14 @@ static error_t open_landing_directory(
  * rather than a mkdir errno. A dangling symlink is one: mkdir would report EEXIST
  * for a path that leads nowhere.
  *
- * A parent it cannot make, either arm of create_ancestor, is noted (note_unmade):
- * the act that met the refusal carries its cause, and every later act beneath
- * the parent fails naming it, unattempted (poisoned_above). Its two other refusals
- * meet a place the run was not to make, and note nothing — every act beneath
- * meets them again: an ancestor that is not a directory, and a landing that stands
- * and refuses its open, a world that moved after the landing check asked, since
- * a landing the run may not hold is PERMISSION at preflight (holdable_directory).
+ * A parent it cannot create, either arm of create_ancestor, is noted
+ * (note_uncreated): the act that met the refusal carries its cause, and every
+ * later act beneath the parent fails naming it, unattempted (poisoned_above).
+ * Its two other refusals meet a place the run was not to create, and note nothing
+ * — every act beneath meets them again: an ancestor that is not a directory,
+ * and a landing that stands and refuses its open, a world that moved after the
+ * landing check asked, since a landing the run may not hold is PERMISSION at
+ * preflight (holdable_directory).
  *
  * @param run Run context (must not be NULL)
  * @param path Planned path whose parents must exist (must not be NULL)
@@ -1546,10 +1595,10 @@ static error_t ensure_parents(deploy_run_t *run, const char *path) {
         err = create_ancestor(run, scratch);
         if (err) {
             /* Not created: this act fails with the cause, and every later act
-             * beneath the parent fails naming it rather than trying the make
-             * again — after ERR_EXISTS too, since what the world made there may
-             * be a link, and nothing lands through one */
-            note_unmade(run, scratch, "created");
+             * beneath the parent fails naming it rather than trying the create
+             * again — after ERR_EXISTS too, since what the world created there
+             * may be a link, and nothing lands through one */
+            note_uncreated(run, scratch, "created");
             goto cleanup;
         }
         *slash = '/';
@@ -1565,15 +1614,15 @@ cleanup:
  *
  * Mechanism only: the verdict says what stands at the path and what the write
  * applies, and this lands it — its content first, then the way to it (the missing
- * parents made, the landing held where it refuses), then its node made whole
- * beside the path, then the directory in its way cleared, then the node published
- * over the path (sys/filesystem.h fs_temp_t). Nothing here looks at the disk to
- * decide anything; a path the world has moved under since preflight meets the
- * mechanism's refusal (rename over a directory is EISDIR, rmdir of a directory
- * that filled up is ENOTEMPTY) and the refusal is the row's outcome.
+ * parents created, the landing held where it refuses), then its node created
+ * whole beside the path, then the directory in its way cleared, then the node
+ * published over the path (sys/filesystem.h fs_temp_t). Nothing here looks at
+ * the disk to decide anything; a path the world has moved under since preflight
+ * meets the mechanism's refusal (rename over a directory is EISDIR, rmdir of a
+ * directory that filled up is ENOTEMPTY) and the refusal is the row's outcome.
  *
  * A sealed row at a terminal, its key cold, is asked for the key before the way
- * to it is made, so a parent the run then cannot make costs a prompt answered
+ * to it is created, so a parent the run then cannot create costs a prompt answered
  * for nothing.
  *
  * The row:
@@ -1597,18 +1646,18 @@ static error_t deploy_file(
     deploy_run_t *run, const deploy_verdict_t *v, state_stat_t *out_stat
 ) {
     /* The stat's resting state: UNSET unless the regular arm's write lands and
-     * binds its own fstat below. The symlink arm never does — a link is made by
-     * path (symlink(2) opens no descriptor to describe), and readlink is its
+     * binds its own fstat below. The symlink arm never does — a link is created
+     * by path (symlink(2) opens no descriptor to describe), and readlink is its
      * whole re-verification. */
     *out_stat = STATE_STAT_UNSET;
 
     const manifest_row_t *file = v->item->row;
 
     /* Its content first, whichever kind it is: a row whose content cannot be
-     * read makes nothing on its way and removes nothing in it. Read as the entry
-     * the row's type says it is (infra/content.h): a link's bytes are its target,
-     * never a seal, and come back the C string symlink(2) is handed, empty or
-     * not; a file's are decrypted where sealed */
+     * read creates nothing on its way and removes nothing in it. Read as the
+     * entry the row's type says it is (infra/content.h): a link's bytes are its
+     * target, never a seal, and come back the C string symlink(2) is handed,
+     * empty or not; a file's are decrypted where sealed */
     const buffer_t *content = NULL;
     error_t err = content_cache_get_from_blob_oid(
         run->cache, &file->blob_oid, gitops_type_filemode(file->type),
@@ -1616,14 +1665,14 @@ static error_t deploy_file(
     );
     if (err) return err;
 
-    /* Then the way to it: parents made, the landing held where it refuses */
+    /* Then the way to it: parents created, the landing held where it refuses */
     err = ensure_parents(run, file->filesystem_path);
     if (err) return err;
 
     /* Then its node, whole, beside the path, while what stands at the path stands:
      * a write the world refuses — a full disk, a file-size limit, a name the
      * kernel will not take — is refused before anything in its way moves.
-     * SECURITY: the ownership the verdict resolved lands as the node is made,
+     * SECURITY: the ownership the verdict resolved lands as the node is created,
      * and a file's mode with it, through the temporary's descriptor before its
      * first byte, so no moment has the wrong pair — a link, the one node without
      * a descriptor, takes it by lchown on the temporary. This is the ONLY place
@@ -1650,7 +1699,7 @@ static error_t deploy_file(
     /* Then the publish, the one step between a removal and the path standing
      * again: rename(2) replaces a regular file, a link (the link itself, not
      * what it points to — at a link row, no conflict and no --force) or a device
-     * in place, and makes the path where nothing stands */
+     * in place, and creates the path where nothing stands */
     err = fs_temp_publish(&temp);
     if (err) goto cleanup;
 
@@ -1660,8 +1709,8 @@ static error_t deploy_file(
     if (file->type != PATH_TYPE_SYMLINK) *out_stat = state_stat_from_write(&written);
 
 cleanup:
-    /* However the row ended, no temporary outlives it: one made and not published
-     * is taken back */
+    /* However the row ended, no temporary outlives it: one created and not
+     * published is taken back */
     fs_temp_deinit(&temp);
     return err;
 }
@@ -1683,7 +1732,7 @@ cleanup:
  * after it.
  *
  * A create or a replace that fails leaves no directory of the run's at the path,
- * so the path is noted (note_unmade) and every act beneath it fails unattempted;
+ * so the path is noted (note_uncreated) and every act beneath it fails unattempted;
  * a fix that fails leaves the directory standing, and notes nothing.
  *
  * @param run Run context (must not be NULL)
@@ -1702,10 +1751,10 @@ static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
     /* A create or a replace lands a new entry through the parent — the replace's
      * after its clear — so the landing is opened first, the one check_landing
      * predicted, as deploy_file opens its own (ensure_parents): the missing parents
-     * made, the nearest present one held where it refuses and the run may hold
-     * it. A squatter's parent stands, the squatter being in it, and nothing is
-     * made — the final component is the path itself. An absent path beneath a
-     * non-directory is one preflight blocked when unplanned and the directory
+     * created, the nearest present one held where it refuses and the run may
+     * hold it. A squatter's parent stands, the squatter being in it, and nothing
+     * is created — the final component is the path itself. An absent path beneath
+     * a non-directory is one preflight blocked when unplanned and the directory
      * pass replaces when planned (prefix order); one still there is ensure_parents'
      * named error. */
     error_t err = ensure_parents(run, path);
@@ -1724,7 +1773,7 @@ static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
     /* No directory of the run's came to stand — the create never happened, or
      * the squatter survived its replace — so nothing beneath may land through
      * what stands there: every later act beneath the path fails naming it */
-    if (err) note_unmade(run, path, "converged");
+    if (err) note_uncreated(run, path, "converged");
 
     return err;
 }
@@ -1732,29 +1781,29 @@ static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
 /**
  * The failure a planned path's act meets before it starts, or NULL
  *
- * Deploy's order is parents first and its mechanism makes on the way down, so
+ * Deploy's order is parents first and its mechanism creates on the way down, so
  * per-act failure needs the preflight invariant's execution mirror: a place the
- * run needed a directory at and made none (deploy_unmade_t) — a create that never
- * happened, a squatter that survived its replace, a parent the way could not
- * make; never a fix refused, whose directory stands. An act beneath it would
- * make the place again — a row's as a parent no claim names, a parent's against
- * the same refusal — or land through whatever stands there, the hazard the ancestry
- * rung refuses at preflight met again at execution time. So it is not attempted,
- * and fails with the place's own sentence.
+ * run needed a directory at and created none (deploy_uncreated_t) — a create
+ * that never happened, a squatter that survived its replace, a parent the way
+ * could not create; never a fix refused, whose directory stands. An act beneath
+ * it would create the place again — a row's as a parent no claim names, a parent's
+ * against the same refusal — or land through whatever stands there, the hazard
+ * the ancestry rung refuses at preflight met again at execution time. So it is
+ * not attempted, and fails with the place's own sentence.
  *
- * The first match is the outermost: an act's way is made from the top down, a
- * place that fails there is noted before the act's own, and no act runs beneath
+ * The first match is the outermost: an act's way is created from the top down,
+ * a place that fails there is noted before the act's own, and no act runs beneath
  * a noted place, so along any one path the outer place is noted first. Only the
  * world, taking a directory away mid-run, can note an outer place after an inner
  * one; the act fails as surely, naming the inner. The list is empty on every
  * healthy run, which is what makes the scan free.
  */
 static error_t poisoned_above(const deploy_run_t *run, const char *path) {
-    for (size_t i = 0; i < run->unmade_count; i++) {
-        const deploy_unmade_t *unmade = &run->unmade[i];
+    for (size_t i = 0; i < run->uncreated_count; i++) {
+        const deploy_uncreated_t *uncreated = &run->uncreated[i];
 
-        if (str_path_beneath(path, unmade->filesystem_path, unmade->len)) {
-            return unmade->error;
+        if (str_path_beneath(path, uncreated->filesystem_path, uncreated->len)) {
+            return uncreated->error;
         }
     }
 

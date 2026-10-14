@@ -1085,7 +1085,7 @@ static error_t add_refuse_ancestry(
  * claims of its own beneath it under another label, the name the profile gives
  * the place fresh deciding which of the two stands (core/manifest.h
  * manifest_moved_place). A directory claim admitted above it can move that name,
- * and with it the side: the next apply would make the file where the directory
+ * and with it the side: the next apply would create the file where the directory
  * stands, or the directory where the file does, which nothing this command captured
  * asked for. No capture holds a side — at the place's path a capture names the
  * blob, or is refused by kind — so nothing lifts this one, and its way out is a
@@ -1630,9 +1630,9 @@ static error_t add_write_record(
          * Both kinds earn one event. A path was captured from disk, so it is
          * dotta's to prune on scope exit — the ownership the gate asks for, which
          * nothing later grants a directory that was already there: apply observes
-         * those and anchors only the ones it makes, so an unowned directory is
-         * released where an owned one is pruned. Cleanup's emptiness rule guards
-         * their contents.
+         * those and anchors only the ones it creates, so an unowned directory
+         * is released where an owned one is pruned. Cleanup's emptiness rule
+         * guards their contents.
          *
          * The view says whose the path is, and nothing the record says: the
          * capture's record is written only where the row standing at the path
@@ -1767,7 +1767,7 @@ static error_t add_write_record(
             /* This profile's record alone, the join remove's candidates make
              * (cmds/remove.c remove_paths_candidates): a record naming another
              * profile is that profile's, which its own load decides. A retire
-             * here would have its scope exit forget the copy dotta made and,
+             * here would have its scope exit forget the copy dotta created and,
              * where a link took the place, look through it at the orphans the
              * record displaces (core/workspace.h workspace_displaced_t, RECORD) */
             const state_record_t *record = state_find_record(

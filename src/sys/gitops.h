@@ -108,7 +108,7 @@ error_t gitops_get_signature(git_signature **out, git_repository *repo);
  *                    answers not found for a repository it could not read as
  *                    well, so the open asks both itself before it says so. Read
  *                    by utils/repo.c repo_open, as no store there, and by
- *                    cmds/init.c cmd_init, which makes a repository where it
+ *                    cmds/init.c cmd_init, which creates a repository where it
  *                    reads the code.
  *   ERR_PERMISSION — the repository is owned by another user.
  *   ERR_GIT        — everything else, carrying libgit2's own message — a config
@@ -126,14 +126,14 @@ error_t gitops_open_repository(git_repository **out, const char *path);
 /**
  * Create a bare repository at path, or open the one that stands there
  *
- * `git init --bare`, the path made as needed. dotta's store is bare (utils/repo.h):
- * nothing is ever checked out, every write to a branch is a stage committed in
- * memory (sys/stage), and a working tree was the layer beneath an anchor branch
- * nothing reads any more. Over a repository that already stands the call is git's
- * re-init — refs and config kept, only what is missing written back, HEAD among
- * them — so a store a hand stripped of its HEAD is whole again; it does not make
- * a repository with a working tree bare, and a caller that must know reads
- * `git_repository_is_bare` on what it got.
+ * `git init --bare`, the path created as needed. dotta's store is bare
+ * (utils/repo.h): nothing is ever checked out, every write to a branch is a stage
+ * committed in memory (sys/stage), and a working tree was the layer beneath an
+ * anchor branch nothing reads any more. Over a repository that already stands
+ * the call is git's re-init — refs and config kept, only what is missing written
+ * back, HEAD among them — so a store a hand stripped of its HEAD is whole again;
+ * it does not make a repository with a working tree bare, and a caller that must
+ * know reads `git_repository_is_bare` on what it got.
  *
  * HEAD is written here once, `ref: refs/heads/<init.defaultBranch, else master>`,
  * unborn — git's own fresh state — and nothing in dotta reads or writes it after.

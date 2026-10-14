@@ -69,7 +69,7 @@ error_t editor_launch_with_env(const char *file_path);
  *
  * Three ends leave the caller nothing to keep, `*out_path` NULL. An edit the
  * editor refused — a non-zero exit, a signal — is abandoned, the file unlinked;
- * so is a file that could not be made or written, which holds nothing of the
+ * so is a file that could not be created or written, which holds nothing of the
  * user's. An edit that cannot be read back is the user's all the same: the file
  * stays where the editor left it, and the refusal names it (sys/filesystem.h
  * fs_read_file).

@@ -72,8 +72,8 @@
  * of a setuid tool run by the user, the one shape every syscall's rule and every
  * library are written for (getuid, access(2), libgit2's owner check all answer
  * for the invoker). Everything of dotta's own — the repository, the state, the
- * session cache, a temp script — is then made as the invoker, and root is taken
- * back for one syscall at a time where the invoker is refused
+ * session cache, a temp script — is then created as the invoker, and root is
+ * taken back for one syscall at a time where the invoker is refused
  * (identity_raise_on_refusal / identity_lower: sys/filesystem's second try).
  *
  * That root is held *for* someone is privileged beside an invoker who is not
@@ -282,7 +282,7 @@ bool identity_may_chown(const identity_t *id, uid_t uid, gid_t gid);
  * The kernel's rule for chmod(2), and for any chown(2) of a node that stands:
  * the node's owner, or root. The node half of identity_may_chown's question —
  * that one asks whether a pair is the identity's to give, this one whether the
- * node is the identity's to change — so a node made new asks only the other,
+ * node is the identity's to change — so a node newly created asks only the other,
  * and a node converged where it stands asks both. As there, a "no" can be a
  * kernel's "yes" (an ACL granting it) and the refusal's remedy, sudo, holds either
  * way.

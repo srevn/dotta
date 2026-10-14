@@ -27,13 +27,13 @@
  * alone — a config that declares a format, and a linked worktree's own
  * config.worktree where the format reads one (else neither, for a linked worktree).
  * A directory that is not there reads as it will once it is — git's rules are
- * the path's, and `ignore --test` asks about a path before it is made. So does
- * one the invoker cannot look into: discovery walks past it, as libgit2 does,
- * where git itself cannot work there as the invoker at all. Under sudo that is
- * a hybrid on purpose — the walk enters such a directory with root's reach and
- * reads its rules so, while discovery sees what the invoker sees — and its residue
- * is stated: a repository nested inside one, which only root can see, is read
- * by the lists of the repository around it.
+ * the path's, and `ignore --test` asks about a path before it is created. So
+ * does one the invoker cannot look into: discovery walks past it, as libgit2
+ * does, where git itself cannot work there as the invoker at all. Under sudo
+ * that is a hybrid on purpose — the walk enters such a directory with root's
+ * reach and reads its rules so, while discovery sees what the invoker sees —
+ * and its residue is stated: a repository nested inside one, which only root
+ * can see, is read by the lists of the repository around it.
  *
  * It knows nothing of `core/ignore`, which compiles the user's own `.dottaignore`,
  * config and CLI layers inside the dotta repo: core/ignore asks this module as
@@ -150,8 +150,8 @@ source_filter_t *source_filter_create(arena_t *arena);
  * (source_directory_parent): a link the place is spelled through leads to a
  * directory whose own ancestors are the rungs git reads, and the directories
  * the spelling passed through on the way to it are not among them. A directory
- * not made yet is spelled as it will be once it is, beneath the kernel's spelling
- * of the nearest one that stands.
+ * not created yet is spelled as it will be once it is, beneath the kernel's
+ * spelling of the nearest one that stands.
  *
  * Resolved once per spelling. What the discovery environment refuses is discovery's
  * failure, never this answer's: the directory is where it is either way.

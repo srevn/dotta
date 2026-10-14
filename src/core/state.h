@@ -322,10 +322,10 @@ typedef struct state_record {
  * node's kind is fixed for the life of its inode, and the inode is the filesystem's
  * to hand out again: a node of another kind reusing it at the stat's size within
  * the stat's second is not the node the stat was taken of, and taken for it, a
- * link the user made reads as dotta's file — clean, or pruned as an orphan. Git's
- * ce_match_stat asks the entry's mode before its stat data for the same reason.
- * A link for a link and a regular file for a regular file, the record's kind
- * being a look's word already; never of a directory, which confirms no content
+ * link the user created reads as dotta's file — clean, or pruned as an orphan.
+ * Git's ce_match_stat asks the entry's mode before its stat data for the same
+ * reason. A link for a link and a regular file for a regular file, the record's
+ * kind being a look's word already; never of a directory, which confirms no content
  * and so carries no stat.
  *
  * Whether there is a stat to ask about is the asker's question, not this one's.
@@ -477,7 +477,7 @@ error_t state_save(state_t *state);
  * On a handle whose load found nothing at the path, this first brings the store's
  * database into being — the first write intent, never a read. It is built where
  * no other process can see it and published whole, only where nothing stands:
- * no process ever meets one half-made, a store another process published since
+ * no process ever meets one half-created, a store another process published since
  * this handle's load is opened and never replaced, and something else found
  * standing there is refused as the load refuses it, with nothing written into
  * it. A filesystem that holds no hard links refuses the publication.

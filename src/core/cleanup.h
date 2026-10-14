@@ -399,7 +399,7 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  *               beneath); an orphan the plan does not reach whose state is
  *               RELEASED; an active path — the view has a row beneath the
  *               directory, on disk already or not, so the directory is the ancestor
- *               of an enabled row, one ensure_parents would make anyway; anything
+ *               of an enabled row, one ensure_parents would create anyway; anything
  *               else — the user's
  *
  *   nothing but gone left      prunable
@@ -416,7 +416,7 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  * Released for a directory means what it means for a file — dotta's claim on
  * the path ends, the path stays. A directory holding something not dotta's to
  * remove is serving that something: the shape of the untracked parents
- * create_ancestor makes and never prunes. Re-enabling the profile re-projects
+ * create_ancestor creates and never prunes. Re-enabling the profile re-projects
  * the row and the returning path reads clean (present, observed); what is lost
  * is the ownership bit, and with it the prune on a later scope exit once the
  * directory is empty by hand. That trade buys a status that goes quiet when there

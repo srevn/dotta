@@ -1419,10 +1419,9 @@ typedef struct {
  * which reads all three — the path, to find the fate this run gave the squatted
  * directory's row; the length, to name it on the skip of a row it holds
  * (core/deploy.h deploy_skip_t); the claim, for the remedy where the run gave
- * that row no fate (deploy_ancestor_class_t) — and cmds/update.c cmd_update,
- * the path alone, above a named leaf the user's squatter displaces: whether a
- * profile holds an explicit claim there, a lost blob's place no re-derivation
- * frees.
+ * that row no fate (deploy_ancestry_t) — and cmds/update.c cmd_update, the path
+ * alone, above a named leaf the user's squatter displaces: whether a profile
+ * holds an explicit claim there, a lost blob's place no re-derivation frees.
  *
  * @param ws Workspace (NULL returns NULL)
  * @param path Path to test (NULL returns NULL); proper ancestors only, so a
@@ -1570,7 +1569,7 @@ static inline state_record_t workspace_observation(const manifest_row_t *row) {
  *     profile's row, or another name of the same profile that the view gave the
  *     path to)
  *   - apply_write_record, the record phase (an ownership event after a write: a
- *     file deployed, a directory made — where nothing stood, in a squatter's
+ *     file deployed, a directory created — where nothing stood, in a squatter's
  *     place, or as the parent of a planned path — and a directory fixed in place
  *     whose owned record names another row, which follows the row as a clean
  *     one's does)
@@ -1589,8 +1588,8 @@ static inline state_record_t workspace_observation(const manifest_row_t *row) {
  *             (workspace_item_t's stat); the deploy receipt's triple for a file
  *             deployment — the executor's fstat of the bytes it wrote, distilled
  *             at the write (state_stat_from_write: authorship vouches for it,
- *             no closed second needed), UNSET for a symlink (made by path, no
- *             descriptor exists to describe it); UNSET for a directory, which
+ *             no closed second needed), UNSET for a symlink (created by path,
+ *             no descriptor exists to describe it); UNSET for a directory, which
  *             confirms no content. Never a fresh lstat: a look taken here binds
  *             whatever stands at the path now to a verdict from earlier.
  * @param now Timestamp of the event (must be > 0: a record stamped 0 is one dotta
@@ -1618,8 +1617,8 @@ error_t workspace_anchor(
  * and asks nothing again.
  *
  * Never an ownership event: the binding and the stamp are the record's own, so
- * a pending reassignment keeps reading as one, and a directory the user made is
- * never handed to the prune.
+ * a pending reassignment keeps reading as one, and a directory the user created
+ * is never handed to the prune.
  *
  * One caller, holding the item: cmds/apply.c apply_write_record, apply's record
  * phase, for the claims a fix set on a tracked directory it converged in place
@@ -1697,7 +1696,7 @@ error_t workspace_learn_mode(
  *   the node dotta saw. The record's one observation, the load's, because the
  *   analysis is where presence is established: every active path whose look found
  *   its row's own kind holds a record of that kind once the flush has run, but
- *   where a gone node's pair is the verdict's base, and a path the run makes
+ *   where a gone node's pair is the verdict's base, and a path the run creates
  *   afterwards is an ownership event (workspace_anchor), not an observation.
  *
  *   The learning — what the analyses established that the record lacks, by axis

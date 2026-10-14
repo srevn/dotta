@@ -81,7 +81,7 @@ error_t bootstrap_read(
  *
  * The file goes in TMPDIR (sys/filesystem.h fs_tmpdir). Its reader is the
  * orchestrator (utils/bootstrap.c run_live), which execs it and unlinks it at
- * once, so the file stands only for the length of the script's run; an edit makes
+ * once, so the file stands only for the length of the script's run; an edit creates
  * its own file (sys/editor.h editor_edit), never this executable one. The path
  * is the heap's: a transient of the run's.
  *

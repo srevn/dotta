@@ -883,7 +883,7 @@ static error_t update_write_record(
                 /* This profile's record alone, the join remove's candidates make:
                  * a record naming another profile is that profile's, which its
                  * own load decides. A retire here would have its scope exit forget
-                 * the copy dotta made and, where a link took the place, look
+                 * the copy dotta created and, where a link took the place, look
                  * through it at the orphans the record displaces (core/workspace.h
                  * workspace_displaced_t, RECORD). A fallback is one of this
                  * profile's records kept under another profile's row: a path
@@ -1445,16 +1445,16 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * line per refusing arm, read off the partition's counts in the table's order
      * (workspace_item_route), each naming its route's way out. The displaced
      * four are the squatter's own route inherited, each naming the squatter's
-     * verb — the split apply prints from the fate-borne ancestor_class:
-     * DISPLACED_TRACKED beneath the user's squatter a plan holds, which --force
-     * replaces; DISPLACED_DERIVED beneath the user's squatter at a rung, which
-     * the named re-derivation drops; DISPLACED_STALE and DISPLACED_CONFLICT beneath
-     * dotta's own copy Git moved past, said in the squatter's own words, which
-     * apply replaces unasked and under --force. And the retyped pair arrives
-     * split from the route by the claim that holds the offender (KIND on a row
-     * a plan can hold, KIND_DERIVED on a rung dotta only passes through). A run
-     * that names paths is the named re-derivation itself, so its two DERIVED
-     * lines say what was skipped and name no remedy: what came of the climb beneath
+     * verb — the split apply prints from the fate-borne ancestry: DISPLACED_TRACKED
+     * beneath the user's squatter a plan holds, which --force replaces;
+     * DISPLACED_DERIVED beneath the user's squatter at a rung, which the named
+     * re-derivation drops; DISPLACED_STALE and DISPLACED_CONFLICT beneath dotta's
+     * own copy Git moved past, said in the squatter's own words, which apply
+     * replaces unasked and under --force. And the retyped pair arrives split
+     * from the route by the claim that holds the offender (KIND on a row a plan
+     * can hold, KIND_DERIVED on a rung dotta only passes through). A run that
+     * names paths is the named re-derivation itself, so its two DERIVED lines
+     * say what was skipped and name no remedy: what came of the climb beneath
      * the user's squatter at a rung is the run's own outcome to say — its receipt,
      * or, at a lost blob's place, the line below the leaves' gather. */
     const size_t *refused = partition.refused;

@@ -121,9 +121,9 @@ error_t editor_edit(const char *prefix, buffer_t *bytes, char **out_path) {
 
     *out_path = NULL;
 
-    /* The edit's own file, made in TMPDIR, where every file the run hands another
-     * program is. A template mkstemp could not make is no file of this run's,
-     * whatever name it tried last, so nothing is unlinked. */
+    /* The edit's own file, created in TMPDIR, where every file the run hands
+     * another program is. A template mkstemp could not create is no file of this
+     * run's, whatever name it tried last, so nothing is unlinked. */
     const char *dir = fs_tmpdir();
     char *path = heap_str_format("%s/%s-XXXXXX", dir, prefix);
     int fd = mkstemp(path);

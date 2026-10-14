@@ -839,9 +839,10 @@ static error_t source_physical(const char *path, size_t len, char *physical) {
     spelled[len] = '\0';
 
     /* Cut back a directory at a time to the nearest one that stands: one frame,
-     * however much of the spelling is not made yet. A part not there, or a file
-     * where a directory would be, is not made yet (ENOENT, ENOTDIR); anything
-     * else is the spelling's failure, and so is a root that does not resolve. */
+     * however much of the spelling is not created yet. A part not there, or a
+     * file where a directory would be, is not created yet (ENOENT, ENOTDIR);
+     * anything else is the spelling's failure, and so is a root that does not
+     * resolve. */
     size_t stands = len;
     while (!fs_realpath(spelled, physical)) {
         if ((errno != ENOENT && errno != ENOTDIR) || stands == 1) {
@@ -866,7 +867,7 @@ static error_t source_physical(const char *path, size_t len, char *physical) {
  * spelling's (source_place), resolved once per spelling
  *
  * A directory that is not there — `ignore --test` asks about a path before it
- * is made — is spelled as it will be once it is, beneath the kernel's spelling
+ * is created — is spelled as it will be once it is, beneath the kernel's spelling
  * of the nearest one that stands, and reads as that one reads until then: git's
  * rules are the path's, whether it stands or not. A spelling that resolves to
  * nothing else keeps its failure in an entry of its own, which is no directory:

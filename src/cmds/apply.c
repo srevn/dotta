@@ -60,15 +60,15 @@
  *
  * The remedies close the block, indented under the rows the way every block closes,
  * each gated by what is actually present — the reasons, and for a named squatter
- * the claim that holds it (the fate-borne ancestor_class): a conflict-only run
- * is not told to fix paths by hand, a squatted ancestor claim is not told to
- * widen a scope that can never plan it, a run that holds root is not told to
- * hold it, and an unreadable-only run is offered neither a flag that will not
- * lift it nor a by-hand fix for a path dotta could not even read: it closes with
- * its own line, because dotta never writes on a guess. The refusals the run's
- * identity met — a landing whose bits deny the invoker, a directory it does not
- * own or may not read, a pair it cannot set, and a look that met EACCES on the
- * path itself — close by naming sudo, and only for a run that holds none:
+ * the claim that holds it (the fate-borne ancestry): a conflict-only run is not
+ * told to fix paths by hand, a squatted ancestor claim is not told to widen a
+ * scope that can never plan it, a run that holds root is not told to hold it,
+ * and an unreadable-only run is offered neither a flag that will not lift it
+ * nor a by-hand fix for a path dotta could not even read: it closes with its
+ * own line, because dotta never writes on a guess. The refusals the run's identity
+ * met — a landing whose bits deny the invoker, a directory it does not own or
+ * may not read, a pair it cannot set, and a look that met EACCES on the path
+ * itself — close by naming sudo, and only for a run that holds none:
  * identity()->privileged. The line offers root and promises nothing: a policy
  * may deny root a landing or a read as well. The key's refusal closes the same
  * way, naming the verb that lifts it, and the switch before it where the
@@ -231,6 +231,17 @@ static void apply_print_deploy_skips(
             }
 
             case DEPLOY_SKIP_OWNERSHIP: {
+                /* A directory on the row's way that only root can create as claimed
+                 * (core/deploy.c check_ancestry), named: its own line says whose
+                 * pair, and the row's own claim is not the cause */
+                if (s->ancestor) {
+                    output_print(
+                        out, row_level, "  {red}✗{reset} %s (%.*s needs root to create)\n",
+                        path, (int) s->ancestor, path
+                    );
+                    break;
+                }
+
                 /* The claim as chown(1) spells it: owner, owner:group, or :group */
                 const char *owner = s->item->row->owner ? s->item->row->owner : "";
                 const char *group = s->item->row->group ? s->item->row->group : "";
@@ -260,13 +271,13 @@ static void apply_print_deploy_skips(
      * when a CONTENT skip is present — 'dotta update' refuses a retyped row
      * (cmds/update.c update_partition's kind refusal), so a TYPE-only block must
      * not be told to use it; the incapacities a hand can fix split by the claim
-     * the skip carries (ancestor_class) — widening the scope plans a tracked
-     * ancestor, and PERMISSION, OCCUPIED and a squatter nothing claims read the
-     * same line; a derived claim is never planned, so its second way out is the
-     * named re-derivation, whose own preview names what the re-capture would
-     * commit. Last, UNREADABLE's closing — an unreadable path is not "in the
-     * way", and a fix-or-widen instruction would misname a refusal to judge what
-     * could not be seen. */
+     * the skip carries (ancestry) — widening the scope plans a tracked ancestor,
+     * and PERMISSION, OCCUPIED and a squatter nothing claims read the same line;
+     * a derived claim is never planned, so its second way out is the named
+     * re-derivation, whose own preview names what the re-capture would commit.
+     * Last, UNREADABLE's closing — an unreadable path is not "in the way", and
+     * a fix-or-widen instruction would misname a refusal to judge what could
+     * not be seen. */
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         if (deploy_skip_needs_force(verdicts->skipped.entries[i].reason)) {
             output_info(
@@ -290,8 +301,8 @@ static void apply_print_deploy_skips(
 
         if (s->reason == DEPLOY_SKIP_PERMISSION || s->reason == DEPLOY_SKIP_OCCUPIED ||
             (s->reason == DEPLOY_SKIP_ANCESTOR &&
-            (s->ancestor_class == DEPLOY_ANCESTOR_TRACKED ||
-            s->ancestor_class == DEPLOY_ANCESTOR_UNCLAIMED))) {
+            (s->ancestry == DEPLOY_ANCESTRY_TRACKED ||
+            s->ancestry == DEPLOY_ANCESTRY_UNCLAIMED))) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  Fix the path by hand, or widen the scope so a tracked ancestor is planned"
@@ -300,7 +311,7 @@ static void apply_print_deploy_skips(
         }
     }
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
-        if (verdicts->skipped.entries[i].ancestor_class == DEPLOY_ANCESTOR_DERIVED) {
+        if (verdicts->skipped.entries[i].ancestry == DEPLOY_ANCESTRY_DERIVED) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  Fix the path by hand, or 'dotta update <dir>' to re-derive the way there"
@@ -368,8 +379,8 @@ static void apply_print_deploy_skips(
  * — one list, the glyph carrying the overwrite split: a yellow bullet on exactly
  * the rows the yellow line counted, cyan on the rest (apply_print_paths's idiom
  * — the glyph says which count the path belongs to). The ancestors the run may
- * make on the way are not here: they are the mechanics of landing a planned path,
- * and the receipt names the ones it made.
+ * create on the way are not here: they are the mechanics of landing a planned
+ * path, and the receipt names the ones it created.
  *
  * The warnings close the preview. A warning is an anomaly preflight met while
  * deciding — an ownership it could not resolve — on a row the run will deploy:
@@ -681,7 +692,7 @@ static void apply_print_withheld(
  *   removal). Created and fixed count tracked rows alone, and say so; a replace
  *   can count a rung promoted over dotta's own copy (core/deploy.h
  *   deploy_plan_build), and says "directories"
- * - ancestors: Directories the run made on the way to a planned path, outside
+ * - ancestors: Directories the run created on the way to a planned path, outside
  *   the plan — either class, since a claimed rung is created at its claim whether
  *   the profile tracks it or only passes through it. Verbose only — the preview
  *   never counted them, and the summary says what the preview said; the verbose
@@ -1637,7 +1648,7 @@ static void apply_print_cleanup_refused(
  * the run's writes on disk stand either way, the receipt and the exit code say
  * what landed there, and the next apply reads it back — a deployed file clean
  * and adopted, a pruned orphan's record reclaimed, a released one released again,
- * a fixed claim learned by the flush — all but a directory the run made, which
+ * a fixed claim learned by the flush — all but a directory the run created, which
  * the next load observes and never owns (capture is a directory's ownership event,
  * and a look never is). The caller renders the fate.
  *
@@ -1718,9 +1729,9 @@ static error_t apply_write_record(
     /* Then what the run wrote, path by path — for a file, the blob dotta just
      * wrote, the ownership timestamp, and the stat triple the fast path reads
      * on later runs: the authoritative "dotta confirmed disk == this blob" /
-     * "dotta made this" account. Whatever cleanup did: its failure does not
-     * invalidate what landed, and a record that lost what landed would read a
-     * deployed file as one dotta never wrote.
+     * "dotta put this there" account. Whatever cleanup did: its failure does
+     * not invalidate what landed, and a record that lost what landed would read
+     * a deployed file as one dotta never wrote.
      *
      * The receipt is the whole of it, and the ownership rule is read off each
      * carried-out fate, never off a bucket topology:
@@ -1730,14 +1741,15 @@ static error_t apply_write_record(
      *                             fstat of the bytes it put there
      *                             (state_stat_from_write — authorship needs no
      *                             closed second). A symlink's is UNSET: a link
-     *                             is made by path, no descriptor exists to describe
-     *                             it, and readlink is its whole re-verification
-     *   converged, made           a directory whose convergence is not a fix
-     *   (a create or a replace)   (deploy_convergence) — dotta made it, where
+     *                             is created by path, no descriptor exists to
+     *                             describe it, and readlink is its whole
+     *                             re-verification
+     *   converged, created        a directory whose convergence is not a fix
+     *   (a create or a replace)   (deploy_convergence) — dotta created it, where
      *                             nothing stood or in a squatter's place — an
      *                             ownership event; a directory has no blob and
      *                             no stat
-     *   converged in place        dotta did not make it, and it was present at
+     *   converged in place        dotta did not create it, and it was present at
      *   (a fix)                   load, so the flush has already observed any
      *                             that had no record, or one of another kind of
      *                             node, in that record's place, and learned each
@@ -1745,17 +1757,18 @@ static error_t apply_write_record(
      *                             the claims the fix set that the record still
      *                             lacks, never an ownership event — anchoring
      *                             it as owned would set deployed_at on a directory
-     *                             the user made and hand it to the prune on the
-     *                             next scope exit — with one exception: a record
-     *                             dotta owns whose binding names another row —
-     *                             another profile's, a pending reassignment, or
-     *                             another name of this one's — must not outlive
+     *                             the user created and hand it to the prune on
+     *                             the next scope exit — with one exception: a
+     *                             record dotta owns whose binding names another
+     *                             row — another profile's, a pending reassignment,
+     *                             or another name of this one's — must not outlive
      *                             the run that converged the directory, so it
      *                             takes the one ownership event that moves it
      *                             onto the row, by the acknowledgement loop's
      *                             own test
-     *   ancestors                 claimed parents made on the way, either
-     *                             class — dotta made them too, an ownership event
+     *   ancestors                 claimed parents created on the way, either
+     *                             class — dotta created them too, an ownership
+     *                             event
      *   held                      the directories the run could not narrow back,
      *                             after the writes above: the record learns the
      *                             mode the directory was left at, wherever it
@@ -1851,12 +1864,12 @@ static error_t apply_write_record(
      * owed mode would read dotta's widening as the user's [mode], update's to
      * commit. It learns the mode that stands, and the next load reads the row's
      * as Git's still to bring ([stale], apply's). After the writes above, a
-     * directory the run made, fixed or made on the way holds the record they
-     * wrote, which says its row's mode — the mode its hold owed — so the test
-     * is a landing's alone: one whose record stood on another mode had diverged
-     * before the run and keeps its record, its route as the run found it, while
-     * the receipt names the mode the hold owed. One the load could not look at
-     * holds no record to correct. */
+     * directory the run created, fixed or created on the way holds the record
+     * they wrote, which says its row's mode — the mode its hold owed — so the
+     * test is a landing's alone: one whose record stood on another mode had
+     * diverged before the run and keeps its record, its route as the run found
+     * it, while the receipt names the mode the hold owed. One the load could
+     * not look at holds no record to correct. */
     deploy_holds_t held = deploy_receipt->held;
     for (size_t i = 0; i < held.count; i++) {
         const deploy_hold_t *hold = &held.entries[i];
@@ -1983,7 +1996,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * checkpoint below commits with the rest of the present, and each owed item
      * holds the record its write made from the flush's end — so no loop below
      * meets a record of another kind under a clean item: the acknowledgement
-     * owns no directory the user made where dotta's file was, and a fix learns
+     * owns no directory the user created where dotta's file was, and a fix learns
      * onto the observation. A preview holds none, so the flush takes and commits
      * a scoped one of its own once it owes anything, exactly as it does for status,
      * diff, sync and update (state_locked, in core/state.h), and one refused
@@ -2470,7 +2483,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * observed for the same reason, where an owned one was pruned. A record of
      * another kind of node reaches this loop in no run: the flush has written
      * the directory's observation in its place (core/workspace.h workspace_flush),
-     * so an owned file record never re-stamps a directory the user made. */
+     * so an owned file record never re-stamps a directory the user created. */
     for (size_t i = 0; i < deploy_plan->directories.clean.count; i++) {
         const workspace_item_t *item = deploy_plan->directories.clean.entries[i];
         const manifest_row_t *dir = item->row;

@@ -29,7 +29,7 @@
  * - A dry run is the preview: the caller reads the verdicts and calls no executor,
  *   so there is no dry-run flag beneath the plan
  * - Removals are single-node: what stands at a planned path, never a tree, and
- *   only to land the row's own node there. A file or link row's node is made
+ *   only to land the row's own node there. A file or link row's node is created
  *   whole beside its path before anything in its way is removed (sys/filesystem.h
  *   fs_temp_t), so a write the world refuses — a full disk, a file-size limit,
  *   a name the kernel will not take — removes nothing; a directory row's squatter
@@ -37,7 +37,7 @@
  *   window is the one step after its removal, the rename or the mkdir: refused
  *   there, or killed, the run leaves the path empty over the record that stood,
  *   which reads [deleted] wherever a claim of that record's kind asserts the
- *   path — at once where it is the row's own kind — until a plain apply makes
+ *   path — at once where it is the row's own kind — until a plain apply creates
  *   it (core/workspace.c classify_absent)
  * - Directories are materialized in two phases: held at a working mode (recorded
  *   mode, owner rwx on: deploy_working_mode) while the run writes beneath them,
@@ -159,7 +159,7 @@ static inline bool deploy_occupant_present(fs_occupant_t occ) {
  * and cannot drift. Two facts ride on it and are read as it: a new entry lands
  * iff the convergence is not a fix (preflight's landing question, and the
  * executor's in deploy_directory: the landing it opens, and the path it notes
- * where no directory came to stand), and dotta made the directory iff the
+ * where no directory came to stand), and dotta created the directory iff the
  * convergence is not a fix (the record phase's ownership gate).
  *
  * Total over fs_occupant_t, so a new occupant is a build error here and not a
@@ -261,11 +261,11 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * than the walk's, whether it is the rung that answers no longer depends on how
  * the user spelled the add. The two producers stay one reason and one exit
  * contribution; what a consumer may tell apart is the claim that holds the
- * squatter, which the skip carries (deploy_ancestor_class_t) — the remedy differs
- * by claimant where the refusal does not. And why UNREADABLE ranks after every
- * path rung where its siblings (cleanup_skip_reason, workspace_item_route) rank
- * the same fact first: the landing check, when it has something to say, names
- * the ancestry that refused the look — the actionable half of the very same fact.
+ * squatter, which the skip carries (deploy_ancestry_t) — the remedy differs by
+ * claimant where the refusal does not. And why UNREADABLE ranks after every path
+ * rung where its siblings (cleanup_skip_reason, workspace_item_route) rank the
+ * same fact first: the landing check, when it has something to say, names the
+ * ancestry that refused the look — the actionable half of the very same fact.
  * UNREADABLE is what is left when the landing had nothing to say. FOREIGN is
  * the landing's twin for a directory already there: a create or a replace lands
  * a new entry through its parent, which PERMISSION asks, where a fix converges
@@ -277,16 +277,24 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * the path's: the ownership is resolved for a row every other rung passed (a
  * skipped row can neither warn nor fail strict_ownership — deploy_preflight's
  * invariant), so the question is never asked of a row another reason already
- * holds, and its place in the order is the place the decision takes.
+ * holds, and its place in the order is the place the decision takes. Save where
+ * it names an ancestor: a pending directory row on the way that this run skipped
+ * for its pair, nothing standing there as the run will find it, is the ancestry
+ * rung's to answer, before any probe of the row's own (check_ancestry) — no
+ * directory will stand there, so no rung beneath it can say more, and the remedy
+ * is that pair's.
  *
  * Each reason is a sentence about the row that carries it, read off that skip's
  * own fields (cmds/apply.c apply_print_deploy_skips): the ancestor it names
- * (PERMISSION, ANCESTOR, a TYPE that names one), its own occupant (TYPE, OCCUPIED),
- * its own item (CONTENT, UNREADABLE, and FOREIGN, the owner its look found —
- * another, or the run itself, its read refused), its own claim (OWNERSHIP). So
- * a row beneath a skipped squatter takes the squatter's class and never its reason
- * (check_ancestry): the squatter's sentence is about the squatter, whatever reason
- * a later rung adds.
+ * (PERMISSION, ANCESTOR, a TYPE or an OWNERSHIP that names one), its own occupant
+ * (TYPE, OCCUPIED), its own item (CONTENT, UNREADABLE, and FOREIGN, the owner
+ * its look found — another, or the run itself, its read refused), its own claim
+ * (an OWNERSHIP that names none). So a row beneath a skipped squatter takes the
+ * squatter's class and never its reason (check_ancestry): the squatter's sentence
+ * is about the squatter, whatever reason a later rung adds. A row beneath an
+ * absent directory skipped for its pair takes OWNERSHIP all the same, read as a
+ * sentence about its own way — that directory named, which needs root to create
+ * — and never about the directory's claim, which the directory's own line says.
  *
  * Symlink rows need no arm of their own: a foreign kind at a link row's path is
  * TYPE (deploy.c occupant_conflicts), a retargeted link is CONTENT (the target
@@ -302,7 +310,7 @@ typedef enum {
     DEPLOY_SKIP_TYPE,         /* A different kind of path stands where the row lands (--force) */
     DEPLOY_SKIP_CONTENT,      /* Disk holds content dotta did not put there (--force) */
     DEPLOY_SKIP_UNREADABLE,   /* The path could not be read: no verdict, no guess */
-    DEPLOY_SKIP_OWNERSHIP     /* The claim names a pair this run cannot set (no root held) */
+    DEPLOY_SKIP_OWNERSHIP     /* A pair this run cannot set, the row's or its way's (no root held) */
 } deploy_skip_reason_t;
 
 /**
@@ -349,7 +357,7 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  * remembers a directory there is no claim on a planned row at all (the reach
  * rule, core/workspace.h): the rung never names it, the landing check meets what
  * stands there on its own terms, and apply's own cleanup releases the record in
- * the same run — so there is no fourth class.
+ * the same run — so there is no fourth ancestry.
  *
  * Written where the reason is decided. TRACKED and DERIVED by the ancestry rung
  * (check_ancestry), off the claim the load noted beside the squatter
@@ -357,23 +365,23 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  * as its displaced class, so the remedy here and status's Displaced paths section
  * cannot name two claimants for one squatter: DERIVED where the user's own squatter
  * holds an ancestor claim, TRACKED for every other view claim; UNCLAIMED by the
- * landing check (check_landing), the one class it can find. Read by cmds/apply.c
+ * landing check (check_landing), the one ancestry it can find. Read by cmds/apply.c
  * apply_print_deploy_skips, whose remedies part on it.
  *
- * The class answers for ANCESTOR, where the reason is one and the cure is not —
- * and only where the skip is the squatter's only report: a squatter this run
- * never reached, or one nothing claims. NONE everywhere else: on every skip whose
- * reason is another, and on a row beneath a squatter this run planned and skipped,
- * which reads ANCESTOR and names it but whose remedy is that squatter's own skip,
- * listed above the row — TRACKED's line, a wider scope, is false of a squatter
- * already in it.
+ * The ancestry answers for ANCESTOR, where the reason is one and the cure is
+ * not — and only where the skip is the squatter's only report: a squatter this
+ * run never reached, or one nothing claims. NONE everywhere else: on every skip
+ * whose reason is another, and on a row beneath a squatter this run planned and
+ * skipped, which reads ANCESTOR and names it but whose remedy is that squatter's
+ * own skip, listed above the row — TRACKED's line, a wider scope, is false of a
+ * squatter already in it.
  */
 typedef enum {
-    DEPLOY_ANCESTOR_NONE = 0,  /* Another reason, or a squatter with a skip of its own */
-    DEPLOY_ANCESTOR_TRACKED,   /* A row a plan holds stands there: tracked, or promoted */
-    DEPLOY_ANCESTOR_DERIVED,   /* An ancestor claim the user's own squatter holds */
-    DEPLOY_ANCESTOR_UNCLAIMED  /* Nothing claims it — the landing check's find */
-} deploy_ancestor_class_t;
+    DEPLOY_ANCESTRY_NONE = 0,  /* Another reason, or a squatter with a skip of its own */
+    DEPLOY_ANCESTRY_TRACKED,   /* A row a plan holds stands there: tracked, or promoted */
+    DEPLOY_ANCESTRY_DERIVED,   /* An ancestor claim the user's own squatter holds */
+    DEPLOY_ANCESTRY_UNCLAIMED  /* Nothing claims it — the landing check's find */
+} deploy_ancestry_t;
 
 /**
  * One planned row the run does not deploy
@@ -381,16 +389,18 @@ typedef enum {
  * The shape deploy_verdict_t gives a row the run does deploy: the row's item,
  * and the facts decided about it. `ancestor` is the path the reason names — the
  * ancestor that refused, the non-directory in the way, the squatted directory
- * above the row. Every such path is an ancestor of the row's own, and so a prefix
- * of the item's filesystem_path by construction (check_landing truncates the
- * planned path; a squatted directory stands strictly above every row that names
- * it, and the load lends its length with it — core/workspace.h
- * workspace_squatted_t) — carried as the byte length of that prefix, not a copy.
- * 0 where the reason has no ancestor to name: it is about the planned path itself
- * (OWNERSHIP always is), or (PERMISSION alone) the ancestry could not even be
- * reached to name its refusing node. `ancestor_class` says which claim holds
- * the named path where the skip is the squatter's only report — ANCESTOR's alone,
- * and NONE on a row beneath a skipped squatter (deploy_ancestor_class_t).
+ * above the row, the absent directory on its way only root can create as claimed.
+ * Every such path is an ancestor of the row's own, and so a prefix of the item's
+ * filesystem_path by construction (check_landing truncates the planned path; a
+ * squatted directory stands strictly above every row that names it, and the load
+ * lends its length with it — core/workspace.h workspace_squatted_t; an absent
+ * directory is a row the walk decided above the path) — carried as the byte length
+ * of that prefix, not a copy. 0 where the reason has no ancestor to name: it is
+ * about the planned path itself (OWNERSHIP is, save beneath an absent directory
+ * skipped for its pair), or (PERMISSION alone) the ancestry could not even be
+ * reached to name its refusing node. `ancestry` says which claim holds the named
+ * path where the skip is the squatter's only report — ANCESTOR's alone, and NONE
+ * on a row beneath a skipped squatter (deploy_ancestry_t).
  *
  * The item is the verdict's: the one the row's bucket holds, and never NULL
  * (deploy_verdict_t). Whether it holds a look is the row's ancestry's to say,
@@ -400,18 +410,19 @@ typedef enum {
  * every reader of an item reads, core/workspace.h workspace_displaced_t), never
  * a blanked pointer. So a reader consults the look only where the reason is a
  * sentence about it — a CONTENT skip's route, an UNREADABLE skip's fault, a FOREIGN
- * skip's owner: path rungs, asked only where the ancestry did not answer.
- * OWNERSHIP, the row's rung, reads its claim off the row and never the item's
- * look, which a row planned absent does not have.
+ * skip's owner: path rungs, asked only where the ancestry did not answer. OWNERSHIP
+ * reads its claim off the row and never the item's look, which a row planned
+ * absent does not have — or, where it names an ancestor, the ancestry rung's
+ * answer, nothing of the row but its path.
  *
  * Nothing here is owned: the item is borrowed (workspace lifetime), as every
  * item and row in this module is.
  */
 typedef struct {
-    const workspace_item_t *item;           /* Borrowed (workspace lifetime), as the verdict's — never NULL */
+    const workspace_item_t *item;    /* Borrowed (workspace lifetime), as the verdict's — never NULL */
     deploy_skip_reason_t reason;
-    size_t ancestor;                        /* Prefix length of the named ancestor; 0 = none */
-    deploy_ancestor_class_t ancestor_class; /* ANCESTOR only: the claim at a squatter with no skip of its own */
+    size_t ancestor;                 /* Prefix length of the named ancestor; 0 = none */
+    deploy_ancestry_t ancestry;      /* ANCESTOR only: the claim at a squatter with no skip of its own */
 } deploy_skip_t;
 
 /**
@@ -428,7 +439,7 @@ typedef struct {
  * The verdicts are the *how*, one per row the run WILL deploy, each kind in path
  * order — the order deploy_execute acts in within a kind, the directories first,
  * parents before the paths beneath them — and then the ancestors: the directory
- * rows outside the plan that the run may make on the way to a planned path —
+ * rows outside the plan that the run may create on the way to a planned path —
  * either class, since the plan holds the tracked ones and the ancestors pass is
  * where a derived claim is acted on, save one the plan promoted (see
  * deploy_plan_build, deploy_preflight). Every array is always allocated, so a
@@ -446,6 +457,14 @@ typedef struct {
      * — deploy's own totality equation, the counterpart of cleanup.h's. */
     deploy_skips_t skipped;
 
+    /* The directory rows among them that nothing will stand at as the run finds
+     * them: skipped for a pair, absent at the load or planned absent beneath a
+     * squatter the run replaces — each a skip's item, in path order. No directory
+     * will stand at one, so every row decided beneath it is skipped naming it.
+     * Read by the ancestry rung alone (core/deploy.c check_ancestry); empty on
+     * every healthy run. */
+    ptr_array_t skipped_absent;
+
     /* Anomalies met while deciding — the run goes on; the caller prints them.
      * Only rows the run will touch contribute: a skipped row's ownership is not
      * resolved, so it can neither warn nor fail strict_ownership. */
@@ -454,7 +473,7 @@ typedef struct {
     /* The how — one per row the run WILL deploy */
     deploy_verdicts_t directories;       /* Pending directory rows, parents first */
     deploy_verdicts_t files;             /* Pending file rows */
-    deploy_verdicts_t ancestors;         /* Directory rows the run may make on the way */
+    deploy_verdicts_t ancestors;         /* Directory rows the run may create on the way */
 } deploy_preflight_t;
 
 /**
@@ -523,15 +542,15 @@ typedef struct {
  * leaving the record blob-only.
  *
  * UNSET where the act authored no stat — the executor's fact, not a consumer's
- * re-derivation: a symlink is made by path (symlink(2) opens no descriptor to
- * describe, and readlink is its whole re-verification), and a directory's write
- * is fchmod/fchown through its own descriptor, whose record carries no triple
- * at all. The record phase passes the triple blind: an ownership event writes
- * UNSET as no stat (core/workspace.h workspace_anchor).
+ * re-derivation: a symlink is created by path (symlink(2) opens no descriptor
+ * to describe, and readlink is its whole re-verification), and a directory's
+ * write is fchmod/fchown through its own descriptor, whose record carries no
+ * triple at all. The record phase passes the triple blind: an ownership event
+ * writes UNSET as no stat (core/workspace.h workspace_anchor).
  *
  * The error is the failed bucket's tail — the row's own cause, verbatim (ENOSPC,
- * a blob that would not load, an ancestor this run did not converge or make) —
- * and NULL in every landed bucket: the bucket is the tag, as UNSET already is
+ * a blob that would not load, an ancestor this run did not converge or create)
+ * — and NULL in every landed bucket: the bucket is the tag, as UNSET already is
  * for the stat. A failure has a dozen causes and the remedy differs by cause,
  * so the receipt keeps each for the caller to render, as cleanup's does
  * (cleanup_outcome_t). Borrowed, as every error is (base/error.h).
@@ -559,9 +578,9 @@ typedef struct {
  *
  * The mode the release owes it with the owner triad forced on. Everything the
  * run lands beneath a directory lands through the owner's own write and search
- * bits — mkdir for a child directory, a temporary made and renamed over its path
- * for a file or a link — so a recorded mode that lacks them (0555, 0500, a 0600
- * captured on a directory the walker could not enter) would refuse the very
+ * bits — mkdir for a child directory, a temporary created and renamed over its
+ * path for a file or a link — so a recorded mode that lacks them (0555, 0500, a
+ * 0600 captured on a directory the walker could not enter) would refuse the very
  * children it was captured with. Two phases instead: materialize at the working
  * mode, write the subtree, then release each held directory to its exact mode,
  * deepest-first (deploy_hold_t). Group and other bits are never widened — a 0700
@@ -586,12 +605,12 @@ static inline mode_t deploy_working_mode(mode_t mode) {
  *
  * A hold carries a directory at deploy_working_mode while the run writes beneath
  * it, and the release narrows it back to `mode` once the run is over, deepest
- * first (deploy_execute). The run takes one for a directory it makes or converges
- * — a planned row, or a claimed ancestor made on the way — owing its row's mode,
- * and one for a claimed directory a write must land in whose bits deny the run,
- * owing the mode it had; and only where the working mode would widen what is
- * owed. Each is a directory row of the view, either class, so each has its item.
- * In this module "hold" means only this.
+ * first (deploy_execute). The run takes one for a directory it creates or converges
+ * — a planned row, or a claimed ancestor created on the way — owing its row's
+ * mode, and one for a claimed directory a write must land in whose bits deny
+ * the run, owing the mode it had; and only where the working mode would widen
+ * what is owed. Each is a directory row of the view, either class, so each has
+ * its item. In this module "hold" means only this.
  *
  * On the receipt (deploy_receipt_t's held) a hold is one the release could not
  * let go: the directory stands at deploy_working_mode(mode), or the release could
@@ -644,17 +663,18 @@ typedef struct {
  * holds exactly what happened, by construction.
  *
  * The derived verb is also the ownership gate apply's record phase reads: a
- * converged directory whose convergence is not a fix was made by dotta and anchors
- * as owned; one converged in place was not — anchoring it would set deployed_at
- * on a directory the user made, and hand it to the prune on the next scope exit.
+ * converged directory whose convergence is not a fix was created by dotta and
+ * anchors as owned; one converged in place was not — anchoring it would set
+ * deployed_at on a directory the user created, and hand it to the prune on the
+ * next scope exit.
  *
- * `ancestors` is outside the plan: the claimed directories the run made as parents
- * of a planned path (create_ancestor), each once, either class. They carry their
- * recorded mode and ownership like any other directory row, and dotta made them
- * — so the record phase anchors them as owned, the same event as a created
- * directory — but the plan never named them and the preview never counted them,
- * so the caller's summary keeps them apart from the created count. A parent no
- * row claims has no receipt and no record.
+ * `ancestors` is outside the plan: the claimed directories the run created as
+ * parents of a planned path (create_ancestor), each once, either class. They
+ * carry their recorded mode and ownership like any other directory row, and dotta
+ * created them — so the record phase anchors them as owned, the same event as a
+ * created directory — but the plan never named them and the preview never counted
+ * them, so the caller's summary keeps them apart from the created count. A parent
+ * no row claims has no receipt and no record.
  *
  * `held` is the release's: the holds it could not let go, in the order released
  * — deepest first — each with its cause (deploy_hold_t). Every hold the run takes
@@ -678,7 +698,7 @@ typedef struct {
 typedef struct {
     deploy_outcomes_t deployed;      /* Files written or linked, each with its write's stat */
     deploy_outcomes_t converged;     /* Planned directories — the verb is the verdict's occupant */
-    deploy_outcomes_t ancestors;     /* Claimed directories made on the way, each once */
+    deploy_outcomes_t ancestors;     /* Claimed directories created on the way, each once */
     deploy_outcomes_t failed;        /* Rows that did not land — both kinds, each with its cause */
     deploy_holds_t held;             /* Holds the release could not let go, each with its cause */
 } deploy_receipt_t;
@@ -776,17 +796,20 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * One fate per pending row (the totality equation, deploy_preflight_t), each
  * question asked of its one authority, the first skip reason that applies winning
  * (deploy_skip_reason_t):
- * - Ancestry — the look must bind. A squatted directory row above the path
- *   (workspace_squatted_ancestor) voids every probe taken beneath it, the landing
- *   check's included — the workspace took none there at all, so the row arrives
- *   with nothing measured — so this rung runs first and answers from the run's
- *   own fates (check_ancestry): an ancestor the directory pass converges first
- *   means the row is planned absent and asked nothing else; one the pass skips
- *   means the row takes that skip's class, ancestor named; one the run never
- *   acts on (scope, -p, -e, an ancestor claim the plan does not hold) is ANCESTOR
- *   — an incapacity, and the remedy is a run that reaches it, or, for a claim
- *   the run cannot reach at all because nothing plans it, a re-derivation of
- *   the chain.
+ * - Ancestry — the look must bind, and the way must be one the run can create,
+ *   so this rung runs first and answers from the run's own fates (check_ancestry).
+ *   A pending directory row on the way that this run skipped for its pair, nothing
+ *   standing there as the run will find it, is asked first: no directory will
+ *   stand there whatever converges above it, so the row takes OWNERSHIP naming
+ *   it. Then a squatted directory row above the path (workspace_squatted_ancestor),
+ *   which voids every probe taken beneath it, the landing check's included —
+ *   the workspace took none there at all, so the row arrives with nothing measured:
+ *   an ancestor the directory pass converges first means the row is planned absent
+ *   and asked nothing else; one the pass skips means the row takes that skip's
+ *   class, ancestor named; one the run never acts on (scope, -p, -e, an ancestor
+ *   claim the plan does not hold) is ANCESTOR — an incapacity, and the remedy
+ *   is a run that reaches it, or, for a claim the run cannot reach at all because
+ *   nothing plans it, a re-derivation of the chain.
  * - Landing — the write must be able to land. Every arm of the executor writes
  *   through the *parent* — a temp file or a link renamed over the target, a mkdir
  *   — so the path's own permissions are never the question; a directory converged
@@ -847,17 +870,19 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * holds — that the path is absent, and that something deployable stands beneath it.
  *
  * The deployable gate rests on an invariant the ladder establishes rather than
- * checks: beneath a squatter this run does not converge, every planned row is
- * skipped. Where the squatter stands at a skipped pending row, in that skip's
+ * checks: beneath a directory this run leaves without a directory of its own —
+ * a squatter it does not converge, an absent pending row it skips — every planned
+ * row is skipped. Where a squatter stands at a skipped pending row, in that skip's
  * class, whatever its reason — the rung reads the ancestor's own fate; where it
- * stands at an ancestor outside the run's reach, by ANCESTOR; where a skipped
- * chain is absent instead, by the row's own landing check — presence is monotone
- * up a path, so every planned row beneath meets the same refusing ancestor (an
- * unreadable one leaves its descendants' probes to fail the same way). So the
- * ancestors loop can never plan a parent for a subtree the run skips.
+ * stands at an ancestor outside the run's reach, by ANCESTOR; where the skipped
+ * row is absent instead, by the rung too where the row was skipped for its pair
+ * (OWNERSHIP, naming it), and otherwise by the row's own landing check — presence
+ * is monotone up a path, so every planned row beneath meets the same refusing
+ * ancestor (an unreadable one leaves its descendants' probes to fail the same
+ * way). So the ancestors loop can never plan a parent for a subtree the run skips.
  *
  * Only rows the run will touch are consulted — the deployable ones, and the
- * ancestors it will make; a directory the run leaves alone cannot skip anything.
+ * ancestors it will create; a directory the run leaves alone cannot skip anything.
  * A planned row beneath a squatted ancestor this run converges (deploy_plan_build
  * routed it; the rung confirms it against the fates) is asked nothing: the path
  * is empty once the directory pass has replaced the squatter, and its landing
@@ -871,14 +896,18 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * asks for no other: a landing whose bits deny the invoker is PERMISSION; a
  * directory it may not hold where it stands, another's or one whose bits deny
  * it the read, is FOREIGN; a pair it cannot set is OWNERSHIP — a row is
- * OWNERSHIP-skipped iff its resolved pair is not the invoker's to set and the
- * run holds no root. A run that holds root meets none of the three, since the
- * executors land the row through the syscall's second try (sys/filesystem) and
- * root holds any directory and sets any pair, save where the bits deny root as
- * well (fs_denied asks as root already). The ancestors are not asked the ownership
- * rung (a foreign-owned derived claim above a landing the invoker can write meets
- * the refusal at the create: the first act whose way meets it carries it, and
- * every later act beneath fails naming the ancestor, unattempted — deploy_execute).
+ * OWNERSHIP-skipped iff its resolved pair, or that of a pending directory row
+ * on its way that nothing stands at, is not the invoker's to set and the run
+ * holds no root. A run that holds root meets none of the three, since the executors
+ * land the row through the syscall's second try (sys/filesystem) and root holds
+ * any directory and sets any pair, save where the bits deny root as well (fs_denied
+ * asks as root already). The ancestors are not asked the ownership rung: a pending
+ * row the walk skipped for its pair is never one, every row beneath it skipped
+ * naming it, and a claim the plan does not hold — derived, or tracked outside
+ * the run — that the invoker cannot set, above a landing the invoker can write,
+ * meets the refusal at the create: the first act whose way meets it carries it,
+ * and every later act beneath fails naming the ancestor, unattempted
+ * (deploy_execute).
  *
  * READ-ONLY: modifies neither the filesystem, the state database nor Git.
  *
@@ -912,24 +941,24 @@ error_t deploy_preflight(
  * removes exactly one node.
  *
  * A file or link row's act runs in the order a failure must stop it: its content
- * read, the way to it made, its node made whole beside its path, what stands in
- * its way cleared, the node published — so a row whose content cannot be read
- * makes nothing on its way, and one whose node cannot be made removes nothing
+ * read, the way to it created, its node created whole beside its path, what stands
+ * in its way cleared, the node published — so a row whose content cannot be read
+ * creates nothing on its way, and one whose node cannot be created removes nothing
  * in it.
  *
  * Missing parents are the mechanics of landing a planned path, created top-down
  * as part of its write: a directory the view claims (any profile, in scope or
  * not, either class) with the mode and ownership its ancestor verdict carries,
  * anything else with the word no claim makes, DIR_MODE_DEFAULT and the invoker's
- * own owner — what a claimless row gets, so a directory a raised mkdir made is
- * handed back like the leaf beneath it, and no owner is borrowed from below.
+ * own owner — what a claimless row gets, so a directory a raised mkdir created
+ * is handed back like the leaf beneath it, and no owner is borrowed from below.
  * Creation is all this pass may do: a parent the world made present after the
  * probe meets ERR_EXISTS rather than a convergence (fs_create_dir_exclusive),
  * since whatever now stands there is not this run's to fix, nor to land through
  * (the failure rule below). The claimed ones land in the receipt's ancestors;
  * the ones no row names are never reported. A claimed parent the verdicts did
  * not foresee — present at preflight, gone by the time the run reaches it — is
- * made like an unclaimed one, and the next load reads whatever it has to say
+ * created like an unclaimed one, and the next load reads whatever it has to say
  * about its mode.
  *
  * Directories are materialized in two phases. Every directory the run creates
@@ -949,8 +978,8 @@ error_t deploy_preflight(
  *
  * Individual row failures are non-fatal: the row lands in the receipt's failed
  * bucket with its cause and the run goes on — save the one failure that crosses
- * rows, a place the run needed a directory at and made none: a directory row
- * whose create or replace failed, or a parent the way could not make, claimed
+ * rows, a place the run needed a directory at and created none: a directory row
+ * whose create or replace failed, or a parent the way could not create, claimed
  * or not. The act that met it carries its cause; every later act beneath it fails
  * unattempted, naming the outermost such place in a sentence minted once —
  * "'<path>' was not converged" for a row, "'<path>' was not created" for a parent
@@ -960,7 +989,7 @@ error_t deploy_preflight(
  * what stands there may be a link, and nothing lands through one. A failed
  * converge-in-place poisons nothing — the directory stands, and children land
  * in it or fail on their own merits — nor does a refusal at a place the run did
- * not try to make: an ancestor that is not a directory, a landing that stands
+ * not try to create: an ancestor that is not a directory, a landing that stands
  * and refuses its open (ensure_parents).
  *
  * Every failure is an outcome on the receipt — a row's in `failed`, the run going

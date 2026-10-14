@@ -675,7 +675,7 @@ error_t content_capture_file(
  * the stat and the ownership a claim takes from it are one link's, as
  * content_capture_file's are one inode's by its descriptor. A link has no
  * descriptor to pin it, and this is the portable spelling of one. Residue,
- * accepted: a link made, read and replaced within one second, on a filesystem
+ * accepted: a link created, read and replaced within one second, on a filesystem
  * that hands a freed inode straight back — the tree reads no sub-second field,
  * and the record's safety is the order's, not this check's.
  *

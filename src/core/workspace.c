@@ -657,13 +657,13 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
  * and each answers half of it.
  *
  * The claim has to assert the path. Every kind does but one: an ancestor claim
- * says what to make the rung if dotta has to make it, never that the rung stands,
- * so its absence is the condition the claim exists to serve rather than a
- * contradiction of it. Reading that as a deletion would let a machine which never
- * deployed the profile commit the claim's removal for every machine that will —
- * and the sheet has an authority for when a derived claim's reason is gone
- * (metadata.h's residue rule: when the last tracked path beneath it goes), which
- * this would answer over the top of.
+ * says what the rung is to be if dotta has to create it, never that the rung
+ * stands, so its absence is the condition the claim exists to serve rather than
+ * a contradiction of it. Reading that as a deletion would let a machine which
+ * never deployed the profile commit the claim's removal for every machine that
+ * will — and the sheet has an authority for when a derived claim's reason is
+ * gone (metadata.h's residue rule: when the last tracked path beneath it goes),
+ * which this would answer over the top of.
  *
  * And dotta has to have seen the path there. A record exists iff dotta has seen
  * at the path in scope the node its kind names, or put it there — an observation

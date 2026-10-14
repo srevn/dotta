@@ -210,7 +210,7 @@ typedef struct {
  *
  * The fates are counted apart: under --delete-files several can occur in one
  * removal — the named paths staged for the next apply, a rung it only emptied
- * and dotta never made released here and now — and a receipt that folded them
+ * and dotta never created released here and now — and a receipt that folded them
  * would name work apply is not going to do.
  */
 typedef struct {
@@ -243,7 +243,7 @@ typedef struct {
  * — named by the resolver's reach, not the typed line: an argument takes the
  * exact claim and every claim beneath a named directory (naming a directory means
  * untracking it whole), a named blob alone (remove_resolve), and the flag speaks
- * for all of them. The flag alone cannot make dotta delete a path it never made:
+ * for all of them. The flag alone cannot make dotta delete a path it never created:
  * cleanup reads the order ahead of the ownership gate, by design, since a named
  * path the user wants gone must go whether dotta deployed it or only ever found
  * it. For a path the user did not name there is nothing to read ahead of, so

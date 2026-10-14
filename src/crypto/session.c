@@ -203,7 +203,7 @@ error_t session_save(
     struct session_cache_file cache = { 0 };
     uint8_t cache_key[CRYPTO_KEY_SIZE] = { 0 };
 
-    /* The one caller that makes the directory. Always-call form: tightens a
+    /* The one caller that creates the directory. Always-call form: tightens a
      * pre-existing dir with a weaker mode to 0700 instead of leaving it alone.
      * The parent ~/.cache gets the default 0755. */
     error_t err = fs_create_dir_with_mode(cache_dir, 0700, true);

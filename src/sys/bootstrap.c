@@ -129,9 +129,9 @@ error_t bootstrap_extract_to_temp(
     const char *dir = fs_tmpdir();
     path = heap_str_format("%s/dotta-bootstrap-XXXXXX", dir);
 
-    /* A template mkstemp could not make is no file of this run's, whatever name
-     * it tried last — another process's, perhaps — so it is let go unlinked:
-     * the cleanup unlinks only the file this run made */
+    /* A template mkstemp could not create is no file of this run's, whatever
+     * name it tried last — another process's, perhaps — so it is let go unlinked:
+     * the cleanup unlinks only the file this run created */
     fd = mkstemp(path);
     if (fd < 0) {
         err = error_errno(errno, "Cannot create a temporary file in '%s'", dir);

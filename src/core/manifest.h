@@ -170,8 +170,8 @@ typedef struct profile profile_t;
  *
  * Two kinds of directory row, and `tracked` is the whole difference between them.
  * Every directory row asserts that a path must exist and says what it looks like
- * where dotta has to make it; `tracked` asserts on top of that which paths the
- * profile tracks itself — its attributes the profile's to enforce, its contents
+ * where dotta has to create it; `tracked` asserts on top of that which paths
+ * the profile tracks itself — its attributes the profile's to enforce, its contents
  * the profile's to scan. That is the decision procedure every consumer follows:
  * a question about the path existing is asked of both classes (deploy's ancestors
  * pass, the displacement probe, cleanup's permanence rule), a question about
@@ -1314,8 +1314,8 @@ const char *manifest_claim_name(
  * that name, the claims beneath it where it is not (core/manifest.c
  * manifest_layer). A directory claim this command admits above the place changes
  * what that name composes (`pending`, as manifest_name reads it), and with it
- * the side the next build stands — a file where apply made a directory, or the
- * reverse, which no capture asked for. Each place is asked alone, the ascent
+ * the side the next build stands — a file where apply created a directory, or
+ * the reverse, which no capture asked for. Each place is asked alone, the ascent
  * climbing past a blob.
  *
  * The places are the profile's as committed. A capture moves none of them: beneath

@@ -35,9 +35,10 @@
  *                            working tree is somebody's — a project, or the store
  *                            an older dotta kept checked out. Nothing here
  *                            re-shapes one, declared or not.
- *   declared (dotta.store)   dotta's own — the marker its maker wrote — repaired
- *                            in place: a missing record, epoch or baseline is
- *                            re-made below and what stands is kept
+ *   declared (dotta.store)   dotta's own — the marker a create-style command
+ *                            wrote — repaired in place: a missing record,
+ *                            epoch or baseline is re-created below and what
+ *                            stands is kept
  *   no references at all     a bare `git init`, taken. Untracked files are not
  *                            history and no step below touches them
  *   anything else            history dotta did not write; refused
@@ -128,18 +129,18 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
 
     /* Where the repository goes: the positional when one was given, this machine's
      * configured location otherwise — one answer, expanded, absolute and with
-     * its parents made (utils/repo.h). */
+     * its parents created (utils/repo.h). */
     err = repo_create_target(config, ctx->arena, opts->repo_path, &path, &elsewhere);
     if (err) goto cleanup;
 
-    /* The store: opened where a repository stands, made where nothing does. Only
-     * an absence is created over, and the open proves one before it answers it
-     * (sys/gitops.h gitops_open_repository): a repository that would not open —
-     * a project's .git this run cannot read, a store whose HEAD stands over missing
-     * objects, another user's, a config that will not parse — is not one to write
-     * into, and its own refusal says why. A store a hand stripped of its HEAD
-     * is the absence of the one file that makes a store, and is made whole by
-     * the init, refs and all (gitops_init_repository). */
+    /* The store: opened where a repository stands, created where nothing does.
+     * Only an absence is created over, and the open proves one before it answers
+     * it (sys/gitops.h gitops_open_repository): a repository that would not open
+     * — a project's .git this run cannot read, a store whose HEAD stands over
+     * missing objects, another user's, a config that will not parse — is not
+     * one to write into, and its own refusal says why. A store a hand stripped
+     * of its HEAD is the absence of the one file that makes a store, and is made
+     * whole by the init, refs and all (gitops_init_repository). */
     err = gitops_open_repository(&repo, path);
     if (error_code(err) == ERR_NOT_FOUND) {
         err = gitops_init_repository(&repo, path);
@@ -215,7 +216,8 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     /* A repository outside the configured location is one no later command will
      * find: every one of them resolves that location and stops there, so the
      * next `dotta status` would answer "No dotta repository found at" the
-     * configured location, the repository this run just made standing elsewhere. */
+     * configured location, the repository this run just created standing
+     * elsewhere. */
     if (elsewhere) {
         output_warning(
             out, OUTPUT_NORMAL, "dotta looks for its repository at %s", elsewhere
@@ -245,7 +247,7 @@ cleanup:
 /**
  * The strength the line names, or the default's, judged against the presets
  * (crypto/kdf.h kdf_presets): a name no preset carries refuses the line before
- * anything is made.
+ * anything is created.
  */
 static error_t init_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd

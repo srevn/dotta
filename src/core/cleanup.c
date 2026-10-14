@@ -481,7 +481,7 @@ cleanup_preflight_t *cleanup_preflight(
                  * finish the verdict.
                  *
                  * An active path beneath it, on disk yet or not, makes it the
-                 * ancestor of an enabled row — one ensure_parents would make
+                 * ancestor of an enabled row — one ensure_parents would create
                  * anyway — and nothing dotta does empties it: permanent, known
                  * from the view before any look at the disk. The readdir meets
                  * the rows deployed already (an active path's entry is permanent,

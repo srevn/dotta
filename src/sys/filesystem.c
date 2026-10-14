@@ -543,7 +543,7 @@ error_t fs_temp_symlink(
 
     /* A fresh name each draw until symlink(2) takes one: a name another holds
      * is EEXIST and the next is drawn, and any other refusal is the link's own,
-     * said as the link that was never made */
+     * said as the link that was never created */
     static const char alphabet[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     char *xs = name + n - 6;
@@ -587,7 +587,7 @@ error_t fs_temp_symlink(
 
 error_t fs_temp_publish(fs_temp_t *temp) {
     CHECK_NULL(temp);
-    CHECK_ARG(temp->name[0] != '\0', "no write made to publish");
+    CHECK_ARG(temp->name[0] != '\0', "no write created to publish");
 
     /* The swap: what stood at the path stands until the write does — rename(2)
      * on one filesystem never leaves the path holding part of either. A refusal
@@ -649,8 +649,8 @@ error_t fs_copy_file(const char *src, const char *dst) {
     err = fs_read_file(src, &content);
     if (err) return error_wrap(err, "Failed to copy '%s' to '%s'", src, dst);
 
-    /* Write destination with source permissions atomically, its parent made once
-     * the bytes are in hand, as fs_write_file makes it.
+    /* Write destination with source permissions atomically, its parent created
+     * once the bytes are in hand, as fs_write_file creates it.
      *
      * SECURITY: Use fs_write_file_raw() to set permissions atomically via fchmod(),
      * eliminating the security window where sensitive files (e.g., SSH keys)
@@ -790,8 +790,8 @@ error_t fs_create_dir_with_ownership(
      * factories, a stat's permission bits): a caller that hands more is broken. */
     CHECK_ARG(mode <= 0777, "a mode past 0777");
 
-    /* Whether the directory below is this call's own making: one it made and
-     * cannot attribute is unmade, one it opened stands as found. */
+    /* Whether the directory below is this call's own creation: one it created
+     * and cannot attribute is removed, one it opened stands as found. */
     bool created = false;
 
     /* Try to open existing directory first (eliminates TOCTOU race)
@@ -847,7 +847,7 @@ apply_metadata:
      * ownership is applied to the directory we have open, not to whatever might
      * be at 'path' if a race condition occurred.
      *
-     * A refusal here or at the mode below unmakes a directory this call made
+     * A refusal here or at the mode below removes a directory this call created
      * (fs_create_dir_exclusive's rule: what it could not create as claimed it
      * did not create, and the next run meets the same absent path rather than a
      * directory of the wrong owner that no later run converges — empty by
@@ -916,7 +916,7 @@ error_t fs_create_dir_exclusive(
     }
 
     /* Apply ownership atomically via file descriptor. A refusal here or at the
-     * mode below unmakes the directory: this caller's authority is creation alone,
+     * mode below removes the directory: this caller's authority is creation alone,
      * and what it could not create as claimed it did not create — the next run
      * meets the same absent path, and the same refusal until it holds what the
      * claim needs, rather than a directory of the wrong owner that no later run
@@ -1635,8 +1635,8 @@ const char *fs_stat_noun(const struct stat *st) {
 error_t fs_ensure_parent_dirs(const char *path) {
     CHECK_NULL(path);
 
-    /* The directory the path stands in, made with its own parents where it is
-     * missing; "." and "/" always stand. */
+    /* The directory the path stands in, created with its own parents where it
+     * is missing; "." and "/" always stand. */
     char *parent = fs_parent_dir(path);
     error_t err = fs_is_directory(parent) ? NULL : fs_create_dir(parent, true);
     free(parent);

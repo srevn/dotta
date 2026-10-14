@@ -3,10 +3,10 @@
  *
  * dotta's store is a bare Git repository — one branch per profile under refs/heads,
  * the epoch and this machine's baseline under refs/dotta, the record (`dotta.db`)
- * at its root — that dotta made or took, and declared its own. Nothing is ever
- * checked out: every write to a branch is a stage committed in memory (sys/stage),
- * and HEAD is git's alone, written once by the init and never read (sys/gitops.h,
- * gitops_init_repository).
+ * at its root — that dotta created or took, and declared its own. Nothing is
+ * ever checked out: every write to a branch is a stage committed in memory
+ * (sys/stage), and HEAD is git's alone, written once by the init and never read
+ * (sys/gitops.h, gitops_init_repository).
  *
  * Where it is, this machine decides, and the configuration settles it once, at
  * load (utils/config.h config_load): DOTTA_REPO_DIR where it is set, else [core]
@@ -14,8 +14,8 @@
  * `config->repo_dir`. This is different from git's behavior - dotta uses a
  * centralized repository, not discovery from current working directory.
  *
- * What makes a directory the store is a fact its maker writes into the store's
- * own config, the way git writes `core.bare`:
+ * What makes a directory the store is a fact the create-style command writes
+ * into the store's own config, the way git writes `core.bare`:
  *
  *     [dotta] store = true
  *
@@ -24,15 +24,15 @@
  * the baseline is this machine's and re-seeded; the record is disposable (a fresh
  * machine on a known store has none). A bare repository alone is any bare
  * repository, and a mirror at DOTTA_REPO_DIR would be committed into. So the
- * maker declares (repo_declare_store) and the opener reads the declaration
- * (repo_is_store, repo_open): the local-side counterpart of the epoch's role on
- * the remote side, where `dotta clone` gates on the ref being advertised.
+ * create-style command declares (repo_declare_store) and the opener reads the
+ * declaration (repo_is_store, repo_open): the local-side counterpart of the epoch's
+ * role on the remote side, where `dotta clone` gates on the ref being advertised.
  *
  * Which *directory* the store is is `git_repository_path` on the open handle
  * and not `config->repo_dir`: the two name one directory for the bare repository
- * dotta makes and two for a non-bare one a hand declared, where the store's own
- * files sit in the `.git/` and the path resolves to the worktree beside it. One
- * reader — core/state.c get_db_path, joining the database onto it.
+ * dotta creates and two for a non-bare one a hand declared, where the store's
+ * own files sit in the `.git/` and the path resolves to the worktree beside it.
+ * One reader — core/state.c get_db_path, joining the database onto it.
  */
 
 #ifndef DOTTA_REPO_H
@@ -46,7 +46,7 @@
  *
  * `config->repo_dir` answers "where does this machine's repository live"; this
  * answers "where does a command that creates one put it". Two questions, two
- * tails: only the second has a positional to honour, parent directories to make,
+ * tails: only the second has a positional to honour, parent directories to create,
  * and a caller to warn.
  *
  * `explicit_path` is the command's optional positional (`init [path]`, `clone
@@ -94,10 +94,10 @@ error_t repo_create_target(
  * Writes the marker (the header) into the repository's own config, and beside
  * it `core.logAllRefUpdates = true`: a bare repository keeps no reflog by default,
  * and `dotta git reflog <profile>` is a screen the store has always had. Written
- * by the two makers on every path through — init over a fresh store, over one
- * it takes (bare, no refs at all) and over its own again; clone over the store
- * it just created — so a store is declared from birth and a repaired one is
- * declared again. Idempotent.
+ * by the two create-style commands on every path through — init over a fresh
+ * store, over one it takes (bare, no refs at all) and over its own again; clone
+ * over the store it just created — so a store is declared from birth and a repaired
+ * one is declared again. Idempotent.
  *
  * @param repo Repository (must not be NULL)
  * @return Error or NULL on success

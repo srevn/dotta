@@ -407,7 +407,7 @@ static error_t state_initialize(sqlite3 *db) {
  *
  * The admission's first question about the file. A header that does not mark
  * the file dotta's is no store this code can read — an empty database, another
- * program's, a store whose header lacks the mark (made before it, or restored
+ * program's, a store whose header lacks the mark (created before it, or restored
  * from a text dump) — and one marking another schema was written by another dotta;
  * both are refused. Both fields are integers every database carries, 0 where
  * nothing set them, so a header is never missing one.
@@ -464,7 +464,7 @@ static error_t state_verify(sqlite3 *db) {
  *
  * Not the lock wait: that is the admission's, set before its first statement.
  * Not the journal mode: that is the file's own, written into it where the file
- * is made (state_create), and a connection that never sends the pragma reads
+ * is created (state_create), and a connection that never sends the pragma reads
  * the mode the file carries. Not the temp store: no statement the store runs
  * builds a temporary structure — every read walks a key and every write searches
  * one — so there is nothing for it to place.
@@ -1038,7 +1038,7 @@ static error_t state_data_version(state_t *state, int64_t *out) {
  * and reading one as a store never written would read a truncated store as empty.
  *
  * READWRITE and never CREATE: the connection is the one state_begin takes its
- * lock on, and SQLite's CREATE follows a link to nowhere and makes its target.
+ * lock on, and SQLite's CREATE follows a link to nowhere and creates its target.
  * Nothing here writes to the file. On a refusal the handle holds no connection
  * and no prepared statement, as it did before the call.
  *
@@ -1121,7 +1121,7 @@ fail:
  * like any other (state_admit): a store is never replaced, and what cannot be
  * admitted is refused there, by name. A filesystem with no hard links refuses
  * the publication, naming the file; a replacing rename would publish over a store
- * another process made.
+ * another process created.
  *
  * The raw calls are those of one of dotta's own artifacts (sys/filesystem.h):
  * the file is the invoker's by construction, created 0600 as the session cache
@@ -1143,8 +1143,8 @@ static error_t state_create(const char *db_path) {
         );
     }
 
-    /* A failed mkstemp made no file, and its template may now name one that is
-     * not ours: nothing below runs, the unlink included. */
+    /* A failed mkstemp created no file, and its template may now name one that
+     * is not ours: nothing below runs, the unlink included. */
     int fd = mkstemp(temp);
     if (fd < 0) {
         return error_wrap(

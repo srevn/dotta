@@ -1,11 +1,11 @@
 /**
  * clone.c - Clone dotta repository implementation
  *
- * The clone is init with a remote: the bare store made and declared (utils/repo.h),
- * the remote added, one fetch of everything it has, the epoch taken as the identity
- * gate, and the chosen profiles made local from what landed. No `git_clone`:
- * that call creates a local branch for the remote's HEAD whatever was asked for,
- * and dotta's store has no branch nobody asked for.
+ * The clone is init with a remote: the bare store created and declared
+ * (utils/repo.h), the remote added, one fetch of everything it has, the epoch
+ * taken as the identity gate, and the chosen profiles made local from what landed.
+ * No `git_clone`: that call creates a local branch for the remote's HEAD whatever
+ * was asked for, and dotta's store has no branch nobody asked for.
  *
  * Smart profile management
  * - Auto-detects relevant profiles by default
@@ -258,7 +258,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     /* Where the repository goes: the positional when one was given, this machine's
      * configured location otherwise — one answer, expanded, absolute and with
-     * its parents made (utils/repo.h). Absolute matters twice over here: the
+     * its parents created (utils/repo.h). Absolute matters twice over here: the
      * bootstrap below hands it to a script as $DOTTA_REPO_DIR, and the rollback
      * removes it. */
     err = repo_create_target(config, ctx->arena, opts->path, &local_path, &elsewhere);

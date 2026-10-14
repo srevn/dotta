@@ -316,7 +316,7 @@ static void status_print_profiles(
             output_hintline(
                 out, OUTPUT_NORMAL,
                 "  contradicted  - 'dotta remove <profile> <file>' keeps the directory, "
-                "which apply then makes in the file's place"
+                "which apply then creates in the file's place"
             );
             output_hintline(
                 out, OUTPUT_NORMAL,

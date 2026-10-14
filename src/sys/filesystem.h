@@ -22,7 +22,7 @@
  * call this module makes on a path is the invoker's first, and on a refusal —
  * EACCES, EPERM — the same call once more as root. So a path only root can reach
  * reads as present to a sudo'd run and as absent or refused to a plain one, and
- * what the second try creates is root's, as sudo would have made it; the write's
+ * what the second try creates is root's, as sudo would have created it; the write's
  * fchown then says whose it becomes — the claim's names, the invoker where it
  * names no owner, and the second try's own group where it names none (core/deploy).
  * Nothing outside this module ever runs as root, and no second try spans a call
@@ -44,7 +44,7 @@
  * construction — the drop is what makes them so under sudo — and a refusal on
  * one is a broken installation to report, not a question about reach. A primitive
  * serves both worlds where one of those paths goes through it — the session cache's
- * directory made, the directory a store goes in, a failed clone taken away —
+ * directory created, the directory a store goes in, a failed clone taken away —
  * and carries the reach with it; on the invoker's own paths it never fires.
  *
  * One more reads raw, and on purpose: a source repository's layout — its `.git`,
@@ -200,16 +200,16 @@ error_t fs_read_fd(int fd, buffer_t *out);
 error_t fs_write_fd(int fd, const char *path, const void *data, size_t size);
 
 /**
- * One write made beside its path and not yet published
+ * One write created beside its path and not yet published
  *
- * The node a write puts at a path, made whole under a temporary name in the path's
- * own directory — a file's bytes with its mode and owner, or a link with its
- * owner — while the path stands as it was. The publish renames it over what stands
- * there, so a caller that must take something out of the way does it between
+ * The node a write puts at a path, created whole under a temporary name in the
+ * path's own directory — a file's bytes with its mode and owner, or a link with
+ * its owner — while the path stands as it was. The publish renames it over what
+ * stands there, so a caller that must take something out of the way does it between
  * the two, and a write the world refuses — a full disk, a file-size limit, a
  * name the kernel will not take — is refused before anything at the path moves
  * (core/deploy.c deploy_file). fs_write_file_raw and fs_replace_symlink are the
- * make and the publish with nothing between.
+ * create and the publish with nothing between.
  *
  * Both act on the path's directory, never on the path: the permission a write
  * needs is write and search there, so a caller that must predict whether a write
@@ -217,11 +217,11 @@ error_t fs_write_fd(int fd, const char *path, const void *data, size_t size);
  * is built on exactly that — and a read-only file, or a link into a read-only
  * store, is no obstacle at all.
  *
- * A value its caller holds: FS_TEMP_INIT, one maker, the publish. A maker's refusal
- * and a publish, either way, leave no temporary standing; fs_temp_deinit takes
- * back one made and not published, in the tail of a caller with a step between.
- * A process killed between the make and the publish leaves the temporary where
- * it was made — nothing cleans at a terminating signal (src/main.c
+ * A value its caller holds: FS_TEMP_INIT, one create, the publish. A create's
+ * refusal and a publish, either way, leave no temporary standing; fs_temp_deinit
+ * takes back one created and not published, in the tail of a caller with a step
+ * between. A process killed between the create and the publish leaves the temporary
+ * where it was created — nothing cleans at a terminating signal (src/main.c
  * terminating_signal) — and a scan beneath a tracked directory lists it there
  * as a new file, removed by hand.
  *
@@ -230,32 +230,32 @@ error_t fs_write_fd(int fd, const char *path, const void *data, size_t size);
  */
 typedef struct {
     char name[PATH_MAX];   /* The temporary, beside the path; "" while none stands */
-    const char *path;      /* Where the publish puts it: the maker's, borrowed */
+    const char *path;      /* Where the publish puts it: the create's, borrowed */
 } fs_temp_t;
 
-/** Zero-initializer: no write made */
+/** Zero-initializer: no write created */
 #define FS_TEMP_INIT {0}
 
 /**
- * Make a file's write beside its path, whole
+ * Create a file's write beside its path, whole
  *
  * mkstemp's temporary in the path's own directory — two names in one directory
  * are on one filesystem, so the publish never meets EXDEV — given the owner and
  * the mode through its own descriptor before its first byte, then the bytes,
  * synced. SECURITY: the bytes never stand with the wrong owner or mode, not for
- * a moment — critical for a key or a token. Nothing is made above the path: a
- * directory that does not stand is mkstemp's refusal, naming it. A refusal at
- * any step leaves nothing made and the path as it was, and is said of the path,
- * never of the temporary.
+ * a moment — critical for a key or a token. Nothing is created above the path:
+ * a directory that does not stand is mkstemp's refusal, naming it. A refusal at
+ * any step leaves nothing created and the path as it was, and is said of the
+ * path, never of the temporary.
  *
- * @param temp The write, made (must not be NULL; left as it was on a failure)
+ * @param temp The write, created (must not be NULL; left as it was on a failure)
  * @param path The path the write is for (must not be NULL; borrowed, read by
  *        the publish)
  * @param data The bytes (may be NULL when size is 0)
  * @param size Byte count
  * @param mode Permission mode, applied exactly
- * @param uid Owner, or (uid_t) -1 to leave it as made
- * @param gid Group, or (gid_t) -1 to leave it as made
+ * @param uid Owner, or (uid_t) -1 to leave it as created
+ * @param gid Group, or (gid_t) -1 to leave it as created
  * @param out_st Optional (may be NULL): the fstat of the written descriptor,
  *        taken after the last mutation — it describes exactly the bytes and
  *        metadata this call wrote, which the publish puts at the path (rename
@@ -276,17 +276,17 @@ error_t fs_temp_file(
 );
 
 /**
- * Make a link's write beside its path, whole
+ * Create a link's write beside its path, whole
  *
  * fs_temp_file's template in the path's own directory, its six Xs drawn fresh
  * (sys/entropy) until symlink(2) takes one: a name another holds is EEXIST and
  * the next is drawn, the exclusivity mkstemp's open gives a file's temporary.
  * Then owned there, by lchown on the link itself, the one node with no descriptor
  * to fchown. The target and the ownership are fs_create_symlink's: the target
- * as it stands, and -1 for either half leaving it as made. Nothing is made above
- * the path, and a refusal leaves nothing made and the path as it was.
+ * as it stands, and -1 for either half leaving it as created. Nothing is created
+ * above the path, and a refusal leaves nothing created and the path as it was.
  *
- * @param temp The write, made (must not be NULL; left as it was on a failure)
+ * @param temp The write, created (must not be NULL; left as it was on a failure)
  * @param target Link target (must not be NULL)
  * @param linkpath The path the link is for (must not be NULL; borrowed, read by
  *        the publish)
@@ -303,25 +303,25 @@ error_t fs_temp_symlink(
 );
 
 /**
- * Put a made write in its path's place
+ * Put a created write in its path's place
  *
  * rename(2) of the temporary over the path: what stands there — a regular file,
  * a link (itself, never what it leads to), a device — is replaced whole, and
- * where nothing stands the path is made. A directory refuses it (EISDIR) and
- * stands: a caller that must replace one removes it between the make and this.
+ * where nothing stands the path is created. A directory refuses it (EISDIR) and
+ * stands: a caller that must replace one removes it between the create and this.
  * The temporary is gone either way — published, or unlinked beside the refusal,
  * "Failed to replace '<path>'" in the errno's words.
  *
- * @param temp A made write (must not be NULL): none stands once this returns
+ * @param temp A created write (must not be NULL): none stands once this returns
  * @return Error or NULL on success
  */
 error_t fs_temp_publish(fs_temp_t *temp);
 
 /**
- * Take back a write made and not published — nothing, where none stands
+ * Take back a write created and not published — nothing, where none stands
  *
- * For the tail of a caller with a step between the make and the publish that
- * may refuse: the temporary unlinked. After a maker's refusal or a publish none
+ * For the tail of a caller with a step between the create and the publish that
+ * may refuse: the temporary unlinked. After a create's refusal or a publish none
  * stands, and nothing is done.
  *
  * @param temp A write (must not be NULL): none stands once this returns
@@ -331,14 +331,14 @@ void fs_temp_deinit(fs_temp_t *temp);
 /**
  * Write raw bytes to a file, in the place of what stands at the path
  *
- * The make and the publish with nothing between (fs_temp_file, then
- * fs_temp_publish): the bytes are made whole beside the path, its owner and mode
- * on the temporary's descriptor before the first byte, then renamed over it —
- * so what stood there, a regular file or a link itself rather than what it leads
- * to, is replaced whole or not at all. Nothing is made above the path: its
- * directory must stand (fs_ensure_parent_dirs is the caller's courtesy). A
+ * The create and the publish with nothing between (fs_temp_file, then
+ * fs_temp_publish): the bytes are written whole beside the path, its owner and
+ * mode on the temporary's descriptor before the first byte, then renamed over
+ * it — so what stood there, a regular file or a link itself rather than what it
+ * leads to, is replaced whole or not at all. Nothing is created above the path:
+ * its directory must stand (fs_ensure_parent_dirs is the caller's courtesy). A
  * directory at the path refuses the write (EISDIR); a caller that must replace
- * one makes the write with fs_temp_file and removes the directory before
+ * one creates the write with fs_temp_file and removes the directory before
  * fs_temp_publish. Raw bytes, for a caller that holds no buffer (fs_write_file
  * takes one).
  *
@@ -346,8 +346,8 @@ void fs_temp_deinit(fs_temp_t *temp);
  * @param data Raw data bytes (can be NULL if size is 0)
  * @param size Number of bytes to write
  * @param mode Permission mode (e.g., 0600, 0644, 0755), applied exactly
- * @param uid Owner, or (uid_t) -1 to leave it as made
- * @param gid Group, or (gid_t) -1 to leave it as made
+ * @param uid Owner, or (uid_t) -1 to leave it as created
+ * @param gid Group, or (gid_t) -1 to leave it as created
  * @param out_st Optional (may be NULL): fs_temp_file's
  * @return Error or NULL on success
  */
@@ -376,9 +376,9 @@ error_t fs_write_file(const char *path, const buffer_t *content);
 /**
  * Copy file preserving permissions
  *
- * The source read whole, then the destination's parent directories made if needed
- * (fs_ensure_parent_dirs), as fs_write_file makes them, and the bytes written
- * by fs_write_file_raw at the source's mode.
+ * The source read whole, then the destination's parent directories created if
+ * needed (fs_ensure_parent_dirs), as fs_write_file creates them, and the bytes
+ * written by fs_write_file_raw at the source's mode.
  *
  * @param src Source path (must exist, must not be NULL)
  * @param dst Destination path (must not be NULL)
@@ -484,10 +484,10 @@ error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
  *   the read (core/deploy.c holdable predicts it), and updates ownership + mode
  *   atomically
  * - Use uid=-1 or gid=-1 to skip ownership change
- * - A directory this call made and could not attribute is unmade — the exclusive
- *   sibling's rule — so a refusal leaves the path as the call found it; one it
- *   opened stands, its attributes as they were, save an owner the fchown set
- *   before the fchmod refused
+ * - A directory this call created and could not attribute is removed — the
+ *   exclusive sibling's rule — so a refusal leaves the path as the call found
+ *   it; one it opened stands, its attributes as they were, save an owner the
+ *   fchown set before the fchmod refused
  * - The parent must exist: this primitive never invents attributes for ancestors
  *   — the caller decides those (core/deploy materializes them from their own
  *   claims, and invents nothing for the rest)
@@ -518,7 +518,7 @@ error_t fs_create_dir_with_ownership(
  * the exclusivity — O_EXCL semantics, with no window in which whatever now stands
  * at the path could be re-attributed.
  *
- * For the caller whose authority is creation alone: core/deploy makes the absent
+ * For the caller whose authority is creation alone: core/deploy creates the absent
  * chain above a planned path (create_ancestor), and a path the world made present
  * between its probe and the mkdir is not that run's to converge — the refusal
  * is the outcome of the act that met it, and every act beneath fails naming the
@@ -532,7 +532,7 @@ error_t fs_create_dir_with_ownership(
  * 4. fchmod(fd, mode) - atomic permission change
  * 5. Close file descriptor
  *
- * All or nothing: a refusal at step 3 or 4 removes the directory step 1 made,
+ * All or nothing: a refusal at step 3 or 4 removes the directory step 1 created,
  * so a pair the run cannot set (a foreign-owned claim, no root held) leaves the
  * path absent for the run that can, never a directory of the wrong owner that
  * no later run converges. The parent must exist, as for the sibling.
@@ -555,8 +555,8 @@ error_t fs_create_dir_exclusive(
 );
 
 /**
- * Set the mode of the directory that stands at a path — never made, never through
- * a link
+ * Set the mode of the directory that stands at a path — never created, never
+ * through a link
  *
  * Through the directory's own descriptor — opened for reading, O_DIRECTORY |
  * O_NOFOLLOW, so a link at the path is refused rather than followed, then fchmod
@@ -573,7 +573,7 @@ error_t fs_create_dir_exclusive(
  *
  * The converging sibling with the creation taken out: fs_create_dir_with_ownership
  * creates or converges, fs_create_dir_exclusive creates, and this sets the mode
- * of what stands and makes nothing. Readers: core/deploy.c open_landing_directory
+ * of what stands and creates nothing. Readers: core/deploy.c open_landing_directory
  * (a landing held at a working mode) and release_directories (each hold released
  * to its exact mode).
  *
@@ -835,8 +835,9 @@ error_t fs_working_directory(arena_t *arena, const char **out);
  * (sys/editor.h editor_edit) and a bootstrap script's run (sys/bootstrap.h
  * bootstrap_extract_to_temp). An empty $TMPDIR names none, and /tmp is the
  * directory POSIX promises. Nothing is asked of the directory here: a file that
- * cannot be made in it is refused by the mkstemp that tried, naming it. A write's
- * own temporary is never made here: it stands beside its path (fs_temp_t).
+ * cannot be created in it is refused by the mkstemp that tried, naming it. A
+ * write's own temporary is never created here: it stands beside its path
+ * (fs_temp_t).
  *
  * @return The directory (never NULL)
  */
@@ -945,7 +946,7 @@ error_t fs_expand_tilde(const char *path, arena_t *arena, const char **out);
  * Create symbolic link
  *
  * Where nothing stands: symlink(2) refuses a path anything stands at (EEXIST),
- * so a link made here never takes the place of what arrived since its caller
+ * so a link created here never takes the place of what arrived since its caller
  * looked — fs_replace_symlink puts one in the place of a node.
  *
  * With its ownership: a link carries no mode (symlink(2) takes none, and most
@@ -955,8 +956,8 @@ error_t fs_expand_tilde(const char *path, arena_t *arena, const char **out);
  * the link itself and never its target. -1 for either half leaves it as created.
  *
  * The target goes to symlink(2) as it stands, an empty one included: whether
- * the link can be made is the kernel's answer, as Git hands a link blob's bytes
- * to it (lib/git/entry.c write_entry).
+ * the link can be created is the kernel's answer, as Git hands a link blob's
+ * bytes to it (lib/git/entry.c write_entry).
  *
  * @param target Link target (must not be NULL)
  * @param linkpath Link path (must not be NULL)
@@ -974,16 +975,17 @@ error_t fs_create_symlink(
 /**
  * Put a symbolic link in the place of what stands at a path
  *
- * The make and the publish with nothing between (fs_temp_symlink, then
- * fs_temp_publish): the link is made beside the path, owned there, and renamed
+ * The create and the publish with nothing between (fs_temp_symlink, then
+ * fs_temp_publish): the link is created beside the path, owned there, and renamed
  * over it. So what stood there — a regular file, a device, or a link itself rather
  * than what it points at — stands until the new link does, which then stands
- * owned as it was asked; a link that cannot be made, owned or renamed leaves
- * the path as it was, and no temporary behind. Nothing is made above the path.
- * Where nothing stands the rename makes the path; a caller that must refuse
- * whatever arrives there makes it with fs_create_symlink, whose symlink(2) refuses
+ * owned as it was asked; a link that cannot be created, owned or renamed leaves
+ * the path as it was, and no temporary behind. Nothing is created above the path.
+ * Where nothing stands the rename creates the path; a caller that must refuse
+ * whatever arrives there creates it with fs_create_symlink, whose symlink(2)
+ * refuses
  * a path anything stands at. A directory at the path refuses the link (EISDIR);
- * a caller that must replace one makes the link with fs_temp_symlink and removes
+ * a caller that must replace one creates the link with fs_temp_symlink and removes
  * the directory before fs_temp_publish.
  *
  * @param target Link target (must not be NULL)
@@ -1096,10 +1098,10 @@ fs_occupant_t fs_lstat_occupant(const char *path, struct stat *st);
  * of identity — the path gone, a loop, a name too long. The call the question
  * predicts meets each of those itself, and reports its cause.
  *
- * A directory's W_OK | X_OK is "may an entry be made in it, or removed from it"
- * — asked of the directory a write lands in, or a removal is made from — and
- * its R_OK "may it be opened", as the descriptor that sets a standing directory's
- * mode is (fs_set_dir_mode).
+ * A directory's W_OK | X_OK is "may an entry be created in it, or removed from
+ * it" — asked of the directory a write lands in, or a removal is made from —
+ * and its R_OK "may it be opened", as the descriptor that sets a standing
+ * directory's mode is (fs_set_dir_mode).
  *
  * Readers: core/deploy.c check_landing and open_landing_directory (the landing),
  * holdable (the read a hold or a fix opens its directory with), core/cleanup.c

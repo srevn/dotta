@@ -72,7 +72,7 @@
  * gate every walk asks of a name (infra/label.h label_prefixes). A tree is no
  * claim, so one whose name breaks the grammar creates nothing — a blob beneath
  * it fails the walk at its joined name, and one holding no blob leads nowhere —
- * since every directory the copy makes is its root, a claim, or a rung between
+ * since every directory the copy creates is its root, a claim, or a rung between
  * the two (complete_directories), each a prefix of a validated name. So every
  * entry carries a validated storage path — the metadata key and the associated
  * data both. A link's target is the link's own business, copied verbatim, and
@@ -547,7 +547,7 @@ static error_t export_collect_storage(
  * and creation is what both classes bind. The one directory row it does not hold
  * is the layer's rung, at a place its own blob lost to its claims beneath where
  * no derived claim of its own fills it (core/manifest.h manifest_holds_row):
- * made at its default mode, as a rung the copy completes is, and no claim to
+ * created at its default mode, as a rung the copy completes is, and no claim to
  * list or count. `encrypted` is the row's own — the sheet's stamp as the view
  * projects it — and says which blobs phase 1 reads (validate_content). A link
  * row carries neither a mode nor a stamp and needs neither: its bytes are its
@@ -702,9 +702,9 @@ static error_t export_collect_filesystem(
  * tree as it is collected, short only of the rungs between its entries. A tree
  * a hand wrote with a blob and a tree under one name (git fsck's DUPLICATE_ENTRIES)
  * is the repository corruption phase 2's failure window holds: the write beneath
- * the blob fails there, on the file the copy made. Run after any collector, because
- * every one collects claims and never the rungs between them: the profile's walk
- * shows blobs and directory claims, never a subtree that only leads to them,
+ * the blob fails there, on the file the copy created. Run after any collector,
+ * because every one collects claims and never the rungs between them: the profile's
+ * walk shows blobs and directory claims, never a subtree that only leads to them,
  * and a selection of rows the same.
  *
  * What it establishes is what phase 1 goes on to trust — an lstat of every entry
@@ -1000,9 +1000,10 @@ static error_t materialize_entries(
                 }
 
                 /* The one-entry copy's destination is the user's own path, and
-                 * its parent is made here, once the bytes are in hand: a read
-                 * that fails makes nothing. Inside a tree copy every parent is
-                 * already an entry, created before this loop reached the file. */
+                 * its parent is created here, once the bytes are in hand: a read
+                 * that fails creates nothing. Inside a tree copy every parent
+                 * is already an entry, created before this loop reached the
+                 * file. */
                 err = fs_ensure_parent_dirs(e->dest_path);
                 if (!err) {
                     err = fs_write_file_raw(
@@ -1020,8 +1021,8 @@ static error_t materialize_entries(
             }
 
             case EXPORT_ENTRY_SYMLINK:
-                /* Its parent made as the file arm's is, once its bytes are in
-                 * hand — a link's were read in phase 1 */
+                /* Its parent created as the file arm's is, once its bytes are
+                 * in hand — a link's were read in phase 1 */
                 err = fs_ensure_parent_dirs(e->dest_path);
                 if (err) return err;
 

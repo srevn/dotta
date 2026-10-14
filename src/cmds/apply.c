@@ -731,17 +731,13 @@ static void apply_print_deploy_receipt(
     output_t *out,
     const deploy_receipt_t *receipt
 ) {
-    deploy_outcomes_t deployed = receipt->deployed;
-    deploy_outcomes_t converged = receipt->converged;
-    deploy_outcomes_t ancestors = receipt->ancestors;
-
     /* The verbs, folded off the carried-out fates exactly as the preview folds
      * them off the verdicts (apply_print_deploy_preview) — the receipt restates
      * the preview by construction: one producer, so they cannot drift. */
     size_t created = 0; size_t fixed = 0; size_t replaced = 0;
 
-    for (size_t i = 0; i < converged.count; i++) {
-        switch (deploy_convergence(converged.entries[i].verdict->occupant)) {
+    for (size_t i = 0; i < receipt->converged.count; i++) {
+        switch (deploy_convergence(receipt->converged.entries[i].verdict->occupant)) {
             case DEPLOY_CONVERGE_CREATE:  created++; break;
             case DEPLOY_CONVERGE_FIX:     fixed++; break;
             case DEPLOY_CONVERGE_REPLACE: replaced++; break;
@@ -753,10 +749,10 @@ static void apply_print_deploy_receipt(
     output_gap(out, OUTPUT_NORMAL);
 
     /* Verbose mode: show individual items per outcome */
-    if (deployed.count > 0) {
+    if (receipt->deployed.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Deployed files");
-        for (size_t i = 0; i < deployed.count; i++) {
-            const manifest_row_t *file = deployed.entries[i].verdict->item->row;
+        for (size_t i = 0; i < receipt->deployed.count; i++) {
+            const manifest_row_t *file = receipt->deployed.entries[i].verdict->item->row;
 
             if (file->type == PATH_TYPE_SYMLINK) {
                 output_print(
@@ -791,8 +787,8 @@ static void apply_print_deploy_receipt(
 
     if (created > 0) {
         output_section(out, OUTPUT_VERBOSE, "Created tracked directories");
-        for (size_t i = 0; i < converged.count; i++) {
-            const deploy_verdict_t *v = converged.entries[i].verdict;
+        for (size_t i = 0; i < receipt->converged.count; i++) {
+            const deploy_verdict_t *v = receipt->converged.entries[i].verdict;
 
             if (deploy_convergence(v->occupant) != DEPLOY_CONVERGE_CREATE) continue;
             const manifest_row_t *dir = v->item->row;
@@ -814,8 +810,8 @@ static void apply_print_deploy_receipt(
 
     if (fixed > 0) {
         output_section(out, OUTPUT_VERBOSE, "Fixed tracked directories");
-        for (size_t i = 0; i < converged.count; i++) {
-            const deploy_verdict_t *v = converged.entries[i].verdict;
+        for (size_t i = 0; i < receipt->converged.count; i++) {
+            const deploy_verdict_t *v = receipt->converged.entries[i].verdict;
 
             if (deploy_convergence(v->occupant) != DEPLOY_CONVERGE_FIX) continue;
             const manifest_row_t *dir = v->item->row;
@@ -852,8 +848,8 @@ static void apply_print_deploy_receipt(
 
     if (replaced > 0) {
         output_section(out, OUTPUT_VERBOSE, "Replaced directories");
-        for (size_t i = 0; i < converged.count; i++) {
-            const deploy_verdict_t *v = converged.entries[i].verdict;
+        for (size_t i = 0; i < receipt->converged.count; i++) {
+            const deploy_verdict_t *v = receipt->converged.entries[i].verdict;
 
             if (deploy_convergence(v->occupant) != DEPLOY_CONVERGE_REPLACE) continue;
             const manifest_row_t *dir = v->item->row;
@@ -873,10 +869,10 @@ static void apply_print_deploy_receipt(
         }
     }
 
-    if (ancestors.count > 0) {
+    if (receipt->ancestors.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Created ancestors (outside the plan)");
-        for (size_t i = 0; i < ancestors.count; i++) {
-            const manifest_row_t *dir = ancestors.entries[i].verdict->item->row;
+        for (size_t i = 0; i < receipt->ancestors.count; i++) {
+            const manifest_row_t *dir = receipt->ancestors.entries[i].verdict->item->row;
 
             output_print(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -895,10 +891,10 @@ static void apply_print_deploy_receipt(
 
     /* Non-verbose: summary counts only. */
     if (!output_is_verbose(out)) {
-        if (deployed.count > 0) {
+        if (receipt->deployed.count > 0) {
             output_print(
                 out, OUTPUT_NORMAL, "Deployed {green}%zu{reset} file%s\n",
-                deployed.count, deployed.count == 1 ? "" : "s"
+                receipt->deployed.count, receipt->deployed.count == 1 ? "" : "s"
             );
         }
 
@@ -1790,10 +1786,8 @@ static error_t apply_write_record(
      * written. Ancestors' ownership events stay uncounted: they are outside the
      * plan, so no writer named them for the preview, and an acknowledgement that
      * rides one heals the record silently. */
-    deploy_outcomes_t deployed = deploy_receipt->deployed;
-
-    for (size_t i = 0; i < deployed.count; i++) {
-        const deploy_outcome_t *o = &deployed.entries[i];
+    for (size_t i = 0; i < deploy_receipt->deployed.count; i++) {
+        const deploy_outcome_t *o = &deploy_receipt->deployed.entries[i];
         const workspace_item_t *item = o->verdict->item;
 
         /* Counted before the write below replaces the item's record, which the
@@ -1807,9 +1801,8 @@ static error_t apply_write_record(
         if (err) goto cleanup;
     }
 
-    deploy_outcomes_t converged = deploy_receipt->converged;
-    for (size_t i = 0; i < converged.count; i++) {
-        const deploy_verdict_t *v = converged.entries[i].verdict;
+    for (size_t i = 0; i < deploy_receipt->converged.count; i++) {
+        const deploy_verdict_t *v = deploy_receipt->converged.entries[i].verdict;
         const workspace_item_t *item = v->item;
 
         /* Counted before either write: each replaces the record the reassignment
@@ -1852,10 +1845,9 @@ static error_t apply_write_record(
         if (err) goto cleanup;
     }
 
-    deploy_outcomes_t ancestors = deploy_receipt->ancestors;
-    for (size_t i = 0; i < ancestors.count; i++) {
+    for (size_t i = 0; i < deploy_receipt->ancestors.count; i++) {
         err = workspace_anchor(
-            ws, ancestors.entries[i].verdict->item, STATE_STAT_UNSET, now
+            ws, deploy_receipt->ancestors.entries[i].verdict->item, STATE_STAT_UNSET, now
         );
         if (err) goto cleanup;
     }
@@ -1873,9 +1865,8 @@ static error_t apply_write_record(
      * diverged before the run and keeps its record, its route as the run found
      * it, while the receipt names the mode the hold owed. One the load could
      * not look at holds no record to correct. */
-    deploy_holds_t held = deploy_receipt->held;
-    for (size_t i = 0; i < held.count; i++) {
-        const deploy_hold_t *hold = &held.entries[i];
+    for (size_t i = 0; i < deploy_receipt->held.count; i++) {
+        const deploy_hold_t *hold = &deploy_receipt->held.entries[i];
         const state_record_t *record = hold->item->record;
 
         if (!record || record->mode != hold->mode) continue;
@@ -2587,16 +2578,18 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * bucket. */
     size_t stale_files = 0;
     size_t stale_dirs = 0;
-    workspace_items_t pending_files = deploy_plan->files.pending;
-    workspace_items_t pending_dirs = deploy_plan->directories.pending;
 
-    for (size_t i = 0; i < pending_files.count; i++) {
-        if (pending_files.entries[i]->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
+    for (size_t i = 0; i < deploy_plan->files.pending.count; i++) {
+        const workspace_item_t *item = deploy_plan->files.pending.entries[i];
+
+        if (item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
             stale_files++;
         }
     }
-    for (size_t i = 0; i < pending_dirs.count; i++) {
-        if (pending_dirs.entries[i]->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
+    for (size_t i = 0; i < deploy_plan->directories.pending.count; i++) {
+        const workspace_item_t *item = deploy_plan->directories.pending.entries[i];
+
+        if (item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
             stale_dirs++;
         }
     }

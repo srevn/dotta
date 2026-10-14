@@ -306,7 +306,7 @@ static void ensure_array(
 ) {
     if (*arr_ptr != NULL) return;
     size_t cap = (size_t) (argc > 0 ? argc : 1);
-    *arr_ptr = arena_calloc(arena, cap, sizeof(char *));
+    *arr_ptr = arena_calloc(arena, cap, sizeof(**arr_ptr));
 }
 
 /* ══════════════════════════════════════════════════════════════════

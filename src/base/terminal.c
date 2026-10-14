@@ -90,7 +90,7 @@ error_t terminal_init(terminal_t **out) {
     }
 
     /* The state, made once raw mode is on: nothing before it had to be undone */
-    terminal_t *term = heap_calloc(1, sizeof(terminal_t));
+    terminal_t *term = heap_calloc(1, sizeof(*term));
     term->orig_termios = orig;
     term->raw_mode_enabled = true;
     *out = term;

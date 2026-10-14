@@ -307,7 +307,7 @@ static sync_results_t sync_analyze_phase(
 
     const string_array_t *profiles = scope_profiles(scope);
     sync_results_t results = {
-        .profiles      = arena_calloc(arena, profiles->count, sizeof(profile_sync_result_t)),
+        .profiles      = arena_calloc(arena, profiles->count, sizeof(*results.profiles)),
         .profile_count = profiles->count,
     };
 

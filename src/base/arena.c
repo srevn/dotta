@@ -94,9 +94,10 @@ static void arena_chain(arena_t *arena, size_t min_capacity) {
 
     /* The header and its bytes are one request, and one no size can hold is
      * exhaustion. */
-    if (capacity > SIZE_MAX - sizeof(arena_block_t)) heap_die(SIZE_MAX);
+    arena_block_t *block;
+    if (capacity > SIZE_MAX - sizeof(*block)) heap_die(SIZE_MAX);
 
-    arena_block_t *block = heap_alloc(sizeof(arena_block_t) + capacity);
+    block = heap_alloc(sizeof(*block) + capacity);
     block->next = current;
     block->base = current ? current->base + current->capacity : 0;
     block->capacity = capacity;

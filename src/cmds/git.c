@@ -28,7 +28,7 @@ error_t cmd_git(const dotta_ctx_t *ctx, const cmd_git_options_t *opts) {
      * No command at all is git's to answer as well (its usage, status 1), so
      * the line is handed over whatever it holds. */
     int total_args = 3 + opts->arg_count + 1;  /* git + -C + path + args + NULL */
-    char **argv = heap_calloc((size_t) total_args, sizeof(char *));
+    char **argv = heap_calloc((size_t) total_args, sizeof(*argv));
 
     argv[0] = "git";
     argv[1] = "-C";

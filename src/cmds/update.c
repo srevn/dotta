@@ -1955,7 +1955,7 @@ static error_t update_post_parse(
     }
 
     /* Worst case: every positional becomes a file. */
-    char **files = arena_calloc(arena, o->positional_count, sizeof(char *));
+    char **files = arena_calloc(arena, o->positional_count, sizeof(*files));
     size_t file_count = 0;
 
     for (size_t i = 0; i < o->positional_count; i++) {
@@ -1966,7 +1966,7 @@ static error_t update_post_parse(
         if (i == 0 && o->profile_count == 0 &&
             !path_input_announces_path(arg)) {
             /* Arena-backed 1-slot profile array for the positional. */
-            char **profiles = arena_calloc(arena, 1, sizeof(char *));
+            char **profiles = arena_calloc(arena, 1, sizeof(*profiles));
             profiles[0] = arg;
             o->profiles = profiles;
             o->profile_count = 1;

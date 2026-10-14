@@ -117,7 +117,7 @@ static void insert_for_resize(
  * abandoned to the arena once every entry has moved. */
 static void hashmap_grow(hashmap_t *map) {
     size_t new_cap = map->capacity * 2;
-    hashmap_slot_t *new_slots = arena_calloc(map->arena, new_cap, sizeof(hashmap_slot_t));
+    hashmap_slot_t *new_slots = arena_calloc(map->arena, new_cap, sizeof(*new_slots));
 
     hashmap_slot_t *old_slots = map->slots;
     size_t old_cap = map->capacity;
@@ -138,7 +138,7 @@ static void hashmap_grow(hashmap_t *map) {
         }
     }
 
-    arena_abandon(map->arena, old_slots, old_cap * sizeof(hashmap_slot_t));
+    arena_abandon(map->arena, old_slots, old_cap * sizeof(*old_slots));
     map->mod_count++;
 }
 
@@ -304,9 +304,9 @@ hashmap_t *hashmap_create(arena_t *arena, size_t expected) {
 
     size_t cap = slots_for(expected);
 
-    hashmap_t *map = arena_calloc(arena, 1, sizeof(hashmap_t));
+    hashmap_t *map = arena_calloc(arena, 1, sizeof(*map));
     map->arena = arena;
-    map->slots = arena_calloc(arena, cap, sizeof(hashmap_slot_t));
+    map->slots = arena_calloc(arena, cap, sizeof(*map->slots));
     map->capacity = cap;
     map->grow_at = cap * HASHMAP_LOAD_PERCENT / 100;
 

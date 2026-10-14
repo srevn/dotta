@@ -1004,16 +1004,16 @@ error_t deploy_preflight(
     workspace_items_t all_dirs = workspace_directories(ws);
 
     verdicts->directories.entries = arena_calloc(
-        arena, dirs.count, sizeof(deploy_verdict_t)
+        arena, dirs.count, sizeof(*verdicts->directories.entries)
     );
     verdicts->files.entries = arena_calloc(
-        arena, files.count, sizeof(deploy_verdict_t)
+        arena, files.count, sizeof(*verdicts->files.entries)
     );
     verdicts->ancestors.entries = arena_calloc(
-        arena, all_dirs.count, sizeof(deploy_verdict_t)
+        arena, all_dirs.count, sizeof(*verdicts->ancestors.entries)
     );
     verdicts->skipped.entries = arena_calloc(
-        arena, files.count + dirs.count, sizeof(deploy_skip_t)
+        arena, files.count + dirs.count, sizeof(*verdicts->skipped.entries)
     );
 
     /* Every planned row, in path order, either kind; then the ancestors. A fate

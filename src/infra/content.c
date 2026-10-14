@@ -372,7 +372,7 @@ content_cache_t *content_cache_create(
     CHECK_NULL(repo);
     CHECK_NULL(arena);
 
-    content_cache_t *cache = heap_calloc(1, sizeof(content_cache_t));
+    content_cache_t *cache = heap_calloc(1, sizeof(*cache));
 
     cache->repo = repo;
     cache->keymgr = keymgr;

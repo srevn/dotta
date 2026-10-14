@@ -1544,7 +1544,7 @@ error_t state_records(
     /* Allocate array */
     state_record_t *records = NULL;
     if (record_count > 0) {
-        records = arena_calloc(arena, record_count, sizeof(state_record_t));
+        records = arena_calloc(arena, record_count, sizeof(*records));
     }
 
     size_t i = 0;

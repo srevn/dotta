@@ -472,11 +472,12 @@ typedef enum {
  * `lstat_errno` lstat's errno on an UNKNOWN from a look that failed. The whole
  * struct stat, because state_stat_matches, content_compare_blob_to_disk and
  * workspace_compare_ownership, which the analyses hand it to, each take one,
- * the entries index and the scan's roots read its identity, and deploy reads
- * its owner where it would converge a directory in place (core/deploy.c
- * deploy_preflight's FIX arm, DEPLOY_SKIP_FOREIGN) — where a narrowed look would
- * have to synthesize one back for each. A scan item's is the scan's own lstat,
- * where it answered.
+ * the entries index and the scan's roots read its identity, deploy reads its
+ * owner where it would converge a directory in place (core/deploy.c
+ * deploy_preflight's fix arm, through holdable), and apply's FOREIGN sentence
+ * says whose it is (cmds/apply.c apply_print_deploy_skips) — where a narrowed
+ * look would have to synthesize one back for each. A scan item's is the scan's
+ * own lstat, where it answered.
  *
  * The identity is the source's strings, lent read-only: the row's for an active
  * item, the record's for an orphan, a scan item's own copies (profile: the view's

@@ -472,19 +472,45 @@ static bool nearest_ancestor(
 }
 
 /**
+ * May the run hold this directory where it stands?
+ *
+ * A hold sets a standing directory's mode through the directory's own descriptor,
+ * opened for reading (sys/filesystem.h fs_set_dir_mode), and a fix converges
+ * one through the same open (fs_create_dir_with_ownership). So the run may hold
+ * it only where it may change the node — its owner, or a run that holds root
+ * (identity_may_chmod) — and the node's bits grant it the read (fs_denied): a
+ * directory the run owns and may not read is no more its to hold than another's.
+ * A run that holds root passes both, save where the bits deny root as well.
+ *
+ * Asked wherever the run would hold a directory: a landing whose bits deny the
+ * run (holdable_directory) and a planned directory converged in place
+ * (deploy_preflight's fix arm, FOREIGN where it may not).
+ *
+ * @param path The directory (must not be NULL)
+ * @param st The look that found it there (must not be NULL): the climb's lstat
+ *        at a landing, the load's at a fix
+ */
+static bool holdable(const char *path, const struct stat *st) {
+    return identity_may_chmod(identity(), st->st_uid) && !fs_denied(path, R_OK);
+}
+
+/**
  * The item of a present directory this run may hold, or NULL
  *
  * A directory the view names — any enabled profile, in scope or not, either class,
- * the same reach create_ancestor has — that we own. The run may carry it at a
- * working mode while the paths beneath it land and release it afterwards
- * (deploy_run_t), so its current mode can never refuse a path beneath it. The
- * class does not enter: a claim's mode is captured with the very children it
- * would refuse, and that argument is the ancestor claim's as much as the tracked
- * one's — the alternative would make the reach depend on whether the user typed
- * the directory or a file inside it. Nothing else is ours to touch: a directory
- * no row names whose bits deny the run is a permission error, and a claimed one
- * we do not own cannot be fchmod'd at all (identity_may_chmod: the node's owner,
- * or a run that holds root).
+ * the same reach create_ancestor has — that the run may hold where it stands
+ * (holdable). The run may carry it at a working mode while the paths beneath it
+ * land and release it afterwards (deploy_run_t), so its current mode can never
+ * refuse a path beneath it. The class does not enter: a claim's mode is captured
+ * with the very children it would refuse, and that argument is the ancestor claim's
+ * as much as the tracked one's — the alternative would make the reach depend on
+ * whether the user typed the directory or a file inside it. Nothing else is ours
+ * to touch: a directory no row names whose bits deny the run is a permission
+ * error, and so is a claimed one the run may not hold — another's, or one whose
+ * bits refuse it the read.
+ *
+ * Asked by the landing check and the landing's open (check_landing,
+ * open_landing_directory): the prediction and the mechanism, one question.
  *
  * @param st lstat of the directory (must not be NULL)
  */
@@ -495,8 +521,8 @@ static const workspace_item_t *holdable_directory(
 
     /* The view's claim, which an active item carries and an orphan's does not:
      * a directory only a record remembers is no claim to hold */
-    if (item && item->row && item->item_kind == PATH_KIND_DIRECTORY
-        && identity_may_chmod(identity(), st->st_uid)) {
+    if (item && item->row &&
+        item->item_kind == PATH_KIND_DIRECTORY && holdable(path, st)) {
         return item;
     }
     return NULL;
@@ -649,9 +675,11 @@ static void check_ancestry(
  *                             it before anything lands beneath). A *skipped*
  *                             directory row converges nothing and vouches for
  *                             nothing — it answers below like any stranger's path
- *   a directory the view      ours to hold (holdable_directory), either class:
- *   names                     if its bits deny the run, ensure_parents opens it
- *                             for the run and releases it afterwards; fine
+ *   a directory the view      ours to hold, either class, where the run may
+ *   names                     change it and read it (holdable_directory): if its
+ *                             bits deny the run, ensure_parents opens it for
+ *                             the run and releases it afterwards; fine. Where
+ *                             it may not, it answers as any other directory
  *   any other directory       its bits must not deny the run a new entry —
  *                             fs_denied, which unlike a mode test knows about
  *                             ownership, groups, ACLs and root, and asks for
@@ -905,8 +933,9 @@ static bool above_deployable_row(
  *
  * Workspace = analysis layer, preflight = decision layer, execute = execution
  * layer. Divergence verdicts and occupants are read off the item each pending
- * bucket holds; the one filesystem-level question is the landing (and, for a
- * directory standing where a file belongs, the readdir under path_clearance).
+ * bucket holds; the filesystem-level questions are the landing, the read a fix
+ * opens its directory with (holdable), and, for a directory standing where a
+ * file belongs, the readdir under path_clearance.
  *
  * Every pending row gets exactly one fate — a verdict or a skip, the totality
  * equation — so the verdict arrays hold deployable rows alone and the executors
@@ -1008,14 +1037,16 @@ error_t deploy_preflight(
              * — whether or not something is already at the path, so one question
              * covers them all, and it is never about the path itself (the landing).
              * A directory already standing at a directory row is converged in
-             * place instead, and fchmod and fchown ask for the node's owner,
-             * the owner the load's look found (FOREIGN). A row the workspace
-             * could not settle is asked too, and skipped on its own account only
-             * when the landing had nothing to say (the leftover, below). */
+             * place instead, through its own descriptor: the run's to do only
+             * where it may hold the directory (holdable — the owner the load's
+             * look found, and the read the open needs), FOREIGN where it may
+             * not. A row the workspace could not settle is asked too, and skipped
+             * on its own account only when the landing had nothing to say (the
+             * leftover, below). */
             if (item->item_kind != PATH_KIND_DIRECTORY ||
                 deploy_convergence(occupant) != DEPLOY_CONVERGE_FIX) {
                 check_landing(ws, verdicts, path, &skip);
-            } else if (!identity_may_chmod(identity(), item->st.st_uid)) {
+            } else if (!holdable(path, &item->st)) {
                 skip.reason = DEPLOY_SKIP_FOREIGN;
             }
 
@@ -1365,8 +1396,8 @@ static error_t create_ancestor(deploy_run_t *run, const char *path) {
  * The nearest present ancestor is where the write lands, and its bits must not
  * deny a new entry. An absent chain below it is created at working modes and
  * cannot refuse; the ancestor itself can — a claimed 0555 directory that is already
- * exactly as recorded denies the very child it was captured with. When it is
- * ours (holdable_directory) the run holds it at a working mode, built from its
+ * exactly as recorded denies the very child it was captured with. When the run
+ * may hold it (holdable_directory) it does, at a working mode built from its
  * current mode so that the release restores exactly what was there, recorded or
  * not (an excluded or out-of-scope row is not the plan's to converge) — set on
  * the directory that stands and never made (fs_set_dir_mode): one the world took
@@ -1399,7 +1430,7 @@ static error_t open_landing_directory(
 
     const workspace_item_t *item = holdable_directory(run->ws, ancestor, st);
     if (!item) {
-        return NULL;  /* not ours: the write meets the refusal */
+        return NULL;  /* not the run's to hold: the write meets the refusal */
     }
 
     mode_t current = st->st_mode & 0777;
@@ -1412,7 +1443,8 @@ static error_t open_landing_directory(
 
 /**
  * Create the missing parents of a planned path, top-down from its nearest present
- * ancestor — opening that ancestor for the run first when it is ours and refuses.
+ * ancestor — opening that ancestor for the run first when it refuses and the
+ * run may hold it.
  *
  * Mutation, not decision. Whether the path can land was preflight's question,
  * and the directory pass has already replaced any planned squatter above it; a
@@ -1599,13 +1631,13 @@ static error_t deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
     /* A create or a replace lands a new entry through the parent — the replace's
      * after its clear — so the landing is opened first, the one check_landing
      * predicted, as deploy_file opens its own (ensure_parents): the missing parents
-     * made, the nearest present one held where it is ours and refuses. A squatter's
-     * parent stands, the squatter being in it, and nothing is made — the final
-     * component is the path itself. An absent path beneath a non-directory is
-     * one preflight blocked when unplanned and the directory pass replaces when
-     * planned (prefix order); one still there is ensure_parents' named error. A
-     * fix converges in place, through the directory's own descriptor: no new
-     * entry lands, so there is no landing to open. */
+     * made, the nearest present one held where it refuses and the run may hold
+     * it. A squatter's parent stands, the squatter being in it, and nothing is
+     * made — the final component is the path itself. An absent path beneath a
+     * non-directory is one preflight blocked when unplanned and the directory
+     * pass replaces when planned (prefix order); one still there is ensure_parents'
+     * named error. A fix converges in place, through the directory's own
+     * descriptor: no new entry lands, so there is no landing to open. */
     if (convergence != DEPLOY_CONVERGE_FIX) {
         error_t err = ensure_parents(run, path);
         if (err) return err;

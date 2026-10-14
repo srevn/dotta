@@ -287,9 +287,11 @@ bool identity_may_chown(const identity_t *id, uid_t uid, gid_t gid);
  * kernel's "yes" (an ACL granting it) and the refusal's remedy, sudo, holds either
  * way.
  *
- * Readers: core/deploy.c holdable_directory (a landing directory the run may
- * hold at a working mode) and deploy_preflight's ladder (a planned directory
- * converged in place, DEPLOY_SKIP_FOREIGN). A reader not on this list is a bug.
+ * Readers: core/deploy.c holdable (a directory the run may hold where it stands:
+ * a landing at a working mode, or a planned directory converged in place,
+ * DEPLOY_SKIP_FOREIGN where it may not) and cmds/apply.c apply_print_deploy_skips
+ * (FOREIGN's sentence: another's, or the run's own). A reader not on this list
+ * is a bug.
  *
  * @param id The identity (must not be NULL)
  * @param owner The node's owner (its st_uid)

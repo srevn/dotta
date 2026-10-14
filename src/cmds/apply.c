@@ -67,25 +67,26 @@
  * lift it nor a by-hand fix for a path dotta could not even read: it closes with
  * its own line, because dotta never writes on a guess. The refusals the run's
  * identity met — a landing whose bits deny the invoker, a directory it does not
- * own, a pair it cannot set, and a look that met EACCES on the path itself —
- * close by naming sudo, and only for a run that holds none: identity()->privileged.
- * The line offers root and promises nothing: a policy may deny root a landing
- * or a read as well. The key's refusal closes the same way, naming the verb that
- * lifts it, and the switch before it where the configuration has encryption off
- * (config->encryption_enabled) — the two facts of the run this block asks; the
- * two refusals are told apart by the field the label above reads. Neither line
- * spells the command that would: the user typed one, the verb the other names
- * says the rest when it is run, and what sudo does to their environment on the
- * way is sudo's to document, not dotta's. The consent remedy teaches both
- * directions and names its cost the way cleanup's does: --force keeps Git's and
- * discards what stands there, and a CONTENT skip adds the disk-wins verb, 'dotta
- * update' — gated on CONTENT and not on the class, because update refuses a retyped
- * row (cmds/update.c update_partition's kind refusal). It stops there: the 'dotta
- * add --force' a Git-moved row needs is what update's own refusal says at the
- * moment the user meets it, and '-e' is how to ignore a skip, not how to remedy
- * one. The block sits between the deploy preview and cleanup's, so each engine
- * tells its story the same way — what it will do, then what it will not and why.
- * No total-count line: the exit error's message is the count's one home.
+ * own or may not read, a pair it cannot set, and a look that met EACCES on the
+ * path itself — close by naming sudo, and only for a run that holds none:
+ * identity()->privileged. The line offers root and promises nothing: a policy
+ * may deny root a landing or a read as well. The key's refusal closes the same
+ * way, naming the verb that lifts it, and the switch before it where the
+ * configuration has encryption off (config->encryption_enabled) — the two facts
+ * of the run this block asks; the two refusals are told apart by the field the
+ * label above reads. Neither line spells the command that would: the user typed
+ * one, the verb the other names says the rest when it is run, and what sudo does
+ * to their environment on the way is sudo's to document, not dotta's. The consent
+ * remedy teaches both directions and names its cost the way cleanup's does: --force
+ * keeps Git's and discards what stands there, and a CONTENT skip adds the disk-wins
+ * verb, 'dotta update' — gated on CONTENT and not on the class, because update
+ * refuses a retyped row (cmds/update.c update_partition's kind refusal). It stops
+ * there: the 'dotta add --force' a Git-moved row needs is what update's own refusal
+ * says at the moment the user meets it, and '-e' is how to ignore a skip, not
+ * how to remedy one. The block sits between the deploy preview and cleanup's,
+ * so each engine tells its story the same way — what it will do, then what it
+ * will not and why. No total-count line: the exit error's message is the count's
+ * one home.
  */
 static void apply_print_deploy_skips(
     output_t *out, const config_t *config, const deploy_preflight_t *verdicts
@@ -130,10 +131,17 @@ static void apply_print_deploy_skips(
             }
 
             case DEPLOY_SKIP_FOREIGN: {
-                /* Who holds the directory the run may not converge — a path rung's,
-                 * so the look was at this very path: by name where this host
-                 * has one, by number where it does not. A screen names what it
-                 * can. */
+                /* Why the run may not hold the directory where it stands
+                 * (core/deploy.c holdable) — a path rung's, so the look was at
+                 * this very path: the run's own, whose bits refuse the read the
+                 * fix opens it with, or another's, said by who holds it — by
+                 * name where this host has one, by number where it does not. A
+                 * screen names what it can. */
+                if (identity_may_chmod(identity(), s->item->st.st_uid)) {
+                    output_print(out, row_level, "  {red}✗{reset} %s (not readable)\n", path);
+                    break;
+                }
+
                 const struct passwd *pwd = getpwuid(s->item->st.st_uid);
                 if (pwd && pwd->pw_name) {
                     output_print(

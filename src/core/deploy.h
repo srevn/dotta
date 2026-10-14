@@ -43,7 +43,9 @@
  *   mode, owner rwx on: deploy_working_mode) while the run writes beneath them,
  *   then released to the exact recorded mode, deepest-first — the same way
  *   cmd_export materializes a profile. A directory the view claims therefore
- *   never refuses a path beneath it, and preflight predicts no modes
+ *   never refuses a path beneath it where the run may hold it — its owner's or
+ *   root's to change, and its read granted, since a hold reaches the directory
+ *   through a descriptor opened for reading — and preflight predicts no modes
  * - Metadata is reproduced, not negotiated: every write applies the row's mode
  *   and resolved ownership atomically through its own descriptor, so there is
  *   never a moment when a path stands with the wrong owner
@@ -267,21 +269,24 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * UNREADABLE is what is left when the landing had nothing to say. FOREIGN is
  * the landing's twin for a directory already there: a create or a replace lands
  * a new entry through its parent, which PERMISSION asks, where a fix converges
- * the node in place, which only its owner may do — so a row takes one question
- * or the other, never both, and FOREIGN stands beside PERMISSION. OWNERSHIP ranks
- * last of all, an incapacity behind the consent reasons, because it is the row's
- * rung and not the path's: the ownership is resolved for a row every other rung
- * passed (a skipped row can neither warn nor fail strict_ownership —
- * deploy_preflight's invariant), so the question is never asked of a row another
- * reason already holds, and its place in the order is the place the decision takes.
+ * the node in place through a descriptor opened for reading, which only a run
+ * that may hold it can do — the node's owner, or root, its read granted
+ * (core/deploy.c holdable) — so a row takes one question or the other, never
+ * both, and FOREIGN stands beside PERMISSION. OWNERSHIP ranks last of all, an
+ * incapacity behind the consent reasons, because it is the row's rung and not
+ * the path's: the ownership is resolved for a row every other rung passed (a
+ * skipped row can neither warn nor fail strict_ownership — deploy_preflight's
+ * invariant), so the question is never asked of a row another reason already
+ * holds, and its place in the order is the place the decision takes.
  *
  * Each reason is a sentence about the row that carries it, read off that skip's
  * own fields (cmds/apply.c apply_print_deploy_skips): the ancestor it names
  * (PERMISSION, ANCESTOR, a TYPE that names one), its own occupant (TYPE, OCCUPIED),
- * its own item (CONTENT, UNREADABLE, and FOREIGN, the owner its look found),
- * its own claim (OWNERSHIP). So a row beneath a skipped squatter takes the
- * squatter's class and never its reason (check_ancestry): the squatter's sentence
- * is about the squatter, whatever reason a later rung adds.
+ * its own item (CONTENT, UNREADABLE, and FOREIGN, the owner its look found —
+ * another, or the run itself, its read refused), its own claim (OWNERSHIP). So
+ * a row beneath a skipped squatter takes the squatter's class and never its reason
+ * (check_ancestry): the squatter's sentence is about the squatter, whatever reason
+ * a later rung adds.
  *
  * Symlink rows need no arm of their own: a foreign kind at a link row's path is
  * TYPE (deploy.c occupant_conflicts), a retargeted link is CONTENT (the target
@@ -292,7 +297,7 @@ typedef enum {
     DEPLOY_SKIP_NONE = 0,     /* Not skipped — the row has a verdict */
     DEPLOY_SKIP_ANCESTOR,     /* A non-directory squats an ancestor this run does not converge */
     DEPLOY_SKIP_PERMISSION,   /* The landing's bits deny the run: an ancestor not ours, or none reachable */
-    DEPLOY_SKIP_FOREIGN,      /* A directory another owns stands at the path: only its owner converges it */
+    DEPLOY_SKIP_FOREIGN,      /* The directory at the path is another's, or its bits deny the run the read */
     DEPLOY_SKIP_OCCUPIED,     /* A directory holding untracked paths stands at the path */
     DEPLOY_SKIP_TYPE,         /* A different kind of path stands where the row lands (--force) */
     DEPLOY_SKIP_CONTENT,      /* Disk holds content dotta did not put there (--force) */
@@ -784,18 +789,22 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  *   the chain.
  * - Landing — the write must be able to land. Every arm of the executor writes
  *   through the *parent* — a temp file or a link renamed over the target, a mkdir
- *   — so the path's own permissions are never the question, and a directory being
- *   converged in place asks nothing at all. The question goes to the nearest
- *   present ancestor alone: everything absent beneath it is created by this run
- *   at a working mode and cannot refuse. A deployable or holdable claimed directory
- *   there is dotta's and never refuses; any other directory's bits must not deny
- *   the run a new entry (fs_denied) or the row is skipped (PERMISSION) — what
- *   refuses every identity there denies the run nothing, and is the write's to
- *   meet; a non-directory squatter at a path no row claims skips it too (ANCESTOR
- *   — the claimed ones were the ancestry rung's). Ancestors are not items, so
- *   this is the one fresh probe preflight takes; the mechanism (ensure_parents)
- *   asks the same questions of the same ancestor, so this predicts the run rather
- *   than modelling it.
+ *   — so the path's own permissions are never the question; a directory converged
+ *   in place lands no new entry and asks no landing, only whether the run may
+ *   hold it where it stands (FOREIGN, the landing's twin). The question goes to
+ *   the nearest present ancestor alone: everything absent beneath it is created
+ *   by this run at a working mode and cannot refuse. A deployable directory row
+ *   there is dotta's and never refuses, and neither does a claimed directory
+ *   the run may hold — its owner's or root's to change, its read granted
+ *   (holdable_directory); any other directory's bits must not deny the run a
+ *   new entry (fs_denied) or the row is skipped (PERMISSION) — what refuses every
+ *   identity there denies the run nothing, and is the write's to meet; a
+ *   non-directory squatter at a path no row claims skips it too (ANCESTOR — the
+ *   claimed ones were the ancestry rung's). Ancestors are not items, so the landing
+ *   is probed fresh: what stands there, the bits it grants a new entry and, where
+ *   the run would hold it, the read the hold opens it with; the mechanism
+ *   (ensure_parents) asks the same questions of the same ancestor, so this predicts
+ *   the run rather than modelling it.
  * - Type — the occupant the workspace's look found at the planned path, both
  *   kinds (workspace_item_t.occupant; a row planned beneath a squatter this run
  *   replaces is absent, and asked nothing). A different kind at the path — a
@@ -859,15 +868,16 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * average).
  *
  * Runs as the invoker, the identity every write is made as (sys/identity), and
- * asks for no other: a landing whose bits deny the invoker is PERMISSION, a pair
- * it cannot set is OWNERSHIP — a row is OWNERSHIP-skipped iff its resolved pair
- * is not the invoker's to set and the run holds no root — and a run that holds
- * root meets neither refusal, since the executors land the row through the
- * syscall's second try (sys/filesystem) and root sets any pair, save where the
- * bits deny root as well (fs_denied asks as root already). The ancestors are
- * not asked the ownership rung (a foreign-owned derived claim above a landing
- * the invoker can write meets the refusal at the create, and the row beneath
- * carries it as its outcome).
+ * asks for no other: a landing whose bits deny the invoker is PERMISSION; a
+ * directory it may not hold where it stands, another's or one whose bits deny
+ * it the read, is FOREIGN; a pair it cannot set is OWNERSHIP — a row is
+ * OWNERSHIP-skipped iff its resolved pair is not the invoker's to set and the
+ * run holds no root. A run that holds root meets none of the three, since the
+ * executors land the row through the syscall's second try (sys/filesystem) and
+ * root holds any directory and sets any pair, save where the bits deny root as
+ * well (fs_denied asks as root already). The ancestors are not asked the ownership
+ * rung (a foreign-owned derived claim above a landing the invoker can write meets
+ * the refusal at the create, and the row beneath carries it as its outcome).
  *
  * READ-ONLY: modifies neither the filesystem, the state database nor Git.
  *
@@ -922,17 +932,18 @@ error_t deploy_preflight(
  *
  * Directories are materialized in two phases. Every directory the run creates
  * or converges carries its recorded mode with the owner triad forced on while
- * the run writes beneath it; a claimed, owned directory that already stands where
- * a planned path must land and refuses it is opened the same way, whichever class
- * it is — a claim's mode was captured with the very children it would refuse.
- * When the run is over — however the rows fared — each such directory is released
- * to its exact mode, deepest-first: recorded for the ones the plan materialized,
- * the mode it had for the ones merely opened. Group and other bits are never
- * widened. This is the one transient the run leaves during its life and none
- * afterwards; it is what lets a 0555 directory captured with children be redeployed
- * with them, and what makes the landing check a question about directories no
- * row claims. A hold the release cannot let go is the receipt's (deploy_receipt_t's
- * held).
+ * the run writes beneath it; a claimed directory the run may hold (core/deploy.c
+ * holdable_directory: its owner's or root's to change, its read granted) that
+ * already stands where a planned path must land and refuses it is opened the
+ * same way, whichever class it is — a claim's mode was captured with the very
+ * children it would refuse. When the run is over — however the rows fared — each
+ * such directory is released to its exact mode, deepest-first: recorded for the
+ * ones the plan materialized, the mode it had for the ones merely opened. Group
+ * and other bits are never widened. This is the one transient the run leaves
+ * during its life and none afterwards; it is what lets a 0555 directory captured
+ * with children be redeployed with them, and what makes the landing check a
+ * question about the directories the run may not hold. A hold the release cannot
+ * let go is the receipt's (deploy_receipt_t's held).
  *
  * Individual row failures are non-fatal: the row lands in the receipt's failed
  * bucket with its cause and the run goes on — except that a failed directory

@@ -480,7 +480,9 @@ error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
  *
  * Behavior:
  * - If directory doesn't exist: creates with atomic ownership + mode
- * - If directory exists: updates ownership + mode atomically
+ * - If directory exists: opens it for reading, so its bits must grant the caller
+ *   the read (core/deploy.c holdable predicts it), and updates ownership + mode
+ *   atomically
  * - Use uid=-1 or gid=-1 to skip ownership change
  * - A directory this call made and could not attribute is unmade — the exclusive
  *   sibling's rule — so a refusal leaves the path as the call found it; one it
@@ -555,16 +557,18 @@ error_t fs_create_dir_exclusive(
  * Set the mode of the directory that stands at a path — never made, never through
  * a link
  *
- * Through the directory's own descriptor — opened O_DIRECTORY | O_NOFOLLOW, so
- * a link at the path is refused rather than followed, then fchmod — the mode
- * lands on the node that was opened, whatever the path names by then. Where no
- * directory stands there is nothing to set, and absence is success, told apart
- * at the syscall before any error is made, as a removal tells "already gone"
- * (the header's "The word"): ENOENT and ENOTDIR — nothing there, something there
- * that is no directory, or a component above that is no directory — the absence
- * fs_lstat_occupant reads. Every other refusal is the call's failure, ELOOP among
- * them: a loop above the path leaves a directory the call could not reach, never
- * one that is not there.
+ * Through the directory's own descriptor — opened for reading, O_DIRECTORY |
+ * O_NOFOLLOW, so a link at the path is refused rather than followed, then fchmod
+ * — the mode lands on the node that was opened, whatever the path names by then.
+ * The open needs the read: a directory whose bits refuse the caller that read
+ * refuses the call (EACCES), its mode as it was (core/deploy.c holdable predicts
+ * it). Where no directory stands there is nothing to set, and absence is success,
+ * told apart at the syscall before any error is made, as a removal tells "already
+ * gone" (the header's "The word"): ENOENT and ENOTDIR — nothing there, something
+ * there that is no directory, or a component above that is no directory — the
+ * absence fs_lstat_occupant reads. Every other refusal is the call's failure,
+ * ELOOP among them: a loop above the path leaves a directory the call could not
+ * reach, never one that is not there.
  *
  * The converging sibling with the creation taken out: fs_create_dir_with_ownership
  * creates or converges, fs_create_dir_exclusive creates, and this sets the mode
@@ -1092,10 +1096,13 @@ fs_occupant_t fs_lstat_occupant(const char *path, struct stat *st);
  * predicts meets each of those itself, and reports its cause.
  *
  * A directory's W_OK | X_OK is "may an entry be made in it, or removed from it"
- * — asked of the directory a write lands in, or a removal is made from.
+ * — asked of the directory a write lands in, or a removal is made from — and
+ * its R_OK "may it be opened", as the descriptor that sets a standing directory's
+ * mode is (fs_set_dir_mode).
  *
  * Readers: core/deploy.c check_landing and open_landing_directory (the landing),
- * core/cleanup.c cleanup_refused (the parent).
+ * holdable (the read a hold or a fix opens its directory with), core/cleanup.c
+ * cleanup_refused (the parent).
  *
  * @param path Path (must not be NULL)
  * @param amode R_OK, W_OK, X_OK, or'd

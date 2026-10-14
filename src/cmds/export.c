@@ -917,12 +917,6 @@ static error_t validate_content(
                 );
                 if (err) return err;
                 e->content_held = true;
-
-                /* Phase 2 and the listing read the target as a C string, and an
-                 * empty one is symlink(2)'s to take or refuse, as Git leaves
-                 * it: the reserve gives a buffer that holds no byte its
-                 * terminator. */
-                buffer_reserve(&e->content, e->content.size);
                 break;
             }
 

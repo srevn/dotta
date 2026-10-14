@@ -253,6 +253,10 @@ typedef struct content_cache content_cache_t;
  *    ENCRYPTED      → decrypt using profile key from keymgr
  *    UNSUPPORTED_VERSION → ERR_CRYPTO with version-skew diagnostic
  *
+ * The plaintext is a C string — a terminator past its bytes, an entry with none
+ * included — so a link's target is handed to symlink(2) as it stands, empty or
+ * not: cmds/export.c materialize_entries and print_dry_run read it so.
+ *
  * @param repo Git repository (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)
  * @param mode The entry's filemode, as its tree or index records it

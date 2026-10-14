@@ -180,6 +180,9 @@ static const char ENCRYPTION_DISABLED[] = "Encryption is disabled (encryption.en
  *   - ENCRYPTED           → decrypt via keymgr
  *   - UNSUPPORTED_VERSION → ERR_CRYPTO naming the version pair
  *
+ * Either way the plaintext is the C string both public reads promise: its bytes
+ * and a terminator, an entry with none included.
+ *
  * Works on a zero-copy view, so callers must keep the backing blob alive for
  * the duration of the call.
  *
@@ -221,6 +224,10 @@ static error_t get_plaintext_from_blob(
 
     switch (kind) {
         case CONTENT_PLAINTEXT: {
+            /* The size is known, so the room is exactly it (base/buffer.h
+             * "Sizing"), and its terminator makes a C string of an entry with
+             * no bytes as well, as the decrypt's resize does (crypto/cipher.c) */
+            buffer_reserve(out_content, blob_size);
             buffer_append(out_content, blob_data, blob_size);
             return NULL;
         }

@@ -30,15 +30,15 @@
 /* Maximum file size for fs_read_file (256 MB) */
 #define FS_MAX_READ_SIZE ((size_t) 256 * 1024 * 1024)
 
-/* A write's temp file, beside its target: the target's directory, then this —
- * mkstemp's template, whose six Xs fs_mkstemp reads, and fs_replace_symlink draws
- * for a link's */
-#define FS_TMP_SUFFIX "/.dotta-tmp-XXXXXX"
+/* A write's temporary, beside its path: the path's directory, then this — mkstemp's
+ * template, whose six Xs fs_mkstemp reads, and fs_temp_symlink draws for a
+ * link's */
+#define FS_TEMP_SUFFIX "/.dotta-tmp-XXXXXX"
 
 /* How many names a link's temporary draws before the directory's refusal is the
- * answer (fs_replace_symlink): six characters of sixty-two, drawn fresh, meet a
+ * answer (fs_temp_symlink): six characters of sixty-two, drawn fresh, meet a
  * name another holds by malice alone */
-#define FS_TMP_DRAWS 32
+#define FS_TEMP_DRAWS 32
 
 /**
  * The kernel's calls on managed paths
@@ -373,10 +373,10 @@ error_t fs_read_file(const char *path, buffer_t *out) {
 /**
  * Helper: Apply metadata, write data, sync, and close a file descriptor
  *
- * The core write sequence of fs_write_file_raw's temp file. Ownership and
- * permissions are set via fd-based operations (fchown/fchmod) BEFORE any data
- * is written, preserving the security invariant that sensitive content is never
- * exposed with wrong metadata.
+ * The core write sequence of fs_temp_file's temporary. Ownership and permissions
+ * are set via fd-based operations (fchown/fchmod) BEFORE any data is written,
+ * preserving the security invariant that sensitive content is never exposed with
+ * wrong metadata.
  *
  * The fd is always closed on return (both success and error).
  *
@@ -391,14 +391,8 @@ error_t fs_read_file(const char *path, buffer_t *out) {
  * @return Error or NULL on success
  */
 static error_t write_and_close_fd(
-    int fd,
-    const char *path,
-    const unsigned char *data,
-    size_t size,
-    mode_t mode,
-    uid_t uid,
-    gid_t gid,
-    struct stat *out_st
+    int fd, const char *path, const unsigned char *data, size_t size,
+    mode_t mode, uid_t uid, gid_t gid, struct stat *out_st
 ) {
     /* SECURITY CRITICAL: Apply ownership BEFORE writing data
      *
@@ -475,35 +469,24 @@ static error_t write_and_close_fd(
     return NULL;
 }
 
-error_t fs_write_file_raw(
-    const char *path,
-    const unsigned char *data,
-    size_t size,
-    mode_t mode,
-    uid_t uid,
-    gid_t gid,
-    struct stat *out_st
+error_t fs_temp_file(
+    fs_temp_t *temp, const char *path, const unsigned char *data, size_t size,
+    mode_t mode, uid_t uid, gid_t gid, struct stat *out_st
 ) {
+    CHECK_NULL(temp);
     CHECK_NULL(path);
     CHECK_ARG(data != NULL || size == 0, "data cannot be NULL with a size");
 
-    /* Ensure parent directory exists */
+    /* The temporary in the path's own directory. Two names in one directory are
+     * necessarily on one filesystem, so the publish can never fail with EXDEV —
+     * there is no cross-device case to fall back from, and no second write strategy
+     * at all. The name spells the parent whole before its suffix, so the parent
+     * goes here, and the refusal below reads it there. */
     char *parent = fs_parent_dir(path);
-    error_t err = fs_exists(parent) ? NULL : fs_create_dir(parent, true);
-    if (err) {
-        free(parent);
-        return error_wrap(err, "Failed to create parent directory for '%s'", path);
-    }
-
-    /* Build temp file path in the target's own directory. Two names in one
-     * directory are necessarily on one filesystem, so the rename below can never
-     * fail with EXDEV — there is no cross-device case to fall back from, and no
-     * second write strategy at all. The name spells the parent whole before its
-     * suffix, so the parent goes here, and the refusal below reads it there. */
-    char tmp_path[PATH_MAX];
-    int n = snprintf(tmp_path, sizeof(tmp_path), "%s" FS_TMP_SUFFIX, parent);
+    char name[PATH_MAX];
+    int n = snprintf(name, sizeof(name), "%s" FS_TEMP_SUFFIX, parent);
     free(parent);
-    if (n < 0 || (size_t) n >= sizeof(tmp_path)) {
+    if (n < 0 || (size_t) n >= sizeof(name)) {
         return error_create(ERR_FS, "Path too long for atomic write of '%s'", path);
     }
 
@@ -514,48 +497,140 @@ error_t fs_write_file_raw(
      * file before a single byte of the replacement is written, and does so for
      * every mkstemp errno, ENOSPC included. A write that cannot be atomic is
      * reported, not attempted. */
-    int fd = fs_mkstemp(tmp_path);
+    int fd = fs_mkstemp(name);
     if (fd < 0) {
         return error_errno(
             errno, "Failed to create a temporary file in '%.*s' for '%s'",
-            n - (int) (sizeof(FS_TMP_SUFFIX) - 1), tmp_path, path
+            n - (int) (sizeof(FS_TEMP_SUFFIX) - 1), name, path
         );
     }
 
     /* Write data to temp file with correct ownership and permissions.
      * SECURITY: All metadata is applied via fd operations before data is written.
-     * If anything fails, the original file is untouched. */
-    err = write_and_close_fd(fd, path, data, size, mode, uid, gid, out_st);
+     * If anything fails, the temporary goes and the path is untouched. */
+    error_t err = write_and_close_fd(fd, path, data, size, mode, uid, gid, out_st);
     if (err) {
-        fs_unlink(tmp_path);
+        fs_unlink(name);
         return err;
     }
 
-    /* Atomic replace: rename temp over target. POSIX guarantees this is atomic
-     * on the same filesystem — at no point does the target path contain partial
-     * content. */
-    if (fs_rename(tmp_path, path) < 0) {
-        int saved_errno = errno;
-        fs_unlink(tmp_path);
-
-        return error_errno(saved_errno, "Failed to replace '%s'", path);
-    }
+    /* Whole: the write's from here, until its publish or its take-back — and
+     * only from here, so no refusal above has a name to give back */
+    memcpy(temp->name, name, (size_t) n + 1);
+    temp->path = path;
 
     return NULL;
+}
+
+error_t fs_temp_symlink(
+    fs_temp_t *temp, const char *target, const char *linkpath, uid_t uid, gid_t gid
+) {
+    CHECK_NULL(temp);
+    CHECK_NULL(target);
+    CHECK_NULL(linkpath);
+
+    /* The temporary in the path's own directory, as fs_temp_file's: two names
+     * in one directory are on one filesystem, so the publish never meets EXDEV */
+    char *parent = fs_parent_dir(linkpath);
+    char name[PATH_MAX];
+    int n = snprintf(name, sizeof(name), "%s" FS_TEMP_SUFFIX, parent);
+    free(parent);
+    if (n < 0 || (size_t) n >= sizeof(name)) {
+        return error_create(
+            ERR_FS, "Path too long for an atomic link at '%s'", linkpath
+        );
+    }
+
+    /* A fresh name each draw until symlink(2) takes one: a name another holds
+     * is EEXIST and the next is drawn, and any other refusal is the link's own,
+     * said as the link that was never made */
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    char *xs = name + n - 6;
+
+    for (int draws = 1;; draws++) {
+        uint8_t draw[6];
+        error_t err = entropy_fill(draw, sizeof(draw));
+        if (err) {
+            return error_wrap(
+                err, "Failed to create symlink '%s' -> '%s'", linkpath, target
+            );
+        }
+        for (size_t i = 0; i < sizeof(draw); i++) {
+            xs[i] = alphabet[draw[i] % (sizeof(alphabet) - 1)];
+        }
+
+        if (fs_symlink(target, name) == 0) break;
+        if (errno != EEXIST || draws == FS_TEMP_DRAWS) {
+            return error_errno(
+                errno, "Failed to create symlink '%s' -> '%s'", linkpath, target
+            );
+        }
+    }
+
+    /* Owned before it stands where the path is read: lchown on the temporary,
+     * the link itself. A refusal is worded before the unlink can move errno */
+    if ((uid != (uid_t) -1 || gid != (gid_t) -1) && fs_lchown(name, uid, gid) < 0) {
+        error_t err = error_errno(
+            errno, "Failed to set ownership on symlink '%s'", linkpath
+        );
+        fs_unlink(name);
+        return err;
+    }
+
+    /* Whole: the write's from here, until its publish or its take-back */
+    memcpy(temp->name, name, (size_t) n + 1);
+    temp->path = linkpath;
+
+    return NULL;
+}
+
+error_t fs_temp_publish(fs_temp_t *temp) {
+    CHECK_NULL(temp);
+    CHECK_ARG(temp->name[0] != '\0', "no write made to publish");
+
+    /* The swap: what stood at the path stands until the write does — rename(2)
+     * on one filesystem never leaves the path holding part of either. A refusal
+     * is worded before the unlink can move errno, and the temporary goes beside
+     * it: published or refused, none is left */
+    error_t err = fs_rename(temp->name, temp->path) < 0
+        ? error_errno(errno, "Failed to replace '%s'", temp->path)
+        : NULL;
+
+    if (err) fs_unlink(temp->name);
+    temp->name[0] = '\0';
+
+    return err;
+}
+
+void fs_temp_deinit(fs_temp_t *temp) {
+    CHECK_NULL(temp);
+
+    if (temp->name[0] == '\0') return;
+
+    fs_unlink(temp->name);
+    temp->name[0] = '\0';
+}
+
+error_t fs_write_file_raw(
+    const char *path, const unsigned char *data, size_t size, mode_t mode,
+    uid_t uid, gid_t gid, struct stat *out_st
+) {
+    fs_temp_t temp = FS_TEMP_INIT;
+    error_t err = fs_temp_file(&temp, path, data, size, mode, uid, gid, out_st);
+
+    return err ? err : fs_temp_publish(&temp);
 }
 
 error_t fs_write_file(const char *path, const buffer_t *content) {
     CHECK_NULL(path);
     CHECK_NULL(content);
 
+    error_t err = fs_ensure_parent_dirs(path);
+    if (err) return err;
+
     return fs_write_file_raw(
-        path,
-        (const unsigned char *) content->data,
-        content->size,
-        0644,
-        -1,
-        -1,
-        NULL
+        path, (const unsigned char *) content->data, content->size, 0644, -1, -1, NULL
     );
 }
 
@@ -572,17 +647,20 @@ error_t fs_copy_file(const char *src, const char *dst) {
     /* Read source */
     buffer_t content = BUFFER_INIT;
     err = fs_read_file(src, &content);
-    if (err) {
-        return error_wrap(err, "Failed to copy '%s' to '%s'", src, dst);
-    }
+    if (err) return error_wrap(err, "Failed to copy '%s' to '%s'", src, dst);
 
-    /* Write destination with source permissions atomically
+    /* Write destination with source permissions atomically, its parent made once
+     * the bytes are in hand, as fs_write_file makes it.
+     *
      * SECURITY: Use fs_write_file_raw() to set permissions atomically via fchmod(),
      * eliminating the security window where sensitive files (e.g., SSH keys)
      * would have incorrect permissions (0644 instead of 0600). */
-    err = fs_write_file_raw(
-        dst, (const unsigned char *) content.data, content.size, mode, -1, -1, NULL
-    );
+    err = fs_ensure_parent_dirs(dst);
+    if (!err) {
+        err = fs_write_file_raw(
+            dst, (const unsigned char *) content.data, content.size, mode, -1, -1, NULL
+        );
+    }
     buffer_deinit(&content);
     if (err) {
         return error_wrap(err, "Failed to copy '%s' to '%s'", src, dst);
@@ -704,10 +782,7 @@ error_t fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
 }
 
 error_t fs_create_dir_with_ownership(
-    const char *path,
-    mode_t mode,
-    uid_t uid,
-    gid_t gid
+    const char *path, mode_t mode, uid_t uid, gid_t gid
 ) {
     CHECK_NULL(path);
 
@@ -808,10 +883,7 @@ apply_metadata:
 }
 
 error_t fs_create_dir_exclusive(
-    const char *path,
-    mode_t mode,
-    uid_t uid,
-    gid_t gid
+    const char *path, mode_t mode, uid_t uid, gid_t gid
 ) {
     CHECK_NULL(path);
 
@@ -1046,8 +1118,7 @@ fs_emptiness_t fs_directory_emptiness(
     /* Check if directory contains only metadata and vouched-for entries
      *
      * This prevents "zombie" directories that contain only OS-generated metadata
-     * (like .DS_Store on macOS) from blocking cleanup operations.
-     */
+     * (like .DS_Store on macOS) from blocking cleanup operations. */
     fs_emptiness_t answer = FS_DIR_EMPTY;
 
     for (;;) {
@@ -1065,8 +1136,7 @@ fs_emptiness_t fs_directory_emptiness(
         }
 
         /* Skip . and .. entries */
-        if (strcmp(entry->d_name, ".") == 0 ||
-            strcmp(entry->d_name, "..") == 0) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
             continue;
         }
 
@@ -1218,6 +1288,7 @@ error_t fs_listing_init(fs_listing_t *listing, arena_t *scratch, const char *dir
         .frame = frame,
         .entry = arena_mark(scratch),
     };
+
     return NULL;
 }
 
@@ -1273,7 +1344,7 @@ error_t fs_working_directory(arena_t *arena, const char **out) {
     return NULL;
 }
 
-const char *fs_temp_directory(void) {
+const char *fs_tmpdir(void) {
     const char *directory = getenv("TMPDIR");
 
     return directory && *directory ? directory : "/tmp";
@@ -1384,11 +1455,15 @@ error_t fs_expand_tilde(const char *path, arena_t *arena, const char **out) {
 
         if (!pw) {
             return error_create(
-                ERR_INVALID_ARG, "'%s' names a user this system does not know", path
+                ERR_INVALID_ARG, "'%s' names a user this system does not know",
+                path
             );
         }
         if (!pw->pw_dir || pw->pw_dir[0] == '\0') {
-            return error_create(ERR_INVALID_ARG, "'%s' names a user with no home directory", path);
+            return error_create(
+                ERR_INVALID_ARG, "'%s' names a user with no home directory",
+                path
+            );
         }
         home = pw->pw_dir;
     }
@@ -1404,8 +1479,7 @@ error_t fs_expand_tilde(const char *path, arena_t *arena, const char **out) {
  * Symlink operations
  */
 error_t fs_create_symlink(
-    const char *target, const char *linkpath,
-    uid_t uid, gid_t gid
+    const char *target, const char *linkpath, uid_t uid, gid_t gid
 ) {
     CHECK_NULL(target);
     CHECK_NULL(linkpath);
@@ -1428,70 +1502,12 @@ error_t fs_create_symlink(
 }
 
 error_t fs_replace_symlink(
-    const char *target, const char *linkpath,
-    uid_t uid, gid_t gid
+    const char *target, const char *linkpath, uid_t uid, gid_t gid
 ) {
-    CHECK_NULL(target);
-    CHECK_NULL(linkpath);
+    fs_temp_t temp = FS_TEMP_INIT;
+    error_t err = fs_temp_symlink(&temp, target, linkpath, uid, gid);
 
-    /* The temporary in the path's own directory, as fs_write_file_raw's: two
-     * names in one directory are on one filesystem, so the rename below never
-     * meets EXDEV */
-    char *parent = fs_parent_dir(linkpath);
-    char tmp_path[PATH_MAX];
-    int n = snprintf(tmp_path, sizeof(tmp_path), "%s" FS_TMP_SUFFIX, parent);
-    free(parent);
-    if (n < 0 || (size_t) n >= sizeof(tmp_path)) {
-        return error_create(ERR_FS, "Path too long for an atomic link at '%s'", linkpath);
-    }
-
-    /* A fresh name each draw until symlink(2) takes one: a name another holds
-     * is EEXIST and the next is drawn, and any other refusal is the link's own,
-     * said as the link that was never made */
-    static const char alphabet[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    char *xs = tmp_path + n - 6;
-
-    for (int draws = 1;; draws++) {
-        uint8_t draw[6];
-        error_t err = entropy_fill(draw, sizeof(draw));
-        if (err) {
-            return error_wrap(
-                err, "Failed to create symlink '%s' -> '%s'", linkpath, target
-            );
-        }
-        for (size_t i = 0; i < sizeof(draw); i++) {
-            xs[i] = alphabet[draw[i] % (sizeof(alphabet) - 1)];
-        }
-
-        if (fs_symlink(target, tmp_path) == 0) break;
-        if (errno != EEXIST || draws == FS_TMP_DRAWS) {
-            return error_errno(
-                errno, "Failed to create symlink '%s' -> '%s'", linkpath, target
-            );
-        }
-    }
-
-    /* Owned before it stands where the path is read: lchown on the temporary,
-     * the link itself */
-    if ((uid != (uid_t) -1 || gid != (gid_t) -1) && fs_lchown(tmp_path, uid, gid) < 0) {
-        int saved_errno = errno;
-        fs_unlink(tmp_path);
-
-        return error_errno(
-            saved_errno, "Failed to set ownership on symlink '%s'", linkpath
-        );
-    }
-
-    /* The swap: what stood at the path stands until the link does */
-    if (fs_rename(tmp_path, linkpath) < 0) {
-        int saved_errno = errno;
-        fs_unlink(tmp_path);
-
-        return error_errno(saved_errno, "Failed to replace '%s'", linkpath);
-    }
-
-    return NULL;
+    return err ? err : fs_temp_publish(&temp);
 }
 
 error_t fs_read_symlink(const char *linkpath, buffer_t *out) {
@@ -1625,5 +1641,6 @@ error_t fs_ensure_parent_dirs(const char *path) {
     error_t err = fs_is_directory(parent) ? NULL : fs_create_dir(parent, true);
     free(parent);
 
-    return err ? error_wrap(err, "Failed to create parent directories for '%s'", path) : NULL;
+    return err ? error_wrap(err, "Failed to create parent directories for '%s'", path)
+               : NULL;
 }

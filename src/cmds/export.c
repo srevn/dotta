@@ -999,10 +999,17 @@ static error_t materialize_entries(
                     bytes = &local;
                 }
 
-                err = fs_write_file_raw(
-                    e->dest_path, (const unsigned char *) bytes->data,
-                    bytes->size, e->mode, (uid_t) -1, (gid_t) -1, NULL
-                );
+                /* The one-entry copy's destination is the user's own path, and
+                 * its parent is made here, once the bytes are in hand: a read
+                 * that fails makes nothing. Inside a tree copy every parent is
+                 * already an entry, created before this loop reached the file. */
+                err = fs_ensure_parent_dirs(e->dest_path);
+                if (!err) {
+                    err = fs_write_file_raw(
+                        e->dest_path, (const unsigned char *) bytes->data,
+                        bytes->size, e->mode, (uid_t) -1, (gid_t) -1, NULL
+                    );
+                }
                 buffer_deinit(&local);
                 if (err) return err;
                 output_print(
@@ -1013,11 +1020,8 @@ static error_t materialize_entries(
             }
 
             case EXPORT_ENTRY_SYMLINK:
-                /* The one-entry copy's destination is the user's own path, and
-                 * its parent is created here exactly as fs_write_file_raw creates
-                 * one for a file (sys/filesystem.h). Inside a tree copy every
-                 * parent is already an entry, created before this loop reached
-                 * the link. */
+                /* Its parent made as the file arm's is, once its bytes are in
+                 * hand — a link's were read in phase 1 */
                 err = fs_ensure_parent_dirs(e->dest_path);
                 if (err) return err;
 

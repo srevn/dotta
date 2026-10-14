@@ -58,14 +58,14 @@ error_t editor_launch_with_env(const char *file_path);
 /**
  * Bytes through the user's editor, in a file the caller keeps or lets go
  *
- * `bytes` go into a file of their own — mkstemp's, in the run's temporary directory
- * (sys/filesystem.h fs_temp_directory), named `<prefix>-XXXXXX`, 0600 and the
- * invoker's (an editor that saves by renaming over it leaves one of the invoker's
- * umask) — the user's editor runs on it (editor_launch_with_env), and what it
- * left there is read back into `bytes`, the bytes it opened on released first.
- * The file stands after the call, named by `*out_path`: the caller unlinks it
- * once the edit has gone where it was going, and keeps it where that is refused,
- * naming it in the refusal, so an edit the session cannot commit is never lost.
+ * `bytes` go into a file of their own — mkstemp's, in TMPDIR (sys/filesystem.h
+ * fs_tmpdir), named `<prefix>-XXXXXX`, 0600 and the invoker's (an editor that
+ * saves by renaming over it leaves one of the invoker's umask) — the user's editor
+ * runs on it (editor_launch_with_env), and what it left there is read back into
+ * `bytes`, the bytes it opened on released first. The file stands after the call,
+ * named by `*out_path`: the caller unlinks it once the edit has gone where it
+ * was going, and keeps it where that is refused, naming it in the refusal, so
+ * an edit the session cannot commit is never lost.
  *
  * Three ends leave the caller nothing to keep, `*out_path` NULL. An edit the
  * editor refused — a non-zero exit, a signal — is abandoned, the file unlinked;

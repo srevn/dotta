@@ -42,10 +42,10 @@
  * the store's database (core/state builds it in a private file and publishes it
  * by link(2)), libgit2's and SQLite's files. Those paths are the invoker's by
  * construction — the drop is what makes them so under sudo — and a refusal on
- * one is a broken installation to report, not a question about reach. Three
- * primitives serve both worlds (fs_create_dir, fs_remove_dir, fs_write_file:
- * the temp scripts' directory, init's repository) and carry the reach with them;
- * on the invoker's own paths it never fires.
+ * one is a broken installation to report, not a question about reach. A primitive
+ * serves both worlds where one of those paths goes through it — the session cache's
+ * directory made, the directory a store goes in, a failed clone taken away —
+ * and carries the reach with it; on the invoker's own paths it never fires.
  *
  * One more reads raw, and on purpose: a source repository's layout — its `.git`,
  * a gitdir's HEAD, commondir, objects and refs — which sys/source discovers as
@@ -60,6 +60,7 @@
 #define DOTTA_FILESYSTEM_H
 
 #include <dirent.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -199,39 +200,154 @@ error_t fs_read_fd(int fd, buffer_t *out);
 error_t fs_write_fd(int fd, const char *path, const void *data, size_t size);
 
 /**
- * Write raw bytes to file (overwrites if exists)
+ * One write made beside its path and not yet published
  *
- * Creates parent directories if needed, with default attributes (0755, the running
- * user) — a caller that owns its ancestors' attributes (core/deploy) creates
- * them first and never reaches this path. This is a lower-level function for
- * writing data directly from memory without the buffer_t abstraction. Useful
- * for writing directly from git blobs or other external data sources.
+ * The node a write puts at a path, made whole under a temporary name in the path's
+ * own directory — a file's bytes with its mode and owner, or a link with its
+ * owner — while the path stands as it was. The publish renames it over what stands
+ * there, so a caller that must take something out of the way does it between
+ * the two, and a write the world refuses — a full disk, a file-size limit, a
+ * name the kernel will not take — is refused before anything at the path moves.
+ * fs_write_file_raw and fs_replace_symlink are the make and the publish with
+ * nothing between.
  *
- * One strategy, no fallback: the content is written to a temp file in the target's
- * own directory and rename(2)d over it. So the permission the write needs is
- * write+search on the *parent*, never on the path — and an existing target is
- * replaced whole or not at all, whatever it is (a regular file, or the symlink
- * itself rather than what it points at). A caller that must predict whether the
- * write can land asks about the parent and nothing else; core/deploy's preflight
- * is built on exactly that. Directories are the one thing rename cannot replace:
- * clear them first.
+ * Both act on the path's directory, never on the path: the permission a write
+ * needs is write and search there, so a caller that must predict whether a write
+ * can land asks about that directory and nothing else — core/deploy's preflight
+ * is built on exactly that — and a read-only file, or a link into a read-only
+ * store, is no obstacle at all.
  *
- * SECURITY: This function atomically sets permissions using fchmod() after creating
- * the file and setting ownership, ensuring there is no window where the file
- * has incorrect permissions (critical for sensitive files like SSH keys).
+ * A value its caller holds: FS_TEMP_INIT, one maker, the publish. A maker's refusal
+ * and a publish, either way, leave no temporary standing; fs_temp_deinit takes
+ * back one made and not published, in the tail of a caller with a step between.
+ * A process killed between the make and the publish leaves the temporary where
+ * it was made — nothing cleans at a terminating signal (src/main.c
+ * terminating_signal) — and a scan beneath a tracked directory lists it there
+ * as a new file, removed by hand.
+ *
+ * Readers: sys/filesystem.c fs_write_file_raw and fs_replace_symlink. A reader
+ * not on this list is a bug.
+ */
+typedef struct {
+    char name[PATH_MAX];   /* The temporary, beside the path; "" while none stands */
+    const char *path;      /* Where the publish puts it: the maker's, borrowed */
+} fs_temp_t;
+
+/** Zero-initializer: no write made */
+#define FS_TEMP_INIT {0}
+
+/**
+ * Make a file's write beside its path, whole
+ *
+ * mkstemp's temporary in the path's own directory — two names in one directory
+ * are on one filesystem, so the publish never meets EXDEV — given the owner and
+ * the mode through its own descriptor before its first byte, then the bytes,
+ * synced. SECURITY: the bytes never stand with the wrong owner or mode, not for
+ * a moment — critical for a key or a token. Nothing is made above the path: a
+ * directory that does not stand is mkstemp's refusal, naming it. A refusal at
+ * any step leaves nothing made and the path as it was, and is said of the path,
+ * never of the temporary.
+ *
+ * @param temp The write, made (must not be NULL; left as it was on a failure)
+ * @param path The path the write is for (must not be NULL; borrowed, read by
+ *        the publish)
+ * @param data The bytes (may be NULL when size is 0)
+ * @param size Byte count
+ * @param mode Permission mode, applied exactly
+ * @param uid Owner, or (uid_t) -1 to leave it as made
+ * @param gid Group, or (gid_t) -1 to leave it as made
+ * @param out_st Optional (may be NULL): the fstat of the written descriptor,
+ *        taken after the last mutation — it describes exactly the bytes and
+ *        metadata this call wrote, which the publish puts at the path (rename
+ *        keeps inode, size and mtime), never what a later look there would find
+ * @return Error or NULL on success
+ */
+error_t fs_temp_file(
+    fs_temp_t *temp,
+    const char *path,
+    const unsigned char *data,
+    size_t size,
+    mode_t mode,
+    uid_t uid,
+    gid_t gid,
+    struct stat *out_st
+);
+
+/**
+ * Make a link's write beside its path, whole
+ *
+ * fs_temp_file's template in the path's own directory, its six Xs drawn fresh
+ * (sys/entropy) until symlink(2) takes one: a name another holds is EEXIST and
+ * the next is drawn, the exclusivity mkstemp's open gives a file's temporary.
+ * Then owned there, by lchown on the link itself, the one node with no descriptor
+ * to fchown. The target and the ownership are fs_create_symlink's: the target
+ * as it stands, and -1 for either half leaving it as made. Nothing is made above
+ * the path, and a refusal leaves nothing made and the path as it was.
+ *
+ * @param temp The write, made (must not be NULL; left as it was on a failure)
+ * @param target Link target (must not be NULL)
+ * @param linkpath The path the link is for (must not be NULL; borrowed, read by
+ *        the publish)
+ * @param uid Owner to set on the link, or (uid_t) -1 to leave it
+ * @param gid Group to set on the link, or (gid_t) -1 to leave it
+ * @return Error or NULL on success
+ */
+error_t fs_temp_symlink(
+    fs_temp_t *temp,
+    const char *target,
+    const char *linkpath,
+    uid_t uid,
+    gid_t gid
+);
+
+/**
+ * Put a made write in its path's place
+ *
+ * rename(2) of the temporary over the path: what stands there — a regular file,
+ * a link (itself, never what it leads to), a device — is replaced whole, and
+ * where nothing stands the path is made. A directory refuses it (EISDIR) and
+ * stands: a caller that must replace one removes it between the make and this.
+ * The temporary is gone either way — published, or unlinked beside the refusal,
+ * "Failed to replace '<path>'" in the errno's words.
+ *
+ * @param temp A made write (must not be NULL): none stands once this returns
+ * @return Error or NULL on success
+ */
+error_t fs_temp_publish(fs_temp_t *temp);
+
+/**
+ * Take back a write made and not published — nothing, where none stands
+ *
+ * For the tail of a caller with a step between the make and the publish that
+ * may refuse: the temporary unlinked. After a maker's refusal or a publish none
+ * stands, and nothing is done.
+ *
+ * @param temp A write (must not be NULL): none stands once this returns
+ */
+void fs_temp_deinit(fs_temp_t *temp);
+
+/**
+ * Write raw bytes to a file, in the place of what stands at the path
+ *
+ * The make and the publish with nothing between (fs_temp_file, then
+ * fs_temp_publish): the bytes are made whole beside the path, its owner and mode
+ * on the temporary's descriptor before the first byte, then renamed over it —
+ * so what stood there, a regular file or a link itself rather than what it leads
+ * to, is replaced whole or not at all. Nothing is made above the path: its
+ * directory must stand (fs_ensure_parent_dirs is the caller's courtesy). A
+ * directory at the path refuses the write (EISDIR); a caller that must replace
+ * one makes the write with fs_temp_file and removes the directory before
+ * fs_temp_publish. Raw bytes, for a caller that holds no buffer (fs_write_file
+ * takes one).
  *
  * @param path File path (must not be NULL)
  * @param data Raw data bytes (can be NULL if size is 0)
  * @param size Number of bytes to write
- * @param mode Permission mode (e.g., 0600, 0644, 0755)
- * @param uid Target UID for file ownership (use -1 to preserve current)
- * @param gid Target GID for file ownership (use -1 to preserve current)
- * @param out_st Optional (may be NULL): receives the fstat of the written
- *        descriptor, taken after the last mutation and before the rename that
- *        publishes it — it describes exactly the bytes and metadata this call
- *        wrote, never what a later look at the path would find (rename preserves
- *        inode, size and mtime). What a caller recording the write as its own
- *        act reads (core/deploy)
+ * @param mode Permission mode (e.g., 0600, 0644, 0755), applied exactly
+ * @param uid Owner, or (uid_t) -1 to leave it as made
+ * @param gid Group, or (gid_t) -1 to leave it as made
+ * @param out_st Optional (may be NULL): fs_temp_file's. What a caller recording
+ *        the write as its own act reads (core/deploy)
  * @return Error or NULL on success
  */
 error_t fs_write_file_raw(
@@ -247,7 +363,8 @@ error_t fs_write_file_raw(
 /**
  * Write buffer to file (overwrites if exists)
  *
- * Creates parent directories if needed.
+ * Creates parent directories if needed (fs_ensure_parent_dirs), then
+ * fs_write_file_raw at 0644.
  *
  * @param path File path (must not be NULL)
  * @param content Buffer to write (must not be NULL)
@@ -257,6 +374,10 @@ error_t fs_write_file(const char *path, const buffer_t *content);
 
 /**
  * Copy file preserving permissions
+ *
+ * The source read whole, then the destination's parent directories made if needed
+ * (fs_ensure_parent_dirs), as fs_write_file makes them, and the bytes written
+ * by fs_write_file_raw at the source's mode.
  *
  * @param src Source path (must exist, must not be NULL)
  * @param dst Destination path (must not be NULL)
@@ -701,18 +822,19 @@ error_t fs_ensure_parent_dirs(const char *path);
 error_t fs_working_directory(arena_t *arena, const char **out);
 
 /**
- * The directory a temporary file goes in: $TMPDIR where it names one, else /tmp
+ * The directory a file the run hands another program goes in: $TMPDIR where it
+ * names one, else /tmp
  *
- * One answer for every file the run makes to hand to another program, so no two
- * of them drift: the editor's (sys/editor.h editor_edit) and a bootstrap script's
- * run (sys/bootstrap.h bootstrap_extract_to_temp). An empty $TMPDIR names none,
- * and /tmp is the directory POSIX promises. Nothing is asked of the directory
- * here: a file that cannot be made in it is refused by the mkstemp that tried,
- * naming it.
+ * One answer for every such file, so no two of them drift: the editor's
+ * (sys/editor.h editor_edit) and a bootstrap script's run (sys/bootstrap.h
+ * bootstrap_extract_to_temp). An empty $TMPDIR names none, and /tmp is the
+ * directory POSIX promises. Nothing is asked of the directory here: a file that
+ * cannot be made in it is refused by the mkstemp that tried, naming it. A write's
+ * own temporary is never made here: it stands beside its path (fs_temp_t).
  *
  * @return The directory (never NULL)
  */
-const char *fs_temp_directory(void);
+const char *fs_tmpdir(void);
 
 /**
  * A path as the kernel will open it: absolute, folded wherever the kernel reads
@@ -846,23 +968,17 @@ error_t fs_create_symlink(
 /**
  * Put a symbolic link in the place of what stands at a path
  *
- * One strategy, fs_write_file_raw's: the link is made in the path's own directory
- * under a temporary name, given its ownership there, and rename(2)d over the
- * path. So what stood there — a regular file, a device, or a link itself rather
+ * The make and the publish with nothing between (fs_temp_symlink, then
+ * fs_temp_publish): the link is made beside the path, owned there, and renamed
+ * over it. So what stood there — a regular file, a device, or a link itself rather
  * than what it points at — stands until the new link does, which then stands
  * owned as it was asked; a link that cannot be made, owned or renamed leaves
- * the path as it was, and no temporary behind. The permission it needs is
- * write+search on the parent, never on the path. Where nothing stands the rename
- * makes the path; a caller that must refuse whatever arrives there makes it with
- * fs_create_symlink, whose symlink(2) refuses a path anything stands at.
- * Directories are the one thing rename cannot replace (EISDIR): clear them first.
- *
- * The temporary's name is fs_write_file_raw's template, its six Xs drawn fresh
- * (sys/entropy) until symlink(2) takes one: a name another holds is EEXIST, and
- * the next is drawn — the exclusivity mkstemp's open gives a file's temporary.
- *
- * The target and the ownership are fs_create_symlink's: the target as it stands,
- * and lchown on the link itself, -1 for either half leaving it as created.
+ * the path as it was, and no temporary behind. Nothing is made above the path.
+ * Where nothing stands the rename makes the path; a caller that must refuse
+ * whatever arrives there makes it with fs_create_symlink, whose symlink(2) refuses
+ * a path anything stands at. A directory at the path refuses the link (EISDIR);
+ * a caller that must replace one makes the link with fs_temp_symlink and removes
+ * the directory before fs_temp_publish.
  *
  * @param target Link target (must not be NULL)
  * @param linkpath The path the link is put at (must not be NULL)

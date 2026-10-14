@@ -126,7 +126,7 @@ error_t bootstrap_extract_to_temp(
         goto cleanup;
     }
 
-    const char *dir = fs_temp_directory();
+    const char *dir = fs_tmpdir();
     path = heap_str_format("%s/dotta-bootstrap-XXXXXX", dir);
 
     /* A template mkstemp could not make is no file of this run's, whatever name

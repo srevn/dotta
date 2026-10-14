@@ -248,8 +248,8 @@ error_t session_save(
 
     /* Open with secure permissions atomically. O_NOFOLLOW guards against a symlink
      * swapping our path for a sensitive file; O_NONBLOCK keeps a FIFO with no
-     * reader from wedging the open, which fails ENXIO at once; O_CLOEXEC matches
-     * the secure-file pattern used elsewhere (see fs_write_file_raw). */
+     * reader from wedging the open, which fails ENXIO at once; O_CLOEXEC is
+     * hygiene, as for the open in sys/filesystem.c fs_read_file. */
     fd = open(
         cache_path,
         O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC,

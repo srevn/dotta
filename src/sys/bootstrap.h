@@ -79,11 +79,11 @@ error_t bootstrap_read(
  * Script content is validated via bootstrap_validate() before being written to
  * disk, so a bad shebang never produces a stale temp file.
  *
- * The file goes in the run's temporary directory (sys/filesystem.h
- * fs_temp_directory). Its reader is the orchestrator (utils/bootstrap.c run_live),
- * which execs it and unlinks it at once, so the file stands only for the length
- * of the script's run; an edit makes its own file (sys/editor.h editor_edit),
- * never this executable one. The path is the heap's: a transient of the run's.
+ * The file goes in TMPDIR (sys/filesystem.h fs_tmpdir). Its reader is the
+ * orchestrator (utils/bootstrap.c run_live), which execs it and unlinks it at
+ * once, so the file stands only for the length of the script's run; an edit makes
+ * its own file (sys/editor.h editor_edit), never this executable one. The path
+ * is the heap's: a transient of the run's.
  *
  * @param repo          Open Git repository (must not be NULL)
  * @param profile       Profile branch name (must not be NULL)

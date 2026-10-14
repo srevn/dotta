@@ -1286,15 +1286,18 @@ typedef struct {
 
 /**
  * One execution of the verdicts: what deploy_execute was handed, plus the state
- * the run accumulates. Lives exactly as long as deploy_execute; its holds outlive
- * it, handed to the receipt for the caller's release.
+ * the run accumulates. Lives exactly as long as deploy_execute; the parents it
+ * created and the holds it took outlive it, handed to the receipt as it returns
+ * — the holds for the caller's release.
  */
 typedef struct {
     content_cache_t *cache;             /* every row's bytes, either kind (deploy_file) */
     const workspace_t *ws;              /* a landing directory's item (holdable_directory) */
     const deploy_preflight_t *verdicts; /* the ancestors' metadata (create_ancestor) */
-    deploy_receipt_t *receipt;          /* the receipt so far: the ancestors (create_ancestor) */
-    arena_t *arena;                     /* the holds and the places not created grow here */
+    arena_t *arena;                     /* every list below grows here */
+    deploy_outcome_t *ancestors;        /* every claimed parent created: the receipt's ancestors */
+    size_t ancestor_count;
+    size_t ancestor_capacity;
     deploy_hold_t *holds;               /* every hold taken, in the order taken: the receipt's taken */
     size_t hold_count;
     size_t hold_capacity;
@@ -1310,6 +1313,11 @@ typedef struct {
  * — for the rest (0755, 0700, …) the working mode IS the owed one, so nothing
  * is held and nothing is done twice. The item is the workspace's, outliving the
  * run and its receipt (deploy_hold_t).
+ *
+ * Each directory is held once, by its caller's own shape: a planned row converges
+ * once (deploy_execute's loop), a claimed parent is held at its first create
+ * alone (create_ancestor), and a landing, once held, no longer denies the writes
+ * beneath it (open_landing_directory).
  */
 static void hold_directory(deploy_run_t *run, const workspace_item_t *item, mode_t mode) {
     if (deploy_working_mode(mode) == mode) return;
@@ -1421,18 +1429,22 @@ static error_t create_ancestor(deploy_run_t *run, const char *path) {
         );
         if (err) return err;
 
-        /* On the receipt once and held once — and bounds the sized array: a parent
-         * this run created for an earlier row's write and the world removed since
-         * is re-created here, its first hold releases it, and without this scan
-         * the second re-create would write past entries[count]. */
-        deploy_outcomes_t *receipt = &run->receipt->ancestors;
-        for (size_t j = 0; j < receipt->count; j++) {
-            if (receipt->entries[j].verdict == v) {
+        /* Listed and held once: a parent this run created for an earlier row's
+         * write, and the world took away since, is created again here and is
+         * the run's already — its first hold releases it */
+        for (size_t j = 0; j < run->ancestor_count; j++) {
+            if (run->ancestors[j].verdict == v) {
                 return NULL;
             }
         }
+
         hold_directory(run, v->item, dir->mode);
-        receipt->entries[receipt->count++].verdict = v;
+
+        run->ancestors = arena_grow(
+            run->arena, run->ancestors, &run->ancestor_capacity, run->ancestor_count + 1,
+            sizeof(*run->ancestors)
+        );
+        run->ancestors[run->ancestor_count++] = (deploy_outcome_t){ .verdict = v };
         return NULL;
     }
 
@@ -1805,9 +1817,6 @@ deploy_receipt_t *deploy_execute(
     receipt->converged.entries = arena_calloc(
         arena, verdicts->directories.count, sizeof(*receipt->converged.entries)
     );
-    receipt->ancestors.entries = arena_calloc(
-        arena, verdicts->ancestors.count, sizeof(*receipt->ancestors.entries)
-    );
     receipt->failed.entries = arena_calloc(
         arena, verdicts->directories.count + verdicts->files.count,
         sizeof(*receipt->failed.entries)
@@ -1817,7 +1826,6 @@ deploy_receipt_t *deploy_execute(
         .cache    = cache,
         .ws       = ws,
         .verdicts = verdicts,
-        .receipt  = receipt,
         .arena    = arena,
     };
 
@@ -1872,10 +1880,15 @@ deploy_receipt_t *deploy_execute(
         receipt->deployed.count++;
     }
 
-    /* The holds the run took, the receipt's to carry: the caller lets them go
-     * once every act beneath them is done, the run's and any it runs next
-     * (deploy_release) */
-    receipt->taken = (deploy_holds_t){ .entries = run.holds, .count = run.hold_count };
+    /* The run's own lists, the receipt's to carry: the parents its acts created,
+     * and the holds they took, which the caller lets go once every act beneath
+     * them is done, the run's and any it runs next (deploy_release) */
+    receipt->ancestors = (deploy_outcomes_t){
+        .entries = run.ancestors, .count = run.ancestor_count,
+    };
+    receipt->taken = (deploy_holds_t){
+        .entries = run.holds, .count = run.hold_count,
+    };
     return receipt;
 }
 

@@ -447,9 +447,9 @@ typedef struct {
  * rows outside the plan that the run may create on the way to a planned path —
  * either class, since the plan holds the tracked ones and the ancestors pass is
  * where a derived claim is acted on, save one the plan promoted (see
- * deploy_plan_build, deploy_preflight). Every array is always allocated, so a
- * consumer reads counts and needs no NULL guard. A value of the arena it was
- * decided in, as every array it holds is: nothing frees one.
+ * deploy_plan_build, deploy_preflight). A consumer reads every array by its count,
+ * so none needs a NULL guard: an empty one may hold no spine at all. A value of
+ * the arena it was decided in, as every array it holds is: nothing frees one.
  */
 typedef struct {
     /* The rows the run does not deploy, both kinds, in path order, the order
@@ -665,10 +665,10 @@ typedef struct {
  * — every promised row accounted for, however the rows fared. The ancestors stay
  * outside it, as they stand outside the plan.
  *
- * Each landed array is sized to its verdict array at entry (calloc), `failed`
- * to both kinds together (every promised row could fail), and all fill in verdict
- * order; count gates every read, so an untaken slot is invisible and the receipt
- * holds exactly what happened, by construction.
+ * The promise's arrays are sized to their verdicts at entry (calloc), `failed`
+ * to both kinds together (every promised row could fail), and all three fill in
+ * verdict order; count gates every read, so an untaken slot is invisible and
+ * the receipt holds exactly what happened, by construction.
  *
  * The derived verb is also the ownership gate apply's record phase reads: a
  * converged directory whose convergence is not a fix was created by dotta and
@@ -677,12 +677,14 @@ typedef struct {
  * next scope exit.
  *
  * `ancestors` is outside the plan: the claimed directories the run created as
- * parents of a planned path (create_ancestor), each once, either class. They
- * carry their recorded mode and ownership like any other directory row, and dotta
- * created them — so the record phase anchors them as owned, the same event as a
- * created directory — but the plan never named them and the preview never counted
- * them, so the caller's summary keeps them apart from the created count. A parent
- * no row claims has no receipt and no record.
+ * parents of a planned path (create_ancestor), each once, either class, in the
+ * order created — the run's own list, handed to the receipt whole as execute
+ * returns, as `taken` is. They carry their recorded mode and ownership like any
+ * other directory row, and dotta created them — so the record phase anchors them
+ * as owned, the same event as a created directory — but the plan never named
+ * them and the preview never counted them, so the caller's summary keeps them
+ * apart from the created count. A parent no row claims has no receipt and no
+ * record.
  *
  * `taken` and `held` are the holds' (deploy_hold_t). `taken` is execute's: every
  * hold the run took, in the order taken, each directory still at its working

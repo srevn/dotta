@@ -574,8 +574,8 @@ error_t fs_create_dir_exclusive(
  * The converging sibling with the creation taken out: fs_create_dir_with_ownership
  * creates or converges, fs_create_dir_exclusive creates, and this sets the mode
  * of what stands and creates nothing. Readers: core/deploy.c open_landing_directory
- * (a landing held at a working mode) and release_directories (each hold released
- * to its exact mode).
+ * (a landing held at a working mode) and deploy_release (each hold released to
+ * its exact mode).
  *
  * @param path Directory path (must not be NULL)
  * @param mode Permission mode, at most 0777

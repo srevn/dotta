@@ -362,14 +362,17 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  * the run is denied: unlink and rmdir ask nothing of the path, only write and
  * search on its parent, and the parent's bits deny this run (fs_denied, with
  * the reach — a run that holds root is denied only where root is too, so the
- * sudo'd re-run the preview offers meets a denial only there). Treated exactly
- * as a skip is — left alone, record stays, the directory above waits with it,
- * the screen counts it as skipped — and kept apart from one because the reason
- * is the run's, not the item's: --force lifts a skip reason and never this, and
- * the remedy is root, not consent. The last rung, as OWNERSHIP is deploy's: an
- * item already skipped for a reason is never asked, so a modified orphan under
- * a root-owned parent reads modified unforced and refused under --force, each
- * honest about the one thing in the way.
+ * sudo'd re-run the preview offers meets a denial only there). Asked before either
+ * engine acts, as every verdict is: a parent deploy widens in the same run —
+ * fixed to a wider claim, or held for a write beneath it until its release
+ * (core/deploy.h deploy_release) — refuses the removal all the same, the preview's
+ * word kept and the sudo line true. Treated exactly as a skip is — left alone,
+ * record stays, the directory above waits with it, the screen counts it as skipped
+ * — and kept apart from one because the reason is the run's, not the item's:
+ * --force lifts a skip reason and never this, and the remedy is root, not consent.
+ * The last rung, as OWNERSHIP is deploy's: an item already skipped for a reason
+ * is never asked, so a modified orphan under a root-owned parent reads modified
+ * unforced and refused under --force, each honest about the one thing in the way.
  *
  * Present is not absent at load, and a file --force planned past a look that
  * failed is no more than that: something may stand there. Its parent is asked

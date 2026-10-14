@@ -1650,15 +1650,18 @@ static void apply_print_cleanup_refused(
  * and adopted, a pruned orphan's record reclaimed, a released one released again,
  * a fixed claim learned by the flush — all but a directory the run created, which
  * the next load observes and never owns (capture is a directory's ownership event,
- * and a look never is). The caller renders the fate.
+ * and a look never is), and a directory the release left wide whose record says
+ * the mode its hold owed: the learning of the mode that stands goes back with
+ * the rest, so the next load reads the working mode as the user's [mode], update's
+ * to commit, until a plain apply narrows it. The caller renders the fate.
  *
  * @param ctx Dispatch context (must not be NULL; writes the state it holds, in
  *            the run's transaction)
  * @param ws Workspace (must not be NULL): the items every fate carries are its own
  * @param cleanup_verdicts Cleanup's verdicts (must not be NULL)
  * @param cleanup_receipt Cleanup's receipt (must not be NULL)
- * @param deploy_receipt Deploy's receipt (must not be NULL; the empty receipt
- *        where the run deployed nothing)
+ * @param deploy_receipt Deploy's receipt, its holds let go (must not be NULL;
+ *        the empty receipt where the run deployed nothing)
  * @param now Timestamp of the run's ownership events (must be > 0)
  * @param acknowledged The pending reassignments the record acknowledged (must
  *                     not be NULL) — zero where the phase fails, since nothing
@@ -2904,18 +2907,29 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
             /* Deploy reads every row's bytes through the content cache, taking
              * back what the load decrypted to look at a sealed row. Every failure
-             * the run meets is an outcome on the receipt — a row's, a hold's —
-             * and the run goes on to record what landed. */
+             * the run meets is an outcome on the receipt — a row's here, a hold's
+             * at the release below — and the run goes on to record what landed. */
             deploy_receipt = deploy_execute(ctx->arena, ws, deploy_verdicts, content_cache);
-            apply_print_deploy_receipt(out, deploy_receipt);
         } else if (deploy_verdicts->skipped.count == 0) {
             output_print(out, OUTPUT_VERBOSE, "No deployment work in scope\n");
         }
 
-        /* Prune the orphans the verdicts cleared. cleanup_execute changes the
+        /* The acts, in their one order: deploy's above, then cleanup's, then
+         * the release of deploy's holds. Deploy first, because a write can resolve
+         * through the user's link into a directory a scope exit would empty:
+         * written first, the removal then finds it holding the write; removed
+         * first, the row would be refused for good. The release last, because a
+         * directory a fix narrows must still admit the removals inside it — and
+         * a kill before it leaves the held directories at their working modes
+         * (core/deploy.h deploy_working_mode). cleanup_execute changes the
          * filesystem only; apply, as the transaction owner, settles the records
          * behind what went and what was let go (apply_write_record, below). */
         cleanup_receipt = cleanup_execute(ctx->arena, cleanup_verdicts);
+        deploy_release(ctx->arena, deploy_receipt);
+
+        /* The receipts, once every act is done, in the order the previews printed
+         * them: the empty one says nothing */
+        apply_print_deploy_receipt(out, deploy_receipt);
         apply_print_cleanup_receipt(out, cleanup_verdicts, cleanup_receipt);
 
         /* The record of what the run did — the orphans it settled, the paths it

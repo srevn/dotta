@@ -137,7 +137,8 @@ static bool deploy_needs_work(const workspace_item_t *item) {
  * "Skip" is the word the buckets and the screen use ("Skipped N paths
  * (--exclude)"), and the word core/cleanup uses for the same shape
  * (cleanup_skip_reason_t). In this module "hold" means only a deploy_hold_t — a
- * directory carried at a working mode until release_directories lets it go.
+ * directory carried at a working mode until the release lets it go
+ * (deploy_release).
  */
 typedef enum {
     SKIP_NONE,       /* nothing stands in the way of the row's work */
@@ -500,14 +501,14 @@ static bool holdable(const char *path, const struct stat *st) {
  * A directory the view names — any enabled profile, in scope or not, either class,
  * the same reach create_ancestor has — that the run may hold where it stands
  * (holdable). The run may carry it at a working mode while the paths beneath it
- * land and release it afterwards (deploy_run_t), so its current mode can never
- * refuse a path beneath it. The class does not enter: a claim's mode is captured
- * with the very children it would refuse, and that argument is the ancestor claim's
- * as much as the tracked one's — the alternative would make the reach depend on
- * whether the user typed the directory or a file inside it. Nothing else is ours
- * to touch: a directory no row names whose bits deny the run is a permission
- * error, and so is a claimed one the run may not hold — another's, or one whose
- * bits refuse it the read.
+ * land, until the caller's release (deploy_release), so its current mode can
+ * never refuse a path beneath it. The class does not enter: a claim's mode is
+ * captured with the very children it would refuse, and that argument is the
+ * ancestor claim's as much as the tracked one's — the alternative would make
+ * the reach depend on whether the user typed the directory or a file inside it.
+ * Nothing else is ours to touch: a directory no row names whose bits deny the
+ * run is a permission error, and so is a claimed one the run may not hold —
+ * another's, or one whose bits refuse it the read.
  *
  * Asked by the landing check and the landing's open (check_landing,
  * open_landing_directory): the prediction and the mechanism, one question.
@@ -538,9 +539,10 @@ static const workspace_item_t *holdable_directory(
  * A deployable row is one the directory pass acts on before any file is written:
  * it creates the path, replaces whatever squats it, or converges what is already
  * there — and whichever it does, once its verdict says it will, the directory
- * carries a working mode until the run is over, so nothing planned beneath it
- * is refused on its account. Asked of the verdicts rather than the plan: a skipped
- * directory row does none of that, and vouches for nothing beneath it.
+ * carries a working mode until the caller's release (deploy_release), so nothing
+ * planned beneath it is refused on its account. Asked of the verdicts rather
+ * than the plan: a skipped directory row does none of that, and vouches for nothing
+ * beneath it.
  *
  * Asked by the ladder of an ancestor of the row in hand — the squatted directory
  * above it, the one its landing stands in — whose fate the walk, in path order,
@@ -695,8 +697,8 @@ static void check_ancestry(
  *
  * So the question goes to the nearest present ancestor, and to it alone. Every
  * component between it and the planned path is absent, and ensure_parents creates
- * those with the owner triad on for as long as the run lasts (deploy_working_mode)
- * — an absent component can refuse nothing. What stands at the ancestor decides:
+ * those with the owner triad on until the release (deploy_working_mode) — an
+ * absent component can refuse nothing. What stands at the ancestor decides:
  *
  *   a deployable directory    the directory pass converges it first —
  *   row                       created, fixed or replaced — and carries it at a
@@ -707,8 +709,8 @@ static void check_ancestry(
  *                             nothing — it answers below like any stranger's path
  *   a directory the view      ours to hold, either class, where the run may
  *   names                     change it and read it (holdable_directory): if its
- *                             bits deny the run, ensure_parents opens it for
- *                             the run and releases it afterwards; fine. Where
+ *                             bits deny the run, ensure_parents holds it open
+ *                             until the release (deploy_release); fine. Where
  *                             it may not, it answers as any other directory
  *   any other directory       its bits must not deny the run a new entry —
  *                             fs_denied, which unlike a mode test knows about
@@ -1284,15 +1286,16 @@ typedef struct {
 
 /**
  * One execution of the verdicts: what deploy_execute was handed, plus the state
- * the run accumulates. Lives exactly as long as deploy_execute.
+ * the run accumulates. Lives exactly as long as deploy_execute; its holds outlive
+ * it, handed to the receipt for the caller's release.
  */
 typedef struct {
     content_cache_t *cache;             /* every row's bytes, either kind (deploy_file) */
     const workspace_t *ws;              /* a landing directory's item (holdable_directory) */
     const deploy_preflight_t *verdicts; /* the ancestors' metadata (create_ancestor) */
-    deploy_receipt_t *receipt;          /* the receipt so far: the ancestors, then the holds left */
+    deploy_receipt_t *receipt;          /* the receipt so far: the ancestors (create_ancestor) */
     arena_t *arena;                     /* the holds and the places not created grow here */
-    deploy_hold_t *holds;               /* every hold taken, in the order taken (release_directories) */
+    deploy_hold_t *holds;               /* every hold taken, in the order taken: the receipt's taken */
     size_t hold_count;
     size_t hold_capacity;
     deploy_uncreated_t *uncreated;      /* every place not created, in the order noted (poisoned_above) */
@@ -1301,7 +1304,7 @@ typedef struct {
 } deploy_run_t;
 
 /**
- * Remember a directory to release at the end of the run
+ * Remember a directory for the release (deploy_release)
  *
  * Only a directory whose owed mode is narrower than its working mode needs holding
  * — for the rest (0755, 0700, …) the working mode IS the owed one, so nothing
@@ -1317,46 +1320,6 @@ static void hold_directory(deploy_run_t *run, const workspace_item_t *item, mode
     );
 
     run->holds[run->hold_count++] = (deploy_hold_t){ .item = item, .mode = mode };
-}
-
-/**
- * Release every held directory to its exact mode, deepest-first
- *
- * Holds are taken top-down along each path — the directory pass runs in prefix
- * order and ensure_parents creates from the nearest present ancestor downward —
- * so reverse order releases a child before its parent, and a parent released to
- * a mode without owner-search never stands between us and a child still to be
- * released. A landing opened later may stand above a hold taken earlier on another
- * path, and is released first; but the mode it is released to is the one it had,
- * and the run reached beneath it at that mode, so it keeps every search the
- * releases beneath it need. A run that holds root opens no landing at all: root
- * is denied nothing the bits refuse (fs_denied).
- *
- * Runs at the end of every deploy_execute: however the rows fared, every held
- * directory is asked back to its exact mode, and the next run holds what it needs
- * afresh. Through the directory's own descriptor (fs_set_dir_mode), never a
- * chmod(2) on a path that may have become a symlink meanwhile, and never a
- * directory created anew: one the world took away has nothing left to release.
- * Every hold is attempted; one the directory refuses stays held and is the
- * receipt's, each in the order released, with its cause (deploy_receipt_t's held).
- */
-static void release_directories(deploy_run_t *run) {
-    deploy_holds_t *held = &run->receipt->held;
-
-    /* Sized to the holds: every one could be refused */
-    held->entries = arena_calloc(run->arena, run->hold_count, sizeof(*held->entries));
-
-    for (size_t i = run->hold_count; i-- > 0;) {
-        const deploy_hold_t *hold = &run->holds[i];
-        error_t err = fs_set_dir_mode(hold->item->filesystem_path, hold->mode);
-        if (!err) continue;
-
-        /* Left wide, or out of reach: the hold, with the refusal in the primitive's
-         * own words — the receipt carries the path and both modes beside it */
-        held->entries[held->count++] = (deploy_hold_t){
-            .item = hold->item, .mode = hold->mode, .error = err,
-        };
-    }
 }
 
 /**
@@ -1727,9 +1690,8 @@ cleanup:
  * than chmod'd through.
  *
  * The directory lands at its working mode and is released to its exact recorded
- * mode once the run is over (deploy_working_mode, release_directories), so a
- * recorded mode without owner-write never refuses the tracked children written
- * after it.
+ * mode by the caller's release (deploy_working_mode, deploy_release), so a recorded
+ * mode without owner-write never refuses the tracked children written after it.
  *
  * A create or a replace that fails leaves no directory of the run's at the path,
  * so the path is noted (note_uncreated) and every act beneath it fails unattempted;
@@ -1813,11 +1775,11 @@ static error_t poisoned_above(const deploy_run_t *run, const char *path) {
 /**
  * Carry the verdicts out
  *
- * Every run ends in release_directories: a held directory is asked back to its
- * exact mode however the rows fared, so the tree a failure leaves behind is
- * incomplete but never wider than recorded — save a hold the directory refuses,
- * which the receipt names. Row failures land in the receipt (deploy_receipt_t's
- * contract), and so do those holds; nothing is returned beside it.
+ * Every run hands its holds to the receipt, and the caller's release asks each
+ * back to its exact mode however the rows fared (deploy_release), so the tree a
+ * failure leaves behind is incomplete but never wider than recorded — save a
+ * hold the directory refuses, which the receipt names. Row failures land in the
+ * receipt (deploy_receipt_t's contract); nothing is returned beside it.
  */
 deploy_receipt_t *deploy_execute(
     arena_t *arena,
@@ -1910,9 +1872,61 @@ deploy_receipt_t *deploy_execute(
         receipt->deployed.count++;
     }
 
-    /* The subtree is as complete as it is going to get: exact modes now. A hold
-     * the directory refuses is the receipt's, as a row's failure is — every failure
-     * the run met is an outcome on it, and nothing is returned beside it. */
-    release_directories(&run);
+    /* The holds the run took, the receipt's to carry: the caller lets them go
+     * once every act beneath them is done, the run's and any it runs next
+     * (deploy_release) */
+    receipt->taken = (deploy_holds_t){ .entries = run.holds, .count = run.hold_count };
     return receipt;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * Release
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Let the run's holds go
+ *
+ * Holds are taken top-down along each path — the directory pass runs in prefix
+ * order and ensure_parents creates from the nearest present ancestor downward —
+ * so reverse order releases a child before its parent, and a parent released to
+ * a mode without owner-search never stands between us and a child still to be
+ * released. A landing opened later may stand above a hold taken earlier on another
+ * path, and is released first; but the mode it is released to is the one it had,
+ * and the run reached beneath it at that mode, so it keeps every search the
+ * releases beneath it need. A run that holds root opens no landing at all: root
+ * is denied nothing the bits refuse (fs_denied). The caller's acts in between
+ * take no hold, and remove no held directory — each is a view row's, never an
+ * orphan's — nor a directory above one, which the active row beneath keeps
+ * released; so the order stands across them.
+ *
+ * However the acts fared, every held directory is asked back to its exact mode,
+ * and the next run holds what it needs afresh. Through the directory's own
+ * descriptor (fs_set_dir_mode), never a chmod(2) on a path that may have become
+ * a symlink meanwhile, and never a directory created anew: one the world took
+ * away has nothing left to release. Every hold is attempted; one the directory
+ * refuses stays held and is the receipt's, each in the order released, with its
+ * cause (deploy_receipt_t's held).
+ */
+void deploy_release(arena_t *arena, deploy_receipt_t *receipt) {
+    CHECK_NULL(arena);
+    CHECK_NULL(receipt);
+
+    /* Sized to the holds: every one could be refused */
+    deploy_holds_t held = {
+        .entries = arena_calloc(arena, receipt->taken.count, sizeof(*held.entries)),
+    };
+
+    for (size_t i = receipt->taken.count; i-- > 0;) {
+        const deploy_hold_t *hold = &receipt->taken.entries[i];
+        error_t err = fs_set_dir_mode(hold->item->filesystem_path, hold->mode);
+        if (!err) continue;
+
+        /* Left wide, or out of reach: the hold, with the refusal in the primitive's
+         * own words — the receipt carries the path and both modes beside it */
+        held.entries[held.count++] = (deploy_hold_t){
+            .item = hold->item, .mode = hold->mode, .error = err,
+        };
+    }
+
+    receipt->held = held;
 }

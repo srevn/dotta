@@ -1470,11 +1470,16 @@ cleanup:
  * Deploy a single view row to its filesystem path.
  *
  * Mechanism only: the verdict says what stands at the path and what the write
- * applies, and this lands it — missing parents first, then its content, then
- * the write the row's type calls for. Nothing here looks at the disk to decide
- * anything; a path the world has moved under since preflight meets the mechanism's
- * refusal (rename over a directory is EISDIR, rmdir of a directory that filled
- * up is ENOTEMPTY) and the refusal is the row's outcome.
+ * applies, and this lands it — its content first, then the way to it (the missing
+ * parents made, the landing held where it refuses), then the write its type calls
+ * for. Nothing here looks at the disk to decide anything; a path the world has
+ * moved under since preflight meets the mechanism's refusal (rename over a
+ * directory is EISDIR, rmdir of a directory that filled up is ENOTEMPTY) and
+ * the refusal is the row's outcome.
+ *
+ * A sealed row at a terminal, its key cold, is asked for the key before the way
+ * to it is made, so a parent the run then cannot make costs a prompt answered
+ * for nothing.
  *
  * The row:
  * - file->type: the entry its content is read as, and the write that lands it —
@@ -1504,18 +1509,20 @@ static error_t deploy_file(
 
     const manifest_row_t *file = v->item->row;
 
-    /* Land the path: parents first, whichever kind it is */
-    error_t err = ensure_parents(run, file->filesystem_path);
-    if (err) return err;
-
-    /* Its content, read as the entry the row's type says it is (infra/content.h):
-     * a link's bytes are its target, never a seal, and come back the C string
-     * symlink(2) is handed, empty or not; a file's are decrypted where sealed */
+    /* Its content first, whichever kind it is: a row whose content cannot be
+     * read makes nothing on its way and removes nothing in it. Read as the entry
+     * the row's type says it is (infra/content.h): a link's bytes are its target,
+     * never a seal, and come back the C string symlink(2) is handed, empty or
+     * not; a file's are decrypted where sealed */
     const buffer_t *content = NULL;
-    err = content_cache_get_from_blob_oid(
+    error_t err = content_cache_get_from_blob_oid(
         run->cache, &file->blob_oid, gitops_type_filemode(file->type),
         file->storage_path, file->profile, &content
     );
+    if (err) return err;
+
+    /* Then the way to it: parents made, the landing held where it refuses */
+    err = ensure_parents(run, file->filesystem_path);
     if (err) return err;
 
     /* Either write lands by rename(2) of a temporary over the path, which replaces

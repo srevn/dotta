@@ -896,6 +896,11 @@ error_t deploy_preflight(
  * than a fresh judgment. Whatever a planned path's occupant was, clearing it
  * removes exactly one node.
  *
+ * A file or link row's act runs in the order a failure must stop it: its content
+ * read, the way to it made, what stands in its way cleared, its write — so a
+ * row whose content cannot be read makes nothing on its way and removes nothing
+ * in it.
+ *
  * Missing parents are the mechanics of landing a planned path, created top-down
  * as part of its write: a directory the view claims (any profile, in scope or
  * not, either class) with the mode and ownership its ancestor verdict carries,

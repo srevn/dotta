@@ -3117,7 +3117,8 @@ const args_command_t spec_apply = {
         "Exclusion Patterns:\n"
         "  Excluded paths are protected from deployment, directory\n"
         "  convergence and pruning. Patterns follow gitignore glob syntax;\n"
-        "  a trailing slash restricts a pattern to directories. Repeatable.\n",
+        "  a trailing slash restricts a pattern to directories. Repeatable.\n"
+        "  A pattern names a path as in .dottaignore: '.ssh/*' for ~/.ssh/*.\n",
     .examples     =
         "  %s apply                            # Deploy all enabled profiles\n"
         "  %s apply --force                    # Lift the consent skips (overwrite, prune)\n"
@@ -3125,7 +3126,7 @@ const args_command_t spec_apply = {
         "  %s apply -p work ~/.bashrc          # Profile + file filter\n"
         "  %s apply ~/.bashrc ~/.zshrc         # Deploy specific files only\n"
         "  %s apply -n                         # Preview without writing\n"
-        "  %s apply --exclude 'home/.ssh/*'    # Protect matched files\n",
+        "  %s apply --exclude '.ssh/*'         # Protect matched files\n",
     .epilogue     =
         "See also:\n"
         "  %s status          # Preview pending deployment\n"

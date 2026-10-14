@@ -142,7 +142,7 @@ static bool deploy_needs_work(const workspace_item_t *item) {
  */
 typedef enum {
     SKIP_NONE,       /* nothing stands in the way of the row's work */
-    SKIP_EXCLUDED,   /* an -e pattern matched the row's storage path */
+    SKIP_EXCLUDED,   /* an -e pattern matched the row's mount-relative path */
     SKIP_EXISTING    /* --skip-existing and something occupies the path */
 } skip_reason_t;
 

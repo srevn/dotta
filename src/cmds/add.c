@@ -3061,7 +3061,7 @@ const args_command_t spec_add = {
         "Exclude Patterns:\n"
         "  Glob syntax with *, ?, [abc]. Flag is repeatable.\n"
         "    --exclude '*.log'                    # Skip .log files\n"
-        "    --exclude '.git/*'                   # Skip .git directory\n"
+        "    --exclude '.git/'                    # Skip .git directories\n"
         "    --exclude '*.log' --exclude '*.tmp'  # Multiple patterns\n",
     .examples    =
         "  %s add global ~/.bashrc                   # Basic add\n"

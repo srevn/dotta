@@ -163,9 +163,9 @@ confirm_new_files = true
 # Default: No personal patterns
 patterns = [
     # Personal IDE/editor files
-    ".config/Code/Cache/",    # VSCode cache under ~/.config (the baseline drops .vscode/ already)
-    ".idea/workspace.xml",    # IntelliJ workspace
-    "*.local",                # Any .local files
+    ".config/Code/Cache/",     # VSCode cache under ~/.config (the baseline drops .vscode/ already)
+    "**/.idea/workspace.xml",  # IntelliJ workspace, in any project
+    "*.local",                 # Any .local files
 
     # Personal scripts/tools
     ".envrc.local",          # direnv local overrides

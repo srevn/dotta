@@ -15,7 +15,7 @@ dotta add darwin ~/.config/fish
 dotta add global ~/.config/nvim
 
 # Exclude certain files
-dotta add global ~/.config/nvim --exclude '*.log' --exclude 'node_modules/*'
+dotta add global ~/.config/nvim --exclude '*.log' --exclude 'node_modules/'
 
 # Custom commit message
 dotta add global ~/.bashrc -m "Add shell config"

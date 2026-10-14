@@ -1162,8 +1162,8 @@ error_t deploy_preflight(
 
         /* The row's rung, last: the ownership the write applies, and whether
          * this run may set it (check_ownership). */
-        uid_t uid = (uid_t) -1;
-        gid_t gid = (gid_t) -1;
+        uid_t uid;
+        gid_t gid;
 
         if (skip.reason == DEPLOY_SKIP_NONE) {
             error_t err = check_ownership(
@@ -1189,12 +1189,10 @@ error_t deploy_preflight(
         /* The verdict, onto its kind's array */
         deploy_verdicts_t *kind = item->item_kind == PATH_KIND_DIRECTORY
             ? &verdicts->directories : &verdicts->files;
-        deploy_verdict_t *v = &kind->entries[kind->count++];
 
-        v->item = item;
-        v->occupant = occupant;
-        v->uid = uid;
-        v->gid = gid;
+        kind->entries[kind->count++] = (deploy_verdict_t){
+            .item = item, .occupant = occupant, .uid = uid, .gid = gid,
+        };
     }
 
     /* The ancestors: every directory row the run does not act on, absent as the
@@ -1239,11 +1237,6 @@ error_t deploy_preflight(
             continue;
         }
 
-        deploy_verdict_t *v = &verdicts->ancestors.entries[verdicts->ancestors.count++];
-
-        v->item = item;
-        v->occupant = FS_OCCUPANT_NONE;
-
         /* The pair, without the ownership rung: an ancestor is outside the plan
          * and has no skip to take, and the rows beneath it are decided by now.
          * A pair this run cannot set meets the refusal at the create, leaving
@@ -1254,10 +1247,17 @@ error_t deploy_preflight(
          * the run, above a landing the invoker can write. A pending row the walk
          * skipped for its pair is never here: no deployable row stands beneath
          * it. */
+        uid_t uid;
+        gid_t gid;
+
         error_t err = resolve_deployment_ownership(
-            item->row, opts->strict_ownership, &verdicts->warnings, &v->uid, &v->gid
+            item->row, opts->strict_ownership, &verdicts->warnings, &uid, &gid
         );
         if (err) return err;
+
+        verdicts->ancestors.entries[verdicts->ancestors.count++] = (deploy_verdict_t){
+            .item = item, .occupant = FS_OCCUPANT_NONE, .uid = uid, .gid = gid,
+        };
     }
 
     *out = verdicts;
@@ -1805,11 +1805,12 @@ deploy_receipt_t *deploy_execute(
     CHECK_NULL(cache);
 
     /* The receipt is sized to the verdicts up front, in the arena the run is
-     * handed — one slot per verdict, zeroed, filled in verdict order as each
-     * act lands (a zeroed slot's stat IS the UNSET triple), the failed bucket
-     * to both kinds together — every promised row could fail. count gates what
-     * a consumer reads, so an untaken slot is invisible and the receipt holds
-     * exactly what happened — for a landed file, with its own write's stat. */
+     * handed — one slot per verdict, filled in verdict order as each act lands,
+     * each outcome whole (a member it leaves out is zero, and a zeroed stat IS
+     * the UNSET triple), the failed bucket to both kinds together — every promised
+     * row could fail. count gates what a consumer reads, so an untaken slot is
+     * invisible and the receipt holds exactly what happened — for a landed file,
+     * with its own write's stat. */
     deploy_receipt_t *receipt = arena_calloc(arena, 1, sizeof(*receipt));
     receipt->deployed.entries = arena_calloc(
         arena, verdicts->files.count, sizeof(*receipt->deployed.entries)
@@ -1842,15 +1843,16 @@ deploy_receipt_t *deploy_execute(
         if (!err) err = deploy_directory(&run, v);
         if (err) {
             /* The row's own outcome; the cause already names its subject */
-            deploy_outcome_t *o = &receipt->failed.entries[receipt->failed.count++];
-
-            o->verdict = v;
-            o->error = err;
+            receipt->failed.entries[receipt->failed.count++] = (deploy_outcome_t){
+                .verdict = v, .error = err,
+            };
             continue;
         }
 
         /* Record success; the verb is the verdict's occupant */
-        receipt->converged.entries[receipt->converged.count++].verdict = v;
+        receipt->converged.entries[receipt->converged.count++] = (deploy_outcome_t){
+            .verdict = v,
+        };
     }
 
     /* Every verdict is work the plan chose, by construction: the planner routed
@@ -1860,24 +1862,22 @@ deploy_receipt_t *deploy_execute(
      * deploy_file. */
     for (size_t i = 0; i < verdicts->files.count; i++) {
         const deploy_verdict_t *v = &verdicts->files.entries[i];
-        deploy_outcome_t *o = &receipt->deployed.entries[receipt->deployed.count];
+        state_stat_t stat;
 
         error_t err = poisoned_above(&run, v->item->filesystem_path);
-        if (!err) err = deploy_file(&run, v, &o->stat);
+        if (!err) err = deploy_file(&run, v, &stat);
         if (err) {
-            /* The row's own outcome, as above. The deployed slot stays untaken:
-             * count never covers it, and its stat is UNSET on every deploy_file
-             * error return. */
-            deploy_outcome_t *f = &receipt->failed.entries[receipt->failed.count++];
-
-            f->verdict = v;
-            f->error = err;
+            /* The row's own outcome, as above */
+            receipt->failed.entries[receipt->failed.count++] = (deploy_outcome_t){
+                .verdict = v, .error = err,
+            };
             continue;
         }
 
-        /* Record success */
-        o->verdict = v;
-        receipt->deployed.count++;
+        /* Record success, with the write's own stat */
+        receipt->deployed.entries[receipt->deployed.count++] = (deploy_outcome_t){
+            .verdict = v, .stat = stat,
+        };
     }
 
     /* The run's own lists, the receipt's to carry: the parents its acts created,

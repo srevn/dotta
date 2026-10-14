@@ -74,22 +74,25 @@ static error_t remove_collect_claim(const profile_claim_t *claim, void *payload)
 
     /* The name copied out of the walk's loan, and the kind off the type the decode
      * gave: a blob is a file claim whatever its filemode */
-    walk->claims = arena_grow(
-        walk->arena, walk->claims, &walk->claim_capacity, walk->claim_count + 1,
-        sizeof(*walk->claims)
-    );
-    remove_claim_t *collected = &walk->claims[walk->claim_count++];
-    collected->storage_path = arena_strdup(walk->arena, claim->storage_path);
-    collected->kind = path_type_kind(claim->type);
+    const char *storage_path = arena_strdup(walk->arena, claim->storage_path);
+    path_kind_t kind = path_type_kind(claim->type);
 
     /* Where it stands on this machine, placed as it is collected: NULL for a
      * custom/ claim under a profile with no target here, which stands nowhere
      * and which its name still names. The name is one the walk validated — the
      * tree's shape check, the sheet's parse — so the resolve has no failure to
      * answer. */
-    collected->filesystem_path = mount_resolve(
-        walk->arena, walk->mounts, walk->profile, collected->storage_path
+    const char *filesystem_path = mount_resolve(
+        walk->arena, walk->mounts, walk->profile, storage_path
     );
+
+    walk->claims = arena_grow(
+        walk->arena, walk->claims, &walk->claim_capacity, walk->claim_count + 1,
+        sizeof(*walk->claims)
+    );
+    walk->claims[walk->claim_count++] = (remove_claim_t){
+        .storage_path = storage_path, .filesystem_path = filesystem_path, .kind = kind,
+    };
 
     return NULL;
 }

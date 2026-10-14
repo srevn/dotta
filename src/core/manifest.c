@@ -962,9 +962,11 @@ static error_t manifest_contribute(
      * leaves nothing behind but the arena's bytes. */
     contribution_t *c = &manifest->contributions[manifest->profile_count];
 
-    c->profile = arena_strdup(arena, profile_name(profile));
-    c->explicit = hashmap_borrow(arena, 128);
-    c->derived = hashmap_borrow(arena, 32);
+    *c = (contribution_t){
+        .profile = arena_strdup(arena, profile_name(profile)),
+        .explicit = hashmap_borrow(arena, 128),
+        .derived = hashmap_borrow(arena, 32),
+    };
     manifest->profiles[manifest->profile_count++] = c->profile;
 
     /* The step's two lists, read only while it runs: every row this profile placed,

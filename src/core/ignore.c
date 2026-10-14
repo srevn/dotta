@@ -426,9 +426,9 @@ error_t ignore_ruleset(
         sizeof(*r->profiles)
     );
 
-    r->profiles[r->profile_count].name = arena_strdup(r->arena, key);
-    r->profiles[r->profile_count].ruleset = rs;
-    r->profile_count++;
+    r->profiles[r->profile_count++] = (entry_t){
+        .name = arena_strdup(r->arena, key), .ruleset = rs,
+    };
 
     *out = rs;
     return NULL;

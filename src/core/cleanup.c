@@ -626,10 +626,9 @@ cleanup_receipt_t *cleanup_execute(arena_t *arena, const cleanup_preflight_t *ve
         error_t remove_err = fs_remove_file(path);
         if (remove_err) {
             /* The item's own outcome; the cause already names its subject */
-            cleanup_outcome_t *o = &receipt->failed.entries[receipt->failed.count++];
-
-            o->item = item;
-            o->error = remove_err;
+            receipt->failed.entries[receipt->failed.count++] = (cleanup_outcome_t){
+                .item = item, .error = remove_err,
+            };
             continue;
         }
 
@@ -678,10 +677,9 @@ cleanup_receipt_t *cleanup_execute(arena_t *arena, const cleanup_preflight_t *ve
             continue;
         }
 
-        cleanup_outcome_t *o = &receipt->failed.entries[receipt->failed.count++];
-
-        o->item = item;
-        o->error = remove_err;
+        receipt->failed.entries[receipt->failed.count++] = (cleanup_outcome_t){
+            .item = item, .error = remove_err,
+        };
     }
 
     return receipt;

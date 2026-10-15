@@ -92,13 +92,19 @@
  * Every ORPHANED, RELEASED or OVERRIDDEN item that passes the scope's profile
  * and path dimensions lands in exactly one bucket; out-of-scope items are
  * invisible. The exclude dimension does not drop an item, it spares it: `excluded`
- * is reported ("Skipped N paths (--exclude)") and never touched.
+ * is reported ("Skipped N paths (--exclude)") and never touched. Nor does
+ * --keep-orphans: it keeps every orphan -e did not spare, whatever its verdict
+ * would have been, and `kept` is reported ("Skipped N orphaned paths
+ * (--keep-orphans)") and never touched — the flag decides what the run does with
+ * the orphans the scope reaches, never whether it reaches them. A named path
+ * outranks the blanket flag, as -e outranks --skip-existing in deploy's plan
+ * (core/deploy.h deploy_partition_t).
  *
  * An overridden copy is no orphan cleanup settles: its profile still claims the
  * path, and the copy is left for the row standing over it (core/workspace.h
  * WORKSPACE_STATE_OVERRIDDEN). So it is counted — a path filter that names it
  * has found a path dotta manages — and never decided or touched, which leaves
- * -e nothing to spare of it.
+ * -e nothing to spare of it and --keep-orphans nothing to keep.
  *
  * The path dimension reaches an orphan the way it reaches an active row: `apply
  * <file>` plans the orphan at that path, `apply <dir>` the orphans beneath it,
@@ -116,6 +122,7 @@ typedef struct {
     workspace_items_t files;         /* ORPHANED / RELEASED file items in scope */
     workspace_items_t directories;   /* ORPHANED / RELEASED directory items in scope */
     workspace_items_t excluded;      /* Both kinds, spared by -e — reported, never touched */
+    workspace_items_t kept;          /* Both kinds, kept by --keep-orphans — reported, never touched */
     workspace_items_t overridden;    /* Both kinds, counted for the path filter's match, never touched */
 } cleanup_plan_t;
 
@@ -125,13 +132,14 @@ typedef struct {
  * Walks the workspace's diverged items once, keeping ORPHANED, RELEASED and
  * OVERRIDDEN ones, gating each on scope_accepts_profile ∧ scope_accepts_path(kind),
  * then routing an overridden one to its bucket and the rest by
- * scope_is_excluded(kind) and item_kind.
+ * scope_is_excluded(kind), then keep_orphans, then item_kind.
  *
  * @param arena Arena the plan and its buckets live in (must not be NULL)
  * @param ws Workspace loaded with orphan analysis (must not be NULL)
  * @param scope Operation scope (must not be NULL)
- * @param keep_orphans --keep-orphans: plan nothing. An empty plan is the answer
- *        every later stage reads — no stage re-encodes the flag.
+ * @param keep_orphans --keep-orphans: keep every orphan -e did not spare (kept),
+ *        so files and directories stay empty. The bucket is the answer every
+ *        later stage reads — no stage re-encodes the flag.
  * @return The plan
  */
 cleanup_plan_t *cleanup_plan_build(
@@ -144,8 +152,8 @@ cleanup_plan_t *cleanup_plan_build(
 /**
  * True when the plan carries nothing this run may act on
  *
- * Excluded items are not work: they are reported and left alone. Nor are overridden
- * ones, counted and never touched.
+ * Excluded and kept items are not work: they are reported and left alone. Nor
+ * are overridden ones, counted and never touched.
  */
 static inline bool cleanup_plan_is_empty(const cleanup_plan_t *plan) {
     return plan->files.count == 0 && plan->directories.count == 0;
@@ -155,17 +163,17 @@ static inline bool cleanup_plan_is_empty(const cleanup_plan_t *plan) {
  * How many items the plan classified — both kinds, every bucket
  *
  * Distinct from cleanup_plan_is_empty, which counts only *work*: a plan of nothing
- * but spared or overridden items is empty there and non-zero here. Apply reads
- * this beside deploy_plan_item_count to tell a path filter that named nothing
- * dotta manages from one whose paths are all skipped or overridden — an orphan
- * the filter found is a match, whatever its verdict, and so is a copy no verdict
- * decides.
+ * but spared, kept or overridden items is empty there and non-zero here. Apply
+ * reads this beside deploy_plan_item_count to tell a path filter that named nothing
+ * dotta manages from one whose paths are all spared, kept or overridden — an
+ * orphan the filter found is a match, whatever its verdict and whatever a flag
+ * keeps of it, and so is a copy no verdict decides.
  *
  * The bucket set lives here so a consumer never has to enumerate it.
  */
 static inline size_t cleanup_plan_item_count(const cleanup_plan_t *plan) {
     return plan->files.count + plan->directories.count +
-           plan->excluded.count + plan->overridden.count;
+           plan->excluded.count + plan->kept.count + plan->overridden.count;
 }
 
 /* ── Verdicts ─────────────────────────────────────────────────────── */

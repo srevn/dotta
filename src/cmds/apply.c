@@ -582,13 +582,13 @@ static void apply_print_reassignments(
 }
 
 /**
- * Report the work the plans withheld, by flag
+ * Report the work the plans withheld, by flag, and count it
  *
- * -e (files, the plan's directories, orphans) and --skip-existing (files) both
- * mean "in scope, needed work, deliberately not done" — the user's own flags,
- * decided at plan time, which is what "withheld" names against preflight's
- * "skipped". The two flags take two lines, and -e's line splits its count by
- * kind at verbose.
+ * -e (files, the plan's directories, orphans), --skip-existing (files) and
+ * --keep-orphans (orphans) all mean "in scope, needed work, deliberately not
+ * done" — the user's own flags, decided at plan time, which is what "withheld"
+ * names against preflight's "skipped". The three flags take three lines, and
+ * -e's line splits its count by kind at verbose.
  *
  * Printed once, above the nothing-to-do exit — so a run that does nothing else
  * still says what it withheld — and therefore also above the confirmation prompt,
@@ -596,11 +596,18 @@ static void apply_print_reassignments(
  * from it. Per-item traces stay at plan time, beside the decision that produced
  * them.
  *
+ * The block that names each withheld bucket is the one place that counts them:
+ * the nothing-to-do exit reads the count it returns (cmd_apply), so the closer
+ * and the lines above it can never be two sums of one set.
+ *
  * @param deploy_plan Deployment plan (must not be NULL)
- * @param cleanup_plan Cleanup plan, whose `excluded` bucket carries the orphans
- *        an -e pattern spared (must not be NULL)
+ * @param cleanup_plan Cleanup plan, whose `excluded` and `kept` buckets carry
+ *        the orphans an -e pattern spared and the ones --keep-orphans kept (must
+ *        not be NULL)
+ * @return The paths the plans withheld, every flag's, said or not (--quiet says
+ *         none)
  */
-static void apply_print_withheld(
+static size_t apply_print_withheld(
     output_t *out,
     const deploy_plan_t *deploy_plan,
     const cleanup_plan_t *cleanup_plan
@@ -672,6 +679,20 @@ static void apply_print_withheld(
             existing, existing == 1 ? "" : "s"
         );
     }
+
+    /* --keep-orphans reaches orphans only, both kinds, and keeps each before
+     * any verdict is taken, so no act names what it was spared — a prune, a
+     * release, a reclaim — and one line says it at every verbosity. */
+    size_t kept = cleanup_plan->kept.count;
+    if (kept > 0) {
+        output_print(
+            out, OUTPUT_NORMAL,
+            "Skipped {cyan}%zu{reset} orphaned path%s (--keep-orphans)\n",
+            kept, kept == 1 ? "" : "s"
+        );
+    }
+
+    return excluded + existing + kept;
 }
 
 /**
@@ -1286,10 +1307,10 @@ static void apply_print_cleanup_preview(
     size_t present_dirs = verdicts->prunable_dirs.count + skipped_dirs +
         verdicts->released_dirs.count;
 
-    /* An empty plan — no orphans in scope, --keep-orphans — has nothing to say,
-     * and says nothing. The sum is the plan's size, by the partition above
-     * (cleanup_preflight_t's two equations), so only an empty plan returns here
-     * — the closer in cmd_apply counts on it. */
+    /* A plan with no work — no orphans in scope, or every one spared, kept or
+     * overridden — has nothing to say, and says nothing. The sum is the plan's
+     * work, by the partition above (cleanup_preflight_t's two equations), so
+     * only such a plan returns here. */
     if (present_files + present_dirs + verdicts->absent_files.count +
         verdicts->absent_dirs.count == 0) {
         return;
@@ -2252,24 +2273,27 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *                           by path is still skipped, a released one still
      *                           let go.
      *
-     * --keep-orphans plans nothing. The empty plan is what every later stage
-     * reads, so no stage re-encodes the flag. */
+     * --keep-orphans keeps every orphan in scope -e does not spare: counted for
+     * the filter's match and reported, decided by no stage. The plan's kept bucket
+     * is what every later stage reads, so none re-encodes the flag. */
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Planning cleanup...\n");
 
     cleanup_plan_t *cleanup_plan = cleanup_plan_build(ctx->arena, ws, scope, opts->keep_orphans);
 
-    if (opts->keep_orphans) {
-        output_print(out, OUTPUT_VERBOSE, "  Orphans kept (--keep-orphans)\n");
-    }
-
-    /* Mirror the deployment-loop trace: for each orphan skipped by --exclude,
-     * emit a per-file line. output_print gates on the verbosity level, so
+    /* Mirror the deployment-loop trace: for each orphan -e spared or --keep-orphans
+     * kept, emit a per-file line. output_print gates on the verbosity level, so
      * non-verbose runs pay only the loop cost. */
     for (size_t i = 0; i < cleanup_plan->excluded.count; i++) {
         output_print(
             out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
             cleanup_plan->excluded.entries[i]->filesystem_path
+        );
+    }
+    for (size_t i = 0; i < cleanup_plan->kept.count; i++) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  Preserving orphan (kept): %s\n",
+            cleanup_plan->kept.entries[i]->filesystem_path
         );
     }
 
@@ -2287,10 +2311,10 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Warn if a file filter was given but matched no managed path at all (skipped
-     * rows count as matched — the filter found them). Asked after both planners:
-     * a path can name an orphan as well as an active row, and finding either is
-     * a match. */
+    /* Warn if a file filter was given but matched no managed path at all (what
+     * a flag withholds counts as matched — the filter found it). Asked after
+     * both planners: a path can name an orphan as well as an active row, and
+     * finding either is a match. */
     if (scope_filters_paths(scope) && deploy_plan_item_count(deploy_plan) == 0 &&
         cleanup_plan_item_count(cleanup_plan) == 0) {
         output_warning(
@@ -2601,15 +2625,12 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Everything the plans withheld, said once — above the exit below, so a run
      * whose only work was withheld still reports it, and above the prompt, so
-     * consent is given with the full picture. The count below is the same four
-     * buckets: the nothing-to-do line must not call a workspace clean when its
+     * consent is given with the full picture — and counted by the block that
+     * says it: the nothing-to-do line must not call a workspace clean when its
      * only work was withheld. ("Withheld" is the plan-time word — the user's
-     * own flags, -e and --skip-existing; "skipped" is preflight's, a fate the
-     * run decided.) */
-    apply_print_withheld(out, deploy_plan, cleanup_plan);
-    size_t withheld = deploy_plan->files.excluded.count +
-        deploy_plan->directories.excluded.count + cleanup_plan->excluded.count +
-        deploy_plan->files.skipped_existing.count;
+     * own flags, -e, --skip-existing and --keep-orphans; "skipped" is preflight's,
+     * a fate the run decided.) */
+    size_t withheld = apply_print_withheld(out, deploy_plan, cleanup_plan);
 
     /* The clean reassignments, said where they are written: the loops above wrote
      * every one the list names, or the run ended at the write the store refused,
@@ -2705,9 +2726,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     err = deploy_preflight(ws, deploy_plan, &deploy_opts, ctx->arena, &deploy_verdicts);
     if (err) return error_wrap(err, "Nothing was deployed or pruned");
 
-    /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
-     * no orphans in scope) yields empty verdicts and a silent preview — no gate
-     * needed anywhere. */
+    /* Decide cleanup's verdicts from the plan. A plan with no work — no orphans
+     * in scope, or every one spared, kept or overridden — yields empty verdicts
+     * and a silent preview — no gate needed anywhere. */
     cleanup_preflight_t *cleanup_verdicts = cleanup_preflight(
         ctx->arena, ws, cleanup_plan, opts->force
     );

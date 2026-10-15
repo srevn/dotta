@@ -47,19 +47,10 @@ cleanup_plan_t *cleanup_plan_build(
     CHECK_NULL(ws);
     CHECK_NULL(scope);
 
-    /* The plan and its four buckets are the arena's, beside the items they borrow,
-     * and nothing frees a plan. */
+    /* The plan and its five buckets are the arena's, beside the items they borrow,
+     * and nothing frees a plan. Each orphan in scope is added to its bucket as
+     * the walk decides it, and the five are filled once the walk is done. */
     cleanup_plan_t *plan = arena_calloc(arena, 1, sizeof(*plan));
-
-    /* --keep-orphans: nothing is planned, by request. The empty plan — four empty
-     * buckets — is what every later stage reads, so no stage re-encodes the
-     * flag. */
-    if (keep_orphans) {
-        return plan;
-    }
-
-    /* Each orphan in scope is added to its bucket as the walk decides it, and
-     * the four are filled once the walk is done. */
     workspace_items_t diverged = workspace_diverged(ws);
     workspace_buckets_t *buckets = workspace_buckets_create(arena);
 
@@ -85,13 +76,17 @@ cleanup_plan_t *cleanup_plan_build(
             continue;
         }
 
-        /* An overridden copy: counted, never touched (cleanup_plan_t), so the
-         * exclude dimension spares it nothing — and spares the rest, reported
-         * by the caller, never touched. */
+        /* An overridden copy: counted, never touched (cleanup_plan_t), so neither
+         * flag has anything of it to spare. Of the rest, a path -e names is spared
+         * and every other one --keep-orphans keeps — the named path first, the
+         * blanket flag after it — each reported by the caller and never touched;
+         * what neither withholds goes by its kind. */
         if (item->state == WORKSPACE_STATE_OVERRIDDEN) {
             workspace_buckets_add(buckets, item, &plan->overridden);
         } else if (scope_is_excluded(scope, item->storage_path, item->item_kind)) {
             workspace_buckets_add(buckets, item, &plan->excluded);
+        } else if (keep_orphans) {
+            workspace_buckets_add(buckets, item, &plan->kept);
         } else if (item->item_kind == PATH_KIND_DIRECTORY) {
             workspace_buckets_add(buckets, item, &plan->directories);
         } else {

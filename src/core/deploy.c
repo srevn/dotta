@@ -322,19 +322,20 @@ deploy_plan_t *deploy_plan_build(
          * bucket, therefore: not pending, since there is no convergence to perform;
          * not clean, since there is nothing to adopt or acknowledge (an apply
          * must not take ownership of a parent it found already there). Save a
-         * claim dotta's own copy squats, the view having moved past it — Git,
-         * or the layer requiring the directory at a blob's place the claims beneath
-         * it took (core/manifest.c manifest_layer) — STALE, the workspace's proof
-         * (core/workspace.c workspace_analyze_directory), alone where the copy
-         * is untouched and beside TYPE where it was edited: that squatter is
-         * the view's pending move, the run's to converge as a tracked row's
-         * squatter is — cleared at its own rung in the directory pass, parents
-         * first, so nothing beneath it is written through what stood there, and
-         * created in its place, the type rung deciding whether unasked or under
-         * --force (deploy_preflight). Its convergence is always a replace: STALE
-         * stands on a directory row only where another kind does. Prior to scope,
-         * because scope decides reach and this decides whether there is anything
-         * to reach for. */
+         * claim dotta's own node squats, observed or owned, the view having moved
+         * past it — Git, or the layer requiring the directory at a blob's place
+         * the claims beneath it took (core/manifest.c manifest_layer) — STALE,
+         * the workspace's proof (core/workspace.c workspace_analyze_directory),
+         * alone where the copy is untouched and beside TYPE where it was edited
+         * or never confirmed: that squatter is the view's pending move, the run's
+         * to converge as a tracked row's squatter is — cleared at its own rung
+         * in the directory pass, parents first, so nothing beneath it is written
+         * through what stood there, and created in its place, the type rung
+         * deciding whether unasked or under --force (deploy_preflight); the user's
+         * own node there carries no STALE, and stays the named re-derivation's.
+         * Its convergence is always a replace: STALE stands on a directory row
+         * only where another kind does. Prior to scope, because scope decides
+         * reach and this decides whether there is anything to reach for. */
         if (!item->row->tracked && !(item->divergence & DIVERGENCE_STALE)) continue;
 
         if (!scope_accepts_profile(scope, item->profile) ||

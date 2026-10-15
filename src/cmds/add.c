@@ -877,10 +877,11 @@ static error_t add_refuse_excluded(
  * captured — strictly beneath the root its label resolves to, where the capture's
  * climb goes (core/profiles.h profile_capture_ancestors). The climb retires every
  * derived claim the profile holds at a link it meets, under any name, so after
- * the commit nothing requires a directory there. A link where dotta confirmed a
- * copy (the frame's base, core/workspace.h workspace_base) is never the user's
- * to read through: Git moved past what dotta placed, apply replaces it, and a
- * capture through it would undo half of Git's move.
+ * the commit nothing requires a directory there. A link dotta keeps a record of
+ * — the link its record describes, observed or owned — is never the user's to
+ * read through: it is dotta's node, which Git moved past and apply replaces
+ * (core/workspace.c workspace_analyze_directory), and a capture through it would
+ * undo half of Git's move.
  *
  * The capturing profile's claims are read off the walk's view — its own, under
  * the command's table, the run's binding in it, which the enabled view lacks on
@@ -890,13 +891,13 @@ static error_t add_refuse_excluded(
  *
  * Every strict ancestor, outermost first: a claimed link beneath the machine's
  * own is still claimed, and the refusal names the first one in the way. Its words
- * follow the claim standing at the link and the base, in the order the load classes
- * the node there (core/workspace.c workspace_analyze_directory): a blob — a link
- * a profile claims, or a file — then dotta's copy, a tracked directory, a derived
- * one, each with its way out. A claim at the link that stands nowhere, beneath
- * a blob standing above it, has no row there, and is worded by itself. Dotta's
- * node, where no claim is, is worded by the paths beneath it, with the replace
- * its consent allows.
+ * follow the claim standing at the link and the record of the link, in the order
+ * the load classes the node there (core/workspace.c workspace_analyze_directory):
+ * a blob — a link a profile claims, or a file — then dotta's own link, a tracked
+ * directory, a derived one, each with its way out. A claim at the link that stands
+ * nowhere, beneath a blob standing above it, has no row there, and is worded by
+ * itself. Dotta's node, where no claim is, is worded by the paths beneath it,
+ * with the replace its consent allows.
  *
  * Stated: a capture through dotta's link before any row stands beneath it is
  * admitted, the link no node yet — the row it adds, where its profile is enabled,
@@ -969,12 +970,15 @@ static error_t add_refuse_ancestry(
             other = manifest_lookup_claim(enabled->manifest, profiles[i], link);
         }
 
-        /* Whose node the link is: dotta's where it keeps a record there, and
-         * its copy where the record confirmed one, as the load decides it
-         * (core/workspace.h workspace_base) */
+        /* Whose node the link is: dotta's where it keeps a record of the link —
+         * one of another kind describes a node that is gone, another in its place
+         * (core/workspace.h workspace_type_occupant) — as the load decides it
+         * (core/workspace.c workspace_obstructs, workspace_analyze_directory);
+         * and its copy as dotta confirmed it where that record confirmed one */
         const state_record_t *record = state_find_record(
             enabled->records, enabled->record_count, link
         );
+        if (record && record->kind != occupant) record = NULL;
         const state_record_t *base = workspace_base(record);
 
         /* No claim: the machine's link, read through as the kernel resolves it
@@ -985,10 +989,7 @@ static error_t add_refuse_ancestry(
          * the record confirmed a copy, an edit since being apply's to name, and
          * --force's where it never did (core/workspace.h workspace_untouched) */
         if (!held && !other) {
-            if (!record || record->kind != occupant ||
-                !manifest_active_beneath(enabled->manifest, link)) {
-                continue;
-            }
+            if (!record || !manifest_active_beneath(enabled->manifest, link)) continue;
 
             char shown[PATH_MAX], beneath[PATH_MAX];
             output_format_path(link, identity()->home, shown, sizeof(shown));
@@ -1004,7 +1005,7 @@ static error_t add_refuse_ancestry(
         /* The admission: the user's link, every claim at it the capturing profile's
          * derived one, at a rung the capture's climb visits — and so retires,
          * under every name */
-        if (!other && manifest_is_derived(held) && !base &&
+        if (!other && manifest_is_derived(held) && !record &&
             str_path_beneath(link, root->filesystem_path, strlen(root->filesystem_path))) {
             continue;
         }
@@ -1045,14 +1046,16 @@ static error_t add_refuse_ancestry(
             );
         }
 
-        /* A directory, where dotta last confirmed a copy of its own: apply replaces
-         * the link unasked where it is that copy untouched, and names --force
-         * where it is not */
-        if (base) {
+        /* A directory, where dotta's own link stands: the view squatter's class,
+         * whatever the row's (core/workspace.c workspace_analyze_directory) —
+         * its way out the replace its consent allows, read as far as no measure
+         * is needed, as at a node above a row */
+        if (record) {
             return error_create(
                 ERR_INVALID_ARG, "'%s' would be read through the link at '%s', where "
-                "dotta last confirmed a copy and profile '%s' now claims a directory; "
-                "dotta apply replaces the link first", beneath, shown, row->profile
+                "dotta keeps a record of it and profile '%s' now claims a directory; "
+                "dotta apply%s replaces the link first", beneath, shown, row->profile,
+                base ? "" : " --force"
             );
         }
 

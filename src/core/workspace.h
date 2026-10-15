@@ -240,23 +240,25 @@ typedef enum {
  *                       refuses a capture through it but where the capture's
  *                       own climb retires the claim (cmds/add.c
  *                       add_refuse_ancestry): the view's need displaces everything
- *                       beneath it. The four say who moved the squatter, and so
- *                       whose verb removes it: the user's own node, at a row
- *                       the profile tracks (TRACKED, apply --force) or at a rung
- *                       it only passes through (DERIVED, the named re-derivation);
- *                       or dotta's own copy, which the record proves Git moved
- *                       past, at a row of either class or at none — untouched
- *                       (STALE, apply, unasked) or edited since, or never confirmed
- *                       (CONFLICT, apply --force). The class is the squatter's
- *                       own route, inherited (workspace_item_route: KIND,
- *                       KIND_DERIVED, STALE, CONFLICT) — a node's, the consent
- *                       its landing asks (workspace_untouched) — so every screen
- *                       that speaks of a path beneath it names the squatter's
- *                       verb. At a lost blob's place (core/manifest.c
- *                       manifest_layer) no re-derivation frees a DERIVED squatter,
- *                       the blob's explicit claim naming the path: the named
- *                       one says to move the node aside instead (cmds/update.c
- *                       cmd_update), one hop past the verb the screens name.
+ *                       beneath it. The four say whose node the squatter is and
+ *                       who moved it, and so whose verb removes it: the user's
+ *                       own node, one dotta keeps no record of, at a row the
+ *                       profile tracks (TRACKED, apply --force) or at a rung it
+ *                       only passes through (DERIVED, the named re-derivation);
+ *                       or dotta's own, the node its record describes, observed
+ *                       or owned, which Git moved past, at a row of either class
+ *                       or at none — untouched (STALE, apply, unasked) or edited
+ *                       since, or never confirmed (CONFLICT, apply --force).
+ *                       The class is the squatter's own route, inherited
+ *                       (workspace_item_route: KIND, KIND_DERIVED, STALE, CONFLICT)
+ *                       — a node's, the consent its landing asks
+ *                       (workspace_untouched) — so every screen that speaks of
+ *                       a path beneath it names the squatter's verb. At a lost
+ *                       blob's place (core/manifest.c manifest_layer) no
+ *                       re-derivation frees a DERIVED squatter, the blob's explicit
+ *                       claim naming the path: the named one says to move the
+ *                       node aside instead (cmds/update.c cmd_update), one hop
+ *                       past the verb the screens name.
  *   RECORD              only a record remembers a directory there — the view
  *                       requires none — and none stands there: a record of a
  *                       directory with another kind of node in its place, or a
@@ -284,7 +286,7 @@ typedef enum {
  * node's OBSTRUCTING.
  *
  * Noted by the look that found the squatter — a view row's class refined once,
- * from the base, by the directory analysis that took that look, and a node's
+ * from the record, by the directory analysis that took that look, and a node's
  * from its measure, by the join's look at its record, each before any look beneath
  * (workspace.c workspace_analyze_directory, workspace_look_orphan: STALE, CONFLICT)
  * — and written by every look it withholds (workspace.c workspace_look), which
@@ -778,15 +780,14 @@ static inline bool workspace_reassigned(
  * (core/workspace.c workspace_compare_base).
  *
  * Readers: core/workspace.c workspace_analyze_file (the bytes' base: the fast
- * path's stat and the second question), workspace_analyze_directory (whose a
- * squatter is: dotta's copy where a base stands, the user's where none does),
- * workspace_analyze_orphans (an order measured against a confirmed blob) and
- * workspace_measure (a file compared only against one); workspace_stale below
- * (whether the bytes are asked at all); workspace_untouched below (whether a
- * measured copy is the one dotta confirmed); cmds/add.c add_refuse_ancestry (whose
- * a link above a capture is, as the directory analysis asks it, and whether only
- * --force replaces dotta's own node there, the half of workspace_untouched no
- * measure is needed for). A reader not on this list is a bug.
+ * path's stat and the second question), workspace_analyze_directory (whether
+ * dotta's own squatter is the copy it confirmed), workspace_analyze_orphans (an
+ * order measured against a confirmed blob) and workspace_measure (a file compared
+ * only against one); workspace_stale below (whether the bytes are asked at all);
+ * workspace_untouched below (whether a measured copy is the one dotta confirmed);
+ * cmds/add.c add_refuse_ancestry (whether only --force replaces dotta's own link
+ * above a capture, the half of workspace_untouched no measure is needed for). A
+ * reader not on this list is a bug.
  */
 static inline const state_record_t *workspace_base(const state_record_t *record) {
     return record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;
@@ -969,7 +970,7 @@ typedef enum {
     WORKSPACE_ROUTE_DISPLACED_TRACKED,  /* Beneath the user's squatter a tracked row claims (apply --force) */
     WORKSPACE_ROUTE_DISPLACED_DERIVED,  /* … an ancestor claim holds ('dotta update <dir>') */
     WORKSPACE_ROUTE_DISPLACED_STALE,    /* … dotta's own copy Git moved past, untouched (apply) */
-    WORKSPACE_ROUTE_DISPLACED_CONFLICT, /* … that copy, edited since (apply --force) */
+    WORKSPACE_ROUTE_DISPLACED_CONFLICT, /* … that copy, edited since or never confirmed (apply --force) */
     WORKSPACE_ROUTE_UNVERIFIABLE,       /* DIVERGENCE_UNVERIFIED — dotta could not look */
     WORKSPACE_ROUTE_CONFLICT,           /* (STALE ∨ CLAIM_MOVED) ∧ (CONTENT ∨ TYPE) — both moved */
     WORKSPACE_ROUTE_STALE,              /* STALE ∨ CLAIM_MOVED alone — Git moved, disk did not */
@@ -1008,10 +1009,10 @@ typedef enum {
  *                            the plan, core/deploy.h deploy_plan_build) and writes
  *                            the row fresh beneath it.
  *   displaced, CONFLICT      DISPLACED_CONFLICT — the same, beneath that copy
- *                            edited since: apply --force replaces it. Each class
- *                            is its squatter's own route inherited (KIND,
- *                            KIND_DERIVED, STALE, CONFLICT below). RECORD stands
- *                            on no deployed item (the reach rule,
+ *                            edited since, or never confirmed: apply --force
+ *                            replaces it. Each class is its squatter's own route
+ *                            inherited (KIND, KIND_DERIVED, STALE, CONFLICT below).
+ *                            RECORD stands on no deployed item (the reach rule,
  *                            workspace_displaced_t), so the four view classes
  *                            are the whole test.
  *   DIVERGENCE_UNVERIFIED    UNVERIFIABLE — a bit the analysis could not

@@ -621,7 +621,7 @@ static bool workspace_obstructs(const workspace_t *ws, const workspace_item_t *i
  * and core/deploy.c check_ancestry and deploy_plan_build and cmds/update.c
  * cmd_update, lent them through workspace_squatted_ancestor. The note is handed
  * back to the caller whose look made it, which alone may refine its class before
- * any look beneath reads it: the directory analysis a view row's, from the base,
+ * any look beneath reads it: the directory analysis a view row's, from the record,
  * and the join's look at a record dotta's node's, from its measure
  * (workspace_look_orphan). The file analysis has nothing to refine, and drops it.
  *
@@ -660,7 +660,7 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
     /* Whose claim holds what stands here, if it squats, in the order the claims
      * outrank one another. A directory claim with another kind of node in its
      * place: a view row's class — the user's squatter until the analysis that
-     * asked for this look reads the base (workspace_analyze_directory) — or a
+     * asked for this look reads the record (workspace_analyze_directory) — or a
      * directory record's memory. Dotta's own file or link at no row, where the
      * view's rows beneath it need a directory (workspace_obstructs): a squatter
      * of every path beneath it, rows and records alike, CONFLICT until its measure
@@ -2931,8 +2931,9 @@ static error_t workspace_analyze_untracked(
  * - DELETED state: Directory removed from filesystem
  * - DIVERGENCE_UNVERIFIED: Directory could not be stat'd (inaccessible)
  * - DIVERGENCE_TYPE, DIVERGENCE_STALE: Something other than a directory stands
- *   at the path — the user's (TYPE), dotta's own copy Git moved past (STALE),
- *   or that copy edited since (both): the frame across kinds, the record its base
+ *   at the path — the user's (TYPE), or dotta's own node, the record's kind
+ *   standing, which Git moved past: untouched (STALE), or edited since or never
+ *   confirmed (both) — the frame across kinds, the record its base
  *
  * and for a tracked row alone — the profile's word about a directory it tracks,
  * where an ancestor claim has none to give (the split is at the line itself):
@@ -3021,33 +3022,44 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
      * something real stands here and no look beneath this path is taken at all.
      * DEPLOYED, as the partition made it: the path exists, just another kind.
      *
-     * Who moved it is the frame across kinds, the file analysis's three-way asked
-     * under a directory row. The base is the record where it confirmed a blob —
-     * a file's or a link's; a directory record holds none — and Git moved past
-     * any base by construction, a directory claiming no content. The second
-     * question, put to the base's own kind and binding (workspace_compare_base),
-     * says whether disk left it. Asked of both classes, above the line where
-     * the profile's word about a tracked directory begins: a squatter is a fact
-     * about the path, and a rung dotta's own copy squats is the plan's to converge
-     * (core/deploy.h deploy_plan_build). The note takes the verdict's class before
-     * any look beneath is taken — the walk takes a parent before every path beneath
+     * Whose node it is, then who moved it. The record's own kind standing is
+     * dotta's node, whoever owns the record: dotta saw or put that node there
+     * (classify_absent), and any record makes a node dotta's to replace where a
+     * row needs its place, as dotta's node above a row is (workspace_obstructs).
+     * No record, or one of another kind — a node gone, another in its place —
+     * is the user's squatter, as another node where dotta's stood is at an orphan's
+     * place (workspace_analyze_orphans). Of dotta's node the frame across kinds
+     * asks who moved it, the file analysis's three-way under a directory row:
+     * Git moved past it by construction, a directory claiming no content, and
+     * the second question, put to the base's own kind and binding
+     * (workspace_compare_base), says whether disk left it — a node whose bytes
+     * dotta never confirmed being off it by default. The user's node takes no
+     * STALE beside its TYPE, where a file row's frame reads Git's move past a
+     * record of another kind: no verb captures a squatter at a directory row,
+     * so the bit would only promote a rung for --force to replace a node dotta
+     * keeps no record of (core/deploy.c deploy_plan_build). Asked of both classes,
+     * above the line where the profile's word about a tracked directory begins:
+     * a squatter is a fact about the path, and a rung dotta's own node squats
+     * is the plan's to converge. The note takes the verdict's class before any
+     * look beneath is taken — the walk takes a parent before every path beneath
      * it (workspace_load) — so every path beneath carries the squatter's verb. */
     if (item->occupant != FS_OCCUPANT_DIRECTORY) {
-        const state_record_t *base = workspace_base(record);
         compare_result_t at_base;
 
-        if (!base) {
-            /* No base, no frame: the user's squatter, the look's class kept */
+        if (!record || record->kind != item->occupant) {
+            /* The user's squatter, the look's class kept */
             item->divergence = DIVERGENCE_TYPE;
-        } else if (!workspace_compare_base(ws, item, &at_base) && at_base == CMP_EQUAL) {
-            /* At the base: dotta's own copy, untouched — Git's move alone, apply's
-             * to replace unasked (core/deploy.h deploy_content_conflicts) */
+        } else if (workspace_base(record) && !workspace_compare_base(ws, item, &at_base) &&
+            at_base == CMP_EQUAL) {
+            /* Dotta's own copy, untouched — Git's move alone, apply's to replace
+             * unasked (core/deploy.h deploy_content_conflicts) */
             item->divergence = DIVERGENCE_STALE;
             squatted->claim = WORKSPACE_DISPLACED_STALE;
         } else {
-            /* Off it — the base's kind with other bytes, a third kind of node,
-             * a read that failed, the conservative answer the file analysis gives:
-             * both sides moved, the route's CONFLICT */
+            /* Dotta's own node off its base — the base's kind with other bytes,
+             * bytes dotta never confirmed, a read that failed, the conservative
+             * answer the file analysis gives: both sides moved, the route's
+             * CONFLICT, --force's to replace */
             item->divergence = DIVERGENCE_TYPE | DIVERGENCE_STALE;
             squatted->claim = WORKSPACE_DISPLACED_CONFLICT;
         }
@@ -3059,8 +3071,8 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
      * of a directory the path is owed its observation, of either class, which
      * the flush makes off this look (workspace_flush), as it does a file's: where
      * there is none, and in the place of one of another kind, whose node the
-     * look found gone — this analysis reads a base only where another kind stands,
-     * so no verdict here is that record's.
+     * look found gone — this analysis reads a record only where another kind
+     * stands, so no verdict here is that record's.
      *
      * An ancestor claim is a creation template, not a convergence target, and
      * this is the line the profile's word about the path begins at. Every question

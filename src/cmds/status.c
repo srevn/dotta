@@ -1090,14 +1090,14 @@ static void status_print_workspace(
          * and the directory hint says so; it shares the bare [orphaned] key with
          * the files, so the sentence is written to be true of both.
          *
-         * [orphaned] and one of eleven — absence, a squatter, one of three failed
-         * looks, the kind, the content, one claim axis or both, or nothing —
-         * the last nine with or without [relocated], which no absent or displaced
-         * orphan carries; and [released] with or without [type]: twenty-two keys
-         * bound the domain (core/workspace.c workspace_item_tags, its ORPHANED
-         * and RELEASED arms). A legend that held fewer would drop a key in silence,
-         * and the header would promise its line a prune. */
-        struct { char tags[64]; const char *hint; } legend[22];
+         * [orphaned] and one of ten — absence, a squatter, one of three failed
+         * looks, the content, one claim axis or both, or nothing — the last eight
+         * with or without [relocated], which no absent or displaced orphan carries;
+         * and [released] with or without [type]: twenty keys bound the domain
+         * (core/workspace.c workspace_item_tags, its ORPHANED and RELEASED arms).
+         * A legend that held fewer would drop a key in silence, and the header
+         * would promise its line a prune. */
+        struct { char tags[64]; const char *hint; } legend[20];
         size_t legend_count = 0;
         size_t legend_width = 0;
 
@@ -1224,11 +1224,10 @@ static void status_print_workspace(
                                 case CLEANUP_SKIP_RELOCATED:
                                     hint = relocated_hint;
                                     break;
-                                /* The key names what changed — [modified], [type],
-                                 * [mode], [ownership] — so the hint says only
-                                 * that it did. */
+                                /* The key names what changed — [modified], [mode],
+                                 * [ownership] — so the hint says only that it
+                                 * did. */
                                 case CLEANUP_SKIP_MODIFIED:
-                                case CLEANUP_SKIP_TYPE_CHANGED:
                                 case CLEANUP_SKIP_CLAIM_CHANGED:
                                     hint = "changed since deployment; "
                                         "apply skips it, --force prunes it";

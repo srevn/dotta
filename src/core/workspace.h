@@ -1473,11 +1473,12 @@ const workspace_squatted_t *workspace_squatted_ancestor(
  *      the row, and the look only where the record is of another kind
  *
  * The orphans the analysis may measure — ORPHANED and OVERRIDDEN — take one ladder
- * after their state's word: absence, [displaced], the failed look, [type],
- * [modified], then the claim axes, with [relocated] beside them. Absence and
- * [displaced] reach an orphan alone, an overridden copy being looked at by
- * construction, and a clean one is RED where a prune is coming but DIM on an
- * overridden copy, which no engine removes.
+ * after their state's word: absence, [displaced], the failed look, [modified],
+ * then the claim axes, with [relocated] beside them. Absence and [displaced]
+ * reach an orphan alone, an overridden copy being looked at by construction,
+ * and a clean one is RED where a prune is coming but DIM on an overridden copy,
+ * which no engine removes. The kind is none of theirs: another node where dotta's
+ * stood is released before any measure, its [type] beside [released].
  *
  * The function handles special cases:
  *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)

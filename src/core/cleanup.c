@@ -129,11 +129,6 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
         return CLEANUP_SKIP_MODIFIED;
     }
 
-    /* DIVERGENCE_TYPE: File type changed (file <-> symlink) */
-    if (divergence & DIVERGENCE_TYPE) {
-        return CLEANUP_SKIP_TYPE_CHANGED;
-    }
-
     /* DIVERGENCE_MODE or DIVERGENCE_OWNERSHIP: the claim — the mode, the ownership,
      * or both */
     if (divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
@@ -147,11 +142,13 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
      * - STALE, CLAIM_MOVED: never emitted for an orphan (workspace_compare_orphan
      *   asks one question, of disk alone; who moved a claim is asked of a row,
      *   and an orphan has none) — listed so they cannot block
+     * - TYPE: never on an orphan this table is asked of — another kind of node
+     *   where the file was is the workspace's release (core/workspace.c
+     *   workspace_analyze_orphans) — and left out, so it would block
      * Unknown flags: block removal until explicitly handled above. */
     static const divergence_type_t known_flags = DIVERGENCE_CONTENT |
-        DIVERGENCE_TYPE | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP |
-        DIVERGENCE_UNVERIFIED | DIVERGENCE_ENCRYPTION | DIVERGENCE_STALE |
-        DIVERGENCE_CLAIM_MOVED;
+        DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_UNVERIFIED |
+        DIVERGENCE_ENCRYPTION | DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED;
 
     return (divergence & ~known_flags) ? CLEANUP_SKIP_UNVERIFIED
                                        : CLEANUP_SKIP_NONE;

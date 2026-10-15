@@ -181,17 +181,16 @@ static inline size_t cleanup_plan_item_count(const cleanup_plan_t *plan) {
 /**
  * Why a present orphaned file is skipped rather than pruned
  *
- * Pure in the item's divergence bits. Values are listed in precedence order —
- * cleanup_skip_reason answers the first that applies. Files only: a directory's
- * skip is cleanup_verdict's (the workspace could not verify it) or its remainder's
- * (cleanup_preflight_t), and needs no table.
+ * Pure in the item's divergence bits and its relocation class. Values are listed
+ * in precedence order — cleanup_skip_reason answers the first that applies. Files
+ * only: a directory's skip is cleanup_verdict's (the workspace could not verify
+ * it) or its remainder's (cleanup_preflight_t), and needs no table.
  */
 typedef enum {
     CLEANUP_SKIP_NONE = 0,       /* Not skipped — nothing stands in the way of the prune */
     CLEANUP_SKIP_UNVERIFIED,     /* The workspace could not settle it — see cleanup_skip_reason */
     CLEANUP_SKIP_RELOCATED,      /* The claim's home moved — skipped unless --force */
     CLEANUP_SKIP_MODIFIED,       /* Content differs from what dotta deployed */
-    CLEANUP_SKIP_TYPE_CHANGED,   /* File ↔ symlink ↔ device (a directory in its place is released) */
     CLEANUP_SKIP_CLAIM_CHANGED   /* The claim differs: the mode, the ownership, or both */
 } cleanup_skip_reason_t;
 
@@ -225,10 +224,6 @@ typedef enum {
  *   DIVERGENCE_CONTENT             MODIFIED     — disk differs from what dotta
  *                                  deployed (the record), not from the blob Git
  *                                  may have moved on to
- *   DIVERGENCE_TYPE                TYPE_CHANGED — a one-node swap unlink can
- *                                  undo under --force; a directory where the
- *                                  file was is RELEASED by the workspace and
- *                                  never reaches this table
  *   DIVERGENCE_MODE / OWNERSHIP    CLAIM_CHANGED
  *   ENCRYPTION / STALE /           NONE — a policy mismatch is not a user
  *     CLAIM_MOVED only             change; STALE and CLAIM_MOVED are never
@@ -237,7 +232,10 @@ typedef enum {
  *                                  listed so they cannot block
  *   DIVERGENCE_NONE                NONE — safe to prune
  *   an unnamed divergence bit      UNVERIFIED — blocks until this table
- *                                  names it (defensive default)
+ *                                  names it (defensive default). TYPE is one:
+ *                                  another kind of node where the file was is
+ *                                  the workspace's release, and never this table's
+ *                                  (core/workspace.c workspace_analyze_orphans)
  *
  * A non-encrypted file is verified by hashing the disk copy, read through
  * sys/filesystem and bounded by fs_read_fd's cap (256 MB): only a file above

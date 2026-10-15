@@ -1302,17 +1302,20 @@ static void workspace_analyze_file(
  * converges every claim; this analysis has no row to ask that of, and asks whether
  * disk left the claim the record reconciled — the question prune safety turns on.
  *
- * Precondition: the record carries a confirmed blob. Its one caller,
- * workspace_measure, compares only a file whose record confirmed one — a copy
- * dotta owns, one the user ordered pruned against it, or an overridden one —
- * and leaves the rest unmeasured.
+ * Precondition: the record carries a confirmed blob, and the look found the
+ * record's own kind standing. Its one caller, workspace_measure, compares only
+ * a file whose record confirmed one — a copy dotta owns, one the user ordered
+ * pruned against it, or an overridden one — and leaves the rest unmeasured; and
+ * the orphan analysis releases another node before any measure
+ * (workspace_analyze_orphans), so the copy measured here is always of its record's
+ * kind.
  *
  * Architecture:
  * - Uses the record alone (kind, blob_oid, stat, mode, owner, group)
  * - The content against the record's own pair, the question the file analysis's
  *   second question asks too (workspace_compare_base): the stat — a match means
- *   the exact node dotta wrote, no hashing — else the node's kind and its length
- *   off the look, which need no read, else one read of the record's blob
+ *   the exact node dotta wrote, no hashing — else the length off the look, which
+ *   needs no read, else one read of the record's blob
  * - The claim checked against the record's: the full-bit mode, the ownership
  *   beside it
  * - Single-stat-per-file (the caller's look, which nothing below retakes)
@@ -1325,23 +1328,25 @@ static void workspace_analyze_file(
  *
  * @param ws Workspace (provides the run's content reader)
  * @param item The orphan's item: its record, with a non-zero blob_oid, and the
- *             look taken at the record's path, a present kind (must not be NULL).
- *             The path bits the compare finds are added to its divergence, which
- *             the ladder hands in with none — only where the compare was made,
- *             so a failed look leaves it as it came
+ *             look taken at the record's path, which found the record's own kind
+ *             standing (must not be NULL). The path bits the compare finds are
+ *             added to its divergence, which the ladder hands in with none —
+ *             only where the compare was made, so a failed look leaves it as it
+ *             came
  * @return The look's error when the compare could not be made; NULL otherwise
  */
 static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item) {
     const state_record_t *record = item->record;
 
-    /* Step 1: Content and type comparison
+    /* Step 1: Content comparison
      *
      * The record's own pair under the caller's look (workspace_compare_base):
      * the stat first, so the exact node dotta wrote is recognised without loading
-     * or hashing anything — and the claim below is asked of that node, never of
-     * another kind's — then the kind and the length off the look, then one read
-     * of the record's blob, the one dotta last confirmed disk against. The caller
-     * guarantees a non-zero blob, and the store holds none of another size (CHECK).
+     * or hashing anything, then the length off the look, then one read of the
+     * record's blob, the one dotta last confirmed disk against. The kind rung
+     * between them passes, the look being of the record's kind (the precondition).
+     * The caller guarantees a non-zero blob, and the store holds none of another
+     * size (CHECK).
      */
     compare_result_t cmp_result;
     error_t err = workspace_compare_base(ws, item, &cmp_result);
@@ -1361,19 +1366,12 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
      */
     switch (cmp_result) {
         case CMP_EQUAL:
-            /* Content and type match - continue to the claim */
+            /* Content and kind match - continue to the claim */
             break;
 
         case CMP_DIFFERENT:
             /* Disk left the blob dotta deployed */
             item->divergence |= DIVERGENCE_CONTENT;
-            break;
-
-        case CMP_TYPE_DIFF:
-            /* Type differs (file vs symlink vs directory). The claim below skips
-             * itself on this verdict, as workspace_analyze_file returns on it:
-             * TYPE stands alone. */
-            item->divergence |= DIVERGENCE_TYPE;
             break;
 
         case CMP_MISSING:
@@ -1385,8 +1383,8 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
              * The copy reads as the prune candidate its look said it was, and
              * cleanup's execute re-probes presence before it unlinks
              * (core/cleanup.c cleanup_execute): nothing is removed, and the record
-             * retires as a reclaim. The claim checks below read the verdict and
-             * skip themselves.
+             * retires as a reclaim. The claim is not asked: a mode question over
+             * what is not there answers nothing.
              *
              * The look is not retracted, where the file analysis retracts its
              * own (its CMP_MISSING arm): the entries index was built from this
@@ -1395,32 +1393,31 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
              * keep a new file standing on the reused inode from being offered
              * for one run — the direction every false answer of the index takes
              * (workspace_index_entries). */
-            break;
+            return NULL;
+
+        case CMP_TYPE_DIFF:
+            /* Never: the look is of the record's kind (the precondition), and
+             * both of the compare's kind rungs read that one look */
+            CHECK_ARG(false, "a measured orphan stands as its record's kind");
     }
 
-    /* Step 3: Claim checking (if the path still stands)
+    /* Step 3: Claim checking
      *
-     * Only when the content phase ruled neither absence nor another kind — a
-     * mode question over what is not there, or is not that, answers nothing.
-     * Read off the verdict alone, as workspace_analyze_file's switch returns on
-     * the same two: a bit this function has just set is the verdict spelled twice.
-     * The compare workspace_analyze_claim asks of a row, asked of the record's
-     * claim: the record's mode is total for every kind that carries one (written
-     * from a view row after the build resolved absence), so one full-bit compare
-     * answers; a symlink record is never asked. Both halves read the caller's
-     * look — the one stat the content verdict was made from — for zero extra
-     * syscalls.
+     * The look stands at the record's kind: the switch returned on absence, and
+     * another kind is never measured. The compare workspace_analyze_claim asks
+     * of a row, asked of the record's claim: the record's mode is total for every
+     * kind that carries one (written from a view row after the build resolved
+     * absence), so one full-bit compare answers; a symlink record is never asked.
+     * Both halves read the caller's look — the one stat the content verdict was
+     * made from — for zero extra syscalls.
      */
-    if (cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
-        if (record->kind != FS_OCCUPANT_SYMLINK
-            && (item->st.st_mode & 0777) != record->mode) {
-            item->divergence |= DIVERGENCE_MODE;
-        }
-        /* The ownership axis alone: whose move a difference is gets asked of a
-         * row, and an orphan has none — a name its host cannot resolve included */
-        item->divergence |= workspace_compare_ownership(record->owner, record->group, &item->st)
-            & DIVERGENCE_OWNERSHIP;
+    if (record->kind != FS_OCCUPANT_SYMLINK && (item->st.st_mode & 0777) != record->mode) {
+        item->divergence |= DIVERGENCE_MODE;
     }
+    /* The ownership axis alone: whose move a difference is gets asked of a row,
+     * and an orphan has none — a name its host cannot resolve included */
+    item->divergence |= workspace_compare_ownership(record->owner, record->group, &item->st)
+        & DIVERGENCE_OWNERSHIP;
 
     return NULL;
 }
@@ -1826,24 +1823,20 @@ static bool workspace_item_stands(
  *   - another kind of node holds the place — a directory claim with a symlink
  *     or a file in it, a file claim with a directory: a squatted claim's own
  *     look is the squatter's, so the entry it names is exactly the one every
- *     verdict refuses. The retyped arm's rule read at the build
- *     (workspace_analyze_orphans: two occupants cannot share an inode, a claim
- *     and an occupant can), and the reason a proper-ancestor probe cannot stand
- *     alone — that one answers for ancestors, so a claim whose own path is squatted
- *     is one rung past its reach.
+ *     verdict refuses. It is why a proper-ancestor probe cannot stand alone:
+ *     that one answers for ancestors, so a claim whose own path is squatted is
+ *     one rung past its reach.
  *
  * Read by workspace_index_entries' two passes, over each item's own kind — a
- * row's or a record's — and by the orphan analysis's retyped arm over the record's
- * alone — where the answer is not whether the key may vouch but whether what
- * dotta put there is gone (workspace_analyze_orphans). The scan's roots ask a
- * narrower question of their own items directly: over the directory items the
- * kind is a constant, and what they want is a directory to enumerate. Over
- * path_kind_t, which is coarser than the node a type stands as (core/workspace.h
- * workspace_type_occupant), and on purpose: a link at a file key names the entry
- * it stands on, and a retyped record is released only where a directory and a
- * non-directory swapped. core/deploy.c occupant_conflicts reads the finer kind
- * because deploy must replace a link with a file and back — a different question
- * that happens to look alike.
+ * row's or a record's. The scan's roots ask a narrower question of their own
+ * items directly: over the directory items the kind is a constant, and what they
+ * want is a directory to enumerate. Over path_kind_t, which is coarser than the
+ * node a type stands as (core/workspace.h workspace_type_occupant), and on purpose:
+ * a link at a file key names the entry it stands on. The finer kind is read where
+ * the question is another — the orphan analysis's retyped arm, whether what dotta
+ * put there is gone (workspace_analyze_orphans), and core/deploy.c
+ * occupant_conflicts, because deploy must replace a link with a file and back —
+ * each a different question that happens to look alike.
  *
  * @param occupant What the look found (workspace_item_t)
  * @param kind The kind the claim names — the item's own, a row's or a record's
@@ -1952,8 +1945,9 @@ static void workspace_index_entries(workspace_t *ws) {
  * overridden copy's.
  *
  * @param ws Workspace (provides the run's content reader)
- * @param item The orphan's item, beneath no squatter and not absent: a present
- *             occupant, or one that could not be stat'd (must not be NULL)
+ * @param item The orphan's item, beneath no squatter and not absent: an occupant
+ *             of its record's kind, or one that could not be stat'd (must not
+ *             be NULL)
  */
 static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
     if (item->occupant == FS_OCCUPANT_UNKNOWN) {
@@ -1998,17 +1992,19 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *   - presence, off the look the join took (workspace_look) — either kind, a
  *     dangling link is present: an absent orphan is a reclaim whatever Git says,
  *     which keeps the planners' "absent ⇒ DIVERGENCE_NONE" rule;
- *   - the occupant's kind: a directory where dotta's file was, or anything but
- *     a directory where dotta's directory was, is a path dotta's copy has left
- *     — what dotta put there is gone, the same sentence as LOST below — and the
- *     node in its place is not dotta's to remove: unlink cannot take a directory,
- *     rmdir cannot take a file, and nothing authorizes either. Released, tagged
- *     [type]. Decided ahead of the entry, the prune order and the gate, because
- *     no entry stands for a copy that is no longer there, an order to prune it
- *     is moot, and no tree needs asking. A file ↔ symlink ↔ device swap is not
- *     this: unlink undoes a one-node swap under --force, and the divergence names
- *     it TYPE. An occupant that could not be stat'd is not taken for another
- *     kind — it may be dotta's own directory, unreachable;
+ *   - the occupant's kind: a node of another kind than the one the record describes
+ *     — a link, a directory or a device where dotta's file was, a file, a directory
+ *     or a device where its link was, anything but a directory where its directory
+ *     was — is a path dotta's copy has left: what dotta put there is gone, the
+ *     same sentence as LOST below, and the node in its place is one dotta has
+ *     no record of (core/workspace.h workspace_type_occupant: a record of another
+ *     kind describes another node), never dotta's to remove, --force included.
+ *     Released, tagged [type]. Decided ahead of the entry, the claim its profile
+ *     holds, the prune order and the gate, because no entry stands for a copy
+ *     that is no longer there, nor is one left for a row standing over it, an
+ *     order to prune it is moot, and no tree needs asking. An occupant that could
+ *     not be stat'd is not taken for another node — it may be dotta's own,
+ *     unreachable;
  *   - the entry: a row of the view standing on the record's very entry under
  *     another spelling of its path — whoever's — makes the record a stale key
  *     of an active path, RELEASED, so the one copy is never pruned as the old
@@ -2024,11 +2020,11 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *     manifest_lookup_claim) — and no row stands there, so the claim stands
  *     nowhere. A path an enabled claim names is dotta's whether or not the claim
  *     stands, so the copy is OVERRIDDEN: left for the row standing over it, never
- *     pruned and never released, and measured as a backed copy is. Behind the
- *     entry, whose stale key names no copy of its own; ahead of the prune order,
- *     given when the claim left, which its return has made stale; and ahead of
- *     the gate and Git authority, whose releases each answer a claim that has
- *     gone, which this one has not;
+ *     pruned and never released, and measured as a backed copy is. Behind another
+ *     node, which is no copy of dotta's, and the entry, whose stale key names
+ *     no copy of its own; ahead of the prune order, given when the claim left,
+ *     which its return has made stale; and ahead of the gate and Git authority,
+ *     whose releases each answer a claim that has gone, which this one has not;
  *   - the prune order (remove --delete-files): the user chose the fate of the
  *     deployed copy, and Git is not asked. Honoured only with a reference to
  *     measure the copy against — a directory (cleanup's emptiness rule decides)
@@ -2075,8 +2071,8 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  * This enables status to predict apply behavior (cleanup_verdict reads the same
  * item, and cleanup_skip_reason maps the same bits to the skip):
  * - DIVERGENCE_NONE -> Clean orphan, apply will prune
- * - DIVERGENCE_CONTENT/TYPE -> Modified, apply will skip
- * - DIVERGENCE_MODE/OWNERSHIP -> Metadata changed, apply will skip
+ * - DIVERGENCE_CONTENT -> Modified, apply will skip
+ * - DIVERGENCE_MODE/OWNERSHIP -> The claim changed, apply will skip
  * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
  * - WORKSPACE_STATE_RELEASED -> Git let go, dotta never deployed it, a row of
  *   the view stands on this very entry under another spelling of its path, or
@@ -2136,23 +2132,22 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * Absent: ORPHANED with no divergence — a reclaim whatever Git says. */
         if (item->occupant == FS_OCCUPANT_NONE) continue;
 
-        /* Another kind of path where dotta's copy was (see the doc above): a
-         * directory at a file record's path, anything but a directory at a
-         * directory record's — the claim's kind failing to stand at its key,
-         * which is workspace_claim_stands' own question over the record's kind.
-         * An occupant that could not be stat'd is not taken for another kind,
-         * which is the first term. workspace_claim_stands answers the same of
-         * an absent record — nothing standing vouches for nothing — which is
-         * why the absence arm above decides first. The record's own kind, not
-         * the ancestry's: whether a squatter stands above the copy was asked
+        /* Another node where dotta's copy was (see the doc above): the look found
+         * a kind other than the one the record describes, in the look's own words
+         * — the record keeps its node as an occupant. An occupant that could
+         * not be stat'd is not taken for another node, which is the first term:
+         * it may be dotta's own, unreachable. Absence is no kind either, which
+         * is why the absence arm above decides first. The record's own node,
+         * not the ancestry's: whether a squatter stands above the copy was asked
          * before the look (workspace_squatter_above), and no record that reached
-         * here is beneath one; a directory record that is retyped here is the
-         * squatter workspace_look noted when it took this very look.
+         * here is beneath one; a directory record another node stands in the
+         * place of here is the squatter workspace_look noted when it took this
+         * very look.
          *
-         * What dotta put there is gone, and what stands there is not dotta's to
-         * remove. Released, [type]: the record retires, the path stays. */
-        if (item->occupant != FS_OCCUPANT_UNKNOWN &&
-            !workspace_claim_stands(item->occupant, item->item_kind)) {
+         * What dotta put there is gone, and what stands there is a node dotta
+         * has no record of, never dotta's to remove, --force included. Released,
+         * [type]: the record retires, the path stays. */
+        if (item->occupant != FS_OCCUPANT_UNKNOWN && item->occupant != record->kind) {
             item->state = WORKSPACE_STATE_RELEASED;
             item->divergence = DIVERGENCE_TYPE;
             continue;
@@ -3789,16 +3784,6 @@ bool workspace_item_tags(
                 }
                 *color_out = OUTPUT_COLOR_MAGENTA;
 
-            } else if (item->divergence & DIVERGENCE_TYPE) {
-                /* A file ↔ symlink ↔ device swap at the path (a directory in a
-                 * file's place is released, never measured). An orphan's skip
-                 * (cleanup_skip_reason: TYPE_CHANGED); the DEPLOYED arm and apply's
-                 * preview use the same word. */
-                if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                    tags_out[tag_count++] = "type";
-                }
-                *color_out = OUTPUT_COLOR_RED;
-
             } else if (item->divergence & DIVERGENCE_CONTENT) {
                 /* Content divergence - blocking issue: an orphan's skip
                  * (cleanup_skip_reason: MODIFIED). */
@@ -3900,8 +3885,9 @@ bool workspace_item_tags(
             *color_out = OUTPUT_COLOR_MAGENTA;
 
             if (item->divergence & DIVERGENCE_TYPE) {
-                /* The third reason, named: a directory where dotta's file was,
-                 * or a file, a link, a device where dotta's directory was. */
+                /* The third reason, named: the look found a node of another kind
+                 * than the one the record describes, which is no node of dotta's
+                 * (workspace_analyze_orphans). */
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "type";
                 }

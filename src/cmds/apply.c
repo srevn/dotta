@@ -2779,15 +2779,16 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* How many planned paths Git moved past what dotta last reconciled — a file's
-     * bytes or claim, a directory's claim. [stale] alone the plan brings like
-     * any other divergence; beside [modified] it is a conflict preflight reports.
-     * Released files are covered by the orphan-prune summary below.
+     * bytes, kind or claim, a directory's kind or claim. [stale] alone the plan
+     * brings like any other divergence; beside [modified] it is a conflict
+     * preflight reports. Released files are covered by the orphan-prune summary
+     * below.
      *
      * The item's fact and not the plan's — the plan says what the run does, the
      * item says why — so the plan's pending items are walked once more, each
      * bucket one kind. DIVERGENCE_STALE and DIVERGENCE_CLAIM_MOVED are the
-     * workspace's verdict of that move — the content, another blob or the same
-     * blob under another kind (core/workspace.h workspace_stale), or a claim
+     * workspace's verdict of that move — the content, another kind or another
+     * confirmed blob (core/workspace.h workspace_stale), or a claim
      * (workspace_claims_moved), with a claim naming an owner this host cannot
      * resolve counted beside them, Git's to bring though no run here can
      * (core/workspace.h divergence_type_t) — a persistent signal that survives

@@ -899,13 +899,14 @@ static error_t workspace_compare_base(
  * queries, no Git; the record dotta keeps of the path is the item's, paired onto
  * it at the partition.
  *
- * The content's verdict is three-way, with the record's confirmed pair as base
- * (see the content and type analysis below): DIVERGENCE_STALE says Git moved
- * past the pair dotta last confirmed, DIVERGENCE_CONTENT says disk left it —
- * DIVERGENCE_TYPE where another kind than the row's stands, the kind being the
- * content's axis across kinds. Each is a verdict in its own right — STALE without
- * CONTENT is apply-side work that overwrites nothing of the user's; CONTENT without
- * STALE is a local edit Git has not raced; both together is a conflict.
+ * The content's verdict is three-way, with the record as base — the kind it names,
+ * and the bytes it confirmed (see the content and type analysis below):
+ * DIVERGENCE_STALE says Git moved past what dotta last saw, DIVERGENCE_CONTENT
+ * says disk left it — DIVERGENCE_TYPE where another kind than the row's stands,
+ * the kind being the content's axis across kinds. Each is a verdict in its own
+ * right — STALE without CONTENT is apply-side work that overwrites nothing of
+ * the user's; CONTENT without STALE is a local edit Git has not raced; both
+ * together is a conflict.
  *
  * The claim's verdict is one question per axis (workspace_analyze_claim): did
  * Git move it past the claim the record last reconciled? DIVERGENCE_CLAIM_MOVED
@@ -1025,52 +1026,58 @@ static void workspace_analyze_file(
      * node's record's place wherever the verdict below reads nothing from that
      * record (workspace_flush).
      *
-     * CONTENT AND TYPE ANALYSIS: the verdict is a three-way comparison with dotta's
-     * last content confirmation as base:
+     * CONTENT AND TYPE ANALYSIS: the verdict is a three-way comparison with what
+     * dotta last saw at the path as base:
      *
-     *   theirs = row->blob_oid          what Git expects now
-     *   base   = the confirmed blob     what dotta last confirmed on disk
+     *   theirs = the row            what Git expects now: a kind, and its blob
+     *   base   = the record         what dotta last saw there: the kind, which
+     *                               every record names; the bytes, where it
+     *                               confirmed a blob (workspace_base)
      *   ours   = disk
      *
-     *   git_moved   := base set  && base ≠ theirs   Git advanced since dotta
-     *                                               last confirmed this path
-     *   user_edited := base unset || ours ≠ base    disk left the blob dotta
-     *                                               confirmed there
+     *   git_moved   := base ≠ theirs   Git advanced since dotta last saw this path
+     *   user_edited := ours ≠ base     disk is not the node dotta last saw there
      *
-     * `base ≠ theirs` is a question about content, not about an id: another blob,
-     * or the same blob under another kind. Git hashes a link's target exactly
-     * as it hashes a file's bytes, so one object stands behind both and means a
-     * different thing under each, and a retype Git made under an untouched copy
-     * keeps the id it had. core/workspace.h workspace_compare_confirmed is where
-     * that rule lives, and the two readings of it below — this bool, and the
-     * fast path's whole verdict — are its.
+     * `base ≠ theirs` is a question about content, not about an id: another kind,
+     * or another blob where the record confirmed one. Git hashes a link's target
+     * exactly as it hashes a file's bytes, so one object stands behind both and
+     * means a different thing under each, and a retype Git made under an untouched
+     * copy keeps the id it had. core/workspace.h workspace_stale is where that
+     * rule lives — a base's whole pair (workspace_compare_confirmed), any other
+     * record's kind — and the two readings of it below, this bool and the fast
+     * path's whole verdict, are its.
      *
      * When ours ≠ theirs: CONTENT iff user_edited — TYPE where ours is another
      * kind than theirs — and STALE iff git_moved. STALE without CONTENT means
      * "overwrite loses nothing"; CONTENT without STALE means "Git has not moved
-     * since dotta last confirmed it"; both means both sides moved. Without a
-     * base there is no second question — any difference from theirs is the user's.
+     * since dotta last saw it"; both means both sides moved. Disk is at the base
+     * where it is the node dotta last saw there: a file or a link by its confirmed
+     * pair — the stat, or a read — and a directory by its kind alone, since it
+     * holds no bytes. Where the record confirmed no bytes, nothing says disk's
+     * are the ones dotta saw: any difference from theirs is the user's, beside
+     * Git's move where the record is of another kind.
      *
-     * Source of truth for the base: the record (the path_records row's blob). A
-     * path with no record, or one observed but never confirmed (zero blob), has
-     * no base. Cross-process correct by construction — every invocation sees
-     * the same answer.
+     * Source of truth for the base: the record (the path_records row). No record
+     * is no base, and nothing for Git to have moved past. Cross-process correct
+     * by construction — every invocation sees the same answer.
      */
     compare_result_t cmp_result;
 
-    /* The base: the record, where it carries a confirmed blob (core/workspace.h
-     * workspace_base). It compares under its own binding, never the row's: a
-     * blob opens under one (profile, storage path) pair and no other, and the
-     * record carries the one its blob was confirmed under (core/state.h
+    /* The base for the bytes: the record, where it carries a confirmed blob
+     * (core/workspace.h workspace_base). It compares under its own binding, never
+     * the row's: a blob opens under one (profile, storage path) pair and no other,
+     * and the record carries the one its blob was confirmed under (core/state.h
      * state_record_t) — a row the binding does not name is one the record has
      * yet to follow, and reading the base under it authenticates a ciphertext
      * against a tree path it was never sealed at. */
     const state_record_t *base = workspace_base(record);
 
     /* The first question of the three-way frame is answered from the row and
-     * the base alone; the second (disk_at_base — ours == base) is answered by
-     * whichever path below settles it, and only when it can change the verdict. */
-    bool git_moved = base && workspace_stale(row, base);
+     * the record alone: did the view move past what dotta last saw here — the
+     * kind every record names, or the bytes a base confirmed (core/workspace.h
+     * workspace_stale)? The second (disk_at_base — ours == base) is answered by
+     * whichever path below settles it, and only where it can change the verdict. */
+    bool git_moved = record && workspace_stale(row, record);
     bool disk_at_base = false;
 
     /* BASE FAST PATH (safety-grade)
@@ -1144,6 +1151,18 @@ static void workspace_analyze_file(
          * second question below still reads the base, under the base's own kind. */
         if (item->occupant != workspace_type_occupant(row->type)) {
             cmp_result = CMP_TYPE_DIFF;
+
+            /* The second question too, where the node holds no bytes to read:
+             * dotta's own directory, the node its record names, standing — at
+             * its base by its kind alone, whoever owns the record. Stated: it
+             * holds no stat, so a directory the user created anew in its place
+             * reads as dotta's (L-S1), and one that matters by standing — a mount
+             * point — goes with a plain apply where nothing in it stands in the
+             * way (L-D13). What stands inside it is no part of this row's verdict,
+             * but apply's, where it lands the row (core/deploy.c deploy_preflight's
+             * type rung). */
+            disk_at_base = record && record->kind == FS_OCCUPANT_DIRECTORY &&
+                item->occupant == record->kind;
         } else if (!row->encrypted) {
             err = compare_oid_to_disk(
                 &row->blob_oid, filesystem_path, expected_filemode, &item->st,
@@ -1204,12 +1223,11 @@ static void workspace_analyze_file(
              * that record is a fact about a node the look found gone — a link
              * the user replaced, a directory where the row's file now stands —
              * and the flush writes the row's first observation in its place,
-             * the content with it, disk being the row's leaving that record's
-             * pair nothing to decide. Never onto the gone node's record itself:
-             * a confirmation there would carry the ownership stamp dotta earned
-             * for that node onto one it never wrote, where the observation is
-             * never owned, and apply adopts it as it adopts a row with no record
-             * (cmds/apply.c).
+             * the content with it, disk being the row's leaving that record nothing
+             * to decide. Never onto the gone node's record itself: a confirmation
+             * there would carry the ownership stamp dotta earned for that node
+             * onto one it never wrote, where the observation is never owned,
+             * and apply adopts it as it adopts a row with no record (cmds/apply.c).
              *
              * Onto a record of this row's kind only where it is bound to this
              * row: an encrypted blob opens under one binding and no other, and
@@ -1227,12 +1245,14 @@ static void workspace_analyze_file(
         }
 
         /* Second question — ours vs base — asked once, where it can change the
-         * verdict: Git moved, and the first question found a difference (of bytes
-         * or of kind) although the stat triple did not vouch for disk (touch(1),
-         * an editor's rename-write, a fresh checkout) and disk may still be the
-         * copy dotta last confirmed. git_moved carries both halves of the gate:
-         * without a base there is no second question, and a base equal to theirs
-         * deduces the answer from the first.
+         * verdict: Git moved past a base, and the first question found a difference
+         * (of bytes or of kind) although the stat triple did not vouch for disk
+         * (touch(1), an editor's rename-write, a fresh checkout) and disk may
+         * still be the copy dotta last confirmed. The gate's two halves: a base,
+         * whose bytes the question reads — a record that confirmed none answered
+         * at the first rung, a directory by its kind, or answers not at all,
+         * the edit taken as real — and Git's move past it, since a base equal
+         * to theirs deduces the answer from the first.
          *
          * Put to the base's own kind and its own bytes (workspace_compare_base)
          * — each question is put to the side it compares against, where the first
@@ -1248,9 +1268,9 @@ static void workspace_analyze_file(
          *
          * A failed look answers nothing and leaves disk_at_base false: the edit
          * is taken as real (CONTENT, or TYPE across kinds), the conservative
-         * answer — STALE still holds, because git_moved is a fact about two OIDs.
-         * Its error is dropped, at most one per path. */
-        if (git_moved && (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
+         * answer — STALE still holds, because git_moved is a fact about the row
+         * and the record. Its error is dropped, at most one per path. */
+        if (base && git_moved && (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
             compare_result_t at_base;
             err = workspace_compare_base(ws, item, &at_base);
 
@@ -1276,19 +1296,22 @@ static void workspace_analyze_file(
              * FIFO, socket or device standing on the row): ours ≠ theirs on the
              * kind, the content's axis across kinds — the frame across kinds,
              * which names which side moved as the bytes' arm above does, TYPE
-             * in CONTENT's place. When Git moved the kind out from under an
-             * untouched deployment, the second question above answers it: an
-             * occupant that is exactly what dotta confirmed, kind and content,
-             * diverges by Git's move alone — STALE, and this is the arm the fast
-             * path lands in for that same state, having answered the comparison
-             * off the base's pair instead of a read. At the base Git moved by
-             * construction: the base is then the occupant's kind, which is not
-             * the row's. Git moved and disk left the base too — the base's kind
-             * with other bytes, a third kind of node, a read that failed — is
-             * both sides moved: TYPE, the kind the copy would commit, beside
+             * in CONTENT's place. When Git moved the kind out from under the
+             * node dotta last saw, untouched, the second question above answers
+             * it: an occupant that is exactly what dotta confirmed, kind and
+             * content — or dotta's own directory, which holds no content — diverges
+             * by Git's move alone — STALE, and this is the arm the fast path
+             * lands in for a confirmed copy, having answered the comparison off
+             * the base's pair instead of a read. At the record's node Git moved
+             * by construction: the record is then the occupant's kind, which is
+             * not the row's. Git moved and disk left that node too — the base's
+             * kind with other bytes, a node of the record's kind whose bytes
+             * dotta never confirmed, a third kind of node, a read that failed —
+             * is both sides moved: TYPE, the kind the copy would commit, beside
              * STALE, the move it would commit over (the route's CONFLICT). No
-             * base, or none Git moved past, is the user's kind alone: TYPE. One
-             * question, asked under the base's own kind, whichever path asked it.
+             * record, or one Git did not move past, is the user's kind alone:
+             * TYPE. One question, asked under the record's own kind, whichever
+             * path asked it.
              *
              * Either way the look stands at another kind than the row's, so the
              * claim is not asked of it; the sources ride along, the same shape
@@ -4224,9 +4247,8 @@ error_t workspace_flush(workspace_t *ws) {
         const fs_occupant_t kind = workspace_type_occupant(item->row->type);
 
         state_record_t onto;
-        if (item->occupant == kind && (!record || record->kind != kind) &&
-            (!workspace_base(record) || kind == FS_OCCUPANT_DIRECTORY ||
-            (item->confirmation & DIVERGENCE_CONTENT))) {
+        if (item->occupant == kind && (!record || (record->kind != kind &&
+            (kind == FS_OCCUPANT_DIRECTORY || (item->confirmation & DIVERGENCE_CONTENT))))) {
             /* The row's first observation: the look found the row's own node,
              * and dotta holds no record of it — file and directory rows alike,
              * either class of directory, the record answering whether dotta has
@@ -4243,15 +4265,16 @@ error_t workspace_flush(workspace_t *ws) {
              * found gone — a link the user replaced with the row's file, a file
              * where the row's directory now stands — wherever no verdict reads
              * that record: under a directory row always, the directory analysis
-             * reading no base where the directory stands (it reads one only where
-             * another kind does, the frame across kinds); under a file row where
-             * the record holds no confirmed pair, or where the load learned the
-             * row's content, which leaves its pair nothing to decide. Never owned:
-             * that record's stamp vouches for a node dotta never wrote here,
-             * and apply adopts a file as it adopts one with no record. A pair
-             * the load measured a difference from, or could not read past, stays:
-             * it is the base both sides of a conflict moved from, or the next
-             * readable load's (workspace_analyze_file). */
+             * reading nothing of it where the directory stands (it reads a record
+             * only where another kind does, the frame across kinds); under a
+             * file row where the load learned the row's content, which leaves
+             * the record nothing to decide. Never owned: that record's stamp
+             * vouches for a node dotta never wrote here, and apply adopts a file
+             * as it adopts one with no record. A record of another kind the load
+             * measured a difference from, or could not read past, stays, whatever
+             * it confirmed: its kind is the base both sides of a conflict moved
+             * from (core/workspace.h workspace_stale), or the next readable load's
+             * (workspace_analyze_file). */
             onto = workspace_observation(item->row);
         } else if (record && (item->confirmation != DIVERGENCE_NONE || record->ordered_at > 0)) {
             /* The record the load read, where the analyses noted an axis it lacks
@@ -4267,7 +4290,7 @@ error_t workspace_flush(workspace_t *ws) {
             onto = *record;
         } else {
             /* Nothing is owed: a record the load learned nothing new of, standing
-             * on no order — a gone node's pair the verdict reads among them —
+             * on no order — a gone node's record the verdict reads among them —
              * or no record and no node of the row's to observe. A confirmation
              * rides the observation: a content confirmation is noted only where
              * the row's kind stands (the ladder's first rung, and the stat's),

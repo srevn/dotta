@@ -170,13 +170,15 @@ typedef enum {
 } compare_direction_t;
 
 /**
- * A rendering: the verdict the renderer's own look reached, and the text for it
+ * A rendering: the verdict a look reached, and the text for it
  *
  * The struct is the caller's — a stack local, cleared by compare_generate_diff
- * once its arguments are accepted — and one thing in it is owned: `diff_text`,
- * which compare_diff_deinit frees and resets. NULL there is a copy that matches;
- * every other verdict has a text, which a caller holding its own words for that
- * verdict may ignore.
+ * once its arguments are accepted, or filled whole by a caller that holds a verdict
+ * of its own and the text for it (cmds/diff.c show_file_diff_from_workspace, a
+ * kind off the load's look) — and one thing in it is owned: `diff_text`, which
+ * compare_diff_deinit frees and resets. NULL there is a copy that matches; every
+ * other verdict has a text, which a caller holding its own words for that verdict
+ * may ignore.
  */
 typedef struct {
     compare_result_t status; /* what the look found */
@@ -230,5 +232,23 @@ error_t compare_generate_diff(
  * @param diff Rendering (can be NULL)
  */
 void compare_diff_deinit(file_diff_t *diff);
+
+/**
+ * The text of a type mismatch: the kind a mode names, and the kind a look found
+ *
+ * "Type mismatch: expected <kind>, found <kind>", both kinds in one function's
+ * words (sys/filesystem.h fs_stat_noun). Off whichever look the caller holds,
+ * so the line a CMP_TYPE_DIFF verdict prints is one sentence wherever that verdict
+ * was reached.
+ *
+ * Readers: compare_generate_diff (its own look's CMP_TYPE_DIFF), cmds/diff.c
+ * show_file_diff_from_workspace (the load's look, where a row's kind is not what
+ * stands and no blob is read). A reader not on this list is a bug.
+ *
+ * @param mode The mode the reference expects: a blob's two spellings or a link
+ * @param st The look that found another kind standing (must not be NULL)
+ * @return The text, the caller's to free
+ */
+char *compare_type_mismatch(git_filemode_t mode, const struct stat *st);
 
 #endif /* DOTTA_COMPARE_H */

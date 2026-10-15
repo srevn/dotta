@@ -461,15 +461,8 @@ error_t compare_generate_diff(
             break;
 
         case CMP_TYPE_DIFF:
-            /* Both kinds named, the disk's off this function's own look.
-             * fs_stat_noun reads the type bits whole, so a directory or a device
-             * standing here is named rather than folded into "regular file";
-             * the expected kind is spelled in that same function's words, so
-             * the two halves of one sentence name their kinds alike. */
-            out->diff_text = heap_str_format(
-                "Type mismatch: expected %s, found %s", mode == GIT_FILEMODE_LINK
-                ? "symlink" : "regular file", fs_stat_noun(&st)
-            );
+            /* Both kinds named, the disk's off this function's own look */
+            out->diff_text = compare_type_mismatch(mode, &st);
             break;
 
         case CMP_DIFFERENT: {
@@ -511,4 +504,22 @@ void compare_diff_deinit(file_diff_t *diff) {
 
     free(diff->diff_text);
     *diff = (file_diff_t){ 0 };
+}
+
+/**
+ * The text of a type mismatch: the kind a mode names, and the kind a look found
+ */
+char *compare_type_mismatch(git_filemode_t mode, const struct stat *st) {
+    CHECK_NULL(st);
+
+    validate_mode(mode);
+
+    /* fs_stat_noun reads the type bits whole, so a directory or a device standing
+     * here is named rather than folded into "regular file"; the expected kind
+     * is spelled in that same function's words, so the two halves of one sentence
+     * name their kinds alike */
+    return heap_str_format(
+        "Type mismatch: expected %s, found %s", mode == GIT_FILEMODE_LINK
+        ? "symlink" : "regular file", fs_stat_noun(st)
+    );
 }

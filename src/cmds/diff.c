@@ -199,9 +199,10 @@ static const char *get_status_message_from_item(
                 : "type changed locally";
     }
 
-    /* Git moved past the bytes dotta last confirmed, and disk did not follow. A
-     * claim Git moved alone keeps its axis sentence below: upstream, that sentence
-     * is what apply does, and there are no bytes to name. */
+    /* Git moved past what dotta last saw — the bytes, or the kind — and disk
+     * did not follow. A claim Git moved alone keeps its axis sentence below:
+     * upstream, that sentence is what apply does, and there are no bytes to
+     * name. */
     if (item->divergence & DIVERGENCE_STALE) return "changed in Git (would be deployed by apply)";
 
     if (item->divergence & DIVERGENCE_CONTENT) {
@@ -338,31 +339,41 @@ static error_t show_file_diff_from_workspace(
      * and writes the row fresh). */
     if (item->displaced != WORKSPACE_DISPLACED_NONE) return NULL;
 
-    /* Only a content difference has bytes to render: the copy's own edit, or
-     * the blob Git moved past, which disk still holds. A claim, whoever moved
-     * it (CLAIM_MOVED is no byte), a reassignment and how Git stores the blob
-     * differ in nothing a hunk could show, and a sealed blob is opened for none
-     * of them. */
+    /* Only a content difference has something to render: the copy's own edit,
+     * or the blob or the kind Git moved past, which disk still holds. A claim,
+     * whoever moved it (CLAIM_MOVED is no byte), a reassignment and how Git stores
+     * the blob differ in nothing a hunk could show, and a sealed blob is opened
+     * for none of them. */
     if (!(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE))) return NULL;
 
-    /* Get content from cache via the row's blob_oid (borrowed reference - don't
-     * free), read as the entry the row's type says it is */
     git_filemode_t mode = gitops_type_filemode(file->type);
-    const buffer_t *content = NULL;
-    error_t err = content_cache_get_from_blob_oid(
-        cache, &file->blob_oid, mode, file->storage_path, file->profile, &content
-    );
-    if (err) return err;
-
-    /* Generate diff */
-    compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM)
-                                ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
-
     file_diff_t diff = { 0 };
-    err = compare_generate_diff(
-        content, item->filesystem_path, file->storage_path, mode, cmp_dir, &diff
-    );
-    if (err) return err;
+
+    if (item->occupant != workspace_type_occupant(file->type)) {
+        /* Another kind than the row's stands: the node dotta last saw there,
+         * Git having moved the path's kind past it — the user's own kind returned
+         * above, TYPE. The kind is the whole of the difference, said off the
+         * load's own look with no blob read: a sealed one, its key cold, would
+         * end the diff over a path whose bytes the load never asked for. */
+        diff = (file_diff_t){
+            .status = CMP_TYPE_DIFF,
+            .diff_text = compare_type_mismatch(mode, &item->st),
+        };
+    } else {
+        /* Get content from cache via the row's blob_oid (borrowed reference -
+         * don't free), read as the entry the row's type says it is */
+        const buffer_t *content = NULL;
+        error_t err = content_cache_get_from_blob_oid(
+            cache, &file->blob_oid, mode, file->storage_path, file->profile, &content
+        );
+        if (err) return err;
+
+        err = compare_generate_diff(
+            content, item->filesystem_path, file->storage_path, mode,
+            direction == DIFF_UPSTREAM ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM, &diff
+        );
+        if (err) return err;
+    }
 
     /* The separator belongs to a text, not to a verdict: where the renderer's
      * own look found the copy matching after all — the one thing that can change

@@ -213,18 +213,18 @@ static inline deploy_convergence_t deploy_convergence(fs_occupant_t occ) {
  * on it.
  *
  * A TYPE verdict counts: another kind than the row's stands, and it is not the
- * copy dotta confirmed — disk left that copy on the kind, the content's axis
- * across kinds (core/workspace.h divergence_type_t) — so whatever stands there
- * is the user's, never measured against the row. A Git move without an edit —
- * STALE, the bytes or the kind, or CLAIM_MOVED, a claim — never conflicts: what
- * stands on disk is what dotta confirmed, so the overwrite loses nothing. Mode,
- * ownership and encryption divergence never conflict, whoever moved them: a claim
- * is never an edit (core/workspace.h workspace_item_route, whose STALE arm rests
- * on this).
+ * node dotta last saw there — disk left that node on the kind, the content's
+ * axis across kinds (core/workspace.h divergence_type_t) — so whatever stands
+ * there is the user's, never measured against the row. A Git move without an
+ * edit — STALE, the bytes or the kind, or CLAIM_MOVED, a claim — never conflicts:
+ * what stands on disk is what dotta last saw there — its confirmed copy, or its
+ * own directory — so the overwrite loses nothing. Mode, ownership and encryption
+ * divergence never conflict, whoever moved them: a claim is never an edit
+ * (core/workspace.h workspace_item_route, whose STALE arm rests on this).
  *
  * Three readers, two files: the ladder's content rung and its type rung's consent
  * (deploy_preflight) — an occupant of another kind is replaced unasked where
- * Git moved past dotta's copy (STALE) and this answers no — and the forced
+ * Git moved past dotta's own node (STALE) and this answers no — and the forced
  * preview's counterweight (cmds/apply.c apply_print_deploy_preview) — a verdict
  * overwrites local content iff something stands at its path AND this answers
  * yes, so the preview reads it beside deploy_occupant_present. Each hands it
@@ -949,14 +949,15 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  *   replaces is absent, and asked nothing). A different kind at the path — a
  *   non-directory where a directory belongs, the reverse, or a file row's other
  *   kind — is skipped unless --force (TYPE), save an occupant, under either kind
- *   of row, the workspace proved is dotta's own copy with its kind moved by Git
- *   alone (STALE, and no edit of the user's beside it: deploy_content_conflicts):
- *   that one is replaced unasked, as a STALE row's bytes are overwritten. A
- *   directory holding untracked paths is skipped either way (OCCUPIED), because
- *   deploy removes single nodes and never a tree. A row the workspace could not
- *   settle (DIVERGENCE_UNVERIFIED — an unexaminable occupant, or a look at its
- *   content that failed) is skipped as UNREADABLE when the landing had nothing
- *   to say: no verdict can say what the run will find there.
+ *   of row, the workspace proved is dotta's own node — a copy it confirmed, or
+ *   a directory its record names — with its kind moved by Git alone (STALE, and
+ *   no edit of the user's beside it: deploy_content_conflicts): that one is
+ *   replaced unasked, as a STALE row's bytes are overwritten. A directory holding
+ *   untracked paths is skipped either way (OCCUPIED), because deploy removes
+ *   single nodes and never a tree. A row the workspace could not settle
+ *   (DIVERGENCE_UNVERIFIED — an unexaminable occupant, or a look at its content
+ *   that failed) is skipped as UNREADABLE when the landing had nothing to say:
+ *   no verdict can say what the run will find there.
  * - Content — the workspace's divergence verdict, the only authority for a fact
  *   no lstat can settle. Skipped unless --force (CONTENT; STALE without CONTENT
  *   never skips: disk still holds the blob dotta deployed, so the overwrite loses

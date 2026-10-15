@@ -251,11 +251,12 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     matched that blob. Zero means "never confirmed."
  *   - a stat matching a live look of the record's kind proves, on the fast path,
  *     that disk still equals blob_oid (state_stat_matches).
- *   - the confirmed pair (kind, blob_oid) is not the manifest row's content iff
- *     the Git-expected value has advanced past the last disk confirmation — i.e.,
- *     stale. The pair, not the blob alone: Git hashes a link's target exactly
- *     as it hashes a file's bytes, so one id stands behind both, and the kind
- *     is what tells them apart (core/workspace.h workspace_stale).
+ *   - the record is stale iff the view has advanced past what dotta last saw at
+ *     the path: another kind than the record's, which every record names, or,
+ *     where the record confirmed a blob, another blob. The pair, not the blob
+ *     alone: Git hashes a link's target exactly as it hashes a file's bytes, so
+ *     one id stands behind both, and the kind is what tells them apart
+ *     (core/workspace.h workspace_stale).
  *   - deployed_at > 0 on a file implies a non-zero blob_oid: the write that owned
  *     it confirmed it (schema-enforced). A row with a blob and deployed_at = 0
  *     is a confirmation, not a deployment.

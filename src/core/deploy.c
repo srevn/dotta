@@ -454,10 +454,11 @@ typedef enum {
  *
  * Consent is the first half. Clearing an occupant is the destructive reading of
  * "overwrite modified files", so it is --force's to give — unless nothing of
- * the user's stands there: an occupant the workspace proved is the very copy
- * dotta confirmed, Git having moved the kind past it, is replaced unasked under
- * a file row and a directory row alike, as a STALE row's bytes are overwritten
- * (the ladder's type rung, which hands the proof in).
+ * the user's stands there: an occupant the workspace proved is the very node
+ * dotta last saw there — the copy it confirmed, or its own directory — Git having
+ * moved the kind past it, is replaced unasked under a file row and a directory
+ * row alike, as a STALE row's bytes are overwritten (the ladder's type rung,
+ * which hands the proof in).
  *
  * The second half is a limit no consent lifts. What deploy replaces is the tracked
  * path the user named: one node, whose disappearance is exactly what the preview
@@ -1286,10 +1287,11 @@ error_t deploy_preflight(
                     /* Type: what stands at the path decides the remedy, and whose
                      * it is decides the consent. STALE on a kind the row does
                      * not have is the workspace's proof that Git retyped the
-                     * path past the copy dotta confirmed, and TYPE that disk
-                     * left that copy — the user's edit of the kind — beside it
-                     * or alone (the frame across kinds, either row kind:
-                     * core/workspace.c workspace_analyze_file,
+                     * path past the node dotta last saw there — the copy it
+                     * confirmed, or the directory its record names — and TYPE
+                     * that disk left that node — the user's edit of the kind —
+                     * beside it or alone (the frame across kinds, either row
+                     * kind: core/workspace.c workspace_analyze_file,
                      * workspace_analyze_directory). So the consent is the content
                      * rung's own question: Git's move with no edit of the user's
                      * beside it loses nothing, and needs no --force, as a STALE

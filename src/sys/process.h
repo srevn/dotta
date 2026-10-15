@@ -111,12 +111,11 @@ typedef enum {
  * The primitive writes the entire payload synchronously before the stdout capture
  * loop starts. For that write to be non-blocking even when the child has not
  * yet reached its consuming read, the payload must fit in the pipe buffer. POSIX
- * guarantees PIPE_BUF-sized writes
- * are atomic, and the minimum PIPE_BUF (_POSIX_PIPE_BUF) is 512 bytes;
- * Linux's default pipe capacity is 65536 and macOS's is 16384, with PIPE_BUF
- * itself at 4096 / 512 respectively. Picking 4096 is a comfortable ceiling across
- * realistic targets — larger payloads need a future extension that interleaves
- * stdin writes with the stdout select loop.
+ * guarantees PIPE_BUF-sized writes are atomic, and the minimum PIPE_BUF
+ * (_POSIX_PIPE_BUF) is 512 bytes; Linux's default pipe capacity is 65536 and
+ * macOS's is 16384, with PIPE_BUF itself at 4096 / 512 respectively. Picking
+ * 4096 is a comfortable ceiling across realistic targets — larger payloads need
+ * a future extension that interleaves stdin writes with the stdout select loop.
  */
 #define PROCESS_STDIN_BUFFER_MAX 4096
 

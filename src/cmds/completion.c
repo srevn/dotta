@@ -7,9 +7,9 @@
  * admits at that position. The sources the hooks draw on live here, one authority
  * each: the enabled set (state), the view (every enabled profile at HEAD,
  * precedence resolved), Git (a branch's tree or history), or the filesystem (the
- * paths a re-rooting flag reads under). The hooks compose them per command;
- * nothing here guesses which one a command wants. `dotta completion <shell>`
- * prints the script that asks.
+ * paths a re-rooting flag reads under). The hooks compose them per command; nothing
+ * here guesses which one a command wants. `dotta completion <shell>` prints the
+ * script that asks.
  *
  * The sources fail silently: errors result in no output rather than messages to
  * stderr, and outside a repository every source prints nothing.

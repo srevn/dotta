@@ -4,9 +4,9 @@
  * Dotta composes four user-authored layers into a single gitignore ruleset per
  * operation:
  *
- *   1. Baseline `.dottaignore` at `refs/dotta/baseline` (this machine's;
- *      seeded by `dotta init` / `dotta clone`, editable via `dotta ignore`).
- *      Falls back to compiled defaults when absent.
+ *   1. Baseline `.dottaignore` at `refs/dotta/baseline` (this machine's; seeded
+ *      by `dotta init` / `dotta clone`, editable via `dotta ignore`). Falls back
+ *      to compiled defaults when absent.
  *   2. Profile `.dottaignore` on the profile branch.
  *   3. Config ignore patterns (user-level rules from config.toml).
  *   4. CLI `--exclude` flags (per-operation, highest priority).

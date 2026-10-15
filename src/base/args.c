@@ -558,8 +558,8 @@ static error_t apply_positional(
     /* Select the row:
      *   - the first POSITIONAL or POSITIONAL_ARG of the token's class that can
      *     still take it — an ARG row holds one value and is passed over once it
-     *     does, whoever wrote it (an earlier positional, or a flag writing
-     *     the same field), so ARG rows take positionals in declaration order;
+     *     does, whoever wrote it (an earlier positional, or a flag writing the
+     *     same field), so ARG rows take positionals in declaration order;
      *   - else the first POSITIONAL_RAW bucket (if any).
      */
     const args_opt_t *matched = NULL;
@@ -1049,9 +1049,8 @@ static void render_with_prog(FILE *out, const char *text, const char *prog) {
 /**
  * Format a space-separated flags string ("force f") into a "--force, -f"-style
  * label in `buf`. Names are emitted in source order, single-char names as `-X`,
- * multi-char as `--XXX`, joined
- * with `", "`. Returns bytes written (excluding the terminator);
- * truncates silently if `buf` is too small. Accepts NULL flags.
+ * multi-char as `--XXX`, joined with `", "`. Returns bytes written (excluding
+ * the terminator); truncates silently if `buf` is too small. Accepts NULL flags.
  *
  * Used by every renderer that needs a human-readable flag label:
  * `render_option_row` (per-command options table) and `args_render_root_usage`

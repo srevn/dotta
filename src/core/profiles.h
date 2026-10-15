@@ -388,18 +388,17 @@ typedef error_t (*profile_visit_fn)(const profile_claim_t *claim, void *payload)
  * Readers: core/manifest.c manifest_contribute; profile_counts, its tally; the
  * labels a profile claims under (profile_needs_target); the bytes a profile line
  * weighs (cmds/list.c list_profiles, through list_size_claim); the file listing's
- * rows, read TOLERANT (cmds/list.c list_files, through list_collect_file);
- * export's whole and name arms, read TOLERANT, the second keeping the claims
- * beneath its name (cmds/export.c export_collect_profile and
- * export_collect_storage, through export_collect_claim); the directory claims a
- * completion offers export (cmds/completion.c completion_directories, through
- * completion_offer_directory), and those remove's own names would take, before
- * profile_contradicted's (cmds/remove.c remove_complete, through
- * remove_offer_directory); and every claim the profile makes, before
- * profile_contradicted's, through one visitor — the universe a removal's arguments
- * are matched against, read STRICT, and every claim a deletion takes, read TOLERANT
- * (cmds/remove.c remove_list_claims, through remove_collect_claim, for
- * remove_resolve and remove_profile).
+ * rows, read TOLERANT (cmds/list.c list_files, through list_collect_file); export's
+ * whole and name arms, read TOLERANT, the second keeping the claims beneath its
+ * name (cmds/export.c export_collect_profile and export_collect_storage, through
+ * export_collect_claim); the directory claims a completion offers export
+ * (cmds/completion.c completion_directories, through completion_offer_directory),
+ * and those remove's own names would take, before profile_contradicted's
+ * (cmds/remove.c remove_complete, through remove_offer_directory); and every
+ * claim the profile makes, before profile_contradicted's, through one visitor —
+ * the universe a removal's arguments are matched against, read STRICT, and every
+ * claim a deletion takes, read TOLERANT (cmds/remove.c remove_list_claims, through
+ * remove_collect_claim, for remove_resolve and remove_profile).
  *
  * @param profile Handle (must not be NULL); its sheet is read by the first question
  *                that needs it, a walk or profile_load_sheet
@@ -792,8 +791,8 @@ error_t profile_find(
  *     claim nothing tracked stands beneath any longer (core/profiles.c
  *     profile_prune_ancestors), its key handed to the writer's record phase where
  *     it has one. Revert has none, so a record a rung its commit pruned stood
- *     on is released by the next load, which finds the claim gone
- *     (core/workspace.c workspace_orphan_authority);
+ *     on is released by the next load, which finds the claim gone (core/workspace.c
+ *     workspace_orphan_authority);
  *   - the gate, each document held against the one the draft opened: a commit
  *     no edit of which moved the tree or the sheet makes nothing — no prune, no
  *     save, no commit — so imported redundancy rides a commit and never drives
@@ -1103,10 +1102,9 @@ void profile_capture_ancestors(
  *
  * The claim is the write's whole: its name, where the restore writes it; its
  * blob, an id the ODB holds by the commit — a writer that decides before it writes
- * puts the id now and stores the object past its prompt
- * (sys/stage.h stage_put_blob);
- * its type; and what its item carries, the mode, the owner and group, the stamp.
- * In order, each refusal before the sheet moves:
+ * puts the id now and stores the object past its prompt (sys/stage.h
+ * stage_put_blob); its type; and what its item carries, the mode, the owner and
+ * group, the stamp. In order, each refusal before the sheet moves:
  *   - the admission (profile_draft_t): the sheet's half, ERR_CONFLICT "Cannot
  *     stage '%s': '%s' is a directory profile '%s' claims beneath it", naming
  *     the byte-least such claim; then the tree's, the put's own (sys/stage.h

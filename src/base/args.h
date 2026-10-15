@@ -24,9 +24,9 @@
  * Key design points
  * -----------------
  *   `flags`                Space-separated list of names. Single-char names
- *                          are short forms (emitted with a single dash);
- *                          multi-char names are long forms (double dash). Display
- *                          order follows write order — no "canonical" vs "alias"
+ *                          are short forms (emitted with a single dash); multi-char
+ *                          names are long forms (double dash). Display order
+ *                          follows write order — no "canonical" vs "alias"
  *                          distinction in the renderer.
  *
  *   Positional model       Three shapes: classified (engine routes token

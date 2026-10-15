@@ -268,11 +268,11 @@ error_t gitops_branch_blocker(
  * The names beneath `namespace` — "refs/heads" lists a branch as "p", "refs"
  * lists it as "heads/p" — complete or an error (the header). libgit2's enumeration
  * under the namespace first, on a reference database that has read nothing yet
- * — packed-refs parsed whole, so a damaged file refuses the listing every time and
- * never lists as a store without packed refs (gitops_reference_find says why);
- * then the loose store beneath it, read whole as the invoker, as libgit2 reads
- * it, every ref file looked up: a refusal is the listing's, in Git's words, and
- * a ref the enumeration did not name is appended under the name libgit2 gives
+ * — packed-refs parsed whole, so a damaged file refuses the listing every time
+ * and never lists as a store without packed refs (gitops_reference_find says
+ * why); then the loose store beneath it, read whole as the invoker, as libgit2
+ * reads it, every ref file looked up: a refusal is the listing's, in Git's words,
+ * and a ref the enumeration did not name is appended under the name libgit2 gives
  * it — one born since the enumeration read, one past a link the enumeration could
  * not stat, where libgit2's walk of the directory stops. A link to a directory
  * is a namespace, entered as Git's own listing enters one; what the kernel refuses

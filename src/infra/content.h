@@ -263,8 +263,8 @@ typedef struct content_cache content_cache_t;
  * @param storage_path Path in profile (must not be NULL)
  *          SECURITY: Used as AAD in encryption. Must match Git tree path.
  * @param profile Profile name for key derivation (must not be NULL)
- * @param keymgr Key manager (can be NULL if file is known to be plaintext;
- *          required for ENCRYPTED blobs, returns ERR_LOCKED otherwise)
+ * @param keymgr Key manager (can be NULL if file is known to be plaintext; required
+ *          for ENCRYPTED blobs, returns ERR_LOCKED otherwise)
  * @param out_content Output buffer (CALLER OWNS - must free with buffer_deinit)
  * @return Error or NULL on success
  *

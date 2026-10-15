@@ -32,14 +32,13 @@
  * Every API boundary is explicit; the context is the vehicle within a command.
  * A core entry point takes, by name, each resource it reads — what it takes is
  * its contract, and it checks it at its own boundary (`manifest_build`,
- * `scope_build`, `workspace_load`, `deploy_execute`, `ignore_rules_create`);
- * no core header includes this one. A command-layer function takes the context
- * when it reads two or more of its resources, and the call from cmds into core
- * is the line where the dependencies are spelled out:
- * `manifest_build(ctx->run.repo, ctx->run.state, ctx->arena, &m)`. What a command
- * built — a scope, a workspace, the view after its own mutation — is a parameter,
- * never read off the context: the context carries the dispatcher's instant and
- * nothing the command made.
+ * `scope_build`, `workspace_load`, `deploy_execute`, `ignore_rules_create`); no
+ * core header includes this one. A command-layer function takes the context when
+ * it reads two or more of its resources, and the call from cmds into core is
+ * the line where the dependencies are spelled out: `manifest_build(ctx->run.repo,
+ * ctx->run.state, ctx->arena, &m)`. What a command built — a scope, a workspace,
+ * the view after its own mutation — is a parameter, never read off the context:
+ * the context carries the dispatcher's instant and nothing the command made.
  */
 
 #ifndef DOTTA_RUNTIME_H

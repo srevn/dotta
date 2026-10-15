@@ -7,11 +7,10 @@
  * The label says which namespace the name is in — home/ under the invoker's HOME,
  * root/ under `/`, custom/ under the target this machine binds for the profile
  * — and the tail is the name within it, the subject every user-authored pattern
- * is matched against
- * (core/ignore.h). Where a namespace lands on a machine is infra/mount's table;
- * what a claim under a label says about its path is the sheet's (core/metadata.h).
- * This module is the words and the shape alone: no table, no arena beyond the
- * one compose, no disk, no identity.
+ * is matched against (core/ignore.h). Where a namespace lands on a machine is
+ * infra/mount's table; what a claim under a label says about its path is the
+ * sheet's (core/metadata.h). This module is the words and the shape alone: no
+ * table, no arena beyond the one compose, no disk, no identity.
  *
  * A name that arrives from outside this process — a blob a tree holds, a key a
  * sheet writes, an argument a user types — becomes a name here and nowhere else.

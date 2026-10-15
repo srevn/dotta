@@ -118,8 +118,8 @@ static error_t drop_to_invoker(void) {
         || setreuid(self.uid, (uid_t) -1) != 0 || seteuid(self.uid) != 0) {
         /* Coded by subsystem and not by errno, which is why error_errno is not
          * the producer here — base/error.h names this site: initgroups can fail
-         * EAGAIN or EINVAL on Linux, and error_errno_code would call a
-         * group-list failure ERR_FS. */
+         * EAGAIN or EINVAL on Linux, and error_errno_code would call a group-list
+         * failure ERR_FS. */
         return error_create(
             ERR_PERMISSION, "Failed to run as %s (uid %u): %s",
             self.name, (unsigned) self.uid, strerror(errno)

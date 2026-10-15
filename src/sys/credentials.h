@@ -128,8 +128,8 @@ int credential_make_default(git_credential **out);
  * `strlen(buf) + 1` as the length).
  *
  * @param u                 Parsed remote URL
- * @param username_from_url Username encoded in URL (may be NULL);
- *                          forwarded so multi-account configs disambiguate per URL.
+ * @param username_from_url Username encoded in URL (may be NULL); forwarded so
+ *                          multi-account configs disambiguate per URL.
  * @param out_user          Output (initialized to NULL)
  * @param out_pass          Output (initialized to NULL)
  * @return Error or NULL.

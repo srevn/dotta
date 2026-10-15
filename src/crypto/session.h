@@ -74,10 +74,9 @@
  * @param epoch      The epoch the master derives under: names the file and keys
  *                   the obfuscation (non-NULL)
  * @param expires_at Unix seconds after which the file refuses to load; 0 = never
- * @return NULL on success; the failure's errno code (base/error.h
- *         error_errno_code) — an I/O failure's, or the nonce's draw's
- *         (sys/entropy.h entropy_fill) — or ERR_FS for a path that holds no regular
- *         file
+ * @return NULL on success; the failure's errno code (base/error.h error_errno_code)
+ *         — an I/O failure's, or the nonce's draw's (sys/entropy.h entropy_fill)
+ *         — or ERR_FS for a path that holds no regular file
  */
 error_t session_save(
     const uint8_t master_key[KDF_KEY_SIZE],

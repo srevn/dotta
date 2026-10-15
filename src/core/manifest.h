@@ -158,10 +158,10 @@ typedef struct profile profile_t;
  *
  * Per kind:
  *   blob types  — blob_oid is the tree entry; mode is the metadata claim, or
- *                 the filemode floor (0644 / 0755) where none is claimed;
- *                 encrypted is the metadata-projected cache of the blob's own
- *                 bytes (docs/encryption-spec.md). A link row carries neither:
- *                 see Totality below
+ *                 the filemode floor (0644 / 0755) where none is claimed; encrypted
+ *                 is the metadata-projected cache of the blob's own bytes
+ *                 (docs/encryption-spec.md). A link row carries neither: see
+ *                 Totality below
  *   DIRECTORY   — claimed from metadata alone, or required by the layer at a
  *                 place a blob lost: blob_oid is zero, encrypted is false,
  *                 owner/group are the item's, mode is the claim or
@@ -274,26 +274,25 @@ static inline bool manifest_is_claim(
  * two passes, the order the first decides a contribution's claims in, and the
  * index of its own class a row is asked of (core/manifest.c manifest_place_claim,
  * manifest_contribute, manifest_layer, manifest_places, manifest_precedence,
- * manifest_holds_row);
- * the reassignment predicate, the absence rule and the route table's derived
- * arm (core/workspace.h workspace_reassigned, core/workspace.c classify_absent,
- * workspace_item_route); the untracked scan's word at a child, a rung being the
- * one claim that settles nothing about the path it stands at (core/workspace.c
- * workspace_scan); the tags' clean arm, where a rung nothing diverged
- * on reads [ancestor] (core/workspace.c workspace_item_tags);
- * update's derive-scope slice, a leaf's row and the claim each profile holds
- * where the user's node squats above it (cmds/update.c cmd_update); the two
- * refusals of a second name for one path, where a derived claim names nothing
- * and so blocks nothing (cmds/add.c cmd_add, cmds/revert.c
- * revert_refuse_second_name); add's rule question, where it claims nothing either
- * and so is a discovery, meeting every rule (cmds/add.c add_verdict); the walk
- * that enters such a directory for the claims beneath it (cmds/add.c add_collect);
- * add's ancestry refusal, where the capturing profile's derived claim at the
- * user's link is the one its climb retires (cmds/add.c add_refuse_ancestry);
- * and the per-profile counts `status -v` prints, where a derived row is no
- * directory the profile tracks (cmds/status.c status_print_profiles). Every other
- * `tracked` read in the tree stands where the kind is already settled and asks
- * the field's own meaning, not this predicate.
+ * manifest_holds_row); the reassignment predicate, the absence rule and the route
+ * table's derived arm (core/workspace.h workspace_reassigned, core/workspace.c
+ * classify_absent, workspace_item_route); the untracked scan's word at a child,
+ * a rung being the one claim that settles nothing about the path it stands at
+ * (core/workspace.c workspace_scan); the tags' clean arm, where a rung nothing
+ * diverged on reads [ancestor] (core/workspace.c workspace_item_tags); update's
+ * derive-scope slice, a leaf's row and the claim each profile holds where the
+ * user's node squats above it (cmds/update.c cmd_update); the two refusals of a
+ * second name for one path, where a derived claim names nothing and so blocks
+ * nothing (cmds/add.c cmd_add, cmds/revert.c revert_refuse_second_name); add's
+ * rule question, where it claims nothing either and so is a discovery, meeting
+ * every rule (cmds/add.c add_verdict); the walk that enters such a directory
+ * for the claims beneath it (cmds/add.c add_collect); add's ancestry refusal,
+ * where the capturing profile's derived claim at the user's link is the one its
+ * climb retires (cmds/add.c add_refuse_ancestry); and the per-profile counts
+ * `status -v` prints, where a derived row is no directory the profile tracks
+ * (cmds/status.c status_print_profiles). Every other `tracked` read in the tree
+ * stands where the kind is already settled and asks the field's own meaning,
+ * not this predicate.
  */
 static inline bool manifest_is_derived(const manifest_row_t *row) {
     return row && row->type == PATH_TYPE_DIRECTORY && !row->tracked;
@@ -807,8 +806,8 @@ manifest_missing_t manifest_missing(const manifest_t *manifest);
 /**
  * Look up a row by filesystem path
  *
- * O(1) over the view's index — a path is one row, whatever its kind;
- * callers that want one kind test row->type. NULL when the path is not active.
+ * O(1) over the view's index — a path is one row, whatever its kind; callers
+ * that want one kind test row->type. NULL when the path is not active.
  *
  * @param manifest Manifest (NULL returns NULL)
  * @param filesystem_path Path to look up (NULL returns NULL)
@@ -945,9 +944,9 @@ error_t manifest_holder(
  * with nothing beneath it for either of the profile's documents to find, and a
  * derived row included, since a profile holding a subtree beneath a path is a
  * statement a path that became a file contradicts — and whether the add captures
- * it, a claim being left as it stands but under --force (add_list);
- * every claim an enabled profile holds at a link above a capture, the capturing
- * profile's off its own view and every other's off the enabled one (cmds/add.c
+ * it, a claim being left as it stands but under --force (add_list); every claim
+ * an enabled profile holds at a link above a capture, the capturing profile's
+ * off its own view and every other's off the enabled one (cmds/add.c
  * add_refuse_ancestry); whether an orphan's profile still holds a claim at its
  * path, which leaves the copy overridden, standing nowhere, rather than pruned
  * or released (core/workspace.c workspace_analyze_orphans), and whether a row a
@@ -1105,8 +1104,7 @@ bool manifest_holds_row(const manifest_t *manifest, const manifest_row_t *row);
  * refuses, and a path beneath its place one its writer refuses before it names
  * anything while the blob stands (cmds/add.c cmd_add, through manifest_blob_above),
  * and names past it where the blob lost the place to the claims beneath it. The
- * row is the
- * claim entire, its mode and owner and blob (manifest_lookup_claim);
+ * row is the claim entire, its mode and owner and blob (manifest_lookup_claim);
  * this pair is the claim as a namer needs it.
  *
  * The two layers a namer reads speak this one shape. A claim a verb has admitted

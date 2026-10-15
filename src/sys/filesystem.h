@@ -983,10 +983,9 @@ error_t fs_create_symlink(
  * the path as it was, and no temporary behind. Nothing is created above the path.
  * Where nothing stands the rename creates the path; a caller that must refuse
  * whatever arrives there creates it with fs_create_symlink, whose symlink(2)
- * refuses
- * a path anything stands at. A directory at the path refuses the link (EISDIR);
- * a caller that must replace one creates the link with fs_temp_symlink and removes
- * the directory before fs_temp_publish.
+ * refuses a path anything stands at. A directory at the path refuses the link
+ * (EISDIR); a caller that must replace one creates the link with fs_temp_symlink
+ * and removes the directory before fs_temp_publish.
  *
  * @param target Link target (must not be NULL)
  * @param linkpath The path the link is put at (must not be NULL)

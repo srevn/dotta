@@ -8,14 +8,14 @@
  *      domain-separated keyed-BLAKE2b calls.
  *
  * Argon2id work-area lifecycle: one `secure_alloc` mapping of memory_mib MiB
- * (base/secure.h) — page-aligned, which is more than the u64 alignment
- * monocypher's `crypto_argon2` requires of its `blk *` (u64[128] per block);
- * locked against swap best-effort, with the one advisory the process prints when
- * a lock fails; wiped and unmapped by `secure_free`. monocypher zeroes the work
- * area itself on return, so the bytes are wiped twice: the second pass is
- * `secure_free`'s own, paid (about seven percent of a cold derivation) so that
- * every secret-bearing mapping in the tree ends the one way and no site reasons
- * about which primitive wiped what.
+ * (base/secure.h) — page-aligned, which is more than the u64 alignment monocypher's
+ * `crypto_argon2` requires of its `blk *` (u64[128] per block); locked against
+ * swap best-effort, with the one advisory the process prints when a lock fails;
+ * wiped and unmapped by `secure_free`. monocypher zeroes the work area itself
+ * on return, so the bytes are wiped twice: the second pass is `secure_free`'s
+ * own, paid (about seven percent of a cold derivation) so that every secret-bearing
+ * mapping in the tree ends the one way and no site reasons about which primitive
+ * wiped what.
  *
  * The epoch: the salt is generated once at `dotta init` via `entropy_fill` (see
  * KDF_SALT_SIZE for the 256-bit choice) beside the pair `init` was told to mint

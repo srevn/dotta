@@ -81,10 +81,9 @@ void completion_files(
  * A profile's directory claims, as its walk decodes them rather than as the view
  * places them — the companion of completion_refspecs' pinned form for export,
  * which materializes a profile's claims: bare slash-marked paths, the profile
- * as description. An
- * empty tracked directory (no tree entry) is exactly as offerable as the rest;
- * a claim a blob contradicts at its own name or above it is none (core/profiles.h
- * profile_walk), and is not offered.
+ * as description. An empty tracked directory (no tree entry) is exactly as
+ * offerable as the rest; a claim a blob contradicts at its own name or above it
+ * is none (core/profiles.h profile_walk), and is not offered.
  */
 void completion_directories(
     const dotta_ctx_t *ctx, FILE *out, const char *pinned

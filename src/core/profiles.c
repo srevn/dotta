@@ -430,10 +430,11 @@ static error_t profile_blob_above(
         if (slash) *slash = '\0';
 
         /* Top-down, each component looked up once in the tree the one before it
-         * found — a claim costs its own components, the lookups a question at the
-         * name alone makes (lib/libgit2/src/libgit2/tree.c git_tree_entry_bypath);
-         * a climb from the name would descend from the root at every rung. A
-         * blob answers, as the length of the name it stands at */
+         * found — a claim costs its own components, the lookups a question at
+         * the name alone makes (lib/libgit2/src/libgit2/tree.c
+         * git_tree_entry_bypath); a climb from the name would descend from the
+         * root at every rung. A blob answers, as the length of the name it stands
+         * at */
         const git_tree_entry *entry = git_tree_entry_byname(tree, component);
         git_object_t type = entry ? git_tree_entry_type(entry) : GIT_OBJECT_INVALID;
         if (type == GIT_OBJECT_BLOB) {

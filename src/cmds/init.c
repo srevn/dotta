@@ -36,9 +36,9 @@
  *                            an older dotta kept checked out. Nothing here
  *                            re-shapes one, declared or not.
  *   declared (dotta.store)   dotta's own — the marker a create-style command
- *                            wrote — repaired in place: a missing record,
- *                            epoch or baseline is re-created below and what
- *                            stands is kept
+ *                            wrote — repaired in place: a missing record, epoch
+ *                            or baseline is re-created below and what stands is
+ *                            kept
  *   no references at all     a bare `git init`, taken. Untracked files are not
  *                            history and no step below touches them
  *   anything else            history dotta did not write; refused

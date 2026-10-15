@@ -532,8 +532,8 @@ cleanup:
  *      from the row cache the mutation replaces.
  *   3. The view after — manifest_build over the post-enable set; manifest_diff
  *      attributes the transition to the newly enabled profiles, so gain-side
- *      stats (claimed / added / updated) land in the right slot per profile.
- *      A retarget reads as its claims materializing at the new target (staged);
+ *      stats (claimed / added / updated) land in the right slot per profile. A
+ *      retarget reads as its claims materializing at the new target (staged);
  *      what departs at the old one is apply's to relocate.
  *   4. The save, then per-profile feedback — state_save, and only once it lands
  *      the lines that say what it made true: iterate the validated targets to

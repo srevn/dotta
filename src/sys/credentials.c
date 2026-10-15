@@ -228,9 +228,9 @@ void credential_url_deinit(credential_url_t *u) {
  *   [password=<password>\n]
  *   \n  (blank line terminates request)
  *
- * `username` and `password` are optional — omitted when NULL or empty.
- * The fill path passes `username_from_url` (or NULL) and no password;
- * the approve/reject path passes both.
+ * `username` and `password` are optional — omitted when NULL or empty. The fill
+ * path passes `username_from_url` (or NULL) and no password; the approve/reject
+ * path passes both.
  *
  * Pre-sizes the buffer so no mid-fill realloc occurs. Buffers used to carry
  * passwords are scrubbed and freed by the caller; pre-sizing means the scrub

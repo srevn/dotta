@@ -309,8 +309,8 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     }
     set_pipe_cloexec(pipefd);
 
-    /* Exec-errno self-pipe (child writes errno+_exit on exec failure;
-     * on exec success, FD_CLOEXEC closes the write end and parent reads EOF). */
+    /* Exec-errno self-pipe (child writes errno+_exit on exec failure; on exec
+     * success, FD_CLOEXEC closes the write end and parent reads EOF). */
     if (pipe(errfd) != 0) {
         err = error_errno(errno, "Failed to create exec-errno pipe");
         goto cleanup;

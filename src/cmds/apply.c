@@ -588,7 +588,8 @@ static void apply_print_reassignments(
  * --keep-orphans (orphans) all mean "in scope, needed work, deliberately not
  * done" — the user's own flags, decided at plan time, which is what "withheld"
  * names against preflight's "skipped". The three flags take three lines, and
- * -e's line splits its count by kind at verbose.
+ * -e's splits its count at verbose: each row by the act its plan holds it for,
+ * the orphans apart.
  *
  * Printed once, above the nothing-to-do exit — so a run that does nothing else
  * still says what it withheld — and therefore also above the confirmation prompt,
@@ -612,18 +613,11 @@ static size_t apply_print_withheld(
     const deploy_plan_t *deploy_plan,
     const cleanup_plan_t *cleanup_plan
 ) {
-    /* -e reaches all three kinds, so its summary counts "paths"; the verbose
-     * breakdown names each kind and what it was spared. */
-    size_t excluded_orphan_files = 0; size_t excluded_orphan_dirs = 0;
-
-    for (size_t i = 0; i < cleanup_plan->excluded.count; i++) {
-        if (cleanup_plan->excluded.entries[i]->item_kind == PATH_KIND_DIRECTORY) {
-            excluded_orphan_dirs++;
-        } else {
-            excluded_orphan_files++;
-        }
-    }
-
+    /* -e reaches rows and orphans alike, so its summary counts "paths". The verbose
+     * breakdown names each row by the act its plan holds it for, a file's
+     * deployment or a directory's convergence, missing or diverged alike, and
+     * counts the orphans apart under no act: an orphan's is its verdict's — a
+     * prune, a release, a reclaim — which a spared orphan never gets. */
     size_t excluded = deploy_plan->files.excluded.count +
         deploy_plan->directories.excluded.count + cleanup_plan->excluded.count;
 
@@ -635,7 +629,7 @@ static size_t apply_print_withheld(
             );
             if (deploy_plan->files.excluded.count > 0) {
                 output_print(
-                    out, OUTPUT_VERBOSE, "  • %zu divergent file%s not deployed\n",
+                    out, OUTPUT_VERBOSE, "  • %zu file%s not deployed\n",
                     deploy_plan->files.excluded.count,
                     deploy_plan->files.excluded.count == 1 ? "" : "s"
                 );
@@ -647,18 +641,11 @@ static size_t apply_print_withheld(
                     deploy_plan->directories.excluded.count == 1 ? "y" : "ies"
                 );
             }
-            if (excluded_orphan_files > 0) {
+            if (cleanup_plan->excluded.count > 0) {
                 output_print(
-                    out, OUTPUT_VERBOSE, "  • %zu orphaned file%s not pruned\n",
-                    excluded_orphan_files,
-                    excluded_orphan_files == 1 ? "" : "s"
-                );
-            }
-            if (excluded_orphan_dirs > 0) {
-                output_print(
-                    out, OUTPUT_VERBOSE, "  • %zu orphaned director%s not pruned\n",
-                    excluded_orphan_dirs,
-                    excluded_orphan_dirs == 1 ? "y" : "ies"
+                    out, OUTPUT_VERBOSE, "  • %zu orphaned path%s\n",
+                    cleanup_plan->excluded.count,
+                    cleanup_plan->excluded.count == 1 ? "" : "s"
                 );
             }
         } else {

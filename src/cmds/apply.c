@@ -58,6 +58,14 @@
  * DEPLOYED, since no path bit survives absence, which makes the route read total
  * here.
  *
+ * Dotta's node above rows the run keeps carries no row (core/deploy.h
+ * deploy_skip_reason_t: its two reasons). Its PERMISSION reads the landing's
+ * sentence, as a row's does; its TYPE says where it stands — in the way of the
+ * paths beneath it — and why only --force replaces it, off its own measure: the
+ * failed read's word, the edit, or a copy dotta never confirmed (core/workspace.h
+ * workspace_untouched). The rows beneath it follow it, each in its class's sentence
+ * naming it.
+ *
  * The remedies close the block, indented under the rows the way every block closes,
  * each gated by what is actually present — the reasons, and for a named squatter
  * the claim that holds it (the fate-borne ancestry): a conflict-only run is not
@@ -176,7 +184,36 @@ static void apply_print_deploy_skips(
             case DEPLOY_SKIP_TYPE: {
                 output_colored(out, row_level, OUTPUT_COLOR_RED, "  ⚠");
                 output_print(out, row_level, " %s ", path);
-                if (s->ancestor) {
+                if (!s->item->row) {
+                    /* Dotta's node, which no row stands at: why its replace waits
+                     * for --force, in the words its siblings use — the failed
+                     * read's, as the UNREADABLE line's, then the edit, and what
+                     * is left is a copy dotta never confirmed */
+                    const char *label = NULL;
+                    if (s->item->divergence & DIVERGENCE_UNVERIFIED) {
+                        switch (s->item->fault) {
+                            case WORKSPACE_FAULT_LOCKED:
+                                label = "locked";
+                                break;
+                            case WORKSPACE_FAULT_UNREADABLE:
+                                label = "unreadable";
+                                break;
+                            case WORKSPACE_FAULT_NONE:
+                            case WORKSPACE_FAULT_UNVERIFIED:
+                                label = "cannot verify";
+                                break;
+                        }
+                    } else if (s->item->divergence & DIVERGENCE_CONTENT) {
+                        label = "changed since deployment";
+                    } else {
+                        label = "never confirmed by dotta";
+                    }
+
+                    output_colored(
+                        out, row_level, OUTPUT_COLOR_RED,
+                        "(in the way of the paths beneath it: %s, from ", label
+                    );
+                } else if (s->ancestor) {
                     output_colored(
                         out, row_level, OUTPUT_COLOR_RED, "(wrong type at %.*s from ",
                         (int) s->ancestor, path
@@ -382,6 +419,15 @@ static void apply_print_deploy_skips(
  * create on the way are not here: they are the mechanics of landing a planned
  * path, and the receipt names the ones it created.
  *
+ * Dotta's nodes the run replaces (deploy_preflight_t's replaces) are the third
+ * destructive count, after the directories': each removed on the way to the first
+ * row beneath it that lands, a directory put in its place, yellow as a replaced
+ * directory is. One that is not the copy dotta confirmed (core/workspace.h
+ * workspace_untouched) is replaced under --force alone, so the line beneath counts
+ * those — the forced run's counterweight, as the files' overwrites are — and
+ * the glyph carries the same split at verbose. Every node replaced has a deployable
+ * row beneath it, so it never stands in an otherwise empty preview.
+ *
  * The warnings close the preview. A warning is an anomaly preflight met while
  * deciding — an ownership it could not resolve — on a row the run will deploy:
  * a caveat on the promise, not a skip, so it prints under the promise and ahead
@@ -397,6 +443,7 @@ static void apply_print_deploy_preview(
 ) {
     const deploy_verdicts_t *files = &verdicts->files;
     const deploy_verdicts_t *dirs = &verdicts->directories;
+    const workspace_items_t *nodes = &verdicts->replaces;
 
     size_t created = 0; size_t fixed = 0; size_t replaced = 0;
 
@@ -525,6 +572,38 @@ static void apply_print_deploy_preview(
         }
     }
 
+    if (nodes->count > 0) {
+        output_print(
+            out, OUTPUT_NORMAL, "  {yellow}%zu{reset} orphaned file%s will be replaced by %s\n",
+            nodes->count, nodes->count == 1 ? "" : "s",
+            nodes->count == 1 ? "a directory" : "directories"
+        );
+
+        size_t discards = 0;
+        for (size_t i = 0; i < nodes->count; i++) {
+            if (!workspace_untouched(nodes->entries[i])) discards++;
+        }
+        if (discards > 0) {
+            output_print(
+                out, OUTPUT_NORMAL, "  {yellow}%zu{reset} of them discard%s local changes\n",
+                discards, discards == 1 ? "s" : ""
+            );
+        }
+
+        for (size_t i = 0; i < nodes->count && i < LIST_LIMIT; i++) {
+            /* The glyph carries the discard split, as the files' does the overwrite one */
+            output_print(
+                out, OUTPUT_VERBOSE,
+                workspace_untouched(nodes->entries[i]) ? "    {cyan}•{reset} %s\n"
+                                                       : "    {yellow}•{reset} %s\n",
+                nodes->entries[i]->filesystem_path
+            );
+        }
+        if (nodes->count > LIST_LIMIT) {
+            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", nodes->count - LIST_LIMIT);
+        }
+    }
+
     /* The caveats on the promise. Past the early return by the invariant above:
      * only a row the run touches contributes one, and an ancestor is decided
      * only above a deployable row. */
@@ -587,9 +666,13 @@ static void apply_print_reassignments(
  * -e (files, the plan's directories, orphans), --skip-existing (files) and
  * --keep-orphans (orphans) all mean "in scope, needed work, deliberately not
  * done" — the user's own flags, decided at plan time, which is what "withheld"
- * names against preflight's "skipped". The three flags take three lines, and
- * -e's splits its count at verbose: each row by the act its plan holds it for,
- * the orphans apart.
+ * names against preflight's "skipped". The orphans are both plans': the scope
+ * exit's, and dotta's nodes above rows, the landing's, which deploy's plan spares
+ * (core/deploy.h deploy_ceded_t) — and with a node, the rows beneath it, which
+ * land only once it is replaced, one line of their own whichever flag spared
+ * it. The three flags take three lines, that one a fourth, and -e's splits its
+ * count at verbose: each row by the act its plan holds it for, the orphans apart,
+ * and dotta's nodes apart from them.
  *
  * Printed once, above the nothing-to-do exit — so a run that does nothing else
  * still says what it withheld — and therefore also above the confirmation prompt,
@@ -617,9 +700,15 @@ static size_t apply_print_withheld(
      * breakdown names each row by the act its plan holds it for, a file's
      * deployment or a directory's convergence, missing or diverged alike, and
      * counts the orphans apart under no act: an orphan's is its verdict's — a
-     * prune, a release, a reclaim — which a spared orphan never gets. */
-    size_t excluded = deploy_plan->files.excluded.count +
-        deploy_plan->directories.excluded.count + cleanup_plan->excluded.count;
+     * prune, a release, a reclaim — which a spared orphan never gets. Dotta's
+     * nodes count apart again, by their place rather than an act: a node is
+     * replaced only by a row of the run landing beneath it, and -e spares one
+     * whether a row reaches it or not (core/deploy.h deploy_ceded_t). */
+    size_t excluded =
+        deploy_plan->files.excluded.count +
+        deploy_plan->directories.excluded.count +
+        cleanup_plan->excluded.count +
+        deploy_plan->ceded.excluded.count;
 
     if (excluded > 0) {
         if (output_is_verbose(out)) {
@@ -648,6 +737,14 @@ static size_t apply_print_withheld(
                     cleanup_plan->excluded.count == 1 ? "" : "s"
                 );
             }
+            if (deploy_plan->ceded.excluded.count > 0) {
+                output_print(
+                    out, OUTPUT_VERBOSE,
+                    "  • %zu orphaned file%s in the way of the paths beneath\n",
+                    deploy_plan->ceded.excluded.count,
+                    deploy_plan->ceded.excluded.count == 1 ? "" : "s"
+                );
+            }
         } else {
             output_print(
                 out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} path%s (--exclude)\n",
@@ -667,10 +764,11 @@ static size_t apply_print_withheld(
         );
     }
 
-    /* --keep-orphans reaches orphans only, both kinds, and keeps each before
-     * any verdict is taken, so no act names what it was spared — a prune, a
-     * release, a reclaim — and one line says it at every verbosity. */
-    size_t kept = cleanup_plan->kept.count;
+    /* --keep-orphans reaches orphans only, both kinds and both plans', and keeps
+     * each before any verdict is taken, so no act names what it was spared — a
+     * prune, a release, a reclaim, a node's replace — and one line says it at
+     * every verbosity. */
+    size_t kept = cleanup_plan->kept.count + deploy_plan->ceded.kept.count;
     if (kept > 0) {
         output_print(
             out, OUTPUT_NORMAL,
@@ -679,7 +777,21 @@ static size_t apply_print_withheld(
         );
     }
 
-    return excluded + existing + kept;
+    /* The rows beneath a node either flag spared: a row lands beneath dotta's
+     * node only once the node is replaced (core/deploy.h deploy_partition_t),
+     * so they stay with it, and one line says so at every verbosity, after the
+     * flags' own. */
+    size_t skipped_kept = deploy_plan->files.skipped_kept.count +
+        deploy_plan->directories.skipped_kept.count;
+    if (skipped_kept > 0) {
+        output_print(
+            out, OUTPUT_NORMAL,
+            "Skipped {cyan}%zu{reset} path%s (an orphan in their way stays)\n",
+            skipped_kept, skipped_kept == 1 ? "" : "s"
+        );
+    }
+
+    return excluded + existing + kept + skipped_kept;
 }
 
 /**
@@ -700,6 +812,11 @@ static size_t apply_print_withheld(
  *   removal). Created and fixed count tracked rows alone, and say so; a replace
  *   can count a rung promoted over dotta's own copy (core/deploy.h
  *   deploy_plan_build), and says "directories"
+ * - replaced orphaned files: dotta's nodes the run's acts replaced with directories
+ *   on their way (the receipt's removed) — what the preview promised of them
+ *   (deploy_preflight_t's replaces) less a replace that stopped, which the failed
+ *   rows beneath it name. Yellow, a removal; the directory each left is a parent
+ *   no row claims, so the listing names the node alone
  * - ancestors: Directories the run created on the way to a planned path, outside
  *   the plan — either class, since a claimed rung is created at its claim whether
  *   the profile tracks it or only passes through it. Verbose only — the preview
@@ -877,6 +994,16 @@ static void apply_print_deploy_receipt(
         }
     }
 
+    if (receipt->removed.count > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Replaced orphaned files");
+        for (size_t i = 0; i < receipt->removed.count; i++) {
+            output_print(
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n",
+                receipt->removed.entries[i]->filesystem_path
+            );
+        }
+    }
+
     if (receipt->ancestors.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Created ancestors (outside the plan)");
         for (size_t i = 0; i < receipt->ancestors.count; i++) {
@@ -924,6 +1051,14 @@ static void apply_print_deploy_receipt(
             output_print(
                 out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} director%s\n",
                 replaced, replaced == 1 ? "y" : "ies"
+            );
+        }
+
+        if (receipt->removed.count > 0) {
+            output_print(
+                out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} orphaned file%s with %s\n",
+                receipt->removed.count, receipt->removed.count == 1 ? "" : "s",
+                receipt->removed.count == 1 ? "a directory" : "directories"
             );
         }
     }
@@ -1402,8 +1537,8 @@ static void apply_print_cleanup_preview(
          * skips or a copy left for the row standing over it, could not be verified
          * (status tags it [unverified]), sits under a moved home ([relocated] —
          * the skip --force lifts), or sits under a parent that refuses the run
-         * (the needing-root block names it);
-         * the slash says "left alone this run" for each. */
+         * (the needing-root block names it); the slash says "left alone this
+         * run" for each. */
         if (verdicts->released_dirs.count > 0) {
             output_print(
                 out, OUTPUT_NORMAL,
@@ -1632,8 +1767,9 @@ static void apply_print_cleanup_refused(
  * The run's second transaction (taken back past cmd_apply's early exit) holds
  * these writes alone, and this phase ends it — committed by state_save, or rolled
  * back here — so the post-apply hook meets the database the run leaves, and not
- * a lock nothing will use again. The orphans' records retire, then each path
- * the run wrote is recorded, and every write lands or none does.
+ * a lock nothing will use again. The orphans' records retire — cleanup's, and
+ * dotta's nodes the run replaced, with the record of every row beneath them —
+ * then each path the run wrote is recorded, and every write lands or none does.
  *
  * A refused statement ends the phase at the first one. The phase's writes are
  * one transaction and a database that refuses one write may have ended it — SQLite
@@ -1649,10 +1785,13 @@ static void apply_print_cleanup_refused(
  * and adopted, a pruned orphan's record reclaimed, a released one released again,
  * a fixed claim learned by the flush — all but a directory the run created, which
  * the next load observes and never owns (capture is a directory's ownership event,
- * and a look never is), and a directory the release left wide whose record says
- * the mode its hold owed: the learning of the mode that stands goes back with
- * the rest, so the next load reads the working mode as the user's [mode], update's
- * to commit, until a plain apply narrows it. The caller renders the fate.
+ * and a look never is), a directory the release left wide whose record says the
+ * mode its hold owed: the learning of the mode that stands goes back with the
+ * rest, so the next load reads the working mode as the user's [mode], update's
+ * to commit, until a plain apply narrows it — and a node the run replaced, whose
+ * record the next load releases, another kind standing there, while a row beneath
+ * it the run did not land keeps the record written through the node and reads
+ * [deleted], as a kill before the phase leaves it. The caller renders the fate.
  *
  * @param ctx Dispatch context (must not be NULL; writes the state it holds, in
  *            the run's transaction)
@@ -1725,6 +1864,41 @@ static error_t apply_write_record(
         for (size_t i = 0; i < decided[b]->count; i++) {
             err = state_retire(state, decided[b]->entries[i]->filesystem_path);
             if (err) goto cleanup;
+        }
+    }
+
+    /* Dotta's nodes the way replaced (core/deploy.h deploy_receipt_t's removed):
+     * each retires as an orphan's record does — no row stands at a node's path,
+     * so nothing anchors over it — and with it the record of every row beneath
+     * it. Nothing beneath a node is looked at or recorded (core/workspace.h
+     * workspace_displaced_t), so such a record was written through the node —
+     * the capture through dotta's link that the first row beneath it came from
+     * — and describes nothing the directory in its place holds. Retired ahead
+     * of the anchors below: a row the run landed there is recorded by its own
+     * write, and one it did not — withheld, skipped, failed, out of scope — reads
+     * [undeployed] at the next load, never a deletion for update to commit
+     * (core/workspace.h workspace_route_t's DELETED). An orphan beneath a node
+     * is cleanup's, released where the run reaches it and read absent where it
+     * does not, a reclaim. A run killed between a replace and this phase leaves
+     * the node's record over the directory, read [released] [type] and retired
+     * by the next apply, and a row's beneath it, read [deleted] where the row
+     * did not land (stated). */
+    workspace_items_t active = workspace_active(ws);
+
+    for (size_t r = 0; r < deploy_receipt->removed.count; r++) {
+        const char *node = deploy_receipt->removed.entries[r]->filesystem_path;
+        const size_t len = strlen(node);
+
+        err = state_retire(state, node);
+        if (err) goto cleanup;
+
+        for (size_t i = 0; i < active.count; i++) {
+            const workspace_item_t *item = active.entries[i];
+
+            if (item->record && str_path_beneath(item->filesystem_path, node, len)) {
+                err = state_retire(state, item->filesystem_path);
+                if (err) goto cleanup;
+            }
         }
     }
 
@@ -2172,15 +2346,20 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * and the skipped report — reads this one object. The workspace already
      * computed fresh divergence for every active path; the planner gates each
      * item on scope and classifies it by deploy's work predicate into pending /
-     * clean, or into one of the two skipped buckets (-e, --skip-existing). */
+     * clean, or into one of the three skipped buckets (-e, the node in its way
+     * a flag keeps, --skip-existing) — and holds dotta's nodes above the rows,
+     * the landing's, where the user's flags spare them or not. */
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Planning deployment...\n");
 
-    deploy_plan_t *deploy_plan = deploy_plan_build(ctx->arena, ws, scope, opts->skip_existing);
+    deploy_plan_t *deploy_plan = deploy_plan_build(
+        ctx->arena, ws, scope, opts->skip_existing, opts->keep_orphans
+    );
 
     /* Per-item trace of the work the planner skipped, by reason: -e for both
-     * kinds, --skip-existing for files. output_print gates on the verbosity level,
-     * so normal runs pay only the loop cost. */
+     * kinds, --skip-existing for files, and the rows beneath a node a flag spared;
+     * then dotta's nodes the run leaves, by why. output_print gates on the
+     * verbosity level, so normal runs pay only the loop cost. */
     for (size_t i = 0; i < deploy_plan->files.excluded.count; i++) {
         output_print(
             out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
@@ -2199,8 +2378,38 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             deploy_plan->files.skipped_existing.entries[i]->filesystem_path
         );
     }
+    for (size_t i = 0; i < deploy_plan->directories.skipped_kept.count; i++) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  Skipping (an orphan in its way stays): %s\n",
+            deploy_plan->directories.skipped_kept.entries[i]->filesystem_path
+        );
+    }
+    for (size_t i = 0; i < deploy_plan->files.skipped_kept.count; i++) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  Skipping (an orphan in its way stays): %s\n",
+            deploy_plan->files.skipped_kept.entries[i]->filesystem_path
+        );
+    }
+    for (size_t i = 0; i < deploy_plan->ceded.excluded.count; i++) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
+            deploy_plan->ceded.excluded.entries[i]->filesystem_path
+        );
+    }
+    for (size_t i = 0; i < deploy_plan->ceded.kept.count; i++) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  Preserving orphan (kept): %s\n",
+            deploy_plan->ceded.kept.entries[i]->filesystem_path
+        );
+    }
+    for (size_t i = 0; i < deploy_plan->ceded.unreached.count; i++) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  Preserving orphan (no row of the run beneath it): %s\n",
+            deploy_plan->ceded.unreached.entries[i]->filesystem_path
+        );
+    }
 
-    /* The plan's four counts, each only when it is non-zero — gated the way
+    /* The plan's five counts, each only when it is non-zero — gated the way
      * cleanup's two lines below are, and by the preview's own rule: an empty
      * bucket has nothing to say, and says nothing (apply_print_deploy_preview). */
     if (deploy_plan->files.pending.count > 0) {
@@ -2230,6 +2439,12 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             out, OUTPUT_VERBOSE, "  %zu tracked director%s already converged\n",
             deploy_plan->directories.clean.count,
             deploy_plan->directories.clean.count == 1 ? "y" : "ies"
+        );
+    }
+    if (deploy_plan->nodes.count > 0) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  %zu orphaned file%s in the way of the paths beneath\n",
+            deploy_plan->nodes.count, deploy_plan->nodes.count == 1 ? "" : "s"
         );
     }
 
@@ -2800,17 +3015,21 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         size_t prune_dir_count = cleanup_verdicts->prunable_dirs.count;
 
         /* Compose the prompt from the non-zero parts — "Deploy 2 files, converge
-         * 1 directory and prune 3 orphaned files?". No part means every pending
-         * action is state-only reclamation (e.g. an all-absent orphan set) —
-         * non-destructive, no consent needed. The one destructive deploy verb,
-         * a replace, reaches this prompt only over dotta's own untouched copy,
-         * Git having moved past it, which loses nothing (core/deploy.c
-         * deploy_preflight's type rung); any other needs --force, and --force
-         * is the consent. */
+         * 1 directory, replace 1 orphaned file and prune 3 orphaned files?". No
+         * part means every pending action is state-only reclamation (e.g. an
+         * all-absent orphan set) — non-destructive, no consent needed. The two
+         * destructive deploy verbs reach this prompt only over dotta's own copy
+         * as it confirmed it, which Git holds and the replace loses nothing of:
+         * a squatter Git moved past (core/deploy.c deploy_preflight's type rung),
+         * and dotta's node above the rows the run lands (core/workspace.h
+         * workspace_untouched); any other needs --force, and --force is the
+         * consent. The node's replace is deploy's act, so its part comes before
+         * cleanup's. */
         size_t deploy_count = deploy_verdicts->files.count;
         size_t converge_count = deploy_verdicts->directories.count;
+        size_t replace_count = deploy_verdicts->replaces.count;
 
-        char parts[4][64];
+        char parts[5][64];
         size_t part_count = 0;
         if (deploy_count > 0) {
             snprintf(
@@ -2822,6 +3041,12 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             snprintf(
                 parts[part_count++], sizeof(parts[0]), "converge %zu director%s",
                 converge_count, converge_count == 1 ? "y" : "ies"
+            );
+        }
+        if (replace_count > 0) {
+            snprintf(
+                parts[part_count++], sizeof(parts[0]), "replace %zu orphaned file%s",
+                replace_count, replace_count == 1 ? "" : "s"
             );
         }
         if (prune_file_count > 0) {
@@ -2843,7 +3068,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
 
         if (part_count > 0) {
-            /* ", " between parts, " and " before the last; four parts of at most
+            /* ", " between parts, " and " before the last; five parts of at most
              * 63 bytes fit the buffer with room to spare */
             size_t off = 0;
             for (size_t i = 0; i < part_count; i++) {
@@ -2995,7 +3220,11 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     size_t undelivered = deploy_receipt->failed.count + deploy_receipt->held.count;
 
     for (size_t i = 0; i < deploy_verdicts->skipped.count; i++) {
-        if (!deploy_skip_needs_force(deploy_verdicts->skipped.entries[i].reason)) {
+        const deploy_skip_t *s = &deploy_verdicts->skipped.entries[i];
+
+        /* A node's skip is no promise: it stands at no row, and its rows count,
+         * each skipped in its class (core/deploy.h deploy_skip_t) */
+        if (s->item->row && !deploy_skip_needs_force(s->reason)) {
             undelivered++;
         }
     }

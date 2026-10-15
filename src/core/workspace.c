@@ -27,15 +27,16 @@
  * filesystem side is looked at once, into the item (workspace_look), which notes
  * the squatters it finds as it goes. One walk takes the looks, over every row
  * and every record in path order, a parent before every path beneath it: each
- * row analyzed as its kind asks, each record looked at for the phases after it.
- * Every phase after a look reads the item rather than looking again. The entries
- * index holds the items whose look found their claim's kind, the orphan analysis
- * measures the copy off the item's own stat and errno, the scan's roots take
- * their kind and identity off the directory item's look. So no two phases can
- * disagree about what stands somewhere, and the load's cost is one look per active
- * path and per orphan record. The one look taken after the join is the untracked
- * walk's, at a child no claim settles — the one path the load holds no fact about
- * at all.
+ * row analyzed as its kind asks, each record looked at for the phases after it
+ * — and measured where it is dotta's own node above a row, for the class every
+ * path beneath it carries. Every phase after a look reads the item rather than
+ * looking again. The entries index holds the items whose look found their claim's
+ * kind, the orphan analysis measures the copy off the item's own stat and errno,
+ * the scan's roots take their kind and identity off the directory item's look.
+ * So no two phases can disagree about what stands somewhere, and the load's cost
+ * is one look per active path and per orphan record. The one look taken after
+ * the join is the untracked walk's, at a child no claim settles — the one path
+ * the load holds no fact about at all.
  */
 
 #include "core/workspace.h"
@@ -129,13 +130,14 @@ struct workspace {
     size_t diverged_capacity;
 
     /* The squatted directories: every path a claim names as a directory that
-     * the load's look found occupied by anything else, and every path it looked
+     * the load's look found occupied by anything else, every path where dotta's
+     * own file or link stands with a row beneath it, and every path it looked
      * at where a link stands with an orphan beneath it, with the claim. Noted
-     * by the look that found one and asked before every look after it, which writes
-     * the answer onto the item it withholds the look from (workspace_look, workspace_squatter_above);
-     * lent whole to a caller holding a path (workspace_squatted_ancestor); paths
-     * borrowed from the rows and the records. Almost always empty, which is what
-     * makes every ask free. */
+     * by the look that found one and asked before every look after it, which
+     * writes the answer onto the item it withholds the look from (workspace_look,
+     * workspace_squatter_above); lent whole to a caller holding a path
+     * (workspace_squatted_ancestor); paths borrowed from the rows and the records.
+     * Almost always empty, which is what makes every ask free. */
     workspace_squatted_t *squatted;              /* Arena; sized by the partition, never grown */
     size_t squatted_count;
 
@@ -388,25 +390,25 @@ static workspace_fault_t workspace_error_fault(error_t err) {
  * (workspace_load), so its first hit is the outermost too; the scan asks for
  * the minimum all the same, which reads no order, so all the walk owes the notes
  * is that a parent's is made before any look beneath it. Whose claims reach the
- * asker is the rule's one input: a view claim reaches every path beneath it, a
- * record's memory (WORKSPACE_DISPLACED_RECORD) the orphans alone
- * (workspace_displaced_t).
+ * asker is the rule's one input: what the view requires — a directory row's claim,
+ * or dotta's node above a row — reaches every path beneath it, a record's memory
+ * (WORKSPACE_DISPLACED_RECORD) the orphans alone (workspace_displaced_t).
  *
  * Nothing beneath a squatter that reaches it is looked at, so nothing there is
- * ever noted: the list holds nothing beneath a view claim, and no orphan's note
- * beneath any. It can hold a row's note beneath a record claim — a row beneath
- * a path only a record remembers is looked at, the record's memory not reaching
- * it, and its look may find a squatter of its own: a directory row's, or a link
- * over another orphan — so the minimum is load-bearing for an orphan beneath
- * both, and costs the same scan either way.
+ * ever noted: the list holds nothing beneath what the view requires, and no
+ * orphan's note beneath any. It can hold a row's note beneath a record claim —
+ * a row beneath a path only a record remembers is looked at, the record's memory
+ * not reaching it, and its look may find a squatter of its own: a directory row's,
+ * or a link over another orphan — so the minimum is load-bearing for an orphan
+ * beneath both, and costs the same scan either way.
  *
  * Empty on every healthy load, which is what makes every ask free.
  *
  * Readers: workspace_look, before every look the load takes — it takes them all,
  * and writes the answer onto the item it withholds the look from — and
  * workspace_squatted_ancestor, the view-only face that lends the answer whole
- * to a caller that needs the squatter itself (core/deploy.c check_ancestry,
- * cmds/update.c cmd_update).
+ * to a caller that needs the squatter itself (core/deploy.c check_ancestry and
+ * deploy_plan_build, cmds/update.c cmd_update).
  *
  * @param ws Workspace (must not be NULL)
  * @param path The asker's path (must not be NULL)
@@ -572,6 +574,37 @@ static void workspace_add_unscanned(
 }
 
 /**
+ * Does this record's own node stand above a row of the view?
+ *
+ * Dotta's node in a landing's way: an orphan record of a file or a link whose
+ * look found the node the record knows, standing where the view's rows beneath
+ * it need a directory. A directory record with a row beneath is no such node —
+ * a directory squats nothing, and cleanup's preflight holds it permanent — and
+ * neither is another node in the record's place, which dotta has no record of
+ * (the orphan analysis's retyped arm), nor one whose look failed: the rows beneath
+ * are looked at then, and meet the same cause where it lies on their way, and
+ * the record takes the scope exit's arms (stated).
+ *
+ * The one producer of the fact for the join's note, taken before any look beneath
+ * (workspace_look), and the ladder's state, taken after the walk
+ * (workspace_analyze_orphans): both ask it of one look, so they part only where
+ * an arm between them answers first — the entry's guard, which reads the index
+ * the walk builds last.
+ *
+ * Readers: workspace_look, workspace_analyze_orphans. A reader not on this list
+ * is a bug.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param item An item whose look was taken, a row's or an orphan's (must not be
+ *        NULL)
+ */
+static bool workspace_obstructs(const workspace_t *ws, const workspace_item_t *item) {
+    return !item->row && item->item_kind == PATH_KIND_FILE &&
+           item->occupant == item->record->kind &&
+           workspace_active_beneath(ws, item->filesystem_path);
+}
+
+/**
  * The load's one look at an item's path, and the squatter it finds
  *
  * Every look the load takes at a path it knows is taken here — the join's, at
@@ -583,11 +616,12 @@ static void workspace_add_unscanned(
  * cannot fail: the partition made room for every note.
  *
  * Readers of the notes: workspace_squatter_above, asked here before each look;
- * and core/deploy.c check_ancestry and cmds/update.c cmd_update, lent them through
- * workspace_squatted_ancestor. The note is handed back to the caller whose look
- * made it, which alone may refine a view row's class from the base before any
- * look beneath reads it (the directory analysis; the file analysis and the walk's
- * look at a record have nothing to refine, and drop it).
+ * and core/deploy.c check_ancestry and deploy_plan_build and cmds/update.c
+ * cmd_update, lent them through workspace_squatted_ancestor. The note is handed
+ * back to the caller whose look made it, which alone may refine its class before
+ * any look beneath reads it: the directory analysis a view row's, from the base,
+ * and the join's look at a record dotta's node's, from its measure
+ * (workspace_look_orphan). The file analysis has nothing to refine, and drops it.
  *
  * @param ws Workspace (must not be NULL)
  * @param item The item to look at (must not be NULL)
@@ -621,26 +655,35 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
         return NULL;
     }
 
-    /* A squatter is a directory claim with another kind of node in its place, a
-     * view row's or a record's. For the orphans alone, so is a link at any other
-     * path the load looks at — a record's, or a row's of another kind, beneath
-     * which no row stands (core/manifest.c manifest_layer) — with an orphan beneath
-     * it: the orphan's node stood in a directory there, and a link is the one
-     * node a key beneath resolves through — a file or a device answers ENOTDIR,
-     * absence. Noted only where an orphan would be looked at so, since links
-     * are no rarity the way squatted directories are. */
-    if (item->item_kind != PATH_KIND_DIRECTORY && (item->occupant != FS_OCCUPANT_SYMLINK ||
-        !workspace_item_beneath(ws->orphans, ws->orphan_count, item->filesystem_path))) {
+    /* Whose claim holds what stands here, if it squats, in the order the claims
+     * outrank one another. A directory claim with another kind of node in its
+     * place: a view row's class — the user's squatter until the analysis that
+     * asked for this look reads the base (workspace_analyze_directory) — or a
+     * directory record's memory. Dotta's own file or link at no row, where the
+     * view's rows beneath it need a directory (workspace_obstructs): a squatter
+     * of every path beneath it, rows and records alike, CONFLICT until its measure
+     * finds it untouched (workspace_look_orphan). And, for the orphans alone, a
+     * link at any other path the load looks at — a record's, or a row's of another
+     * kind, beneath which no row stands (core/manifest.c manifest_layer) — with
+     * an orphan beneath it: the orphan's node stood in a directory there, and a
+     * link is the one node a key beneath resolves through — a file or a device
+     * answers ENOTDIR, absence. Dotta's node reaches those orphans as well, so
+     * it outranks the link's memory, which is noted only where an orphan would
+     * be looked at so, since links are no rarity the way squatted directories
+     * are. Any other node squats nothing: a link no record of dotta's stands
+     * for, at a path no enabled claim names, is the machine's, and every look
+     * beneath it is taken through it. */
+    workspace_displaced_t claim;
+    if (item->item_kind == PATH_KIND_DIRECTORY) {
+        claim = !item->row ? WORKSPACE_DISPLACED_RECORD : item->row->tracked
+                           ? WORKSPACE_DISPLACED_TRACKED : WORKSPACE_DISPLACED_DERIVED;
+    } else if (workspace_obstructs(ws, item)) {
+        claim = WORKSPACE_DISPLACED_CONFLICT;
+    } else if (item->occupant == FS_OCCUPANT_SYMLINK &&
+        workspace_item_beneath(ws->orphans, ws->orphan_count, item->filesystem_path)) {
+        claim = WORKSPACE_DISPLACED_RECORD;
+    } else {
         return NULL;
-    }
-
-    /* Held by the item's claim: a directory row's class, or a record's memory —
-     * a directory record's own, or the orphans' beneath a link. A view row's is
-     * the user's squatter until the analysis that asked for this look reads the
-     * base (workspace_analyze_directory). */
-    workspace_displaced_t claim = WORKSPACE_DISPLACED_RECORD;
-    if (item->row && item->item_kind == PATH_KIND_DIRECTORY) {
-        claim = item->row->tracked ? WORKSPACE_DISPLACED_TRACKED : WORKSPACE_DISPLACED_DERIVED;
     }
 
     /* Noted where it was found, for every later look to ask: the walk takes a
@@ -1305,10 +1348,12 @@ static void workspace_analyze_file(
  * Precondition: the record carries a confirmed blob, and the look found the
  * record's own kind standing. Its one caller, workspace_measure, compares only
  * a file whose record confirmed one — a copy dotta owns, one the user ordered
- * pruned against it, or an overridden one — and leaves the rest unmeasured; and
- * the orphan analysis releases another node before any measure
- * (workspace_analyze_orphans), so the copy measured here is always of its record's
- * kind.
+ * pruned against it, an overridden one, or dotta's node above a row — and leaves
+ * the rest unmeasured; and each of its own callers measures a look of the record's
+ * kind alone — the orphan analysis releases another node before any measure
+ * (workspace_analyze_orphans), and the join measures a node only where its own
+ * kind stands (workspace_obstructs) — so the copy measured here is always of
+ * its record's kind.
  *
  * Architecture:
  * - Uses the record alone (kind, blob_oid, stat, mode, owner, group)
@@ -1383,16 +1428,18 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
              * The copy reads as the prune candidate its look said it was, and
              * cleanup's execute re-probes presence before it unlinks
              * (core/cleanup.c cleanup_execute): nothing is removed, and the record
-             * retires as a reclaim. The claim is not asked: a mode question over
-             * what is not there answers nothing.
+             * retires as a reclaim — or, dotta's node above a row, as the untouched
+             * copy its landing replaces, whose unlink finds nothing, which is
+             * its success (core/deploy.c clear_occupant). The claim is not asked:
+             * a mode question over what is not there answers nothing.
              *
              * The look is not retracted, where the file analysis retracts its
-             * own (its CMP_MISSING arm): the entries index was built from this
-             * look before the orphan analysis ran (workspace_load), so a retraction
-             * could not take the entry back out of it. A stale entry can only
-             * keep a new file standing on the reused inode from being offered
-             * for one run — the direction every false answer of the index takes
-             * (workspace_index_entries). */
+             * own (its CMP_MISSING arm): what was built from it stands — the
+             * entries index (workspace_load), and a node's note, which withheld
+             * every look beneath it before this read — so a retraction could
+             * take back neither. A stale entry can only keep a new file standing
+             * on the reused inode from being offered for one run — the direction
+             * every false answer of the index takes (workspace_index_entries). */
             return NULL;
 
         case CMP_TYPE_DIFF:
@@ -1834,9 +1881,10 @@ static bool workspace_item_stands(
  * node a type stands as (core/workspace.h workspace_type_occupant), and on purpose:
  * a link at a file key names the entry it stands on. The finer kind is read where
  * the question is another — the orphan analysis's retyped arm, whether what dotta
- * put there is gone (workspace_analyze_orphans), and core/deploy.c
- * occupant_conflicts, because deploy must replace a link with a file and back —
- * each a different question that happens to look alike.
+ * put there is gone (workspace_analyze_orphans), workspace_obstructs, whether
+ * dotta's own node stands above a row, and core/deploy.c occupant_conflicts,
+ * because deploy must replace a link with a file and back — each a different
+ * question that happens to look alike.
  *
  * @param occupant What the look found (workspace_item_t)
  * @param kind The kind the claim names — the item's own, a row's or a record's
@@ -1934,15 +1982,18 @@ static void workspace_index_entries(workspace_t *ws) {
  *
  * A sealed file is read where its stat moved and its length did not, or where
  * no stat was ever recorded — no learning reaches an orphan, so the read recurs
- * at every load — so a load that may ask for the key (apply's) asks here, whatever
- * its scope; over a pipe it reads a line of its input as the passphrase
- * (crypto/keymgr.h).
+ * at every load — so a load that may ask for the key asks here, whatever its
+ * scope: apply's, and every load at dotta's node above a row, as every load reads
+ * a sealed view squatter's base (stated); over a pipe it reads a line of its
+ * input as the passphrase (crypto/keymgr.h).
  *
  * Readers: the orphan analysis's three arms that keep the copy dotta's — the
  * user's prune order, the claim its profile still holds, and Git's backing
- * (workspace_analyze_orphans). A fact, not a verdict: cleanup's still skips a
- * prunable copy for a divergence or a reason of its own, and no engine reads an
- * overridden copy's.
+ * (workspace_analyze_orphans) — and the join's look at dotta's node above a row,
+ * whose class every path beneath it reads (workspace_look_orphan). A fact, not
+ * a verdict: cleanup's still skips a prunable copy for a divergence or a reason
+ * of its own, no engine reads an overridden copy's, and a node's is the consent
+ * its landing asks (core/workspace.h workspace_untouched).
  *
  * @param ws Workspace (provides the run's content reader)
  * @param item The orphan's item, beneath no squatter and not absent: an occupant
@@ -1974,6 +2025,31 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
 }
 
 /**
+ * A record's look in the join, and the class of dotta's node where it is one
+ *
+ * The look (workspace_look), and where it noted dotta's own node above a row
+ * (workspace_obstructs), the class every path beneath it carries, off the copy's
+ * measure (workspace_measure): STALE where the copy is untouched (core/workspace.h
+ * workspace_untouched), CONFLICT where it is not — the directory analysis's
+ * refinement of a view row's squatter (workspace_analyze_directory), for the
+ * squatter a record proves dotta's. Measured here, on every load and before any
+ * look beneath, because every look beneath reads the class; the rest of the
+ * record's verdict is the orphan analysis's, where a load asks for one.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param item An orphan's item (must not be NULL)
+ */
+static void workspace_look_orphan(workspace_t *ws, workspace_item_t *item) {
+    workspace_squatted_t *squatted = workspace_look(ws, item);
+
+    /* A record's memory has no class to refine */
+    if (!squatted || squatted->claim == WORKSPACE_DISPLACED_RECORD) return;
+
+    workspace_measure(ws, item);
+    if (workspace_untouched(item)) squatted->claim = WORKSPACE_DISPLACED_STALE;
+}
+
+/**
  * Analyze the orphans — the records whose path the view lacks
  *
  * Each was set aside by workspace_partition because no active row names its path:
@@ -1982,13 +2058,12 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  * which questions apply.
  *
  * Per orphan, in order — the ancestry, presence, the occupant's kind, the entry,
- * the claim its profile holds, the prune order, the ownership gate, then Git
- * authority:
+ * position, the claim its profile holds, the prune order, the ownership gate,
+ * then Git authority:
  *   - the ancestry: a squatter above the copy — a directory row of the view, a
  *     directory record the looker found squatted, or a link over a record beneath
  *     it — means no look was taken at all, and the record is released with nothing
- *     measured (workspace_squatter_above,
- *     and the file analysis for the rule);
+ *     measured (workspace_squatter_above, and the file analysis for the rule);
  *   - presence, off the look the join took (workspace_look) — either kind, a
  *     dangling link is present: an absent orphan is a reclaim whatever Git says,
  *     which keeps the planners' "absent ⇒ DIVERGENCE_NONE" rule;
@@ -2010,11 +2085,22 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *     of an active path, RELEASED, so the one copy is never pruned as the old
  *     one (workspace_row_stands). A target bound through a symlink, a HOME spelled
  *     two ways, a name the volume folds; apply adopts the row under its spelling
- *     and retires the key. Asked ahead of every arm that would remove the copy:
- *     its reason is a fact about the entry, which outranks every reason about
- *     the record or about Git — an order to prune the copy lives only while its
- *     path is out of the view (core/state.h), and the view holds this one under
- *     another spelling;
+ *     and retires the key. Asked ahead of every arm that would remove the copy,
+ *     a landing's among them: its reason is a fact about the entry, which outranks
+ *     every reason about the record or about Git — an order to prune the copy
+ *     lives only while its path is out of the view (core/state.h), and the view
+ *     holds this one under another spelling. Written whole, nothing measured,
+ *     over a node the join measured before the index it reads was built;
+ *   - position: dotta's own node above a row (workspace_obstructs) — the record's
+ *     own file or link standing where the view's rows beneath it need a directory
+ *     — is OBSTRUCTING: the landing's, replaced by the first row beneath that
+ *     lands (core/deploy.h), whatever an order, the gate or Git would say: an
+ *     order the landing carries out, an observed node as an owned one (any record
+ *     of dotta's: the bytes are Git's where it confirmed them, --force's where
+ *     it did not), a node Git let go in the way all the same. The join measured
+ *     it and noted it a squatter of every path beneath it (workspace_look_orphan).
+ *     Behind the entry, whose stale key names no node of its own; ahead of the
+ *     scope exit's reasons, which position outranks;
  *   - the claim its profile holds: the record's profile still holds a claim at
  *     its path — explicit or derived, under any of its names (core/manifest.h
  *     manifest_lookup_claim) — and no row stands there, so the claim stands
@@ -2022,9 +2108,12 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *     stands, so the copy is OVERRIDDEN: left for the row standing over it, never
  *     pruned and never released, and measured as a backed copy is. Behind another
  *     node, which is no copy of dotta's, and the entry, whose stale key names
- *     no copy of its own; ahead of the prune order, given when the claim left,
- *     which its return has made stale; and ahead of the gate and Git authority,
- *     whose releases each answer a claim that has gone, which this one has not;
+ *     no copy of its own; behind position, which it never meets, a claim of the
+ *     profile at a node's place either standing there over the rows beneath or
+ *     leaving a directory row there (core/manifest.c manifest_layer); ahead of
+ *     the prune order, given when the claim left, which its return has made stale;
+ *     and ahead of the gate and Git authority, whose releases each answer a claim
+ *     that has gone, which this one has not;
  *   - the prune order (remove --delete-files): the user chose the fate of the
  *     deployed copy, and Git is not asked. Honoured only with a reference to
  *     measure the copy against — a directory (cleanup's emptiness rule decides)
@@ -2056,17 +2145,17 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *     never the load's — the rule the file analysis takes for its own looks.
  *
  * Divergence for a file the analysis measures — a prunable copy or an overridden
- * one — is disk against what dotta last confirmed there, the record
- * (workspace_compare_orphan); one whose record confirmed nothing is left
- * unmeasured. A directory's verdict is what is left in it, read where its removal
- * is decided (cleanup's emptiness rule), so there is nothing to measure, only
- * whether it can be: a directory dotta cannot stat, read or search — the path,
- * or a component above it — is UNVERIFIED, the bit an unstattable file carries,
- * and held until the user can say what is in it. That is one fs_eaccess per present
- * directory orphan (read and search: the walk lstat's an entry named like OS
- * metadata to see that it is a file); the readdir itself stays cleanup's, because
- * what is left in a directory depends on the plan. Both are the measure's
- * (workspace_measure).
+ * one, and a node, which the join measured before it — is disk against what dotta
+ * last confirmed there, the record (workspace_compare_orphan); one whose record
+ * confirmed nothing is left unmeasured. A directory's verdict is what is left
+ * in it, read where its removal is decided (cleanup's emptiness rule), so there
+ * is nothing to measure, only whether it can be: a directory dotta cannot stat,
+ * read or search — the path, or a component above it — is UNVERIFIED, the bit
+ * an unstattable file carries, and held until the user can say what is in it.
+ * That is one fs_eaccess per present directory orphan (read and search: the walk
+ * lstat's an entry named like OS metadata to see that it is a file); the readdir
+ * itself stays cleanup's, because what is left in a directory depends on the
+ * plan. Both are the measure's (workspace_measure).
  *
  * This enables status to predict apply behavior (cleanup_verdict reads the same
  * item, and cleanup_skip_reason maps the same bits to the skip):
@@ -2079,6 +2168,9 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *   (with DIVERGENCE_TYPE) another kind of path stands there; apply releases
  * - WORKSPACE_STATE_OVERRIDDEN -> its profile still claims the path, standing
  *   nowhere; neither engine removes the copy, whatever its bits
+ * - WORKSPACE_STATE_OBSTRUCTING -> the rows beneath need its place; apply replaces
+ *   it with a directory for them, unasked where untouched, else under --force
+ *   (core/workspace.h workspace_untouched)
  *
  * Presence comes first, so an absent record never reaches a RELEASED arm: whatever
  * Git would have said, it reads [orphaned] [absent] and apply reclaims it. The
@@ -2153,19 +2245,20 @@ static void workspace_analyze_orphans(workspace_t *ws) {
             continue;
         }
 
-        /* The guard, ahead of every arm that would remove the copy: a row of
-         * the view stands on this very entry under another spelling of its path
-         * — this profile's own claim after its root was re-spelled, another
-         * profile's through a link no binding names, a name the volume folds.
-         * The record is a stale key of an active path, not a copy left behind —
-         * released, and the path stays for the row standing on it; what becomes
-         * of that row is apply's adoption, which reads its own gates
-         * (cmds/apply.c). Its reason is a fact about the entry, never about the
-         * record or Git, so it outranks both: an order to prune the copy lives
-         * only while its path is out of the view (core/state.h), and the view
-         * holds this one; the gate would release on a reason of its own; and
-         * Git's answer would only choose between a prune and a hold the entry
-         * has already ruled out.
+        /* The guard, ahead of every arm that would remove the copy, a landing's
+         * among them: a row of the view stands on this very entry under another
+         * spelling of its path — this profile's own claim after its root was
+         * re-spelled, another profile's through a link no binding names, a name
+         * the volume folds. The record is a stale key of an active path, not a
+         * copy left behind — released, and the path stays for the row standing
+         * on it; what becomes of that row is apply's adoption, which reads its
+         * own gates (cmds/apply.c). Its reason is a fact about the entry, never
+         * about the record or Git, so it outranks both: an order to prune the
+         * copy lives only while its path is out of the view (core/state.h), and
+         * the view holds this one; a landing would replace the very node the
+         * row stands on; the gate would release on a reason of its own; and Git's
+         * answer would only choose between a prune and a skip the entry has already
+         * ruled out.
          *
          * By the entry and never by a name compare: a volume that folds case or
          * normalization stands one entry at two strings, and cleanup was measured
@@ -2175,7 +2268,27 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * keep this order. */
         if (item->occupant != FS_OCCUPANT_UNKNOWN &&
             workspace_row_stands(ws, item->filesystem_path, &item->st)) {
+            /* Released whole: a release reads no measure, and the join measured
+             * dotta's node here before the index this asks was built
+             * (workspace_look_orphan). That node's note stands: the rows beneath
+             * its key, displaced by it, skip ANCESTOR with the tracked closer
+             * for the one run that retires the record (stated) */
             item->state = WORKSPACE_STATE_RELEASED;
+            item->divergence = DIVERGENCE_NONE;
+            item->fault = WORKSPACE_FAULT_NONE;
+            continue;
+        }
+
+        /* Position, ahead of every reason a scope exit gives: dotta's own node
+         * above a row (workspace_obstructs). The view's rows beneath need a
+         * directory there, so its place is their landing's — replaced by the
+         * first of them that lands (core/deploy.h) — whatever an order, the gate
+         * or Git would say: an order the landing carries out, an observed node
+         * as an owned one, a node Git let go in the way all the same. The join
+         * measured it and noted it a squatter of every path beneath it
+         * (workspace_look_orphan). */
+        if (workspace_obstructs(ws, item)) {
+            item->state = WORKSPACE_STATE_OBSTRUCTING;
             continue;
         }
 
@@ -2227,12 +2340,12 @@ static void workspace_analyze_orphans(workspace_t *ws) {
         switch (workspace_orphan_authority(ws->repo, authority_cache, item)) {
             case ORPHAN_AUTHORITY_UNVERIFIED:
                 /* Git could not vouch for the path — a lookup that failed — and
-                 * neither LOST nor BACKED is a guess to make: held. Not measured,
-                 * unlike a backed copy below: no reader shows a bit beside
-                 * UNVERIFIED, so a compare would only give the item a second
-                 * reason for the fate it already has. Its class is UNVERIFIED
-                 * whatever went wrong: the probe meets Git alone, never a key
-                 * or a permission. */
+                 * neither LOST nor BACKED is a guess to make: it stays, and cleanup
+                 * skips it (CLEANUP_SKIP_UNVERIFIED). Not measured, unlike a
+                 * backed copy below: no reader shows a bit beside UNVERIFIED,
+                 * so a compare would only give the item a second reason for the
+                 * fate it already has. Its class is UNVERIFIED whatever went
+                 * wrong: the probe meets Git alone, never a key or a permission. */
                 item->divergence = DIVERGENCE_UNVERIFIED;
                 item->fault = WORKSPACE_FAULT_UNVERIFIED;
                 continue;
@@ -3056,10 +3169,11 @@ static error_t workspace_partition(workspace_t *ws) {
     }
 
     /* Room for every squatter the looks can note. A squatter is a directory claim,
-     * a view row's or a record's, or a link at any path the load looks at with
-     * an orphan beneath it — a file row's among them, and two such links, one
-     * beneath the other, can stand over one orphan — and each item is looked at
-     * once (workspace_look), so the items bound the notes. */
+     * a view row's or a record's, dotta's own file or link above a row, or a
+     * link at any path the load looks at with an orphan beneath it — a file row's
+     * among them, and two such links, one beneath the other, can stand over one
+     * orphan — and each item is looked at once (workspace_look), so the items
+     * bound the notes. */
     ws->squatted = arena_calloc(
         ws->arena, view.count + ws->orphan_count, sizeof(*ws->squatted)
     );
@@ -3077,8 +3191,9 @@ static error_t workspace_partition(workspace_t *ws) {
  * none of them lists anything, so no two can list by two rules; an active item
  * none had anything to write on keeps what the partition made it — DEPLOYED,
  * nothing wrong — and is not among them. An orphan is never DEPLOYED, so every
- * analyzed one has something to say: a reclaim, a release, a prune, a skip, or
- * a copy left for the row standing over it.
+ * analyzed one has something to say: a reclaim, a release, a prune, a skip, a
+ * copy left for the row standing over it, or a node the landing beneath it
+ * replaces.
  *
  * The reassignment is the one term no analysis writes: a clean row whose owned
  * record names another profile is REASSIGNED by the route, read over the item's
@@ -3169,17 +3284,19 @@ error_t workspace_load(
      * before every path beneath it, whichever kind and whichever source — each
      * looked at once, into its item (workspace_look): a row by the analysis its
      * kind asks, a record for the phases after, the entries index reading its
-     * identity and the orphan analysis its stat and errno. Path order, because
-     * a squatter is noted by the look that finds it and asked by every look beneath
-     * it (workspace_squatter_above), and strcmp puts a prefix before every path
-     * it opens: all those asks need, each scanning the notes and none reading
-     * their order. Each half of the active items is in that order
-     * (workspace_kind_order), and so are the orphans, the snapshot's (core/state.h
-     * state_records), so the walk merges three heads, no two at one path: the
-     * view holds one row per path, and a record is an orphan exactly where no
-     * row stands (workspace_partition). Every load takes every look, a record's
-     * as a row's: the look is the join's, and an analysis a caller declines saves
-     * its own work, never a look — why the join is no caller's to decline is
+     * identity and the orphan analysis its stat and errno — and, where the record
+     * is dotta's own node above a row, its class, which every look beneath reads
+     * (workspace_look_orphan). Path order, because a squatter is noted by the
+     * look that finds it and asked by every look beneath it
+     * (workspace_squatter_above), and strcmp puts a prefix before every path it
+     * opens: all those asks need, each scanning the notes and none reading their
+     * order. Each half of the active items is in that order (workspace_kind_order),
+     * and so are the orphans, the snapshot's (core/state.h state_records), so
+     * the walk merges three heads, no two at one path: the view holds one row
+     * per path, and a record is an orphan exactly where no row stands
+     * (workspace_partition). Every load takes every look, a record's as a row's:
+     * the look is the join's, and an analysis a caller declines saves its own
+     * work, never a look — why the join is no caller's to decline is
      * workspace_load's own contract. The walk cannot fail: an analysis writes
      * its verdict, and the confirmation the record is owed, onto the item, and
      * a look that fails is a verdict too. */
@@ -3195,7 +3312,7 @@ error_t workspace_load(
             workspace_analyze_file(ws, file, config);
             f++;
         } else if (orphan) {
-            workspace_look(ws, orphan);
+            workspace_look_orphan(ws, orphan);
             o++;
         } else {
             break;
@@ -3280,6 +3397,18 @@ workspace_items_t workspace_directories(const workspace_t *ws) {
     return (workspace_items_t){
         .entries = (const workspace_item_t *const *) ws->active,
         .count = ws->dir_count,
+    };
+}
+
+/**
+ * The orphans: the analyzed prefix, in the snapshot's order — every orphan or
+ * none (analyzed_count)
+ */
+workspace_items_t workspace_orphans(const workspace_t *ws) {
+    if (!ws) return (workspace_items_t){ 0 };
+    return (workspace_items_t){
+        .entries = (const workspace_item_t *const *) ws->orphans,
+        .count = ws->analyzed_count,
     };
 }
 
@@ -3381,11 +3510,13 @@ const workspace_item_t *workspace_find(
 
     /* An active path's item, the clean ones too; else an orphan's, of the prefix
      * the load analyzed — every orphan or none, the bound the diverged items
-     * list by (analyzed_count). No path is both: a record is an orphan exactly
-     * where no active item stands (workspace_partition). */
+     * list by and the orphans' lender lends (analyzed_count). No path is both:
+     * a record is an orphan exactly where no active item stands
+     * (workspace_partition). */
     const workspace_item_t *item = workspace_find_active(ws, filesystem_path);
 
-    return item ? item : workspace_find_item(ws->orphans, ws->analyzed_count, filesystem_path);
+    return item ? item
+                : workspace_find_item(ws->orphans, ws->analyzed_count, filesystem_path);
 }
 
 /**
@@ -3409,10 +3540,11 @@ const workspace_squatted_t *workspace_squatted_ancestor(
 ) {
     if (!ws || !path) return NULL;
 
-    /* The view-only face of the one scan (workspace_squatter_above), lent whole:
-     * a record's memory reaches the orphans alone, which carry the fact themselves
-     * (the reach rule, workspace_displaced_t), and this probe's askers need the
-     * squatter itself, which no item carries. */
+    /* The view's face of the one scan (workspace_squatter_above), lent whole —
+     * what the view requires, a directory row's claim or dotta's node above a
+     * row: a record's memory reaches the orphans alone, which carry the fact
+     * themselves (the reach rule, workspace_displaced_t), and this probe's askers
+     * need the squatter itself, which no item carries. */
     return workspace_squatter_above(ws, path, false);
 }
 
@@ -3724,16 +3856,21 @@ bool workspace_item_tags(
         }
 
         case WORKSPACE_STATE_ORPHANED:
-        case WORKSPACE_STATE_OVERRIDDEN: {
-            /* The orphans the analysis may measure (workspace_measure): the state's
-             * word, then one ladder for both. An overridden copy is present and
-             * looked at by construction — its arm comes after both — so absence
-             * and [displaced] reach an orphan alone, and the skip each bit's
-             * arm names is an orphan's, cleanup's: no engine removes an overridden
-             * copy, whatever its bits. */
+        case WORKSPACE_STATE_OVERRIDDEN:
+        case WORKSPACE_STATE_OBSTRUCTING: {
+            /* The orphans a measure may reach (workspace_measure): the state's
+             * word, then one ladder for the three. An overridden copy and a node
+             * are present and looked at by construction — the copy's arm comes
+             * after absence and the ancestry, and a node is a look that found
+             * its record's own kind — so absence and [displaced] reach an orphan
+             * alone. The skip each bit's arm names is an orphan's, cleanup's;
+             * no engine removes an overridden copy, whatever its bits; and a
+             * node's landing asks --force for every bit but the claim's
+             * (core/workspace.h workspace_untouched). */
             if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                 tags_out[tag_count++] = item->state == WORKSPACE_STATE_ORPHANED
-                    ? "orphaned" : "overridden";
+                    ? "orphaned" : item->state == WORKSPACE_STATE_OVERRIDDEN
+                    ? "overridden" : "obstructing";
             }
 
             /* Determine color and secondary tags based on divergence */
@@ -3767,7 +3904,8 @@ bool workspace_item_tags(
                 /* The failed look, worded by whose remedy it is (workspace_fault_t)
                  * — the deployed arm's switch, so one item has one name in both.
                  * Conservative: an orphan's skip (CLEANUP_SKIP_UNVERIFIED, ranked
-                 * first there as it is here — one item, one name). */
+                 * first there as it is here — one item, one name), and a node's
+                 * landing under --force alone. */
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     switch (item->fault) {
                         case WORKSPACE_FAULT_LOCKED:
@@ -3786,7 +3924,8 @@ bool workspace_item_tags(
 
             } else if (item->divergence & DIVERGENCE_CONTENT) {
                 /* Content divergence - blocking issue: an orphan's skip
-                 * (cleanup_skip_reason: MODIFIED). */
+                 * (cleanup_skip_reason: MODIFIED), and a node's landing under
+                 * --force alone. */
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "modified";
                 }
@@ -3795,7 +3934,8 @@ bool workspace_item_tags(
             } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
                 /* The claim alone — the mode, the ownership, or both — left the
                  * one the record reconciled; the content is dotta's. Warning
-                 * level: an orphan's skip (cleanup_skip_reason: CLAIM_CHANGED). */
+                 * level: an orphan's skip (cleanup_skip_reason: CLAIM_CHANGED),
+                 * where a node's landing goes unasked, a claim being no edit. */
                 if (item->divergence & DIVERGENCE_MODE) {
                     if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                         tags_out[tag_count++] = "mode";
@@ -3812,8 +3952,9 @@ bool workspace_item_tags(
                 /* No divergence: nothing moved from what dotta last confirmed —
                  * or, on a copy dotta only observed, nothing was confirmed to
                  * measure. RED where a removal is coming: cleanup prunes a clean
-                 * orphan. DIM on an overridden copy, which no engine removes:
-                 * the colour of a line that asks nothing ([ancestor]'s). */
+                 * orphan, and the landing beneath a node replaces it. DIM on an
+                 * overridden copy, which no engine removes: the colour of a line
+                 * that asks nothing ([ancestor]'s). */
                 *color_out = item->state == WORKSPACE_STATE_OVERRIDDEN
                     ? OUTPUT_COLOR_DIM : OUTPUT_COLOR_RED;
             }
@@ -3825,8 +3966,8 @@ bool workspace_item_tags(
              * (workspace.h). The fate stays cleanup's, and turns on which class
              * it is (a re-targeted custom/ copy prunes, a moved home's is skipped
              * unless --force); this only names what the copy is. An overridden
-             * copy carries none: the relocation is read where Git backs an orphan
-             * (workspace_analyze_orphans). */
+             * copy and a node carry none: the relocation is read where Git backs
+             * an orphan (workspace_analyze_orphans). */
             if (item->relocation != WORKSPACE_RELOCATION_NONE) {
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "relocated";

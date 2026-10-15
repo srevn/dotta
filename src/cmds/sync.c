@@ -1566,8 +1566,9 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                             /* Beneath a squatter: nothing there was looked at,
                              * so there is no local edit here for a pull to conflict
                              * with — the squatter's own row is the work, and it
-                             * is counted under its own arm. Counted to be reported,
-                             * never to block. */
+                             * is counted under its own arm, or dotta's node at
+                             * no row is, the landing's, which this load does
+                             * not lend. Counted to be reported, never to block. */
                             displaced_count++;
                             break;
 
@@ -1641,10 +1642,11 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 case WORKSPACE_STATE_ORPHANED:
                 case WORKSPACE_STATE_RELEASED:
                 case WORKSPACE_STATE_OVERRIDDEN:
+                case WORKSPACE_STATE_OBSTRUCTING:
                     /* Not sync's concern — handled by apply command, or by no
-                     * verb: a copy left for the row standing over it. RELEASED
-                     * and OVERRIDDEN are never emitted here anyway: both come
-                     * only from orphan analysis, which this load switches off. */
+                     * verb: a copy left for the row standing over it. The orphans'
+                     * states are never emitted here anyway: they come only from
+                     * orphan analysis, which this load switches off. */
                     break;
             }
         }
@@ -1944,10 +1946,9 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Manifest block — the view after the Git phase, diffed against the view
      * before it. A true delta in both modes: a local external commit that predates
-     * the sync is in `before` and `after` alike and is
-     * reported by its results (status's [stale], [released]), not here;
-     * what the block names is what the pulls and resolutions above did to the
-     * view. Sync writes no state.
+     * the sync is in `before` and `after` alike and is reported by its results
+     * (status's [stale], [released]), not here; what the block names is what
+     * the pulls and resolutions above did to the view. Sync writes no state.
      *
      * Attribution is per enabled profile — scope_enabled, never the -p narrowed
      * scope_profiles: precedence runs across the whole enabled set, which is

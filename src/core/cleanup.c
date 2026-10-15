@@ -51,19 +51,33 @@ cleanup_plan_t *cleanup_plan_build(
      * and nothing frees a plan. Each orphan in scope is added to its bucket as
      * the walk decides it, and the five are filled once the walk is done. */
     cleanup_plan_t *plan = arena_calloc(arena, 1, sizeof(*plan));
-    workspace_items_t diverged = workspace_diverged(ws);
+    workspace_items_t orphans = workspace_orphans(ws);
     workspace_buckets_t *buckets = workspace_buckets_create(arena);
 
-    for (size_t i = 0; i < diverged.count; i++) {
-        const workspace_item_t *item = diverged.entries[i];
+    for (size_t i = 0; i < orphans.count; i++) {
+        const workspace_item_t *item = orphans.entries[i];
 
-        /* Both kinds reach all three states: the kind decides the bucket and
-         * the state is a verdict's input — but an overridden copy's, which is
-         * its bucket, no verdict deciding it. */
-        if (item->state != WORKSPACE_STATE_ORPHANED &&
-            item->state != WORKSPACE_STATE_RELEASED &&
-            item->state != WORKSPACE_STATE_OVERRIDDEN) {
-            continue;
+        /* Both kinds reach the three states this plan reads: the kind decides
+         * the bucket and the state is a verdict's input — but an overridden copy's,
+         * which is its bucket, no verdict deciding it */
+        switch (item->state) {
+            case WORKSPACE_STATE_ORPHANED:
+            case WORKSPACE_STATE_RELEASED:
+            case WORKSPACE_STATE_OVERRIDDEN:
+                break;
+
+            case WORKSPACE_STATE_OBSTRUCTING:
+                /* The landing's: dotta's node above rows of the view, which deploy
+                 * replaces with the first of them that lands (core/deploy.h) —
+                 * no scope exit's to decide */
+                continue;
+
+            case WORKSPACE_STATE_DEPLOYED:
+            case WORKSPACE_STATE_UNDEPLOYED:
+            case WORKSPACE_STATE_DELETED:
+            case WORKSPACE_STATE_UNTRACKED:
+            case WORKSPACE_STATE_UNSCANNED:
+                CHECK_ARG(false, "the orphans' lender lent an item that is no orphan");
         }
 
         /* Coherent Scope principle: the same operation-scope triplet the deploy
@@ -285,7 +299,9 @@ typedef struct {
  * than being let go around a copy dotta keeps. Everything else is permanent: a
  * RELEASED orphan stays where it is; an active path (the view has a row, and a
  * row's item is never an orphan's) stands in an enabled profile's name; an entry
- * the load holds no item for is the user's.
+ * the load holds no item for is the user's. Dotta's node above a row is never
+ * met here: the directory it stands in holds that row beneath it too, so the
+ * view makes it permanent before any readdir (cleanup_preflight).
  *
  * Membership is keyed by filesystem path, which is why the entry arrives as a
  * full path rather than a basename.

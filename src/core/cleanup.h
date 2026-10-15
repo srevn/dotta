@@ -30,18 +30,18 @@
  *   Execute probes once more, only to report what it found
  * - what becomes of a present orphan, either kind — but an overridden copy, which
  *   the workspace leaves for the row standing over it and the plan counts apart
- *   (cleanup_plan_t): cleanup_verdict, from the item — RELEASED ⇒ released (left
+ *   (cleanup_plan_t), and dotta's node above a row, the landing's, which the
+ *   plan never holds: cleanup_verdict, from the item — RELEASED ⇒ released (left
  *   on disk, record retires — never pruned, --force included: dotta removes what
  *   it deployed and Git still backs, and lets go of what Git lost, of what it
  *   never deployed, of a path another kind of node stands at, and of a key that
  *   spells a path a row stands on under another spelling); a relocated home/
  *   claim ⇒ skipped unless --force, either kind (the copy is the claim's old
- *   home — see the verdict table);
- *   a file with a cleanup_skip_reason ⇒ skipped unless --force; a directory the
- *   workspace could not verify ⇒ skipped, --force included; else prunable, a
- *   directory's remainder permitting
- * - what is left in a directory after this run: fs_directory_emptiness,
- *   vouching for what this run prunes and for what it merely skips (preflight;
+ *   home — see the verdict table); a file with a cleanup_skip_reason ⇒ skipped
+ *   unless --force; a directory the workspace could not verify ⇒ skipped, --force
+ *   included; else prunable, a directory's remainder permitting
+ * - what is left in a directory after this run: fs_directory_emptiness, vouching
+ *   for what this run prunes and for what it merely skips (preflight;
  *   cleanup_preflight_t has the classes), and fs_remove_empty_dir, which removes
  *   exactly what that walk looks past as gone and refuses anything else before
  *   touching it (execute)
@@ -104,7 +104,10 @@
  * path, and the copy is left for the row standing over it (core/workspace.h
  * WORKSPACE_STATE_OVERRIDDEN). So it is counted — a path filter that names it
  * has found a path dotta manages — and never decided or touched, which leaves
- * -e nothing to spare of it and --keep-orphans nothing to keep.
+ * -e nothing to spare of it and --keep-orphans nothing to keep. Nor is dotta's
+ * node above a row (WORKSPACE_STATE_OBSTRUCTING): its place is the landing's of
+ * the rows beneath it, and deploy's plan holds it, counts it and spares it
+ * (core/deploy.h deploy_plan_t), so this plan has no bucket for it at all.
  *
  * The path dimension reaches an orphan the way it reaches an active row: `apply
  * <file>` plans the orphan at that path, `apply <dir>` the orphans beneath it,
@@ -114,9 +117,10 @@
  * directory the filter does not cover stays, and the next run that covers it
  * prunes it.
  *
- * Each bucket keeps the order the workspace lends its diverged items in: the
- * preflight orders the directories it walks (cleanup_preflight). A value of the
- * arena it was built in: nothing frees one.
+ * Each bucket keeps the order the workspace lends its orphans in, path order
+ * (core/workspace.h workspace_orphans): the preflight orders the directories it
+ * walks (cleanup_preflight). A value of the arena it was built in: nothing frees
+ * one.
  */
 typedef struct {
     workspace_items_t files;         /* ORPHANED / RELEASED file items in scope */
@@ -129,10 +133,12 @@ typedef struct {
 /**
  * Build the cleanup plan
  *
- * Walks the workspace's diverged items once, keeping ORPHANED, RELEASED and
- * OVERRIDDEN ones, gating each on scope_accepts_profile ∧ scope_accepts_path(kind),
- * then routing an overridden one to its bucket and the rest by
- * scope_is_excluded(kind), then keep_orphans, then item_kind.
+ * Walks the workspace's orphans once (core/workspace.h workspace_orphans), by
+ * an exhaustive switch over the state: ORPHANED, RELEASED and OVERRIDDEN kept,
+ * an OBSTRUCTING node left to the landing beneath it (core/deploy.h). Gates each
+ * on scope_accepts_profile ∧ scope_accepts_path(kind), then routes an overridden
+ * one to its bucket and the rest by scope_is_excluded(kind), then keep_orphans,
+ * then item_kind.
  *
  * @param arena Arena the plan and its buckets live in (must not be NULL)
  * @param ws Workspace loaded with orphan analysis (must not be NULL)
@@ -326,8 +332,10 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  * are preflight's, from the disk — and its directory hint says so.
  *
  * Never asked of an overridden copy: the plan counts one apart and decides nothing
- * of it (cleanup_plan_t), and status lists it in a section of its own. The table
- * has no row for one, and would read it as any orphan of its kind.
+ * of it (cleanup_plan_t), and status lists it in a section of its own. Nor of
+ * dotta's node above a row, which the plan never holds: its fate is the landing's
+ * (core/deploy.h), and status keys it by that. The table has no row for either,
+ * and would read one as any orphan of its kind.
  */
 typedef enum {
     CLEANUP_ABSENT,      /* Not on disk at load → record retires, no filesystem effect */

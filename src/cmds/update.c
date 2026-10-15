@@ -371,9 +371,13 @@ static void update_partition(
             case WORKSPACE_STATE_ORPHANED:
             case WORKSPACE_STATE_RELEASED:
             case WORKSPACE_STATE_OVERRIDDEN:
+            case WORKSPACE_STATE_OBSTRUCTING:
                 /* Another verb's, or none: not deployed yet (apply's), a record
-                 * the view lacks (cleanup prunes or releases it), or a copy left
-                 * for the row standing over it — never update's to commit */
+                 * the view lacks (cleanup prunes or releases it), a copy left
+                 * for the row standing over it, or dotta's node above a row,
+                 * which the landing beneath it replaces — never update's to commit,
+                 * and the four orphans' never met here: this load declines their
+                 * analysis */
                 continue;
         }
 
@@ -1935,9 +1939,9 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
  * Route the raw positional bucket into `files[]` and `profiles[]`.
  *
  * Positional rule (differs from add — position-dependent):
- *   - First positional: a file path or a profile name, by whether it announces a
- *     path (infra/path.h path_input_announces_path). A file path lands in `files`;
- *     a name lands in `profiles`.
+ *   - First positional: a file path or a profile name, by whether it announces
+ *     a path (infra/path.h path_input_announces_path). A file path lands in
+ *     `files`; a name lands in `profiles`.
  *   - Remaining positionals: always file paths.
  *
  * Profiles from `-p` are already populated in `profiles` by the APPEND row; a

@@ -588,6 +588,9 @@ static void status_print_workspace(
 
             case WORKSPACE_STATE_ORPHANED:
             case WORKSPACE_STATE_RELEASED:
+            case WORKSPACE_STATE_OBSTRUCTING:
+                /* The orphans an engine settles: a scope exit's, or the landing's
+                 * of the rows beneath dotta's node — each keyed below by its own */
                 workspace_buckets_add(buckets, item, &orphaned);
                 break;
 
@@ -728,22 +731,24 @@ static void status_print_workspace(
 
     /* Section 3: Displaced paths — beneath a squatter one of the two sections
      * above holds, or Undeployed changes below where it is dotta's own copy Git
-     * moved past, untouched (the route's DISPLACED_* arms, the squatter's own
-     * route inherited): nothing there was looked at, so the line shows [displaced]
-     * and only what no look decides or disproves beside it (the blob's verdict,
-     * a reassignment), and the header sends the user to the squatter, whose own
-     * section names its verb. The header opens with the predicate, as every
-     * sentence about such a path does, and spells the squatter out where the
-     * other four name it with the word — this is where the word is grounded
-     * (core/workspace.h workspace_displaced_t). Named by section rather than
-     * "above": under -p the squatter's row may be filtered while a child is not,
-     * and the bare status lists both. */
+     * moved past, untouched, or Issues where it is dotta's own node at no row,
+     * the landing's of the paths beneath it (the route's DISPLACED_* arms, the
+     * squatter's own route inherited): nothing there was looked at, so the line
+     * shows [displaced] and only what no look decides or disproves beside it
+     * (the blob's verdict, a reassignment), and the header sends the user to
+     * the squatter, whose own section names its verb. The header opens with the
+     * predicate, as every sentence about such a path does, and spells the squatter
+     * out where the other four name it with the word — this is where the word
+     * is grounded (core/workspace.h workspace_displaced_t). Named by section
+     * rather than "above": under -p the squatter's row may be filtered while a
+     * child is not, and the bare status lists both. */
     if (displaced.count > 0) {
         output_list_t *list = output_list_create(
             out, "Displaced paths",
             "not looked at: a different kind stands at a directory above "
             "them; resolve that directory first (\"dotta status\" lists "
-            "it under Conflicts, Squatted ancestors or Undeployed changes)"
+            "it under Conflicts, Squatted ancestors, Undeployed changes "
+            "or Issues)"
         );
 
         for (size_t i = 0; i < displaced.count; i++) {
@@ -1084,20 +1089,27 @@ static void status_print_workspace(
          * [released] one are both released — and that is the design: the tag
          * says what the item is, the key what apply does with it. The verdict
          * is its engine's, picked by the state — cleanup's for ORPHANED and
-         * RELEASED (cleanup_verdict, the one producer the preview reads too) —
-         * and this only names it. PRUNABLE is the one verdict status cannot finish
-         * — the remainder and the run's reach are preflight's, from the disk —
-         * and the directory hint says so; it shares the bare [orphaned] key with
-         * the files, so the sentence is written to be true of both.
+         * RELEASED (cleanup_verdict, the one producer the preview reads too),
+         * and for OBSTRUCTING the consent the landing beneath dotta's node asks
+         * (core/workspace.h workspace_untouched), off the same tags — and this
+         * only names it. PRUNABLE is the one verdict status cannot finish — the
+         * remainder and the run's reach are preflight's, from the disk — and
+         * the directory hint says so; it shares the bare [orphaned] key with
+         * the files, so the sentence is written to be true of both. A node's
+         * key, likewise, says what its landing asks and not whether the node's
+         * parent admits the run: a parent that refuses it is apply's skip line
+         * to name (stated).
          *
          * [orphaned] and one of ten — absence, a squatter, one of three failed
          * looks, the content, one claim axis or both, or nothing — the last eight
          * with or without [relocated], which no absent or displaced orphan carries;
-         * and [released] with or without [type]: twenty keys bound the domain
-         * (core/workspace.c workspace_item_tags, its ORPHANED and RELEASED arms).
-         * A legend that held fewer would drop a key in silence, and the header
+         * [released] with or without [type]; and [obstructing] and one of eight
+         * — one of three failed looks, the content, one claim axis or both, or
+         * nothing: twenty-eight keys bound the domain (core/workspace.c
+         * workspace_item_tags, its ORPHANED, RELEASED and OBSTRUCTING arms). A
+         * legend that held fewer would drop a key in silence, and the header
          * would promise its line a prune. */
-        struct { char tags[64]; const char *hint; } legend[20];
+        struct { char tags[64]; const char *hint; } legend[28];
         size_t legend_count = 0;
         size_t legend_width = 0;
 
@@ -1249,6 +1261,46 @@ static void status_print_workspace(
                     }
                     break;
 
+                case WORKSPACE_STATE_OBSTRUCTING:
+                    /* The landing's consent (core/workspace.h workspace_untouched),
+                     * by the tags in the order they rank: what moved, as a skipped
+                     * orphan's key says it, and the replace --force gives where
+                     * cleanup's would be a prune — save a claim, which is never
+                     * an edit, and the bare key, which says what the node is in
+                     * the way of */
+                    if (item->divergence & DIVERGENCE_UNVERIFIED) {
+                        switch (item->fault) {
+                            case WORKSPACE_FAULT_LOCKED:
+                                hint = config->encryption_enabled
+                                    ? "encrypted, and no key opened it "
+                                    "('dotta key set'); apply skips it, "
+                                    "--force replaces it"
+                                    : "encrypted, and encryption is disabled "
+                                    "(encryption.enabled = true, then 'dotta key "
+                                    "set'); apply skips it, --force replaces it";
+                                break;
+                            case WORKSPACE_FAULT_UNREADABLE:
+                                hint = "cannot be read; "
+                                    "apply skips it, --force replaces it";
+                                break;
+                            case WORKSPACE_FAULT_NONE:
+                            case WORKSPACE_FAULT_UNVERIFIED:
+                                hint = "could not be verified; "
+                                    "apply skips it, --force replaces it";
+                                break;
+                        }
+                    } else if (item->divergence & DIVERGENCE_CONTENT) {
+                        hint = "changed since deployment; "
+                            "apply skips it, --force replaces it";
+                    } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
+                        hint = "changed since deployment, its bytes dotta's; "
+                            "apply replaces it";
+                    } else {
+                        hint = "the paths beneath it need a directory here; "
+                            "apply replaces it, --force where dotta never confirmed it";
+                    }
+                    break;
+
                 case WORKSPACE_STATE_DEPLOYED:
                 case WORKSPACE_STATE_UNDEPLOYED:
                 case WORKSPACE_STATE_DELETED:
@@ -1256,7 +1308,9 @@ static void status_print_workspace(
                 case WORKSPACE_STATE_UNSCANNED:
                 case WORKSPACE_STATE_OVERRIDDEN:
                     /* The section switch above files no other state here */
-                    CHECK_ARG(false, "the orphaned bucket holds ORPHANED and RELEASED alone");
+                    CHECK_ARG(
+                        false, "the orphaned bucket holds ORPHANED, RELEASED and OBSTRUCTING alone"
+                    );
             }
             if (!hint) continue;
 

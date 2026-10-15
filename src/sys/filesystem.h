@@ -642,10 +642,12 @@ typedef enum {
  *
  * An entry is looked past when it is OS metadata — exactly what fs_remove_empty_dir
  * clears — or when `vouch`, handed the entry's full path, answers true: the caller
- * is about to remove it, or has decided it does not count. That lets a caller
- * who is about to remove things beneath a directory ask whether the directory
- * will then be empty, without mutating anything and without a second walk of
- * its own. With vouch == NULL only metadata is looked past.
+ * is about to remove it, or has decided it does not count. The path is joined
+ * as base/string.h str_path_join joins one — a child of "/" is "/x" — so a caller
+ * keyed by path finds what it names. That lets a caller who is about to remove
+ * things beneath a directory ask whether the directory will then be empty, without
+ * mutating anything and without a second walk of its own. With vouch == NULL
+ * only metadata is looked past.
  *
  * One walk, so a prediction and the removal that follows it cannot mean different
  * things by "empty". The walk stops at the first entry nobody vouches for, so

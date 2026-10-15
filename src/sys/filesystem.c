@@ -1074,6 +1074,24 @@ bool fs_is_directory(const char *path) {
 }
 
 /**
+ * The path of a directory's entry, into a buffer — false where it does not fit
+ *
+ * Joined as base/string.h str_path_join joins a directory and a name: the
+ * directory's trailing separators fold into the one written at the seam, so a
+ * child of the root is "/x", the spelling every key names it by. One producer
+ * for the two spellings the emptiness walk must not let disagree: the path it
+ * hands its vouch, which a caller keys by (fs_directory_emptiness), and the one
+ * it lstats to tell OS metadata (entry_is_removable_metadata).
+ */
+static bool fs_entry_path(char *child, size_t size, const char *dir, const char *name) {
+    size_t len = strlen(dir);
+    while (len > 0 && dir[len - 1] == '/') len--;
+
+    const int n = snprintf(child, size, "%.*s/%s", (int) len, dir, name);
+    return n >= 0 && (size_t) n < size;
+}
+
+/**
  * Is this directory entry OS metadata dotta may remove?
  *
  * Name and type together, because two functions act on the answer and they must
@@ -1093,8 +1111,7 @@ static bool entry_is_removable_metadata(const char *dir, const char *name) {
     /* Not metadata when it cannot be named: a path past PATH_MAX, the kernel's
      * own bound, which no lstat would answer for either. */
     char child[PATH_MAX];
-    int n = snprintf(child, sizeof(child), "%s/%s", dir, name);
-    if (n < 0 || (size_t) n >= sizeof(child)) return false;
+    if (!fs_entry_path(child, sizeof(child), dir, name)) return false;
 
     struct stat st;
     return fs_lstat(child, &st) == 0 && S_ISREG(st.st_mode);
@@ -1146,12 +1163,12 @@ fs_emptiness_t fs_directory_emptiness(
             continue;
         }
 
-        /* Skip what the caller vouches for. Its full path, because the caller
-         * reasons about paths, not about basenames. */
+        /* Skip what the caller vouches for. Its full path, spelled as a key spells
+         * it (fs_entry_path), because the caller reasons about paths, not about
+         * basenames. */
         if (vouch) {
             char child[PATH_MAX];
-            int n = snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
-            if (n < 0 || (size_t) n >= sizeof(child)) {
+            if (!fs_entry_path(child, sizeof(child), path, entry->d_name)) {
                 /* Cannot name it, so cannot let the caller vouch for it — and
                  * an entry nobody could be asked about is not an entry nobody
                  * vouched for. The walk is incomplete, which is what the read

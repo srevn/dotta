@@ -234,25 +234,27 @@ typedef enum {
  *                       the view's rows beneath it need one where dotta's own
  *                       file or link stands, at no row (OBSTRUCTING, the node a
  *                       landing replaces: core/deploy.h). Nothing beneath it is
- *                       looked at, a row's or a record's: the view's need displaces
- *                       everything beneath it. The four say who moved the squatter,
- *                       and so whose verb removes it: the user's own node, at a
- *                       row the profile tracks (TRACKED, apply --force) or at a
- *                       rung it only passes through (DERIVED, the named
- *                       re-derivation); or dotta's own copy, which the record
- *                       proves Git moved past, at a row of either class or at
- *                       none — untouched (STALE, apply, unasked) or edited since,
- *                       or never confirmed (CONFLICT, apply --force). The class
- *                       is the squatter's own route, inherited
- *                       (workspace_item_route: KIND, KIND_DERIVED, STALE, CONFLICT)
- *                       — a node's, the consent its landing asks
- *                       (workspace_untouched) — so every screen that speaks of
- *                       a path beneath it names the squatter's verb. At a lost
- *                       blob's place (core/manifest.c manifest_layer) no
- *                       re-derivation frees a DERIVED squatter, the blob's explicit
- *                       claim naming the path: the named one says to move the
- *                       node aside instead (cmds/update.c cmd_update), one hop
- *                       past the verb the screens name.
+ *                       looked at, a row's or a record's, nor captured — add
+ *                       refuses a capture through it but where the capture's
+ *                       own climb retires the claim (cmds/add.c
+ *                       add_refuse_ancestry): the view's need displaces everything
+ *                       beneath it. The four say who moved the squatter, and so
+ *                       whose verb removes it: the user's own node, at a row
+ *                       the profile tracks (TRACKED, apply --force) or at a rung
+ *                       it only passes through (DERIVED, the named re-derivation);
+ *                       or dotta's own copy, which the record proves Git moved
+ *                       past, at a row of either class or at none — untouched
+ *                       (STALE, apply, unasked) or edited since, or never confirmed
+ *                       (CONFLICT, apply --force). The class is the squatter's
+ *                       own route, inherited (workspace_item_route: KIND,
+ *                       KIND_DERIVED, STALE, CONFLICT) — a node's, the consent
+ *                       its landing asks (workspace_untouched) — so every screen
+ *                       that speaks of a path beneath it names the squatter's
+ *                       verb. At a lost blob's place (core/manifest.c
+ *                       manifest_layer) no re-derivation frees a DERIVED squatter,
+ *                       the blob's explicit claim naming the path: the named
+ *                       one says to move the node aside instead (cmds/update.c
+ *                       cmd_update), one hop past the verb the screens name.
  *   RECORD              only a record remembers a directory there — the view
  *                       requires none — and none stands there: a record of a
  *                       directory with another kind of node in its place, or a
@@ -773,7 +775,9 @@ static inline bool workspace_reassigned(
  * confirmed blob) and workspace_measure (a file compared only against one);
  * workspace_untouched below (whether a measured copy is the one dotta confirmed);
  * cmds/add.c add_refuse_ancestry (whose a link above a capture is, as the directory
- * analysis asks it). A reader not on this list is a bug.
+ * analysis asks it, and whether only --force replaces dotta's own node there,
+ * the half of workspace_untouched no measure is needed for). A reader not on
+ * this list is a bug.
  */
 static inline const state_record_t *workspace_base(const state_record_t *record) {
     return record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;
@@ -940,12 +944,12 @@ typedef struct {
  * it caused is a displaced DEPLOYED item instead (workspace_displaced_t); and
  * only over a record no removal of dotta's own made untrue — the replace of dotta's
  * node above a row retires the record of every row beneath it, which no look
- * wrote and a capture through the node did (cmds/apply.c apply_write_record),
- * save where the world cut the replacing run short: a replace stopped between
- * its unlink and its create (core/deploy.h, the Removals bullet), or a run killed,
- * or its record refused, before that phase. Every DELETED item can therefore
- * bear update's verb. Callers keep their state switch and read this table for
- * the DEPLOYED arm alone.
+ * wrote, nor any capture once a row stood beneath the node (cmds/add.c
+ * add_refuse_ancestry; cmds/apply.c apply_write_record), save where the world
+ * cut the replacing run short: a replace stopped between its unlink and its create
+ * (core/deploy.h, the Removals bullet), or a run killed, or its record refused,
+ * before that phase. Every DELETED item can therefore bear update's verb. Callers
+ * keep their state switch and read this table for the DEPLOYED arm alone.
  */
 typedef enum {
     WORKSPACE_ROUTE_CLEAN,              /* No divergence, no reassignment */
@@ -1414,7 +1418,9 @@ const workspace_item_t *workspace_find(
  * read off each kind's active items in their order, one lower bound per kind —
  * workspace_find's search, asked of the paths beneath a path rather than of the
  * path. The root included: every row but one at "/" lies beneath it. Pure value
- * return — no look, no allocation, no error path.
+ * return — no look, no allocation, no error path. A caller that holds no workspace
+ * asks the view itself (core/manifest.h manifest_active_beneath): the same rows,
+ * by the same relation.
  *
  * Readers: core/cleanup.c cleanup_preflight (an orphaned directory the view holds
  * a row beneath is the ancestor of an enabled row, and permanent); workspace.c

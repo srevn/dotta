@@ -134,7 +134,10 @@ typedef struct {
  * own at a rung of the captured name's own chain, every claim there the capturing
  * profile's derived one, which the capture's climb retires under every name the
  * profile holds the place by. A link no enabled profile claims is the machine's,
- * and read through. The refusal names the claim standing at the link and the
+ * and read through — but dotta's own above a row of the view, the link its record
+ * describes, which the rows' landing replaces with a directory: nothing beneath
+ * it is captured, as nothing there is looked at, until that apply. The refusal
+ * names the claim standing at the link, or the paths beneath dotta's, and the
  * verb that clears it, and the walk enters no link, so an argument's ancestors
  * are every listed path's.
  *

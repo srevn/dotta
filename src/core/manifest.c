@@ -1917,6 +1917,24 @@ const manifest_row_t *manifest_blob_above(
 }
 
 /**
+ * Does an active path lie strictly beneath `path`?
+ */
+bool manifest_active_beneath(const manifest_t *manifest, const char *path) {
+    if (!manifest || !path) return false;
+
+    /* The spine is the rows standing, in no order a bound could read: every row
+     * is asked */
+    const size_t len = strlen(path);
+    for (size_t i = 0; i < manifest->count; i++) {
+        if (str_path_beneath(manifest->rows[i]->filesystem_path, path, len)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
  * The one row holding this name, or a refusal naming every holder
  */
 error_t manifest_holder(

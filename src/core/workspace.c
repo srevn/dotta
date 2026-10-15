@@ -589,7 +589,9 @@ static void workspace_add_unscanned(
  * (workspace_look), and the ladder's state, taken after the walk
  * (workspace_analyze_orphans): both ask it of one look, so they part only where
  * an arm between them answers first — the entry's guard, which reads the index
- * the walk builds last.
+ * the walk builds last. Where no item is, add's ancestry refusal spells the same
+ * fact off the record, its own lstat and the view (cmds/add.c add_refuse_ancestry,
+ * core/manifest.h manifest_active_beneath): a drift between the two is a defect.
  *
  * Readers: workspace_look, workspace_analyze_orphans. A reader not on this list
  * is a bug.

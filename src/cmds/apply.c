@@ -1870,19 +1870,19 @@ static error_t apply_write_record(
     /* Dotta's nodes the way replaced (core/deploy.h deploy_receipt_t's removed):
      * each retires as an orphan's record does — no row stands at a node's path,
      * so nothing anchors over it — and with it the record of every row beneath
-     * it. Nothing beneath a node is looked at or recorded (core/workspace.h
-     * workspace_displaced_t), so such a record was written through the node —
-     * the capture through dotta's link that the first row beneath it came from
-     * — and describes nothing the directory in its place holds. Retired ahead
-     * of the anchors below: a row the run landed there is recorded by its own
-     * write, and one it did not — withheld, skipped, failed, out of scope — reads
-     * [undeployed] at the next load, never a deletion for update to commit
-     * (core/workspace.h workspace_route_t's DELETED). An orphan beneath a node
-     * is cleanup's, released where the run reaches it and read absent where it
-     * does not, a reclaim. A run killed between a replace and this phase leaves
-     * the node's record over the directory, read [released] [type] and retired
-     * by the next apply, and a row's beneath it, read [deleted] where the row
-     * did not land (stated). */
+     * it. Nothing beneath a node is looked at, recorded or captured
+     * (core/workspace.h workspace_displaced_t), so such a record was written
+     * before it was one — by the capture through dotta's link that made the first
+     * row beneath it, or before the link stood there at all — and describes nothing
+     * the directory in its place holds. Retired ahead of the anchors below: a
+     * row the run landed there is recorded by its own write, and one it did not
+     * — withheld, skipped, failed, out of scope — reads [undeployed] at the next
+     * load, never a deletion for update to commit (core/workspace.h
+     * workspace_route_t's DELETED). An orphan beneath a node is cleanup's, released
+     * where the run reaches it and read absent where it does not, a reclaim. A
+     * run killed between a replace and this phase leaves the node's record over
+     * the directory, read [released] [type] and retired by the next apply, and
+     * a row's beneath it, read [deleted] where the row did not land (stated). */
     workspace_items_t active = workspace_active(ws);
 
     for (size_t r = 0; r < deploy_receipt->removed.count; r++) {

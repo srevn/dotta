@@ -36,10 +36,11 @@
  * stands nowhere has a row at its path or a standing blob above it.
  *
  * Everything that asks *what stands where* reads the index — manifest_lookup,
- * manifest_rows, manifest_holder, manifest_diff: deployment, the record's join,
- * the workspace, every screen. Everything that asks *what does this profile hold*
- * — its claim at a path or by a name, what it calls a path — reads that profile's
- * own contribution — manifest_lookup_claim, manifest_lookup_storage, manifest_name,
+ * manifest_rows, manifest_blob_above, manifest_active_beneath, manifest_holder,
+ * manifest_diff: deployment, the record's join, the workspace, every screen.
+ * Everything that asks *what does this profile hold* — its claim at a path or
+ * by a name, what it calls a path — reads that profile's own contribution —
+ * manifest_lookup_claim, manifest_lookup_storage, manifest_name,
  * manifest_claim_name: a claim of P that stands nowhere is still found and named
  * by what P holds.
  *
@@ -102,13 +103,15 @@
  *   - Readers: manifest_rows (every row standing, both kinds, unordered),
  *     manifest_profiles (the profiles the rows came from, in precedence order),
  *     manifest_mounts (the table the rows were placed by, lent), manifest_lookup
- *     (by filesystem path, O(1)), manifest_holder (the one row holding a name,
- *     or a refusal naming each), manifest_lookup_claim and manifest_lookup_storage
- *     (one profile's claim, at a path and by its name), manifest_name,
- *     manifest_claim_name, manifest_holds_name, manifest_holds_row and
- *     manifest_moved_place (one profile's own contribution, whatever stands);
- *     and manifest_diff, the per-profile delta between two views that the
- *     scope-changing verbs and sync print their receipts from.
+ *     (by filesystem path, O(1)), manifest_blob_above and manifest_active_beneath
+ *     (the blob standing above a path, and whether a row stands beneath it),
+ *     manifest_holder (the one row holding a name, or a refusal naming each),
+ *     manifest_lookup_claim and manifest_lookup_storage (one profile's claim,
+ *     at a path and by its name), manifest_name, manifest_claim_name,
+ *     manifest_holds_name, manifest_holds_row and manifest_moved_place (one
+ *     profile's own contribution, whatever stands); and manifest_diff, the
+ *     per-profile delta between two views that the scope-changing verbs and sync
+ *     print their receipts from.
  *
  * Core Principles:
  *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
@@ -862,6 +865,31 @@ const manifest_row_t *manifest_blob_above(
     const manifest_t *manifest,
     const char *filesystem_path
 );
+
+/**
+ * Does an active path lie strictly beneath `path`?
+ *
+ * Whether the view holds a row beneath the path, at any depth — every directory
+ * above an active path is its ancestor, not its parent alone — on disk or not:
+ * a row standing, as the index holds it, so a claim that stands nowhere is none.
+ * The root included: every row but one at "/" lies beneath it. Pure value return
+ * — no allocation, no error path.
+ *
+ * The question core/workspace.h workspace_active_beneath asks of the join's active
+ * items, which are these rows, by the same relation (base/string.h
+ * str_path_beneath), so the two cannot part: the join answers off its items'
+ * order by a lower bound, and this off the rows standing, unordered
+ * (manifest_rows), by a scan — for a caller that holds no workspace.
+ *
+ * Readers: cmds/add.c add_refuse_ancestry (dotta's own link above a capture,
+ * which a row of the view beneath it makes the node its landing replaces). A
+ * reader not on this list is a bug.
+ *
+ * @param manifest Manifest (NULL answers false)
+ * @param path Directory to ask about, as a key spells one (NULL answers false)
+ * @return true where an active path lies strictly beneath it
+ */
+bool manifest_active_beneath(const manifest_t *manifest, const char *path);
 
 /**
  * The one row holding this name, or a refusal naming every holder

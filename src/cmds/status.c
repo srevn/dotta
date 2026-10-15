@@ -457,8 +457,8 @@ static void status_print_workspace(
     /* The status line, one fold whatever the filter: the diverged items it shows,
      * those of them dotta could not verify, and those the filter hides. It shows
      * every item in scope but an overridden copy, which a section of its own
-     * lists and which asks nothing of the user — no verb takes it, the row standing
-     * over it carrying the work — so a filter that hides that row reads Clean
+     * lists and which asks nothing of the user apart from the row standing over
+     * it, whose landing clears it — so a filter that hides that row reads Clean
      * over the copy. A scope is Clean iff the line shows none. Invalid is reserved
      * for what the analysis could not establish: an item carrying
      * DIVERGENCE_UNVERIFIED (an unreadable path, a comparison that could not
@@ -503,7 +503,8 @@ static void status_print_workspace(
         /* The fold counts every item the line shows, never a section's size: an
          * unverified orphan lists under Issues and still makes the line Invalid,
          * and an overridden copy lists in a section of its own and leaves the
-         * line as it finds it */
+         * line as it finds it — its work is the landing of the row standing over
+         * it, which the line counts where it shows that row */
         if (item->state != WORKSPACE_STATE_OVERRIDDEN) {
             shown++;
             if (item->divergence & DIVERGENCE_UNVERIFIED) {
@@ -595,6 +596,8 @@ static void status_print_workspace(
                 break;
 
             case WORKSPACE_STATE_OVERRIDDEN:
+                /* The landing's too, of the blob standing over it — listed apart,
+                 * each line naming that blob (section 9) */
                 workspace_buckets_add(buckets, item, &overridden);
                 break;
         }
@@ -1020,17 +1023,25 @@ static void status_print_workspace(
         output_list_free(list);
     }
 
-    /* Section 9: Overridden copies — orphans whose profile still claims the path,
-     * each left for the row standing over it: no verb takes one, so the header
-     * names none, and the line counts none. No row stands at such a copy's path,
-     * so what leaves its claim standing nowhere stands above it: the blob each
-     * line names (core/manifest.h manifest_blob_above), the profile's own or
-     * another's, read off the view, since the tags read the item alone — and
-     * the metadata, carrying its path, is sized for one. */
+    /* Section 9: Overridden copies — orphans beneath a standing blob, each the
+     * landing's of the row standing over it, which clears it (core/deploy.h
+     * deploy_clearance). The header promises no flag and keys no tag, since a
+     * line's tags name what moved and not which cell it is: a bare tag is a copy
+     * dotta confirmed — unasked — or one it never did — --force's — and an
+     * [unreadable] one a read that failed — --force's — or a look — no flag's.
+     * So it says what holds of every line: the landing clears the copy, or apply's
+     * skip names what keeps it. The line counts none, a copy's work being its
+     * row's, which the line counts where it shows that row (stated: a filter
+     * that hides it reads Clean over the copy). Its blob is the one each line
+     * names, found by the call the orphan analysis made the copy's state by
+     * (core/manifest.h manifest_blob_above), the profile's own or another's,
+     * read off the view, since the tags read the item alone — and the metadata,
+     * carrying its path, is sized for one. */
     if (overridden.count > 0) {
         output_list_t *list = output_list_create(
             out, "Overridden copies",
-            "another claim stands over each, a file or link above it; left where they stand"
+            "a file or link stands over each; \"dotta apply\" clears them as it lands it, "
+            "or says what keeps one"
         );
 
         for (size_t i = 0; i < overridden.count; i++) {
@@ -1262,7 +1273,7 @@ static void status_print_workspace(
                     break;
 
                 case WORKSPACE_STATE_OBSTRUCTING:
-                    /* The landing's consent (core/workspace.h workspace_untouched),
+                    /* The landing's consent (core/deploy.h deploy_clearance),
                      * by the tags in the order they rank: what moved, as a skipped
                      * orphan's key says it, and the replace --force gives where
                      * cleanup's would be a prune — save a claim, which is never

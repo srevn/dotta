@@ -1105,8 +1105,9 @@ fs_occupant_t fs_lstat_occupant(const char *path, struct stat *st);
  * directory's mode is (fs_set_dir_mode).
  *
  * Readers: core/deploy.c check_landing and open_landing_directory (the landing),
- * holdable (the read a hold or a fix opens its directory with), core/cleanup.c
- * cleanup_refused (the parent).
+ * holdable (the read a hold or a fix opens its directory with), check_clearance
+ * (a directory a clearance would empty) and stop_clearance (the read an UNREADABLE
+ * stop failed for), core/cleanup.c cleanup_refused (the parent).
  *
  * @param path Path (must not be NULL)
  * @param amode R_OK, W_OK, X_OK, or'd

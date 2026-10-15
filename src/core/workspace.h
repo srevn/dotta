@@ -104,15 +104,15 @@
  *
  * Among the orphans the state says which engine settles the record, written once
  * at the load whatever the command's scope: ORPHANED and RELEASED are a scope
- * exit's (core/cleanup.h); OBSTRUCTING is a landing's, dotta's own node where
- * the view's rows beneath it need a directory, which the first of them to land
- * replaces (core/deploy.h); OVERRIDDEN is no engine's, the row standing over it
- * carrying the work.
+ * exit's (core/cleanup.h); OBSTRUCTING and OVERRIDDEN are a landing's, by place
+ * (core/deploy.h) — dotta's own node where the view's rows beneath it need a
+ * directory, which the first of them to land replaces, and a copy beneath a blob
+ * the view stands, which that blob's landing clears.
  *
- * OVERRIDDEN is the record against the view, standing from whenever its claim
- * came to stand nowhere until the blob over it goes; not manifest_diff_stats_t's
- * `overridden` (core/manifest.h), which counts one transition's own delta between
- * two views.
+ * OVERRIDDEN is the record against the view, standing from whenever a blob came
+ * to stand above it until that blob goes or its landing clears the copy; not
+ * manifest_diff_stats_t's `overridden` (core/manifest.h), which counts one
+ * transition's own delta between two views.
  */
 typedef enum {
     WORKSPACE_STATE_DEPLOYED,      /* The view claims the path and something stands there */
@@ -122,7 +122,7 @@ typedef enum {
     WORKSPACE_STATE_UNTRACKED,     /* Beneath a tracked directory, in neither the view nor the record */
     WORKSPACE_STATE_UNSCANNED,     /* Where the scan could not look: nothing at or beneath it is offered */
     WORKSPACE_STATE_RELEASED,      /* An orphan dotta lets go: the path stays, the record retires */
-    WORKSPACE_STATE_OVERRIDDEN,    /* An orphan its profile still claims: the path and the record stay */
+    WORKSPACE_STATE_OVERRIDDEN,    /* An orphan beneath a standing blob: that blob's landing clears it */
     WORKSPACE_STATE_OBSTRUCTING    /* An orphan in the way of rows beneath it: their landing replaces it */
 } workspace_state_t;
 
@@ -308,19 +308,18 @@ typedef enum {
  *
  * Readers: workspace_item_route, core/cleanup.c cleanup_verdict, core/deploy.c
  * deploy_needs_work and deploy_plan_build (the --skip-existing test, and the
- * node a row lies beneath: deploy_node_above), workspace.c workspace_item_tags
- * (the DEPLOYED arm's [displaced], beside which only what no look decides or
- * disproves rides, and the ORPHANED arm's rider), cmds/status.c
- * status_print_workspace's Issues hint, and cmds/diff.c
- * get_status_message_from_item and show_file_diff_from_workspace (the colour
- * ladder and the content gate), should_show_item_for_direction beside them;
- * cmds/update.c cmd_update (the named derivation's leaves, climbed beneath the
- * user's squatter at a rung alone, the one squatter the climb's retire answers
- * for — but at a lost blob's place); and core/deploy.c check_ancestry, off the
- * squatted directory itself — a caller that needs the squatter, which no item
- * carries, is lent it whole, the claim this class is copied from
- * (workspace_squatted_ancestor), so apply's remedy and status's section cannot
- * name two claimants for one squatter.
+ * node a row lies beneath: deploy_reach), workspace.c workspace_item_tags (the
+ * DEPLOYED arm's [displaced], beside which only what no look decides or disproves
+ * rides, and the ORPHANED arm's rider), cmds/status.c status_print_workspace's
+ * Issues hint, and cmds/diff.c get_status_message_from_item and
+ * show_file_diff_from_workspace (the colour ladder and the content gate),
+ * should_show_item_for_direction beside them; cmds/update.c cmd_update (the named
+ * derivation's leaves, climbed beneath the user's squatter at a rung alone, the
+ * one squatter the climb's retire answers for — but at a lost blob's place);
+ * and core/deploy.c check_ancestry, off the squatted directory itself — a caller
+ * that needs the squatter, which no item carries, is lent it whole, the claim
+ * this class is copied from (workspace_squatted_ancestor), so apply's remedy
+ * and status's section cannot name two claimants for one squatter.
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */
@@ -806,12 +805,13 @@ static inline const state_record_t *workspace_base(const state_record_t *record)
  * confirmed, unread — only under --force. The view squatter's own test, read
  * there off the base's compare alone (core/workspace.c
  * workspace_analyze_directory). Asked of a measured copy alone: dotta's node
- * above a row, which the join measures.
+ * above a row, which the join measures, and a file or link beneath a standing
+ * blob, which the orphan analysis does.
  *
  * Readers: core/workspace.c workspace_look_orphan (the class of dotta's node
- * above a row), core/deploy.c deploy_preflight (the node's consent), cmds/apply.c
- * apply_print_deploy_preview (the forced counterweight). A reader not on this
- * list is a bug.
+ * above a row), core/deploy.h deploy_clearance (a landing's consent to remove a
+ * file or a link of dotta's: its node above a row, a copy beneath a blob row).
+ * A reader not on this list is a bug.
  */
 static inline bool workspace_untouched(const workspace_item_t *item) {
     return workspace_base(item->record) &&
@@ -948,22 +948,23 @@ typedef struct {
  * Deployed items only. Every other state routes trivially by the state itself
  * (DELETED → update's, UNDEPLOYED → apply's, UNTRACKED → update --include-new's,
  * UNSCANNED → no verb's, since the scan could not look, ORPHANED / RELEASED →
- * cleanup_verdict's, OVERRIDDEN → no verb's, the row standing over it carrying
- * the work, OBSTRUCTING → apply's, the landing beneath it replacing the node)
- * and is not drift-prone. DELETED earns that triviality upstream, four times:
- * classify_absent reads absence as a deletion only for a claim that asserts its
- * path, so an ancestor claim never arrives here; only over a record of the claim's
- * own kind, so a path where dotta only ever saw another kind of node never does
- * either; only where a look was taken, so a path whose absence the squatter above
- * it caused is a displaced DEPLOYED item instead (workspace_displaced_t); and
- * only over a record no removal of dotta's own made untrue — the replace of dotta's
- * node above a row retires the record of every row beneath it, which no look
- * wrote, nor any capture once a row stood beneath the node (cmds/add.c
- * add_refuse_ancestry; cmds/apply.c apply_write_record), save where the world
- * cut the replacing run short: a replace stopped between its unlink and its create
- * (core/deploy.h, the Removals bullet), or a run killed, or its record refused,
- * before that phase. Every DELETED item can therefore bear update's verb. Callers
- * keep their state switch and read this table for the DEPLOYED arm alone.
+ * cleanup_verdict's, OVERRIDDEN → apply's, the landing of the blob above it
+ * clearing the copy, OBSTRUCTING → apply's, the landing beneath it replacing
+ * the node) and is not drift-prone. DELETED earns that triviality upstream, four
+ * times: classify_absent reads absence as a deletion only for a claim that asserts
+ * its path, so an ancestor claim never arrives here; only over a record of the
+ * claim's own kind, so a path where dotta only ever saw another kind of node
+ * never does either; only where a look was taken, so a path whose absence the
+ * squatter above it caused is a displaced DEPLOYED item instead
+ * (workspace_displaced_t); and only over a record no removal of dotta's own made
+ * untrue — the replace of dotta's node above a row retires the record of every
+ * row beneath it, which no look wrote, nor any capture once a row stood beneath
+ * the node (cmds/add.c add_refuse_ancestry; cmds/apply.c apply_write_record),
+ * save where the world cut the replacing run short: a replace stopped between
+ * its unlink and its create (core/deploy.h, the Removals bullet), or a run killed,
+ * or its record refused, before that phase. Every DELETED item can therefore
+ * bear update's verb. Callers keep their state switch and read this table for
+ * the DEPLOYED arm alone.
  */
 typedef enum {
     WORKSPACE_ROUTE_CLEAN,              /* No divergence, no reassignment */
@@ -1047,10 +1048,11 @@ typedef enum {
  *                            is the verb that says why every time it is run. So
  *                            does dotta's own directory where Git moved the path's
  *                            kind past it, whatever it holds: what of that apply
- *                            may remove is weighed where apply lands the row,
- *                            which no load does (stated), so one holding what
- *                            apply may not remove reads here all the same, and
- *                            apply's skip says what stands in the way.
+ *                            may remove is weighed where apply lands the row
+ *                            (core/deploy.c check_clearance), which no load does
+ *                            (stated), so one holding what apply may not remove
+ *                            reads here all the same, and apply's skip says what
+ *                            stands in the way.
  *   TYPE alone,              KIND — the user's kind mismatch (no record, or one
  *     non-capturable         Git did not move past) that the copy cannot commit,
  *                            on a row a plan can hold: a tracked directory row's
@@ -1100,13 +1102,14 @@ typedef struct workspace workspace_t;
  *
  * - analyze_orphans — every record whose path the view lacks, either kind, off
  *   the look the join took at it: presence, ownership, divergence, whether a
- *   row of the view needs its place or its profile still claims the path, and
- *   Git authority, at one ref lookup and a lazy tree load per profile with present,
- *   owned orphans, the sheet beside it where a directory orphan needs one, and
- *   one tree lookup per such orphan. Read by core/cleanup.c cleanup_plan_build
- *   (the settle, apply's cleanup), core/deploy.c deploy_plan_build (the nodes a
- *   landing replaces) and cmds/status.c status_print_workspace (Issues, and
- *   Overridden copies).
+ *   landing needs its place — a row of the view beneath it, or a blob above it
+ *   — and Git authority, at one ref lookup and a lazy tree load per profile with
+ *   present, owned orphans, the sheet beside it where a directory orphan needs
+ *   one, and one tree lookup per such orphan. Read by core/cleanup.c
+ *   cleanup_plan_build (the settle, apply's cleanup), core/deploy.c
+ *   deploy_plan_build (the landing's orphans: the nodes it replaces, the copies
+ *   it clears) and cmds/status.c status_print_workspace (Issues, and Overridden
+ *   copies).
  * - analyze_untracked — every regular file and symlink beneath a tracked directory
  *   that no enabled profile claims and dotta has no record of, at a readdir walk
  *   per tracked directory, and every place it could not look (UNSCANNED). Read
@@ -1237,9 +1240,9 @@ error_t workspace_load(
  * and is lent among the active items all the same (workspace_active, and its
  * kind's: workspace_directories, workspace_files). So a load holding none is
  * clean, and one is clean over a scope iff it holds none of the scope's items
- * but overridden copies — each listed, and no verb's: the row standing over it
- * carries the work. cmds/status.c status_print_workspace reads its status line
- * that way, filtered or not.
+ * but overridden copies — each listed, its work the landing of the blob standing
+ * over it, which that row's own line counts. cmds/status.c status_print_workspace
+ * reads its status line that way, filtered or not.
  *
  * @param ws Workspace (NULL returns an empty slice)
  * @return Borrowed slice over the diverged items
@@ -1414,12 +1417,16 @@ void workspace_buckets_fill(workspace_buckets_t *buckets);
  *
  * For a reader walking the disk, which meets a path cold: core/cleanup.c
  * vouch_entry, whose emptiness walk meets an entry no verdict decided and asks
- * whether it is an orphan or an overridden copy; core/deploy.c holdable_directory,
- * whose landing climb meets a present ancestor and asks whether the view names
- * a directory there. Each asks its own question of the item: an orphan carries
- * no row, and an active item is never ORPHANED or OVERRIDDEN. A reader holding
- * an item — the active items, the diverged items, an engine's bucket, a fate —
- * asks nothing by path. A reader not on this list is a bug.
+ * whether it is an orphan the scope did not reach; core/deploy.c vouch_clearance,
+ * whose clearance's walk meets every entry beneath a blob row's path and asks
+ * whether a landing may remove it, and on whose word (core/deploy.h
+ * deploy_clearance) — on a load that declined the orphan analysis each reads as
+ * a stranger's and stops the walk, the safe direction; core/deploy.c
+ * holdable_directory, whose landing climb meets a present ancestor and asks whether
+ * the view names a directory there. Each asks its own question of the item: an
+ * orphan carries no row, and an active item never takes an orphan's state. A
+ * reader holding an item — the active items, the diverged items, an engine's
+ * bucket, a fate — asks nothing by path. A reader not on this list is a bug.
  *
  * @param ws Workspace (NULL returns NULL)
  * @param filesystem_path Path to look up (NULL returns NULL)
@@ -1534,10 +1541,9 @@ typedef struct {
  * (core/deploy.h deploy_skip_t); the claim, for the remedy where the run gave
  * that row no fate (deploy_ancestry_t) — core/deploy.c deploy_plan_build, the
  * path alone, above a row displaced in a node's class: which of the plan's nodes
- * the row's landing replaces (deploy_node_above) — and cmds/update.c cmd_update,
- * the path alone, above a named leaf the user's squatter displaces: whether a
- * profile holds an explicit claim there, a lost blob's place no re-derivation
- * frees.
+ * the row's landing replaces (deploy_reach) — and cmds/update.c cmd_update, the
+ * path alone, above a named leaf the user's squatter displaces: whether a profile
+ * holds an explicit claim there, a lost blob's place no re-derivation frees.
  *
  * @param ws Workspace (NULL returns NULL)
  * @param path Path to test (NULL returns NULL); proper ancestors only, so a
@@ -1593,10 +1599,10 @@ const workspace_squatted_t *workspace_squatted_ancestor(
  * [modified], then the claim axes, with [relocated] beside them. Absence,
  * [displaced] and [relocated] reach an orphan alone, an overridden copy and a
  * node being looked at by construction, and the relocation read where Git backs
- * an orphan; and a clean one is RED where a removal is coming — cleanup's prune,
- * or the replace of a node by the landing beneath it — but DIM on an overridden
- * copy, which no engine removes. The kind is none of theirs: another node where
- * dotta's stood is released before any measure, its [type] beside [released].
+ * an orphan; and a clean one is RED, a removal coming — cleanup's prune, the
+ * replace of a node by the landing beneath it, the clearance of a copy by the
+ * landing above it. The kind is none of theirs: another node where dotta's stood
+ * is released before any measure, its [type] beside [released].
  *
  * The function handles special cases:
  *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)

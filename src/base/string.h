@@ -111,7 +111,8 @@ const char *str_path_under(const char *path, const char *dir, size_t dir_len);
  * ends. A name reads as a path does ("home/x" beneath "home").
  *
  * Readers: core/workspace.c workspace_item_beneath (each kind's active items,
- * the orphans). A reader not on this list is a bug.
+ * the orphans) and core/deploy.c deploy_reach (the copies beneath a blob row,
+ * among the landing's orphans). A reader not on this list is a bug.
  *
  * @param path Candidate path
  * @param dir Directory path

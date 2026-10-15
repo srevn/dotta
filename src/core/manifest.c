@@ -1990,8 +1990,9 @@ error_t manifest_holder(
  * of the record by path for the departure split (state_find_record). Nothing is
  * written; the rule for what a row `after` lacks means for apply is the one the
  * workspace reads when it meets the record there — a claim its profile still
- * holds is overridden, held for the blob above it, and anything else a departure,
- * whose record's presence and ownership say what apply does. Nothing here can
+ * holds is overridden, the landing's of the blob above it, and anything else a
+ * departure, whose record's presence and ownership say what apply does, save
+ * beneath a blob, whose landing clears the copy all the same. Nothing here can
  * fail: the one thing a caller can get wrong, a profile named twice, is its bug.
  */
 void manifest_diff(
@@ -2080,7 +2081,7 @@ void manifest_diff(
 
         /* The profile claims the path still, and it stands nowhere: with no row
          * at its path, a blob stands above it (manifest_layer), and its copy is
-         * held for that blob — a derived claim's as much as any, the way beneath
+         * that blob's landing's — a derived claim's as much as any, the way beneath
          * the blob as overridden as the claims it leads to. No departure, so no
          * record is asked. */
         if (manifest_lookup_claim(after, old->profile, old->filesystem_path)) {

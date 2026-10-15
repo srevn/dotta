@@ -372,9 +372,9 @@ static void update_partition(
             case WORKSPACE_STATE_RELEASED:
             case WORKSPACE_STATE_OVERRIDDEN:
             case WORKSPACE_STATE_OBSTRUCTING:
-                /* Another verb's, or none: not deployed yet (apply's), a record
-                 * the view lacks (cleanup prunes or releases it), a copy left
-                 * for the row standing over it, or dotta's node above a row,
+                /* Another verb's: not deployed yet (apply's), a record the view
+                 * lacks (cleanup prunes or releases it), a copy beneath a blob,
+                 * which that blob's landing clears, or dotta's node above a row,
                  * which the landing beneath it replaces — never update's to commit,
                  * and the four orphans' never met here: this load declines their
                  * analysis */

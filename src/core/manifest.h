@@ -854,8 +854,10 @@ const manifest_row_t *manifest_lookup(
  *
  * Readers: cmds/add.c cmd_add, of the path an argument names — a capture beneath
  * one of the profile's own files, whichever label names either, over the one
- * profile's view its names come from; and cmds/status.c status_print_workspace,
- * of an overridden copy, whose line names what stands over it.
+ * profile's view its names come from; core/workspace.c workspace_analyze_orphans,
+ * of an orphan's path — a copy beneath a standing blob is that blob's landing's
+ * (WORKSPACE_STATE_OVERRIDDEN); and cmds/status.c status_print_workspace, of
+ * such a copy, whose line names what stands over it, by the call that made it one.
  *
  * @param manifest Manifest (must not be NULL)
  * @param filesystem_path Where to ask, absolute: a key (must not be NULL)
@@ -975,20 +977,17 @@ error_t manifest_holder(
  * it, a claim being left as it stands but under --force (add_list); every claim
  * an enabled profile holds at a link above a capture, the capturing profile's
  * off its own view and every other's off the enabled one (cmds/add.c
- * add_refuse_ancestry); whether an orphan's profile still holds a claim at its
- * path, which leaves the copy overridden, standing nowhere, rather than pruned
- * or released (core/workspace.c workspace_analyze_orphans), and whether a row a
- * transition left no row at is its profile's claim there the same way, which
- * counts it overridden rather than departed (manifest_diff); whether a commit
- * that let a claim go left its profile holding the path all the same, which keeps
- * the record a row would (cmds/add.c add_write_record, cmds/update.c
- * update_write_record, cmds/remove.c remove_settle); whether any profile holds
- * an explicit claim where the user's node squats above a named update's leaf, a
- * lost blob's place no re-derivation frees (cmds/update.c cmd_update); whether
- * the untracked scan's owner holds a blob at a child no row of its own stands
- * at (core/workspace.c workspace_scan); and `ignore --test`'s note beneath a
- * verdict that excludes a path its asker holds, which the rules never reach
- * (cmds/ignore.c ignore_test).
+ * add_refuse_ancestry); whether a row a transition left no row at is its profile's
+ * claim there still, standing nowhere, which counts it overridden rather than
+ * departed (manifest_diff); whether a commit that let a claim go left its profile
+ * holding the path all the same, which keeps the record a row would (cmds/add.c
+ * add_write_record, cmds/update.c update_write_record, cmds/remove.c
+ * remove_settle); whether any profile holds an explicit claim where the user's
+ * node squats above a named update's leaf, a lost blob's place no re-derivation
+ * frees (cmds/update.c cmd_update); whether the untracked scan's owner holds a
+ * blob at a child no row of its own stands at (core/workspace.c workspace_scan);
+ * and `ignore --test`'s note beneath a verdict that excludes a path its asker
+ * holds, which the rules never reach (cmds/ignore.c ignore_test).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,
@@ -1390,8 +1389,8 @@ const manifest_row_t *manifest_moved_place(
  * answering different questions. `overridden` is the transition's own the same
  * way — a path `before` stood under a profile that still claims it in `after`,
  * where it stands nowhere — and not the copy the record keeps there, overridden
- * (core/workspace.h WORKSPACE_STATE_OVERRIDDEN) from whenever its claim came to
- * stand nowhere until the blob over it goes.
+ * (core/workspace.h WORKSPACE_STATE_OVERRIDDEN) from whenever a blob came to
+ * stand above it until that blob goes or its landing clears the copy.
  */
 typedef struct {
     const char *profile;         /* Profile name (borrowed from the profiles filter) */
@@ -1407,8 +1406,8 @@ typedef struct {
     size_t reassigned;           /* Paths `before` had under this profile that `after` gives another */
     size_t overridden;           /* Paths `before` had under this profile that it claims still, standing nowhere in `after` */
     struct {
-        size_t owned;            /* … with a record dotta owns (deployed_at > 0): apply prunes the copy, or releases it if Git let go */
-        size_t observed;         /* … with a record dotta never owned: apply releases it, the copy stays */
+        size_t owned;            /* … with a record dotta owns (deployed_at > 0): apply prunes the copy, releases it if Git let go, or clears it beneath a blob */
+        size_t observed;         /* … with a record dotta never owned: apply releases it, the copy stays, or clears it beneath a blob */
     } orphans;                   /* Paths `before` had under this profile that `after` lacks, its claim gone, with a record at them */
 } manifest_diff_stats_t;
 
@@ -1433,14 +1432,16 @@ typedef struct {
  *     the path there still (manifest_lookup_claim): overridden. No row at its
  *     path leaves a blob standing above it — another profile's, or on this machine
  *     P's own, which contradicts it (manifest_contradicted) — and its copy is
- *     held for that blob, never an orphan (core/workspace.c
+ *     that blob's landing's, which clears it (core/workspace.c
  *     workspace_analyze_orphans), so no record is asked
  *   - every other row of `before` under P whose path `after` lacks, with a record
  *     at the path: an orphan — owned or merely observed, which is the split the
  *     ownership gate reads. What apply then does with an owned one depends on
  *     why the path left: a scope change (profile disable) leaves Git backing it
  *     and apply prunes the copy; a Git removal (sync) does not, and apply releases
- *     it
+ *     it — save, owned or observed, a copy beneath a blob `after` stands, which
+ *     that blob's landing clears (core/workspace.c workspace_analyze_orphans:
+ *     its position, before the gate and Git)
  *   Overlap semantics, by where the claim standing over A's at path X is
  *   (core/manifest.c manifest_layer): at X, B gets claimed for X and A reassigned;
  *   beneath X, A's blob there having lost its place to the claims beneath it,

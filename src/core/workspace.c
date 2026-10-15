@@ -1552,9 +1552,9 @@ typedef enum {
  * name among them, which has no binding to be placed by.
  *
  * One kind of row reaches this probe — a record whose path the view lacks, and
- * whose profile holds no claim there (one that does is overridden first,
- * workspace_analyze_orphans) — and three reasons it may be there are what the
- * probe tells apart:
+ * which no standing blob stands above (a copy beneath one is overridden first,
+ * workspace_analyze_orphans), so no enabled profile holds a claim there — and
+ * three reasons it may be there are what the probe tells apart:
  *   - the profile is disabled: it still holds the claim, and the deployed copy
  *     is dotta's to prune;
  *   - the profile moved: it is enabled, but its --target changed between a disable
@@ -2012,13 +2012,14 @@ static void workspace_index_entries(workspace_t *ws) {
  * a sealed view squatter's base (stated); over a pipe it reads a line of its
  * input as the passphrase (crypto/keymgr.h).
  *
- * Readers: the orphan analysis's three arms that keep the copy dotta's — the
- * user's prune order, the claim its profile still holds, and Git's backing
+ * Readers: the orphan analysis's three arms that keep the copy dotta's — position
+ * beneath a blob, the user's prune order, and Git's backing
  * (workspace_analyze_orphans) — and the join's look at dotta's node above a row,
  * whose class every path beneath it reads (workspace_look_orphan). A fact, not
  * a verdict: cleanup's still skips a prunable copy for a divergence or a reason
- * of its own, no engine reads an overridden copy's, and a node's is the consent
- * its landing asks (core/workspace.h workspace_untouched).
+ * of its own, and an overridden copy's and a node's is the consent their landing
+ * asks (core/deploy.h deploy_clearance) — a directory's status's alone, its landing
+ * reading what it holds afresh.
  *
  * @param ws Workspace (provides the run's content reader)
  * @param item The orphan's item, beneath no squatter and not absent: an occupant
@@ -2083,7 +2084,7 @@ static void workspace_look_orphan(workspace_t *ws, workspace_item_t *item) {
  * which questions apply.
  *
  * Per orphan, in order — the ancestry, presence, the occupant's kind, the entry,
- * position, the claim its profile holds, the prune order, the ownership gate,
+ * position, above a row and beneath a blob, the prune order, the ownership gate,
  * then Git authority:
  *   - the ancestry: a squatter above the copy — a directory row of the view, a
  *     directory record the looker found squatted, or a link over a record beneath
@@ -2099,12 +2100,11 @@ static void workspace_look_orphan(workspace_t *ws, workspace_item_t *item) {
  *     same sentence as LOST below, and the node in its place is one dotta has
  *     no record of (core/workspace.h workspace_type_occupant: a record of another
  *     kind describes another node), never dotta's to remove, --force included.
- *     Released, tagged [type]. Decided ahead of the entry, the claim its profile
- *     holds, the prune order and the gate, because no entry stands for a copy
- *     that is no longer there, nor is one left for a row standing over it, an
- *     order to prune it is moot, and no tree needs asking. An occupant that could
- *     not be stat'd is not taken for another node — it may be dotta's own,
- *     unreachable;
+ *     Released, tagged [type]. Decided ahead of the entry, position, the prune
+ *     order and the gate, because no entry stands for a copy that is no longer
+ *     there, nor is one in a landing's way, an order to prune it is moot, and
+ *     no tree needs asking. An occupant that could not be stat'd is not taken
+ *     for another node — it may be dotta's own, unreachable;
  *   - the entry: a row of the view standing on the record's very entry under
  *     another spelling of its path — whoever's — makes the record a stale key
  *     of an active path, RELEASED, so the one copy is never pruned as the old
@@ -2126,19 +2126,16 @@ static void workspace_look_orphan(workspace_t *ws, workspace_item_t *item) {
  *     it and noted it a squatter of every path beneath it (workspace_look_orphan).
  *     Behind the entry, whose stale key names no node of its own; ahead of the
  *     scope exit's reasons, which position outranks;
- *   - the claim its profile holds: the record's profile still holds a claim at
- *     its path — explicit or derived, under any of its names (core/manifest.h
- *     manifest_lookup_claim) — and no row stands there, so the claim stands
- *     nowhere. A path an enabled claim names is dotta's whether or not the claim
- *     stands, so the copy is OVERRIDDEN: left for the row standing over it, never
- *     pruned and never released, and measured as a backed copy is. Behind another
- *     node, which is no copy of dotta's, and the entry, whose stale key names
- *     no copy of its own; behind position, which it never meets, a claim of the
- *     profile at a node's place either standing there over the rows beneath or
- *     leaving a directory row there (core/manifest.c manifest_layer); ahead of
- *     the prune order, given when the claim left, which its return has made stale;
- *     and ahead of the gate and Git authority, whose releases each answer a claim
- *     that has gone, which this one has not;
+ *   - position beneath a blob: a copy beneath a standing blob (core/manifest.h
+ *     manifest_blob_above) — a file or link row, whose landing needs everything
+ *     beneath its path gone — is OVERRIDDEN: that landing's, cleared with it
+ *     (core/deploy.h deploy_clearance), whatever its profile claims, an order,
+ *     the gate or Git would say, and measured as every copy a landing may remove
+ *     is. A claim its profile holds that stands nowhere stands beneath a blob
+ *     by the view's own rule (core/manifest.h), so it asks no arm of its own.
+ *     Never beside the node's arm: a node has rows beneath it, and no row stands
+ *     beneath a standing blob. The place, not the look: a copy whose look failed
+ *     is overridden all the same, and its landing never removes it;
  *   - the prune order (remove --delete-files): the user chose the fate of the
  *     deployed copy, and Git is not asked. Honoured only with a reference to
  *     measure the copy against — a directory (cleanup's emptiness rule decides)
@@ -2191,11 +2188,12 @@ static void workspace_look_orphan(workspace_t *ws, workspace_item_t *item) {
  * - WORKSPACE_STATE_RELEASED -> Git let go, dotta never deployed it, a row of
  *   the view stands on this very entry under another spelling of its path, or
  *   (with DIVERGENCE_TYPE) another kind of path stands there; apply releases
- * - WORKSPACE_STATE_OVERRIDDEN -> its profile still claims the path, standing
- *   nowhere; neither engine removes the copy, whatever its bits
+ * - WORKSPACE_STATE_OVERRIDDEN -> a blob the view stands is above it; apply clears
+ *   it with that blob's landing, unasked where untouched, else under --force,
+ *   never where its look failed (core/deploy.h deploy_clearance)
  * - WORKSPACE_STATE_OBSTRUCTING -> the rows beneath need its place; apply replaces
  *   it with a directory for them, unasked where untouched, else under --force
- *   (core/workspace.h workspace_untouched)
+ *   (core/deploy.h deploy_clearance)
  *
  * Presence comes first, so an absent record never reaches a RELEASED arm: whatever
  * Git would have said, it reads [orphaned] [absent] and apply reclaims it. The
@@ -2317,17 +2315,23 @@ static void workspace_analyze_orphans(workspace_t *ws) {
             continue;
         }
 
-        /* The record's profile still holds a claim at its path, and no row stands
-         * there: the claim stands nowhere. A path an enabled claim names is dotta's
-         * whether or not the claim stands, so the copy is overridden — left for
-         * the row standing over it, never pruned and never released, whatever
-         * an order, the gate or Git would say: each of those lets go a copy whose
-         * claim has gone, and this one's is held. By place, not by name: a derived
-         * claim names nothing, and a profile holding the path under another of
-         * its names claims the copy the record names. Measured, as a backed copy
-         * is (workspace_measure): its line says what changed or could not be
-         * read, and neither engine removes the copy whatever it says. */
-        if (manifest_lookup_claim(ws->manifest, item->profile, item->filesystem_path)) {
+        /* Position again, the other place a landing needs: beneath a standing
+         * blob (core/manifest.h manifest_blob_above) — a file or link row, whose
+         * landing needs everything beneath its path gone. The copy is overridden:
+         * that landing's, cleared with it — unasked where it is dotta's copy as
+         * dotta confirmed it, under --force where it is not, never where it could
+         * not be looked at (core/deploy.h deploy_clearance) — whatever its profile
+         * claims, an order, the gate or Git would say: a claim the blob leaves
+         * no room, a claim gone, an observed copy as an owned one, a copy Git
+         * let go in the way all the same, and an order the landing carries out,
+         * so a prune-ordered copy beneath a blob waits for that blob's landing,
+         * which a run that does not reach the blob's row leaves for a later one
+         * (stated). A claim its profile holds that stands nowhere stands beneath
+         * a blob by the view's own rule (core/manifest.h), so it asks no arm of
+         * its own. Measured, as every copy a landing may remove is
+         * (workspace_measure): its line says what changed or could not be read,
+         * and the landing's consent reads the same bits. */
+        if (manifest_blob_above(ws->manifest, item->filesystem_path)) {
             item->state = WORKSPACE_STATE_OVERRIDDEN;
             workspace_measure(ws, item);
             continue;
@@ -2388,11 +2392,12 @@ static void workspace_analyze_orphans(workspace_t *ws) {
         /* The relocation read: a relocated orphan is one whose claim its profile
          * still holds at another path. The record's own (profile, storage path)
          * pair is asked of that profile's own rows (manifest_lookup_storage),
-         * standing or not, and a row found there projects to another string:
-         * the arm of the claim its profile holds found none at the record's path,
-         * and one name places at one path. Where the row stands it projects to
-         * another entry too — a root re-spelled under another name of one directory
-         * is the guard's above, not a relocation; one standing nowhere was never
+         * standing or not, and a row found there projects to another string: a
+         * claim its profile held at the record's path would stand there, the
+         * record no orphan, or stand nowhere beneath a blob, the arm above, and
+         * one name places at one path. Where the row stands it projects to another
+         * entry too — a root re-spelled under another name of one directory is
+         * the guard's above, not a relocation; one standing nowhere was never
          * looked at, and there a re-spelled root reads as a move, which can only
          * add the class's skip. So the claim moved with its root: a re-targeted
          * custom/ binding, a different $HOME. Whether it stands at its new path
@@ -3229,8 +3234,7 @@ static error_t workspace_partition(workspace_t *ws) {
  * none had anything to write on keeps what the partition made it — DEPLOYED,
  * nothing wrong — and is not among them. An orphan is never DEPLOYED, so every
  * analyzed one has something to say: a reclaim, a release, a prune, a skip, a
- * copy left for the row standing over it, or a node the landing beneath it
- * replaces.
+ * copy the landing above it clears, or a node the landing beneath it replaces.
  *
  * The reassignment is the one term no analysis writes: a clean row whose owned
  * record names another profile is REASSIGNED by the route, read over the item's
@@ -3901,9 +3905,8 @@ bool workspace_item_tags(
              * after absence and the ancestry, and a node is a look that found
              * its record's own kind — so absence and [displaced] reach an orphan
              * alone. The skip each bit's arm names is an orphan's, cleanup's;
-             * no engine removes an overridden copy, whatever its bits; and a
-             * node's landing asks --force for every bit but the claim's
-             * (core/workspace.h workspace_untouched). */
+             * and the landing that clears a copy or replaces a node asks --force
+             * for every bit but the claim's (core/deploy.h deploy_clearance). */
             if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                 tags_out[tag_count++] = item->state == WORKSPACE_STATE_ORPHANED
                     ? "orphaned" : item->state == WORKSPACE_STATE_OVERRIDDEN
@@ -3988,12 +3991,10 @@ bool workspace_item_tags(
             } else {
                 /* No divergence: nothing moved from what dotta last confirmed —
                  * or, on a copy dotta only observed, nothing was confirmed to
-                 * measure. RED where a removal is coming: cleanup prunes a clean
-                 * orphan, and the landing beneath a node replaces it. DIM on an
-                 * overridden copy, which no engine removes: the colour of a line
-                 * that asks nothing ([ancestor]'s). */
-                *color_out = item->state == WORKSPACE_STATE_OVERRIDDEN
-                    ? OUTPUT_COLOR_DIM : OUTPUT_COLOR_RED;
+                 * measure. RED, a removal coming: cleanup prunes a clean orphan,
+                 * the landing beneath a node replaces it, and the landing above
+                 * a copy clears it. */
+                *color_out = OUTPUT_COLOR_RED;
             }
 
             /* The relocation, ridden as a secondary tag beside the divergence

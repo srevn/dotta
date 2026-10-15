@@ -18,15 +18,16 @@
  * Design principles:
  * - Every decision is taken at preflight, before anything changes, from the
  *   occupant the workspace's look found (workspace_item_t.occupant) and the row
- *   — one fate per planned row, a verdict or an explicit skip, and one per node
- *   of the plan, replaced or kept. A confirmation prompt may sit between preflight
- *   and execute; nothing looks again across it, and nothing pretends to: the
- *   mechanisms refuse what a verdict no longer describes (O_NOFOLLOW, EISDIR,
- *   EEXIST, ENOTEMPTY) and the refusal is that row's outcome, not the run's end.
- *   The one unlink of dotta's node is the mechanism that cannot tell: whatever
- *   non-directory the world put in the node's place by then — across the prompt,
- *   a hook — goes as the node did, one node all the same, and a directory there
- *   refuses it. The same stance as core/cleanup
+ *   — and, for a directory in a blob row's way, the entries a readdir finds beneath
+ *   it (the clearance) — one fate per planned row, a verdict or an explicit skip,
+ *   and one per node of the plan, replaced or kept. A confirmation prompt may
+ *   sit between preflight and execute; nothing looks again across it, and nothing
+ *   pretends to: the mechanisms refuse what a verdict no longer describes
+ *   (O_NOFOLLOW, EISDIR, EEXIST, ENOTEMPTY) and the refusal is that row's outcome,
+ *   not the run's end. The one unlink of dotta's node is the mechanism that cannot
+ *   tell: whatever non-directory the world put in the node's place by then —
+ *   across the prompt, a hook — goes as the node did, one node all the same,
+ *   and a directory there refuses it. The same stance as core/cleanup
  * - One element type per phase: the plan buckets borrowed items and authors
  *   nothing; preflight authors the fates — a verdict or a skip, carrying everything
  *   decided about the row; execute authors the outcomes — one per verdict, landed
@@ -34,8 +35,12 @@
  *   is derived from the fate, never stored twice
  * - A dry run is the preview: the caller reads the verdicts and calls no executor,
  *   so there is no dry-run flag beneath the plan
- * - Removals are single-node: what stands at a planned path, never a tree, and
- *   only to land the row's own node there — or dotta's own node above a planned
+ * - Removals are single-node, each one node and never a tree, and only to land
+ *   a row: what stands at a planned path, the row's own node landing there; a
+ *   copy of dotta's beneath a blob row's path, which the row's landing removes
+ *   with what stands at its path or not at all — every entry beneath judged first
+ *   (deploy_clearance), and each copy removed deepest first, before the directory
+ *   it stood in (deploy_verdict_t's cleared); or dotta's own node above a planned
  *   path, a file or a link where the rows beneath need a directory, replaced by
  *   one as part of the first act beneath it (deploy_plan_t's nodes). A file or
  *   link row's node is created whole beside its path before anything in its way
@@ -46,14 +51,21 @@
  *   the rename or the mkdir: refused there, or killed, the run leaves the path
  *   empty over the record that stood, which reads [deleted] wherever a claim of
  *   that record's kind asserts the path — at once where it is the row's own kind
- *   — until a plain apply creates it (core/workspace.c classify_absent). Dotta's
- *   node goes on the way to the first act beneath it, after that act's content
- *   read and before its node is created, since the temporary is created in the
- *   directory that takes the node's place or beneath it: a write refused there
- *   leaves that directory standing empty and the node gone, its bytes Git's where
- *   dotta confirmed them, and a create refused after its unlink leaves the path
- *   empty with the node's record kept, which the next load reads absent and
- *   reclaims
+ *   — until a plain apply creates it (core/workspace.c classify_absent). A copy
+ *   whose removal is refused fails its row with that removal's cause, every removal
+ *   before it standing and its record retired (cmds/apply.c apply_write_record):
+ *   no row stands beneath a standing blob, so no later act's way runs through
+ *   what is left. The clearance is preflight's look, and the removals meet what
+ *   the prompt's window left: a directory copy a link replaced in that window
+ *   turns the removals beneath it into removals inside the link's target, as
+ *   cleanup's prune does (stated); and, unlike git, the clearance does not refuse
+ *   the process's working directory (stated). Dotta's node goes on the way to
+ *   the first act beneath it, after that act's content read and before its node
+ *   is created, since the temporary is created in the directory that takes the
+ *   node's place or beneath it: a write refused there leaves that directory
+ *   standing empty and the node gone, its bytes Git's where dotta confirmed them,
+ *   and a create refused after its unlink leaves the path empty with the node's
+ *   record kept, which the next load reads absent and reclaims
  * - Directories are materialized in two phases: held at a working mode (the mode
  *   owed, owner rwx on: deploy_working_mode) while the run writes beneath them,
  *   then released to the exact mode owed, deepest first, by the caller once every
@@ -67,7 +79,7 @@
  *   and resolved ownership atomically through its own descriptor, so there is
  *   never a moment when a path stands with the wrong owner
  * - Silent: outcomes travel in the receipt — a row's failure among them, its
- *   cause on the outcome; the nodes the run replaced; the holds the run took,
+ *   cause on the outcome; the nodes the run removed; the holds the run took,
  *   and each the release could not let go — verdicts and skips in the preflight,
  *   with the anomalies met while deciding (an identity that could not be resolved),
  *   which are the caller's to print; the one error this module returns is
@@ -127,19 +139,24 @@ typedef struct {
  * (core/workspace.h workspace_active): a pending row's is the item its bucket
  * holds, an ancestor's the directory item the pass walks (workspace_directories).
  *
- * The decided facts are exactly the ones not on the row: the occupant, and the
+ * The decided facts are exactly the ones not on the row: the occupant; the
  * ownership the write applies (resolve_deployment_ownership: the claim resolved
  * on this host, half by half — the invoker where it names no owner, no change
  * where it names no group — on every run; (uid_t) -1 is no change, and an owner
- * is left unchanged only where the claim named one this host cannot resolve).
- * The mode the write applies is the row's, read there — total for every kind
- * that carries one (check_ownership carries the rationale).
+ * is left unchanged only where the claim named one this host cannot resolve);
+ * and, for a blob row whose occupant is a directory, the copies its landing removes
+ * with it — every orphan of dotta's beneath its path, each a node the clearance's
+ * walk vouched for (core/deploy.c check_clearance), deepest first, so each goes
+ * once everything in it has — the walk's own list, handed over whole, and empty
+ * on every other verdict. The mode the write applies is the row's, read there —
+ * total for every kind that carries one (check_ownership carries the rationale).
  */
 typedef struct {
     const workspace_item_t *item;    /* Borrowed (workspace lifetime), never NULL; the row is item->row */
     fs_occupant_t occupant;          /* What the run will find at the path */
     uid_t uid;                       /* Ownership the write applies; -1 = no change */
     gid_t gid;
+    workspace_items_t cleared;       /* The copies its landing removes, deepest first */
 } deploy_verdict_t;
 
 /**
@@ -237,6 +254,77 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
 }
 
 /**
+ * May a landing remove this node, and on whose word? — the landing's consent
+ *
+ * The one table for every node of dotta's a landing removes beside its row's
+ * own occupant: its node above a row, which the first act beneath it replaces,
+ * and a copy beneath a blob row, which that row's landing clears (core/workspace.h
+ * workspace_state_t: OBSTRUCTING, OVERRIDDEN). Pure in the item the load made,
+ * so --force is each reader's to apply. Its rule is two facts about every path:
+ * a landing removes a node dotta keeps any record of, and bytes Git may lack
+ * only under --force.
+ *
+ *   no item — a stranger's — or one no landing   REFUSED      no flag lifts it
+ *   removes: a scope exit's orphan, another node where dotta's stood, a stale
+ *   key, a row
+ *   a landing's, its look failed                 UNREADABLE   no flag lifts it:
+ *                                                             nothing says what
+ *                                                             an unlink would meet
+ *   a landing's directory                        OK           it holds no bytes;
+ *                                                             what it holds is
+ *                                                             judged entry by entry
+ *   a landing's file or link as dotta            OK           its bytes are Git's
+ *   confirmed it (core/workspace.h workspace_untouched)
+ *   a landing's file or link otherwise           NEEDS_FORCE  edited, never
+ *                                                             confirmed, or a
+ *                                                             read that failed:
+ *                                                             bytes Git may lack
+ *
+ * A node meets the last two cells alone — it stands as its record's kind, a file
+ * or a link (core/workspace.c workspace_obstructs) — and a copy any of the five.
+ * A scope exit's orphan is read by another table, cleanup's (core/cleanup.h
+ * cleanup_skip_reason), whose reasons are the copy's where these are the user's
+ * order to land: the two stay two, and the state says which reads an orphan.
+ *
+ * Readers: core/deploy.c vouch_clearance (each entry a clearance's walk meets)
+ * and deploy_preflight (dotta's node above a row, its consent), cmds/apply.c
+ * apply_print_deploy_preview (the nodes' and the copies' discards). A reader
+ * not on this list is a bug.
+ */
+typedef enum {
+    DEPLOY_CLEARANCE_OK,            /* Unasked: dotta's copy as it confirmed it, or a directory */
+    DEPLOY_CLEARANCE_NEEDS_FORCE,   /* --force's: dotta's file or link, edited, never confirmed, or unread */
+    DEPLOY_CLEARANCE_UNREADABLE,    /* No flag's: dotta's, but its look failed */
+    DEPLOY_CLEARANCE_REFUSED        /* No flag's: nothing of dotta's a landing removes */
+} deploy_clearance_t;
+
+static inline deploy_clearance_t deploy_clearance(const workspace_item_t *item) {
+    if (!item) return DEPLOY_CLEARANCE_REFUSED;
+
+    switch (item->state) {
+        case WORKSPACE_STATE_OBSTRUCTING:
+        case WORKSPACE_STATE_OVERRIDDEN:
+            /* A landing's: by its look, then its kind, then its bytes */
+            if (item->occupant == FS_OCCUPANT_UNKNOWN) return DEPLOY_CLEARANCE_UNREADABLE;
+            if (item->occupant == FS_OCCUPANT_DIRECTORY) return DEPLOY_CLEARANCE_OK;
+            return workspace_untouched(item) ? DEPLOY_CLEARANCE_OK : DEPLOY_CLEARANCE_NEEDS_FORCE;
+
+        case WORKSPACE_STATE_DEPLOYED:
+        case WORKSPACE_STATE_UNDEPLOYED:
+        case WORKSPACE_STATE_DELETED:
+        case WORKSPACE_STATE_ORPHANED:
+        case WORKSPACE_STATE_UNTRACKED:
+        case WORKSPACE_STATE_UNSCANNED:
+        case WORKSPACE_STATE_RELEASED:
+            /* An active row, a scan's item, a scope exit's orphan — another node
+             * where dotta's stood, a stale key among them: no landing's */
+            return DEPLOY_CLEARANCE_REFUSED;
+    }
+
+    CHECK_ARG(false, "a state no enumerator names");
+}
+
+/**
  * Why a planned row is not deployed this run
  *
  * The counterpart of cleanup_skip_reason_t, and the same contract: values are
@@ -302,12 +390,24 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * directory will stand there, so no rung beneath it can say more, and the remedy
  * is that pair's.
  *
+ * The clearance answers at the type rung, for a blob row whose occupant is a
+ * directory (core/deploy.c check_clearance), and three reasons are its stops:
+ * OCCUPIED where an entry is no landing's to remove, UNREADABLE where an entry
+ * could not be looked at or a directory it walks could not be read, PERMISSION
+ * where a directory it would empty denies the run the removals in it. And TYPE
+ * is its edit, a copy only --force removes. The walk goes on past an edit and
+ * ends at a stop, so a stop outranks every edit wherever readdir met each, whatever
+ * their order here — one cause a skip, and the next run names the next
+ * (deploy_blocker_t).
+ *
  * Each reason is a sentence about the row that carries it, read off that skip's
  * own fields (cmds/apply.c apply_print_deploy_skips): the ancestor it names
- * (PERMISSION, ANCESTOR, a TYPE or an OWNERSHIP that names one), its own occupant
- * (TYPE, OCCUPIED), its own item (CONTENT, UNREADABLE, and FOREIGN, the owner
- * its look found — another, or the run itself, its read refused), its own claim
- * (an OWNERSHIP that names none). So a row beneath a skipped squatter takes the
+ * (PERMISSION, ANCESTOR, a TYPE or an OWNERSHIP that names one), the path a
+ * clearance names at the row's path or beneath it (OCCUPIED, a clearance's
+ * PERMISSION and UNREADABLE, and a TYPE its edit holds back), its own occupant
+ * (TYPE), its own item (CONTENT, UNREADABLE, and FOREIGN, the owner its look
+ * found — another, or the run itself, its read refused), its own claim (an
+ * OWNERSHIP that names none). So a row beneath a skipped squatter takes the
  * squatter's class and never its reason (check_ancestry): the squatter's sentence
  * is about the squatter, whatever reason a later rung adds. A row beneath an
  * absent directory skipped for its pair takes OWNERSHIP all the same, read as a
@@ -318,9 +418,9 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * it, with no row: two of the reasons, in their order — PERMISSION where its
  * parent denies the run the unlink and the create in its place (the landing check,
  * asked of the node's own path), TYPE where nothing but --force consents to
- * replacing it (core/workspace.h workspace_untouched) — each a sentence about
- * the node, its own item read for the second. A row beneath it takes its class,
- * as beneath any skipped squatter.
+ * replacing it (deploy_clearance) — each a sentence about the node, its own item
+ * read for the second. A row beneath it takes its class, as beneath any skipped
+ * squatter.
  *
  * Symlink rows need no arm of their own: a foreign kind at a link row's path is
  * TYPE (deploy.c occupant_conflicts), a retargeted link is CONTENT (the target
@@ -332,7 +432,7 @@ typedef enum {
     DEPLOY_SKIP_ANCESTOR,     /* A non-directory squats an ancestor this run does not converge */
     DEPLOY_SKIP_PERMISSION,   /* The landing's bits deny the run: an ancestor not ours, or none reachable */
     DEPLOY_SKIP_FOREIGN,      /* The directory at the path is another's, or its bits deny the run the read */
-    DEPLOY_SKIP_OCCUPIED,     /* A directory holding untracked paths stands at the path */
+    DEPLOY_SKIP_OCCUPIED,     /* A directory holding what no landing may remove stands at the path */
     DEPLOY_SKIP_TYPE,         /* A different kind of path stands where the row lands (--force) */
     DEPLOY_SKIP_CONTENT,      /* Disk holds content dotta did not put there (--force) */
     DEPLOY_SKIP_UNREADABLE,   /* The path could not be read: no verdict, no guess */
@@ -343,9 +443,9 @@ typedef enum {
  * Is --force the remedy for this skip?
  *
  * The consent/incapacity split, as a value. "Needs force" is the module's own
- * word (CLEARANCE_NEEDS_FORCE) and the screen's ("Use --force to overwrite or
- * replace them"). Total over the reasons, so a new one is classed here or the
- * build fails.
+ * word (DEPLOY_CLEARANCE_NEEDS_FORCE) and the screen's ("Use --force to overwrite
+ * or replace them"). Total over the reasons, so a new one is classed here or
+ * the build fails.
  *
  * Readers: cmds/apply.c apply_print_deploy_skips (the block's level and each
  * row's, and the --force line) and cmd_apply (the exit, which counts the
@@ -414,6 +514,34 @@ typedef enum {
 } deploy_ancestry_t;
 
 /**
+ * Where a clearance stopped, or its first edit — the path a skip names at its
+ * row's path or beneath it
+ *
+ * A blob row's clearance walks everything beneath its path (core/deploy.c
+ * check_clearance) and stops at what its landing may not remove, --force included:
+ * an entry no landing's (OCCUPIED), one it could not look at or a directory it
+ * could not read (UNREADABLE), a directory whose bits deny the run the removals
+ * in it (PERMISSION) — the occupant at the row's own path among them. Or it goes
+ * on past a copy only --force removes, the first of which is its edit (TYPE).
+ * The path is a stop's, the walk's copy of it, or the edit's own; the item the
+ * edit's alone, whose bits say why only --force removes it; the fault an UNREADABLE
+ * stop's, classed off the bits at the path when the walk stopped (sys/filesystem.h
+ * fs_denied: UNREADABLE where they refused this identity, UNVERIFIED for any
+ * other failure), so no engine reads a load's fault. A stop outranks every edit
+ * (deploy_skip_reason_t), and one cause rides a skip: the first stop in readdir's
+ * order, else the first edit — the next run names the next (stated).
+ *
+ * Read by cmds/apply.c apply_print_deploy_skips: the path on the row's line,
+ * the item for the edit's word, the fault for the sudo closer. A reader not on
+ * this list is a bug.
+ */
+typedef struct {
+    const char *path;                /* A stop's (the walk's copy) or the edit's; NULL: none */
+    const workspace_item_t *item;    /* The edit's (TYPE); NULL on a stop */
+    workspace_fault_t fault;         /* An UNREADABLE stop's, off the bits at the path; NONE elsewhere */
+} deploy_blocker_t;
+
+/**
  * One planned row the run does not deploy — or dotta's node above rows of the
  * run that the run keeps
  *
@@ -433,7 +561,9 @@ typedef enum {
  * alone) the ancestry could not even be reached to name its refusing node.
  * `ancestry` says which claim holds the named path where the skip is the squatter's
  * only report — ANCESTOR's alone, and NONE on a row beneath a skipped squatter
- * (deploy_ancestry_t).
+ * (deploy_ancestry_t). `blocker` is the path a clearance names at the row's path
+ * or beneath it — where its walk stopped, or the first copy only --force removes
+ * (deploy_blocker_t) — and none on every skip the walk did not write.
  *
  * The item is the verdict's: the one the row's bucket holds, or the node the
  * plan holds, and never NULL (deploy_verdict_t). Whether it holds a look is the
@@ -457,6 +587,7 @@ typedef struct {
     deploy_skip_reason_t reason;
     size_t ancestor;                 /* Prefix length of the named ancestor; 0 = none */
     deploy_ancestry_t ancestry;      /* ANCESTOR only: the claim at a squatter with no skip of its own */
+    deploy_blocker_t blocker;        /* A clearance's stop or first edit, at or beneath the path; none elsewhere */
 } deploy_skip_t;
 
 /**
@@ -516,6 +647,26 @@ typedef struct {
 } deploy_preflight_t;
 
 /**
+ * How many copies the run's landings clear — every verdict's cleared, counted
+ *
+ * A copy rides the verdict of the one row whose landing clears it, a file row's
+ * alone: a directory row's squatter is never a directory, so no clearance walks
+ * one. One count, so the preview's promise and the prompt's consent say one number,
+ * as both read the nodes' off replaces.
+ *
+ * Readers: cmds/apply.c apply_print_deploy_preview and cmd_apply (the prompt).
+ * A reader not on this list is a bug.
+ */
+static inline size_t deploy_cleared_count(const deploy_preflight_t *verdicts) {
+    size_t total = 0;
+
+    for (size_t i = 0; i < verdicts->files.count; i++) {
+        total += verdicts->files.entries[i].cleared.count;
+    }
+    return total;
+}
+
+/**
  * One kind's partition of the active items in scope
  *
  * Every file item and every tracked directory item that passes the scope's profile
@@ -529,8 +680,8 @@ typedef struct {
  * Three buckets carry work the run deliberately does not do. They differ by reason,
  * and the reason is the only thing a consumer needs from them — so the bucket
  * an item sits in *is* its reason tag, and a path -e names is reported as excluded
- * even when another reason would also skip it — --skip-existing, or dotta's node
- * above it a flag keeps (a named path is the more explicit intent).
+ * even when another reason would also skip it — --skip-existing, or a landing's
+ * orphan in its way a flag keeps (a named path is the more explicit intent).
  *
  * Each bucket is a slice of the items it holds, filled once the plan has decided
  * every item (core/workspace.h workspace_buckets_t): deploy.c deploy_classify
@@ -551,34 +702,40 @@ typedef struct {
      * already, save over dotta's own untouched copy, which loses nothing. */
     workspace_items_t skipped_existing;
 
-    /* Need work, skipped because dotta's node in the row's way stays: -e names
-     * the node, or --keep-orphans keeps it (deploy_ceded_t), and a row lands
-     * beneath the node only once the node is replaced. Never existing too: a
-     * row beneath a node was never looked at, so nothing occupies its path for
-     * --skip-existing to keep. */
+    /* Need work, skipped because a landing's orphan in the row's way stays —
+     * dotta's node above it, or a copy beneath it where the row is a blob: -e
+     * names it, or --keep-orphans keeps it (deploy_ceded_t), and the row lands
+     * only with every removal its way needs. Never existing too where a node
+     * stands above: a row beneath a node was never looked at, so nothing occupies
+     * its path for --skip-existing to keep. */
     workspace_items_t skipped_kept;
 } deploy_partition_t;
 
 /**
- * Dotta's nodes in scope that no landing of this run replaces, by why
+ * The landing's orphans in scope that no landing of this run removes, by why
  *
- * Counted for a path filter's match (deploy_plan_item_count), reported where a
- * flag of the user's spared one (cmds/apply.c apply_print_withheld), never touched.
- * A node a flag spares keeps the rows beneath it from landing (deploy_partition_t's
- * skipped_kept); one no row of the run reaches waits for a run that lands one.
+ * Dotta's nodes above rows and the copies beneath blob rows alike. Counted for
+ * a path filter's match (deploy_plan_item_count), reported where a flag of the
+ * user's spared one (cmds/apply.c apply_print_withheld), never touched. One a
+ * flag spares keeps the row in its way from landing (deploy_partition_t's
+ * skipped_kept), and the rest of that row's way waits with it; one no row of
+ * the run reaches waits for a run that lands one.
  */
 typedef struct {
     workspace_items_t excluded;    /* -e names it */
     workspace_items_t kept;        /* --keep-orphans keeps it */
-    workspace_items_t unreached;   /* In scope, no row of the run beneath: it waits for a run with one */
+    workspace_items_t unreached;   /* In scope, no row of the run in its way: it waits for a run with one */
 } deploy_ceded_t;
 
 /**
  * Deployment plan — deploy's classification of the active items in scope, one
  * partition per kind, and of the landing's orphans: dotta's own nodes above rows
  * of the view (core/workspace.h WORKSPACE_STATE_OBSTRUCTING), each replaced by
- * the first act beneath it. A value of the arena it was built in: nothing frees
- * one.
+ * the first act beneath it, and the copies beneath blob rows (OVERRIDDEN), each
+ * cleared by its row's landing — no bucket's where a row of the run reaches it,
+ * that row's clearance deciding it at preflight (deploy_verdict_t's cleared),
+ * or the row's own skip keeping it. A value of the arena it was built in: nothing
+ * frees one.
  *
  * Both kinds' items arrive ordered by filesystem_path (workspace_directories,
  * workspace_files), so within each kind's pending a row precedes every path beneath
@@ -598,7 +755,7 @@ typedef struct {
     deploy_partition_t files;         /* The file items */
     deploy_partition_t directories;   /* The tracked directory items, and promoted rungs */
     workspace_items_t nodes;          /* Dotta's nodes above rows of the run, to replace */
-    deploy_ceded_t ceded;             /* Dotta's nodes in scope this run leaves standing, by why */
+    deploy_ceded_t ceded;             /* The landing's orphans in scope this run leaves standing, by why */
 } deploy_plan_t;
 
 /**
@@ -707,9 +864,9 @@ typedef struct {
 } deploy_holds_t;
 
 /**
- * Deployment receipt — the run's: one outcome per verdict, in act order, dotta's
- * nodes its acts replaced, and the holds: every one the run took, and each the
- * release could not let go
+ * Deployment receipt — the run's: one outcome per verdict, in act order, the
+ * nodes of dotta's its landings removed, and the holds: every one the run took,
+ * and each the release could not let go
  *
  * Four outcome arrays: three mirroring the preflight's split for the rows that
  * landed, and `failed` for the rows that did not — landed or failed is the one
@@ -753,15 +910,19 @@ typedef struct {
  * apart from the created count. A parent no row claims has no receipt and no
  * record.
  *
- * `removed` is outside the plan too: dotta's own nodes the way replaced
- * (deploy_preflight_t's replaces), each unlinked with a directory standing in
- * its place, in the order replaced — the run's own list, handed to the receipt
- * whole as execute returns, as `ancestors` is. The record phase retires each
- * one's record, and the record of every row beneath it, which a capture through
- * the node wrote and no look did (cmds/apply.c apply_write_record). A replace
- * stopped short — its way refused, its unlink, or the create in its place — is
- * none of them: the act that met it carries its cause, and every later act beneath
- * it fails naming the node (deploy_execute).
+ * `removed` is outside the plan too: every node of dotta's a landing removed,
+ * each by its own act, in act order — the run's own list, handed to the receipt
+ * whole as execute returns, as `ancestors` is. Two kinds, whose verb is each
+ * one's state: dotta's node the way replaced (deploy_preflight_t's replaces),
+ * unlinked with a directory standing in its place; and a copy a clearance took
+ * (deploy_verdict_t's cleared), removed on its row's way. The record phase retires
+ * each one's record, and a node's takes with it the record of every row beneath
+ * it, which a capture through the node wrote and no look did (cmds/apply.c
+ * apply_write_record) — no row stands beneath a copy. A replace stopped short —
+ * its way refused, its unlink, or the create in its place — is none of them:
+ * the act that met it carries its cause, and every later act beneath it fails
+ * naming the node (deploy_execute); and a copy is one once its own removal has
+ * landed, whatever its row does after.
  *
  * `taken` and `held` are the holds' (deploy_hold_t). `taken` is execute's: every
  * hold the run took, in the order taken, each directory still at its working
@@ -791,7 +952,7 @@ typedef struct {
     deploy_outcomes_t deployed;      /* Files written or linked, each with its write's stat */
     deploy_outcomes_t converged;     /* Planned directories — the verb is the verdict's occupant */
     deploy_outcomes_t ancestors;     /* Claimed directories created on the way, each once */
-    workspace_items_t removed;       /* Dotta's nodes the way replaced — their records retire */
+    workspace_items_t removed;       /* Dotta's nodes and copies the landings removed — their records retire */
     deploy_outcomes_t failed;        /* Rows that did not land — both kinds, each with its cause */
     deploy_holds_t taken;            /* Every hold the run took, in the order taken — the release's to let go */
     deploy_holds_t held;             /* Holds the release could not let go, each with its cause */
@@ -800,8 +961,8 @@ typedef struct {
 /**
  * Build the deployment plan
  *
- * Walks the workspace's orphans for dotta's nodes above rows (workspace_orphans,
- * by the switch every engine reads them with: OBSTRUCTING), then its directory
+ * Walks the workspace's orphans for the landing's (workspace_orphans, by the
+ * switch every engine reads them with: OBSTRUCTING, OVERRIDDEN), then its directory
  * items and file items once — a directory where its profile tracks it, an ancestor
  * claim being no convergence of the run's save where dotta's own copy squats
  * it, Git having moved past that copy (STALE: the squatter is Git's pending move,
@@ -809,9 +970,9 @@ typedef struct {
  * scope_accepts_profile ∧ scope_accepts_path(kind), then classifying it by deploy's
  * work predicate (missing, or diverged in content / mode / ownership / type /
  * stale) and by the reasons its work is skipped: scope_is_excluded(kind), then
- * the node above it a flag spares, then skip_existing. Every item was analyzed
- * — neither kind is a load's to decline (workspace_load) — so a clean one is a
- * path the load looked at and found agreeing.
+ * a landing's orphan in its way a flag spares, then skip_existing. Every item
+ * was analyzed — neither kind is a load's to decline (workspace_load) — so a
+ * clean one is a path the load looked at and found agreeing.
  *
  * A path beneath a squatted directory needs no rule of the plan's own: the
  * workspace looked at nothing there, so the row's item carries the displaced
@@ -826,14 +987,18 @@ typedef struct {
  * on its ancestor's account, Coherent Scope, and converges on the next apply
  * that covers it.
  *
- * Dotta's node above rows is the plan's where a row of the run lies beneath it
- * — in scope, -e naming the row not — whatever the node's own scope: its place
- * is the landing's of those rows, so a -p naming their profile reaches another
- * profile's node (the landing's reach above). One in scope that no such row reaches
- * waits for a run that lands one (unreached), counted for a path filter's match.
- * The user's word spares a node, and with it every row beneath that would otherwise
- * be work (SKIP_KEPT): -e naming the node, the named path first, else
- * --keep-orphans. A spared node is reported, never touched (deploy_ceded_t).
+ * A landing's orphan is the plan's where a row of the run needs its place — in
+ * scope, -e naming the row not — whatever the orphan's own scope: dotta's node
+ * above rows is the landing's of every row beneath it, so a -p naming their profile
+ * reaches another profile's node (the landing's reach above), and a copy beneath
+ * a blob row is that row's landing's, whoever's copy it is. A node a row reaches
+ * is the plan's to replace (nodes); a copy a row reaches is no bucket's, that
+ * row's clearance deciding it at preflight, or the row's own skip keeping it.
+ * One in scope that no row reaches waits for a run that lands one (unreached),
+ * counted for a path filter's match. The user's word spares one, and with it
+ * the row in its way that would otherwise be work (SKIP_KEPT): -e naming the
+ * orphan, the named path first, else --keep-orphans. A spared one is reported,
+ * never touched (deploy_ceded_t).
  *
  * @param arena Arena the plan and its buckets live in (must not be NULL)
  * @param ws Workspace with divergence analysis (must not be NULL)
@@ -845,10 +1010,11 @@ typedef struct {
  *        all see one answer. Not overridden by --force: --force also overrides
  *        cleanup's skip reasons and the confirmation prompt, so the combination
  *        is meaningful and the narrower flag keeps its promise.
- * @param keep_orphans --keep-orphans: dotta's node above rows of the run is kept,
- *        and the rows beneath it skipped with it — the flag cleanup's plan reads
- *        for the scope exit's orphans (core/cleanup.h cleanup_plan_build), read
- *        here for the landing's. The bucket is the answer every later stage reads.
+ * @param keep_orphans --keep-orphans: the landing's orphans are kept, dotta's
+ *        node above rows and a copy beneath a blob row, and the rows in their
+ *        way skipped with them — the flag cleanup's plan reads for the scope
+ *        exit's orphans (core/cleanup.h cleanup_plan_build), read here for the
+ *        landing's. The bucket is the answer every later stage reads.
  * @return The plan
  */
 deploy_plan_t *deploy_plan_build(
@@ -868,17 +1034,19 @@ static inline bool deploy_plan_is_empty(const deploy_plan_t *plan) {
 }
 
 /**
- * How many items the plan classified — both kinds and the nodes, every bucket
+ * How many items the plan classified — both kinds and the landing's orphans,
+ * every bucket
  *
  * Distinct from deploy_plan_is_empty, which counts only *work*: a plan of nothing
  * but clean items is empty there and non-zero here. Apply reads this to tell a
  * path filter that named nothing dotta manages from one whose paths are all
- * converged or skipped already — or name dotta's node, which waits for a run
- * that lands a row beneath it.
+ * converged or skipped already — or name a landing's orphan, which waits for a
+ * run that lands the row in its way.
  *
  * The bucket set lives here so a consumer never has to enumerate it. An item
  * that is both clean and excluded lands in no bucket at all, nor does an ancestor
- * claim (see deploy_partition_t), so a scope of only such items counts zero.
+ * claim (see deploy_partition_t), so a scope of only such items counts zero;
+ * nor does a copy a row of the run reaches, the row counted in its own bucket.
  */
 static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
     const deploy_partition_t *kinds[] = { &plan->files, &plan->directories };
@@ -952,12 +1120,17 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  *   of row, the workspace proved is dotta's own node — a copy it confirmed, or
  *   a directory its record names — with its kind moved by Git alone (STALE, and
  *   no edit of the user's beside it: deploy_content_conflicts): that one is
- *   replaced unasked, as a STALE row's bytes are overwritten. A directory holding
- *   untracked paths is skipped either way (OCCUPIED), because deploy removes
- *   single nodes and never a tree. A row the workspace could not settle
- *   (DIVERGENCE_UNVERIFIED — an unexaminable occupant, or a look at its content
- *   that failed) is skipped as UNREADABLE when the landing had nothing to say:
- *   no verdict can say what the run will find there.
+ *   replaced unasked, as a STALE row's bytes are overwritten. A directory in a
+ *   blob row's way goes with everything beneath it or not at all: the clearance
+ *   (check_clearance) judges every entry beneath it first, by the landing's table
+ *   (deploy_clearance) — dotta's copy as it confirmed it goes unasked, any other
+ *   copy of dotta's under --force alone (TYPE, its edit named), and what no landing
+ *   may remove — a stranger's, one it could not look at, a directory it could
+ *   not read or empty — skips the row whatever --force says (OCCUPIED, UNREADABLE,
+ *   PERMISSION), the stop named and nothing removed. A row the workspace could
+ *   not settle (DIVERGENCE_UNVERIFIED — an unexaminable occupant, or a look at
+ *   its content that failed) is skipped as UNREADABLE when the landing had nothing
+ *   to say: no verdict can say what the run will find there.
  * - Content — the workspace's divergence verdict, the only authority for a fact
  *   no lstat can settle. Skipped unless --force (CONTENT; STALE without CONTENT
  *   never skips: disk still holds the blob dotta deployed, so the overwrite loses
@@ -1069,13 +1242,15 @@ error_t deploy_preflight(
  * says stands at the path is what the executor clears or converges, and a path
  * the world has moved under since preflight meets the mechanism's refusal rather
  * than a fresh judgment. Whatever a planned path's occupant was, clearing it
- * removes exactly one node.
+ * removes exactly one node, and so does clearing each copy its clearance named.
  *
  * A file or link row's act runs in the order a failure must stop it: its content
  * read, the way to it created — dotta's node on it replaced first — its node
- * created whole beside its path, what stands in its way cleared, the node published
- * — so a row whose content cannot be read creates nothing on its way and replaces
- * no node there, and one whose node cannot be created removes nothing at its path.
+ * created whole beside its path, what stands in its way cleared — the copies
+ * its clearance named, deepest first, then the directory they stood in — the
+ * node published — so a row whose content cannot be read creates nothing on its
+ * way and replaces no node there, and one whose node cannot be created removes
+ * nothing at its path.
  *
  * Missing parents are the mechanics of landing a planned path, created top-down
  * as part of its write: a directory the view claims (any profile, in scope or

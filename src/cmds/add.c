@@ -163,8 +163,8 @@ typedef struct {
  * another profile's claim standing at the path; a blob captured where claims
  * stand beneath it, its place a directory row; and a capture beneath a standing
  * blob, with no row at its path — the one of the three whose copy the record
- * phase writes down, an observation, so it is held for the blob above it and
- * not met as a stranger's (add_write_record).
+ * phase writes down, an observation, so it is the blob's landing's to clear and
+ * not met there as a stranger's (add_write_record).
  *
  * `unkept` is one thing only. This command cannot author a second name, and a
  * capture at a contested path lands on the name the next settle will keep —
@@ -1707,12 +1707,16 @@ static error_t add_write_record(
          * blob above. The capture is overridden there, and its copy — the bytes
          * the capture just read, which nothing deployed — is written down as an
          * observation, the capture's record with no deployment stamp: the load
-         * holds such a copy for the blob standing over it (core/workspace.c
+         * reads such a copy as the landing's of the blob standing over it, which
+         * clears it as dotta's own copy, its bytes the commit's (core/workspace.c
          * workspace_analyze_orphans), where an unrecorded node would be a
-         * stranger's beneath it. Overridden at its own path, it stays unrecorded:
-         * there the record would be the frame's base for the row standing at
-         * the path (core/workspace.h workspace_base), and apply would replace
-         * the capture unasked as dotta's own copy.
+         * stranger's beneath it, stopping that landing. The copy alone: a directory
+         * on its way that no record names — one made after the blob came to stand,
+         * where no row is left for a load to observe — is the user's, and stops
+         * the landing all the same (stated). Overridden at its own path, it stays
+         * unrecorded: there the record would be the frame's base for the row
+         * standing at the path (core/workspace.h workspace_base), and apply would
+         * replace the capture unasked as dotta's own copy.
          *
          * A refused statement ends the pass. The phase's writes are one transaction
          * and a database that refuses one write may have ended it — SQLite rolls

@@ -85,10 +85,12 @@ static void profile_print_enable_stats(
  * view before the disable against the view after it: reassigned (picked up by a
  * fallback profile) + orphans.owned (left the view with a record dotta owns —
  * apply prunes the deployed copy) + orphans.observed (left the view with a record
- * dotta never owned — apply releases it, the copy stays). A departure with no
- * record is not counted: nothing was ever seen at the path, so nothing pends
- * for apply. None is overridden: the view after holds no claim of a profile it
- * was built without.
+ * dotta never owned — apply releases it, the copy stays) — save a copy of either
+ * beneath a blob the view after stands, which that blob's landing clears, the
+ * words here aside (stated: the receipts' words are their own arc's). A departure
+ * with no record is not counted: nothing was ever seen at the path, so nothing
+ * pends for apply. None is overridden: the view after holds no claim of a profile
+ * it was built without.
  */
 static void profile_print_disable_stats(
     output_t *out,

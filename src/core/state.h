@@ -946,11 +946,11 @@ error_t state_retire(state_t *state, const char *filesystem_path);
  * latest.
  *
  * An order lives only while its path is out of the view. Read in exactly one
- * place — the workspace's orphan analysis, behind its arm for a claim the record's
- * profile holds at the path again, standing nowhere: that copy is overridden,
- * and the order, given when the claim left, prunes nothing — and ended by every
- * record written whole (state_write): the flush's, where the path has re-entered
- * the view, and an ownership event's; and gone with its record (a retire; apply
+ * place — the workspace's orphan analysis, behind position: a copy above a row
+ * or beneath a standing blob is that landing's, the order carried out by the
+ * landing and unasked where the copy is untouched — and ended by every record
+ * written whole (state_write): the flush's, where the path has re-entered the
+ * view, and an ownership event's; and gone with its record (a retire; apply
  * executing the prune is one).
  *
  * @param state State (must not be NULL, must have active transaction)

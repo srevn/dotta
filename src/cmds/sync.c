@@ -1643,8 +1643,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 case WORKSPACE_STATE_RELEASED:
                 case WORKSPACE_STATE_OVERRIDDEN:
                 case WORKSPACE_STATE_OBSTRUCTING:
-                    /* Not sync's concern — handled by apply command, or by no
-                     * verb: a copy left for the row standing over it. The orphans'
+                    /* Not sync's concern — handled by apply command. The orphans'
                      * states are never emitted here anyway: they come only from
                      * orphan analysis, which this load switches off. */
                     break;
@@ -1961,7 +1960,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * reassignment and q's claim; a path that moved between two pulled profiles
      * is one reassignment, never a transient release; and a claim of p's that a
      * blob the pull brought now stands above is p's overridden, never a release
-     * either: its copy is held for the blob.
+     * either: its copy is that blob's landing's, which clears it.
      *
      * Sync does not deploy. Apply's divergence analysis does that, which is what
      * the summary's hint points at.
@@ -1995,10 +1994,12 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             const manifest_diff_stats_t *s = &stats[i];
             size_t staged = s->added + s->updated;
 
-            /* A departure here is a Git-side removal, so every orphan it leaves
-             * is one apply releases (the record retires, the copy stays); a
-             * departure with no record has no filesystem effect and asks nothing
-             * of the user, so it is not counted. */
+            /* A departure here is a Git-side removal, so an orphan it leaves is
+             * one apply releases (the record retires, the copy stays) — save
+             * one beneath a blob the view after stands, which that blob's landing
+             * clears, counted released all the same (stated: the receipts' words
+             * are their own arc's); a departure with no record has no filesystem
+             * effect and asks nothing of the user, so it is not counted. */
             size_t released = s->orphans.owned + s->orphans.observed;
 
             if (staged + released + s->reassigned + s->overridden == 0) continue;
@@ -2144,35 +2145,33 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * so the answer does not move with --force. Each arm claims apply has
          * work, so each names the apply that takes the claim away: a record whose
          * path the view lacks is an orphan apply prunes, releases or reclaims —
-         * or the copy of a claim its profile still holds there, standing nowhere,
-         * left for the row standing over it, which reads as apply's too: that
-         * row is apply's either way, the copy's directory standing in its place;
-         * one whose kind, or whose confirmed content, is not the row's is stale
-         * (one of a file row's kind that confirmed none is unvouched instead,
-         * below), and apply deploys the row — or, where the row's own kind already
-         * stands in place of the node the record describes, lets the record go:
-         * its load's flush observes the row's node there — a directory's always,
-         * a file's where the load learns the row's content (core/workspace.h
-         * workspace_flush) — and a file is adopted; one whose claim Git moved
-         * past the one it reconciled is stale on that axis, and apply brings it
-         * (core/workspace.h workspace_claims_moved, whose rule keeps out a derived
-         * claim, which apply never converges) — a claim disk already stands on
-         * included, since no load runs after the pull: it hints until one learns
-         * it, the apply it names or the next sync's own; an owned record naming
-         * a profile the row does not is a reassignment apply acknowledges
-         * (core/workspace.h's rule, which is also what keeps a derived claim
-         * out of it — asked with no look, which across kinds leaves the answer
-         * to the stale arm before it); and a row the record cannot vouch for is
-         * work apply has not done. Vouching differs by kind because apply's answer
-         * does — a file needs an OWNED record, since apply adopts a path it merely
-         * observed and says so; a directory needs only a record, since apply
-         * never adopts one: an absent or squatted row has none, and one standing
-         * as a directory is settled by any load's observation. A FILE ↔ EXECUTABLE
-         * move Git made under an untouched copy is not stale: the record keeps
-         * the node, and either blob mode stands as one (core/workspace.h
-         * workspace_stale); it moves the mode, where no sheet claim stands, and
-         * the claim arm hints it — where one stands, the row's mode is the claim's,
-         * not the filemode's, and nothing moved.
+         * or a copy beneath a blob the view stands, which that blob's landing
+         * clears, apply's as well; one whose kind, or whose confirmed content,
+         * is not the row's is stale (one of a file row's kind that confirmed
+         * none is unvouched instead, below), and apply deploys the row — or,
+         * where the row's own kind already stands in place of the node the record
+         * describes, lets the record go: its load's flush observes the row's
+         * node there — a directory's always, a file's where the load learns the
+         * row's content (core/workspace.h workspace_flush) — and a file is adopted;
+         * one whose claim Git moved past the one it reconciled is stale on that
+         * axis, and apply brings it (core/workspace.h workspace_claims_moved,
+         * whose rule keeps out a derived claim, which apply never converges) —
+         * a claim disk already stands on included, since no load runs after the
+         * pull: it hints until one learns it, the apply it names or the next
+         * sync's own; an owned record naming a profile the row does not is a
+         * reassignment apply acknowledges (core/workspace.h's rule, which is
+         * also what keeps a derived claim out of it — asked with no look, which
+         * across kinds leaves the answer to the stale arm before it); and a row
+         * the record cannot vouch for is work apply has not done. Vouching differs
+         * by kind because apply's answer does — a file needs an OWNED record,
+         * since apply adopts a path it merely observed and says so; a directory
+         * needs only a record, since apply never adopts one: an absent or squatted
+         * row has none, and one standing as a directory is settled by any load's
+         * observation. A FILE ↔ EXECUTABLE move Git made under an untouched copy
+         * is not stale: the record keeps the node, and either blob mode stands
+         * as one (core/workspace.h workspace_stale); it moves the mode, where
+         * no sheet claim stands, and the claim arm hints it — where one stands,
+         * the row's mode is the claim's, not the filemode's, and nothing moved.
          *
          * The record's paths are unique and so are the view's, so the records
          * that vouch for a row count the rows that have one. */

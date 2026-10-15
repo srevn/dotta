@@ -454,8 +454,7 @@ typedef enum {
  * to look, and never from a look not taken). What it means is said beside it:
  * DIVERGENCE_UNVERIFIED where a look failed, a displaced class where none was
  * taken, and on a released record neither — letting a copy go needs no measurement.
- * An orphan on a load that took no look at the orphans keeps UNKNOWN, and no
- * reader is lent it — nor, whatever its look, one the load did not analyze: the
+ * No reader is lent an orphan the load did not analyze, whatever its look: the
  * diverged items (workspace_diverged) and workspace_find lend an orphan only
  * where the load analyzed the orphans. Presence is therefore
  * `occupant != FS_OCCUPANT_NONE` — the workspace's rule, and cleanup's;
@@ -1014,16 +1013,16 @@ typedef struct workspace workspace_t;
  * Workspace load options — the two analyses a caller may decline
  *
  * What every load does is workspace_load's own contract, stated there. These
- * two are optional because each walks a set the join does not, at a cost, for a
+ * two are optional because each asks, at a cost, what the join does not, for a
  * reader that may not exist:
  *
- * - analyze_orphans — every record whose path the view lacks, either kind:
- *   presence, ownership, divergence, whether its profile still claims the path,
- *   and Git authority, at one ref lookup and a lazy tree load per profile with
- *   present, owned orphans, the sheet beside it where a directory orphan needs
- *   one, and one tree lookup per such orphan. Read by core/cleanup.c
- *   cleanup_plan_build (the settle, apply's cleanup) and cmds/status.c
- *   status_print_workspace (Issues, and Overridden copies).
+ * - analyze_orphans — every record whose path the view lacks, either kind, off
+ *   the look the join took at it: presence, ownership, divergence, whether its
+ *   profile still claims the path, and Git authority, at one ref lookup and a
+ *   lazy tree load per profile with present, owned orphans, the sheet beside it
+ *   where a directory orphan needs one, and one tree lookup per such orphan.
+ *   Read by core/cleanup.c cleanup_plan_build (the settle, apply's cleanup) and
+ *   cmds/status.c status_print_workspace (Issues, and Overridden copies).
  * - analyze_untracked — every regular file and symlink beneath a tracked directory
  *   that no enabled profile claims and dotta has no record of, at a readdir walk
  *   per tracked directory, and every place it could not look (UNSCANNED). Read
@@ -1036,7 +1035,7 @@ typedef struct workspace workspace_t;
  *
  * A reader not named above is a bug. Declining an analysis declines its items;
  * it never asserts there are none — a load with the orphan analysis off reads
- * an empty orphan set because nobody looked, not because the machine is clean.
+ * an empty orphan set because nobody asked, not because the machine is clean.
  *
  * Lifetime: read-only during workspace_load(), safe to stack-allocate.
  */
@@ -1053,21 +1052,22 @@ typedef struct {
  * - The view: every enabled profile's tree and metadata at HEAD
  * - The record: the path_records in the store's dotta.db
  * - The filesystem: one look per row, either kind, and one per record the view
- *   lacks where a reader asks for it — and none beneath a squatter that reaches
- *   the asker (workspace_displaced_t)
+ *   lacks — and none beneath a squatter that reaches the asker
+ *   (workspace_displaced_t)
  *
- * The join is every load's and no caller's to decline: the view's directory rows,
- * then its file rows. Both kinds, because a kind nobody analyzed keeps the verdict
- * the partition made its items with — DEPLOYED, nothing wrong — which every reader
- * of an item takes for a path looked at and found clean: for apply that is
- * adoption, taking ownership of paths it never looked at (core/deploy.c
- * deploy_plan_build, which files a clean item among the adoptable). Directories
- * first, because their looks are the only producer of the view's squatters
- * (workspace.c workspace_look) and every look the load takes after them asks
- * that fact before taking one: run the file rows without it and a row beneath a
- * squatter is looked at *through* the squatter — workspace_displaced_t names
- * what such a look answers — carrying no displaced field to say so, so its bits
- * come back as the user's own work (workspace_item_route).
+ * The join is every load's and no caller's to decline: one walk over the view's
+ * rows and the records it lacks, in path order. Both kinds of row, because a
+ * kind nobody analyzed keeps the verdict the partition made its items with —
+ * DEPLOYED, nothing wrong — which every reader of an item takes for a path looked
+ * at and found clean: for apply that is adoption, taking ownership of paths it
+ * never looked at (core/deploy.c deploy_plan_build, which files a clean item
+ * among the adoptable). Every record too, whichever analysis reads its look:
+ * declining one saves its own work, never a look. Path order, because a squatter
+ * is noted by the look that finds it (workspace.c workspace_look) and every look
+ * beneath it asks that fact before taking one: take a row beneath a squatter
+ * before it and the row is looked at *through* the squatter — workspace_displaced_t
+ * names what such a look answers — carrying no displaced field to say so, so
+ * its bits come back as the user's own work (workspace_item_route).
  *
  * Additionally, where `analyze_untracked` asks for it: every regular file and
  * symlink beneath a tracked directory that no enabled profile claims and dotta
@@ -1406,13 +1406,13 @@ typedef struct {
  * carries.
  *
  * The answer is noted by the look that found each squatter (workspace.c
- * workspace_look), and every directory row is looked at before any file row or
- * orphan record (workspace_load), so it is complete before anything asks — a
- * scan root is chosen off the look the directory analysis took, later still.
- * The outermost such ancestor is returned: the true offender, whose presence
- * voids every path beneath it. Fate-blind by construction — whether *this run*
- * converges the squatted directory is deploy's question, asked of its own fates
- * against this answer (check_ancestry).
+ * workspace_look), in the load's one walk over every row and record
+ * (workspace_load), so it is complete before anything asks — a scan root is chosen
+ * off the look the directory analysis took, later still. The outermost such
+ * ancestor is returned: the true offender, whose presence voids every path beneath
+ * it. Fate-blind by construction — whether *this run* converges the squatted
+ * directory is deploy's question, asked of its own fates against this answer
+ * (check_ancestry).
  *
  * Lent whole, as the load noted it (workspace_squatted_t): the one search, handed
  * out, with nothing re-derived from it. Readers: core/deploy.c check_ancestry,

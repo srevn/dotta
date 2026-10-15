@@ -1544,12 +1544,15 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (refused[WORKSPACE_ROUTE_CONFLICT] > 0) {
         /* The status Conflicts header's own words, a kind both sides moved among
          * them: a directory row's too, and add keeps disk's only where the kind
-         * matches, refusing a change across file and directory */
+         * matches, refusing a change across file and directory; apply --force
+         * replaces a directory only with all it holds, which no load reads
+         * (core/deploy.c check_clearance) */
         output_info(
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: changed in Git and on disk — 'dotta diff' compares, "
-            "'dotta apply --force' keeps Git's, 'dotta add --force' keeps disk's "
-            "when the kind matches, 'dotta remove' untracks",
+            "'dotta apply --force' keeps Git's (a directory only if all dotta's), "
+            "'dotta add --force' keeps disk's when the kind matches, 'dotta remove' "
+            "untracks",
             refused[WORKSPACE_ROUTE_CONFLICT],
             refused[WORKSPACE_ROUTE_CONFLICT] == 1 ? "" : "s"
         );
@@ -1566,7 +1569,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         output_info(
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: a different kind stands on disk — "
-            "'dotta apply --force' replaces %s, 'dotta remove' untracks %s",
+            "'dotta apply --force' replaces %s (a directory only if all dotta's), "
+            "'dotta remove' untracks %s",
             refused[WORKSPACE_ROUTE_KIND],
             refused[WORKSPACE_ROUTE_KIND] == 1 ? "" : "s",
             refused[WORKSPACE_ROUTE_KIND] == 1 ? "it" : "them",

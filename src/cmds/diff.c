@@ -186,16 +186,20 @@ static const char *get_status_message_from_item(
      * the fact, read where apply's skip label, update's census and status's section
      * read it, and ahead of the kind's own sentence, which a kind both sides
      * moved would otherwise take. Upstream only in practice: the downstream filter
-     * admits neither this nor the STALE arm below. */
+     * admits neither this nor the STALE arm below. Its --force is qualified as
+     * status's Conflicts header qualifies it: a directory in a blob row's way
+     * goes only with all it holds (core/deploy.c check_clearance). */
     if (workspace_item_route(item) == WORKSPACE_ROUTE_CONFLICT) {
-        return "changed in Git and on disk (apply --force <path> keeps Git's)";
+        return "changed in Git and on disk (apply --force <path> keeps Git's, a directory "
+               "only if all dotta's)";
     }
 
     /* Handle divergence-based messages for deployed items: a kind the user changed,
-     * Git having moved nothing past it */
+     * Git having moved nothing past it — --force's to replace, as the route's
+     * KIND arm has it, and a directory only with all it holds */
     if (item->divergence & DIVERGENCE_TYPE) {
         return direction == DIFF_UPSTREAM
-                ? "type would change on apply"
+                ? "type would change on apply --force (a directory only if all dotta's)"
                 : "type changed locally";
     }
 

@@ -1035,8 +1035,10 @@ typedef enum {
  *                            — but update will not commit over a move Git made
  *                            — its capture takes the item whole, bytes and claims
  *                            — and apply skips the row rather than overwrite
- *                            the edit without --force. Neither verb's by default;
- *                            the user decides.
+ *                            the edit without --force, which replaces a directory
+ *                            only with all it holds (core/deploy.c
+ *                            check_clearance). Neither verb's by default; the
+ *                            user decides.
  *   STALE ∨ CLAIM_MOVED      STALE — Git moved past what dotta last reconciled,
  *     alone                  the bytes, the kind or a claim; disk did not follow:
  *                            overwriting loses nothing, so it is apply's to bring,
@@ -1061,7 +1063,10 @@ typedef enum {
  *                            target's attributes into metadata), or a file row
  *                            occupied by a directory, FIFO, socket, or device.
  *                            Resolution is explicit and the user's: apply --force
- *                            replaces what the run converges, remove untracks it.
+ *                            replaces what the run converges — a directory only
+ *                            where all it holds is dotta's, its walk stopping
+ *                            at what no landing removes (core/deploy.c
+ *                            check_clearance) — and remove untracks it.
  *   TYPE alone on a          KIND_DERIVED — the same mismatch on a directory
  *     derived rung           dotta only passes through: neither planned nor named,
  *                            so no flag lifts it and no decision pends. One verb

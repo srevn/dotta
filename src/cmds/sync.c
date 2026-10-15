@@ -1793,12 +1793,14 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 if (conflict_count > 0) {
                     /* The status Conflicts header's remedies, a kind both sides
                      * moved among the conflicts: add keeps disk's only where
-                     * the kind matches */
+                     * the kind matches, and apply --force replaces a directory
+                     * only with all it holds */
                     output_hint(
                         out, OUTPUT_NORMAL,
                         "Resolve conflicts first: 'dotta diff' compares; 'dotta apply "
-                        "--force' keeps Git's, 'dotta add --force' keeps disk's when the "
-                        "kind matches, 'dotta remove' untracks; 'dotta update' commits the rest"
+                        "--force' keeps Git's (a directory only if all dotta's), 'dotta add "
+                        "--force' keeps disk's when the kind matches, 'dotta remove' "
+                        "untracks; 'dotta update' commits the rest"
                     );
                 } else {
                     output_hint(

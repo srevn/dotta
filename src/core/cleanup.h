@@ -251,9 +251,9 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *
  * The verdict buckets of cleanup_preflight_t, as a value — PRUNABLE split once
  * more there, by the run's reach: one producer, read by the verdict phase to
- * fill them and by status to predict them, so the two cannot route one item two
- * ways. In the order the tests are taken — the occupant, the state, the divergence
- * bits:
+ * fill them. Status's keys read the tags instead: a key speaks for every line
+ * carrying them, a verdict for one item (cmds/status.c status_print_workspace).
+ * In the order the tests are taken — the occupant, the state, the divergence bits:
  *
  *   occupant NONE                         ABSENT     record retires, no effect
  *   state RELEASED                        RELEASED   left alone, record retires
@@ -318,8 +318,8 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    one is (the classes are on
  *                                                    cleanup_preflight_t)
  *
- * PRUNABLE is the one verdict status cannot finish — the remainder and the reach
- * are preflight's, from the disk — and its directory hint says so.
+ * PRUNABLE is the one verdict the item alone cannot finish: the remainder and
+ * the reach are preflight's, from the disk.
  *
  * Never asked of a landing's orphan, which the plan never holds — dotta's node
  * above a row, a copy beneath a standing blob: its fate is the landing's

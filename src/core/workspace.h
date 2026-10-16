@@ -367,7 +367,7 @@ typedef enum {
  * --force and prune a BOUND one — the reason is cleanup's and lives there
  * (core/cleanup.h) — and the three screens that ask only whether there is a
  * relocation at all: the [relocated] tag (workspace_item_tags), apply's prune
- * split, status's prunable hint. The presence question is this field against
+ * split, status's [relocated] key. The presence question is this field against
  * NONE at every one of them.
  */
 typedef enum {

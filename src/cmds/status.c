@@ -17,7 +17,6 @@
 #include "base/output.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
-#include "core/cleanup.h"
 #include "core/manifest.h"
 #include "core/scope.h"
 #include "core/state.h"
@@ -1095,25 +1094,15 @@ static void status_print_workspace(
             "run \"dotta apply\" to prune them, where no key below says otherwise"
         );
 
-        /* The header promises a prune wherever no key below says otherwise, so
-         * a clean orphaned file, which gets one, needs no key of its own. Every
-         * other hint is keyed below by the exact tags its line shows, once per
-         * distinct tag string, so the key reads back against the list it follows.
-         * The tag is the item's state and the key its verdict, so two lines can
-         * name one fate under two tags — an [orphaned] [displaced] line and a
-         * [released] one are both released — and that is the design: the tag
-         * says what the item is, the key what apply does with it. The verdict
-         * is its engine's, picked by the state — cleanup's for ORPHANED and
-         * RELEASED (cleanup_verdict, the one producer the preview reads too),
-         * and for OBSTRUCTING the consent the landing beneath dotta's node asks
-         * (core/workspace.h workspace_untouched), off the same tags — and this
-         * only names it. PRUNABLE is the one verdict status cannot finish — the
-         * remainder and the run's reach are preflight's, from the disk — and
-         * the directory hint says so; it shares the bare [orphaned] key with
-         * the files, so the sentence is written to be true of both. A node's
-         * key, likewise, says what its landing asks and not whether the node's
-         * parent admits the run: a parent that refuses it is apply's skip line
-         * to name (stated).
+        /* Every hint is keyed below by the exact tags its line shows, once per
+         * distinct tag string, so the key reads back against the list it follows,
+         * and reads what those tags say and nothing else — never the kind, the
+         * relocation's class or what a directory holds, which no tag carries —
+         * so it is true of every line it stands over. The bare [orphaned] key
+         * is the header's, a file's and a directory's: a directory's prune waits
+         * on what is left in it, which apply's preview names (stated). A key
+         * says what becomes of the item and not whether its parent admits the
+         * run: a parent that refuses it is apply's skip line to name (stated).
          *
          * [orphaned] and one of ten — absence, a squatter, one of three failed
          * looks, the content, one claim axis or both, or nothing — the last eight
@@ -1127,17 +1116,6 @@ static void status_print_workspace(
         struct { char tags[64]; const char *hint; } legend[28];
         size_t legend_count = 0;
         size_t legend_width = 0;
-
-        /* One sentence for every [relocated] key, wherever the verdict put the
-         * item — a pruned custom/ re-target and a skipped home move share the
-         * tag string across kinds and fates, and a claim that moved stands at
-         * its new path or nowhere, so the sentence is written to be true of all
-         * of them, the way the bare [orphaned] key's is: it says the claim moved,
-         * never where it stands. */
-        static const char relocated_hint[] =
-            "the claim moved with its target or home; "
-            "apply prunes the old copy, but under a moved home "
-            "only --force does";
 
         for (size_t i = 0; i < orphaned.count; i++) {
             const workspace_item_t *item = orphaned.entries[i];
@@ -1162,118 +1140,71 @@ static void status_print_workspace(
 
             const char *hint = NULL;
 
-            /* The engine whose verdict the key names, by the state: exhaustive,
-             * as the section switch above is, so a state added to this bucket
-             * asks for an arm of its own here rather than taking cleanup's key
-             * in silence */
+            /* By the state, exhaustive as the section switch above is, so a state
+             * added to this bucket asks for an arm of its own here */
             switch (item->state) {
                 case WORKSPACE_STATE_ORPHANED:
-                case WORKSPACE_STATE_RELEASED:
-                    switch (cleanup_verdict(item, false)) {
-                        case CLEANUP_ABSENT:
-                            hint = "already gone from disk; apply reclaims its entry";
-                            break;
-
-                        case CLEANUP_RELEASED:
-                            /* The displaced read comes first: such an item was
-                             * never looked at, so neither sibling sentence is
-                             * true of it — the same precedence the verdict's
-                             * own arms take. The last sentence is the bare
-                             * [released] key's, which a file and a directory
-                             * share — the legend keeps the first hint a key meets
-                             * — so, like the bare [orphaned] key's, it is written
-                             * to be true of both and names no kind. Its claim
-                             * "no longer stands": Git dropped it, or Git still
-                             * carries it where a blob of its profile leaves it
-                             * no room, and the sentence is true of both. */
-                            hint = item->displaced != WORKSPACE_DISPLACED_NONE
-                                ? "not looked at, beneath a squatted directory; "
-                                "apply releases its entry, the path stays"
-                                : (item->divergence & DIVERGENCE_TYPE)
-                                ? "what dotta put there is gone, another kind of "
-                                "path stands in its place; apply releases its "
-                                "entry, the path stays"
-                                : "its claim no longer stands in Git, dotta never "
-                                "deployed it, or its record names it under another "
-                                "spelling of its path; apply releases its "
-                                "entry, the path stays";
-                            break;
-
-                        case CLEANUP_SKIPPED:
-                            if (item->item_kind == PATH_KIND_DIRECTORY) {
-                                /* The two ways a directory reaches SKIPPED here
-                                 * (force=false): the workspace could not verify
-                                 * it, or the relocation skip — so the tail is
-                                 * the relocation, no third way existing. Unverified
-                                 * is read first, which is the file table's order
-                                 * and the inverse of cleanup_verdict's arms,
-                                 * deliberately: --force lifts the relocation
-                                 * skip and never the unverified bit, so on a
-                                 * directory carrying both the failed look's wording
-                                 * is the one that stays true. Worded by whose
-                                 * remedy it is; a directory seals no content,
-                                 * so its failed look is never the key's. */
-                                hint = (item->divergence & DIVERGENCE_UNVERIFIED)
-                                    ? (item->fault == WORKSPACE_FAULT_UNREADABLE
-                                       ? "cannot be read; apply skips it"
-                                       : "could not be verified; apply skips it")
-                                    : relocated_hint;
+                    /* The tags' ladder: absence, a squatter, the failed look or
+                     * the bits, and the relocation beside the last two */
+                    if (item->occupant == FS_OCCUPANT_NONE) {
+                        hint = "already gone from disk; apply reclaims it";
+                    } else if (item->displaced != WORKSPACE_DISPLACED_NONE) {
+                        hint = "not looked at, beneath a squatted directory; "
+                            "apply releases it, the path stays";
+                    } else if (item->divergence & DIVERGENCE_UNVERIFIED) {
+                        /* Worded by whose remedy the failed look is, so the hint
+                         * and its tag say the same thing (workspace_fault_t). A
+                         * directory shares [unreadable] and [unverified], and
+                         * no flag lifts its skip, so neither names --force;
+                         * [locked] is a file's alone. Read before the relocation,
+                         * as the tags rank them. */
+                        switch (item->fault) {
+                            case WORKSPACE_FAULT_LOCKED:
+                                hint = config->encryption_enabled
+                                    ? "encrypted, and no key opened it "
+                                    "('dotta key set'); apply skips it, "
+                                    "--force prunes it"
+                                    : "encrypted, and encryption is disabled "
+                                    "(encryption.enabled = true, then 'dotta key "
+                                    "set'); apply skips it, --force prunes it";
                                 break;
-                            }
-                            switch (cleanup_skip_reason(item)) {
-                                case CLEANUP_SKIP_UNVERIFIED:
-                                    /* Worded by whose remedy the failed look
-                                     * is, so the hint and the tag it is keyed
-                                     * by say the same thing (workspace_fault_t)
-                                     * — the key's naming the switch first where
-                                     * encryption is off. */
-                                    switch (item->fault) {
-                                        case WORKSPACE_FAULT_LOCKED:
-                                            hint = config->encryption_enabled
-                                                ? "encrypted, and no key opened it "
-                                                "('dotta key set'); apply skips it, "
-                                                "--force prunes it"
-                                                : "encrypted, and encryption is disabled "
-                                                "(encryption.enabled = true, then 'dotta key "
-                                                "set'); apply skips it, --force prunes it";
-                                            break;
-                                        case WORKSPACE_FAULT_UNREADABLE:
-                                            hint = "cannot be read; "
-                                                "apply skips it, --force prunes it";
-                                            break;
-                                        case WORKSPACE_FAULT_NONE:
-                                        case WORKSPACE_FAULT_UNVERIFIED:
-                                            hint = "could not be verified; "
-                                                "apply skips it, --force prunes it";
-                                            break;
-                                    }
-                                    break;
-                                case CLEANUP_SKIP_RELOCATED:
-                                    hint = relocated_hint;
-                                    break;
-                                /* The key names what changed — [modified], [mode],
-                                 * [ownership] — so the hint says only that it
-                                 * did. */
-                                case CLEANUP_SKIP_MODIFIED:
-                                case CLEANUP_SKIP_CLAIM_CHANGED:
-                                    hint = "changed since deployment; "
-                                        "apply skips it, --force prunes it";
-                                    break;
-                                case CLEANUP_SKIP_NONE:
-                                    break;
-                            }
-                            break;
-
-                        case CLEANUP_PRUNABLE:
-                            if (item->relocation != WORKSPACE_RELOCATION_NONE) {
-                                hint = relocated_hint;
-                            } else if (item->item_kind == PATH_KIND_DIRECTORY) {
-                                hint = "apply prunes it; a directory still holding "
-                                    "something not dotta's to remove is released "
-                                    "instead";
-                            }
-                            break;
+                            case WORKSPACE_FAULT_UNREADABLE:
+                                hint = "cannot be read; apply skips it";
+                                break;
+                            case WORKSPACE_FAULT_NONE:
+                            case WORKSPACE_FAULT_UNVERIFIED:
+                                hint = "could not be verified; apply skips it";
+                                break;
+                        }
+                    } else if (item->divergence &
+                        (DIVERGENCE_CONTENT | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
+                        /* The key names what changed — [modified], [mode],
+                         * [ownership], a file's alone — so the hint says only
+                         * that it did: --force lifts the skip whatever [relocated]
+                         * beside them says */
+                        hint = "changed since deployment; apply skips it, --force prunes it";
+                    } else if (item->relocation != WORKSPACE_RELOCATION_NONE) {
+                        /* One sentence for every [relocated] key: a re-target
+                         * apply prunes and a moved home it skips share the tag
+                         * string, and a claim that moved stands at its new path
+                         * or nowhere, so it says the claim moved, never where
+                         * it stands */
+                        hint = "the claim moved with its target or home; apply prunes "
+                            "the old copy, but under a moved home only --force does";
                     }
+                    break;
+
+                case WORKSPACE_STATE_RELEASED:
+                    /* The bare [released] key, a file's and a directory's, written
+                     * true of both. Its claim "no longer stands": Git dropped
+                     * it, or Git still carries it where a blob of its profile
+                     * leaves it no room. */
+                    hint = (item->divergence & DIVERGENCE_TYPE)
+                        ? "what dotta put there is gone, another kind of path stands "
+                        "in its place; apply releases it, the path stays"
+                        : "its claim no longer stands in Git, dotta never deployed it, "
+                        "or its record names it under another spelling of its path; "
+                        "apply releases it, the path stays";
                     break;
 
                 case WORKSPACE_STATE_OBSTRUCTING:

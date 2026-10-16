@@ -382,10 +382,15 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             repo, "origin", opts->profiles, opts->profile_count, out, &fetched_profiles
         );
 
-        output_success(
-            out, OUTPUT_NORMAL, "Fetched %zu of %zu specified profile%s",
-            fetched_profiles.count, opts->profile_count, opts->profile_count == 1 ? "" : "s"
-        );
+        if (fetched_profiles.count > 0) {
+            output_success(
+                out, OUTPUT_NORMAL, "Fetched %zu of %zu specified profile%s",
+                fetched_profiles.count, opts->profile_count,
+                opts->profile_count == 1 ? "" : "s"
+            );
+        } else {
+            output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
+        }
 
     } else if (opts->all_profiles) {
         /* Hub mode: every remote profile made local. A listing that fails ends
@@ -400,6 +405,9 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
          * this list has. Named profiles (-p) keep the order typed; detection
          * sorts its own answer. */
         profile_order(&fetched_profiles);
+        if (fetched_profiles.count == 0) {
+            output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
+        }
 
     } else {
         /* Default: auto-detect profiles for this machine */
@@ -434,10 +442,15 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     out, OUTPUT_NORMAL, "Fetched %zu profile%s",
                     fetched_profiles.count, fetched_profiles.count == 1 ? "" : "s"
                 );
+            } else {
+                output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
             }
 
         } else {
-            /* No profiles detected — show available remote branches as guidance */
+            /* No profiles detected, so none was fetched: the remote's profiles
+             * listed as guidance, with the two verbs that take one — none is
+             * here yet, and enable refuses a profile whose branch is not
+             * (cmds/profile.c profile_enable) */
             output_warning(out, OUTPUT_NORMAL, "No profiles auto-detected for this system");
             if (remote_branches.count > 0) {
                 output_section(out, OUTPUT_NORMAL, "Available remote profiles");
@@ -445,8 +458,11 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     output_info(out, OUTPUT_NORMAL, "  • %s", remote_branches.entries[i]);
                 }
                 output_gap(out, OUTPUT_NORMAL);
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Run 'dotta profile fetch <name>', then 'dotta profile enable <name>'"
+                );
             }
-            output_info(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>' after setup");
         }
     }
 
@@ -482,10 +498,6 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             continue;
         }
         string_array_push(&to_enable, name);
-    }
-
-    if (fetched_profiles.count == 0) {
-        output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
     }
 
     err = initialize_state(repo, ctx->arena, &to_enable, out);
@@ -748,7 +760,8 @@ const args_command_t spec_clone = {
         "Profile Behavior:\n"
         "  Fetched profiles are enabled automatically. Run '%s profile\n"
         "  list' to inspect enabled vs available profiles, and '%s\n"
-        "  profile enable <name>' to add one later.\n",
+        "  profile fetch <name>', then '%s profile enable <name>', to\n"
+        "  add one later.\n",
     .examples    =
         "  %s clone git@github.com:user/dotfiles.git    # Auto-detect profiles\n"
         "  %s clone <url> --all                         # Hub mode\n"

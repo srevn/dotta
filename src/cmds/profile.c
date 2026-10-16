@@ -405,13 +405,15 @@ cleanup:
  *   1. Gather & validate — resolve --all/args to a request set, then filter out
  *      the already-enabled, the missing, and the ones that need a target and
  *      were named without one: such a profile is enabled only with one, so it
- *      is skipped and told the flag, whatever the request shape, and a run that
- *      enabled nothing is an error. Emits per-profile warnings — an enabled one
- *      whose claims hold no target told the flag too; produces to_enable_validated.
- *      An already-enabled profile named with a --target that differs from its
- *      row's is not a skip: it re-enters the validated set as a retarget, and
- *      `retarget` remembers which one (at most one: a target binds the one profile
- *      the line names, profile_enable_post_parse).
+ *      is skipped and told the flag, whatever the request shape. Each skip is
+ *      said once — a refused profile by its warning, the already-enabled by one
+ *      count — and a run that enabled nothing is an error where one was refused.
+ *      An enabled profile whose claims hold no target is told the flag too;
+ *      produces to_enable_validated. An already-enabled profile named with a
+ *      --target that differs from its row's is not a skip: it re-enters the
+ *      validated set as a retarget, and `retarget` remembers which one (at most
+ *      one: a target binds the one profile the line names,
+ *      profile_enable_post_parse).
  *   2. Write scope to state — state_enable_profile per target. The one call serves
  *      both kinds: a fresh enable inserts the row, a retarget runs the UPSERT
  *      arm state.h documents (the target moves, the position stays).
@@ -447,8 +449,7 @@ static error_t profile_enable(
      * profile_enable_post_parse). */
     const char *retarget = NULL;
     size_t already_enabled = 0;
-    size_t not_found = 0;
-    size_t no_target = 0;
+    size_t refused = 0;    /* Missing, or needing a target the line did not give */
 
     /* Phase 1: Gather & validate
      *
@@ -485,8 +486,8 @@ static error_t profile_enable(
      * — absolute, tilde, or relative to the working directory, the spelling
      * completion offers — spelled by the target's reading (infra/path.h
      * path_input_target): the absolute path the row stores, held to the target's
-     * rules. Validating inside the per-profile loop used to categorize a bad
-     * target as not_found, which mislabels a CLI input problem as a missing
+     * rules. Validating inside the per-profile loop would refuse a bad target
+     * as a profile's skip, which mislabels a CLI input problem as a missing
      * profile. A target binds the one profile the line names, never --all
      * (profile_enable_post_parse), so a single validation here covers every path
      * that can reach Phase 2. */
@@ -496,9 +497,9 @@ static error_t profile_enable(
     }
 
     /* Filter: already-enabled, missing-branch and needs-a-target are per-profile
-     * skips, each with its own tally — unless the already-enabled profile came
-     * with a differing --target, which is a retarget and stays in the run's work.
-     * The surviving set lands in to_enable_validated. */
+     * skips — unless the already-enabled profile came with a differing --target,
+     * which is a retarget and stays in the run's work. The surviving set lands
+     * in to_enable_validated. */
     string_array_t to_enable_validated;
     string_array_init(&to_enable_validated, ctx->arena, 0);
 
@@ -574,7 +575,7 @@ static error_t profile_enable(
                 "profiles, or 'dotta profile fetch %s' to bring it from the remote",
                 name
             );
-            not_found++;
+            refused++;
             continue;
         }
 
@@ -602,17 +603,35 @@ static error_t profile_enable(
             output_hint(
                 out, OUTPUT_NORMAL, "dotta profile enable %s --target /path", name
             );
-            no_target++;
+            refused++;
             continue;
         }
 
         string_array_push(&to_enable_validated, name);
     }
 
-    /* Dry-run: preview what a live run would do, skip every state mutation. Dry-run
-     * owns its complete UX below — the live-path summary is unreachable on this
-     * branch, which returns before it. It changes the enabled set nowhere, so
-     * it leaves apply nothing to do, and names no next step. */
+    /* Each skip said once: a refused profile by its warning above, an enabled
+     * one by this count, its own line being verbose's */
+    if (already_enabled > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "%zu profile%s already enabled",
+            already_enabled, already_enabled == 1 ? "" : "s"
+        );
+    }
+
+    /* Nothing to enable, live or dry: a refusal where a profile the line named
+     * was refused, each said above; a success where every one was enabled already,
+     * or --all met a repository with no profile to enable. Either exit leaves
+     * the state untouched: the transaction state_open began rolls back at
+     * state_free. */
+    if (to_enable_validated.count == 0) {
+        if (refused == 0) return NULL;
+        return error_create(ERR_INVALID_ARG, "No profiles were enabled");
+    }
+
+    /* Dry-run: preview what a live run would do, skip every state mutation. It
+     * changes the enabled set nowhere, so it leaves apply nothing to do, and
+     * names no next step. */
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
 
@@ -634,131 +653,54 @@ static error_t profile_enable(
                 retarget
             );
         }
-        if (already_enabled > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "%zu profile%s already enabled",
-                already_enabled, already_enabled == 1 ? "" : "s"
-            );
-        }
-        if (not_found > 0) {
-            output_warning(
-                out, OUTPUT_NORMAL, "%zu profile%s not found",
-                not_found, not_found == 1 ? "" : "s"
-            );
-        }
-        if (no_target > 0) {
-            output_warning(
-                out, OUTPUT_NORMAL, "%zu profile%s need%s a target",
-                no_target, no_target == 1 ? "" : "s",
-                no_target == 1 ? "s" : ""
-            );
-        }
-        /* Mirror the live-path terminal: if nothing would be enabled because
-         * every requested profile was missing or needs a target, surface the
-         * same error a live run would produce. Idempotent cases (all already
-         * enabled) succeed. */
-        if (to_enable_validated.count == 0 && (not_found > 0 || no_target > 0)) {
-            return error_create(
-                not_found > 0 ? ERR_NOT_FOUND : ERR_INVALID_ARG,
-                "No profiles were enabled"
-            );
-        }
         return NULL;
     }
 
-    /* Phases 2–4 share the "we have work to do" precondition. Wrapping them
-     * together makes the "nothing validated → exit without touching state" path
-     * explicit; the transaction opened by state_open then rolls back via state_free
-     * on the no-op exit. */
-    if (to_enable_validated.count > 0) {
-        /* Phase 2: Write scope to state */
-        for (size_t i = 0; i < to_enable_validated.count; i++) {
-            const char *profile = to_enable_validated.entries[i];
+    /* Phase 2: Write scope to state */
+    for (size_t i = 0; i < to_enable_validated.count; i++) {
+        const char *profile = to_enable_validated.entries[i];
 
-            err = state_enable_profile(state, profile, target);
-            if (err) return err;
-        }
-
-        /* Phase 3: The view after, and the record held against it. The builder
-         * reads the rows as the loop above left them — any --target supplied
-         * for the new entries, and the retargeted row's new binding, included. */
-        manifest_t *after = NULL;
-        err = manifest_build(repo, state, ctx->arena, &after);
+        err = state_enable_profile(state, profile, target);
         if (err) return err;
+    }
 
-        state_record_t *records = NULL;
-        size_t record_count = 0;
-        err = state_records(state, ctx->arena, &records, &record_count);
-        if (err) return err;
+    /* Phase 3: The view after, and the record held against it. The builder reads
+     * the rows as the loop above left them — any --target supplied for the new
+     * entries, and the retargeted row's new binding, included. */
+    manifest_t *after = NULL;
+    err = manifest_build(repo, state, ctx->arena, &after);
+    if (err) return err;
 
-        /* Phase 4: The save, then per-profile feedback — the retarget's line
-         * names its verb. Each line says what the save made true, so none is
-         * said before it: the COMMIT is a write the store can refuse on its own,
-         * where a full disk meets the transaction (core/state.h state_commit),
-         * and a line above it would stand over the refusal. */
-        err = state_save(state);
-        if (err) return err;
+    state_record_t *records = NULL;
+    size_t record_count = 0;
+    err = state_records(state, ctx->arena, &records, &record_count);
+    if (err) return err;
 
-        for (size_t i = 0; i < to_enable_validated.count; i++) {
-            const char *name = to_enable_validated.entries[i];
-            if (retarget && strcmp(name, retarget) == 0) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  {green}✓{reset} Updated target for %s\n",
-                    name
-                );
-            } else {
-                output_print(
-                    out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n", name
-                );
-            }
-        }
+    /* Phase 4: The save, then per-profile feedback — the retarget's line names
+     * its verb. Each line says what the save made true, so none is said before
+     * it: the COMMIT is a write the store can refuse on its own, where a full
+     * disk meets the transaction (core/state.h state_commit), and a line above
+     * it would stand over the refusal. */
+    err = state_save(state);
+    if (err) return err;
 
-        /* The next step, where the record owes apply work against the view the
-         * save leaves (core/workspace.h workspace_pending) — whatever began it,
-         * this enable or a change no apply has followed — and nowhere else: a
-         * profile enabled again before an apply let its copies go owes it nothing,
-         * and neither does one this machine places nothing of */
-        if (workspace_pending(after, records, record_count)) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy paths");
+    for (size_t i = 0; i < to_enable_validated.count; i++) {
+        const char *name = to_enable_validated.entries[i];
+        if (retarget && strcmp(name, retarget) == 0) {
+            output_success(out, OUTPUT_NORMAL, "Updated target for %s", name);
+        } else {
+            output_success(out, OUTPUT_NORMAL, "Enabled %s", name);
         }
     }
 
-    /* Live summary — only runs on non-dry-run, non-error completion. Any failure
-     * in Phases 2-4, the save's included, returns before it; dry-run owns its
-     * own messaging above. Each profile's enable, or its retarget, is said by
-     * its own line (Phase 4), so none is counted again here. */
-    output_gap(out, OUTPUT_NORMAL);
-
-    if (already_enabled > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "%zu profile%s already enabled",
-            already_enabled, already_enabled == 1 ? "" : "s"
-        );
-    }
-    if (not_found > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "%zu profile%s not found",
-            not_found, not_found == 1 ? "" : "s"
-        );
-    }
-    if (no_target > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "%zu profile%s need%s a target",
-            no_target, no_target == 1 ? "" : "s",
-            no_target == 1 ? "s" : ""
-        );
-    }
-
-    /* Terminal: error only if the user's inputs produced zero validated profiles
-     * AND at least one was genuinely missing or needs a target — the code names
-     * which, for the reader; every error exits the same. Pure idempotent cases
-     * (all already-enabled, or --all on an empty repo) succeed. */
-    if (to_enable_validated.count == 0 && (not_found > 0 || no_target > 0)) {
-        return error_create(
-            not_found > 0 ? ERR_NOT_FOUND : ERR_INVALID_ARG,
-            "No profiles were enabled"
-        );
+    /* The next step, where the record owes apply work against the view the save
+     * leaves (core/workspace.h workspace_pending) — whatever began it, this enable
+     * or a change no apply has followed — and nowhere else: a profile enabled
+     * again before an apply let its copies go owes it nothing, and neither does
+     * one this machine places nothing of */
+    if (workspace_pending(after, records, record_count)) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy paths");
     }
 
     return NULL;
@@ -805,7 +747,7 @@ static error_t profile_disable(
 
     /* Phase 1: Gather & validate
      *
-     * The enabled rows, where the handle holds them, read until Phase 3's first
+     * The enabled rows, where the handle holds them, read until Phase 2's first
      * delete replaces them (core/state.h state_profiles). What outlives that is
      * copied: the names into to_disable_validated, the targets into forgotten. */
     state_profiles_t enabled_profiles = state_profiles(state);
@@ -854,7 +796,7 @@ static error_t profile_disable(
     }
 
     /* The bindings the deletes forget, spelled as the screens print them — arena
-     * copies, because Phase 3's first delete replaces the row cache state_target
+     * copies, because Phase 2's first delete replaces the row cache state_target
      * lends from. NULL where the row had none. */
     const char **forgotten = arena_calloc(
         ctx->arena, to_disable_validated.count, sizeof(*forgotten)
@@ -868,119 +810,89 @@ static error_t profile_disable(
         forgotten[i] = arena_strdup(ctx->arena, shown);
     }
 
-    /* Dry-run: preview what a live run would do, skip every state mutation. Dry-run
-     * owns its complete UX below — the live-path summary is unreachable on this
-     * branch, which returns before it. It changes the enabled set nowhere, so
-     * it leaves apply nothing to do, and names no next step. */
-    if (opts->dry_run) {
-        output_gap(out, OUTPUT_NORMAL);
-
-        if (to_disable_validated.count > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "Would disable %zu profile%s:",
-                to_disable_validated.count,
-                to_disable_validated.count == 1 ? "" : "s"
-            );
-            for (size_t i = 0; i < to_disable_validated.count; i++) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  - %s", to_disable_validated.entries[i]
-                );
-                if (forgotten[i]) {
-                    output_print(
-                        out, OUTPUT_NORMAL, " (forgets target %s)", forgotten[i]
-                    );
-                }
-                output_endline(out, OUTPUT_NORMAL);
-            }
-        }
-        if (not_enabled > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "%zu profile%s not enabled",
-                not_enabled, not_enabled == 1 ? "" : "s"
-            );
-        }
-        return NULL;
-    }
-
-    /* Phases 2–4 share the "we have work to do" precondition. Wrapping them
-     * together makes the "nothing validated → exit without touching state" path
-     * explicit; the transaction opened by state_open then rolls back via state_free
-     * on the no-op exit. */
-    if (to_disable_validated.count > 0) {
-        /* Phase 2: Write scope to state */
-        for (size_t i = 0; i < to_disable_validated.count; i++) {
-            err = state_disable_profile(state, to_disable_validated.entries[i]);
-            if (err) return err;
-        }
-
-        /* Phase 3: The view after, and the record held against it (see
-         * profile_enable).
-         *
-         * Unlike enable's, this build gates nothing: the disable is a membership
-         * write that needs no view, and it must land whatever the enabled set
-         * looks like — it is the way out of a set the loads cannot build (a profile
-         * whose metadata.json will not parse, a branch that will not load), and
-         * what it leaves can hold another such profile still. The message names
-         * the profile; warn with it and disable without the next step. */
-        manifest_t *after = NULL;
-        state_record_t *records = NULL;
-        size_t record_count = 0;
-        err = manifest_build(repo, state, ctx->arena, &after);
-        if (err) {
-            output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
-        } else {
-            err = state_records(state, ctx->arena, &records, &record_count);
-            if (err) return err;
-        }
-
-        /* Phase 4: The save, then per-profile feedback — each line said once
-         * the save made it true, as enable's are. The target the row carried
-         * went with it; the line says so and names the command that puts it
-         * back. */
-        err = state_save(state);
-        if (err) return err;
-
-        for (size_t i = 0; i < to_disable_validated.count; i++) {
-            const char *name = to_disable_validated.entries[i];
-            output_print(
-                out, OUTPUT_NORMAL, "  {green}✓{reset} Disabled %s\n", name
-            );
-            if (forgotten[i]) {
-                output_print(
-                    out, OUTPUT_NORMAL,
-                    "  Forgot target %s (dotta profile enable %s --target %s "
-                    "restores it)\n", forgotten[i], name, forgotten[i]
-                );
-            }
-        }
-
-        /* The next step, where the record owes apply work against the view the
-         * save leaves (core/workspace.h workspace_pending), as enable's — none
-         * where nothing this machine recorded leaves with the profile, nor where
-         * no view after was built to ask */
-        if (after && workspace_pending(after, records, record_count)) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed paths");
-        }
-    }
-
-    /* Live summary — only runs on non-dry-run, non-error completion. All reachable
-     * states here are successes:
-     *   - count > 0: actual work performed.
-     *   - count == 0 && not_enabled > 0: idempotent (user asked to disable profiles
-     *     that weren't enabled).
-     *   - count == 0 && not_enabled == 0 is unreachable: the line names one profile
-     *     at least or --all (profile_post_parse), and the --all-on-empty case
-     *     is caught by the early exit.
-     * Each profile's disable is said by its own line (Phase 5), so none is counted
-     * again here. */
-    output_gap(out, OUTPUT_NORMAL);
-
+    /* The skip said once: a named profile that was not enabled, by this count,
+     * its own line being verbose's */
     if (not_enabled > 0) {
         output_info(
             out, OUTPUT_NORMAL, "%zu profile%s not enabled",
             not_enabled, not_enabled == 1 ? "" : "s"
         );
+    }
+
+    /* Nothing to disable: every profile the line named was not enabled, a success,
+     * as --all over an empty set is above, the transaction state_open began rolling
+     * back at state_free */
+    if (to_disable_validated.count == 0) return NULL;
+
+    /* Dry-run: preview what a live run would do, skip every state mutation. It
+     * changes the enabled set nowhere, so it leaves apply nothing to do, and
+     * names no next step. */
+    if (opts->dry_run) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_info(
+            out, OUTPUT_NORMAL, "Would disable %zu profile%s:",
+            to_disable_validated.count, to_disable_validated.count == 1 ? "" : "s"
+        );
+        for (size_t i = 0; i < to_disable_validated.count; i++) {
+            output_print(out, OUTPUT_NORMAL, "  - %s", to_disable_validated.entries[i]);
+            if (forgotten[i]) {
+                output_print(out, OUTPUT_NORMAL, " (forgets target %s)", forgotten[i]);
+            }
+            output_endline(out, OUTPUT_NORMAL);
+        }
+        return NULL;
+    }
+
+    /* Phase 2: Write scope to state */
+    for (size_t i = 0; i < to_disable_validated.count; i++) {
+        err = state_disable_profile(state, to_disable_validated.entries[i]);
+        if (err) return err;
+    }
+
+    /* Phase 3: The view after, and the record held against it (see profile_enable).
+     *
+     * Unlike enable's, this build gates nothing: the disable is a membership
+     * write that needs no view, and it must land whatever the enabled set looks
+     * like — it is the way out of a set the loads cannot build (a profile whose
+     * metadata.json will not parse, a branch that will not load), and what it
+     * leaves can hold another such profile still. The message names the profile;
+     * warn with it and disable without the next step. */
+    manifest_t *after = NULL;
+    state_record_t *records = NULL;
+    size_t record_count = 0;
+    err = manifest_build(repo, state, ctx->arena, &after);
+    if (err) {
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
+    } else {
+        err = state_records(state, ctx->arena, &records, &record_count);
+        if (err) return err;
+    }
+
+    /* Phase 4: The save, then per-profile feedback — each line said once the
+     * save made it true, as enable's are. The target the row carried went with
+     * it; the line says so and names the command that puts it back. */
+    err = state_save(state);
+    if (err) return err;
+
+    for (size_t i = 0; i < to_disable_validated.count; i++) {
+        const char *name = to_disable_validated.entries[i];
+        output_success(out, OUTPUT_NORMAL, "Disabled %s", name);
+        if (forgotten[i]) {
+            output_print(
+                out, OUTPUT_NORMAL,
+                "  Forgot target %s (dotta profile enable %s --target %s "
+                "restores it)\n", forgotten[i], name, forgotten[i]
+            );
+        }
+    }
+
+    /* The next step, where the record owes apply work against the view the save
+     * leaves (core/workspace.h workspace_pending), as enable's — none where nothing
+     * this machine recorded leaves with the profile, nor where no view after
+     * was built to ask */
+    if (after && workspace_pending(after, records, record_count)) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed paths");
     }
 
     return NULL;

@@ -1944,7 +1944,7 @@ static const args_opt_t remove_opts[] = {
     ARGS_FLAG(
         "delete-files",
         cmd_remove_options_t,delete_files,
-        "Stage deployed items for removal on next apply"
+        "Remove the deployed items at the next apply"
     ),
     ARGS_FLAG(
         "n dry-run",
@@ -1995,11 +1995,11 @@ const args_command_t spec_remove = {
         "  (default)           Remove paths from the profile branch. Deployed\n"
         "                      items are released from management and stay\n"
         "                      on the filesystem untouched.\n"
-        "  --delete-files      Same as default, plus stage the deployed\n"
-        "                      items for removal on the next '%s apply'.\n"
+        "  --delete-files      Same as default, plus remove the deployed\n"
+        "                      items at the next '%s apply'.\n"
         "  --delete-profile    Delete the entire profile branch. No paths\n"
-        "                      may be given; with --delete-files the deployed\n"
-        "                      items are staged for removal as well.\n",
+        "                      may be given; with --delete-files the next\n"
+        "                      apply removes the deployed items as well.\n",
     .examples    =
         "  %s remove global ~/.bashrc                  # Untrack, keep on disk\n"
         "  %s remove darwin ~/.config/nvim -n          # Preview removal\n"
@@ -2009,7 +2009,7 @@ const args_command_t spec_remove = {
     .epilogue    =
         "See also:\n"
         "  %s profile disable <name>  # Stop deploying without deleting\n"
-        "  %s apply                   # Carry out staged file removals\n",
+        "  %s apply                   # Carry out the scheduled removals\n",
     .opts_size   = sizeof(cmd_remove_options_t),
     .opts        = remove_opts,
     .post_parse  = remove_post_parse,

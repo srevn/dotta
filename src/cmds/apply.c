@@ -3549,7 +3549,7 @@ const args_command_t spec_apply = {
         "See also:\n"
         "  %s status          # Preview pending deployment\n"
         "  %s update          # Commit filesystem changes back\n"
-        "  %s profile enable  # Stage a profile for deployment\n",
+        "  %s profile enable  # Enable a profile for deployment\n",
     .opts_size    = sizeof(cmd_apply_options_t),
     .opts         = apply_opts,
     .classify     = apply_classify,

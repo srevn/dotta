@@ -35,7 +35,7 @@ typedef struct {
 
     /* Operation modes */
     bool delete_profile;        /* Delete entire profile branch */
-    bool delete_files;          /* Stage deployed files for deletion via apply */
+    bool delete_files;          /* The deployed copies removed by the next apply */
 
     /* Safety flags */
     bool dry_run;               /* Show what would be removed without doing it */
@@ -62,7 +62,7 @@ typedef struct {
  *
  * This command modifies the Git repository only. By default, deployed files are
  * released from management and remain on the filesystem. With delete_files=true,
- * they are staged for removal and deleted when 'dotta apply' is run.
+ * they are ordered pruned, and deleted when 'dotta apply' is run.
  *
  * Executes hooks; never touches deployed files. Writes the record for what the
  * commit let go (retire, or prune-order under --delete-files) — the record phase

@@ -2040,12 +2040,12 @@ static const args_opt_t update_opts[] = {
     ARGS_FLAG(
         "include-new",
         cmd_update_options_t,include_new,
-        "Also stage new files inside tracked directories"
+        "Also commit new files inside tracked directories"
     ),
     ARGS_FLAG(
         "only-new",
         cmd_update_options_t,only_new,
-        "Stage only new files; skip modifications"
+        "Commit only new files; skip modifications"
     ),
     ARGS_POSITIONAL_RAW(
         cmd_update_options_t,positional_args,  positional_count,

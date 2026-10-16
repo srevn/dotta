@@ -2811,9 +2811,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     output_gap(out, OUTPUT_NORMAL);
 
     /* The record phase's own screen, below the ✓ lines the add earned: the cause
-     * and what it left standing, what the rows took, or the fact that no row
-     * holds this profile. The fate is the error — the receipt carries no field
-     * for it — and it renders here with the other two rather than at the call. */
+     * and what it left standing, what the rows did not take, or the fact that
+     * no row holds this profile. The fate is the error — the receipt carries no
+     * field for it — and it renders here with the other two, not at the call. */
     if (record_err) {
         output_warning(
             out, OUTPUT_NORMAL, "Failed to update the record: %s",
@@ -2829,20 +2829,14 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             "The record was not written - what it already held stands"
         );
     } else if (state_enabled(state, opts->profile)) {
-        /* What the record took of what the capture listed. The unit is the path
-         * — one row per managed path, both kinds — and the kinds are named where
-         * they were captured, above. Never zero: an add that captured nothing
-         * ended at its selection, so the count line and the notes below always
-         * have a capture to speak of. */
+        /* What the record took of what the capture listed, said only where it
+         * took less: every path taken is what every add records, the ✓ lines
+         * above saying it already. The unit is the path — one row per managed
+         * path, both kinds — and the kinds are named where they were captured,
+         * above. */
         const size_t captured = walk.files.count + walk.directories.count;
-        const bool whole = receipt.anchored == captured;
 
-        if (whole) {
-            output_info(
-                out, OUTPUT_NORMAL, "Record updated (%zu path%s marked as deployed)",
-                captured, captured == 1 ? "" : "s"
-            );
-        } else {
+        if (receipt.anchored != captured) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "Record updated (%zu/%zu path%s marked as deployed)",
@@ -2889,17 +2883,6 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 receipt.taken_over, receipt.taken_over == 1 ? "" : "s"
             );
         }
-        /* Why nothing needs deploying: the bytes were read off disk, so the record
-         * names them deployed without an apply having run — what this add captured;
-         * a commit another writer landed since is Git's move past it, the next
-         * status's to name. Said only where it is true of every path on the line
-         * — a capture a row did not take is not standing at the winner's blob. */
-        if (whole) {
-            output_hint(
-                out, OUTPUT_NORMAL, "Paths captured from filesystem (already deployed)"
-            );
-        }
-        output_hint(out, OUTPUT_NORMAL, "Run 'dotta status' to verify");
     } else {
         output_info(
             out, OUTPUT_NORMAL, "Profile not enabled - nothing marked as deployed"

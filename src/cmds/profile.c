@@ -22,6 +22,7 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "core/workspace.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
@@ -740,7 +741,8 @@ static error_t profile_enable(
 
     /* Dry-run: preview what a live run would do, skip every state mutation. Dry-run
      * owns its complete UX below — the live-path summary is unreachable on this
-     * branch, which returns before it. */
+     * branch, which returns before it. It changes the enabled set nowhere, so
+     * it leaves apply nothing to do, and names no next step. */
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
 
@@ -760,12 +762,6 @@ static error_t profile_enable(
             output_info(
                 out, OUTPUT_NORMAL, "Would update deployment target for '%s'",
                 retarget
-            );
-        }
-        if (to_enable_validated.count > 0) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_info(
-                out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy paths"
             );
         }
         if (already_enabled > 0) {
@@ -853,19 +849,24 @@ static error_t profile_enable(
             }
             profile_print_enable_stats(out, name, &stats[i]);
         }
+
+        /* The next step, where the record owes apply work against the view the
+         * save leaves (core/workspace.h workspace_pending) — whatever began it,
+         * this enable or a change no apply has followed — and nowhere else: a
+         * profile enabled again before an apply let its copies go owes it nothing,
+         * and neither does one this machine places nothing of */
+        if (workspace_pending(after, records, record_count)) {
+            output_gap(out, OUTPUT_NORMAL);
+            output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy paths");
+        }
     }
 
     /* Live summary — only runs on non-dry-run, non-error completion. Any failure
      * in Phases 2-4, the save's included, returns before it; dry-run owns its
-     * own messaging above. Each profile's enable, or its retarget, is said by its
-     * own line (Phase 4), so none is counted again here. */
+     * own messaging above. Each profile's enable, or its retarget, is said by
+     * its own line (Phase 4), so none is counted again here. */
     output_gap(out, OUTPUT_NORMAL);
 
-    if (to_enable_validated.count > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy paths"
-        );
-    }
     if (already_enabled > 0) {
         output_info(
             out, OUTPUT_NORMAL, "%zu profile%s already enabled",
@@ -1008,7 +1009,8 @@ static error_t profile_disable(
 
     /* Dry-run: preview what a live run would do, skip every state mutation. Dry-run
      * owns its complete UX below — the live-path summary is unreachable on this
-     * branch, which returns before it. */
+     * branch, which returns before it. It changes the enabled set nowhere, so
+     * it leaves apply nothing to do, and names no next step. */
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
 
@@ -1029,10 +1031,6 @@ static error_t profile_disable(
                 }
                 output_endline(out, OUTPUT_NORMAL);
             }
-            output_gap(out, OUTPUT_NORMAL);
-            output_info(
-                out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed paths"
-            );
         }
         if (not_enabled > 0) {
             output_info(
@@ -1066,18 +1064,18 @@ static error_t profile_disable(
             if (err) return err;
         }
 
-        /* Phase 4: The view after, and the diff — skipped with `before`, whose
-         * warning already covers it. Once `before` has built, this build cannot
-         * fail on Git's account: the post-disable set is a subset of the same
-         * profiles at the same HEADs. */
+        /* Phase 4: The view after, the record, and the diff — skipped with
+         * `before`, whose warning already covers it. Once `before` has built,
+         * this build cannot fail on Git's account: the post-disable set is a
+         * subset of the same profiles at the same HEADs. */
         manifest_diff_stats_t *stats = NULL;
+        manifest_t *after = NULL;
+        state_record_t *records = NULL;
+        size_t record_count = 0;
         if (before) {
-            manifest_t *after = NULL;
             err = manifest_build(repo, state, ctx->arena, &after);
             if (err) return err;
 
-            state_record_t *records = NULL;
-            size_t record_count = 0;
             err = state_records(state, ctx->arena, &records, &record_count);
             if (err) return err;
 
@@ -1109,6 +1107,15 @@ static error_t profile_disable(
                 );
             }
         }
+
+        /* The next step, where the record owes apply work against the view the
+         * save leaves (core/workspace.h workspace_pending), as enable's — none
+         * where nothing this machine recorded leaves with the profile, nor where
+         * no view after was built to ask */
+        if (after && workspace_pending(after, records, record_count)) {
+            output_gap(out, OUTPUT_NORMAL);
+            output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed paths");
+        }
     }
 
     /* Live summary — only runs on non-dry-run, non-error completion. All reachable
@@ -1122,12 +1129,6 @@ static error_t profile_disable(
      * Each profile's disable is said by its own line (Phase 5), so none is counted
      * again here. */
     output_gap(out, OUTPUT_NORMAL);
-
-    if (to_disable_validated.count > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed paths"
-        );
-    }
 
     if (not_enabled > 0) {
         output_info(

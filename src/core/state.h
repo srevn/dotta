@@ -820,7 +820,8 @@ const char *state_target(
  *   - cmds/remove.c remove_profile_candidates (every record naming the profile,
  *     read before the prompt and under the lock) and core/workspace.c
  *     workspace_pending (every record against a view, with no workspace and no
- *     disk, handed the array by cmds/sync.c cmd_sync): walks, key order unread
+ *     disk, handed the array by cmds/sync.c cmd_sync and cmds/profile.c
+ *     profile_enable and profile_disable): walks, key order unread
  *
  * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
  *

@@ -1656,7 +1656,10 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 /* Strict mode: the report says what blocks, and the refusal why.
                  * The lines carry status's section vocabulary — one item, one
                  * line — and the unverifiable count rides along as an advisory
-                 * so the paths the analysis could not settle are never silent. */
+                 * so the paths the analysis could not settle are never silent.
+                 * A dry run is refused alike: the refusal is what the sync would
+                 * do, where the non-strict question is consent, which a dry run
+                 * is owed none of. */
                 output_section(out, OUTPUT_NORMAL, "Workspace has uncommitted changes");
                 output_gap(out, OUTPUT_NORMAL);
 
@@ -1733,7 +1736,8 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 goto cleanup;
             }
 
-            /* Non-strict mode: Warn and require user confirmation
+            /* Non-strict mode: warn, and require the user's confirmation of a
+             * run that pulls or pushes
              *
              * The risk: syncing before committing local changes can turn them
              * into conflicts. If the pull moves a file the user edited, the edit
@@ -1783,12 +1787,15 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             }
 
             /* The user's consent, defaulting to no: a terminal's answer or a
-             * pipe's — the question discards nothing, so any stdin answers it.
-             * Declined or unanswered, the run stops before the Git phase and
-             * says what to do first: declined is the user's word, a cancel and
-             * no failure; no answer, nobody declined, and the run is refused as
-             * strict mode refuses it, naming the flag that syncs anyway. */
-            const output_answer_t answer = output_ask(out, false, "Continue anyway?");
+             * pipe's — the question discards nothing, so any stdin answers it —
+             * or yes where none is owed, a dry run pulling and pushing nothing,
+             * the report above its preview. Declined or unanswered, the run stops
+             * before the Git phase and says what to do first: declined is the
+             * user's word, a cancel and no failure; no answer, nobody declined,
+             * and the run is refused as strict mode refuses it, naming the flag
+             * that syncs anyway. */
+            const output_answer_t answer = opts->dry_run
+                ? OUTPUT_ANSWER_YES : output_ask(out, false, "Continue anyway?");
             if (answer != OUTPUT_ANSWER_YES) {
                 output_gap(out, OUTPUT_NORMAL);
                 if (answer == OUTPUT_ANSWER_NO) {
@@ -1825,7 +1832,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 goto cleanup;  /* err is NULL for a decline: a cancel, not an error */
             }
 
-            /* User confirmed - proceed with sync */
+            /* Confirmed, or no consent owed: proceed */
             output_info(out, OUTPUT_VERBOSE, "Proceeding with uncommitted changes");
         } else {
             /* Nothing blocks, but not every path is settled: say so and proceed.
@@ -1928,8 +1935,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     bool all_quiet = true;
     for (size_t i = 0; i < results.profile_count; i++) {
         const profile_sync_result_t *r = &results.profiles[i];
-        if (r->outcome != SYNC_OUTCOME_UP_TO_DATE ||
-            r->state != UPSTREAM_UP_TO_DATE) {
+        if (r->outcome != SYNC_OUTCOME_UP_TO_DATE || r->state != UPSTREAM_UP_TO_DATE) {
             all_quiet = false;
             break;
         }

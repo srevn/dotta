@@ -71,15 +71,16 @@ static const char *apply_consent_label(const workspace_item_t *orphan) {
  * Print the deploy skips: what the run will not do, and why
  *
  * The skips are reported and the run goes on: the verdicts already exclude them,
- * so nothing downstream re-checks. One section for every skip, both kinds, in
- * path order, the order preflight decides them in — a skipped squatter precedes
- * the rows beneath it, which is the reading order — capped like every preview
- * list (one skipped squatter takes its whole subtree with it, so this one has a
- * multiplier cleanup's uncapped block does not). The header is the block's only
- * prose, as it is in every block on both sides: no one sentence covers both
- * families here — the consent skips --force lifts and the hard blocks it does
- * not — and "not deployed" would say the header again. Each row names its own
- * reason, and the remedies close.
+ * so nothing downstream re-checks. One section for every skip, both kinds, a
+ * directory row by its slash as status's lines name it (path_kind_suffix) and a
+ * path a reason names in its parenthesis bare, in path order, the order preflight
+ * decides them in — a skipped squatter precedes the rows beneath it, which is
+ * the reading order — capped like every preview list (one skipped squatter takes
+ * its whole subtree with it, so this one has a multiplier cleanup's uncapped
+ * block does not). The header is the block's only prose, as it is in every block
+ * on both sides: no one sentence covers both families here — the consent skips
+ * --force lifts and the hard blocks it does not — and "not deployed" would say
+ * the header again. Each row names its own reason, and the remedies close.
  *
  * Two line families. The landing and occupancy reasons keep their exact
  * parentheticals — facts about the path's surroundings, no profile — and a
@@ -175,8 +176,8 @@ static void apply_print_deploy_skips(
                     /* A directory the clearance would empty, its bits refusing
                      * the removals in it */
                     output_print(
-                        out, row_level, "  {red}✗{reset} %s (%s is not writable)\n",
-                        path, s->blocker.path
+                        out, row_level, "  {red}✗{reset} %s%s (%s is not writable)\n",
+                        path, path_kind_suffix(s->item->item_kind), s->blocker.path
                     );
                 } else if (s->ancestor) {
                     /* The landing, by the bit that refused: its search where
@@ -186,15 +187,15 @@ static void apply_print_deploy_skips(
                      * its own (apply_print_cleanup_refused): a chmod between
                      * the two words the other bit (stated) */
                     output_print(
-                        out, row_level, "  {red}✗{reset} %s (%.*s %s)\n",
-                        path, (int) s->ancestor, path,
+                        out, row_level, "  {red}✗{reset} %s%s (%.*s %s)\n",
+                        path, path_kind_suffix(s->item->item_kind), (int) s->ancestor, path,
                         s->item->occupant == FS_OCCUPANT_UNKNOWN
                             ? "is not searchable" : "is not writable"
                     );
                 } else {
                     output_print(
-                        out, row_level, "  {red}✗{reset} %s (ancestry cannot be reached)\n",
-                        path
+                        out, row_level, "  {red}✗{reset} %s%s (ancestry cannot be reached)\n",
+                        path, path_kind_suffix(s->item->item_kind)
                     );
                 }
                 break;
@@ -208,20 +209,23 @@ static void apply_print_deploy_skips(
                  * name where this host has one, by number where it does not. A
                  * screen names what it can. */
                 if (identity_may_chmod(identity(), s->item->st.st_uid)) {
-                    output_print(out, row_level, "  {red}✗{reset} %s (not readable)\n", path);
+                    output_print(
+                        out, row_level, "  {red}✗{reset} %s%s (not readable)\n",
+                        path, path_kind_suffix(s->item->item_kind)
+                    );
                     break;
                 }
 
                 const struct passwd *pwd = getpwuid(s->item->st.st_uid);
                 if (pwd && pwd->pw_name) {
                     output_print(
-                        out, row_level, "  {red}✗{reset} %s (owned by %s)\n",
-                        path, pwd->pw_name
+                        out, row_level, "  {red}✗{reset} %s%s (owned by %s)\n",
+                        path, path_kind_suffix(s->item->item_kind), pwd->pw_name
                     );
                 } else {
                     output_print(
-                        out, row_level, "  {red}✗{reset} %s (owned by uid %u)\n",
-                        path, (unsigned) s->item->st.st_uid
+                        out, row_level, "  {red}✗{reset} %s%s (owned by uid %u)\n",
+                        path, path_kind_suffix(s->item->item_kind), (unsigned) s->item->st.st_uid
                     );
                 }
                 break;
@@ -229,8 +233,8 @@ static void apply_print_deploy_skips(
 
             case DEPLOY_SKIP_ANCESTOR: {
                 output_print(
-                    out, row_level, "  {red}✗{reset} %s (%.*s is not a directory)\n",
-                    path, (int) s->ancestor, path
+                    out, row_level, "  {red}✗{reset} %s%s (%.*s is not a directory)\n",
+                    path, path_kind_suffix(s->item->item_kind), (int) s->ancestor, path
                 );
                 break;
             }
@@ -240,15 +244,15 @@ static void apply_print_deploy_skips(
                  * dotta keeps no record of a landing's (core/deploy.h
                  * deploy_blocker_t) */
                 output_print(
-                    out, row_level, "  {red}✗{reset} %s (%s is not dotta's to remove)\n",
-                    path, s->blocker.path
+                    out, row_level, "  {red}✗{reset} %s%s (%s is not dotta's to remove)\n",
+                    path, path_kind_suffix(s->item->item_kind), s->blocker.path
                 );
                 break;
             }
 
             case DEPLOY_SKIP_TYPE: {
                 output_colored(out, row_level, OUTPUT_COLOR_RED, "  ⚠");
-                output_print(out, row_level, " %s ", path);
+                output_print(out, row_level, " %s%s ", path, path_kind_suffix(s->item->item_kind));
                 if (!s->item->row) {
                     /* Dotta's node, which no row stands at: why its replace waits
                      * for --force */
@@ -282,7 +286,7 @@ static void apply_print_deploy_skips(
                 bool conflict = workspace_item_route(s->item) == WORKSPACE_ROUTE_CONFLICT;
 
                 output_colored(out, row_level, OUTPUT_COLOR_RED, "  ✗");
-                output_print(out, row_level, " %s ", path);
+                output_print(out, row_level, " %s%s ", path, path_kind_suffix(s->item->item_kind));
                 output_colored(
                     out, row_level, OUTPUT_COLOR_RED, "(%s from ",
                     conflict ? "changed in Git and on disk" : "modified locally"
@@ -298,7 +302,9 @@ static void apply_print_deploy_skips(
                      * beneath it, worded by the bits there (core/deploy.h
                      * deploy_blocker_t's fault) */
                     output_colored(out, row_level, OUTPUT_COLOR_YELLOW, "  ?");
-                    output_print(out, row_level, " %s ", path);
+                    output_print(
+                        out, row_level, " %s%s ", path, path_kind_suffix(s->item->item_kind)
+                    );
                     output_colored(
                         out, row_level, OUTPUT_COLOR_YELLOW, "(%s %s)\n", s->blocker.path,
                         s->blocker.fault == WORKSPACE_FAULT_UNREADABLE
@@ -310,7 +316,7 @@ static void apply_print_deploy_skips(
                 /* The failed look's word (apply_fault_label) — a path rung's,
                  * so the look was at this very path */
                 output_colored(out, row_level, OUTPUT_COLOR_YELLOW, "  ?");
-                output_print(out, row_level, " %s ", path);
+                output_print(out, row_level, " %s%s ", path, path_kind_suffix(s->item->item_kind));
                 output_colored(
                     out, row_level, OUTPUT_COLOR_YELLOW, "(%s from ",
                     apply_fault_label(s->item->fault)
@@ -326,8 +332,8 @@ static void apply_print_deploy_skips(
                  * pair, and the row's own claim is not the cause */
                 if (s->ancestor) {
                     output_print(
-                        out, row_level, "  {red}✗{reset} %s (%.*s needs root to create)\n",
-                        path, (int) s->ancestor, path
+                        out, row_level, "  {red}✗{reset} %s%s (%.*s needs root to create)\n",
+                        path, path_kind_suffix(s->item->item_kind), (int) s->ancestor, path
                     );
                     break;
                 }
@@ -337,8 +343,8 @@ static void apply_print_deploy_skips(
                 const char *group = s->item->row->group ? s->item->row->group : "";
 
                 output_print(
-                    out, row_level, "  {red}✗{reset} %s (%s%s%s needs root to set)\n",
-                    path, owner, *group ? ":" : "", group
+                    out, row_level, "  {red}✗{reset} %s%s (%s%s%s needs root to set)\n",
+                    path, path_kind_suffix(s->item->item_kind), owner, *group ? ":" : "", group
                 );
                 break;
             }
@@ -1184,20 +1190,21 @@ static void apply_print_deploy_receipt(
         }
     }
 
-    /* The rows that did not land — both kinds, verdict order, each with its cause.
-     * At every verbosity, and after what landed (the header carries the rationale);
-     * capped the way the skip block is. The cause is the chain's root, where
-     * the refusal speaks verbatim — EISDIR, ENOSPC, a blob that would not load;
-     * each wrap above it names the row, in its storage spelling or its filesystem
-     * one, and the line already names it. */
+    /* The rows that did not land — both kinds, verdict order, a directory by
+     * its slash, each with its cause. At every verbosity, and after what landed
+     * (the header carries the rationale); capped the way the skip block is. The
+     * cause is the chain's root, where the refusal speaks verbatim — EISDIR,
+     * ENOSPC, a blob that would not load; each wrap above it names the row, in
+     * its storage spelling or its filesystem one, and the line already names it. */
     if (receipt->failed.count > 0) {
         output_section(out, OUTPUT_QUIET, "Failed deployments");
         for (size_t i = 0; i < receipt->failed.count && i < LIST_LIMIT; i++) {
             const deploy_outcome_t *o = &receipt->failed.entries[i];
 
             output_print(
-                out, OUTPUT_QUIET, "  {red}✗{reset} %s (%s)\n",
+                out, OUTPUT_QUIET, "  {red}✗{reset} %s%s (%s)\n",
                 o->verdict->item->filesystem_path,
+                path_kind_suffix(o->verdict->item->item_kind),
                 error_message(error_root(o->error))
             );
         }
@@ -1462,19 +1469,20 @@ static void apply_print_cleanup_receipt(
         }
     }
 
-    /* The items the run could not remove — both kinds, act order, each with its
-     * cause. At every verbosity, and after what went (the header carries the
-     * rationale); capped the way deploy's failed section is. The cause is the
-     * chain's root, where the refusal speaks verbatim — EROFS, an immutable flag's
-     * EPERM, EBUSY — read as deploy's failed rows read theirs. */
+    /* The items the run could not remove — both kinds, act order, a directory
+     * by its slash, each with its cause. At every verbosity, and after what went
+     * (the header carries the rationale); capped the way deploy's failed section
+     * is. The cause is the chain's root, where the refusal speaks verbatim —
+     * EROFS, an immutable flag's EPERM, EBUSY — read as deploy's failed rows
+     * read theirs. */
     if (receipt->failed.count > 0) {
         output_section(out, OUTPUT_QUIET, "Failed prunes");
         for (size_t i = 0; i < receipt->failed.count && i < LIST_LIMIT; i++) {
             const cleanup_outcome_t *o = &receipt->failed.entries[i];
 
             output_print(
-                out, OUTPUT_QUIET, "  {red}✗{reset} %s (%s)\n",
-                o->item->filesystem_path,
+                out, OUTPUT_QUIET, "  {red}✗{reset} %s%s (%s)\n",
+                o->item->filesystem_path, path_kind_suffix(o->item->item_kind),
                 error_message(error_root(o->error))
             );
         }
@@ -1834,17 +1842,17 @@ static void apply_print_cleanup_skips(
 /**
  * Print the cleanup refusals: what the run cannot prune, and the way out offered
  *
- * Both kinds in one section — files, then the directories deepest first — each
- * row naming the parent whose bits deny the run, verbatim, in the words deploy's
- * PERMISSION row uses for the same fact ("… is not writable"; "ancestry cannot
- * be reached" where the workspace's own lstat was denied on the way — the occupant
- * says so, and the parent the probe asked is then not the rung that refused),
- * and the one closer: sudo, named for a run that holds none the way
- * apply_print_deploy_skips names it — asked of the identity, never handed in.
- * Capped like deploy's block — one root-owned parent can refuse a whole subtree
- * — where cleanup's skipped-files block is not (every row there carries a reason
- * of its own). Neither a --force line nor a by-hand one: root is not a flag,
- * and the row already names the directory a hand would have to open.
+ * Both kinds in one section — files, then the directories deepest first, each
+ * by its slash — each row naming the parent whose bits deny the run, verbatim,
+ * in the words deploy's PERMISSION row uses for the same fact ("… is not writable";
+ * "ancestry cannot be reached" where the workspace's own lstat was denied on
+ * the way — the occupant says so, and the parent the probe asked is then not
+ * the rung that refused), and the one closer: sudo, named for a run that holds
+ * none the way apply_print_deploy_skips names it — asked of the identity, never
+ * handed in. Capped like deploy's block — one root-owned parent can refuse a
+ * whole subtree — where cleanup's skipped-files block is not (every row there
+ * carries a reason of its own). Neither a --force line nor a by-hand one: root
+ * is not a flag, and the row already names the directory a hand would have to open.
  *
  * Last of the previews, after the skips it is the sibling of: a refusal is a
  * skip by fate — the count lines above say "skipped", the record stays, the receipt
@@ -1874,13 +1882,13 @@ static void apply_print_cleanup_refused(
 
             if (item->occupant == FS_OCCUPANT_UNKNOWN) {
                 output_print(
-                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s (ancestry cannot be reached)\n",
-                    path
+                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s%s (ancestry cannot be reached)\n",
+                    path, path_kind_suffix(item->item_kind)
                 );
             } else {
                 output_print(
-                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%.*s is not writable)\n",
-                    path, (int) str_path_parent_len(path), path
+                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s%s (%.*s is not writable)\n", path,
+                    path_kind_suffix(item->item_kind), (int) str_path_parent_len(path), path
                 );
             }
         }

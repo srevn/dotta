@@ -531,8 +531,8 @@ typedef enum {
  * order, else the first edit — the next run names the next (stated).
  *
  * Read by cmds/apply.c apply_print_deploy_skips: the path on the row's line,
- * the item for the edit's word, the fault for the sudo closer. A reader not on
- * this list is a bug.
+ * the item for the edit's word and the closer its failed read takes, the fault
+ * for the sudo closer. A reader not on this list is a bug.
  */
 typedef struct {
     const char *path;                /* A stop's (the walk's copy) or the edit's; NULL: none */

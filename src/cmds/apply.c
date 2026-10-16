@@ -108,34 +108,40 @@ static const char *apply_consent_label(const workspace_item_t *orphan) {
  * sentence naming it.
  *
  * The remedies close the block, indented under the rows the way every block closes,
- * each gated by what is actually present — the reasons, and for a named squatter
- * the claim that holds it (the fate-borne ancestry): a conflict-only run is not
- * told to fix paths by hand, a squatted ancestor claim is not told to widen a
- * scope that can never plan it, a run that holds root is not told to hold it,
- * and an unreadable-only run is offered neither a flag that will not lift it
- * nor a by-hand fix for a path dotta could not even read: it closes with its
- * own line, because dotta never writes on a guess. The refusals the run's identity
- * met — a landing whose bits deny the invoker, a directory it does not own or
- * may not read, a pair it cannot set, a look that met EACCES on the path itself,
- * and a clearance's stop the bits refused — close by naming sudo, and only for
- * a run that holds none: identity()->privileged. The line offers root and promises
- * nothing: a policy may deny root a landing or a read as well. The key's refusal
- * closes the same way, naming the verb that lifts it, and the switch before it
- * where the configuration has encryption off (config->encryption_enabled) — the
- * two facts of the run this block asks; the two refusals are told apart by the
- * field the label above reads. Neither line spells the command that would: the
- * user typed one, the verb the other names says the rest when it is run, and
- * what sudo does to their environment on the way is sudo's to document, not
- * dotta's. The consent remedy teaches both directions and names its cost the
- * way cleanup's does: --force keeps Git's and discards what stands there, and a
- * CONTENT skip adds the disk-wins verb, 'dotta update' — gated on CONTENT and
- * not on the class, because update refuses a retyped row (cmds/update.c
- * update_partition's kind refusal). It stops there: the 'dotta add --force' a
- * Git-moved row needs is what update's own refusal says at the moment the user
- * meets it, and '-e' is how to ignore a skip, not how to remedy one. The block
- * sits between the deploy preview and cleanup's, so each engine tells its story
- * the same way — what it will do, then what it will not and why. No total-count
- * line: the exit error's message is the count's one home.
+ * each a way out one of its rows has, gated by what is actually present — the
+ * reasons, the claim that holds a named squatter (the fate-borne ancestry), and
+ * the read a line names: a conflict-only run is not told to fix paths by hand,
+ * a squatter is told of a wider scope only where a tracked claim holds it and
+ * of the re-derivation only where a derived one does, a run that holds root is
+ * not told to hold it, and an unreadable-only run is offered neither a flag that
+ * will not lift it nor a by-hand fix for a path dotta could not even read: it
+ * closes with its own line, because dotta never writes on a guess. No line says
+ * "by hand" alone: an incapacity's row already names the path a hand would open,
+ * as a refused prune's does (apply_print_cleanup_refused), so the hand is named
+ * only beside a second way out the row does not name. The refusals the run's
+ * identity met — a landing whose bits deny the invoker, a directory it does not
+ * own or may not read, a pair it cannot set, a look that met EACCES on the path
+ * itself or on the node or copy a TYPE line names, and a clearance's stop the
+ * bits refused — close by naming sudo, and only for a run that holds none:
+ * identity()->privileged. The line offers root and promises nothing: a policy
+ * may deny root a landing or a read as well. The key's refusal — the row's own
+ * look's, or the node's or the copy's a TYPE line names — closes the same way,
+ * naming the verb that lifts it, and the switch before it where the configuration
+ * has encryption off (config->encryption_enabled) — the two facts of the run
+ * this block asks; the two refusals are told apart by the field the label above
+ * reads. Neither line spells the command that would: the user typed one, the
+ * verb the other names says the rest when it is run, and what sudo does to their
+ * environment on the way is sudo's to document, not dotta's. The consent remedy
+ * teaches both directions and names its cost the way cleanup's does: --force
+ * keeps Git's and discards what stands there, and a CONTENT skip adds the disk-wins
+ * verb, 'dotta update' — gated on CONTENT and not on the class, because update
+ * refuses a retyped row (cmds/update.c update_partition's kind refusal). It stops
+ * there: the 'dotta add --force' a Git-moved row needs is what update's own refusal
+ * says at the moment the user meets it, and '-e' is how to ignore a skip, not
+ * how to remedy one. The block sits between the deploy preview and cleanup's,
+ * so each engine tells its story the same way — what it will do, then what it
+ * will not and why. No total-count line: the exit error's message is the count's
+ * one home.
  */
 static void apply_print_deploy_skips(
     output_t *out, const config_t *config, const deploy_preflight_t *verdicts
@@ -346,11 +352,11 @@ static void apply_print_deploy_skips(
      * deploy_skip_needs_force), naming its cost; the disk-wins direction only
      * when a CONTENT skip is present — 'dotta update' refuses a retyped row
      * (cmds/update.c update_partition's kind refusal), so a TYPE-only block must
-     * not be told to use it; the incapacities a hand can fix split by the claim
-     * the skip carries (ancestry) — widening the scope plans a tracked ancestor,
-     * and PERMISSION, OCCUPIED and a squatter nothing claims read the same line;
-     * a derived claim is never planned, so its second way out is the named
-     * re-derivation, whose own preview names what the re-capture would commit.
+     * not be told to use it; a named squatter's second way out, by the claim
+     * that holds it (ancestry) — a wider scope plans a tracked ancestor, and a
+     * derived claim is never planned, so its way out is the named re-derivation,
+     * whose own preview names what the re-capture would commit, where a squatter
+     * nothing claims has none: its row names it, and the hand is all there is.
      * Last, UNREADABLE's closing, a clearance's stop's among them, its line naming
      * the path it could not read — an unreadable path is not "in the way", and
      * a fix-or-widen instruction would misname a refusal to judge what could
@@ -374,12 +380,7 @@ static void apply_print_deploy_skips(
         }
     }
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
-        const deploy_skip_t *s = &verdicts->skipped.entries[i];
-
-        if (s->reason == DEPLOY_SKIP_PERMISSION || s->reason == DEPLOY_SKIP_OCCUPIED ||
-            (s->reason == DEPLOY_SKIP_ANCESTOR &&
-            (s->ancestry == DEPLOY_ANCESTRY_TRACKED ||
-            s->ancestry == DEPLOY_ANCESTRY_UNCLAIMED))) {
+        if (verdicts->skipped.entries[i].ancestry == DEPLOY_ANCESTRY_TRACKED) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  Fix the path by hand, or widen the scope so a tracked ancestor is planned"
@@ -399,13 +400,16 @@ static void apply_print_deploy_skips(
     for (size_t i = 0; !identity()->privileged && i < verdicts->skipped.count; i++) {
         const deploy_skip_t *s = &verdicts->skipped.entries[i];
 
-        /* An UNREADABLE skip's refusal is the row's own failed look, or its
-         * clearance's stop — never both: a walk runs over a directory the row's
-         * look found, and a look that failed leaves no clearance to stop */
+        /* A read a line names, refused by the bits: an UNREADABLE row's own look
+         * or its clearance's stop — never both: a walk runs over a directory
+         * the row's look found, and a look that failed leaves no clearance to
+         * stop — or a TYPE line's, at the node or at the copy its clearance met */
         if (s->reason == DEPLOY_SKIP_PERMISSION || s->reason == DEPLOY_SKIP_FOREIGN ||
-            s->reason == DEPLOY_SKIP_OWNERSHIP || (s->reason == DEPLOY_SKIP_UNREADABLE &&
+            s->reason == DEPLOY_SKIP_OWNERSHIP ||
+            ((s->reason == DEPLOY_SKIP_UNREADABLE || s->reason == DEPLOY_SKIP_TYPE) &&
             (s->item->fault == WORKSPACE_FAULT_UNREADABLE ||
-            s->blocker.fault == WORKSPACE_FAULT_UNREADABLE))) {
+            s->blocker.fault == WORKSPACE_FAULT_UNREADABLE ||
+            (s->blocker.item && s->blocker.item->fault == WORKSPACE_FAULT_UNREADABLE)))) {
             output_info(out, OUTPUT_NORMAL, "  Run under sudo to deploy them");
             break;
         }
@@ -413,8 +417,11 @@ static void apply_print_deploy_skips(
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         const deploy_skip_t *s = &verdicts->skipped.entries[i];
 
-        if (s->reason == DEPLOY_SKIP_UNREADABLE &&
-            s->item->fault == WORKSPACE_FAULT_LOCKED) {
+        /* A read a line names, locked: the row's own look, or a TYPE line's at
+         * the node or the copy — never a stop's, whose fault is the bits' */
+        if ((s->reason == DEPLOY_SKIP_UNREADABLE || s->reason == DEPLOY_SKIP_TYPE) &&
+            (s->item->fault == WORKSPACE_FAULT_LOCKED ||
+            (s->blocker.item && s->blocker.item->fault == WORKSPACE_FAULT_LOCKED))) {
             output_info(
                 out, OUTPUT_NORMAL, config->encryption_enabled
                     ? "  Run 'dotta key set' to deploy them"
@@ -1709,24 +1716,28 @@ static void apply_print_cleanup_preview(
 /**
  * Print the cleanup skips: the orphaned files the run will not prune, and why
  *
- * Each is named with its reason, then the one line the deploy-side conflict block
- * also ends with — --force overrides the skip. The header names the fate in the
- * receipt's own words for this bucket — the two blocks that map one-to-one onto
- * a receipt section, this and "Released files", name it identically there and
- * here — which also keeps it clear of the deploy block's "Skipped paths" above,
- * whose rows carry the same shape. The labels name the reasons, because no one
- * reason covers the block — a skipped relocation is byte-clean and an unverifiable
- * copy may be — and the closing line names the cost the same way: what stands
- * there, whatever its state. The ways to keep a skipped file are the inverse of
- * the command that orphaned it (profile enable, add) or a move aside, and every
- * line names the profile; they are not spelled out.
+ * Each is named with its reason, then the ways out its rows have, closed as the
+ * deploy block closes its own (apply_print_deploy_skips): the line the deploy-side
+ * conflict block also ends with — --force overrides every skip here — and, where
+ * a row names a read that failed, what lifts the read — sudo where the bits refused
+ * it, for a run that holds none, and the key where none opened it, the switch
+ * first where encryption is off (config->encryption_enabled). The header names
+ * the fate in the receipt's own words for this bucket — the two blocks that map
+ * one-to-one onto a receipt section, this and "Released files", name it identically
+ * there and here — which also keeps it clear of the deploy block's "Skipped paths"
+ * above, whose rows carry the same shape. The labels name the reasons, because
+ * no one reason covers the block — a skipped relocation is byte-clean and an
+ * unverifiable copy may be — and the --force line names the cost the same way:
+ * what stands there, whatever its state. The ways to keep a skipped file are
+ * the inverse of the command that orphaned it (profile enable, add) or a move
+ * aside, and every line names the profile; they are not spelled out.
  *
- * It comes last of the previews, so that guidance is what the user is looking
- * at when the confirmation prompt arrives.
+ * The previews end with it and the refusals (apply_print_cleanup_refused), so
+ * that guidance is what the user is looking at when the confirmation prompt
+ * arrives.
  */
 static void apply_print_cleanup_skips(
-    output_t *out,
-    const cleanup_preflight_t *verdicts
+    output_t *out, const config_t *config, const cleanup_preflight_t *verdicts
 ) {
     if (verdicts->skipped_files.count == 0) return;
 
@@ -1789,6 +1800,27 @@ static void apply_print_cleanup_skips(
         out, OUTPUT_NORMAL,
         "  Use --force to prune them anyway (discards what stands there)"
     );
+
+    /* A row's fault is the read its label names: UNVERIFIED ranks first
+     * (cleanup_skip_reason), and only an UNVERIFIED item carries a fault
+     * (workspace_fault_t) */
+    for (size_t i = 0; !identity()->privileged && i < verdicts->skipped_files.count; i++) {
+        if (verdicts->skipped_files.entries[i]->fault == WORKSPACE_FAULT_UNREADABLE) {
+            output_info(out, OUTPUT_NORMAL, "  Run under sudo to prune them");
+            break;
+        }
+    }
+    for (size_t i = 0; i < verdicts->skipped_files.count; i++) {
+        if (verdicts->skipped_files.entries[i]->fault == WORKSPACE_FAULT_LOCKED) {
+            output_info(
+                out, OUTPUT_NORMAL, config->encryption_enabled
+                    ? "  Run 'dotta key set' to prune them"
+                    : "  Set encryption.enabled = true, then run 'dotta key set' to "
+                "prune them"
+            );
+            break;
+        }
+    }
 }
 
 /**
@@ -3088,7 +3120,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     apply_print_deploy_preview(out, deploy_verdicts);
     apply_print_deploy_skips(out, config, deploy_verdicts);
     apply_print_cleanup_preview(out, cleanup_verdicts);
-    apply_print_cleanup_skips(out, cleanup_verdicts);
+    apply_print_cleanup_skips(out, config, cleanup_verdicts);
     apply_print_cleanup_refused(out, cleanup_verdicts);
 
     /* Neither engine's skips abort: what can be deployed is deployed, what can

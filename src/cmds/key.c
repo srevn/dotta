@@ -313,12 +313,6 @@ static void key_status(const dotta_ctx_t *ctx) {
             out, OUTPUT_NORMAL, "  Encrypted files in current profiles: %zu\n",
             encrypted_count
         );
-
-        if (encrypted_count == 0) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_hint(out, OUTPUT_NORMAL, "To encrypt files, use:");
-            output_hintline(out, OUTPUT_NORMAL, "  dotta add --encrypt -p <profile> <file>");
-        }
     }
 }
 

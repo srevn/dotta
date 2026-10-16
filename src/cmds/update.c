@@ -947,10 +947,10 @@ cleanup:
  * once, freed — nothing is checked out anywhere.
  *
  * Profiles are walked in enabled-set order — the model's one canonical profile
- * order — so multi-profile runs commit, report, and (on a stop) strand in one
- * predictable sequence; within a profile, items keep filter order. Every item's
- * and every row's profile is in the enabled set by construction (the view is
- * built from it), so the per-profile gathers drop nothing. A profile is visited
+ * order — so multi-profile runs commit, report at verbose, and (on a stop) strand
+ * in one predictable sequence; within a profile, items keep filter order. Every
+ * item's and every row's profile is in the enabled set by construction (the view
+ * is built from it), so the per-profile gathers drop nothing. A profile is visited
  * when it has items to commit or chains to re-derive: a named run's row slice
  * reaches profiles whose items all held still, which is what makes the derivation's
  * consent trigger — and the remedy it carries — work on a quiet tree at all. A
@@ -961,7 +961,9 @@ cleanup:
  * holds it even when a later profile fails and the record write follows what
  * Git shows. A profile whose commit did not land — a walk that touched nothing,
  * one whose captures put back what the profile holds, or a failure before its
- * commit — contributes no entry, and its items are neither counted nor said.
+ * commit — contributes no entry, and its items are not counted. A failure stops
+ * the run at its profile, and its error says so over the cause: the profiles
+ * before it committed, the ones after it are never visited.
  *
  * @param ctx Dispatch context (must not be NULL; the drafts are opened on the
  *            run's repository, the capture reads the key and the encryption policy)
@@ -972,8 +974,6 @@ cleanup:
  * @param derive_rows The named run's in-scope view rows, the chains to re-derive,
  *                    none beneath a squatter the view keeps (empty on a bare run)
  * @param opts Update options (must not be NULL)
- * @param total_updated Output: total items committed across all profiles (must
- *                      not be NULL)
  * @param out_commits Output: one commit's bookkeeping per landed commit, in the
  *                    command arena; set on every return (must not be NULL)
  * @param out_commit_count Output: number of entries in out_commits (must not be
@@ -986,21 +986,18 @@ static error_t update_execute(
     workspace_items_t work,
     manifest_rows_t derive_rows,
     const cmd_update_options_t *opts,
-    size_t *total_updated,
     update_commit_t **out_commits,
     size_t *out_commit_count
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(enabled);
     CHECK_NULL(opts);
-    CHECK_NULL(total_updated);
     CHECK_NULL(out_commits);
     CHECK_NULL(out_commit_count);
 
     git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
 
-    *total_updated = 0;
     *out_commit_count = 0;
 
     /* One bookkeeping slot per enabled profile — an upper bound; only landed
@@ -1040,33 +1037,34 @@ static error_t update_execute(
             continue;
         }
 
-        /* Display profile header */
+        /* The profile's header, framing the lines its walk says at verbose: at
+         * normal the preview named every item, and the run's one line says what
+         * landed */
         output_section(
-            out, OUTPUT_NORMAL, "Updating profile '{cyan}%s{reset}':",
-            profile
+            out, OUTPUT_VERBOSE, "Updating profile '{cyan}%s{reset}':", profile
         );
 
         /* The profile's draft, opened at its head: the parent of the commit the
          * walk makes, and the profile every question of the walk is asked of,
-         * its sheet read now — one that will not load stops the run in the loader's
-         * words. Its life is this iteration's. */
+         * its sheet read now — one that will not load stops the run, the loader's
+         * words its cause. Its life is this iteration's. */
         profile_draft_t *draft = NULL;
-        error_t err = profile_draft_open(repo, profile, &draft);
-        if (err) return err;
-
-        /* Update this profile on its draft */
         update_commit_t bookkeeping = { 0 };
-        err = update_profile(
-            ctx, draft, profile,
-            (workspace_items_t){ .entries = items, .count = item_count },
-            (manifest_rows_t){ .entries = rows, .count = row_count },
-            opts, &bookkeeping
-        );
+        error_t err = profile_draft_open(repo, profile, &draft);
+        if (!err) {
+            err = update_profile(
+                ctx, draft, profile,
+                (workspace_items_t){ .entries = items, .count = item_count },
+                (manifest_rows_t){ .entries = rows, .count = row_count },
+                opts, &bookkeeping
+            );
+        }
         profile_draft_free(draft);
 
-        /* Any error is a failure before the commit: no commit landed, whatever
-         * the bookkeeping holds */
-        if (err) return err;
+        /* Any error is a failure before the commit — no commit landed, whatever
+         * the bookkeeping holds — and stops the run here: the error says where,
+         * over its cause */
+        if (err) return error_wrap(err, "Update stopped at profile '%s'", profile);
 
         /* Whether the commit landed is the commit's own answer, read off the
          * bookkeeping: the walk's lists say what it edited, and edits that left
@@ -1075,25 +1073,8 @@ static error_t update_execute(
         if (!bookkeeping.committed) continue;
 
         /* The commit landed: its bookkeeping is the record write's now, the
-         * caller's whatever a later profile meets. Its user items are what it
-         * captured and deleted; a derivation-only commit carries none. */
+         * caller's whatever a later profile meets */
         commits[(*out_commit_count)++] = bookkeeping;
-        size_t processed = bookkeeping.captured_count + bookkeeping.deleted.count;
-        *total_updated += processed;
-
-        if (!output_is_verbose(out)) {
-            if (processed > 0) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %zu item%s\n",
-                    processed, processed == 1 ? "" : "s"
-                );
-            } else {
-                /* A derivation-only commit: no user item moved, the chains did */
-                output_print(
-                    out, OUTPUT_NORMAL, "  {green}✓{reset} Re-derived the ancestry\n"
-                );
-            }
-        }
     }
 
     return NULL;
@@ -1836,15 +1817,12 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     /* Execute profile updates, in enabled-set order. Filtered to operation scope.
      * ctx->run.keymgr is borrowed by the capture inside per-profile iteration.
      * A dry run executes nothing: the sections above are its preview, and the
-     * summary below is its one sentence. */
+     * run's line below is its one sentence. */
     update_commit_t *commits = NULL;
     size_t commit_count = 0;
-    size_t total_updated = 0;
-    error_t record_err = NULL;   /* The record phase's fate: non-fatal, read by the stop and the summary */
     if (!opts->dry_run) {
         err = update_execute(
-            ctx, scope_enabled(scope), work, derive_rows, opts, &total_updated,
-            &commits, &commit_count
+            ctx, scope_enabled(scope), work, derive_rows, opts, &commits, &commit_count
         );
 
         /* Write the record — for the commits that landed, error or no
@@ -1856,10 +1834,9 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * here: the landed commits are Git truth and the record follows them;
          * the profiles that never committed have nothing to write.
          *
-         * Non-fatal, and said in landed terms: its fate is the error, which is
-         * carried to the screens that read it — the stop's, and the summary's. */
-        record_err = update_write_record(ctx, commits, commit_count);
-
+         * Non-fatal, and said in landed terms, in a block of its own above the
+         * run's line. */
+        error_t record_err = update_write_record(ctx, commits, commit_count);
         if (record_err) {
             /* The landed commits are Git truth and the record's write failed
              * behind them, rolled back whole: the record is what it was. The
@@ -1871,6 +1848,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
              * side: an unowned directory is released at scope exit, never pruned.
              * Said in landed terms — after a mid-sequence stop only some profiles
              * committed, and this line must not claim more. */
+            output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to update the record: %s",
                 error_line(record_err)
@@ -1885,31 +1863,28 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 "Run 'dotta apply' to adopt the files they added and settle the paths "
                 "they let go"
             );
-        } else if (err && commit_count > 0) {
-            /* The executor stopped mid-sequence, and the commits that landed
-             * are recorded (just above): said before the stop is reported, so
-             * the ✓ lines above are accounted for. The line stands under the
-             * header of the profile that stopped the run, whose commit did not
-             * land, so it says whose record it wrote, in the failure's words */
-            output_info(out, OUTPUT_NORMAL, "Record updated for the commits that landed");
         }
-
-        if (err) return err;
     }
 
-    /* Execute post-update hook (the hooks layer suppresses it on a dry run) */
-    hook_fire_post(config, out, &hook_inv);
-
-    /* Summary — one truthful line */
+    /* The run's one line: what it committed — whole, or before the stop the error
+     * below names — or that it committed nothing. Said ahead of the stop and of
+     * the post-update hook, as apply's receipts are said ahead of its hook. */
     output_gap(out, OUTPUT_NORMAL);
     if (opts->dry_run) {
         output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
     } else if (commit_count == 0) {
         /* Every profile committed nothing (the walk's race guard refused what
-         * the plan admitted, or the captures put back what the profile holds):
-         * say so instead of counting zero */
+         * the plan admitted, the captures put back what the profile holds, or
+         * the first profile stopped the run): say so instead of counting zero */
         output_info(out, OUTPUT_NORMAL, "Nothing was committed");
     } else {
+        /* A landed commit's user items are what it captured and deleted; a
+         * derivation-only commit carries none */
+        size_t total_updated = 0;
+        for (size_t i = 0; i < commit_count; i++) {
+            total_updated += commits[i].captured_count + commits[i].deleted.count;
+        }
+
         if (total_updated > 0) {
             output_success(
                 out, OUTPUT_NORMAL, "Updated %zu item%s across %zu profile%s",
@@ -1925,6 +1900,11 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             );
         }
     }
+
+    if (err) return err;
+
+    /* Execute post-update hook (the hooks layer suppresses it on a dry run) */
+    hook_fire_post(config, out, &hook_inv);
 
     return NULL;
 }

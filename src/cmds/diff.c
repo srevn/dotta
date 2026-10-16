@@ -328,12 +328,12 @@ static error_t show_file_diff_from_workspace(
     output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
     output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
 
-    /* For missing files, type changes and failed looks, no content diff to show:
-     * an unverified row has no bytes the analysis could compare, and reading
-     * them here would fail the way the look did. */
+    /* For missing files and failed looks, no content diff to show: an unverified
+     * row has no bytes the analysis could compare, and reading them here would
+     * fail the way the look did. */
     if (item->state == WORKSPACE_STATE_DELETED ||
         item->state == WORKSPACE_STATE_UNDEPLOYED ||
-        (item->divergence & (DIVERGENCE_TYPE | DIVERGENCE_UNVERIFIED))) {
+        (item->divergence & DIVERGENCE_UNVERIFIED)) {
         return NULL;
     }
 
@@ -343,20 +343,23 @@ static error_t show_file_diff_from_workspace(
      * and writes the row fresh). */
     if (item->displaced != WORKSPACE_DISPLACED_NONE) return NULL;
 
-    /* Only a content difference has something to render: the copy's own edit,
-     * or the blob or the kind Git moved past, which disk still holds. A claim,
-     * whoever moved it (CLAIM_MOVED is no byte), a reassignment and how Git stores
-     * the blob differ in nothing a hunk could show, and a sealed blob is opened
-     * for none of them. */
-    if (!(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE))) return NULL;
+    /* Only a difference of bytes or of kind has something to render: the copy's
+     * own edit, the blob or the kind Git moved past, which disk still holds, or
+     * the user's own kind. A claim, whoever moved it (CLAIM_MOVED is no byte),
+     * a reassignment and how Git stores the blob differ in nothing a hunk could
+     * show, and a sealed blob is opened for none of them. */
+    if (!(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE | DIVERGENCE_TYPE))) {
+        return NULL;
+    }
 
     git_filemode_t mode = gitops_type_filemode(file->type);
     file_diff_t diff = { 0 };
 
     if (item->occupant != workspace_type_occupant(file->type)) {
-        /* Another kind than the row's stands: the node dotta last saw there,
-         * Git having moved the path's kind past it — the user's own kind returned
-         * above, TYPE. The kind is the whole of the difference, said off the
+        /* Another kind than the row's stands — the user's (TYPE), the node dotta
+         * last saw there with Git having moved the path's kind past it (STALE),
+         * or the user's beside a move of Git's (both: the conflict, whose line
+         * names no kind). The kind is the whole of the difference, said off the
          * load's own look with no blob read: a sealed one, its key cold, would
          * end the diff over a path whose bytes the load never asked for. */
         diff = (file_diff_t){
@@ -732,9 +735,9 @@ static error_t compare_tree_files_to_filesystem(
 
         /* The status message, in the commit's words rather than the renderer's
          * — and the verdict this form has no line for is a copy that is the
-         * commit's, which prints nothing at all. The renderer's own text for
-         * the two verdicts with no bytes to show is generated and dropped here:
-         * it is the workspace arm's fallback, not this loop's vocabulary. */
+         * commit's, which prints nothing at all. The renderer's own text for an
+         * absence is generated and dropped here: the status line says it in this
+         * loop's words. */
         const char *status_msg = NULL;
         output_color_t status_color = OUTPUT_COLOR_RED;
 
@@ -769,8 +772,9 @@ static error_t compare_tree_files_to_filesystem(
             output_print(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
             output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
 
-            /* Only a content difference has bytes to render */
-            if (diff.status == CMP_DIFFERENT) {
+            /* A difference of bytes or of kind has a text — the hunk, or both
+             * kinds off the renderer's look, as the workspace arm draws them */
+            if (diff.status == CMP_DIFFERENT || diff.status == CMP_TYPE_DIFF) {
                 output_print(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
                 output_print_diff(out, OUTPUT_NORMAL, diff.diff_text);
             }

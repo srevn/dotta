@@ -15,12 +15,13 @@ Profiles are the central organizing unit in dotta. Each profile is built on a Gi
 dotta profile enable global darwin
 # ✓ Enabled global
 # ✓ Enabled darwin
-# Staged 47 entries for deployment
+#
+# Hint: Run 'dotta apply' to deploy paths
 
 # Disable a profile (files will be removed on next apply)
 dotta profile disable darwin
 
-# Preview the impact without making changes
+# See which profiles would change, without changing them
 dotta profile disable darwin --dry-run
 
 # List all profiles and their state
@@ -30,13 +31,15 @@ dotta profile list
 dotta profile list --all
 ```
 
-Enabling a profile puts its files in play: dotta now expects them on disk, and a higher profile still wins any path they share (see [The View and the Record](concepts.md#the-view-and-the-record)). Disabling takes them back out, showing a preview of what that does -- files may fall back to a lower-precedence profile, or be marked as orphaned for removal.
+Enabling a profile puts its files in play: dotta now expects them on disk, and a higher profile still wins any path they share, or one beneath a file of its own (see [Layering and Precedence](#layering-and-precedence)). Disabling takes them back out: at the next `apply`, a path a lower profile also holds falls back to it, a file dotta deployed is removed, and one it only found there is left alone, under the [usual cleanup rules](concepts.md#the-view-and-the-record). Both end by naming `dotta apply` when it has work to do, and `dotta apply --dry-run` shows what that work is.
 
 `enable`, `disable`, `reorder` and `fetch` also work without the `profile` in front of them: `dotta enable global` is `dotta profile enable global`.
 
 ## Layering and Precedence
 
 When multiple profiles deploy to the same pathname, the profile enabled later wins. `dotta profile list` shows this machine's order; another machine can use a different order.
+
+A path is a subtree too. A later profile's file at a path stands over everything beneath it: an earlier profile's files there stand nowhere, `dotta status` lists their copies under Overridden copies, and the next `apply` clears them as it lands the file. A later profile's files beneath an earlier profile's file take that file's place, and `apply` replaces the file with the directory they need.
 
 The order is a list this machine keeps:
 
@@ -103,7 +106,7 @@ It then behaves like any [added directory](concepts.md#directories): `apply` cre
 
 Profiles with `custom/` paths need a target to be enabled. `clone` and `profile enable --all` leave them disabled and show how to set one. If sync brings `custom/` paths into an enabled profile, `status` asks you to choose a target.
 
-Targets are not exclusive. Another profile can manage paths there through its own `home/` or `root/` names; normal layering applies wherever the destination pathnames match.
+Targets are not exclusive. Another profile can manage paths there through its own `home/` or `root/` names; normal layering applies wherever the destination pathnames match or nest.
 
 ## Hierarchical Organization
 
@@ -175,6 +178,8 @@ Keybindings:
 - `J`/`K` -- reorder (move up/down)
 - `w` -- save changes
 - `q` / `Esc` -- quit
+
+Saving writes the enabled set and nothing else: `dotta apply` carries it out, and `dotta apply --dry-run` shows what that will do. An enabled profile whose branch is gone reads `(no branch)`: toggle it off to disable it, or fetch its branch back.
 
 ## Metadata Preservation
 

@@ -218,11 +218,16 @@ dotta sync      # Push/pull with remote
 
 `sync` requires a clean workspace (no uncommitted changes). Use `dotta update` first, or `--force` to override.
 
+After a pull, `sync` lists what it did to each profile's files — added, updated, reassigned to another profile, overridden by another profile's file, or released (left on disk, no longer managed) — and names `dotta apply` for as long as it has work to do.
+
 ## Removing Files
 
 ```bash
 # Remove a file from a profile
 dotta remove global ~/.bashrc
+
+# ...and its deployed copy, at the next apply
+dotta remove global ~/.bashrc --delete-files
 
 # Remove a directory
 dotta remove global ~/.config/nvim
@@ -234,4 +239,4 @@ dotta remove test --delete-profile
 dotta remove global ~/.bashrc --dry-run
 ```
 
-Removing modifies the Git repository only. Run `dotta apply` afterward to sync the filesystem (orphaned files are pruned by default).
+Removing changes the Git repository only. By default the file stays where it is and dotta stops managing it; with `--delete-files`, the next `dotta apply` removes the copies dotta deployed. `remove` says which happened to each path, and a path another enabled profile still provides stays, deployed from that profile.

@@ -93,7 +93,7 @@ dotta add web --target ~/jail ~/jail     # ~/jail is a link → stores the link
 dotta add web ~/jail/etc                 # tracks the directory it points at
 ```
 
-Use the home or target spelling dotta knows, or a stored name such as `home/.config/app.conf`. Another spelling of the same file is a different path to dotta, even within one profile. Directory walks keep the pathnames they encounter, and profiles layer only where their destination pathnames match.
+Use the home or target spelling dotta knows, or a stored name such as `home/.config/app.conf`. Another spelling of the same file is a different path to dotta, even within one profile. Directory walks keep the pathnames they encounter, and profiles layer only where their destination pathnames match or nest.
 
 Relative paths start at your working directory. `..` removes the preceding path component: `~/link/../x` means `~/x`.
 
@@ -103,7 +103,7 @@ Dotta remembers two kinds of directory, and treats them very differently.
 
 **An added directory** — `dotta add p ~/.config/nvim` — is one the profile manages in its own right. Dotta creates it even when it would be empty, and restores its permissions and its owner on `apply`. It reports the directory in `dotta status` when it drifts, and looks inside it for new files under `dotta update --include-new`. The home directory, a target and `/` count as added directories, and everything here applies to them too.
 
-**A directory dotta passed through** on its way to an added file is just a recipe for re-creating it. When dotta has to create that directory to put a file in it, it uses the permissions it saw at the time, and the owner too where that was not the user running `dotta`; a directory that already exists is never touched, never checked and never searched. And if part of the path was a symlink when the file was added, dotta records nothing for that component at all — a symlinked config directory is left alone, and dotta writes straight through it.
+**A directory dotta passed through** on its way to an added file is just a recipe for re-creating it. When dotta has to create that directory to put a file in it, it uses the permissions it saw at the time, and the owner too where that was not the user running `dotta`; a directory that already exists is never touched, never checked and never searched. And if part of the path was a symlink when the file was added, dotta records nothing for that component at all — a symlinked config directory is left alone, and dotta writes straight through it. A link dotta manages is another matter: once no profile claims it but paths beneath it still need a directory, `apply` replaces the link with one, and nothing is read, recorded or captured through it until then.
 
 Dotta only revisits any of this when asked. Capturing a file — adding a new one, or updating one — refreshes the directories above it, and pointing `dotta update` at a directory — `dotta update ~/.config` — refreshes everything beneath it. That is also the fix when things move. Swap a passed-through directory for a symlink and `apply` refuses to write through it (`~/.config/nvim is not a directory`); `dotta update <dir>` drops the stale expectation, and the next `apply` trusts the arrangement on disk.
 
@@ -150,7 +150,7 @@ Filesystem (Live System)
 
 **Workspace** -- what dotta finds when it compares the view against the actual filesystem, with the record saying what it last confirmed. This is what `dotta status` reports, and it is worked out when the command runs, so nothing it decides is out of date.
 
-**Apply** -- walks the view and compares each path against disk, deploying only what actually changed: contents, permissions, owner, encryption. It then removes or releases the leftovers according to the record, and writes the record for what it did.
+**Apply** -- walks the view and compares each path against disk, deploying only what actually changed: contents, permissions, owner, encryption. A path it lands takes its place whole: dotta's own file or link in its way is replaced, and dotta's own copies beneath a file it lands are cleared — or the path waits, and says why. It then removes or releases the leftovers according to the record, and writes the record for what it did.
 
 This design gives:
 

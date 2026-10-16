@@ -110,8 +110,8 @@
  *     at a path and by its name), manifest_name, manifest_claim_name,
  *     manifest_holds_name, manifest_holds_row and manifest_moved_place (one
  *     profile's own contribution, whatever stands); and manifest_diff, the
- *     per-profile delta between two views that the scope-changing verbs and sync
- *     print their receipts from.
+ *     per-profile delta between two views, in claims, that sync's Manifest block
+ *     prints.
  *
  * Core Principles:
  *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
@@ -214,7 +214,7 @@ typedef struct manifest_row {
     const char *storage_path;   /* Path in profile (home/.bashrc) */
     const char *profile;        /* The profile whose claim the row is; the rung's, its owner */
 
-    /* What stands there: manifest_diff's updated compares each field but encrypted */
+    /* What stands there: manifest_diff's updated compares type through group */
     path_type_t type;           /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
     git_oid blob_oid;           /* Blob the composed profile layer expects on disk (zero for DIRECTORY) */
     mode_t mode;                /* Total for every kind that carries one (claim or floor); 0 on a link row, a don't-care */
@@ -1369,104 +1369,97 @@ const manifest_row_t *manifest_moved_place(
 );
 
 /**
- * Per-profile statistics from a view-to-view diff
+ * Per-profile statistics from a view-to-view diff, in claims
  *
- * Fields are populated conditionally based on the profile's role in the transition.
- * The same profile can gain and lose paths simultaneously (e.g., enable A while
- * B was reordered above it), so gain-side and loss-side fields are independent.
+ * A claim is an explicit row — a file, a link, a tracked directory: the unit
+ * `dotta list` and `status -v` count (core/profiles.h profile_counts_t). A derived
+ * row is the way to the claims beneath it, which apply creates or lets go as
+ * they need it, so it counts on neither side. One profile can gain claims and
+ * lose others in one transition (a pull that adds one path and removes another),
+ * so gain-side and loss-side fields are independent.
  *
- *   Gain-side  — the paths `after` stands under the profile.
- *   Loss-side  — the paths `before` stood under the profile that `after` does
+ *   Gain-side  — the claims `after` stands under the profile.
+ *   Loss-side  — the claims `before` stood under the profile that `after` does
  *                not.
  *
  * Counters describe the two views and the record; they do NOT verify disk matches
  * anything. Verification is workspace divergence analysis (status/diff/apply).
- * Both kinds count.
  *
- * `reassigned` here is this transition's own delta — a path `before` held under
- * one profile that `after` gives another — and not the standing fact the screens
- * name by the same word: a record dotta owns naming a profile the row does not
- * is workspace_reassigned (core/workspace.h), true from whenever it began until
- * apply acknowledges it. Both appear in sync's receipt, twenty lines apart,
- * answering different questions. `overridden` is the transition's own the same
- * way — a path `before` stood under a profile that still claims it in `after`,
+ * `reassigned` here is this transition's own delta — a claim `before` held under
+ * one profile whose path `after` gives another — and not the standing fact the
+ * screens name by the same word: a record dotta owns naming a profile the row
+ * does not is workspace_reassigned (core/workspace.h), true from whenever it
+ * began until apply acknowledges it. `overridden` is the transition's own the
+ * same way — a claim `before` stood under a profile that still holds it in `after`,
  * where it stands nowhere — and not the copy the record keeps there, overridden
  * (core/workspace.h WORKSPACE_STATE_OVERRIDDEN) from whenever a blob came to
  * stand above it until that blob goes or its landing clears the copy.
  */
 typedef struct {
-    const char *profile;         /* Profile name (borrowed from the profiles filter) */
+    const char *profile;   /* Profile name (borrowed from the profiles filter) */
 
     /* Gain-side */
-    size_t claimed;              /* Rows `after` stands under this profile, a rung attributed to it among them */
-
-    /* Gain-side, subsets of claimed (the remainder was unchanged) */
-    size_t added;                /* … whose path `before` did not have */
-    size_t updated;              /* … whose path `before` had, with type, blob, mode, owner, group or class moved */
+    size_t added;          /* Claims at a path `before` stood no claim at */
+    size_t updated;        /* Claims at a path `before` stood one at, its type, blob, mode, owner or group moved */
 
     /* Loss-side */
-    size_t reassigned;           /* Paths `before` had under this profile that `after` gives another */
-    size_t overridden;           /* Paths `before` had under this profile that it claims still, standing nowhere in `after` */
-    struct {
-        size_t owned;            /* … with a record dotta owns (deployed_at > 0): apply prunes the copy, releases it if Git let go, or clears it beneath a blob */
-        size_t observed;         /* … with a record dotta never owned: apply releases it, the copy stays, or clears it beneath a blob */
-    } orphans;                   /* Paths `before` had under this profile that `after` lacks, its claim gone, with a record at them */
+    size_t reassigned;     /* Claims whose path `after` gives another profile */
+    size_t overridden;     /* Claims the profile holds still, standing nowhere in `after` */
+    size_t orphaned;       /* Claims gone, with a record at the path: orphans the next apply settles */
 } manifest_diff_stats_t;
 
 /**
- * Attribute the transition between two views to profiles
+ * Attribute the transition between two views to profiles, in their claims
  *
- * The delta the scope-changing verbs (profile enable / disable) and sync print
- * their receipts from: what each profile in `profiles` claims in `after` that
- * it did not in `before`, what it lost to another profile's row or to a blob
- * standing above it, and what left the view under it — the last counted only
- * where a record stands, because only a path dotta has observed has anything
- * for apply to do at its departure; a departure with no record asks nothing of
- * apply and is not counted.
+ * The delta sync's Manifest block prints (cmds/sync.c cmd_sync): what each profile
+ * in `profiles` claims in `after` that it did not in `before`, what it lost to
+ * another profile's row or to a blob standing above it, and what left the view
+ * under it — the last counted only where a record stands, because only a path
+ * dotta has observed has anything for apply to do at its departure; a departure
+ * with no record asks nothing of apply and is not counted.
  *
- * Attribution (for a profile P in `profiles`):
- *   - every row of `after` under P: claimed; added if `before` has no row at
- *     the path; updated if it has one whose type, blob, mode, owner, group or
- *     `tracked` class differs
- *   - every row of `before` under P whose path `after` gives another profile:
+ * Attribution (for a profile P in `profiles`, over its claims; a derived row of
+ * either view counts nowhere):
+ *   - every claim of `after` under P: added if `before` stands no claim at the
+ *     path — no row, or a derived one, a claim born where a way was; updated if
+ *     it stands one whose type, blob, mode, owner or group differs. Between two
+ *     claims a class flip is a type flip, so `tracked` needs no term of its own
+ *   - every claim of `before` under P whose path `after` gives another profile:
  *     reassigned
- *   - every row of `before` under P whose path `after` stands no row at, P claiming
- *     the path there still (manifest_lookup_claim): overridden. No row at its
- *     path leaves a blob standing above it — another profile's, or on this machine
- *     P's own, which contradicts it (manifest_contradicted) — and its copy is
- *     that blob's landing's, which clears it (core/workspace.c
+ *   - every claim of `before` under P whose path `after` stands no row at, P
+ *     claiming the path there still (manifest_lookup_claim): overridden. No row
+ *     at its path leaves a blob standing above it — another profile's, or on
+ *     this machine P's own, which contradicts it (manifest_contradicted) — and
+ *     its copy is that blob's landing's, which clears it (core/workspace.c
  *     workspace_analyze_orphans), so no record is asked
- *   - every other row of `before` under P whose path `after` lacks, with a record
- *     at the path: an orphan — owned or merely observed, which is the split the
- *     ownership gate reads. What apply then does with an owned one depends on
- *     why the path left: a scope change (profile disable) leaves Git backing it
- *     and apply prunes the copy; a Git removal (sync) does not, and apply releases
- *     it — save, owned or observed, a copy beneath a blob `after` stands, which
- *     that blob's landing clears (core/workspace.c workspace_analyze_orphans:
- *     its position, before the gate and Git)
+ *   - every other claim of `before` under P whose path `after` lacks, with a
+ *     record at the path: orphaned. What apply does there is the orphan analysis's
+ *     (core/workspace.c workspace_analyze_orphans): a copy beneath a blob `after`
+ *     stands is that blob's landing's, and otherwise the record's order, its
+ *     ownership and Git say whether apply prunes the copy or releases it
  *   Overlap semantics, by where the claim standing over A's at path X is
- *   (core/manifest.c manifest_layer): at X, B gets claimed for X and A reassigned;
- *   beneath X, A's blob there having lost its place to the claims beneath it,
- *   the row standing at X — a derived claim filling the place, or the layer's
- *   rung, attributed to the side A lost to — gets claimed for X under its profile
- *   and A reassigned, or, the row being A's own, A gets claimed and updated for
- *   X, the kind having moved; above X — a blob, which leaves no row at X — A
- *   gets overridden for X. The sum of claimed is the true size of `after`.
+ *   (core/manifest.c manifest_layer): at X, B gets added or updated for X and A
+ *   reassigned; beneath X, A's blob there having lost its place to the claims
+ *   beneath it, the row standing at X — a derived claim filling the place, or
+ *   the layer's rung, attributed to the side A lost to — is the way to the claims
+ *   beneath it, counted on their own, and A is reassigned for X, or, the row
+ *   being A's own, counted nowhere; above X — a blob, which leaves no row at X
+ *   — A gets overridden for X.
  *
- * `before` may be NULL — an empty view (clone, the first enable): every row of
- * `after` is then added and nothing departed.
+ * `before` may be NULL — an empty view: every claim of `after` is then added
+ * and nothing departed.
  *
  * Preconditions:
  *   - profiles' entries are pairwise unique: two slots would silently collapse
  *     into one, so a duplicate is the caller's bug, a death
  *   - out_stats points to an array of length profiles->count; it is zero-filled
  *     here with each profile's name set, so a caller reads the counts without
- *     asking whether anything changed: all-zero means "nothing for apply to do
- *     came out of this transition"
+ *     asking whether anything changed
  *
- * Performance: O(A + B (P + log R)) — one pass over each view, and per row `after`
- * stands nothing at, the profile's claim there (P the profiles `after` holds)
- * and, where it claims none, a search of the record; no Git, no disk, no database.
+ * Performance: O(A + B (P + log R)) — one pass over each view, and per claim
+ * `after` stands nothing at, the profile's claim there (P the profiles `after`
+ * holds) and, where it claims none, a search of the record; no Git, no disk, no
+ * database.
  *
  * @param before View before the transition (may be NULL = empty)
  * @param after View after the transition (must not be NULL)

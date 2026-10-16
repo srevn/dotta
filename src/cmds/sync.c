@@ -1859,35 +1859,35 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
         manifest_diff(before, after, records, record_count, enabled, stats);
 
-        bool manifest_changed = false;  /* The block printed: the Git phase moved the view */
+        bool manifest_changed = false;  /* The block's header, said at its first line */
         for (size_t i = 0; i < enabled->count; i++) {
             const manifest_diff_stats_t *s = &stats[i];
-            size_t staged = s->added + s->updated;
-
-            /* A departure here is a Git-side removal, so an orphan it leaves is
-             * one apply releases (the record retires, the copy stays) — save
-             * one beneath a blob the view after stands, which that blob's landing
-             * clears, counted released all the same (stated: the receipts' words
-             * are their own arc's); a departure with no record has no filesystem
-             * effect and asks nothing of the user, so it is not counted. */
-            size_t released = s->orphans.owned + s->orphans.observed;
-
-            if (staged + released + s->reassigned + s->overridden == 0) continue;
+            if (s->added + s->updated + s->reassigned + s->overridden + s->orphaned == 0) {
+                continue;
+            }
 
             if (!manifest_changed) {
                 output_section(out, OUTPUT_NORMAL, "Manifest");
                 manifest_changed = true;
             }
 
-            /* One line per profile, non-zero parts only. */
+            /* One line per profile, its non-zero counts in the diff's order:
+             * what the pull added and updated, what passed to another profile,
+             * what another's blob stands over, what left. A departure here is a
+             * Git-side removal, so an orphan it leaves is one apply releases
+             * (the record retires, the copy stays) — save one beneath a blob
+             * the view after stands, which that blob's landing clears, counted
+             * released all the same (stated); a departure with no record has no
+             * filesystem effect and asks nothing of the user, so it is not
+             * counted. */
             output_print(out, OUTPUT_NORMAL, "  %s:", s->profile);
             const char *sep = " ";
-            if (staged > 0) {
-                output_print(out, OUTPUT_NORMAL, "%s%zu staged", sep, staged);
+            if (s->added > 0) {
+                output_print(out, OUTPUT_NORMAL, "%s%zu added", sep, s->added);
                 sep = ", ";
             }
-            if (released > 0) {
-                output_print(out, OUTPUT_NORMAL, "%s%zu released", sep, released);
+            if (s->updated > 0) {
+                output_print(out, OUTPUT_NORMAL, "%s%zu updated", sep, s->updated);
                 sep = ", ";
             }
             if (s->reassigned > 0) {
@@ -1900,18 +1900,23 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 output_print(
                     out, OUTPUT_NORMAL, "%s%zu overridden", sep, s->overridden
                 );
+                sep = ", ";
+            }
+            if (s->orphaned > 0) {
+                output_print(out, OUTPUT_NORMAL, "%s%zu released", sep, s->orphaned);
             }
             output_endline(out, OUTPUT_NORMAL);
         }
 
         /* The import's health, in the receipt's own shape and apply's: the paths
          * a profile carries that this machine will not land, a section each.
-         * The Manifest block above names none of them — it counts rows, and none
-         * of them is a row of the view after — so this is the import moment's
-         * only signal of each, and the moment the paths are worth naming rather
-         * than counting, an import being what brought them. Every repair is
-         * generic: the (from P) beside every path names the profiles, and a path
-         * holding a space would paste into a command it breaks. */
+         * The Manifest block above names none of them — it counts claims standing
+         * in a view, and none of them is a row of the view after — so this is
+         * the import moment's only signal of each, and the moment the paths are
+         * worth naming rather than counting, an import being what brought them.
+         * Every repair is generic: the (from P) beside every path names the
+         * profiles, and a path holding a space would paste into a command it
+         * breaks. */
         manifest_unbound_t unbound = manifest_unbound(after);
         if (unbound.count > 0) {
             output_section(out, OUTPUT_NORMAL, "Paths with no target");
@@ -2008,16 +2013,14 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             );
         }
 
-        /* The hint states a fact about the record, not about this sync. The
-         * manifest block is the direct evidence of new work — it is empty exactly
-         * when the Git phase touched nothing active (a pull of README or
-         * .dottaignore, a push, 'ours'), which no profile's line above tells
-         * apart — and the record owes the work that was already there, read off
-         * the view the Git phase produced and the record's own columns
-         * (core/workspace.h workspace_pending): an earlier sync reviewed with
-         * status instead of apply, a scope change, a revert. The block is a delta
-         * and prints once; the hint prints for as long as the work stands. */
-        if (manifest_changed || workspace_pending(after, records, record_count)) {
+        /* The hint states a fact about the record, not about this sync: the record
+         * owes apply work against the view the Git phase produced (core/workspace.h
+         * workspace_pending), whatever began it — this pull, an earlier one
+         * reviewed with status instead of apply, a scope change, a revert. The
+         * block is a delta and prints once; the hint prints for as long as the
+         * work stands, and a pull that moved only the way to a claim — a derived
+         * directory's mode — moves neither. */
+        if (workspace_pending(after, records, record_count)) {
             output_gap(out, OUTPUT_NORMAL);
             output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy");
         }

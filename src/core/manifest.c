@@ -1982,18 +1982,17 @@ error_t manifest_holder(
 }
 
 /**
- * Attribute the transition between two views to profiles
+ * Attribute the transition between two views to profiles, in their claims
  *
- * Two passes — every row of `after` for the gain side, every row of `before`
+ * Two passes — every claim of `after` for the gain side, every claim of `before`
  * for the loss side — over an index of profile → stats slot, the profile's own
  * claim at a path `after` stands nothing at (manifest_lookup_claim), and a search
- * of the record by path for the departure split (state_find_record). Nothing is
- * written; the rule for what a row `after` lacks means for apply is the one the
- * workspace reads when it meets the record there — a claim its profile still
- * holds is overridden, the landing's of the blob above it, and anything else a
- * departure, whose record's presence and ownership say what apply does, save
- * beneath a blob, whose landing clears the copy all the same. Nothing here can
- * fail: the one thing a caller can get wrong, a profile named twice, is its bug.
+ * of the record by path for a departure (state_find_record). Nothing is written;
+ * the rule for what a claim `after` lacks means for apply is the one the workspace
+ * reads when it meets the record there — a claim its profile still holds is
+ * overridden, the landing's of the blob above it, and anything else a departure,
+ * which leaves apply an orphan where a record stands. Nothing here can fail:
+ * the one thing a caller can get wrong, a profile named twice, is its bug.
  */
 void manifest_diff(
     const manifest_t *before,
@@ -2031,44 +2030,43 @@ void manifest_diff(
         hashmap_set(stats_map, name, &out_stats[i]);
     }
 
-    /* Gain side: every row of `after`, attributed to the profile it stands under
-     * — a rung's, the side its blob lost to. What `before` had at the path splits
-     * claimed into added / updated / unchanged. */
+    /* Gain side: every claim of `after`, attributed to the profile it stands
+     * under. A derived row counts nowhere — the way to the claims beneath it,
+     * which apply creates as they need it — and what `before` stood at the path
+     * splits the claims into added / updated / unchanged. */
     manifest_rows_t rows = manifest_rows(after);
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];
+        if (manifest_is_derived(row)) continue;
 
         manifest_diff_stats_t *slot = hashmap_get(stats_map, row->profile);
         if (!slot) continue;
 
-        slot->claimed++;
-
-        /* Every field of what stands there, in the row's own order, but the
-         * encrypted stamp: the blob's own, it moves with the blob. `tracked`
-         * sits beside the mode for the same reason the mode is here: a directory
-         * that stops being a scan root and a convergence target — or becomes
-         * one — is a different promise at the path, and a class flip usually
-         * carries the same mode across, so without this term the receipt would
-         * call it unchanged. */
+        /* No claim before — no row, or the way a derived row was — is a claim
+         * born. Against one, every field of what stands there, in the row's own
+         * order, but the two flags: the encrypted stamp is the blob's own and
+         * moves with the blob, and between two claims a class flip is a type
+         * flip. */
         const manifest_row_t *old = manifest_lookup(before, row->filesystem_path);
-        if (!old) {
+        if (!old || manifest_is_derived(old)) {
             slot->added++;
         } else if (old->type != row->type ||
             !git_oid_equal(&old->blob_oid, &row->blob_oid) ||
             old->mode != row->mode || !str_equal(old->owner, row->owner) ||
-            !str_equal(old->group, row->group) || old->tracked != row->tracked) {
+            !str_equal(old->group, row->group)) {
             slot->updated++;
         }
     }
 
-    /* Loss side: every row of `before`, attributed to its former owner. A path
-     * still in `after` under another profile is a reassignment (for user-facing
-     * "A → B" messaging); a path `after` lacks is overridden where its profile
-     * claims it still, else an orphan if a record stands at it, ownership saying
-     * which kind. */
+    /* Loss side: every claim of `before`, attributed to its former owner, a derived
+     * row counting nowhere here either. A path still in `after` under another
+     * profile is a reassignment (for user-facing "A → B" messaging); a path `after`
+     * lacks is overridden where its profile claims it still, else an orphan if
+     * a record stands at it. */
     rows = manifest_rows(before);
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *old = rows.entries[i];
+        if (manifest_is_derived(old)) continue;
 
         manifest_diff_stats_t *slot = hashmap_get(stats_map, old->profile);
         if (!slot) continue;
@@ -2081,27 +2079,17 @@ void manifest_diff(
 
         /* The profile claims the path still, and it stands nowhere: with no row
          * at its path, a blob stands above it (manifest_layer), and its copy is
-         * that blob's landing's — a derived claim's as much as any, the way beneath
-         * the blob as overridden as the claims it leads to. No departure, so no
-         * record is asked. */
+         * that blob's landing's. No departure, so no record is asked. */
         if (manifest_lookup_claim(after, old->profile, old->filesystem_path)) {
             slot->overridden++;
             continue;
         }
 
-        /* The record, searched by path for the orphan split (state_find_record):
-         * a departed row with a record dotta owns leaves an orphan apply prunes
-         * (or releases, if Git let go), one with a record dotta never owned leaves
-         * one the ownership gate releases, one without leaves nothing for apply
-         * to do. */
-        const state_record_t *record = state_find_record(
-            records, record_count, old->filesystem_path
-        );
-        if (!record) continue;
-        if (record->deployed_at > 0) {
-            slot->orphans.owned++;
-        } else {
-            slot->orphans.observed++;
+        /* The record, searched by path (state_find_record): a departed claim
+         * with one leaves an orphan, whose fate is the orphan analysis's at apply;
+         * one without leaves nothing for apply to do. */
+        if (state_find_record(records, record_count, old->filesystem_path)) {
+            slot->orphaned++;
         }
     }
 

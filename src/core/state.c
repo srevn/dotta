@@ -341,10 +341,10 @@ static error_t state_initialize(sqlite3 *db) {
          *     not a deployment
          *   - a stamp is a moment or 0, never negative: the readers of one ask
          *     it both ways — the orphan's ownership gate deployed_at == 0
-         *     (core/workspace.c workspace_analyze_orphans), the disable's receipt
-         *     deployed_at > 0 (core/manifest.c manifest_diff) — which agree on
-         *     these values alone, where a negative stamp would be pruned as dotta's
-         *     by the one and said to be left alone by the other
+         *     (core/workspace.c workspace_analyze_orphans), the voucher for a
+         *     file deployed_at > 0 (core/workspace.c workspace_pending) — which
+         *     agree on these values alone, where a negative stamp would be pruned
+         *     as dotta's by the one and vouch for nothing by the other
          *   - a stored blob is a real OID (20 bytes, never zeroblob)
          *   - the key is one a writer spells and C reads whole (key_spelling:
          *     FOLDED_SPELLING above — absolute and folded, the shape mount_resolve

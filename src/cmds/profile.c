@@ -31,134 +31,6 @@
 #include "sys/upstream.h"
 
 /**
- * Print manifest enable statistics
- *
- * Reports gain-side attribution for one enabled profile from the diff of the
- * view before the enable against the view after it: claimed (rows the profile
- * won precedence for, both kinds), of which added + updated are staged — new to
- * the view, or moved past what it held — and the rest were already at the view's
- * values. The diff reads no disk; what is deployed and what is not is status's
- * to say.
- */
-static void profile_print_enable_stats(
-    output_t *out,
-    const char *profile,
-    const manifest_diff_stats_t *stats
-) {
-    if (stats->claimed == 0) return;
-
-    size_t staged = stats->added + stats->updated;
-
-    if (output_is_verbose(out)) {
-        /* Detailed breakdown */
-        output_section(out, OUTPUT_VERBOSE, "Manifest Analysis");
-        output_print(
-            out, OUTPUT_VERBOSE, "  Profile: %s\n",
-            profile
-        );
-        output_print(
-            out, OUTPUT_VERBOSE, "  Total entries: %zu\n",
-            stats->claimed
-        );
-
-        if (staged > 0) {
-            output_print(
-                out, OUTPUT_VERBOSE,
-                "    - {yellow}%zu{reset} staged for deployment\n",
-                staged
-            );
-        }
-    } else {
-        /* Compact summary */
-        if (staged > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "  Staged %zu entr%s for deployment\n",
-                staged, staged == 1 ? "y" : "ies"
-            );
-        }
-    }
-}
-
-/**
- * Print manifest disable statistics
- *
- * Reports loss-side attribution for one disabled profile from the diff of the
- * view before the disable against the view after it: reassigned (picked up by a
- * fallback profile) + orphans.owned (left the view with a record dotta owns —
- * apply prunes the deployed copy) + orphans.observed (left the view with a record
- * dotta never owned — apply releases it, the copy stays) — save a copy of either
- * beneath a blob the view after stands, which that blob's landing clears, the
- * words here aside (stated: the receipts' words are their own arc's). A departure
- * with no record is not counted: nothing was ever seen at the path, so nothing
- * pends for apply. None is overridden: the view after holds no claim of a profile
- * it was built without.
- */
-static void profile_print_disable_stats(
-    output_t *out,
-    const char *profile,
-    const manifest_diff_stats_t *stats
-) {
-    if (!stats) return;
-
-    size_t total = stats->reassigned + stats->orphans.owned + stats->orphans.observed;
-    if (total == 0) return;
-
-    if (output_is_verbose(out)) {
-        /* Detailed breakdown */
-        output_section(out, OUTPUT_VERBOSE, "Manifest Analysis");
-        output_print(out, OUTPUT_VERBOSE, "  Profile: %s\n", profile);
-
-        output_print(
-            out, OUTPUT_VERBOSE,
-            "  Total entries affected: %zu\n", total
-        );
-
-        if (stats->reassigned > 0) {
-            output_print(
-                out, OUTPUT_VERBOSE,
-                "    - {green}%zu{reset} path%s with fallback (will reassign)\n",
-                stats->reassigned,
-                stats->reassigned == 1 ? "" : "s"
-            );
-        }
-
-        if (stats->orphans.owned > 0) {
-            output_print(
-                out, OUTPUT_VERBOSE,
-                "    - {red}%zu{reset} path%s without fallback (will be pruned)\n",
-                stats->orphans.owned,
-                stats->orphans.owned == 1 ? "" : "s"
-            );
-        }
-
-        if (stats->orphans.observed > 0) {
-            output_print(
-                out, OUTPUT_VERBOSE,
-                "    - {cyan}%zu{reset} path%s never deployed here (left alone)\n",
-                stats->orphans.observed,
-                stats->orphans.observed == 1 ? "" : "s"
-            );
-        }
-    } else {
-        /* Compact summary */
-        if (stats->orphans.owned > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "  Staged %zu path%s for removal\n",
-                stats->orphans.owned, stats->orphans.owned == 1 ? "" : "s"
-            );
-        }
-
-        if (stats->reassigned > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "  Reassigned %zu path%s to lower precedence\n",
-                stats->reassigned,
-                stats->reassigned == 1 ? "" : "s"
-            );
-        }
-    }
-}
-
-/**
  * Profile list subcommand
  *
  * Shows enabled vs available profiles with clear visual distinction.
@@ -546,14 +418,13 @@ cleanup:
  *      enabled_profiles membership and order are now authoritative. Nothing else
  *      is written: the view is computed, never stored. `before` borrows nothing
  *      from the row cache the mutation replaces.
- *   3. The view after — manifest_build over the post-enable set; manifest_diff
- *      attributes the transition to the newly enabled profiles, so gain-side
- *      stats (claimed / added / updated) land in the right slot per profile. A
- *      retarget reads as its claims materializing at the new target (staged);
- *      what departs at the old one is apply's to relocate.
+ *   3. The view after and the record — manifest_build over the post-enable set,
+ *      and the record held against it: whether the next apply has work there
+ *      (core/workspace.h workspace_pending). A retarget's claims stand at the
+ *      new target, and what its records hold at the old one is apply's to relocate.
  *   4. The save, then per-profile feedback — state_save, and only once it lands
- *      the lines that say what it made true: iterate the validated targets to
- *      preserve per-profile output (the retarget's line says so).
+ *      the lines that say what it made true: one per validated target (the
+ *      retarget's line says so), then the next step where apply has work.
  */
 static error_t profile_enable(
     const dotta_ctx_t *ctx,
@@ -585,9 +456,8 @@ static error_t profile_enable(
      * holds (state_enabled), which nothing in this phase moves. seen_set tracks
      * profiles decided-about within this command pass, so duplicate args like
      * `enable foo foo` are silently deduped instead of producing two rows in
-     * to_enable_validated (and, downstream, two "Enabled foo" lines with split
-     * stats attribution). Its keys are borrowed from to_enable, the command arena's
-     * as the set is. */
+     * to_enable_validated (and, downstream, two "Enabled foo" lines). Its keys
+     * are borrowed from to_enable, the command arena's as the set is. */
     hashmap_t *seen_set = hashmap_borrow(ctx->arena, 0);
 
     /* Resolve the request set (--all → list of local branches; args → verbatim).
@@ -809,9 +679,9 @@ static error_t profile_enable(
             if (err) return err;
         }
 
-        /* Phase 3: The view after, and the diff. The builder reads the rows as
-         * the loop above left them — any --target supplied for the new entries,
-         * and the retargeted row's new binding, included. */
+        /* Phase 3: The view after, and the record held against it. The builder
+         * reads the rows as the loop above left them — any --target supplied
+         * for the new entries, and the retargeted row's new binding, included. */
         manifest_t *after = NULL;
         err = manifest_build(repo, state, ctx->arena, &after);
         if (err) return err;
@@ -820,12 +690,6 @@ static error_t profile_enable(
         size_t record_count = 0;
         err = state_records(state, ctx->arena, &records, &record_count);
         if (err) return err;
-
-        manifest_diff_stats_t *stats = arena_calloc(
-            ctx->arena, to_enable_validated.count, sizeof(*stats)
-        );
-
-        manifest_diff(before, after, records, record_count, &to_enable_validated, stats);
 
         /* Phase 4: The save, then per-profile feedback — the retarget's line
          * names its verb. Each line says what the save made true, so none is
@@ -847,7 +711,6 @@ static error_t profile_enable(
                     out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n", name
                 );
             }
-            profile_print_enable_stats(out, name, &stats[i]);
         }
 
         /* The next step, where the record owes apply work against the view the
@@ -904,27 +767,25 @@ static error_t profile_enable(
 /**
  * Profile disable subcommand
  *
- * Five-phase flow, the mirror of profile_enable's:
+ * Four-phase flow, the mirror of profile_enable's:
  *   1. Gather & validate — filter requested profiles to those actually enabled;
  *      emit not-enabled diagnostics up front. Read the bindings the deletes will
  *      forget: the one fact disable destroys that the user cannot recompute,
  *      copied before the deletes replace the row cache they borrow from.
- *   2. The view before — manifest_build over the enabled set as it stands. It
- *      feeds the receipt only: a set that will not build is warned about and
- *      the disable lands without one.
- *   3. Write scope to state — state_disable_profile per validated target;
+ *   2. Write scope to state — state_disable_profile per validated target;
  *      enabled_profiles is now authoritative for the target set, the line gone
  *      whole, target included. Nothing else is written: what the next apply prunes
  *      or releases is derivable — the disabled profile's records are no longer
  *      in the view, and the orphan analysis asks Git about each.
- *   4. The view after — manifest_build over the post-disable set; manifest_diff
- *      attributes the transition to the disabled profiles, so loss-side stats
- *      (reassigned / orphans.owned / orphans.observed) land in the right slot.
- *   5. The save, then per-profile feedback — state_save, and only once it lands
+ *   3. The view after and the record — manifest_build over the post-disable set,
+ *      and the record held against it: whether the next apply has work there
+ *      (core/workspace.h workspace_pending). A set that will not build is warned
+ *      about and the disable lands without the answer.
+ *   4. The save, then per-profile feedback — state_save, and only once it lands
  *      the lines that say what it made true: iterate the validated targets to
  *      preserve the existing per-profile UX; a forgotten target is named with
  *      the way back, so `disable --all` then `enable --all` is a copy-paste per
- *      line.
+ *      line. Then the next step where apply has work.
  */
 static error_t profile_disable(
     const dotta_ctx_t *ctx,
@@ -1041,55 +902,41 @@ static error_t profile_disable(
         return NULL;
     }
 
-    /* Phases 2–5 share the "we have work to do" precondition. Wrapping them
+    /* Phases 2–4 share the "we have work to do" precondition. Wrapping them
      * together makes the "nothing validated → exit without touching state" path
      * explicit; the transaction opened by state_open then rolls back via state_free
      * on the no-op exit. */
     if (to_disable_validated.count > 0) {
-        /* Phase 2: The view before (see profile_enable).
-         *
-         * Unlike enable's, this build gates nothing: the disable is a membership
-         * write that needs no view, and it must land whatever the enabled set
-         * looks like — it is the way out of a set the loads cannot build (a profile
-         * whose metadata.json will not parse, a branch that will not load), and
-         * that set is exactly the one this build fails on. The message names
-         * the profile; warn with it and disable without the receipt. */
-        manifest_t *before = NULL;
-        err = manifest_build(repo, state, ctx->arena, &before);
-        if (err) output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
-
-        /* Phase 3: Write scope to state */
+        /* Phase 2: Write scope to state */
         for (size_t i = 0; i < to_disable_validated.count; i++) {
             err = state_disable_profile(state, to_disable_validated.entries[i]);
             if (err) return err;
         }
 
-        /* Phase 4: The view after, the record, and the diff — skipped with
-         * `before`, whose warning already covers it. Once `before` has built,
-         * this build cannot fail on Git's account: the post-disable set is a
-         * subset of the same profiles at the same HEADs. */
-        manifest_diff_stats_t *stats = NULL;
+        /* Phase 3: The view after, and the record held against it (see
+         * profile_enable).
+         *
+         * Unlike enable's, this build gates nothing: the disable is a membership
+         * write that needs no view, and it must land whatever the enabled set
+         * looks like — it is the way out of a set the loads cannot build (a profile
+         * whose metadata.json will not parse, a branch that will not load), and
+         * what it leaves can hold another such profile still. The message names
+         * the profile; warn with it and disable without the next step. */
         manifest_t *after = NULL;
         state_record_t *records = NULL;
         size_t record_count = 0;
-        if (before) {
-            err = manifest_build(repo, state, ctx->arena, &after);
-            if (err) return err;
-
+        err = manifest_build(repo, state, ctx->arena, &after);
+        if (err) {
+            output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
+        } else {
             err = state_records(state, ctx->arena, &records, &record_count);
             if (err) return err;
-
-            stats = arena_calloc(ctx->arena, to_disable_validated.count, sizeof(*stats));
-
-            manifest_diff(
-                before, after, records, record_count, &to_disable_validated, stats
-            );
         }
 
-        /* Phase 5: The save, then per-profile feedback (no stats when the receipt
-         * was skipped) — each line said once the save made it true, as enable's
-         * are. The target the row carried went with it; the line says so and
-         * names the command that puts it back. */
+        /* Phase 4: The save, then per-profile feedback — each line said once
+         * the save made it true, as enable's are. The target the row carried
+         * went with it; the line says so and names the command that puts it
+         * back. */
         err = state_save(state);
         if (err) return err;
 
@@ -1098,7 +945,6 @@ static error_t profile_disable(
             output_print(
                 out, OUTPUT_NORMAL, "  {green}✓{reset} Disabled %s\n", name
             );
-            profile_print_disable_stats(out, name, stats ? &stats[i] : NULL);
             if (forgotten[i]) {
                 output_print(
                     out, OUTPUT_NORMAL,

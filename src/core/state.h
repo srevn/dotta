@@ -813,10 +813,9 @@ const char *state_target(
  *     a capture is), cmds/update.c update_write_record (whose record a path a
  *     commit let go holds, read under the phase's lock), cmds/remove.c
  *     remove_paths_candidates (the settle's candidates, read before the lock
- *     and under it), and core/manifest.c manifest_diff (a departed row's orphan
- *     split, handed the array by cmds/profile.c profile_enable, profile_disable
- *     and cmds/sync.c cmd_sync): by path, through state_find_record, which rests
- *     on strcmp order
+ *     and under it), and core/manifest.c manifest_diff (whether a departed claim
+ *     leaves an orphan, handed the array by cmds/sync.c cmd_sync): by path, through
+ *     state_find_record, which rests on strcmp order
  *   - cmds/remove.c remove_profile_candidates (every record naming the profile,
  *     read before the prompt and under the lock) and core/workspace.c
  *     workspace_pending (every record against a view, with no workspace and no
@@ -849,8 +848,8 @@ error_t state_records(
  * Readers: cmds/add.c add_write_record (the takeover note, and the let-go's join)
  * and add_refuse_ancestry (whose node a link above a capture is), cmds/update.c
  * update_write_record (the let-go's join), cmds/remove.c remove_paths_candidates
- * (the settle's candidates), core/manifest.c manifest_diff (a departed row's
- * orphan split).
+ * (the settle's candidates), core/manifest.c manifest_diff (whether a departed
+ * claim leaves an orphan).
  *
  * @param records The snapshot (NULL when count is 0)
  * @param count Records in it

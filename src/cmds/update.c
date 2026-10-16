@@ -920,9 +920,10 @@ static error_t update_write_record(
     err = state_commit(state);
     if (err) goto cleanup;
 
-    /* The split of the "Record updated" line cmd_update says, said once the commit
-     * landed: a count said before it would stand above a COMMIT the store refused
-     * (core/state.h state_commit) */
+    /* The record's split, said once the commit landed — every update writes the
+     * record, so the plain screen says nothing of it, and a count said before
+     * the commit would stand above a COMMIT the store refused (core/state.h
+     * state_commit) */
     if (synced > 0 || removed > 0 || fallbacks > 0) {
         output_info(
             out, OUTPUT_VERBOSE,
@@ -1402,28 +1403,30 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (err) return err;
 
     /* The run's filter context, ahead of everything the filter says against it:
-     * the verbose "Excluded" log, the census, the nothing-exit and the preview */
+     * the verbose "Excluded" log, the census, the nothing-exit and the preview.
+     * Verbose, as the log it heads is: at NORMAL it would say back the flags
+     * the user typed, the nothing-exit naming the two modes in its own words */
     if (opts->only_new) {
         output_info(
-            out, OUTPUT_NORMAL,
+            out, OUTPUT_VERBOSE,
             "Filter: Showing only new files (--only-new)"
         );
     } else if (opts->include_new) {
         output_info(
-            out, OUTPUT_NORMAL,
+            out, OUTPUT_VERBOSE,
             "Filter: Including new files from tracked directories (--include-new)"
         );
     }
     if (opts->file_count > 0) {
         output_info(
-            out, OUTPUT_NORMAL,
+            out, OUTPUT_VERBOSE,
             "Filter: Limiting to %zu specified path%s",
             opts->file_count, opts->file_count == 1 ? "" : "s"
         );
     }
     if (opts->exclude_count > 0) {
         output_info(
-            out, OUTPUT_NORMAL,
+            out, OUTPUT_VERBOSE,
             "Filter: Excluding %zu pattern%s",
             opts->exclude_count, opts->exclude_count == 1 ? "" : "s"
         );
@@ -1919,15 +1922,6 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             output_success(
                 out, OUTPUT_NORMAL, "Re-derived the ancestry across %zu profile%s",
                 commit_count, commit_count == 1 ? "" : "s"
-            );
-        }
-
-        /* Record feedback, plain: the per-path split is the verbose "Record synced"
-         * line, and the failure case already said what happened (warning above) */
-        if (!record_err) {
-            output_info(out, OUTPUT_NORMAL, "Record updated");
-            output_hint(
-                out, OUTPUT_NORMAL, "Run 'dotta status' to verify state"
             );
         }
     }

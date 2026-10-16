@@ -602,11 +602,12 @@ error_t manifest_mount_table(
  * this machine. Recorded, never dropped in silence — the health consumers (status,
  * apply, sync) surface these; export reads the count alone, for the reason its
  * refusal gives, and so does add's enable hint over its own opened tree
- * (cmds/add.c). The repair is one command (`profile enable <p> --target /path`),
- * the untracking another (`remove`). The screen says **no target** or **needs a
- * target**, never "unbound": the header's word is what the build could not do,
- * the screen's is what the user must give. Strings are the build arena's, same
- * lifetime as the rows.
+ * (cmds/add.c); and an enable that names an enabled profile holding them says
+ * so, with the flag (cmds/profile.c profile_enable). The repair is one command
+ * (`profile enable <p> --target /path`), the untracking another (`remove`). The
+ * screen says **no target** or **needs a target**, never "unbound": the header's
+ * word is what the build could not do, the screen's is what the user must give.
+ * Strings are the build arena's, same lifetime as the rows.
  */
 typedef struct {
     const char *profile;

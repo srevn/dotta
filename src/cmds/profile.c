@@ -533,11 +533,12 @@ cleanup:
  *      the already-enabled, the missing, and the ones that need a target and
  *      were named without one: such a profile is enabled only with one, so it
  *      is skipped and told the flag, whatever the request shape, and a run that
- *      enabled nothing is an error. Emits per-profile warnings; produces
- *      to_enable_validated. An already-enabled profile named with a --target
- *      that differs from its row's is not a skip: it re-enters the validated
- *      set as a retarget, and `retarget` remembers which one (at most one: a
- *      target binds the one profile the line names, profile_enable_post_parse).
+ *      enabled nothing is an error. Emits per-profile warnings — an enabled one
+ *      whose claims hold no target told the flag too; produces to_enable_validated.
+ *      An already-enabled profile named with a --target that differs from its
+ *      row's is not a skip: it re-enters the validated set as a retarget, and
+ *      `retarget` remembers which one (at most one: a target binds the one profile
+ *      the line names, profile_enable_post_parse).
  *   2. Write scope to state — state_enable_profile per target. The one call serves
  *      both kinds: a fresh enable inserts the row, a retarget runs the UPSERT
  *      arm state.h documents (the target moves, the position stays).
@@ -665,6 +666,25 @@ static error_t profile_enable(
             }
             output_info(out, OUTPUT_VERBOSE, "  %s already enabled", name);
             already_enabled++;
+
+            /* A row with no binding whose claims need one: said as the
+             * needs-a-target skip below says it, with the flag. The fact is the
+             * view before's, as status's legend reads it (core/manifest.h
+             * manifest_unbound): a claim placed nowhere for want of a target,
+             * which a bound row has none of. */
+            manifest_unbound_t unbound = manifest_unbound(before);
+            for (size_t j = 0; j < unbound.count; j++) {
+                if (strcmp(unbound.entries[j].profile, name) != 0) continue;
+
+                output_warning(
+                    out, OUTPUT_NORMAL,
+                    "Profile '%s' holds custom/ paths and needs a target here", name
+                );
+                output_hint(
+                    out, OUTPUT_NORMAL, "dotta profile enable %s --target /path", name
+                );
+                break;
+            }
             continue;
         }
 

@@ -30,22 +30,37 @@
 #define LIST_LIMIT 20  /* Every capped list in this file trims here. */
 
 /**
+ * A failed read's word, by its fault (core/workspace.h workspace_fault_t) — apply's
+ * own: "cannot verify" beside "modified locally", never the status tag
+ *
+ * One producer for every line that words a read that failed, so one path reads
+ * the same way in both previews. Readers: apply_print_deploy_skips (an UNREADABLE
+ * row), apply_print_cleanup_skips (an UNVERIFIED orphan), apply_consent_label
+ * (a landing's orphan whose read failed). A reader not on this list is a bug.
+ */
+static const char *apply_fault_label(workspace_fault_t fault) {
+    switch (fault) {
+        case WORKSPACE_FAULT_LOCKED:     return "locked";
+        case WORKSPACE_FAULT_UNREADABLE: return "unreadable";
+        case WORKSPACE_FAULT_NONE:
+        case WORKSPACE_FAULT_UNVERIFIED: return "cannot verify";
+    }
+
+    CHECK_ARG(false, "a fault no enumerator names");
+}
+
+/**
  * Why only --force removes a landing's orphan, in the words its siblings use
  *
  * Dotta's node above a row, or a copy a row's clearance met beneath it
- * (core/deploy.h deploy_clearance's NEEDS_FORCE): the failed read's word, as
- * the UNREADABLE line's, then the edit, and what is left is one dotta never
+ * (core/deploy.h deploy_clearance's NEEDS_FORCE): the failed read's word
+ * (apply_fault_label), then the edit, and what is left is one dotta never
  * confirmed. Read by the two TYPE lines that name one (apply_print_deploy_skips):
  * the node's own, and a row's beside the copy it names.
  */
 static const char *apply_consent_label(const workspace_item_t *orphan) {
     if (orphan->divergence & DIVERGENCE_UNVERIFIED) {
-        switch (orphan->fault) {
-            case WORKSPACE_FAULT_LOCKED:     return "locked";
-            case WORKSPACE_FAULT_UNREADABLE: return "unreadable";
-            case WORKSPACE_FAULT_NONE:
-            case WORKSPACE_FAULT_UNVERIFIED: return "cannot verify";
-        }
+        return apply_fault_label(orphan->fault);
     }
 
     return (orphan->divergence & DIVERGENCE_CONTENT)
@@ -77,7 +92,7 @@ static const char *apply_consent_label(const workspace_item_t *orphan) {
  * label reads the row's route (workspace_item_route — one producer for the
  * characterization; deploy keeps its decision): modified locally where only disk
  * moved, changed in Git and on disk where both sides did. An UNREADABLE label
- * reads the item's fault the same way (workspace_fault_t — locked, unreadable,
+ * reads the item's fault the same way (apply_fault_label — locked, unreadable,
  * or the plain "cannot verify"). Every skip carries its row's item (deploy_skip_t),
  * and both reasons are path rungs, asked only where the ancestry did not answer,
  * so each reads a look at the row's own path — a CONTENT one DEPLOYED, since no
@@ -278,27 +293,14 @@ static void apply_print_deploy_skips(
                     break;
                 }
 
-                /* The failed look's word, by the item's fault (workspace_fault_t)
-                 * — a path rung's, so the look was at this very path. apply's
-                 * own vocabulary: "cannot verify" beside "modified locally",
-                 * not the status tag. */
-                const char *label = NULL;
-                switch (s->item->fault) {
-                    case WORKSPACE_FAULT_LOCKED:
-                        label = "locked";
-                        break;
-                    case WORKSPACE_FAULT_UNREADABLE:
-                        label = "unreadable";
-                        break;
-                    case WORKSPACE_FAULT_NONE:
-                    case WORKSPACE_FAULT_UNVERIFIED:
-                        label = "cannot verify";
-                        break;
-                }
-
+                /* The failed look's word (apply_fault_label) — a path rung's,
+                 * so the look was at this very path */
                 output_colored(out, row_level, OUTPUT_COLOR_YELLOW, "  ?");
                 output_print(out, row_level, " %s ", path);
-                output_colored(out, row_level, OUTPUT_COLOR_YELLOW, "(%s from ", label);
+                output_colored(
+                    out, row_level, OUTPUT_COLOR_YELLOW, "(%s from ",
+                    apply_fault_label(s->item->fault)
+                );
                 output_print(out, row_level, "{cyan}%s{reset}", s->item->profile);
                 output_colored(out, row_level, OUTPUT_COLOR_YELLOW, ")\n");
                 break;
@@ -1785,22 +1787,10 @@ static void apply_print_cleanup_skips(
                       : "ownership changed";
                 break;
             case CLEANUP_SKIP_UNVERIFIED:
-                /* The failed look's word, by the item's fault (workspace_fault_t)
-                 * — the same three the deploy block's UNREADABLE row prints, so
-                 * one path reads the same way in both previews. */
+                /* The failed look's word, the deploy block's UNREADABLE row's
+                 * (apply_fault_label) */
                 glyph = "?";
-                switch (item->fault) {
-                    case WORKSPACE_FAULT_LOCKED:
-                        label = "locked";
-                        break;
-                    case WORKSPACE_FAULT_UNREADABLE:
-                        label = "unreadable";
-                        break;
-                    case WORKSPACE_FAULT_NONE:
-                    case WORKSPACE_FAULT_UNVERIFIED:
-                        label = "cannot verify";
-                        break;
-                }
+                label = apply_fault_label(item->fault);
                 break;
             case CLEANUP_SKIP_NONE:
                 /* A file is in skipped_files because a reason names it */

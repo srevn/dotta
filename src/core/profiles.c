@@ -179,8 +179,7 @@ error_t profile_require(git_repository *repo, const char *name) {
 
     /* Git's answer or Git's error: an unreadable or corrupt loose ref is an error,
      * never an absence — a bool that read it as "no" sent the user to fetch a
-     * profile that was here, let --force delete nothing and call it done, and
-     * had validate --fix offer to disable a healthy profile */
+     * profile that was here, and let --force delete nothing and call it done */
     bool exists = false;
     error_t err = gitops_branch_exists(repo, name, &exists);
     if (err) return err;

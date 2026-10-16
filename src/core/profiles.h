@@ -166,11 +166,10 @@ void profile_order(string_array_t *names);
  * cmds/export.c cmd_export, cmds/list.c list_files and list_file_history (an
  * explicit profile's), cmds/revert.c revert_select_profile (the -p arm), and
  * core/scope.c scope_build, on its filter's refusal path. A verb that acts on
- * both answers — add (open or create), enable's skip, remove's --force arm,
- * validate's probe, the enabled set resolved without a view (core/scope.c
- * scope_resolve_enabled) — asks gitops_branch_exists itself and reads the bool;
- * the view's build reads gitops_branch_tree, whose absence is its answer
- * (core/manifest.c manifest_build).
+ * both answers — add (open or create), enable's skip, remove's --force arm, the
+ * enabled set resolved without a view (core/scope.c scope_resolve_enabled) —
+ * asks gitops_branch_exists itself and reads the bool; the view's build reads
+ * gitops_branch_tree, whose absence is its answer (core/manifest.c manifest_build).
  *
  * @param repo Repository (must not be NULL)
  * @param name Profile name (must not be NULL)
@@ -557,10 +556,10 @@ error_t profile_counts(profile_t *profile, profile_counts_t *out);
  * lets a row be saved unbound (cmds/interactive.c plan_classify says why), add's
  * implicit enable authors no such row (a created profile's custom/ claim requires
  * --target, which the row takes), sync and a re-bind can leave an enabled row
- * needing one, and `profile validate` does not ask — an enabled row with no binding
- * is a lifecycle stage the health channel names, not an inconsistency. add asks
- * no producer: it holds a view over its own opened tree under its own table and
- * reads the slice on that (cmds/add.c add_print_enable).
+ * needing one — an enabled row with no binding is a lifecycle stage the health
+ * channel names, not an inconsistency. add asks no producer: it holds a view
+ * over its own opened tree under its own table and reads the slice on that
+ * (cmds/add.c add_print_enable).
  *
  * Cost: one walk of the profile — whose sheet a question before it may have parsed
  * already, the handle keeping it — and a two-root table in a frame of the call's

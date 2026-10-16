@@ -808,8 +808,6 @@ const char *state_target(
  *     search (workspace_find_item: workspace_find's and the scan's) and the
  *     diverged items' orphan listing (workspace_list, which the screens print)
  *     rest on
- *   - cmds/profile.c profile_validate: the deleted profiles in first-seen order,
- *     so the report is reproducible
  *   - cmds/add.c add_write_record (the takeover note, and whose record a path
  *     its commit let go holds) and add_refuse_ancestry (whose node a link above
  *     a capture is), cmds/update.c update_write_record (whose record a path a

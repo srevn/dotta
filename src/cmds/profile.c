@@ -1236,195 +1236,6 @@ static error_t profile_reorder(
 }
 
 /**
- * Profile validate subcommand
- *
- * Checks state consistency and offers to fix issues.
- */
-static error_t profile_validate(
-    const dotta_ctx_t *ctx,
-    const cmd_profile_options_t *opts
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(opts);
-
-    git_repository *repo = ctx->run.repo;
-    state_t *state = ctx->run.state;
-    output_t *out = ctx->out;
-
-    error_t err = NULL;
-
-    /* State for reporting */
-    bool has_issues = false;
-    bool fixed_enabled_profiles = false;  /* Track what we actually fixed */
-    bool has_orphaned_files = false;      /* Track issues we can't fix */
-    size_t orphaned_files = 0;
-
-    /* Promote to a write transaction when we intend to mutate */
-    if (opts->fix) {
-        err = state_begin(state);
-        if (err) goto cleanup;
-    }
-
-    /* The enabled rows, where the handle holds them: read after the promotion,
-     * which reads them again under its lock, and until the first fix below replaces
-     * them (core/state.h state_profiles) — the missing ones are copied into their
-     * own list first */
-    state_profiles_t enabled_profiles = state_profiles(state);
-
-    output_section(out, OUTPUT_NORMAL, "Validating profile state");
-
-    /* Check 1: Enabled profiles exist as branches */
-    string_array_t missing;
-    string_array_init(&missing, ctx->arena, 0);
-
-    for (size_t i = 0; i < enabled_profiles.count; i++) {
-        const char *profile = enabled_profiles.entries[i].name;
-
-        bool exists = false;
-        err = gitops_branch_exists(repo, profile, &exists);
-        if (err) goto cleanup;
-        if (!exists) {
-            string_array_push(&missing, profile);
-            has_issues = true;
-        }
-    }
-
-    if (missing.count > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "Found %zu missing profile%s in state:",
-            missing.count, missing.count == 1 ? "" : "s"
-        );
-
-        for (size_t i = 0; i < missing.count; i++) {
-            output_print(out, OUTPUT_NORMAL, "  • %s\n", missing.entries[i]);
-        }
-
-        if (opts->fix) {
-            /* Remove missing profiles from state */
-            for (size_t i = 0; i < missing.count; i++) {
-                const char *profile = missing.entries[i];
-                err = state_disable_profile(state, profile);
-                if (err) goto cleanup;
-            }
-
-            err = state_commit(state);
-            if (err) goto cleanup;
-
-            output_success(out, OUTPUT_NORMAL, "Removed missing profiles from state");
-            fixed_enabled_profiles = true;
-        } else {
-            output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile validate --fix' to remove them");
-        }
-    }
-
-    /* Check 2: The record references valid profiles
-     *
-     * One read of the path_records table, walked once; each distinct profile is
-     * asked of Git once (`probed` remembers the answer), so R records cost P
-     * probes, where P is the distinct-profile count, typically < 10. `deleted`
-     * keeps the missing profiles in first-seen order so the report is reproducible.
-     * Nothing here is fixable in place: a record whose profile is gone is an
-     * orphan the next apply reads, asks Git about, finds LOST, and releases. */
-    state_record_t *records = NULL;
-    size_t record_count = 0;
-    err = state_records(state, ctx->arena, &records, &record_count);
-    if (err) goto cleanup;
-
-    string_array_t deleted;
-    string_array_init(&deleted, ctx->arena, 0);
-    hashmap_t *probed = hashmap_borrow(ctx->arena, 16);   /* profile → its branch gone (non-NULL) or not */
-
-    for (size_t i = 0; i < record_count; i++) {
-        const char *profile = records[i].profile;
-
-        void *gone = NULL;
-        if (!hashmap_find(probed, profile, &gone)) {
-            bool exists = false;
-            err = gitops_branch_exists(repo, profile, &exists);
-            if (err) goto cleanup;
-            gone = (void *) (uintptr_t) !exists;
-            hashmap_set(probed, profile, gone);
-            if (gone) string_array_push(&deleted, profile);
-        }
-
-        if (gone) {
-            orphaned_files++;
-            has_issues = true;
-            has_orphaned_files = true;
-        }
-    }
-
-    if (orphaned_files > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "Found %zu entr%s from deleted profile%s in state:",
-            orphaned_files, orphaned_files == 1 ? "y" : "ies",
-            deleted.count == 1 ? "" : "s"
-        );
-
-        for (size_t i = 0; i < deleted.count; i++) {
-            size_t n = 0;
-            for (size_t j = 0; j < record_count; j++) {
-                if (strcmp(records[j].profile, deleted.entries[i]) == 0) n++;
-            }
-            output_print(
-                out, OUTPUT_NORMAL, "  • %zu entr%s from %s\n",
-                n, n == 1 ? "y" : "ies", deleted.entries[i]
-            );
-        }
-
-        output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to release them");
-    }
-
-cleanup:
-    /* Cleanup all resources. state_rollback is a no-op if no transaction is active,
-     * so it's safe to call unconditionally on the borrowed handle */
-    state_rollback(state);
-
-    /* If there's an error, return it now */
-    if (err) return err;
-
-    /* Summary (only shown on success) */
-    output_gap(out, OUTPUT_NORMAL);
-    if (!has_issues) {
-        output_success(out, OUTPUT_NORMAL, "Profile state is valid");
-    } else {
-        if (opts->fix) {
-            /* Be accurate about what was actually fixed */
-            if (fixed_enabled_profiles && !has_orphaned_files) {
-                output_success(
-                    out, OUTPUT_NORMAL, "Fixed all profile state issues"
-                );
-            } else if (fixed_enabled_profiles && has_orphaned_files) {
-                output_info(
-                    out, OUTPUT_NORMAL, "Fixed enabled profile list"
-                );
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "Entries from deleted profiles require 'dotta apply' to release"
-                );
-            } else if (!fixed_enabled_profiles && has_orphaned_files) {
-                output_warning(
-                    out, OUTPUT_NORMAL, "Profile state has issues that require 'dotta apply'"
-                );
-            } else {  /* Shouldn't reach here, but handle gracefully */
-                output_warning(
-                    out, OUTPUT_NORMAL, "Profile state has issues"
-                );
-            }
-        } else {
-            output_warning(
-                out, OUTPUT_NORMAL, "Profile state has issues"
-            );
-            output_info(
-                out, OUTPUT_NORMAL, "Run 'dotta profile validate --fix'"
-            );
-        }
-    }
-
-    return NULL;
-}
-
-/**
  * Profile command dispatcher
  */
 error_t cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) {
@@ -1438,7 +1249,6 @@ error_t cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) {
         case PROFILE_ENABLE:   return profile_enable(ctx, opts);
         case PROFILE_DISABLE:  return profile_disable(ctx, opts);
         case PROFILE_REORDER:  return profile_reorder(ctx, opts);
-        case PROFILE_VALIDATE: return profile_validate(ctx, opts);
     }
 
     CHECK_ARG(false, "a profile subcommand no enumerator names");
@@ -1814,49 +1624,18 @@ static const args_command_t spec_profile_reorder = {
     .dispatch      = profile_dispatch,
 };
 
-/* --- validate --- */
-
-static void profile_validate_defaults(void *o) {
-    ((cmd_profile_options_t *) o)->subcommand = PROFILE_VALIDATE;
-}
-
-static const args_opt_t profile_validate_opts[] = {
-    ARGS_GROUP("Options:"),
-    ARGS_FLAG(
-        "fix",
-        cmd_profile_options_t,fix,
-        "Automatically fix any detected inconsistencies"
-    ),
-    ARGS_END,
-};
-
-static const args_command_t spec_profile_validate = {
-    .name          = "profile validate",
-    .summary       = "Check for and fix inconsistencies in the profile state",
-    .usage         = "%s profile validate [--fix]",
-    .opts_size     = sizeof(cmd_profile_options_t),
-    .opts          = profile_validate_opts,
-    .init_defaults = profile_validate_defaults,
-    .payload       = &(const dotta_needs_t){
-        .repo      = DOTTA_REPO_OPEN,
-        .state     = DOTTA_STATE_READ,
-    },
-    .dispatch      = profile_dispatch,
-};
-
 /* --- parent: subcommand index + spec --- */
 
 /* Every verb but `list` — `dotta list` is the list command — also stands at the
  * root: `dotta enable work` for `dotta profile enable work`. */
 static const args_subcommand_t profile_subs[] = {
-    /* aliases     spec                    hidden shortcut */
-    { "list",     &spec_profile_list,     false, false },
-    { "fetch",    &spec_profile_fetch,    false, true  },
-    { "enable",   &spec_profile_enable,   false, true  },
-    { "disable",  &spec_profile_disable,  false, true  },
-    { "reorder",  &spec_profile_reorder,  false, true  },
-    { "validate", &spec_profile_validate, false, true  },
-    { NULL,       NULL,                   false, false }
+    /* aliases    spec                  hidden shortcut */
+    { "list",    &spec_profile_list,    false, false },
+    { "fetch",   &spec_profile_fetch,   false, true  },
+    { "enable",  &spec_profile_enable,  false, true  },
+    { "disable", &spec_profile_disable, false, true  },
+    { "reorder", &spec_profile_reorder, false, true  },
+    { NULL,      NULL,                  false, false }
 };
 
 const args_command_t spec_profile = {
@@ -1877,8 +1656,7 @@ const args_command_t spec_profile = {
         "  %s profile fetch darwin            # Download a profile\n"
         "  %s profile enable darwin           # Enable a profile for deployment\n"
         "  %s profile disable --all           # Disable all enabled profiles\n"
-        "  %s profile reorder global darwin   # Change layering priority\n"
-        "  %s profile validate --fix          # Fix state inconsistencies\n",
+        "  %s profile reorder global darwin   # Change layering priority\n",
     .opts_size          = sizeof(cmd_profile_options_t),
     .subcommands        = profile_subs,
     .default_subcommand = &spec_profile_list,

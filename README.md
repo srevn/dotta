@@ -40,7 +40,6 @@ Shortcuts:
   enable         profile enable
   disable        profile disable
   reorder        profile reorder
-  validate       profile validate
 
 Options:
   -h, --help        Show help (use <command> --help for details)

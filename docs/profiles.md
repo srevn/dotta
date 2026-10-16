@@ -32,7 +32,7 @@ dotta profile list --all
 
 Enabling a profile puts its files in play: dotta now expects them on disk, and a higher profile still wins any path they share (see [The View and the Record](concepts.md#the-view-and-the-record)). Disabling takes them back out, showing a preview of what that does -- files may fall back to a lower-precedence profile, or be marked as orphaned for removal.
 
-`enable`, `disable`, `reorder`, `fetch` and `validate` also work without the `profile` in front of them: `dotta enable global` is `dotta profile enable global`.
+`enable`, `disable`, `reorder` and `fetch` also work without the `profile` in front of them: `dotta enable global` is `dotta profile enable global`.
 
 ## Layering and Precedence
 
@@ -190,13 +190,4 @@ dotta add linux /etc/systemd/system/myservice.service
 
 # On target machine
 dotta apply  # Restores content, permissions (0644), and ownership (root:root)
-```
-
-## Validation
-
-If something gets out of sync, validate and fix the profile state:
-
-```bash
-dotta profile validate        # Check for inconsistencies
-dotta profile validate --fix  # Auto-fix detected issues
 ```

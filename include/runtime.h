@@ -129,11 +129,10 @@ typedef enum dotta_repo_mode {
  * The rule is that a preview holds nothing, not that it writes nothing. What
  * skips a mutation is the command's own preview branch, and READ permits a scoped
  * `state_begin` by contract — so a command that writes at a moment rather than
- * across its dispatch declares READ and promotes there (`profile validate --fix`,
- * update, remove, revert), and a preview that records what it read does so through
- * the same scoped transaction status and diff use (the workspace flush,
- * `core/workspace.h`): an observation is a reading, and the next load would have
- * to establish it again.
+ * across its dispatch declares READ and promotes there (update, remove, revert),
+ * and a preview that records what it read does so through the same scoped
+ * transaction status and diff use (the workspace flush, `core/workspace.h`): an
+ * observation is a reading, and the next load would have to establish it again.
  *
  * CREATE-style commands (init, clone) declare NONE and open state themselves,
  * because the database file does not exist before dispatch runs — there is nothing

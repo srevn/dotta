@@ -263,16 +263,16 @@ static const char *get_status_message_from_item(
  * Formats and displays the divergence the workspace analysis settled; nothing
  * is re-analyzed. The item's row is the path's view row — blob, storage path,
  * profile; non-NULL for every state the direction filter passes (untracked and
- * orphaned items were filtered there).
+ * orphaned items were filtered there). A read the render makes and fails is the
+ * row's: its cause is said in the row's block, and the diff goes on.
  *
  * @param item Workspace item with divergence info (must not be NULL)
  * @param cache Content cache (must not be NULL)
  * @param direction Diff direction
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
- * @return Error or NULL on success
  */
-static error_t show_file_diff_from_workspace(
+static void show_file_diff_from_workspace(
     const workspace_item_t *item,
     content_cache_t *cache,
     diff_direction_t direction,
@@ -289,7 +289,7 @@ static error_t show_file_diff_from_workspace(
     /* Name-only output */
     if (opts->name_only) {
         output_print(out, OUTPUT_NORMAL, "%s\n", item->filesystem_path);
-        return NULL;
+        return;
     }
 
     /* Show file header */
@@ -334,14 +334,14 @@ static error_t show_file_diff_from_workspace(
     if (item->state == WORKSPACE_STATE_DELETED ||
         item->state == WORKSPACE_STATE_UNDEPLOYED ||
         (item->divergence & DIVERGENCE_UNVERIFIED)) {
-        return NULL;
+        return;
     }
 
     /* Beneath a squatter: there are no bytes of this path's to compare — Git's
      * blob against the squatter's target's file would be a diff of two unrelated
      * things, and nothing here is overwritten (apply --force replaces the squatter
      * and writes the row fresh). */
-    if (item->displaced != WORKSPACE_DISPLACED_NONE) return NULL;
+    if (item->displaced != WORKSPACE_DISPLACED_NONE) return;
 
     /* Only a difference of bytes or of kind has something to render: the copy's
      * own edit, the blob or the kind Git moved past, which disk still holds, or
@@ -349,7 +349,7 @@ static error_t show_file_diff_from_workspace(
      * a reassignment and how Git stores the blob differ in nothing a hunk could
      * show, and a sealed blob is opened for none of them. */
     if (!(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE | DIVERGENCE_TYPE))) {
-        return NULL;
+        return;
     }
 
     git_filemode_t mode = gitops_type_filemode(file->type);
@@ -361,25 +361,37 @@ static error_t show_file_diff_from_workspace(
          * or the user's beside a move of Git's (both: the conflict, whose line
          * names no kind). The kind is the whole of the difference, said off the
          * load's own look with no blob read: a sealed one, its key cold, would
-         * end the diff over a path whose bytes the load never asked for. */
+         * fail a read of bytes that are no part of it. */
         diff = (file_diff_t){
             .status = CMP_TYPE_DIFF,
             .diff_text = compare_type_mismatch(mode, &item->st),
         };
     } else {
-        /* Get content from cache via the row's blob_oid (borrowed reference -
-         * don't free), read as the entry the row's type says it is */
+        /* The row's blob from the cache by its blob_oid (borrowed reference -
+         * don't free), read as the entry the row's type says it is, then the
+         * copy against it. Either read can fail where the load's did not — a
+         * blob the load never opened, its record's stat vouching for disk, or
+         * the copy read again — and the failure is this row's, as a look the
+         * load could not take is its row's: its root, where the hunk would be,
+         * as apply's receipt names the same read's. One error per such row stays
+         * for the run (base/error.h). */
         const buffer_t *content = NULL;
         error_t err = content_cache_get_from_blob_oid(
             cache, &file->blob_oid, mode, file->storage_path, file->profile, &content
         );
-        if (err) return err;
-
-        err = compare_generate_diff(
-            content, item->filesystem_path, file->storage_path, mode,
-            direction == DIFF_UPSTREAM ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM, &diff
-        );
-        if (err) return err;
+        if (!err) {
+            err = compare_generate_diff(
+                content, item->filesystem_path, file->storage_path, mode,
+                direction == DIFF_UPSTREAM ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM, &diff
+            );
+        }
+        if (err) {
+            output_print(
+                out, OUTPUT_NORMAL, "{dim}# Error:{reset}   %s\n",
+                error_message(error_root(err))
+            );
+            return;
+        }
     }
 
     /* The separator belongs to a text, not to a verdict: where the renderer's
@@ -391,15 +403,14 @@ static error_t show_file_diff_from_workspace(
     }
 
     compare_diff_deinit(&diff);
-
-    return NULL;
 }
 
 /**
  * Present diffs for a specific direction using workspace analysis
  *
- * Filters pre-analyzed divergence and generates diffs for display. Uses cached
- * metadata and content from workspace/caches.
+ * Filters the items the analysis found diverged by kind, the scope and the
+ * direction, and shows each one that passes: its settled verdict, and the bytes
+ * its hunk draws, read through the run's content cache.
  *
  * @param diverged Diverged items from workspace (borrowed slice)
  * @param cache Content cache for blob access (must not be NULL)
@@ -410,9 +421,8 @@ static error_t show_file_diff_from_workspace(
  * @param diff_count Output: number of diffs shown (must not be NULL)
  * @param unverified Output: how many of them were rows the analysis could not
  *                   look at; shown by their status line, no hunk (must not be NULL)
- * @return Error or NULL on success
  */
-static error_t present_diffs_for_direction(
+static void present_diffs_for_direction(
     workspace_items_t diverged,
     content_cache_t *cache,
     diff_direction_t direction,
@@ -431,11 +441,6 @@ static error_t present_diffs_for_direction(
 
     *diff_count = 0;
     *unverified = 0;
-
-    error_t err = NULL;
-
-    /* Early return if no diverged items */
-    if (diverged.count == 0) return NULL;
 
     for (size_t i = 0; i < diverged.count; i++) {
         const workspace_item_t *item = diverged.entries[i];
@@ -462,8 +467,7 @@ static error_t present_diffs_for_direction(
         }
 
         /* Show the diff (content already analyzed by workspace) */
-        err = show_file_diff_from_workspace(item, cache, direction, opts, out);
-        if (err) return err;
+        show_file_diff_from_workspace(item, cache, direction, opts, out);
 
         (*diff_count)++;
 
@@ -471,8 +475,6 @@ static error_t present_diffs_for_direction(
             (*unverified)++;
         }
     }
-
-    return NULL;
 }
 
 /**
@@ -1329,11 +1331,10 @@ static error_t diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change");
         output_gap(out, OUTPUT_NORMAL);
 
-        err = present_diffs_for_direction(
+        present_diffs_for_direction(
             diverged, cache, DIFF_UPSTREAM, scope, opts, out,
             &upstream_count, &unverified
         );
-        if (err) return err;
 
         if (upstream_count == 0 && !opts->name_only) {
             output_info(out, OUTPUT_NORMAL, "No upstream differences");
@@ -1350,11 +1351,10 @@ static error_t diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit");
         output_gap(out, OUTPUT_NORMAL);
 
-        err = present_diffs_for_direction(
+        present_diffs_for_direction(
             diverged, cache, DIFF_DOWNSTREAM, scope, opts, out,
             &downstream_count, &unverified
         );
-        if (err) return err;
 
         if (downstream_count == 0 && !opts->name_only) {
             output_info(out, OUTPUT_NORMAL, "No downstream differences");
@@ -1369,11 +1369,10 @@ static error_t diff_workspace(
         total_diff_count = upstream_count + downstream_count;
     } else {
         size_t unverified = 0;
-        err = present_diffs_for_direction(
+        present_diffs_for_direction(
             diverged, cache, opts->direction, scope, opts, out,
             &total_diff_count, &unverified
         );
-        if (err) return err;
 
         /* An empty screen says what the verb it previews says of its own empty
          * run. Upstream, apply's: under a filter the scope the screen showed

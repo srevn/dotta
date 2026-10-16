@@ -1438,7 +1438,8 @@ static void apply_print_cleanup_receipt(
         /* Nor here: a directory is skipped because something the run skips is
          * still in it, because the workspace could not verify it, because its
          * home moved, because its parent refuses the run, or because its turn
-         * found it retyped, unreachable or not empty; --verbose names which. */
+         * found it retyped, unreachable or not empty. Nor a pointer at --verbose,
+         * which names them as it names every count's paths. */
         size_t skipped_dirs = verdicts->skipped_dirs.count + verdicts->refused_dirs.count +
             receipt->skipped_dirs.count;
 
@@ -1446,9 +1447,6 @@ static void apply_print_cleanup_receipt(
             output_info(
                 out, OUTPUT_NORMAL, "Skipped %zu orphaned director%s",
                 skipped_dirs, skipped_dirs == 1 ? "y" : "ies"
-            );
-            output_info(
-                out, OUTPUT_NORMAL, "Use --verbose to see which directories were skipped."
             );
         }
 

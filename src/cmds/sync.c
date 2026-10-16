@@ -32,27 +32,21 @@
 #define LIST_LIMIT 20  /* Every capped list in this file trims here. */
 
 /**
- * Per-profile sync outcome
- */
-typedef enum {
-    SYNC_OUTCOME_UP_TO_DATE = 0, /* Genuine no-op (or analyze never reached) */
-    SYNC_OUTCOME_PUSHED,         /* Clean push: LOCAL_AHEAD / NO_REMOTE created */
-    SYNC_OUTCOME_PULLED,         /* Clean FF: REMOTE_AHEAD + auto_pull */
-    SYNC_OUTCOME_RESOLVED,       /* Destructive: rebase / merge / ours / theirs */
-    SYNC_OUTCOME_DIVERGED,       /* Unresolved: warn / --no-push / --no-pull / cancel / unknown */
-    SYNC_OUTCOME_FAILED,         /* Push/pull/resolution error */
-} sync_outcome_t;
-
-/**
  * Per-profile sync result
+ *
+ * The profile's state against the remote, and the failure the run met for it. A
+ * row fails by its error, whichever phase met it: said on the profile's line
+ * where it is met — the analyze phase's read back by the push phase and the dry
+ * run — and counted by sync_failure. A row with no error whose state is up-to-date
+ * is one the run had nothing to do for, its line verbose's, counted at normal
+ * by cmd_sync; every other row's line says what the run did with it.
  */
 typedef struct {
     const char *profile;           /* The scope's own name, borrowed */
     upstream_state_t state;
     size_t ahead;
     size_t behind;
-    sync_outcome_t outcome;
-    error_t error;                 /* The failed outcome's cause, whichever phase met it; NULL elsewhere */
+    error_t error;                 /* The failure's cause, borrowed; NULL where the run met none */
 } profile_sync_result_t;
 
 /**
@@ -63,20 +57,6 @@ typedef struct {
     profile_sync_result_t *profiles;
     size_t profile_count;
 } sync_results_t;
-
-/**
- * Single funnel for SYNC_OUTCOME_FAILED: the outcome and its cause, borrowed as
- * every error is (base/error.h). A row says the cause — where the failure is
- * met, or, for the analyze phase's, where the push phase and the dry run read
- * it back — and sync_failure counts it.
- */
-static void mark_result_failed(
-    profile_sync_result_t *result,
-    error_t err
-) {
-    result->outcome = SYNC_OUTCOME_FAILED;
-    result->error = err;
-}
 
 /**
  * Fast-forward a branch to its remote-tracking ref, and nothing else; *updated
@@ -290,8 +270,8 @@ static error_t sync_fetch_phase(
  * The table is made here, in `arena`, as scope_profiles(scope) orders it — the
  * profiles sync_fetch_phase fetched: analyze only what the user asked for. A
  * row names its profile by the scope's own string. A profile it cannot analyze
- * fails in its own row (mark_result_failed), and the push phase's skip line and
- * the dry run read that cause back; a later phase says its own failure where it
+ * fails in its own row, by its error, and the push phase's skip line and the
+ * dry run read that cause back; a later phase says its own failure where it
  * happens.
  */
 static sync_results_t sync_analyze_phase(
@@ -323,7 +303,7 @@ static sync_results_t sync_analyze_phase(
         );
 
         if (err) {
-            mark_result_failed(result, err);
+            result->error = err;
             continue;
         }
 
@@ -397,7 +377,6 @@ static void handle_remote_ahead(
                 "    Enable 'auto_pull' for automatic pull during sync"
             );
         }
-        result->outcome = SYNC_OUTCOME_DIVERGED;
         return;
     }
 
@@ -417,16 +396,15 @@ static void handle_remote_ahead(
             "  {red}✗{reset} {red}%s{reset}: %s\n",
             result->profile, error_line(err)
         );
-        mark_result_failed(result, err);
+        result->error = err;
         return;
     }
 
     if (!pulled) {
         /* Race: analyze saw REMOTE_AHEAD but FF found nothing new (we caught up
-         * between phases). Reclassify to reflect reality so downstream consumers
-         * (summary, hooks) see coherent state. */
+         * between phases). Reclassify to reflect reality: the row is up to date,
+         * its line verbose's, and cmd_sync counts it with the others. */
         result->state = UPSTREAM_UP_TO_DATE;
-        result->outcome = SYNC_OUTCOME_UP_TO_DATE;
         output_colored(
             out, OUTPUT_VERBOSE, upstream_state_color(result->state),
             "  %s %s: already up-to-date\n",
@@ -437,7 +415,6 @@ static void handle_remote_ahead(
 
     /* Pull succeeded. What the pull did to the view is reported by cmd_sync's
      * manifest block, once, after every profile's Git work. */
-    result->outcome = SYNC_OUTCOME_PULLED;
     output_print(
         out, OUTPUT_NORMAL,
         "  {green}✓{reset} {green}%s{reset}: pulled %zu commit%s\n",
@@ -451,8 +428,8 @@ static void handle_remote_ahead(
  * Unified handler for SYNC_STRATEGY_REBASE and SYNC_STRATEGY_MERGE (structurally
  * identical — only the strategy enum and log strings differ).
  *
- * Returns critical error only on rollback failure (caller must propagate). All
- * other failures are recorded in result/results and return NULL.
+ * Returns critical error only on rollback failure (caller must propagate). Every
+ * other failure is the row's error, and returns NULL.
  */
 static error_t resolve_and_push_divergence(
     git_repository *repo,
@@ -484,7 +461,7 @@ static error_t resolve_and_push_divergence(
     );
     if (err) {
         output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-        mark_result_failed(result, err);
+        result->error = err;
         return NULL;
     }
 
@@ -492,7 +469,7 @@ static error_t resolve_and_push_divergence(
     err = resolve_execute(&resolve, NULL);
     if (err) {
         output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-        mark_result_failed(result, err);
+        result->error = err;
         return NULL;
     }
 
@@ -501,7 +478,7 @@ static error_t resolve_and_push_divergence(
     err = resolve_verify(&resolve, &ahead, NULL);
     if (err) {
         output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-        mark_result_failed(result, err);
+        result->error = err;
 
         char reason[64];
         snprintf(
@@ -517,13 +494,14 @@ static error_t resolve_and_push_divergence(
     );
 
     if (no_push) {
+        /* Resolved locally all the same: the next sync sees LOCAL_AHEAD */
         output_info(out, OUTPUT_NORMAL, "    Push skipped (--no-push)");
     } else {
         /* Push resolved commits */
         err = gitops_push_branch(repo, remote_name, result->profile, xfer);
         if (err) {
             output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-            mark_result_failed(result, err);
+            result->error = err;
 
             output_info(
                 out, OUTPUT_NORMAL,
@@ -541,9 +519,6 @@ static error_t resolve_and_push_divergence(
             push_desc
         );
     }
-
-    /* Resolved locally even if push was deferred — next sync sees LOCAL_AHEAD. */
-    result->outcome = SYNC_OUTCOME_RESOLVED;
 
     return NULL;
 }
@@ -567,7 +542,6 @@ static void handle_diverged_ours(
 
     if (no_push) {
         output_info(out, OUTPUT_NORMAL, "    Force push skipped (--no-push)");
-        result->outcome = SYNC_OUTCOME_DIVERGED;
         return;
     }
 
@@ -584,7 +558,6 @@ static void handle_diverged_ours(
                 break;
             case OUTPUT_ANSWER_NO:
                 output_info(out, OUTPUT_NORMAL, "    Operation cancelled by user");
-                result->outcome = SYNC_OUTCOME_DIVERGED;
                 return;
             case OUTPUT_ANSWER_NONE: {
                 error_t err = error_create(
@@ -593,7 +566,7 @@ static void handle_diverged_ours(
                     "asking", result->profile
                 );
                 output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-                mark_result_failed(result, err);
+                result->error = err;
                 return;
             }
         }
@@ -603,7 +576,7 @@ static void handle_diverged_ours(
     error_t err = gitops_force_push_branch(repo, remote_name, result->profile, xfer);
     if (err) {
         output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-        mark_result_failed(result, err);
+        result->error = err;
         return;
     }
 
@@ -611,7 +584,6 @@ static void handle_diverged_ours(
         out, OUTPUT_NORMAL,
         "    {green}✓{reset} Force pushed to remote (remote commits discarded)\n"
     );
-    result->outcome = SYNC_OUTCOME_RESOLVED;
 }
 
 /**
@@ -639,7 +611,6 @@ static void handle_diverged_theirs(
                 break;
             case OUTPUT_ANSWER_NO:
                 output_info(out, OUTPUT_NORMAL, "    Operation cancelled by user");
-                result->outcome = SYNC_OUTCOME_DIVERGED;
                 return;
             case OUTPUT_ANSWER_NONE: {
                 error_t err = error_create(
@@ -648,7 +619,7 @@ static void handle_diverged_theirs(
                     "resets without asking", result->profile
                 );
                 output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-                mark_result_failed(result, err);
+                result->error = err;
                 return;
             }
         }
@@ -661,7 +632,7 @@ static void handle_diverged_theirs(
     );
     if (err) {
         output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-        mark_result_failed(result, err);
+        result->error = err;
         return;
     }
 
@@ -669,7 +640,7 @@ static void handle_diverged_theirs(
     err = resolve_execute(&resolve, NULL);
     if (err) {
         output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-        mark_result_failed(result, err);
+        result->error = err;
         return;
     }
 
@@ -685,7 +656,7 @@ static void handle_diverged_theirs(
             out, OUTPUT_NORMAL,
             "    {yellow}⚠{reset} Local branch was reset but verification failed\n"
         );
-        mark_result_failed(result, err);
+        result->error = err;
         return;
     }
 
@@ -693,7 +664,6 @@ static void handle_diverged_theirs(
         out, OUTPUT_NORMAL,
         "    {green}✓{reset} Reset to remote (local commits discarded)\n"
     );
-    result->outcome = SYNC_OUTCOME_RESOLVED;
 }
 
 /**
@@ -733,11 +703,9 @@ static error_t handle_diverged(
                     );
                 }
             }
-            result->outcome = SYNC_OUTCOME_DIVERGED;
             return NULL;
         }
 
-        /* Non-WARN strategies own their outcome inside the inner handler. */
         case SYNC_STRATEGY_REBASE: {
             return resolve_and_push_divergence(
                 repo, remote_name, result, out, RESOLVE_STRATEGY_REBASE,
@@ -804,7 +772,7 @@ static error_t sync_push_phase(
         profile_sync_result_t *result = &results->profiles[i];
 
         /* Skip rows that already failed in analyze phase. */
-        if (result->outcome == SYNC_OUTCOME_FAILED) {
+        if (result->error) {
             output_print(
                 out, OUTPUT_NORMAL,
                 "  {red}✗{reset} {red}%s{reset}: %s\n",
@@ -816,7 +784,7 @@ static error_t sync_push_phase(
         /* Handle based on state */
         switch (result->state) {
             case UPSTREAM_UP_TO_DATE: {
-                /* outcome remains UP_TO_DATE via calloc-default. */
+                /* Nothing to do, said at verbose: at normal cmd_sync counts these */
                 output_colored(
                     out, OUTPUT_VERBOSE, upstream_state_color(result->state),
                     "  %s %s: up-to-date\n",
@@ -848,7 +816,6 @@ static error_t sync_push_phase(
                         upstream_state_symbol(result->state),
                         result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                     );
-                    result->outcome = SYNC_OUTCOME_DIVERGED;
                     break;
                 }
 
@@ -865,14 +832,13 @@ static error_t sync_push_phase(
                         "  {red}✗{reset} {red}%s{reset}: %s\n",
                         result->profile, error_line(err)
                     );
-                    mark_result_failed(result, err);
+                    result->error = err;
                 } else {
                     output_print(
                         out, OUTPUT_NORMAL,
                         "  {green}✓{reset} {green}%s{reset}: pushed %zu commit%s\n",
                         result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                     );
-                    result->outcome = SYNC_OUTCOME_PUSHED;
                 }
                 break;
             }
@@ -884,7 +850,6 @@ static error_t sync_push_phase(
                         "  %s %s: local only (push skipped: --no-push)\n",
                         upstream_state_symbol(result->state), result->profile
                     );
-                    result->outcome = SYNC_OUTCOME_DIVERGED;
                     break;
                 }
 
@@ -902,14 +867,13 @@ static error_t sync_push_phase(
                         "  {red}✗{reset} {red}%s{reset}: %s\n",
                         result->profile, error_line(err)
                     );
-                    mark_result_failed(result, err);
+                    result->error = err;
                 } else {
                     output_print(
                         out, OUTPUT_NORMAL,
                         "  {green}✓{reset} {green}%s{reset}: created remote branch\n",
                         result->profile
                     );
-                    result->outcome = SYNC_OUTCOME_PUSHED;
                 }
                 break;
             }
@@ -958,7 +922,6 @@ static error_t sync_push_phase(
                         "incorporating remote changes)",
                         config_strategies[diverged_strategy].name
                     );
-                    result->outcome = SYNC_OUTCOME_DIVERGED;
                     break;
                 }
                 error_t err = handle_diverged(
@@ -977,7 +940,6 @@ static error_t sync_push_phase(
                     "  %s %s: no local branch\n",
                     upstream_state_symbol(result->state), result->profile
                 );
-                result->outcome = SYNC_OUTCOME_DIVERGED;
                 break;
             }
         }
@@ -991,7 +953,7 @@ static error_t sync_push_phase(
  *
  * Glyph and color flow from upstream_state_symbol / upstream_state_color so the
  * visual stays in lockstep with list/status as those maps evolve. Analyze-phase
- * failures use the outcome glyph (✗), not a state glyph.
+ * failures use the failure's glyph (✗), not a state glyph.
  */
 static void sync_render_dry_run(
     const sync_results_t *results,
@@ -1002,7 +964,7 @@ static void sync_render_dry_run(
     for (size_t i = 0; i < results->profile_count; i++) {
         const profile_sync_result_t *r = &results->profiles[i];
 
-        if (r->outcome == SYNC_OUTCOME_FAILED) {
+        if (r->error) {
             output_print(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s: %s\n",
                 r->profile, error_line(r->error)
@@ -1064,154 +1026,29 @@ static void sync_render_dry_run(
 }
 
 /**
- * Render the final sync summary.
- *
- * Tallies per-row outcomes (single source of truth), disambiguates the DIVERGED
- * umbrella by the captured analyze-phase state into needs_pull / needs_push /
- * diverged buckets, then emits the count lines, the session-level transfer stats,
- * and — when apply has work, whether the manifest block just staged, released
- * or reassigned it or the record already disagreed with the view — the "Run apply"
- * hint.
- *
- * The receipt, and only the receipt: every line goes to `out`, and whether sync
- * kept its promise is sync_failure's to say through the return value. The three
- * registers partition the profiles by what the run did with them — ✓ for the
- * buckets it acted on, "Warning:" for the ones it was told to leave alone
- * (--no-push, --no-pull, 'warn' on a divergence), ✗ for the ones it tried and
- * could not. A failure written to stderr from here would leave a redirected sync's
- * receipt reading as a clean success.
- *
- * The summary keeps the finer-grained user vocabulary; hook env (Tier 2) will
- * expose the cleaner outcome partition.
- */
-static void sync_render_summary(
-    const sync_results_t *results,
-    const transfer_context_t *xfer,
-    bool manifest_changed,
-    bool apply_pending,
-    output_t *out
-) {
-    output_section(out, OUTPUT_NORMAL, "Sync complete");
-
-    size_t pushed = 0, pulled = 0, resolved = 0;
-    size_t up_to_date = 0, failed = 0;
-    size_t needs_pull = 0, needs_push = 0, diverged = 0;
-
-    for (size_t i = 0; i < results->profile_count; i++) {
-        const profile_sync_result_t *r = &results->profiles[i];
-        switch (r->outcome) {
-            case SYNC_OUTCOME_UP_TO_DATE: up_to_date++; break;
-            case SYNC_OUTCOME_PUSHED:     pushed++; break;
-            case SYNC_OUTCOME_PULLED:     pulled++; break;
-            case SYNC_OUTCOME_RESOLVED:   resolved++; break;
-            case SYNC_OUTCOME_FAILED:     failed++; break;
-            case SYNC_OUTCOME_DIVERGED:
-                switch (r->state) {
-                    case UPSTREAM_REMOTE_AHEAD:
-                        needs_pull++;
-                        break;
-                    case UPSTREAM_LOCAL_AHEAD:
-                    case UPSTREAM_NO_REMOTE:
-                        needs_push++;
-                        break;
-                    case UPSTREAM_DIVERGED:
-                    case UPSTREAM_NO_LOCAL:
-                    case UPSTREAM_UP_TO_DATE:
-                        diverged++;
-                        break;
-                }
-                break;
-        }
-    }
-
-    if (pushed > 0) {
-        output_success(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s pushed",
-            pushed, pushed == 1 ? "" : "s"
-        );
-    }
-    if (pulled > 0) {
-        output_success(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s pulled",
-            pulled, pulled == 1 ? "" : "s"
-        );
-    }
-    if (resolved > 0) {
-        output_success(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s resolved",
-            resolved, resolved == 1 ? "" : "s"
-        );
-    }
-    if (up_to_date > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s already up-to-date",
-            up_to_date, up_to_date == 1 ? "" : "s"
-        );
-    }
-    if (needs_push > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s need push",
-            needs_push, needs_push == 1 ? "" : "s"
-        );
-    }
-    if (needs_pull > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s need pull",
-            needs_pull, needs_pull == 1 ? "" : "s"
-        );
-    }
-    if (diverged > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s diverged",
-            diverged, diverged == 1 ? "" : "s"
-        );
-    }
-    if (failed > 0) {
-        output_print(
-            out, OUTPUT_NORMAL, "{red}✗{reset} {cyan}%zu{reset} profile%s failed\n",
-            failed, failed == 1 ? "" : "s"
-        );
-    }
-
-    /* Session-level wire stats (silent if nothing moved) */
-    transfer_summarize(xfer, out, OUTPUT_NORMAL);
-
-    /* The hint states a fact about the record, not about this sync. The manifest
-     * block is the direct evidence of new work — it is empty exactly when the
-     * Git phase touched nothing active (a pull of README or .dottaignore, a push,
-     * 'ours'), which no guess from the outcome tallies could tell apart — and
-     * apply_pending is the work that was already there: an earlier sync reviewed
-     * with status instead of apply, a scope change, local drift. The block is a
-     * delta and prints once; the hint prints for as long as the work stands. */
-    if (manifest_changed || apply_pending) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy");
-    }
-}
-
-/**
  * The run's failure, if it had one — the answer cmd_sync returns.
  *
- * A profile the run tried to reconcile and could not (SYNC_OUTCOME_FAILED —
+ * A profile the run tried to reconcile and could not (a row with an error —
  * whatever the phase: analyze, pull, resolve, push) is a broken promise, and
- * only the return value carries that to the caller. The reason was printed beside
- * the profile it belongs to and the receipt counted it, but a shell reads neither.
+ * only the return value carries that to the caller. The reason was printed on
+ * the profile's own row — on stdout, so a redirected sync's report never reads
+ * as a clean success — but a shell reads none of it.
  *
  * A profile the run deliberately left alone is not a failure: the caller asked
  * for that (--no-push, --no-pull), the configured strategy did ('warn' on a
- * divergence), or the user declined the prompt. The DIVERGED bucket's warning
- * is that bucket's whole report, and `dotta sync && dotta apply` keeps working
- * for everyone who syncs under 'warn'.
+ * divergence), or the user declined the prompt. Its own row is its whole report,
+ * and `dotta sync && dotta apply` keeps working for everyone who syncs under
+ * 'warn'.
  *
  * Pure, and deliberately so: the per-profile errors stay in the rows of `results`
  * that borrow them and are never rethrown, since each was already rendered where
- * it happened. The message carries the one fact the receipt does not — how much
- * of the run the failures were.
+ * it happened. The message carries the one fact no row says — how much of the
+ * run the failures were.
  */
 static error_t sync_failure(const sync_results_t *results) {
     size_t failed = 0;
     for (size_t i = 0; i < results->profile_count; i++) {
-        if (results->profiles[i].outcome == SYNC_OUTCOME_FAILED) failed++;
+        if (results->profiles[i].error) failed++;
     }
 
     if (failed == 0) return NULL;
@@ -1935,7 +1772,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     bool all_quiet = true;
     for (size_t i = 0; i < results.profile_count; i++) {
         const profile_sync_result_t *r = &results.profiles[i];
-        if (r->outcome != SYNC_OUTCOME_UP_TO_DATE || r->state != UPSTREAM_UP_TO_DATE) {
+        if (r->error || r->state != UPSTREAM_UP_TO_DATE) {
             all_quiet = false;
             break;
         }
@@ -1958,6 +1795,25 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     if (err) goto cleanup;
 
+    /* What the Git phase left unsaid, said once beneath it: at normal the profiles
+     * it had nothing to do for, whose own lines are verbose's (sync_push_phase)
+     * — counted after the clear, which would take a line printed before it —
+     * and at verbose the wire, Git's tally of what the lines above say moved.
+     * Every other profile's line said what the run did with it. */
+    size_t up_to_date = 0;
+    for (size_t i = 0; i < results.profile_count; i++) {
+        const profile_sync_result_t *r = &results.profiles[i];
+        if (!r->error && r->state == UPSTREAM_UP_TO_DATE) up_to_date++;
+    }
+    if (up_to_date > 0 && !output_is_verbose(out)) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_info(
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s already up-to-date",
+            up_to_date, up_to_date == 1 ? "" : "s"
+        );
+    }
+    transfer_summarize(xfer, out, OUTPUT_VERBOSE);
+
     /* Manifest block — the view after the Git phase, diffed against the view
      * before it. A true delta in both modes: a local external commit that predates
      * the sync is in `before` and `after` alike and is reported by its results
@@ -1978,7 +1834,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * either: its copy is that blob's landing's, which clears it.
      *
      * Sync does not deploy. Apply's divergence analysis does that, which is what
-     * the summary's hint points at.
+     * the hint closing the report points at.
      *
      * A failed build is not sync's failure — every Git ref already moved and
      * stands — and its message carries the repair (a tree that will not load,
@@ -1987,8 +1843,6 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * claim the profile's own tree contradicts; the health notices after the
      * block are their signal. */
     const string_array_t *enabled = scope_enabled(scope);
-    bool manifest_changed = false;    /* The block printed: the Git phase moved something active */
-    bool apply_pending = false;       /* The record disagrees with the view, whenever that began */
 
     err = manifest_build(repo, state, ctx->arena, &after);
     if (err) {
@@ -2005,6 +1859,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
         manifest_diff(before, after, records, record_count, enabled, stats);
 
+        bool manifest_changed = false;  /* The block printed: the Git phase moved the view */
         for (size_t i = 0; i < enabled->count; i++) {
             const manifest_diff_stats_t *s = &stats[i];
             size_t staged = s->added + s->updated;
@@ -2190,6 +2045,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          *
          * The record's paths are unique and so are the view's, so the records
          * that vouch for a row count the rows that have one. */
+        bool apply_pending = false;  /* The record disagrees with the view, whenever that began */
         size_t vouched = 0;
         for (size_t i = 0; i < record_count; i++) {
             const state_record_t *record = &records[i];
@@ -2211,16 +2067,27 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         if (vouched < manifest_rows(after).count) {
             apply_pending = true;
         }
+
+        /* The hint states a fact about the record, not about this sync. The
+         * manifest block is the direct evidence of new work — it is empty exactly
+         * when the Git phase touched nothing active (a pull of README or
+         * .dottaignore, a push, 'ours'), which no profile's line above tells
+         * apart — and apply_pending is the work that was already there: an earlier
+         * sync reviewed with status instead of apply, a scope change, local drift.
+         * The block is a delta and prints once; the hint prints for as long as
+         * the work stands. */
+        if (manifest_changed || apply_pending) {
+            output_gap(out, OUTPUT_NORMAL);
+            output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy");
+        }
     }
 
-    /* Post-sync fires once the Git phase and the manifest block are done; a failed
-     * build was warned above and is not a reason to skip it. Nor is a profile
-     * that failed: the pushes and pulls that did land are real, and the hook's
-     * subject is the world sync leaves behind, not what sync returns. */
+    /* Post-sync fires once the receipt is done — the Git phase's lines, the
+     * manifest block and its hint; a failed build was warned above and is not a
+     * reason to skip it. Nor is a profile that failed: the pushes and pulls that
+     * did land are real, and the hook's subject is the world sync leaves behind,
+     * not what sync returns. */
     hook_fire_post(config, out, &hook_inv);
-
-    /* Final summary */
-    sync_render_summary(&results, xfer, manifest_changed, apply_pending, out);
 
     /* The receipt is printed; the return value is what the caller reads. */
     err = sync_failure(&results);

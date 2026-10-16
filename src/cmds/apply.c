@@ -3281,9 +3281,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         /* Carry the verdicts out (files-only, directories-only, or mixed — one
          * call). Reporting reads the result: outcomes, never plan counts. The
          * gate is verdict truth, not plan truth — a plan whose every row was
-         * skipped carries no work — and a run the skips emptied stays silent:
-         * the skip block was its whole story, and "no work in scope" would misname
-         * it. */
+         * skipped carries no work — and a run with none says nothing of it here:
+         * the preview already did, by the Deployment block it never printed and
+         * the skip block that emptied it. */
         if (deploy_verdicts->files.count + deploy_verdicts->directories.count > 0) {
             output_gap(out, OUTPUT_VERBOSE);
             output_print(out, OUTPUT_VERBOSE, "Executing deployment plan...\n");
@@ -3293,8 +3293,6 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * the run meets is an outcome on the receipt — a row's here, a hold's
              * at the release below — and the run goes on to record what landed. */
             deploy_receipt = deploy_execute(ctx->arena, ws, deploy_verdicts, content_cache);
-        } else if (deploy_verdicts->skipped.count == 0) {
-            output_print(out, OUTPUT_VERBOSE, "No deployment work in scope\n");
         }
 
         /* The acts, in their one order: deploy's above, then cleanup's, then

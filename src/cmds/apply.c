@@ -757,7 +757,7 @@ static void apply_print_reassignments(
  * one line of their own whichever flag spared it. The three flags take three
  * lines, that one a fourth, and -e's splits its count at verbose: each row by
  * the act its plan holds it for, the orphans apart, and the landing's apart from
- * them by their place.
+ * them by what they stand in the way of.
  *
  * Printed once, above the nothing-to-do exit — so a run that does nothing else
  * still says what it withheld — and therefore also above the confirmation prompt,
@@ -786,15 +786,13 @@ static size_t apply_print_withheld(
      * deployment or a directory's convergence, missing or diverged alike, and
      * counts the orphans apart under no act: an orphan's is its verdict's — a
      * prune, a release, a reclaim — which a spared orphan never gets. The landing's
-     * count apart again, by their place rather than an act — dotta's nodes above
-     * the paths beneath them, the copies beneath the file above them: each goes
-     * only with the landing of the row in its way, and -e spares one whether a
-     * row reaches it or not (core/deploy.h deploy_ceded_t). */
+     * count apart again, by what they stand in the way of rather than an act —
+     * a deployment, of the paths beneath dotta's node or of the file above a
+     * copy: each goes only with the landing of the row in its way, and -e spares
+     * one whether a row reaches it or not (core/deploy.h deploy_ceded_t). */
     size_t excluded =
-        deploy_plan->files.excluded.count +
-        deploy_plan->directories.excluded.count +
-        cleanup_plan->excluded.count +
-        deploy_plan->ceded.excluded.count;
+        deploy_plan->files.excluded.count + deploy_plan->directories.excluded.count +
+        cleanup_plan->excluded.count + deploy_plan->ceded.excluded.count;
 
     if (excluded > 0) {
         if (output_is_verbose(out)) {
@@ -823,28 +821,11 @@ static size_t apply_print_withheld(
                     cleanup_plan->excluded.count == 1 ? "" : "s"
                 );
             }
-
-            /* The landing's by their place, the one bucket folded where it is
-             * printed: dotta's nodes, and the rest copies */
-            size_t nodes = 0;
-            for (size_t i = 0; i < deploy_plan->ceded.excluded.count; i++) {
-                if (deploy_plan->ceded.excluded.entries[i]->state == WORKSPACE_STATE_OBSTRUCTING) {
-                    nodes++;
-                }
-            }
-            const size_t copies = deploy_plan->ceded.excluded.count - nodes;
-
-            if (nodes > 0) {
+            if (deploy_plan->ceded.excluded.count > 0) {
                 output_print(
-                    out, OUTPUT_VERBOSE,
-                    "  • %zu orphaned file%s in the way of the paths beneath\n",
-                    nodes, nodes == 1 ? "" : "s"
-                );
-            }
-            if (copies > 0) {
-                output_print(
-                    out, OUTPUT_VERBOSE, "  • %zu orphaned path%s in the way of the file above\n",
-                    copies, copies == 1 ? "" : "s"
+                    out, OUTPUT_VERBOSE, "  • %zu orphaned path%s in the way of a deployment\n",
+                    deploy_plan->ceded.excluded.count,
+                    deploy_plan->ceded.excluded.count == 1 ? "" : "s"
                 );
             }
         } else {

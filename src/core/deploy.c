@@ -498,16 +498,17 @@ static bool occupant_conflicts(fs_occupant_t occ, path_type_t type) {
  * --force removes is held beside it, the blocker it would be, for the consent
  * that follows the walk: a skip's blocker only where that consent refuses. The
  * removals grow as the walk vouches for them, each directory after everything
- * it holds, so the verdict hands them to the run deepest first. Lives as long
- * as the row's decision; its list is the preflight's arena's.
+ * it holds, deepest first — the row's alone until its verdict takes them onto
+ * the run's (deploy_preflight_t's clears); a skip takes none. Lives as long as
+ * the row's decision; its list is the preflight's arena's.
  */
 typedef struct {
     const workspace_t *ws;             /* The load's items, met cold by path (workspace_find) */
     arena_t *arena;                    /* The removals below, and a stop's path */
     deploy_skip_t *skip;               /* The row's skip in the making: a stop's reason and blocker */
-    const workspace_item_t **cleared;  /* Every copy vouched for so far, deepest first */
-    size_t cleared_count;
-    size_t cleared_capacity;
+    const workspace_item_t **clears;   /* Every copy vouched for so far, deepest first */
+    size_t clear_count;
+    size_t clear_capacity;
     deploy_blocker_t edit;             /* The first copy only --force removes; none where it met none */
 } deploy_walk_t;
 
@@ -585,11 +586,11 @@ static bool vouch_clearance(const char *entry, void *ctx) {
         return false;
     }
 
-    walk->cleared = arena_grow(
-        walk->arena, walk->cleared, &walk->cleared_capacity, walk->cleared_count + 1,
-        sizeof(*walk->cleared)
+    walk->clears = arena_grow(
+        walk->arena, walk->clears, &walk->clear_capacity, walk->clear_count + 1,
+        sizeof(*walk->clears)
     );
-    walk->cleared[walk->cleared_count++] = item;
+    walk->clears[walk->clear_count++] = item;
     return true;
 }
 
@@ -611,7 +612,7 @@ static bool vouch_clearance(const char *entry, void *ctx) {
  * @return Whether the walk may go on; false where it stopped, the stop on the skip
  */
 static bool check_clearance(deploy_walk_t *walk, const char *path) {
-    const size_t before = walk->cleared_count;
+    const size_t before = walk->clear_count;
 
     switch (fs_directory_emptiness(path, vouch_clearance, walk)) {
         case FS_DIR_EMPTY:
@@ -622,8 +623,11 @@ static bool check_clearance(deploy_walk_t *walk, const char *path) {
             return stop_clearance(walk, DEPLOY_SKIP_UNREADABLE, path);
     }
 
-    return walk->cleared_count == before || !fs_denied(path, W_OK | X_OK) ||
-           stop_clearance(walk, DEPLOY_SKIP_PERMISSION, path);
+    if (walk->clear_count > before && fs_denied(path, W_OK | X_OK)) {
+        return stop_clearance(walk, DEPLOY_SKIP_PERMISSION, path);
+    }
+
+    return true;
 }
 
 /**
@@ -632,7 +636,7 @@ static bool check_clearance(deploy_walk_t *walk, const char *path) {
  * Every arm removes exactly one node: unlink for a file, a symlink or a device,
  * rmdir for a directory that holds nothing (fs_remove_empty_dir clears OS metadata
  * and refuses anything else). Deploy owns no recursive removal at all — a directory
- * goes once each copy in it has, one node at a time, deepest first (deploy_file)
+ * goes once each copy in it has, one node at a time, deepest first (clear_copies)
  * — which is what lets the clearance's walk be a prediction rather than a guard:
  * a directory that fills up between the two stops the run instead of going with
  * it. Absence is success — a race that removes the node first has done this
@@ -1315,6 +1319,14 @@ error_t deploy_preflight(
 
     verdicts->replaces.entries = replaces;
 
+    /* The nodes are an index the walk writes in place, the rows beneath each
+     * reading its fate as the walk goes (check_ancestry). The copies are read
+     * by no fate, and no plan bounds them — a walk meets what its readdir does,
+     * a name twice where a directory changes under it — so each deployable row's
+     * go into a bucket with its verdict, filled once the walk is done
+     * (core/workspace.h workspace_buckets_t): none on a healthy load. */
+    workspace_buckets_t *buckets = workspace_buckets_create(arena);
+
     /* Every planned row, in path order, either kind; then the ancestors. A fate
      * is a prediction of what the run will find at the row's path and on the
      * way to it, so it is decided after the fate of every one of the row's
@@ -1386,7 +1398,8 @@ error_t deploy_preflight(
          * skip: each rung that refuses writes it — the reason, and the ancestor
          * it names with the claim there — and the row is skipped iff one did.
          * The clearance's walk writes into the same skip where it stops, and
-         * the removals it vouches for ride the row's verdict (check_clearance). */
+         * the removals it vouches for go onto the run's with the row's verdict
+         * (check_clearance). */
         deploy_skip_t skip = { .item = item };
         deploy_walk_t walk = { .ws = ws, .arena = arena, .skip = &skip };
         bool absent = false;
@@ -1523,16 +1536,23 @@ error_t deploy_preflight(
             continue;
         }
 
-        /* The verdict, onto its kind's array, with the removals its clearance
-         * vouched for — none where no walk ran */
+        /* The verdict, onto its kind's array; and the copies its clearance vouched
+         * for, onto the run's — none where no walk ran — each found again beneath
+         * the row's path by its act (clear_copies) */
         deploy_verdicts_t *kind = item->item_kind == PATH_KIND_DIRECTORY
             ? &verdicts->directories : &verdicts->files;
 
         kind->entries[kind->count++] = (deploy_verdict_t){
             .item = item, .occupant = occupant, .uid = uid, .gid = gid,
-            .cleared = { .entries = walk.cleared, .count = walk.cleared_count },
         };
+
+        for (size_t i = 0; i < walk.clear_count; i++) {
+            workspace_buckets_add(buckets, walk.clears[i], &verdicts->clears);
+        }
     }
+
+    /* The copies, whole: every deployable row's, in path order */
+    workspace_buckets_fill(buckets);
 
     /* The nodes the walk replaces, each kept only where a deployable row lies
      * beneath it, by the ancestors pass's own question (above_deployable_row):
@@ -1643,20 +1663,23 @@ typedef struct {
 /**
  * One execution of the verdicts: what deploy_execute was handed, plus the state
  * the run accumulates. Lives exactly as long as deploy_execute; the parents it
- * created, the nodes of dotta's it removed and the holds it took outlive it,
- * handed to the receipt as it returns — the holds for the caller's release.
+ * created, the nodes and copies of dotta's it removed and the holds it took outlive
+ * it, handed to the receipt as it returns — the holds for the caller's release.
  */
 typedef struct {
     content_cache_t *cache;             /* every row's bytes, either kind (deploy_file) */
     const workspace_t *ws;              /* a landing directory's item (holdable_directory) */
-    const deploy_preflight_t *verdicts; /* the ancestors' metadata, the nodes to replace */
+    const deploy_preflight_t *verdicts; /* the ancestors' metadata, the nodes and copies to remove */
     arena_t *arena;                     /* every list below grows here */
     deploy_outcome_t *ancestors;        /* every claimed parent created: the receipt's ancestors */
     size_t ancestor_count;
     size_t ancestor_capacity;
-    const workspace_item_t **removed;   /* every node of dotta's a landing removed: the receipt's removed */
-    size_t removed_count;
-    size_t removed_capacity;
+    const workspace_item_t **replaced;  /* every node of dotta's the way replaced: the receipt's replaced */
+    size_t replaced_count;
+    size_t replaced_capacity;
+    const workspace_item_t **cleared;   /* every copy of dotta's a clearance took: the receipt's cleared */
+    size_t cleared_count;
+    size_t cleared_capacity;
     deploy_hold_t *holds;               /* every hold taken, in the order taken: the receipt's taken */
     size_t hold_count;
     size_t hold_capacity;
@@ -1711,24 +1734,6 @@ static void note_uncreated(deploy_run_t *run, const char *path, const char *verb
         .len = strlen(path),
         .error = error_create(ERR_FS, "'%s' was not %s", path, verb),
     };
-}
-
-/**
- * Note a node of dotta's a landing removed, for the record phase to retire
- *
- * Called by the act that removed it, once the removal has landed: dotta's node
- * above a row once the directory stands in its place (replace_node), and each
- * copy a clearance named once its own removal has (deploy_file). The run's own
- * list, handed to the receipt whole as execute returns (deploy_receipt_t's
- * removed), in act order. The item is the workspace's, outliving the run.
- */
-static void note_removed(deploy_run_t *run, const workspace_item_t *item) {
-    run->removed = arena_grow(
-        run->arena, run->removed, &run->removed_capacity, run->removed_count + 1,
-        sizeof(*run->removed)
-    );
-
-    run->removed[run->removed_count++] = item;
 }
 
 /**
@@ -1909,7 +1914,7 @@ static error_t ensure_parents(deploy_run_t *run, const char *path);
  *
  * The node preflight decided to replace (deploy_preflight_t's replaces) the path
  * lies strictly beneath — one at most, nodes never nesting — unless the run's
- * removed list holds it already: the first act beneath a node replaces it, and
+ * replaced list holds it already: the first act beneath a node replaces it, and
  * every later one finds a directory in its place. Asked first on every act's
  * way (ensure_parents), after that act's content read (deploy_file), so a run
  * whose acts beneath the node all fail before their way leaves it standing.
@@ -1920,7 +1925,7 @@ static error_t ensure_parents(deploy_run_t *run, const char *path);
  * of the node's path (check_landing). The node itself, one unlink, never through
  * it (clear_occupant). And a directory in its place, created as a parent no row
  * claims is (create_ancestor's claimless arm: no row stands at an orphan's path).
- * Listed on the run's removed once that directory stands, and its record retires
+ * Listed on the run's replaced once that directory stands, and its record retires
  * with the record of every row beneath it (cmds/apply.c apply_write_record).
  *
  * A replace stopped at any of the three is a place the run created no directory
@@ -1945,8 +1950,8 @@ static error_t replace_node(deploy_run_t *run, const char *path) {
     if (!node) return NULL;
 
     /* Replaced already, by an earlier act beneath it */
-    for (size_t i = 0; i < run->removed_count; i++) {
-        if (run->removed[i] == node) return NULL;
+    for (size_t i = 0; i < run->replaced_count; i++) {
+        if (run->replaced[i] == node) return NULL;
     }
 
     error_t err = ensure_parents(run, node->filesystem_path);
@@ -1957,7 +1962,11 @@ static error_t replace_node(deploy_run_t *run, const char *path) {
         return err;
     }
 
-    note_removed(run, node);
+    run->replaced = arena_grow(
+        run->arena, run->replaced, &run->replaced_capacity, run->replaced_count + 1,
+        sizeof(*run->replaced)
+    );
+    run->replaced[run->replaced_count++] = node;
     return NULL;
 }
 
@@ -2039,17 +2048,55 @@ cleanup:
 }
 
 /**
+ * Clear dotta's copies beneath a planned path — the ones its clearance vouched for
+ *
+ * replace_node's twin beneath the path: the copies preflight's walk vouched for
+ * (deploy_preflight_t's clears), found by position — the run's list holds every
+ * deployable row's, and only this row's lie beneath its path, no row standing
+ * beneath a standing blob — in the order the walk took them, deepest first, so
+ * a directory goes once everything in it has. Each one node and never through a
+ * link (clear_occupant), on the run's cleared list as it goes, whose records
+ * retire (cmds/apply.c apply_write_record). Refused midway, the act carries that
+ * removal's cause: each copy before it stays gone and listed, and the rest stand.
+ *
+ * @param run Run context (must not be NULL)
+ * @param path Planned path whose copies go (must not be NULL)
+ * @return Error or NULL on success — a path with no copy beneath it included
+ */
+static error_t clear_copies(deploy_run_t *run, const char *path) {
+    const workspace_items_t *clears = &run->verdicts->clears;
+    const size_t len = strlen(path);
+
+    for (size_t i = 0; i < clears->count; i++) {
+        const workspace_item_t *copy = clears->entries[i];
+
+        if (!str_path_beneath(copy->filesystem_path, path, len)) continue;
+
+        error_t err = clear_occupant(copy->filesystem_path, copy->occupant);
+        if (err) return err;
+
+        run->cleared = arena_grow(
+            run->arena, run->cleared, &run->cleared_capacity, run->cleared_count + 1,
+            sizeof(*run->cleared)
+        );
+        run->cleared[run->cleared_count++] = copy;
+    }
+
+    return NULL;
+}
+
+/**
  * Deploy a single view row to its filesystem path.
  *
  * Mechanism only: the verdict says what stands at the path and what the write
  * applies, and this lands it — its content first, then the way to it (the missing
  * parents created, the landing held where it refuses), then its node created
  * whole beside the path, then the directory in its way cleared, the copies its
- * clearance named before it, then the node published over the path
- * (sys/filesystem.h fs_temp_t). Nothing here looks at the disk to decide anything;
- * a path the world has moved under since preflight meets the mechanism's refusal
- * (rename over a directory is EISDIR, rmdir of a directory that filled up is
- * ENOTEMPTY) and the refusal is the row's outcome.
+ * clearance vouched for before it (clear_copies), then the node published over
+ * the path (sys/filesystem.h fs_temp_t). Nothing here looks at the disk to decide
+ * anything; a path the world has moved under since preflight meets the mechanism's
+ * refusal (rename over a directory is EISDIR, rmdir of a directory that filled
+ * up is ENOTEMPTY) and the refusal is the row's outcome.
  *
  * A sealed row at a terminal, its key cold, is asked for the key before the way
  * to it is created, so a parent the run then cannot create costs a prompt answered
@@ -2120,24 +2167,17 @@ static error_t deploy_file(
     if (err) goto cleanup;
 
     /* Then what the publish cannot replace, a directory (EISDIR): the one the
-     * verdict named, never one found by a fresh look from down here — the copies
-     * its clearance named first, deepest first, each one node and never through
-     * a link (clear_occupant), each on the run's removed list as it goes, whose
-     * records retire (cmds/apply.c apply_write_record), then the directory itself.
-     * Refused midway, what went before it stays gone and the rest stands, the
-     * row fails with that removal's cause, and the write is taken back: no row
-     * stands beneath a standing blob, so no later act's way runs through what
-     * is left */
-    for (size_t i = 0; i < v->cleared.count; i++) {
-        const workspace_item_t *copy = v->cleared.entries[i];
-
-        err = clear_occupant(copy->filesystem_path, copy->occupant);
+     * verdict named, never one found by a fresh look from down here — emptied
+     * first of the copies its clearance vouched for (clear_copies), then removed
+     * itself. Refused midway, what went before it stays gone and the rest stands,
+     * the row fails with that removal's cause, and the write is taken back: no
+     * row stands beneath a standing blob, so no later act's way runs through
+     * what is left */
+    if (v->occupant == FS_OCCUPANT_DIRECTORY) {
+        err = clear_copies(run, file->filesystem_path);
+        if (!err) err = clear_occupant(file->filesystem_path, v->occupant);
         if (err) goto cleanup;
-        note_removed(run, copy);
     }
-    err = v->occupant == FS_OCCUPANT_DIRECTORY
-        ? clear_occupant(file->filesystem_path, v->occupant) : NULL;
-    if (err) goto cleanup;
 
     /* Then the publish, the one step between a removal and the path standing
      * again: rename(2) replaces a regular file, a link (the link itself, not
@@ -2349,14 +2389,17 @@ deploy_receipt_t *deploy_execute(
     }
 
     /* The run's own lists, the receipt's to carry: the parents its acts created,
-     * the nodes of dotta's they removed, and the holds they took, which the caller
-     * lets go once every act beneath them is done, the run's and any it runs
-     * next (deploy_release) */
+     * the nodes of dotta's they replaced and the copies they cleared, and the
+     * holds they took, which the caller lets go once every act beneath them is
+     * done, the run's and any it runs next (deploy_release) */
     receipt->ancestors = (deploy_outcomes_t){
         .entries = run.ancestors, .count = run.ancestor_count,
     };
-    receipt->removed = (workspace_items_t){
-        .entries = run.removed, .count = run.removed_count,
+    receipt->replaced = (workspace_items_t){
+        .entries = run.replaced, .count = run.replaced_count,
+    };
+    receipt->cleared = (workspace_items_t){
+        .entries = run.cleared, .count = run.cleared_count,
     };
     receipt->taken = (deploy_holds_t){
         .entries = run.holds, .count = run.hold_count,

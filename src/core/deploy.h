@@ -40,12 +40,12 @@
  *   copy of dotta's beneath a blob row's path, which the row's landing removes
  *   with what stands at its path or not at all — every entry beneath judged first
  *   (deploy_clearance), and each copy removed deepest first, before the directory
- *   it stood in (deploy_verdict_t's cleared); or dotta's own node above a planned
+ *   it stood in (deploy_preflight_t's clears); or dotta's own node above a planned
  *   path, a file or a link where the rows beneath need a directory, replaced by
- *   one as part of the first act beneath it (deploy_plan_t's nodes). A file or
- *   link row's node is created whole beside its path before anything in its way
- *   is removed (sys/filesystem.h fs_temp_t), so a write the world refuses — a
- *   full disk, a file-size limit, a name the kernel will not take — removes
+ *   one as part of the first act beneath it (deploy_preflight_t's replaces). A
+ *   file or link row's node is created whole beside its path before anything in
+ *   its way is removed (sys/filesystem.h fs_temp_t), so a write the world refuses
+ *   — a full disk, a file-size limit, a name the kernel will not take — removes
  *   nothing; a directory row's squatter goes first, rename(2) putting no directory
  *   over a non-directory. Either arm's window is the one step after its removal,
  *   the rename or the mkdir: refused there, or killed, the run leaves the path
@@ -79,13 +79,13 @@
  *   and resolved ownership atomically through its own descriptor, so there is
  *   never a moment when a path stands with the wrong owner
  * - Silent: outcomes travel in the receipt — a row's failure among them, its
- *   cause on the outcome; the nodes the run removed; the holds the run took,
- *   and each the release could not let go — verdicts and skips in the preflight,
- *   with the anomalies met while deciding (an identity that could not be resolved),
- *   which are the caller's to print; the one error this module returns is
- *   preflight's strict_ownership refusal, met before anything changes. This module
- *   emits no prose of its own; verbosity and tense are the caller's, the same
- *   convention as every other core module
+ *   cause on the outcome; the nodes and copies the run removed; the holds the
+ *   run took, and each the release could not let go — verdicts and skips in the
+ *   preflight, with the anomalies met while deciding (an identity that could
+ *   not be resolved), which are the caller's to print; the one error this module
+ *   returns is preflight's strict_ownership refusal, met before anything changes.
+ *   This module emits no prose of its own; verbosity and tense are the caller's,
+ *   the same convention as every other core module
  */
 
 #ifndef DOTTA_DEPLOY_H
@@ -114,14 +114,14 @@ typedef struct {
 /**
  * How one planned row is materialized — decided once, at preflight
  *
- * Everything a consumer needs and nothing it has to go and get: the row's item
- * — the row, with its analysis — what stands at its path, and the metadata the
- * write applies. The occupant is the workspace's lstat, never a fresh one — or
- * FS_OCCUPANT_NONE for a row preflight planned absent beneath a squatter this
- * run replaces first (check_ancestry), whose own path the workspace never looked
- * at and which the run empties before anything lands there. The occupant is also
- * the receipt's verb for a directory: NONE → created, DIRECTORY → fixed, anything
- * else → replaced (deploy_convergence).
+ * Everything a consumer needs of the row's own path and nothing it has to go
+ * and get: the row's item — the row, with its analysis — what stands at its path,
+ * and the metadata the write applies. The occupant is the workspace's lstat,
+ * never a fresh one — or FS_OCCUPANT_NONE for a row preflight planned absent
+ * beneath a squatter this run replaces first (check_ancestry), whose own path
+ * the workspace never looked at and which the run empties before anything lands
+ * there. The occupant is also the receipt's verb for a directory: NONE → created,
+ * DIRECTORY → fixed, anything else → replaced (deploy_convergence).
  *
  * The item is the one the fate is taken for, filled verbatim on every arm — the
  * planned-absent arms and the skip's included (deploy_skip_t). Its row is the
@@ -139,24 +139,22 @@ typedef struct {
  * (core/workspace.h workspace_active): a pending row's is the item its bucket
  * holds, an ancestor's the directory item the pass walks (workspace_directories).
  *
- * The decided facts are exactly the ones not on the row: the occupant; the
+ * The decided facts are exactly the ones not on the row: the occupant, and the
  * ownership the write applies (resolve_deployment_ownership: the claim resolved
  * on this host, half by half — the invoker where it names no owner, no change
  * where it names no group — on every run; (uid_t) -1 is no change, and an owner
- * is left unchanged only where the claim named one this host cannot resolve);
- * and, for a blob row whose occupant is a directory, the copies its landing removes
- * with it — every orphan of dotta's beneath its path, each a node the clearance's
- * walk vouched for (core/deploy.c check_clearance), deepest first, so each goes
- * once everything in it has — the walk's own list, handed over whole, and empty
- * on every other verdict. The mode the write applies is the row's, read there —
- * total for every kind that carries one (check_ownership carries the rationale).
+ * is left unchanged only where the claim named one this host cannot resolve).
+ * The mode the write applies is the row's, read there — total for every kind
+ * that carries one (check_ownership carries the rationale). What the row's way
+ * needs beyond its path is the run's, never a verdict's (deploy_preflight_t):
+ * the ancestors it may create, dotta's node above it, the copies beneath it —
+ * each found again by the act whose way meets it.
  */
 typedef struct {
     const workspace_item_t *item;    /* Borrowed (workspace lifetime), never NULL; the row is item->row */
     fs_occupant_t occupant;          /* What the run will find at the path */
     uid_t uid;                       /* Ownership the write applies; -1 = no change */
     gid_t gid;
-    workspace_items_t cleared;       /* The copies its landing removes, deepest first */
 } deploy_verdict_t;
 
 /**
@@ -281,10 +279,11 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  *                                                             bytes Git may lack
  *
  * A node meets the last two cells alone — it stands as its record's kind, a file
- * or a link (core/workspace.c workspace_obstructs) — and a copy any of the five.
- * A scope exit's orphan is read by another table, cleanup's (core/cleanup.h
- * cleanup_skip_reason), whose reasons are the copy's where these are the user's
- * order to land: the two stay two, and the state says which reads an orphan.
+ * or a link (core/workspace.c workspace_obstructs) — a copy any of the last four,
+ * and an entry a clearance's walk meets any of the five. A scope exit's orphan
+ * is read by another table, cleanup's (core/cleanup.h cleanup_skip_reason), whose
+ * reasons are the copy's where these are the user's order to land: the two stay
+ * two, and the state says which reads an orphan.
  *
  * Readers: core/deploy.c vouch_clearance (each entry a clearance's walk meets)
  * and deploy_preflight (dotta's node above a row, its consent), cmds/apply.c
@@ -607,9 +606,21 @@ typedef struct {
  * rows outside the plan that the run may create on the way to a planned path —
  * either class, since the plan holds the tracked ones and the ancestors pass is
  * where a derived claim is acted on, save one the plan promoted (see
- * deploy_plan_build, deploy_preflight). A consumer reads every array by its count,
- * so none needs a NULL guard: an empty one may hold no spine at all. A value of
- * the arena it was decided in, as every array it holds is: nothing frees one.
+ * deploy_plan_build, deploy_preflight).
+ *
+ * Beside them, what of dotta's own the landings remove on their way — the run's,
+ * never a verdict's (deploy_verdict_t): its nodes above rows (replaces), each
+ * replaced by the first act beneath it that lands; and its copies beneath blob
+ * rows (clears), each cleared by the file row above it — a directory row's squatter
+ * is never a directory, so no clearance walks one — every row's together and
+ * deepest first, so a directory goes once everything in it has. The act whose
+ * way meets each finds it by position (core/deploy.c replace_node above its path,
+ * clear_copies beneath it), and the preview and the prompt count each kind off
+ * its own list.
+ *
+ * A consumer reads every array by its count, so none needs a NULL guard: an empty
+ * one may hold no spine at all. A value of the arena it was decided in, as every
+ * array it holds is: nothing frees one.
  */
 typedef struct {
     /* The rows the run does not deploy, both kinds, in path order, the order
@@ -644,27 +655,8 @@ typedef struct {
     deploy_verdicts_t files;             /* Pending file rows */
     deploy_verdicts_t ancestors;         /* Directory rows the run may create on the way */
     workspace_items_t replaces;          /* Dotta's nodes the run replaces, path order, on their rows' way */
+    workspace_items_t clears;            /* Dotta's copies the run clears, each row's deepest first */
 } deploy_preflight_t;
-
-/**
- * How many copies the run's landings clear — every verdict's cleared, counted
- *
- * A copy rides the verdict of the one row whose landing clears it, a file row's
- * alone: a directory row's squatter is never a directory, so no clearance walks
- * one. One count, so the preview's promise and the prompt's consent say one number,
- * as both read the nodes' off replaces.
- *
- * Readers: cmds/apply.c apply_print_deploy_preview and cmd_apply (the prompt).
- * A reader not on this list is a bug.
- */
-static inline size_t deploy_cleared_count(const deploy_preflight_t *verdicts) {
-    size_t total = 0;
-
-    for (size_t i = 0; i < verdicts->files.count; i++) {
-        total += verdicts->files.entries[i].cleared.count;
-    }
-    return total;
-}
 
 /**
  * One kind's partition of the active items in scope
@@ -733,7 +725,7 @@ typedef struct {
  * of the view (core/workspace.h WORKSPACE_STATE_OBSTRUCTING), each replaced by
  * the first act beneath it, and the copies beneath blob rows (OVERRIDDEN), each
  * cleared by its row's landing — no bucket's where a row of the run reaches it,
- * that row's clearance deciding it at preflight (deploy_verdict_t's cleared),
+ * that row's clearance deciding it at preflight (deploy_preflight_t's clears),
  * or the row's own skip keeping it. A value of the arena it was built in: nothing
  * frees one.
  *
@@ -865,8 +857,8 @@ typedef struct {
 
 /**
  * Deployment receipt — the run's: one outcome per verdict, in act order, the
- * nodes of dotta's its landings removed, and the holds: every one the run took,
- * and each the release could not let go
+ * nodes and the copies of dotta's its landings removed, and the holds: every
+ * one the run took, and each the release could not let go
  *
  * Four outcome arrays: three mirroring the preflight's split for the rows that
  * landed, and `failed` for the rows that did not — landed or failed is the one
@@ -910,19 +902,19 @@ typedef struct {
  * apart from the created count. A parent no row claims has no receipt and no
  * record.
  *
- * `removed` is outside the plan too: every node of dotta's a landing removed,
- * each by its own act, in act order — the run's own list, handed to the receipt
- * whole as execute returns, as `ancestors` is. Two kinds, whose verb is each
- * one's state: dotta's node the way replaced (deploy_preflight_t's replaces),
- * unlinked with a directory standing in its place; and a copy a clearance took
- * (deploy_verdict_t's cleared), removed on its row's way. The record phase retires
- * each one's record, and a node's takes with it the record of every row beneath
- * it, which a capture through the node wrote and no look did (cmds/apply.c
- * apply_write_record) — no row stands beneath a copy. A replace stopped short —
- * its way refused, its unlink, or the create in its place — is none of them:
- * the act that met it carries its cause, and every later act beneath it fails
- * naming the node (deploy_execute); and a copy is one once its own removal has
- * landed, whatever its row does after.
+ * `replaced` and `cleared` are outside the plan too: what of dotta's own the
+ * landings removed, each by its own act, in act order — the run's own lists,
+ * handed to the receipt whole as execute returns, as `ancestors` is, the outcomes
+ * of the preflight's two (deploy_preflight_t's replaces, clears). `replaced`
+ * holds dotta's nodes the way replaced, each unlinked with a directory standing
+ * in its place; `cleared` the copies the clearances took, each removed on its
+ * row's way. The record phase retires each one's record, and a node's takes with
+ * it the record of every row beneath it, which a capture through the node wrote
+ * and no look did (cmds/apply.c apply_write_record) — no row stands beneath a
+ * copy. A replace stopped short — its way refused, its unlink, or the create in
+ * its place — is on neither: the act that met it carries its cause, and every
+ * later act beneath it fails naming the node (deploy_execute); and a copy is on
+ * `cleared` once its own removal has landed, whatever its row does after.
  *
  * `taken` and `held` are the holds' (deploy_hold_t). `taken` is execute's: every
  * hold the run took, in the order taken, each directory still at its working
@@ -952,7 +944,8 @@ typedef struct {
     deploy_outcomes_t deployed;      /* Files written or linked, each with its write's stat */
     deploy_outcomes_t converged;     /* Planned directories — the verb is the verdict's occupant */
     deploy_outcomes_t ancestors;     /* Claimed directories created on the way, each once */
-    workspace_items_t removed;       /* Dotta's nodes and copies the landings removed — their records retire */
+    workspace_items_t replaced;      /* Dotta's nodes the way replaced — their records retire */
+    workspace_items_t cleared;       /* Dotta's copies the clearances took — their records retire */
     deploy_outcomes_t failed;        /* Rows that did not land — both kinds, each with its cause */
     deploy_holds_t taken;            /* Every hold the run took, in the order taken — the release's to let go */
     deploy_holds_t held;             /* Holds the release could not let go, each with its cause */
@@ -1242,14 +1235,15 @@ error_t deploy_preflight(
  * says stands at the path is what the executor clears or converges, and a path
  * the world has moved under since preflight meets the mechanism's refusal rather
  * than a fresh judgment. Whatever a planned path's occupant was, clearing it
- * removes exactly one node, and so does clearing each copy its clearance named.
+ * removes exactly one node, and so does clearing each copy its clearance vouched
+ * for.
  *
  * A file or link row's act runs in the order a failure must stop it: its content
  * read, the way to it created — dotta's node on it replaced first — its node
  * created whole beside its path, what stands in its way cleared — the copies
- * its clearance named, deepest first, then the directory they stood in — the
- * node published — so a row whose content cannot be read creates nothing on its
- * way and replaces no node there, and one whose node cannot be created removes
+ * its clearance vouched for, deepest first, then the directory they stood in —
+ * the node published — so a row whose content cannot be read creates nothing on
+ * its way and replaces no node there, and one whose node cannot be created removes
  * nothing at its path.
  *
  * Missing parents are the mechanics of landing a planned path, created top-down
@@ -1273,7 +1267,13 @@ error_t deploy_preflight(
  * run may hold it; then the node, one unlink, never followed; then a directory
  * in its place, created as a parent no row claims is, since no row stands at an
  * orphan's path. A run whose acts beneath it all fail before their way leaves
- * it standing. The receipt lists each one replaced (removed).
+ * it standing. The receipt lists each one replaced (replaced).
+ *
+ * Dotta's copies beneath a blob row — the ones its clearance vouched for
+ * (deploy_preflight_t's clears) — go as part of that row's act alone, found beneath
+ * its path: each one node, never through a link, deepest first, then the directory
+ * they stood in. A removal refused among them fails the row, every copy before
+ * it gone. The receipt lists each one cleared (cleared).
  *
  * Directories are materialized in two phases. Every directory the run creates
  * or converges carries its recorded mode with the owner triad forced on while

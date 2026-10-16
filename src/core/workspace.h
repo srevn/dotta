@@ -1359,14 +1359,16 @@ workspace_items_t workspace_orphans(const workspace_t *ws);
  * that outlives the workspace does not extend them.
  *
  * A pass that must read what it decided while it decides keeps an index of its
- * own beside the buckets (core/cleanup.c cleanup_preflight's fate set); a producer
- * that builds a new element per decision keeps typed arrays of it instead
- * (core/deploy.h deploy_preflight_t, the receipts).
+ * own beside the buckets (core/cleanup.c cleanup_preflight's fate set;
+ * core/deploy.c deploy_preflight's replaced nodes, whose fates the rows beneath
+ * them read); a producer that builds a new element per decision keeps typed arrays
+ * of it instead (core/deploy.h deploy_preflight_t's verdicts and skips, the
+ * receipts).
  *
- * Readers: core/deploy.c deploy_plan_build (through deploy_classify),
- * core/cleanup.c cleanup_plan_build and cleanup_preflight, cmds/status.c
- * status_print_workspace, cmds/update.c update_partition. A reader not on this
- * list is a bug.
+ * Readers: core/deploy.c deploy_plan_build (through deploy_classify) and
+ * deploy_preflight (the copies its clearances vouch for), core/cleanup.c
+ * cleanup_plan_build and cleanup_preflight, cmds/status.c status_print_workspace,
+ * cmds/update.c update_partition. A reader not on this list is a bug.
  */
 typedef struct workspace_buckets workspace_buckets_t;
 

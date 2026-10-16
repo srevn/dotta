@@ -463,14 +463,15 @@ static void apply_print_deploy_skips(
  * Dotta's nodes the run replaces (deploy_preflight_t's replaces) are the third
  * destructive count, after the directories': each removed on the way to the first
  * row beneath it that lands, a directory put in its place, yellow as a replaced
- * directory is. The copies the file rows' landings clear (deploy_verdict_t's
- * cleared) are the fourth: each removed with its row, yellow too. For each, one
- * the landing's table answers --force's for (core/deploy.h deploy_clearance) —
- * one dotta never confirmed, or one changed since — is removed under --force
- * alone, so the line beneath counts those — the forced run's counterweight, as
- * the files' overwrites are — and the glyph carries the same split at verbose.
- * Every node replaced has a deployable row beneath it, and every copy cleared
- * its row above, so neither stands in an otherwise empty preview.
+ * directory is. The copies the file rows' landings clear (deploy_preflight_t's
+ * clears) are the fourth: each removed with its row, yellow too, and listed in
+ * the order the run removes them, each row's deepest first. For each, one the
+ * landing's table answers --force's for (core/deploy.h deploy_clearance) — one
+ * dotta never confirmed, or one changed since — is removed under --force alone,
+ * so the line beneath counts those — the forced run's counterweight, as the files'
+ * overwrites are — and the glyph carries the same split at verbose. Every node
+ * replaced has a deployable row beneath it, and every copy cleared its row above,
+ * so neither stands in an otherwise empty preview.
  *
  * The warnings close the preview. A warning is an anomaly preflight met while
  * deciding — an ownership it could not resolve — on a row the run will deploy:
@@ -488,7 +489,7 @@ static void apply_print_deploy_preview(
     const deploy_verdicts_t *files = &verdicts->files;
     const deploy_verdicts_t *dirs = &verdicts->directories;
     const workspace_items_t *nodes = &verdicts->replaces;
-    const size_t cleared = deploy_cleared_count(verdicts);
+    const workspace_items_t *copies = &verdicts->clears;
 
     size_t created = 0; size_t fixed = 0; size_t replaced = 0;
 
@@ -651,22 +652,16 @@ static void apply_print_deploy_preview(
         }
     }
 
-    /* The copies the file rows' landings clear, told as the nodes are: the count,
-     * its discards, and at verbose each copy, deepest first under its row */
-    if (cleared > 0) {
+    if (copies->count > 0) {
         output_print(
             out, OUTPUT_NORMAL, "  {yellow}%zu{reset} orphaned path%s will be cleared\n",
-            cleared, cleared == 1 ? "" : "s"
+            copies->count, copies->count == 1 ? "" : "s"
         );
 
         size_t discards = 0;
-        for (size_t i = 0; i < files->count; i++) {
-            const workspace_items_t *copies = &files->entries[i].cleared;
-
-            for (size_t c = 0; c < copies->count; c++) {
-                if (deploy_clearance(copies->entries[c]) == DEPLOY_CLEARANCE_NEEDS_FORCE) {
-                    discards++;
-                }
+        for (size_t i = 0; i < copies->count; i++) {
+            if (deploy_clearance(copies->entries[i]) == DEPLOY_CLEARANCE_NEEDS_FORCE) {
+                discards++;
             }
         }
         if (discards > 0) {
@@ -676,23 +671,18 @@ static void apply_print_deploy_preview(
             );
         }
 
-        size_t shown = 0;
-        for (size_t i = 0; i < files->count && shown < LIST_LIMIT; i++) {
-            const workspace_items_t *copies = &files->entries[i].cleared;
-
-            for (size_t c = 0; c < copies->count && shown < LIST_LIMIT; c++, shown++) {
-                /* The glyph carries the discard split, as the nodes' does */
-                output_print(
-                    out, OUTPUT_VERBOSE,
-                    deploy_clearance(copies->entries[c]) == DEPLOY_CLEARANCE_NEEDS_FORCE
-                        ? "    {yellow}•{reset} %s%s\n" : "    {cyan}•{reset} %s%s\n",
-                    copies->entries[c]->filesystem_path,
-                    path_kind_suffix(copies->entries[c]->item_kind)
-                );
-            }
+        for (size_t i = 0; i < copies->count && i < LIST_LIMIT; i++) {
+            /* The glyph carries the discard split, as the nodes' does */
+            output_print(
+                out, OUTPUT_VERBOSE,
+                deploy_clearance(copies->entries[i]) == DEPLOY_CLEARANCE_NEEDS_FORCE
+                    ? "    {yellow}•{reset} %s%s\n" : "    {cyan}•{reset} %s%s\n",
+                copies->entries[i]->filesystem_path,
+                path_kind_suffix(copies->entries[i]->item_kind)
+            );
         }
-        if (cleared > LIST_LIMIT) {
-            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", cleared - LIST_LIMIT);
+        if (copies->count > LIST_LIMIT) {
+            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", copies->count - LIST_LIMIT);
         }
     }
 
@@ -922,15 +912,15 @@ static size_t apply_print_withheld(
  *   removal). Created and fixed count tracked rows alone, and say so; a replace
  *   can count a rung promoted over dotta's own copy (core/deploy.h
  *   deploy_plan_build), and says "directories"
- * - replaced orphaned files and cleared orphaned paths: the receipt's removed,
- *   by the verb each one's state derives — dotta's nodes the run's acts replaced
- *   with directories on their way, what the preview promised of them
- *   (deploy_preflight_t's replaces) less a replace that stopped, which the failed
- *   rows beneath it name; and the copies the file rows' landings cleared, what
- *   the preview promised of them (deploy_verdict_t's cleared) less the ones a
- *   refused removal left, which its row's failure names. Yellow, a removal; the
- *   directory each node left is a parent no row claims, so the listing names
- *   the node alone
+ * - replaced orphaned files and cleared orphaned paths: the receipt's replaced
+ *   and cleared, each read off its own list as the preview reads the preflight's
+ *   — dotta's nodes the run's acts replaced with directories on their way, what
+ *   the preview promised of them (deploy_preflight_t's replaces) less a replace
+ *   that stopped, which the failed rows beneath it name; and the copies the file
+ *   rows' landings cleared, what the preview promised of them (deploy_preflight_t's
+ *   clears) less the ones a refused removal left, which its row's failure names.
+ *   Yellow, a removal; the directory each node left is a parent no row claims,
+ *   so the listing names the node alone
  * - ancestors: Directories the run created on the way to a planned path, outside
  *   the plan — either class, since a claimed rung is created at its claim whether
  *   the profile tracks it or only passes through it. Verbose only — the preview
@@ -982,17 +972,6 @@ static void apply_print_deploy_receipt(
             case DEPLOY_CONVERGE_REPLACE: replaced++; break;
         }
     }
-
-    /* The removals by the verb each one's state derives, as a directory's is
-     * its verdict's occupant's: dotta's node replaced with a directory, and the
-     * rest copies cleared with their rows (deploy_receipt_t's removed) */
-    size_t nodes = 0;
-    for (size_t i = 0; i < receipt->removed.count; i++) {
-        if (receipt->removed.entries[i]->state == WORKSPACE_STATE_OBSTRUCTING) {
-            nodes++;
-        }
-    }
-    const size_t copies = receipt->removed.count - nodes;
 
     /* The receipt is a block: the previews above it close with nothing, and at
      * NORMAL the summary below is the first line it has. */
@@ -1119,25 +1098,24 @@ static void apply_print_deploy_receipt(
         }
     }
 
-    if (nodes > 0) {
+    if (receipt->replaced.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Replaced orphaned files");
-        for (size_t i = 0; i < receipt->removed.count; i++) {
-            const workspace_item_t *item = receipt->removed.entries[i];
-
-            if (item->state != WORKSPACE_STATE_OBSTRUCTING) continue;
-            output_print(out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n", item->filesystem_path);
+        for (size_t i = 0; i < receipt->replaced.count; i++) {
+            output_print(
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n",
+                receipt->replaced.entries[i]->filesystem_path
+            );
         }
     }
 
-    if (copies > 0) {
+    if (receipt->cleared.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Cleared orphaned paths");
-        for (size_t i = 0; i < receipt->removed.count; i++) {
-            const workspace_item_t *item = receipt->removed.entries[i];
+        for (size_t i = 0; i < receipt->cleared.count; i++) {
+            const workspace_item_t *copy = receipt->cleared.entries[i];
 
-            if (item->state == WORKSPACE_STATE_OBSTRUCTING) continue;
             output_print(
-                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s%s\n", item->filesystem_path,
-                path_kind_suffix(item->item_kind)
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s%s\n", copy->filesystem_path,
+                path_kind_suffix(copy->item_kind)
             );
         }
     }
@@ -1192,17 +1170,18 @@ static void apply_print_deploy_receipt(
             );
         }
 
-        if (nodes > 0) {
+        if (receipt->replaced.count > 0) {
             output_print(
                 out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} orphaned file%s with %s\n",
-                nodes, nodes == 1 ? "" : "s", nodes == 1 ? "a directory" : "directories"
+                receipt->replaced.count, receipt->replaced.count == 1 ? "" : "s",
+                receipt->replaced.count == 1 ? "a directory" : "directories"
             );
         }
 
-        if (copies > 0) {
+        if (receipt->cleared.count > 0) {
             output_print(
                 out, OUTPUT_NORMAL, "Cleared {yellow}%zu{reset} orphaned path%s\n",
-                copies, copies == 1 ? "" : "s"
+                receipt->cleared.count, receipt->cleared.count == 1 ? "" : "s"
             );
         }
     }
@@ -2012,45 +1991,49 @@ static error_t apply_write_record(
         }
     }
 
-    /* The nodes of dotta's the landings removed (core/deploy.h deploy_receipt_t's
-     * removed): each retires as an orphan's record does — no row stands at its
-     * path, so nothing anchors over it. A copy a clearance took goes alone, no
-     * row standing beneath a standing blob; dotta's node the way replaced takes
-     * with it the record of every row beneath it. Nothing beneath a node is looked
-     * at, recorded or captured (core/workspace.h workspace_displaced_t), so such
-     * a record was written before it was one — by the capture through dotta's
-     * link that made the first row beneath it, or before the link stood there
-     * at all — and describes nothing the directory in its place holds. Retired
-     * ahead of the anchors below: a row the run landed there is recorded by its
-     * own write, and one it did not — withheld, skipped, failed, out of scope —
-     * reads [undeployed] at the next load, never a deletion for update to commit
-     * (core/workspace.h workspace_route_t's DELETED). An orphan beneath a node
-     * is cleanup's, released where the run reaches it and read absent where it
-     * does not, a reclaim. A run killed between a replace and this phase leaves
-     * the node's record over the directory, read [released] [type] and retired
-     * by the next apply, and a row's beneath it, read [deleted] where the row
-     * did not land (stated); one killed after a copy's removal leaves its record,
-     * read absent and reclaimed. */
+    /* Dotta's nodes the way replaced (core/deploy.h deploy_receipt_t's replaced):
+     * each retires as an orphan's record does — no row stands at a node's path,
+     * so nothing anchors over it — and with it the record of every row beneath
+     * it. Nothing beneath a node is looked at, recorded or captured
+     * (core/workspace.h workspace_displaced_t), so such a record was written
+     * before it was one — by the capture through dotta's link that made the first
+     * row beneath it, or before the link stood there at all — and describes nothing
+     * the directory in its place holds. Retired ahead of the anchors below: a
+     * row the run landed there is recorded by its own write, and one it did not
+     * — withheld, skipped, failed, out of scope — reads [undeployed] at the next
+     * load, never a deletion for update to commit (core/workspace.h
+     * workspace_route_t's DELETED). An orphan beneath a node is cleanup's, released
+     * where the run reaches it and read absent where it does not, a reclaim. A
+     * run killed between a replace and this phase leaves the node's record over
+     * the directory, read [released] [type] and retired by the next apply, and
+     * a row's beneath it, read [deleted] where the row did not land (stated). */
     workspace_items_t active = workspace_active(ws);
 
-    for (size_t r = 0; r < deploy_receipt->removed.count; r++) {
-        const workspace_item_t *orphan = deploy_receipt->removed.entries[r];
+    for (size_t r = 0; r < deploy_receipt->replaced.count; r++) {
+        const char *node = deploy_receipt->replaced.entries[r]->filesystem_path;
+        const size_t len = strlen(node);
 
-        err = state_retire(state, orphan->filesystem_path);
+        err = state_retire(state, node);
         if (err) goto cleanup;
 
-        if (orphan->state != WORKSPACE_STATE_OBSTRUCTING) continue;
-
-        const size_t len = strlen(orphan->filesystem_path);
         for (size_t i = 0; i < active.count; i++) {
             const workspace_item_t *item = active.entries[i];
 
-            if (item->record &&
-                str_path_beneath(item->filesystem_path, orphan->filesystem_path, len)) {
+            if (item->record && str_path_beneath(item->filesystem_path, node, len)) {
                 err = state_retire(state, item->filesystem_path);
                 if (err) goto cleanup;
             }
         }
+    }
+
+    /* The copies the clearances took (deploy_receipt_t's cleared): each retires
+     * as a node's record does, and alone — no row stands beneath a standing blob,
+     * so none was written beneath a copy. A run killed after a copy's removal
+     * and before this phase leaves its record, which the next load reads absent
+     * and reclaims. */
+    for (size_t i = 0; i < deploy_receipt->cleared.count; i++) {
+        err = state_retire(state, deploy_receipt->cleared.entries[i]->filesystem_path);
+        if (err) goto cleanup;
     }
 
     /* Then what the run wrote, path by path — for a file, the blob dotta just
@@ -3181,7 +3164,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         size_t deploy_count = deploy_verdicts->files.count;
         size_t converge_count = deploy_verdicts->directories.count;
         size_t replace_count = deploy_verdicts->replaces.count;
-        size_t clear_count = deploy_cleared_count(deploy_verdicts);
+        size_t clear_count = deploy_verdicts->clears.count;
 
         char parts[6][64];
         size_t part_count = 0;

@@ -145,18 +145,18 @@ typedef struct {
  * phase settled it — STEP 1's where the save landed, the ones the phase began
  * with where it rolled back (state_rollback) — so the tail asks the handle.
  *
- * `anchored` is both kinds. The record's unit is the path — one row per managed
+ * Each count is both kinds. The record's unit is the path — one row per managed
  * path, a directory's differing only in the columns a directory has no content
  * for — so the ownership event a capture earns is one event, and the kinds are
  * named where they were captured, above this line.
  *
- * The four counts partition the capture exactly: a claim whose own row took the
- * event, one another claim stands over, one another name of this profile holds
- * — a second name of one profile being a thing it can hold and a sync can bring
- * here (core/manifest.h manifest_unkept, whose screen word is "unused path"),
- * whose repair is the health channel's on the same screen, not this receipt's —
- * and one whose name the profile no longer holds at the path at all. Nothing
- * falls through, which is what makes the sum total and each cause checked where
+ * With the captures whose own row took the event, the three counts partition
+ * the capture exactly: one another claim stands over, one another name of this
+ * profile holds — a second name of one profile being a thing it can hold and a
+ * sync can bring here (core/manifest.h manifest_unkept, whose screen word is
+ * "unused path"), whose repair is the health channel's on the same screen, not
+ * this receipt's — and one whose name the profile no longer holds at the path
+ * at all. Nothing falls through, which is what makes each cause checked where
  * the row that says it is in hand rather than read off a difference.
  *
  * `overridden` is three positions, the view's own (core/manifest.c manifest_layer):
@@ -177,8 +177,7 @@ typedef struct {
  * and take the name away. The claim no longer stands, so nothing is written for it.
  */
 typedef struct {
-    size_t anchored;       /* Captures whose own row took the ownership event */
-    size_t taken_over;     /* Of the anchored, records taken from another profile */
+    size_t taken_over;     /* Captures whose ownership event took another profile's record */
     size_t overridden;     /* Captures another claim stands over: at, above or beneath them */
     size_t unkept;         /* Captures another name of this profile holds */
     size_t gone;           /* Captures whose name the profile no longer holds at the path */
@@ -995,10 +994,9 @@ static error_t add_refuse_ancestry(
             output_format_path(link, identity()->home, shown, sizeof(shown));
             output_format_path(filesystem_path, identity()->home, beneath, sizeof(beneath));
             return error_create(
-                ERR_INVALID_ARG, "'%s' would be read through the link at '%s', where "
-                "dotta keeps a record of it and the paths beneath it need a directory; "
-                "dotta apply%s replaces the link first", beneath, shown,
-                base ? "" : " --force"
+                ERR_INVALID_ARG, "'%s' would be read through dotta's link at '%s', "
+                "where the paths beneath it need a directory; dotta apply%s replaces "
+                "the link first", beneath, shown, base ? "" : " --force"
             );
         }
 
@@ -1052,10 +1050,9 @@ static error_t add_refuse_ancestry(
          * is needed, as at a node above a row */
         if (record) {
             return error_create(
-                ERR_INVALID_ARG, "'%s' would be read through the link at '%s', where "
-                "dotta keeps a record of it and profile '%s' now claims a directory; "
-                "dotta apply%s replaces the link first", beneath, shown, row->profile,
-                base ? "" : " --force"
+                ERR_INVALID_ARG, "'%s' would be read through dotta's link at '%s', "
+                "where profile '%s' now claims a directory; dotta apply%s replaces the "
+                "link first", beneath, shown, row->profile, base ? "" : " --force"
             );
         }
 
@@ -1756,7 +1753,6 @@ static error_t add_write_record(
 
                 err = state_write(state, &record);
                 if (err) goto cleanup;
-                receipt->anchored++;
 
                 const state_record_t *was = state_find_record(
                     records, record_count, row->filesystem_path
@@ -2509,16 +2505,12 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
         output_gap(out, OUTPUT_NORMAL);
 
-        /* The one fact of the record a preview has: no row holds the profile
-         * and this add does not create it — the tail's question, asked before
-         * any phase has run, off the rows the dispatcher loaded. What the rows
-         * would take otherwise is the post-commit view's to say, and a preview
-         * builds none. */
+        /* The one remedy a preview can name: no row holds the profile and this
+         * add does not create it, so enable comes next — the tail's question,
+         * asked before any phase has run, off the rows the dispatcher loaded.
+         * What the rows would take otherwise is the post-commit view's to say,
+         * and a preview builds none. */
         if (profile_exists && !state_enabled(state, opts->profile)) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Profile not enabled - nothing would be marked as deployed"
-            );
             add_print_enable(out, opts->profile, opts->target, view);
             output_gap(out, OUTPUT_NORMAL);
         }
@@ -2810,83 +2802,51 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     output_gap(out, OUTPUT_NORMAL);
 
-    /* The record phase's own screen, below the ✓ lines the add earned: the cause
-     * and what it left standing, what the rows did not take, or the fact that
-     * no row holds this profile. The fate is the error — the receipt carries no
-     * field for it — and it renders here with the other two, not at the call. */
+    /* The record phase's own screen, below the ✓ lines the add earned: its failure,
+     * in the store's own words, or what became of the captures the view gives
+     * no row of their own. The fate is the error — the receipt carries no field
+     * for it — and it renders here with the notes, not at the call. A refused
+     * phase leaves every path's record what it was: the first refused statement
+     * ended the pass and the rollback took the rest. */
     if (record_err) {
-        output_warning(
-            out, OUTPUT_NORMAL, "Failed to update the record: %s",
-            error_line(record_err)
-        );
-
-        /* Nothing this phase wrote stands: the first refused statement ended
-         * the pass and the rollback took the rest, so every path's record is
-         * what it was — an ownership event that stood still stands, and a path
-         * with no record has none. */
-        output_info(
-            out, OUTPUT_NORMAL,
-            "The record was not written - what it already held stands"
-        );
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
     } else if (state_enabled(state, opts->profile)) {
-        /* What the record took of what the capture listed, said only where it
-         * took less: every path taken is what every add records, the ✓ lines
-         * above saying it already. The unit is the path — one row per managed
-         * path, both kinds — and the kinds are named where they were captured,
-         * above. */
-        const size_t captured = walk.files.count + walk.directories.count;
-
-        if (receipt.anchored != captured) {
+        /* Each cause named by the count that checked it (add_receipt_t): another
+         * claim standing over a capture is an override — another profile's at
+         * its path, claims beneath it, or a blob above it, the profile's own
+         * claims among them, so the note names no profile — a row of this one
+         * under another of its own names is an unused path, whose repair the
+         * health channel carries on the status screen, and a name the profile
+         * no longer holds is one a later commit removed. A capture none of them
+         * names took its row, which the ✓ lines above already say. */
+        if (receipt.overridden > 0) {
+            output_info(
+                out, OUTPUT_NORMAL, "Note: %zu path%s overridden by another claim",
+                receipt.overridden, receipt.overridden == 1 ? "" : "s"
+            );
+        }
+        if (receipt.unkept > 0) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "Record updated (%zu/%zu path%s marked as deployed)",
-                receipt.anchored, captured, captured == 1 ? "" : "s"
+                "Note: %zu path%s captured under an unused path; 'dotta status -v' names %s",
+                receipt.unkept, receipt.unkept == 1 ? "" : "s",
+                receipt.unkept == 1 ? "it" : "them"
             );
-
-            /* Each cause named by the count that checked it, never by the shortfall
-             * (add_receipt_t): another claim standing over a capture is an override
-             * — another profile's at its path, claims beneath it, or a blob above
-             * it, the profile's own claims among them, so the note names no profile
-             * — a row of this one under another of its own names is an unused
-             * path, whose repair the health channel carries on the status screen,
-             * and a name the profile no longer holds is one a later commit removed.
-             * The three sum to the shortfall exactly. */
-            if (receipt.overridden > 0) {
-                output_info(
-                    out, OUTPUT_NORMAL, "Note: %zu path%s overridden by another claim",
-                    receipt.overridden, receipt.overridden == 1 ? "" : "s"
-                );
-            }
-            if (receipt.unkept > 0) {
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "Note: %zu path%s captured under an unused path; "
-                    "'dotta status -v' names %s",
-                    receipt.unkept, receipt.unkept == 1 ? "" : "s",
-                    receipt.unkept == 1 ? "it" : "them"
-                );
-            }
-            if (receipt.gone > 0) {
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "Note: %zu path%s no longer in profile '%s'; a later commit "
-                    "removed %s",
-                    receipt.gone, receipt.gone == 1 ? "" : "s", opts->profile,
-                    receipt.gone == 1 ? "it" : "them"
-                );
-            }
+        }
+        if (receipt.gone > 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Note: %zu path%s no longer in profile '%s'; a later commit removed %s",
+                receipt.gone, receipt.gone == 1 ? "" : "s", opts->profile,
+                receipt.gone == 1 ? "it" : "them"
+            );
         }
         if (receipt.taken_over > 0) {
             output_info(
-                out, OUTPUT_NORMAL,
-                "Note: %zu path%s taken over from other profiles",
+                out, OUTPUT_NORMAL, "Note: %zu path%s taken over from other profiles",
                 receipt.taken_over, receipt.taken_over == 1 ? "" : "s"
             );
         }
-    } else {
-        output_info(
-            out, OUTPUT_NORMAL, "Profile not enabled - nothing marked as deployed"
-        );
     }
 
     /* The remedy the run leaves, keyed on the one fact that decides it. No row
@@ -2902,9 +2862,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (!state_enabled(state, opts->profile)) {
         add_print_enable(out, opts->profile, opts->target, view);
     } else if (record_err) {
-        output_hint(
-            out, OUTPUT_NORMAL, "Re-run this add with --force to record these paths"
-        );
+        output_hint(out, OUTPUT_NORMAL, "Re-run this add with --force to finish it");
     }
 
 cleanup:

@@ -911,7 +911,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
          * that names nothing claims nothing either. Each reaches here, and the
          * sentence names the one thing all of them mean. */
         output_warning(
-            out, OUTPUT_NORMAL, "No file claim recorded for '%s' at commit %s",
+            out, OUTPUT_NORMAL, "No file claim for '%s' at commit %s",
             target->storage_path, oid_str
         );
         output_hintline(
@@ -937,7 +937,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         output_gap(out, OUTPUT_NORMAL);
         output_print(
             out, OUTPUT_NORMAL,
-            "{green}Contents unchanged; restoring the recorded mode, ownership "
+            "{green}Contents unchanged; restoring the commit's mode, ownership "
             "and stamp{reset}\n"
         );
     } else {

@@ -1206,8 +1206,8 @@ static void status_print_workspace(
                         ? "what dotta put there is gone, another kind of path stands "
                         "in its place; apply releases it, the path stays"
                         : "its claim no longer stands in Git, dotta never deployed it, "
-                        "or its record names it under another spelling of its path; "
-                        "apply releases it, the path stays";
+                        "or it is another spelling of a path dotta manages; apply "
+                        "releases it, the path stays";
                     break;
 
                 case WORKSPACE_STATE_OBSTRUCTING:

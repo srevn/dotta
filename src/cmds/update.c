@@ -807,9 +807,6 @@ static error_t update_write_record(
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;
     const mount_table_t *mounts = ctx->run.mounts;
-    output_t *out = ctx->out;
-
-    size_t synced = 0, removed = 0, fallbacks = 0;   /* The split, said once the commit lands */
 
     /* The lock, and every decision below made under it (state_begin) */
     error_t err = state_begin(state);
@@ -841,7 +838,6 @@ static error_t update_write_record(
 
             err = state_write(state, &record);
             if (err) goto cleanup;
-            synced++;
         }
 
         /* What the commit let go, by key — the deleted claims, the pruned entries
@@ -852,8 +848,7 @@ static error_t update_write_record(
          * profile_capture_ancestors), and a deleted directory can stand where
          * the prune takes a rung named under another label, so two keys can place
          * one path — one record, settled once, as remove joins what its commit
-         * let go (cmds/remove.c remove_paths_candidates), and the receipt counts
-         * records. */
+         * let go (cmds/remove.c remove_paths_candidates). */
         const string_array_t *let_go[] = {
             &commit->deleted, &commit->pruned, &commit->ancestors_retired
         };
@@ -907,30 +902,14 @@ static error_t update_write_record(
                 if (!row) {
                     err = state_retire(state, filesystem_path);
                     if (err) goto cleanup;
-                    removed++;
-                } else if (strcmp(row->profile, commit->profile) != 0) {
-                    fallbacks++;
                 }
-                /* else: still this profile's claim — the commit did not let the
-                 * path go; not ours to count. */
+                /* else: kept — a fallback under another profile's row, or this
+                 * profile's own claim still, the commit not having let it go */
             }
         }
     }
 
     err = state_commit(state);
-    if (err) goto cleanup;
-
-    /* The record's split, said once the commit landed — every update writes the
-     * record, so the plain screen says nothing of it, and a count said before
-     * the commit would stand above a COMMIT the store refused (core/state.h
-     * state_commit) */
-    if (synced > 0 || removed > 0 || fallbacks > 0) {
-        output_info(
-            out, OUTPUT_VERBOSE,
-            "Record synced: %zu staged, %zu removed, %zu fallback%s",
-            synced, removed, fallbacks, fallbacks == 1 ? "" : "s"
-        );
-    }
 
 cleanup:
     /* The transaction ends here either way: a refused one is rolled back, and a
@@ -1846,22 +1825,15 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
              * the ownership its record already held — apply earns none for a
              * directory (cmds/add.c add_write_record) — which is the conservative
              * side: an unowned directory is released at scope exit, never pruned.
-             * Said in landed terms — after a mid-sequence stop only some profiles
-             * committed, and this line must not claim more. */
+             * The store's refusal is said in its own words, and the remedy in
+             * landed terms — after a mid-sequence stop only some profiles
+             * committed, and the run's line below names what did. */
             output_gap(out, OUTPUT_NORMAL);
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to update the record: %s",
-                error_line(record_err)
-            );
-            output_info(
-                out, OUTPUT_NORMAL,
-                "The commits that landed are in Git; the record was not written - "
-                "what it already held stands"
-            );
+            output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
             output_hint(
                 out, OUTPUT_NORMAL,
-                "Run 'dotta apply' to adopt the files they added and settle the paths "
-                "they let go"
+                "Run 'dotta apply' to adopt the files the commits added and settle "
+                "the paths they let go"
             );
         }
     }

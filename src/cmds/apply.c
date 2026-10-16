@@ -1707,9 +1707,10 @@ static void apply_print_cleanup_preview(
      * key of a path a row stands on under another spelling — and cleanup has no
      * per-row reason for it the way cleanup_skip_reason answers for a skip, so
      * the only honest form would be a disjunction naming all four at every row.
-     * Hence the one thing true of all four: nothing on disk was touched. The
-     * old second half ("no longer managed by dotta") was false of the fourth,
-     * which is about a file this same run may adopt eleven lines above. */
+     * Hence the one thing true of all four: nothing on disk was touched. A second
+     * half saying what dotta stops doing ("no longer managed by dotta") was false
+     * of the fourth, which is about a file this same run may adopt eleven lines
+     * above, and the header says the rest. */
     if (verdicts->released_files.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Released files");
 
@@ -1720,10 +1721,7 @@ static void apply_print_cleanup_preview(
             output_print(out, OUTPUT_NORMAL, " {dim}(from %s){reset}\n", item->profile);
         }
 
-        output_info(
-            out, OUTPUT_NORMAL,
-            "  Nothing on disk was touched; dotta's records of these paths are released."
-        );
+        output_info(out, OUTPUT_NORMAL, "  Nothing on disk was touched.");
     }
 }
 
@@ -3315,26 +3313,18 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
         /* The record of what the run did — the orphans it settled, the paths it
          * wrote — whole or not at all (apply_write_record). A record the store
-         * refused is said beneath the receipts, with what it left standing; one
-         * that landed says only the reassignments it acknowledged, at the tail. */
+         * refused is said beneath the receipts, in the store's own words, and
+         * names no remedy: the first refused statement ended the phase and the
+         * rollback took the rest, so every path's record is what it was before
+         * the run, and what the run wrote on disk the next apply reads back.
+         * One that landed says only the reassignments it acknowledged, at the
+         * tail. */
         error_t record_err = apply_write_record(
             ctx, ws, cleanup_verdicts, cleanup_receipt, deploy_receipt, now, &acknowledged_count
         );
         if (record_err) {
             output_gap(out, OUTPUT_NORMAL);
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to update the record: %s",
-                error_line(record_err)
-            );
-
-            /* Nothing the phase wrote stands: the first refused statement ended
-             * it and the rollback took the rest, so every path's record is what
-             * it was before the run — and what the run wrote on disk, the next
-             * apply reads back. */
-            output_info(
-                out, OUTPUT_NORMAL,
-                "The record was not written - what it already held stands"
-            );
+            output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
         }
     }
 

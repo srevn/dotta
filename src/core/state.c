@@ -1534,7 +1534,8 @@ error_t state_records(
     int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         return error_create(
-            ERR_STATE_INVALID, "Failed to prepare the record's read: %s", sqlite3_errmsg(state->db)
+            ERR_STATE_INVALID, "Cannot read the store's database: %s",
+            sqlite3_errmsg(state->db)
         );
     }
 
@@ -1584,7 +1585,7 @@ error_t state_records(
             (group_type != SQLITE_NULL && !record->group) ||
             (blob_type != SQLITE_NULL && !blob)) {
             sqlite3_finalize(stmt);
-            return error_create(ERR_MEMORY, "Failed to read the record's columns");
+            return error_create(ERR_MEMORY, "Cannot read the store's database: out of memory");
         }
 
         /* A NULL blob (a directory, or observed only) is the zero OID calloc
@@ -1609,7 +1610,8 @@ error_t state_records(
 
     if (rc != SQLITE_DONE) {
         return error_create(
-            ERR_STATE_INVALID, "Failed to read the record: %s", sqlite3_errmsg(state->db)
+            ERR_STATE_INVALID, "Cannot read the store's database: %s",
+            sqlite3_errmsg(state->db)
         );
     }
 
@@ -1695,7 +1697,7 @@ error_t state_write(state_t *state, const state_record_t *record) {
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         return error_create(
-            ERR_STATE_INVALID, "Failed to write the record at '%s': %s",
+            ERR_STATE_INVALID, "Cannot write '%s' to the store's database: %s",
             record->filesystem_path, sqlite3_errmsg(state->db)
         );
     }
@@ -1722,7 +1724,7 @@ error_t state_retire(state_t *state, const char *filesystem_path) {
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         return error_create(
-            ERR_STATE_INVALID, "Failed to retire the record at '%s': %s",
+            ERR_STATE_INVALID, "Cannot remove '%s' from the store's database: %s",
             filesystem_path, sqlite3_errmsg(state->db)
         );
     }
@@ -1753,8 +1755,8 @@ error_t state_order_prune(state_t *state, const char *filesystem_path, time_t no
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         return error_create(
-            ERR_STATE_INVALID, "Failed to order '%s' pruned: %s",
-            filesystem_path, sqlite3_errmsg(state->db)
+            ERR_STATE_INVALID, "Cannot schedule '%s' for removal in the store's "
+            "database: %s", filesystem_path, sqlite3_errmsg(state->db)
         );
     }
 

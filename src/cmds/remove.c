@@ -1261,12 +1261,12 @@ static error_t remove_paths(
         }
     }
 
-    /* One phase, one sentence, whichever step refused: the record phase's, as
-     * add's, update's and apply's say it — each refusal beneath names its own
-     * step, the read, the lock or the commit. Non-fatal: the commit to Git stands,
-     * so the refusal is warned and the command goes on. */
+    /* One phase, one sentence, whichever step refused, as add's, update's and
+     * apply's say it: the store's refusal in its own words, which name the step
+     * — the read, the lock, an order, a retire or the commit. Non-fatal: the
+     * commit to Git stands, so the refusal is warned and the command goes on. */
     if (err) {
-        output_warning(out, OUTPUT_NORMAL, "Failed to update the record: %s", error_line(err));
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
         err = NULL;
     } else if (settlement.ordered + settlement.released + settlement.fallback > 0) {
         if (opts->delete_files) {
@@ -1655,11 +1655,11 @@ static error_t remove_profile(
         if (!err) err = state_commit(state);
 
         /* One phase, one sentence, whichever step refused — the lock, the row,
-         * the read, the settle or the commit, each naming its own — as every
-         * record phase says it; the lock goes back with every write it held.
-         * Non-fatal: the branch is gone and stands. */
+         * the read, the settle or the commit, each naming its own in the store's
+         * words — as every record phase says it; the lock goes back with every
+         * write it held. Non-fatal: the branch is gone and stands. */
         if (err) {
-            output_warning(out, OUTPUT_NORMAL, "Failed to update the record: %s", error_line(err));
+            output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
             state_rollback(state);
             settlement = (remove_settlement_t){ 0 };   /* the rollback took the writes with it */
             err = NULL;

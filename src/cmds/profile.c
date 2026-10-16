@@ -216,9 +216,18 @@ static error_t profile_list(
             if (!row_err) row_err = profile_counts(profile, &count);
             profile_free(profile);
 
-            /* Name what the profile holds where it reads, otherwise say so: the
-             * row's error is dropped, one per unreadable profile */
-            if (row_err) {
+            /* Name what the profile holds where it reads, otherwise say so: a
+             * branch Git does not hold in the health channel's word
+             * (core/manifest.h manifest_missing), off the load's refusal, whose
+             * code no count's failure answers (core/profiles.h profile_load);
+             * any other failure as one. The row's error is dropped, one per
+             * unreadable profile */
+            if (error_code(row_err) == ERR_NOT_FOUND) {
+                output_print(
+                    out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} {yellow}(no branch){reset}",
+                    i + 1, name
+                );
+            } else if (row_err) {
                 output_print(
                     out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (counts unavailable)",
                     i + 1, name

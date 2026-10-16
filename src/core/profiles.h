@@ -270,9 +270,12 @@ profile_t *profile_open(const char *name, const git_tree *tree);
  * profile_open at the head gitops_load_branch_tree reads, the tree the handle's
  * own. A branch that does not stand is refused in gitops' words (sys/gitops.h,
  * ERR_NOT_FOUND naming the reference), never answered empty; nothing is said
- * over them, the reference naming the branch. A reader for whom the absence is
- * an answer reads gitops_branch_tree and opens the profile at what it finds
- * (core/manifest.c manifest_build, core/workspace.c workspace_orphan_authority).
+ * over them, the reference naming the branch. The code is the absence's alone —
+ * a head that will not read is Git's error — so a reader for whom the absence
+ * is an answer takes it off the refusal (cmds/profile.c profile_list, an enabled
+ * row's no branch), or reads gitops_branch_tree and opens the profile at what
+ * it finds (core/manifest.c manifest_build, core/workspace.c
+ * workspace_orphan_authority).
  *
  * Readers: cmds/remove.c remove_overlaps and cmds/revert.c revert_select_profile,
  * which load every local profile; cmds/ignore.c ignore_test; the questions asked

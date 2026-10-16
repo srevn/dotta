@@ -623,16 +623,22 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         );
     }
 
-    output_gap(out, OUTPUT_NORMAL);
-    output_hintline(out, OUTPUT_NORMAL, "Next steps:");
-    /* The scripts a run did not finish: declined, or stopped at a failure, which
-     * `dotta bootstrap` runs again once its reason is fixed (cmds/clone.h) */
-    if (bootstrap_found.count > 0 && (!run_bootstrap || bootstrap.stopped)) {
-        output_hintline(out, OUTPUT_NORMAL, "  Run bootstrap:  dotta bootstrap");
+    /* The steps that hold, and only those: the scripts a run did not finish —
+     * declined, or stopped at a failure, which `dotta bootstrap` runs again once
+     * its reason is fixed (cmds/clone.h) — and the apply that lands what the
+     * clone enabled, a clone writing no file of its own */
+    const bool bootstrap_owed =
+        bootstrap_found.count > 0 && (!run_bootstrap || bootstrap.stopped);
+    if (bootstrap_owed || to_enable.count > 0) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_hintline(out, OUTPUT_NORMAL, "Next steps:");
+        if (bootstrap_owed) {
+            output_hintline(out, OUTPUT_NORMAL, "  Run bootstrap:  dotta bootstrap");
+        }
+        if (to_enable.count > 0) {
+            output_hintline(out, OUTPUT_NORMAL, "  Apply profiles: dotta apply");
+        }
     }
-    output_hintline(out, OUTPUT_NORMAL, "  List profiles:  dotta profile list");
-    output_hintline(out, OUTPUT_NORMAL, "  Apply profiles: dotta apply");
-    output_hintline(out, OUTPUT_NORMAL, "  View state:     dotta status");
 
 cleanup:
     /* Cleanup resources */

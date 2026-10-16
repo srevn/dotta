@@ -279,11 +279,6 @@ static error_t bootstrap_run(
                 ? "No bootstrap scripts found in any profile."
                 : "No bootstrap scripts found in enabled profiles."
         );
-        output_section(out, OUTPUT_NORMAL, "Profiles checked");
-
-        for (size_t i = 0; i < profiles->count; i++) {
-            output_print(out, OUTPUT_NORMAL, "  - %s\n", profiles->entries[i]);
-        }
         output_gap(out, OUTPUT_NORMAL);
         output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
         output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap <profile> --edit");
@@ -351,10 +346,6 @@ static error_t bootstrap_run(
     if (!opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
         output_success(out, OUTPUT_NORMAL, "Bootstrap complete!");
-        output_gap(out, OUTPUT_NORMAL);
-        output_hintline(out, OUTPUT_NORMAL, "Next steps:");
-        output_hintline(out, OUTPUT_NORMAL, "  Apply profiles:  dotta apply");
-        output_hintline(out, OUTPUT_NORMAL, "  View state:      dotta status");
     }
 
     return NULL;

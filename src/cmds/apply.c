@@ -2671,8 +2671,10 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_warning(
             out, OUTPUT_NORMAL, "No matching paths found in enabled profiles"
         );
+        /* The listing that spells what a filter can match: diff's remedy for
+         * the same miss (cmds/diff.c validate_filter_paths) */
         output_hint(
-            out, OUTPUT_NORMAL, "Check if the path is correct and profile is enabled"
+            out, OUTPUT_NORMAL, "Use 'dotta list <profile>' to see managed files"
         );
     }
 

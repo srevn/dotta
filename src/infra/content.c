@@ -594,7 +594,7 @@ error_t content_capture_file(
          * content_capture_link's (the header), and the walk lists one as a leaf;
          * what cannot be captured at all is a special file. */
         return error_create(
-            ERR_INVALID_ARG, "Cannot capture '%s': it is a %s, not a regular file.",
+            ERR_INVALID_ARG, "Cannot capture '%s': it is a %s, not a regular file",
             filesystem_path, fs_stat_noun(&st)
         );
     }
@@ -687,7 +687,7 @@ error_t content_capture_link(const char *filesystem_path, content_capture_t *out
          * file is that capture's, and what cannot be captured at all is a special
          * file. */
         return error_create(
-            ERR_INVALID_ARG, "Cannot capture '%s': it is a %s, not a symlink.",
+            ERR_INVALID_ARG, "Cannot capture '%s': it is a %s, not a symlink",
             filesystem_path, fs_stat_noun(&st)
         );
     }

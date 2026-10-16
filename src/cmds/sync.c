@@ -1774,7 +1774,13 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 output_info(out, OUTPUT_VERBOSE, "  %zu displaced", displaced_count);
             }
 
-            output_info(out, OUTPUT_NORMAL, "Syncing before 'update' may lead to conflicts.");
+            /* Said only where update has work: the risk is to that work, and a
+             * block of conflicts alone has none, update refusing every one */
+            if (blocking_count > conflict_count) {
+                output_info(
+                    out, OUTPUT_NORMAL, "Syncing before 'update' may lead to conflicts."
+                );
+            }
 
             /* The user's consent, defaulting to no: a terminal's answer or a
              * pipe's — the question discards nothing, so any stdin answers it.
@@ -1792,13 +1798,16 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                     /* The status Conflicts header's remedies, a kind both sides
                      * moved among the conflicts: add keeps disk's only where
                      * the kind matches, and apply --force replaces a directory
-                     * only with all it holds */
+                     * only with all it holds. Update refuses every one of them,
+                     * so its clause rides only where it has work beside them */
                     output_hint(
                         out, OUTPUT_NORMAL,
                         "Resolve conflicts first: 'dotta diff' compares; 'dotta apply "
                         "--force' keeps Git's (a directory only if all dotta's), 'dotta add "
                         "--force' keeps disk's when the kind matches, 'dotta remove' "
-                        "untracks; 'dotta update' commits the rest"
+                        "untracks%s",
+                        blocking_count > conflict_count
+                            ? "; 'dotta update' commits the rest" : ""
                     );
                 } else {
                     output_hint(

@@ -65,7 +65,11 @@
  *   node's place or beneath it: a write refused there leaves that directory
  *   standing empty and the node gone, its bytes Git's where dotta confirmed them,
  *   and a create refused after its unlink leaves the path empty with the node's
- *   record kept, which the next load reads absent and reclaims
+ *   record kept, which the next load reads absent and reclaims. The node goes
+ *   alone, never through it, so a link's target keeps whatever was written through
+ *   it — an edit of a row beneath included, which no screen names, nothing beneath
+ *   the node being looked at (core/workspace.h workspace_displaced_t) — and the
+ *   row lands Git's bytes (stated)
  * - Directories are materialized in two phases: held at a working mode (the mode
  *   owed, owner rwx on: deploy_working_mode) while the run writes beneath them,
  *   then released to the exact mode owed, deepest first, by the caller once every

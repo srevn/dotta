@@ -1185,9 +1185,7 @@ static void sync_render_summary(
      * delta and prints once; the hint prints for as long as the work stands. */
     if (manifest_changed || apply_pending) {
         output_gap(out, OUTPUT_NORMAL);
-        output_hint(
-            out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy, or 'dotta status' to review"
-        );
+        output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy");
     }
 }
 

@@ -857,27 +857,14 @@ static error_t profile_enable(
 
     /* Live summary — only runs on non-dry-run, non-error completion. Any failure
      * in Phases 2-4, the save's included, returns before it; dry-run owns its
-     * own messaging above. */
+     * own messaging above. Each profile's enable, or its retarget, is said by its
+     * own line (Phase 4), so none is counted again here. */
     output_gap(out, OUTPUT_NORMAL);
 
-    {
-        size_t enabled_count = to_enable_validated.count - (retarget ? 1 : 0);
-        if (enabled_count > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Enabled %zu profile%s",
-                enabled_count, enabled_count == 1 ? "" : "s"
-            );
-        }
-        if (retarget) {
-            output_success(
-                out, OUTPUT_NORMAL, "Updated deployment target for '%s'", retarget
-            );
-        }
-        if (to_enable_validated.count > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy paths"
-            );
-        }
+    if (to_enable_validated.count > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy paths"
+        );
     }
     if (already_enabled > 0) {
         output_info(
@@ -1131,15 +1118,12 @@ static error_t profile_disable(
      *     that weren't enabled).
      *   - count == 0 && not_enabled == 0 is unreachable: the line names one profile
      *     at least or --all (profile_post_parse), and the --all-on-empty case
-     *     is caught by the early exit. */
+     *     is caught by the early exit.
+     * Each profile's disable is said by its own line (Phase 5), so none is counted
+     * again here. */
     output_gap(out, OUTPUT_NORMAL);
 
     if (to_disable_validated.count > 0) {
-        output_success(
-            out, OUTPUT_NORMAL, "Disabled %zu profile%s",
-            to_disable_validated.count,
-            to_disable_validated.count == 1 ? "" : "s"
-        );
         output_info(
             out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed paths"
         );

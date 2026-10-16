@@ -493,7 +493,10 @@ static void status_print_workspace(
 
         /* Coherent Scope: under a profile filter only its profiles' items are
          * shown, so status matches what apply would do; the rest are hidden,
-         * and counted beneath the sections */
+         * and counted beneath the sections. A landing's orphan is filtered by
+         * its record's profile and a derived rung by its own, where apply -p
+         * reaches each from another row: under -p a status can list one apply
+         * leaves, or hide one it acts on (stated) */
         if (!scope_accepts_profile(scope, item->profile)) {
             hidden++;
             continue;

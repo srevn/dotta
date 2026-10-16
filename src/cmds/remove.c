@@ -212,12 +212,14 @@ typedef struct {
  * What the settle loop did, counted by fate
  *
  * The fates are counted apart: under --delete-files several can occur in one
- * removal — the named paths staged for the next apply, a rung it only emptied
- * and dotta never created released here and now — and a receipt that folded them
- * would name work apply is not going to do.
+ * removal — the named paths ordered pruned by the next apply, a rung it only
+ * emptied and dotta never created released here and now — and a receipt that
+ * folded them would name work apply is not going to do. Each count is the paths
+ * dotta answers for, both kinds: a directory it created on a removed file's way
+ * is pruned or released by the same apply, and counted as the file is.
  */
 typedef struct {
-    size_t ordered;    /* Prune ordered — staged for the next apply */
+    size_t ordered;    /* Prune ordered — carried out by the next apply */
     size_t released;   /* Record retired, the copy left standing */
     size_t fallback;   /* Record kept — another profile's row provides the path */
 } remove_settlement_t;
@@ -1268,47 +1270,39 @@ static error_t remove_paths(
     if (err) {
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
         err = NULL;
-    } else if (settlement.ordered + settlement.released + settlement.fallback > 0) {
-        if (opts->delete_files) {
-            output_info(
-                out, OUTPUT_VERBOSE,
-                "Record: %zu staged for removal, %zu released, %zu fallback%s",
-                settlement.ordered, settlement.released, settlement.fallback,
-                settlement.fallback == 1 ? "" : "s"
-            );
-        } else {
-            output_info(
-                out, OUTPUT_VERBOSE,
-                "Record: %zu released, %zu fallback%s",
-                settlement.released, settlement.fallback,
-                settlement.fallback == 1 ? "" : "s"
-            );
-        }
     }
 
     /* Execute post-remove hook */
     hook_fire_post(config, out, &hook_inv);
 
-    /* Success */
+    /* Success, then what became of the copies the commit let go — said once,
+     * after the act, by the fate each took rather than the flag that was typed:
+     * an order is work waiting for apply, and its line names it; a release is
+     * done; a fallback stays, another profile's row providing the path. Nothing
+     * recorded — or a record phase that failed with its warning — leaves the
+     * success line to stand alone. */
     char counts[64];
     remove_format_counts(counts, sizeof(counts), removed_files, removed_dirs);
     output_success(
         out, OUTPUT_NORMAL, "Removed %s from profile '%s'",
         counts, opts->profile
     );
-    /* The hint speaks only for records actually settled, and for the fate they
-     * took rather than the flag that was typed: an order is work waiting for
-     * apply, a release is already done. Nothing recorded — or a record phase
-     * that failed with its warning — leaves the success line to stand alone. */
     if (settlement.ordered > 0) {
         output_info(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta apply' to remove paths from filesystem"
+            out, OUTPUT_NORMAL, "  %zu path%s will be pruned when you run 'dotta apply'",
+            settlement.ordered, settlement.ordered == 1 ? "" : "s"
         );
-    } else if (settlement.released > 0) {
+    }
+    if (settlement.released > 0) {
         output_info(
-            out, OUTPUT_NORMAL,
-            "Paths released from management (no apply needed)"
+            out, OUTPUT_NORMAL, "  %zu path%s released from management",
+            settlement.released, settlement.released == 1 ? "" : "s"
+        );
+    }
+    if (settlement.fallback > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "  %zu path%s still provided by another enabled profile",
+            settlement.fallback, settlement.fallback == 1 ? "" : "s"
         );
     }
 
@@ -1487,84 +1481,26 @@ static error_t remove_profile(
         output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "Profile '%s' has unpushed changes!", opts->profile);
         output_hint(out, OUTPUT_NORMAL, "Run 'dotta sync' first to avoid data loss");
-    } else if (is_local_only) {
-        /* Inform about local-only status in verbose mode (not a warning) */
-        output_info(
-            out, OUTPUT_VERBOSE, "Note: Profile '%s' is local-only (not pushed to remote)",
-            opts->profile
-        );
     }
 
     /* The candidates as the record stands before the prompt, on the borrowed
-     * state: the preview's, and whether there is anything to settle once the
-     * branch is gone. Under spec-driven READ the handle is always non-NULL here
-     * (the dispatcher's), and state_load for a missing DB still returns a usable
-     * handle (DB-less, reads degrade to empty) — no defensive fallback needed.
-     * The settle reads them again under its lock: the prompt and the pre-remove
-     * hook stand between the two, and another process can write the record there
-     * — an apply that adopts or deploys this profile's files, from another terminal
-     * or from the hook. Failure is non-fatal — warn and decide over what was
-     * read; what this run cannot settle, the next apply reads as orphans and
-     * releases. */
+     * state: whether there is anything to settle once the branch is gone. Under
+     * spec-driven READ the handle is always non-NULL here (the dispatcher's),
+     * and state_load for a missing DB still returns a usable handle (DB-less,
+     * reads degrade to empty) — no defensive fallback needed. The settle reads
+     * them again under its lock: the prompt and the pre-remove hook stand between
+     * the two, and another process can write the record there — an apply that
+     * adopts or deploys this profile's files, from another terminal or from the
+     * hook. Failure is non-fatal — warn and decide over what was read; what this
+     * run cannot settle, the next apply reads as orphans and releases. */
     remove_candidate_t *candidates = NULL;
     size_t candidate_count = 0;
-    size_t deployed_count = 0;
     remove_settlement_t settlement = { 0 };
     err = remove_profile_candidates(ctx, opts->profile, &candidates, &candidate_count);
     if (err) {
         /* The store's refusal says the read it refused */
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
         err = NULL;
-    }
-    for (size_t i = 0; i < candidate_count; i++) {
-        if (candidates[i].record->deployed_at > 0) deployed_count++;
-    }
-
-    /* The fates ahead of the prompt, from the same gate the settle reads: with
-     * --delete-files the deployed entries are ordered pruned and the observed
-     * rest releases; without it everything releases (informational, not a warning).
-     * The view that remains does not exist yet, so a fallback — a path a lower
-     * profile still provides — is promised the fate it will not take; the receipt
-     * corrects it, as it does a record another process moved before the lock.
-     * With none, the two read the same gate over the same records and agree. */
-    if (candidate_count > 0) {
-        output_gap(out, OUTPUT_VERBOSE);
-        if (opts->delete_files && deployed_count > 0) {
-            if (deployed_count < candidate_count) {
-                output_info(
-                    out, OUTPUT_VERBOSE,
-                    "Note: Profile '%s' has %zu managed entr%s (%zu deployed)",
-                    opts->profile, candidate_count,
-                    candidate_count == 1 ? "y" : "ies", deployed_count
-                );
-                output_info(
-                    out, OUTPUT_VERBOSE,
-                    "      The deployed entries will be pruned when you run 'dotta apply';"
-                );
-                output_info(
-                    out, OUTPUT_VERBOSE,
-                    "      the rest will be released from management."
-                );
-            } else {
-                output_info(
-                    out, OUTPUT_VERBOSE, "Note: Profile '%s' has %zu deployed entr%s",
-                    opts->profile, deployed_count, deployed_count == 1 ? "y" : "ies"
-                );
-                output_info(
-                    out, OUTPUT_VERBOSE,
-                    "      These will be pruned when you run 'dotta apply'."
-                );
-            }
-        } else {
-            output_info(
-                out, OUTPUT_VERBOSE, "Note: Profile '%s' has %zu managed entr%s",
-                opts->profile, candidate_count, candidate_count == 1 ? "y" : "ies"
-            );
-            output_info(
-                out, OUTPUT_VERBOSE,
-                "      These will be released from management."
-            );
-        }
     }
 
     /* Confirm deletion. Declined is the user's word, and no failure; unanswered
@@ -1663,23 +1599,6 @@ static error_t remove_profile(
             state_rollback(state);
             settlement = (remove_settlement_t){ 0 };   /* the rollback took the writes with it */
             err = NULL;
-        } else if (settlement.ordered + settlement.released + settlement.fallback > 0) {
-            if (opts->delete_files) {
-                output_info(
-                    out, OUTPUT_VERBOSE,
-                    "%zu entr%s staged for removal, %zu released, %zu fallback%s",
-                    settlement.ordered, settlement.ordered == 1 ? "y" : "ies",
-                    settlement.released,
-                    settlement.fallback, settlement.fallback == 1 ? "" : "s"
-                );
-            } else {
-                output_info(
-                    out, OUTPUT_VERBOSE,
-                    "%zu entr%s released from management, %zu fallback%s",
-                    settlement.released, settlement.released == 1 ? "y" : "ies",
-                    settlement.fallback, settlement.fallback == 1 ? "" : "s"
-                );
-            }
         }
     }
 
@@ -1727,24 +1646,28 @@ static error_t remove_profile(
 
     /* Success message: every exit before the deletion is behind us (dry run,
      * cancel, error) — with what it took, which a question asked before it said
-     * too, and nothing else on an unasked run says */
+     * too, and nothing else on an unasked run says. Then what became of the copies,
+     * as the file route says it (remove_paths): once, after the act, by the fate
+     * each took. */
     output_success(
         out, OUTPUT_NORMAL, "Profile '%s' deleted (%s)", opts->profile, counts
     );
-
-    /* The hint speaks only for records actually settled, and for the fate they
-     * took rather than the flag that was typed: an order is work waiting for
-     * apply, a release is already done. Nothing recorded — or a settle that failed
-     * with its warning — leaves the success line to stand alone. */
     if (settlement.ordered > 0) {
         output_info(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta apply' to remove deployed paths from filesystem"
+            out, OUTPUT_NORMAL, "  %zu path%s will be pruned when you run 'dotta apply'",
+            settlement.ordered, settlement.ordered == 1 ? "" : "s"
         );
-    } else if (settlement.released > 0) {
+    }
+    if (settlement.released > 0) {
         output_info(
-            out, OUTPUT_NORMAL,
-            "Paths released from management (no apply needed)"
+            out, OUTPUT_NORMAL, "  %zu path%s released from management",
+            settlement.released, settlement.released == 1 ? "" : "s"
+        );
+    }
+    if (settlement.fallback > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "  %zu path%s still provided by another enabled profile",
+            settlement.fallback, settlement.fallback == 1 ? "" : "s"
         );
     }
 

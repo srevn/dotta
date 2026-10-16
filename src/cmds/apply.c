@@ -179,9 +179,17 @@ static void apply_print_deploy_skips(
                         path, s->blocker.path
                     );
                 } else if (s->ancestor) {
+                    /* The landing, by the bit that refused: its search where
+                     * the row's own look was refused beneath it — the climb reached
+                     * the landing, so nothing above it refused — else its write.
+                     * The look is the load's, as a refused prune's sentence reads
+                     * its own (apply_print_cleanup_refused): a chmod between
+                     * the two words the other bit (stated) */
                     output_print(
-                        out, row_level, "  {red}✗{reset} %s (%.*s is not writable)\n",
-                        path, (int) s->ancestor, path
+                        out, row_level, "  {red}✗{reset} %s (%.*s %s)\n",
+                        path, (int) s->ancestor, path,
+                        s->item->occupant == FS_OCCUPANT_UNKNOWN
+                            ? "is not searchable" : "is not writable"
                     );
                 } else {
                     output_print(

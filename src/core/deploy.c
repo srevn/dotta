@@ -1033,8 +1033,10 @@ static void check_ancestry(
  * the landing is clear — and its ancestry only on the ANCESTOR one. The named
  * ancestor is a prefix of the planned path itself, so it travels as a byte length
  * (deploy_skip_t). A PERMISSION with an ancestor reads "<ancestor> is not
- * writable"; without one, "ancestry cannot be reached" — the zero length is itself
- * the honest fact (the offender could not be named).
+ * writable", or "is not searchable" where the row's own look was refused beneath
+ * it — the refusal asks both bits at once, and the look says which refused; without
+ * one, "ancestry cannot be reached" — the zero length is itself the honest fact
+ * (the offender could not be named).
  *
  * @param ws Workspace, for the claimed-ancestor lookup (must not be NULL)
  * @param verdicts The fates decided so far, for the deployable-directory test

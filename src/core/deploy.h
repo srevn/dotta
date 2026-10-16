@@ -405,13 +405,15 @@ static inline deploy_clearance_t deploy_clearance(const workspace_item_t *item) 
  * clearance names at the row's path or beneath it (OCCUPIED, a clearance's
  * PERMISSION and UNREADABLE, and a TYPE its edit holds back), its own occupant
  * (TYPE), its own item (CONTENT, UNREADABLE, and FOREIGN, the owner its look
- * found — another, or the run itself, its read refused), its own claim (an
- * OWNERSHIP that names none). So a row beneath a skipped squatter takes the
- * squatter's class and never its reason (check_ancestry): the squatter's sentence
- * is about the squatter, whatever reason a later rung adds. A row beneath an
- * absent directory skipped for its pair takes OWNERSHIP all the same, read as a
- * sentence about its own way — that directory named, which needs root to create
- * — and never about the directory's claim, which the directory's own line says.
+ * found — another, or the run itself, its read refused — and a PERMISSION that
+ * names its landing, the bit that refused: the search where the row's own look
+ * was refused beneath it, else the write), its own claim (an OWNERSHIP that names
+ * none). So a row beneath a skipped squatter takes the squatter's class and never
+ * its reason (check_ancestry): the squatter's sentence is about the squatter,
+ * whatever reason a later rung adds. A row beneath an absent directory skipped
+ * for its pair takes OWNERSHIP all the same, read as a sentence about its own
+ * way — that directory named, which needs root to create — and never about the
+ * directory's claim, which the directory's own line says.
  *
  * Dotta's node above rows of the run takes a skip of its own where the run keeps
  * it, with no row: two of the reasons, in their order — PERMISSION where its
@@ -573,10 +575,10 @@ typedef struct {
  * of an item reads, core/workspace.h workspace_displaced_t), never a blanked
  * pointer. So a reader consults the look only where the reason is a sentence
  * about it — a CONTENT skip's route, an UNREADABLE skip's fault, a FOREIGN skip's
- * owner: path rungs, asked only where the ancestry did not answer. OWNERSHIP
- * reads its claim off the row and never the item's look, which a row planned
- * absent does not have — or, where it names an ancestor, the ancestry rung's
- * answer, nothing of the row but its path.
+ * owner, the bit a landing's PERMISSION names: path rungs, asked only where the
+ * ancestry did not answer. OWNERSHIP reads its claim off the row and never the
+ * item's look, which a row planned absent does not have — or, where it names an
+ * ancestor, the ancestry rung's answer, nothing of the row but its path.
  *
  * Nothing here is owned: the item is borrowed (workspace lifetime), as every
  * item and row in this module is.

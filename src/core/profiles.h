@@ -550,19 +550,18 @@ error_t profile_counts(profile_t *profile, profile_counts_t *out);
  *
  * Readers: the three enablers' skip — `profile enable` (cmds/profile.c
  * profile_enable), clone (cmds/clone.c cmd_clone), the editor's OFF→ON gate —
- * the two marks, the listing's available rows and the editor's, and the editor's
- * `t`, live only on a row that can be bound. The listing asks it of the handle
- * its row counted at (cmds/profile.c profile_list); the editor's three read the
- * one answer its rows keep (cmds/interactive.c read_targets). The rule these
- * keep is "a profile that needs a target is not enabled without one", and its
- * scope is theirs alone, not an invariant of the rows: the editor prompts and
- * lets a row be saved unbound (cmds/interactive.c plan_classify says why), add's
- * implicit enable authors no such row (a created profile's custom/ claim requires
- * --target, which the row takes), sync and a re-bind can leave an enabled row
- * needing one — an enabled row with no binding is a lifecycle stage the health
- * channel names, not an inconsistency. add asks no producer: it holds a view
- * over its own opened tree under its own table and reads the slice on that
- * (cmds/add.c add_print_enable).
+ * and the two marks, the listing's available rows and the editor's. The listing
+ * asks it of the handle its row counted at (cmds/profile.c profile_list); the
+ * editor's two read the one answer its rows keep (cmds/interactive.c read_targets).
+ * The rule these keep is "a profile that needs a target is not enabled without
+ * one", and its scope is theirs alone, not an invariant of the rows: the editor
+ * prompts and lets a row be saved unbound (cmds/interactive.c plan_classify says
+ * why), add's implicit enable authors no such row (a created profile's custom/
+ * claim requires --target, which the row takes), sync and a re-bind can leave
+ * an enabled row needing one — an enabled row with no binding is a lifecycle
+ * stage the health channel names, not an inconsistency. add asks no producer:
+ * it holds a view over its own opened tree under its own table and reads the
+ * slice on that (cmds/add.c add_print_enable).
  *
  * Cost: one walk of the profile — whose sheet a question before it may have parsed
  * already, the handle keeping it — and a two-root table in a frame of the call's

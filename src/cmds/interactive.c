@@ -586,23 +586,15 @@ static void render_footer(const view_t *view) {
         return;
     }
 
-    /* `t` is named where it is live: on a row whose profile needs a target
-     * (handle_key_normal). */
-    const char *target_hint =
-        (view->item_count > 0 && view->items[view->cursor].needs_target)
-            ? UI_DIM "t" UI_RESET " target  "
-            : "";
-
     if (view->modified) {
         fprintf(
             stdout,
             UI_DIM "↑↓" UI_RESET " navigate  "
             UI_DIM "space" UI_RESET " toggle  "
             UI_DIM "J/K" UI_RESET " move  "
-            "%s"
+            UI_DIM "t" UI_RESET " target  "
             UI_BOLD_YELLOW "w" UI_RESET " " UI_BOLD_YELLOW "save" UI_RESET "  "
-            UI_DIM "q" UI_RESET " quit",
-            target_hint
+            UI_DIM "q" UI_RESET " quit"
         );
     } else {
         fprintf(
@@ -610,9 +602,8 @@ static void render_footer(const view_t *view) {
             UI_DIM "↑↓" UI_RESET " navigate  "
             UI_DIM "space" UI_RESET " toggle  "
             UI_DIM "J/K" UI_RESET " move  "
-            "%s"
-            UI_DIM "q" UI_RESET " quit",
-            target_hint
+            UI_DIM "t" UI_RESET " target  "
+            UI_DIM "q" UI_RESET " quit"
         );
     }
 }
@@ -745,18 +736,16 @@ static interactive_result_t handle_key_normal(view_t *view, int key) {
 
         case 't':
         case 'T': {
-            /* Set or edit the target on a row whose profile needs one: the same
-             * prompt as space, with enable cleared so committing only sets the
-             * string. No-op on a row that needs none — a binding places custom/
-             * claims, and a profile with none has nothing for one to place. On
-             * a disabled row the target is what the next toggle-on writes. */
+            /* Set or edit the row's target: the same prompt as space, with enable
+             * cleared so committing only sets the string. On every row, whatever
+             * its profile claims today, as `profile enable --target` binds any
+             * profile: a binding is where the profile's custom/ claims land — a
+             * later capture beneath it, and what a sync brings. On a disabled
+             * row the target is what the next toggle-on writes. */
             if (view->cursor >= view->item_count) {
                 return INTERACTIVE_CONTINUE;
             }
             item_t *it = &view->items[view->cursor];
-            if (!it->needs_target) {
-                return INTERACTIVE_CONTINUE;
-            }
             prompt_open_edit(&view->prompt, view->cursor, it->target);
             return INTERACTIVE_CONTINUE;
         }

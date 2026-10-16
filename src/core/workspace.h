@@ -735,11 +735,11 @@ static inline compare_result_t workspace_compare_confirmed(
  * two acknowledgement loops — the writers that move the record onto the row's
  * profile — with the item's, and its pending reassignments off the verdicts and
  * its record phase, with the verdict's (cmds/apply.c cmd_apply,
- * apply_write_record); and sync's apply hint, with none, which asks it of the
- * record against the view with no workspace at all, workspace_stale answering
- * first across kinds (cmds/sync.c). A record's WRITER asks the whole binding —
- * profile and storage path both — which is manifest_is_claim; this is the half
- * the screens name and the receipts count. Not manifest_diff_stats_t's
+ * apply_write_record); and the record's owed work, with none, which asks it of
+ * the record against a view with no workspace at all, workspace_stale answering
+ * first across kinds (workspace_pending below). A record's WRITER asks the whole
+ * binding — profile and storage path both — which is manifest_is_claim; this is
+ * the half the screens name and the receipts count. Not manifest_diff_stats_t's
  * `reassigned`, which counts one transition's own delta between two views; this
  * is the record against the view, standing from whenever it began.
  *
@@ -836,8 +836,8 @@ static inline bool workspace_untouched(const workspace_item_t *item) {
  *
  * Readers: core/workspace.c workspace_analyze_file (git_moved — the three-way
  * frame's first question, whichever kind stands, and half the gate on its second),
- * cmds/sync.c cmd_sync's apply hint (the record still disagrees with the view).
- * A reader not on this list is a bug.
+ * workspace_pending below (the record still disagrees with the view). A reader
+ * not on this list is a bug.
  */
 static inline bool workspace_stale(const manifest_row_t *row, const state_record_t *record) {
     return workspace_base(record) ? workspace_compare_confirmed(row, record) != CMP_EQUAL
@@ -868,9 +868,8 @@ static inline bool workspace_stale(const manifest_row_t *row, const state_record
  * Readers: core/workspace.c workspace_analyze_claim, which both analyses of an
  * active item call (DIVERGENCE_CLAIM_MOVED where disk has not followed a moved
  * claim, the record's learning where it has), cmds/apply.c apply_write_record
- * (the claims a fix set that the record still lacks), cmds/sync.c cmd_sync's
- * apply hint (the record still disagrees with the view). A reader not on this
- * list is a bug.
+ * (the claims a fix set that the record still lacks), workspace_pending below
+ * (the record still disagrees with the view). A reader not on this list is a bug.
  */
 static inline divergence_type_t workspace_claims_moved(
     const manifest_row_t *row, const state_record_t *record
@@ -889,6 +888,39 @@ static inline divergence_type_t workspace_claims_moved(
     }
     return moved;
 }
+
+/**
+ * Pending: the record owes apply work — it disagrees with the view somewhere
+ *
+ * The record against a view, every record once and every claim once, with no
+ * workspace and no disk: the answer does not move with --force, and a drift the
+ * record does not know — a copy edited or removed behind it — is status's and
+ * apply's to find. True where:
+ *   - a record's path holds no row of the view: an orphan, which apply settles
+ *     whatever its fate — a prune, a release, a reclaim, or the landing that
+ *     clears or replaces its node — each said on its receipt, a release and a
+ *     reclaim as much as a prune;
+ *   - a record is stale against its row, its claim is not the row's on an axis
+ *     the record reconciled, or it is a reassignment apply acknowledges: the
+ *     three words above, asked with no look;
+ *   - a claim the view stands — a file, a link, a tracked directory — has no
+ *     record that vouches for it: an owned one for a file, since apply adopts a
+ *     path it merely observed and says so; any for a directory, since apply never
+ *     adopts one. A derived row vouches for nothing and needs no voucher: it is
+ *     the way to the claims beneath it, which the next load observes where it
+ *     stands and apply creates only for a claim it deploys.
+ *
+ * Readers: cmds/sync.c cmd_sync's apply hint. A reader not on this list is a bug.
+ *
+ * @param view The view the record is held against (must not be NULL)
+ * @param records The record, as core/state.h state_records reads it (NULL when
+ *                record_count is 0)
+ * @param record_count Records in it
+ * @return Whether the next apply has work the record and the view say
+ */
+bool workspace_pending(
+    const manifest_t *view, const state_record_t *records, size_t record_count
+);
 
 /**
  * Bound carrier for a borrowed slice of workspace items

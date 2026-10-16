@@ -279,23 +279,24 @@ static inline bool manifest_is_claim(
  * manifest_contribute, manifest_layer, manifest_places, manifest_precedence,
  * manifest_holds_row); the reassignment predicate, the absence rule and the route
  * table's derived arm (core/workspace.h workspace_reassigned, core/workspace.c
- * classify_absent, workspace_item_route); the untracked scan's word at a child,
- * a rung being the one claim that settles nothing about the path it stands at
- * (core/workspace.c workspace_scan); the tags' clean arm, where a rung nothing
- * diverged on reads [ancestor] (core/workspace.c workspace_item_tags); update's
- * derive-scope slice, a leaf's row and the claim each profile holds where the
- * user's node squats above it (cmds/update.c cmd_update); the two refusals of a
- * second name for one path, where a derived claim names nothing and so blocks
- * nothing (cmds/add.c cmd_add, cmds/revert.c revert_refuse_second_name); add's
- * rule question, where it claims nothing either and so is a discovery, meeting
- * every rule (cmds/add.c add_verdict); the walk that enters such a directory
- * for the claims beneath it (cmds/add.c add_collect); add's ancestry refusal,
- * where the capturing profile's derived claim at the user's link is the one its
- * climb retires (cmds/add.c add_refuse_ancestry); and the per-profile counts
- * `status -v` prints, where a derived row is no directory the profile tracks
- * (cmds/status.c status_print_profiles). Every other `tracked` read in the tree
- * stands where the kind is already settled and asks the field's own meaning,
- * not this predicate.
+ * classify_absent, workspace_item_route); the record's owed work, where a derived
+ * row neither vouches for a claim nor needs a voucher (core/workspace.c
+ * workspace_pending); the untracked scan's word at a child, a rung being the
+ * one claim that settles nothing about the path it stands at (core/workspace.c
+ * workspace_scan); the tags' clean arm, where a rung nothing diverged on reads
+ * [ancestor] (core/workspace.c workspace_item_tags); update's derive-scope slice,
+ * a leaf's row and the claim each profile holds where the user's node squats
+ * above it (cmds/update.c cmd_update); the two refusals of a second name for
+ * one path, where a derived claim names nothing and so blocks nothing (cmds/add.c
+ * cmd_add, cmds/revert.c revert_refuse_second_name); add's rule question, where
+ * it claims nothing either and so is a discovery, meeting every rule (cmds/add.c
+ * add_verdict); the walk that enters such a directory for the claims beneath it
+ * (cmds/add.c add_collect); add's ancestry refusal, where the capturing profile's
+ * derived claim at the user's link is the one its climb retires (cmds/add.c
+ * add_refuse_ancestry); and the per-profile counts `status -v` prints, where a
+ * derived row is no directory the profile tracks (cmds/status.c
+ * status_print_profiles). Every other `tracked` read in the tree stands where
+ * the kind is already settled and asks the field's own meaning, not this predicate.
  */
 static inline bool manifest_is_derived(const manifest_row_t *row) {
     return row && row->type == PATH_TYPE_DIRECTORY && !row->tracked;

@@ -818,9 +818,9 @@ const char *state_target(
  *     and cmds/sync.c cmd_sync): by path, through state_find_record, which rests
  *     on strcmp order
  *   - cmds/remove.c remove_profile_candidates (every record naming the profile,
- *     read before the prompt and under the lock) and cmds/sync.c cmd_sync's apply
- *     hint (every record against the view the Git phase produced, with no workspace
- *     and no disk): walks, key order unread
+ *     read before the prompt and under the lock) and core/workspace.c
+ *     workspace_pending (every record against a view, with no workspace and no
+ *     disk, handed the array by cmds/sync.c cmd_sync): walks, key order unread
  *
  * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
  *

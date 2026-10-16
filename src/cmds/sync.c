@@ -2008,75 +2008,16 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             );
         }
 
-        /* The hint's standing half: what the record already disagreed with the
-         * view about, whichever sync or scope change left it there. Read off
-         * the view the Git phase produced and the record's own columns
-         * (core/state.h state_record_t) — no disk and no second workspace load,
-         * so the answer does not move with --force. Each arm claims apply has
-         * work, so each names the apply that takes the claim away: a record whose
-         * path the view lacks is an orphan apply prunes, releases or reclaims —
-         * or a copy beneath a blob the view stands, which that blob's landing
-         * clears, apply's as well; one whose kind, or whose confirmed content,
-         * is not the row's is stale (one of a file row's kind that confirmed
-         * none is unvouched instead, below), and apply deploys the row — or,
-         * where the row's own kind already stands in place of the node the record
-         * describes, lets the record go: its load's flush observes the row's
-         * node there — a directory's always, a file's where the load learns the
-         * row's content (core/workspace.h workspace_flush) — and a file is adopted;
-         * one whose claim Git moved past the one it reconciled is stale on that
-         * axis, and apply brings it (core/workspace.h workspace_claims_moved,
-         * whose rule keeps out a derived claim, which apply never converges) —
-         * a claim disk already stands on included, since no load runs after the
-         * pull: it hints until one learns it, the apply it names or the next
-         * sync's own; an owned record naming a profile the row does not is a
-         * reassignment apply acknowledges (core/workspace.h's rule, which is
-         * also what keeps a derived claim out of it — asked with no look, which
-         * across kinds leaves the answer to the stale arm before it); and a row
-         * the record cannot vouch for is work apply has not done. Vouching differs
-         * by kind because apply's answer does — a file needs an OWNED record,
-         * since apply adopts a path it merely observed and says so; a directory
-         * needs only a record, since apply never adopts one: an absent or squatted
-         * row has none, and one standing as a directory is settled by any load's
-         * observation. A FILE ↔ EXECUTABLE move Git made under an untouched copy
-         * is not stale: the record keeps the node, and either blob mode stands
-         * as one (core/workspace.h workspace_stale); it moves the mode, where
-         * no sheet claim stands, and the claim arm hints it — where one stands,
-         * the row's mode is the claim's, not the filemode's, and nothing moved.
-         *
-         * The record's paths are unique and so are the view's, so the records
-         * that vouch for a row count the rows that have one. */
-        bool apply_pending = false;  /* The record disagrees with the view, whenever that began */
-        size_t vouched = 0;
-        for (size_t i = 0; i < record_count; i++) {
-            const state_record_t *record = &records[i];
-            const manifest_row_t *row = manifest_lookup(after, record->filesystem_path);
-
-            if (!row) {
-                apply_pending = true;
-                continue;
-            }
-
-            if (row->type == PATH_TYPE_DIRECTORY || record->deployed_at > 0) vouched++;
-
-            if (workspace_stale(row, record) ||
-                workspace_claims_moved(row, record) != DIVERGENCE_NONE ||
-                workspace_reassigned(row, record, FS_OCCUPANT_UNKNOWN)) {
-                apply_pending = true;
-            }
-        }
-        if (vouched < manifest_rows(after).count) {
-            apply_pending = true;
-        }
-
         /* The hint states a fact about the record, not about this sync. The
          * manifest block is the direct evidence of new work — it is empty exactly
          * when the Git phase touched nothing active (a pull of README or
          * .dottaignore, a push, 'ours'), which no profile's line above tells
-         * apart — and apply_pending is the work that was already there: an earlier
-         * sync reviewed with status instead of apply, a scope change, local drift.
-         * The block is a delta and prints once; the hint prints for as long as
-         * the work stands. */
-        if (manifest_changed || apply_pending) {
+         * apart — and the record owes the work that was already there, read off
+         * the view the Git phase produced and the record's own columns
+         * (core/workspace.h workspace_pending): an earlier sync reviewed with
+         * status instead of apply, a scope change, a revert. The block is a delta
+         * and prints once; the hint prints for as long as the work stands. */
+        if (manifest_changed || workspace_pending(after, records, record_count)) {
             output_gap(out, OUTPUT_NORMAL);
             output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy");
         }

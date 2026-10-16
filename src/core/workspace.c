@@ -3276,6 +3276,74 @@ static void workspace_list(workspace_t *ws) {
 }
 
 /**
+ * Pending: the record owes apply work — it disagrees with the view somewhere
+ */
+bool workspace_pending(
+    const manifest_t *view, const state_record_t *records, size_t record_count
+) {
+    CHECK_NULL(view);
+
+    /* Each record against the row at its path; each arm that answers names the
+     * apply that takes its disagreement away */
+    size_t vouched = 0;
+    for (size_t i = 0; i < record_count; i++) {
+        const state_record_t *record = &records[i];
+        const manifest_row_t *row = manifest_lookup(view, record->filesystem_path);
+
+        /* An orphan: apply prunes, releases or reclaims it — or it is a copy
+         * beneath a blob the view stands, which that blob's landing clears, or
+         * dotta's node above rows of the view, which their landing replaces */
+        if (!row) return true;
+
+        /* Stale: the record's kind, or its confirmed content, is not the row's
+         * (one of a file row's kind that confirmed none is unvouched instead,
+         * below), and apply deploys the row — or, where the row's own kind already
+         * stands in place of the node the record describes, lets the record go:
+         * its load's flush observes the row's node there — a directory's always,
+         * a file's where the load learns the row's content (workspace_flush) —
+         * and a file is adopted. A FILE ↔ EXECUTABLE move Git made under an
+         * untouched copy is not stale, either blob mode standing as one: it moves
+         * the mode, the claim's question below — where a sheet claim stands,
+         * the row's mode is the claim's, and nothing moved. */
+        if (workspace_stale(row, record)) return true;
+
+        /* The claim Git moved past the one the record reconciled, which apply
+         * brings — a claim disk already stands on included, where no load has
+         * learned it since: owed until one does. The rule keeps out a derived
+         * claim, which apply never converges. */
+        if (workspace_claims_moved(row, record) != DIVERGENCE_NONE) return true;
+
+        /* An owned record naming a profile the row does not: the reassignment
+         * apply acknowledges. The rule keeps out a derived claim too, and asked
+         * with no look it leaves another kind's record to the stale arm above. */
+        if (workspace_reassigned(row, record, FS_OCCUPANT_UNKNOWN)) return true;
+
+        /* What vouches for a claim differs by kind because apply's answer does:
+         * a file needs an owned record, since apply adopts a path it merely
+         * observed and says so; a directory any, since apply never adopts one —
+         * an absent or squatted row has none, and one standing as a directory
+         * is settled by any load's observation. A derived row is no claim. */
+        if (!manifest_is_derived(row) &&
+            (row->type == PATH_TYPE_DIRECTORY || record->deployed_at > 0)) {
+            vouched++;
+        }
+    }
+
+    /* A claim no record vouches for is work apply has not done. A derived row
+     * needs no voucher: it is the way to the claims beneath it, which the next
+     * load observes where it stands and apply creates only for a claim it deploys
+     * — so a rung no load has observed, above a capture its record vouches for,
+     * owes apply nothing. The record's paths are unique and so are the view's,
+     * so the records that vouch for a claim count the claims that have one. */
+    size_t claims = 0;
+    manifest_rows_t rows = manifest_rows(view);
+    for (size_t i = 0; i < rows.count; i++) {
+        if (!manifest_is_derived(rows.entries[i])) claims++;
+    }
+    return vouched < claims;
+}
+
+/**
  * Load workspace from repository
  */
 error_t workspace_load(

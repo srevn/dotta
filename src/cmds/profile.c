@@ -251,8 +251,11 @@ static error_t profile_list(
             output_endline(out, OUTPUT_NORMAL);
         }
     } else {
+        /* Enable takes only a profile whose branch is here: the ones listed below */
         output_info(out, OUTPUT_NORMAL, "No enabled profiles");
-        output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
+        if (available.count > 0) {
+            output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
+        }
     }
 
     /* Print available (disabled) profiles, marking the ones that need a target:
@@ -1238,8 +1241,6 @@ static error_t profile_reorder(
         out, OUTPUT_NORMAL, "Reordered %zu profile%s",
         opts->profile_count, opts->profile_count == 1 ? "" : "s"
     );
-    output_info(out, OUTPUT_NORMAL, "New precedence takes effect on the next run");
-    output_hint(out, OUTPUT_NORMAL, "Run 'dotta status' to review changes");
 
     return NULL;
 }

@@ -353,7 +353,7 @@ typedef enum {
  * A fact of the placement, not an assertion about who moved the file: the program
  * read the record and the view, never the actor. NONE on every item that is not
  * a relocation — an orphan whose profile holds its name at no other path, and
- * every state but ORPHANED (the arms that release or hold a copy decide before
+ * every state but ORPHANED (the arms that release a copy or skip it decide before
  * the read, and a DEPLOYED item's claim is at its own path). Two names a profile
  * holds read NONE all the same, being in none of its rows: one its settle did
  * not keep at its new path, the move landing two of its names there, and a second

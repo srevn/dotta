@@ -1500,8 +1500,8 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
  * Each read is made once, at the first row that needs it, and kept for the pass
  * with what it met: the answer, or the failure, which answers every later row
  * that needs the read — UNVERIFIED, the read asked no more: a failure minted
- * once per cause and answered again (base/error.h). A failed read holds only
- * the rows that need it: a sheet that will not load holds the directory questions
+ * once per cause and answered again (base/error.h). A failed read skips only
+ * the rows that need it: a sheet that will not load fails the directory questions
  * the tree leaves open, never a file's claim or a directory's a blob stands at
  * or above, which are the tree's to answer. The pass is the retry boundary, as
  * a source filter is (sys/source.h): the next load reads afresh.
@@ -1575,11 +1575,11 @@ typedef enum {
  *               WORKSPACE_STATE_RELEASED — left on disk, record retires
  *   UNVERIFIED  a lookup or a load failed. LOST would retire the record and
  *               BACKED would prune the copy, so neither is guessed: the caller
- *               marks the orphan DIVERGENCE_UNVERIFIED and holds it until Git
- *               answers
+ *               marks the orphan DIVERGENCE_UNVERIFIED, skipped until Git answers
+ *               (a file until --force, core/cleanup.h cleanup_verdict)
  *
  * No failure is raised: each one says only that the probe could not answer, which
- * UNVERIFIED already says — the orphan's hold, never the load's, the rule every
+ * UNVERIFIED already says — the orphan's skip, never the load's, the rule every
  * failed look in this file takes. A read's failure is kept for the pass and answers
  * every later row that needs the read — the head's on the profile's entry, the
  * sheet's on its profile — and the next load asks afresh
@@ -1621,7 +1621,7 @@ static orphan_authority_t workspace_orphan_authority(
     if (item->item_kind == PATH_KIND_FILE) {
         /* The tree at the name, and the tree alone: Git's one-entry rule
          * (core/profiles.h profile_entry), which the sheet must not answer —
-         * one that will not load never holds a copy the tree releases. Three
+         * one that will not load never skips a copy the tree releases. Three
          * answers, not two: a subtree that will not load on the way is a failure
          * to look, never an absence — and this row's alone, kept by nothing,
          * since another name may have a way past it. It is worded for the row
@@ -1646,7 +1646,7 @@ static orphan_authority_t workspace_orphan_authority(
      * it contradicts it and answers without the sheet, which the handle reads
      * once and keeps with its failure; a subtree or a gitlink vetoes nothing,
      * and a FILE item claims no directory. Read strictly: whether the claim stands
-     * is the sheet's question, so one that will not load holds the copy. */
+     * is the sheet's question, so one that will not load skips the copy. */
     const profile_claim_t *claim = NULL;
     error_t err = profile_find(
         cached->profile, PROFILE_READ_STRICT, PATH_KIND_DIRECTORY, item->storage_path, &claim
@@ -2158,13 +2158,15 @@ static void workspace_look_orphan(workspace_t *ws, workspace_item_t *item) {
  *     and the row not kept, and that class picks the fate (cleanup_verdict).
  *     Elsewhere is another string, and where the row stands another entry: a
  *     row standing on the record's very entry was the entry's arm above. UNVERIFIED
- *     keeps the orphan skipped until Git answers — either kind: LOST would retire
- *     the record, BACKED would remove the copy, and neither is a guess to make
- *     about an empty directory any more than about a file. Skipped and not
- *     measured: no reader shows a bit beside UNVERIFIED, so a compare would only
- *     give the item a second reason for the one fate it already has. The probe
- *     raises nothing, so a lookup it could not make is this orphan's skip and
- *     never the load's — the rule the file analysis takes for its own looks.
+ *     keeps the orphan skipped until Git answers, since LOST would retire the
+ *     record and BACKED would remove the copy and neither is a guess to make: a
+ *     directory whatever --force says, a file until --force, which lifts every
+ *     skip a file carries (core/cleanup.h cleanup_verdict) — and so removes a
+ *     copy LOST would have released. Skipped and not measured: no reader shows
+ *     a bit beside UNVERIFIED, so a compare would only give the item a second
+ *     reason for the one fate it already has. The probe raises nothing, so a
+ *     lookup it could not make is this orphan's skip and never the load's — the
+ *     rule the file analysis takes for its own looks.
  *
  * Divergence for a file the analysis measures — a prunable copy or an overridden
  * one, and a node, which the join measured before it — is disk against what dotta
@@ -2173,11 +2175,11 @@ static void workspace_look_orphan(workspace_t *ws, workspace_item_t *item) {
  * in it, read where its removal is decided (cleanup's emptiness rule), so there
  * is nothing to measure, only whether it can be: a directory dotta cannot stat,
  * read or search — the path, or a component above it — is UNVERIFIED, the bit
- * an unstattable file carries, and held until the user can say what is in it.
- * That is one fs_eaccess per present directory orphan (read and search: the walk
- * lstat's an entry named like OS metadata to see that it is a file); the readdir
- * itself stays cleanup's, because what is left in a directory depends on the
- * plan. Both are the measure's (workspace_measure).
+ * an unstattable file carries, and skipped until the user can say what is in
+ * it. That is one fs_eaccess per present directory orphan (read and search: the
+ * walk lstat's an entry named like OS metadata to see that it is a file); the
+ * readdir itself stays cleanup's, because what is left in a directory depends
+ * on the plan. Both are the measure's (workspace_measure).
  *
  * This enables status to predict apply behavior (cleanup_verdict reads the same
  * item, and cleanup_skip_reason maps the same bits to the skip):
@@ -2217,7 +2219,7 @@ static void workspace_analyze_orphans(workspace_t *ws) {
     hashmap_t *authority_cache = hashmap_borrow(ws->arena, 8);
 
     /* The walk cannot fail: a folded error is not the walk's — the probe's failures
-     * are the orphan's hold, a read's kept for the pass (the head's on its
+     * are the orphan's skip, a read's kept for the pass (the head's on its
      * profile's entry, the sheet's on the entry's profile) and a subtree's on
      * the way to one name that row's alone, and the measure's are its bit, dropped
      * at the call that raised it; none is carried out of the walk. */
@@ -2370,11 +2372,12 @@ static void workspace_analyze_orphans(workspace_t *ws) {
             case ORPHAN_AUTHORITY_UNVERIFIED:
                 /* Git could not vouch for the path — a lookup that failed — and
                  * neither LOST nor BACKED is a guess to make: it stays, and cleanup
-                 * skips it (CLEANUP_SKIP_UNVERIFIED). Not measured, unlike a
-                 * backed copy below: no reader shows a bit beside UNVERIFIED,
-                 * so a compare would only give the item a second reason for the
-                 * fate it already has. Its class is UNVERIFIED whatever went
-                 * wrong: the probe meets Git alone, never a key or a permission. */
+                 * skips it (CLEANUP_SKIP_UNVERIFIED), a file until --force. Not
+                 * measured, unlike a backed copy below: no reader shows a bit
+                 * beside UNVERIFIED, so a compare would only give the item a
+                 * second reason for the fate it already has. Its class is
+                 * UNVERIFIED whatever went wrong: the probe meets Git alone,
+                 * never a key or a permission. */
                 item->divergence = DIVERGENCE_UNVERIFIED;
                 item->fault = WORKSPACE_FAULT_UNVERIFIED;
                 continue;

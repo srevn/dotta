@@ -528,12 +528,14 @@ typedef struct {
  * two distinctly, because a decision is not an effect, and folds the verdicts'
  * absent_* (gone at load) into the same reclaimed line, since what the user has
  * in hand is the same either way: a path that is already gone. skipped_dirs is
- * execute's own refusal, re-decided by nothing — a directory retyped while the
- * run waited, or one an entry arrived in that the removal may not clear
- * (fs_remove_empty_dir's ERR_CONFLICT): what the run found is the next load's
- * to judge ([type], the entry), no remedy line depends on which, and "skipped"
- * is still the screen's word for it, so no cause rides on it. failed is both
- * kinds in act order, each with its cause.
+ * execute's own refusal, re-decided by nothing — a directory retyped or made
+ * unreachable while the run waited, or one the removal found not empty
+ * (fs_remove_empty_dir's ERR_CONFLICT): an entry that arrived, which the removal
+ * may not clear, or a child whose own removal failed above, still in it. What
+ * the run found is the next load's to judge ([type], the entry), a failed child's
+ * cause is that child's row in failed, no remedy line depends on which, and
+ * "skipped" is still the screen's word for it, so no cause rides on it. failed
+ * is both kinds in act order, each with its cause.
  *
  * Each array is sized to its promise at entry (calloc; the failed bucket to both
  * kinds together — every promised item could fail) and fills in act order: files,
@@ -558,7 +560,11 @@ typedef struct {
  *   attempted: the world moved           deploy   exit ≠ 0  failed — EEXIST, EISDIR,
  *                                                           ENOTEMPTY are the
  *                                                           row's own outcome
- *                                        cleanup  exit 0    skipped_dirs
+ *                                        cleanup  exit 0    skipped_dirs — one a
+ *                                                           failed child keeps
+ *                                                           adds nothing: the
+ *                                                           child's row in failed
+ *                                                           counts
  *   attempted: the mechanism errored     both     exit ≠ 0  failed
  *
  * The line: a plan is a promise, an orphan set is a permission. A skip stays
@@ -572,7 +578,7 @@ typedef struct {
     cleanup_outcomes_t reclaimed_files;   /* Gone by the time the run looked; nothing was needed */
     cleanup_outcomes_t pruned_dirs;       /* Removed */
     cleanup_outcomes_t reclaimed_dirs;    /* Gone by the time the run looked */
-    cleanup_outcomes_t skipped_dirs;      /* Retyped, or gained an entry, while the run waited */
+    cleanup_outcomes_t skipped_dirs;      /* Retyped, unreachable, or not empty when its turn came */
     cleanup_outcomes_t failed;            /* Both kinds, act order, each with its cause */
 } cleanup_receipt_t;
 

@@ -36,13 +36,13 @@ typedef struct {
  * by a disabled profile or by a deletion in Git.
  *
  * Orchestrates scope resolution, workspace divergence analysis, plan construction,
- * pre-flight checks, the apply hooks, and execution. Builds no manifest of its
- * own — core/manifest maintains that when profiles or files change, and apply
- * reads it through the workspace. Never asks for root: a landing the invoker
- * cannot write, a pair it cannot set or an orphan whose parent refuses its removal
- * is a preflight skip that closes by naming sudo, and a run under sudo lands or
- * prunes it through the syscall's second try (sys/filesystem) with no prompt of
- * dotta's between.
+ * pre-flight checks, the apply hooks, and execution. Builds no view of its own:
+ * the dispatcher builds it over the enabled set at every run whose spec declares
+ * it (src/main.c open_run), and apply reads it through the workspace. Never asks
+ * for root: a landing the invoker cannot write, a pair it cannot set or an orphan
+ * whose parent refuses its removal is a preflight skip that closes by naming
+ * sudo, and a run under sudo lands or prunes it through the syscall's second
+ * try (sys/filesystem) with no prompt of dotta's between.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

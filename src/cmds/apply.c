@@ -1437,8 +1437,8 @@ static void apply_print_cleanup_receipt(
 
         /* Nor here: a directory is skipped because something the run skips is
          * still in it, because the workspace could not verify it, because its
-         * parent refuses the run, or because the removal refused — the verbose
-         * listing names which. */
+         * home moved, because its parent refuses the run, or because its turn
+         * found it retyped, unreachable or not empty; --verbose names which. */
         size_t skipped_dirs = verdicts->skipped_dirs.count + verdicts->refused_dirs.count +
             receipt->skipped_dirs.count;
 
@@ -1846,7 +1846,7 @@ static void apply_print_cleanup_skips(
  * by its slash — each row naming the parent whose bits deny the run, verbatim,
  * in the words deploy's PERMISSION row uses for the same fact ("… is not writable";
  * "ancestry cannot be reached" where the workspace's own lstat was denied on
- * the way — the occupant says so, and the parent the probe asked is then not
+ * the way — the occupant says so, and the parent the probe asked need not be
  * the rung that refused), and the one closer: sudo, named for a run that holds
  * none the way apply_print_deploy_skips names it — asked of the identity, never
  * handed in. Capped like deploy's block — one root-owned parent can refuse a

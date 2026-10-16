@@ -936,11 +936,13 @@ static output_answer_t remove_ask_paths(
 }
 
 /**
- * Ask whether to delete a profile — or answer yes where --force gave the answer
+ * Ask whether to delete a profile — or answer yes where --force or the
+ * configuration gave the answer
  *
  * `counts` is the profile-holdings phrase from the count family
  * (output_format_counts, or its "counts unavailable" stand-in). The warning says
- * what the deletion takes whether or not the configuration asks.
+ * what the deletion takes ahead of the question it is the preamble of; where
+ * none is asked, the receipt says it (remove_profile).
  */
 static output_answer_t remove_ask_profile(
     const char *profile,
@@ -949,8 +951,10 @@ static output_answer_t remove_ask_profile(
     const config_t *config,
     output_t *out
 ) {
-    /* Skip confirmation if --force */
-    if (opts->force) return OUTPUT_ANSWER_YES;
+    /* Skip confirmation if --force, or where the configuration asks none */
+    if (opts->force || !config->confirm_destructive) {
+        return OUTPUT_ANSWER_YES;
+    }
 
     output_gap(out, OUTPUT_NORMAL);
     output_warning(
@@ -968,7 +972,6 @@ static output_answer_t remove_ask_profile(
             "         Deployed paths will be released from management."
         );
     }
-    if (!config->confirm_destructive) return OUTPUT_ANSWER_YES;
     return output_ask_destructive(out, "Continue?");
 }
 
@@ -1723,8 +1726,11 @@ static error_t remove_profile(
     hook_fire_post(config, out, &hook_inv);
 
     /* Success message: every exit before the deletion is behind us (dry run,
-     * cancel, error) */
-    output_success(out, OUTPUT_NORMAL, "Profile '%s' deleted", opts->profile);
+     * cancel, error) — with what it took, which a question asked before it said
+     * too, and nothing else on an unasked run says */
+    output_success(
+        out, OUTPUT_NORMAL, "Profile '%s' deleted (%s)", opts->profile, counts
+    );
 
     /* The hint speaks only for records actually settled, and for the fate they
      * took rather than the flag that was typed: an order is work waiting for

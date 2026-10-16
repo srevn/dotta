@@ -54,11 +54,12 @@
 /* --- Types --- */
 
 typedef struct {
-    const char *name;      /* Profile name, the listing's */
+    const char *name;      /* Profile name: the listing's, or a copy of the store's (missing) */
     const char *target;    /* The store's spelling, or text this session typed */
     bool enabled;          /* Selected for save; toggled by space, persisted by view_save */
     bool needs_target;     /* A claim of the profile needs a binding (core/profiles.h) */
     bool unreadable;       /* The profile would not read: the seed absorbed it, the row says so */
+    bool missing;          /* Enabled with no branch: nothing to read, the row says so */
 } item_t;
 
 typedef struct {
@@ -131,7 +132,10 @@ static void prompt_open_edit(prompt_t *p, size_t item_index, const char *current
 
 /* --- View lifecycle --- */
 
-/* Allocate view->items and populate name/enabled. */
+/* The rows: every enabled profile in its saved order, then the rest of what Git
+ * lists, disabled. A save writes the enabled set as the rows show it (view_save),
+ * so every name the store enables is a row, one Git holds no branch for among
+ * them: a name the screen left out is one the save would disable unasked. */
 static error_t build_items(git_repository *repo, state_t *deploy_state, view_t *view) {
     arena_t *arena = view->arena;
 
@@ -158,16 +162,28 @@ static error_t build_items(git_repository *repo, state_t *deploy_state, view_t *
     }
 
     /* The rows, and which listed names an enabled row took. Every name is the
-     * listing's, the view's arena's as the rows are — never the state's row cache,
-     * which a save replaces while the session goes on. */
+     * view's arena's, as the rows are — the listing's, or a copy of an enabled
+     * name it lacks — never the state's row cache, which a save replaces while
+     * the session goes on. A row per listed name and one per enabled name the
+     * listing lacks, so the two counts together bound them. */
     bool *used = arena_calloc(arena, all_profiles.count, sizeof(*used));
-    view->items = arena_calloc(arena, all_profiles.count, sizeof(*view->items));
+    view->items = arena_calloc(
+        arena, all_profiles.count + enabled_profiles.count, sizeof(*view->items)
+    );
 
     /* Pass A: enabled profiles in their saved order. */
     for (size_t i = 0; i < enabled_profiles.count; i++) {
+        const char *name = enabled_profiles.entries[i].name;
         void *found = NULL;
-        if (!hashmap_find(profile_map, enabled_profiles.entries[i].name, &found)) {
-            /* Persisted name no longer exists locally — drop silently. */
+        if (!hashmap_find(profile_map, name, &found)) {
+            /* Enabled, and Git lists no branch for it (core/manifest.h
+             * manifest_missing): drawn at its rank and saved as it stands, so
+             * the two ways out status names — the disable, the fetch that brings
+             * the branch back — stay the user's to pick. The name is a copy,
+             * the listing holding none to borrow. */
+            view->items[view->item_count++] = (item_t){
+                .name = arena_strdup(arena, name), .enabled = true, .missing = true
+            };
             continue;
         }
         size_t at = (size_t) (uintptr_t) found;
@@ -187,10 +203,10 @@ static error_t build_items(git_repository *repo, state_t *deploy_state, view_t *
 }
 
 /* Pass two, the target column of every row: the binding an enabled row holds
- * (its arrow), and whether its profile needs one (its mark, and the OFF→ON gate)
- * — both read up front so a keystroke never reads Git: the gate is a field test,
- * where a lazy probe would be a tree read inside a raw-mode handler, visible
- * latency on the first space.
+ * (its arrow), and, where Git holds its branch, whether its profile needs one
+ * (its mark, and the OFF→ON gate) — both read up front so a keystroke never reads
+ * Git: the gate is a field test, where a lazy probe would be a tree read inside
+ * a raw-mode handler, visible latency on the first space.
  *
  * The binding first, and it cannot fail: the row's target is the store's fact
  * whatever the profile says, so a profile that will not read keeps its arrow.
@@ -215,6 +231,10 @@ static void read_targets(git_repository *repo, state_t *deploy_state, view_t *vi
         if (bound) {
             it->target = arena_strdup(view->arena, bound);
         }
+
+        /* A row with no branch has no profile to ask: never unreadable, never
+         * gated, its mark the branch it lacks (row_render) */
+        if (it->missing) continue;
 
         /* The need, absorbed (above), asked of the profile at its head: the error
          * is dropped, one per row whose profile will not read. */
@@ -504,11 +524,12 @@ static void interactive_datum(const char *datum) {
     free(spelled);
 }
 
-/* Four row shapes, all the same line count:
+/* Five row shapes, all the same line count:
  *   1. Prompt-active   "  ▶   Target: <buffer>_"
  *   2. Bound           "  ▶ ✓ name → <target>"
  *   3. Needs a target  "    name (needs a target)"
  *   4. Unreadable      "    name (unreadable)"
+ *   5. No branch       "  ▶ ✓ name (no branch)", a bound row's after its arrow
  *
  * Trailing '_' is the visible caret; hardware cursor stays hidden for the whole
  * session. Every datum prints through interactive_datum, the row's layout through
@@ -558,6 +579,13 @@ static void row_render(const view_t *view, size_t i) {
         fprintf(stdout, " " UI_DIM "(unreadable)" UI_RESET);
     } else if (it->needs_target) {
         fprintf(stdout, " " UI_DIM "(needs a target)" UI_RESET);
+    }
+
+    /* And a fourth, whatever those answered: has the profile a branch? A row
+     * Git lists none for says so after its binding, in the word and the colour
+     * status and the listing use; SPACE is its way out here, status's disable. */
+    if (it->missing) {
+        fprintf(stdout, " " UI_YELLOW "(no branch)" UI_RESET);
     }
     fprintf(stdout, "\r\n");
 }
@@ -723,7 +751,10 @@ static interactive_result_t handle_key_normal(view_t *view, int key) {
              * within a session, so a re-enable skips the prompt naturally via
              * gate 3 (until a save releases it: view_save). A row the seed could
              * not read needs nothing it can say, so it toggles without a prompt
-             * and plan_check refuses the save that would enable it. */
+             * and plan_check refuses the save that would enable it. A row with
+             * no branch toggles likewise, and its save stands either way: such
+             * a profile contributes nothing to the view plan_check builds
+             * (core/manifest.h manifest_missing). */
             if (toggling_on && it->needs_target && it->target == NULL) {
                 prompt_open_capture(&view->prompt, view->cursor);
                 return INTERACTIVE_CONTINUE;
@@ -936,6 +967,7 @@ const args_command_t spec_interactive = {
         "  - Enabled profiles are saved to state in the displayed order\n"
         "  - Profile order determines layering (later overrides earlier)\n"
         "  - Toggling on a profile that needs a target opens an inline target prompt\n"
+        "  - A profile marked (no branch) stays enabled until toggled off and saved\n"
         "  - A relative target is resolved from this directory, like a shell's\n"
         "  - Use regular commands (apply, update, sync) after enabling profiles\n",
     .payload      = &(const dotta_needs_t){

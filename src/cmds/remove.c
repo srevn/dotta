@@ -33,8 +33,9 @@
 #include "utils/hooks.h"
 
 /**
- * One claim of the profile: a tracked path in storage terms, either kind — a
- * tree blob (FILE) or a metadata directory item (DIRECTORY).
+ * One claim of the profile: a path it tracks, in storage terms, either kind — a
+ * blob (FILE) or a directory claim it tracks (DIRECTORY), never one it only passes
+ * through.
  *
  * The profile's claims are the argument universe of a removal — never the view:
  * a disabled profile's paths must stay removable (the view holds only enabled
@@ -64,6 +65,7 @@ typedef struct {
 
 /**
  * Walk visitor: one claim of the profile, whatever its kind, collected and placed
+ * — a derived claim passed by
  *
  * @param claim One claim, decoded (borrowed — valid for the call only)
  * @param payload The walk (remove_walk_t)
@@ -71,6 +73,12 @@ typedef struct {
  */
 static error_t remove_collect_claim(const profile_claim_t *claim, void *payload) {
     remove_walk_t *walk = payload;
+
+    /* A derived claim is the way to the profile's claims and never one of them
+     * (core/profiles.h profile_counts): no argument takes it, and the commit's
+     * prune lets it go once nothing tracked stands beneath — a rung, whose record
+     * the gate settles (remove_settle) */
+    if (claim->type == PATH_TYPE_DIRECTORY && !claim->tracked) return NULL;
 
     /* The name copied out of the walk's loan, and the kind off the type the decode
      * gave: a blob is a file claim whatever its filemode */
@@ -104,9 +112,10 @@ static error_t remove_collect_claim(const profile_claim_t *claim, void *payload)
  * profile_walk, profile_contradicted), collected by one visitor, under the reader's
  * policy: a removal reads strictly, refusing a sheet that will not load before
  * its preview as every writer does; a deletion tolerantly, so a profile whose
- * sheet will not load stays deletable. In order: the blobs in the tree's pre-order,
- * the directory claims that stand in the sheet's, the contradicted ones in the
- * sheet's.
+ * sheet will not load stays deletable. The profile's own claims alone: the blobs
+ * and the directories it tracks, never the way to them (remove_collect_claim).
+ * In order: the blobs in the tree's pre-order, the directory claims that stand
+ * in the sheet's, the contradicted ones in the sheet's.
  *
  * Readers: remove_resolve, the universe a removal's arguments are matched against,
  * and remove_profile, every claim a deletion takes — one producer, so the two
@@ -518,8 +527,9 @@ static bool remove_contradicted(
  * ~/jail/etc/x` takes the claim standing there under whatever name, and a root
  * takes everything beneath it. Either way an argument takes every claim at it
  * and — at a '/' boundary, never a false prefix like home/dir2 for home/dir —
- * every claim beneath it: naming a directory means untracking it whole. A claim
- * is removed once, however many arguments match it.
+ * every claim beneath it: naming a directory means untracking it whole, and one
+ * the profile only passes through means what it tracks beneath, the way itself
+ * the commit's prune's. A claim is removed once, however many arguments match it.
  *
  * But a blob the argument names leaves no room: a file has nothing beneath it,
  * so the directory claims at or beneath the named blob's own name — the claims
@@ -1749,9 +1759,10 @@ typedef struct {
 } remove_offer_t;
 
 /**
- * Walk visitor: a directory claim offered where its own name would take it —
- * where no blob stands at that name (remove_resolve). A file claim is the refspecs'
- * to offer (cmds/completion.h completion_refspecs).
+ * Walk visitor: a directory claim offered where its name takes what the profile
+ * tracks at and beneath it — where no blob stands at that name, which an argument
+ * would take alone (remove_resolve). A file claim is the refspecs' to offer
+ * (cmds/completion.h completion_refspecs).
  *
  * @param claim One claim, decoded (borrowed — valid for the call only)
  * @param payload The offer (remove_offer_t)
@@ -1765,8 +1776,8 @@ static error_t remove_offer_directory(const profile_claim_t *claim, void *payloa
     /* Whether a blob stands at the claim's own name, where an argument naming
      * it would name the blob and take the blob alone. Asked of the name, never
      * read off which walk showed the claim, so the offer holds wherever the
-     * classification draws its line: a claim beneath a blob is its own name's
-     * to take, one at a blob's name is not. A gitlink's name names no blob. */
+     * classification draws its line: a claim beneath a blob is reached by its
+     * own name, one at a blob's name is not. A gitlink's name names no blob. */
     profile_held_t held;
     error_t err = profile_holds(offer->profile, claim->storage_path, &held);
     if (err) return err;
@@ -1784,8 +1795,8 @@ static error_t remove_offer_directory(const profile_claim_t *claim, void *payloa
  * What can stand at the cursor, read off the buckets remove_post_parse routes:
  * a local profile in the profile slot — the first positional, unless -p took it
  * — then the claims of that profile, standing or not, enabled or not: its files,
- * and the directory claims its own names would take, slash-marked; nothing after
- * --delete-profile, which takes no path.
+ * and the directory claims whose names take what it tracks there, slash-marked;
+ * nothing after --delete-profile, which takes no path.
  */
 static args_want_t remove_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1813,7 +1824,7 @@ static args_want_t remove_complete(
 
     /* The directory claims, remove's own offer: every claim the profile makes
      * at its head — the walk's, then those its tree contradicts — asked whether
-     * its own name would take it (remove_offer_directory), so the offer is the
+     * a blob stands at its name (remove_offer_directory), so the offer is the
      * rule's and not where the classification draws its line. Read strictly:
      * the claims are the sheet's, so a sheet that will not load offers none either
      * way. None outside a repository, and every failure dropped, as every

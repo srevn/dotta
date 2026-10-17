@@ -395,12 +395,13 @@ typedef error_t (*profile_visit_fn)(const profile_claim_t *claim, void *payload)
  * name (cmds/export.c export_collect_profile and export_collect_storage, through
  * export_collect_claim); the directory claims a completion offers export
  * (cmds/completion.c completion_directories, through completion_offer_directory),
- * and those remove's own names would take, before profile_contradicted's
+ * and those remove's completion offers as names, before profile_contradicted's
  * (cmds/remove.c remove_complete, through remove_offer_directory); and every
- * claim the profile makes, before profile_contradicted's, through one visitor —
- * the universe a removal's arguments are matched against, read STRICT, and every
- * claim a deletion takes, read TOLERANT (cmds/remove.c remove_list_claims, through
- * remove_collect_claim, for remove_resolve and remove_profile).
+ * claim the profile makes, a derived one passed by, before profile_contradicted's,
+ * through one visitor — the universe a removal's arguments are matched against,
+ * read STRICT, and every claim a deletion takes, read TOLERANT (cmds/remove.c
+ * remove_list_claims, through remove_collect_claim, for remove_resolve and
+ * remove_profile).
  *
  * @param profile Handle (must not be NULL); its sheet is read by the first question
  *                that needs it, a walk or profile_load_sheet
@@ -437,14 +438,14 @@ error_t profile_walk(
  * TOLERANT: none is shown past one, the failure kept (profile_load_sheet).
  *
  * Readers: every claim the profile makes, after the walk, through the walk's
- * visitor — the universe a removal's arguments are matched against, read STRICT,
- * and every claim a deletion takes, read TOLERANT (cmds/remove.c
- * remove_list_claims, through remove_collect_claim, for remove_resolve and
- * remove_profile); the directory claims remove's own names would take, read STRICT
- * after the walk (cmds/remove.c remove_complete, through remove_offer_directory);
- * and the tracked claims the view's health names, each with its blob, read STRICT
- * after the walk (core/manifest.c manifest_contribute, through
- * manifest_note_claim).
+ * visitor, which passes a derived one by — the universe a removal's arguments
+ * are matched against, read STRICT, and every claim a deletion takes, read TOLERANT
+ * (cmds/remove.c remove_list_claims, through remove_collect_claim, for
+ * remove_resolve and remove_profile); the directory claims remove's completion
+ * offers as names, read STRICT after the walk (cmds/remove.c remove_complete,
+ * through remove_offer_directory); and the tracked claims the view's health names,
+ * each with its blob, read STRICT after the walk (core/manifest.c
+ * manifest_contribute, through manifest_note_claim).
  *
  * @param profile Handle (must not be NULL); its sheet read through it
  * @param read The sheet's policy for this question

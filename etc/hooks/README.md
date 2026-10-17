@@ -134,8 +134,9 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_COMMAND` - Always "remove"
 - `DOTTA_PROFILE` - Profile name being modified or deleted
 - `DOTTA_FILE_COUNT` - Number of entries: one per path the removal takes a claim
-  at, a directory's as well as a file's — every path the profile claims, when it
-  is deleted — each once, however many claims stand there
+  at, a directory the profile tracks as well as a file — every path the profile
+  tracks, when it is deleted — each once, however many claims stand there; a
+  directory the profile only passes through is none of them
 - `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Each entry's path (0-indexed)
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
 

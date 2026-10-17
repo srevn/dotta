@@ -56,11 +56,12 @@
  * chain above a tracked path, binding dotta's own creation of that path and nothing
  * else.
  *
- * Nothing infers a tracked claim away. It leaves the sheet where a verb takes
- * it — `remove` of the directory, or `update` committing the deletion of a
- * directory dotta saw — and no attribute of it reads back as intent: a walked
- * directory at the umask default, or claiming no mode at all, is kept for the
- * word alone.
+ * Nothing infers a tracked claim away. Its word goes where a verb takes it —
+ * `remove` of the directory, or `update` committing the deletion of a directory
+ * dotta saw — the claim staying the way to whatever tracked stands beneath it
+ * (core/profiles.h profile_remove), and no attribute of it reads back as intent:
+ * a walked directory at the umask default, or claiming no mode at all, is kept
+ * for the word alone.
  *
  * The polarity is the fail-safe one and the sparse one at once: an item that
  * loses the field — a hand edit, a tool that drops what it does not know — degrades
@@ -341,7 +342,7 @@ metadata_t *metadata_clone(arena_t *arena, const metadata_t *metadata);
  *
  * Readers: the parser and the copy (metadata_from_json, metadata_clone); and a
  * profile's draft, its every edit that writes a claim (core/profiles.c
- * profile_admit, profile_capture_file, profile_capture_directory,
+ * profile_remove, profile_admit, profile_capture_file, profile_capture_directory,
  * profile_capture_rung, profile_restore_ancestors and profile_restore_file),
  * the rung counting what it moved.
  *

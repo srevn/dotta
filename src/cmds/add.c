@@ -2596,8 +2596,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * its place under that very name, since a listing under another of the
      * profile's names captures elsewhere, and a claim this machine cannot place
      * is listed nowhere. The file at such a name is the profile's own claim,
-     * captured under --force alone (add_list), so the remedy is --force's. A
-     * derived claim there rides the capture to the commit's prune. */
+     * captured under --force alone (add_list), so the remedy is --force's. The
+     * removal takes the claim's tracking (core/profiles.h profile_remove), and
+     * the derivation it leaves rides the capture to the commit's prune, as a
+     * derived claim there does. */
     const manifest_contradicted_t contradicted = manifest_contradicted(view);
     for (size_t i = 0; i < contradicted.count; i++) {
         const manifest_contradicted_claim_t *at = &contradicted.entries[i];

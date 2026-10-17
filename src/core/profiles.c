@@ -1047,14 +1047,34 @@ error_t profile_remove(profile_draft_t *draft, path_kind_t kind, const char *sto
         }
 
         case PATH_KIND_DIRECTORY: {
-            /* A directory claim's whole footprint is its item, so none of that
-             * kind at the name is the sheet's refusal, naming the profile */
-            if (!metadata_remove_item(draft->sheet, PATH_KIND_DIRECTORY, storage_path)) {
+            /* A directory claim's whole footprint is its item, so a name the
+             * sheet tracks nothing at is the sheet's refusal, naming the profile
+             * — no claim there, or a derivation, which stands for what stands
+             * beneath it and is no writer's to take */
+            const metadata_item_t *claim = metadata_find_item(
+                draft->sheet, PATH_KIND_DIRECTORY, storage_path
+            );
+            if (!claim || !claim->tracked) {
                 return error_create(
-                    ERR_NOT_FOUND, "Profile '%s' claims no directory at '%s'",
+                    ERR_NOT_FOUND, "Profile '%s' tracks no directory at '%s'",
                     draft->base->name, storage_path
                 );
             }
+
+            /* The tracking goes, never the way to what stays beneath it: the
+             * claim stays a derivation, the attributes it claimed kept, so another
+             * machine creates the directory as this one had it — the prune's to
+             * take at the commit where nothing tracked stands beneath it once
+             * every edit is in, whatever order the writer made them in
+             * (profile_prune_ancestors) */
+            const metadata_item_t derivation = {
+                .kind  = PATH_KIND_DIRECTORY,
+                .key   = claim->key,
+                .mode  = claim->mode,
+                .owner = claim->owner,
+                .group = claim->group,
+            };
+            metadata_write_item(draft->sheet, &derivation);
 
             return NULL;
         }
@@ -1624,12 +1644,13 @@ static bool profile_tracked_beneath(const profile_draft_t *draft, const char *ke
 /**
  * Prune the derivations nothing stands beneath
  *
- * The ancestors' third edit (profile_draft_t): the climb and the way author a
- * derived claim at a rung because something beneath it stands, and this removes
- * one the moment nothing does. A tracked claim is not this pass's subject at
- * all — the walk's own word stands with nothing beneath it and at any attributes,
- * and it is retracted where it was made (core/metadata.h) — so the pass reads
- * one field and asks one question of what is left:
+ * The ancestors' last edit (profile_draft_t): the climb and the way author a
+ * derived claim at a rung because something beneath it stands, a directory claim's
+ * removal leaves one where the claim stood, and this removes one the moment nothing
+ * does. A tracked claim is not this pass's subject at all — the walk's own word
+ * stands with nothing beneath it and at any attributes, and only a verb takes
+ * it (profile_remove, core/metadata.h) — so the pass reads one field and asks
+ * one question of what is left:
  *
  *   Is anything tracked beneath it? The profile's tracked set is the index's
  *   paths and the copy's own tracked claims together. The index names every path
@@ -1653,11 +1674,17 @@ static bool profile_tracked_beneath(const profile_draft_t *draft, const char *ke
  * neither, so a removal changes no later decision, and the keys come back in
  * key order.
  *
+ * The keys are the paths the commit lets go that the writer did not name: a claim
+ * the base tracked is derived here only where a writer's removal took its tracking,
+ * and that writer names it, so a removal reports its claim once whatever order
+ * it took the claims beneath in.
+ *
  * Reader: profile_commit, past its gate.
  *
  * @param draft The draft
- * @param pruned Receives the keys pruned, appended as copies in the array's arena;
- *               NULL where the writer keeps none, one with no record phase
+ * @param pruned Receives the key of each derivation pruned but a claim the base
+ *               tracked, appended as copies in the array's arena; NULL where
+ *               the writer keeps none, one with no record phase
  * @return Error or NULL on success: a failed look at the index, which must not
  *         prune
  */
@@ -1700,9 +1727,14 @@ static error_t profile_prune_ancestors(profile_draft_t *draft, string_array_t *p
         }
 
         /* Nothing stands beneath it: its key handed back where the caller keeps
-         * them; then the derivation goes, and the slice is read again, the removal
-         * having moved every entry past the cursor down one */
-        if (pruned) string_array_push(pruned, dir->key);
+         * them — but a claim the base tracked, whose tracking a writer's removal
+         * took (profile_remove), and which that writer names itself; then the
+         * derivation goes, and the slice is read again, the removal having moved
+         * every entry past the cursor down one */
+        const metadata_item_t *was = metadata_find_item(
+            draft->base->sheet, PATH_KIND_DIRECTORY, dir->key
+        );
+        if (pruned && !(was && was->tracked)) string_array_push(pruned, dir->key);
         metadata_remove_item(draft->sheet, PATH_KIND_DIRECTORY, dir->key);
         directories = metadata_items(draft->sheet, PATH_KIND_DIRECTORY);
     }
@@ -1730,11 +1762,12 @@ error_t profile_commit(
     /* The prune, against the stage's index — the tree the commit will record,
      * the removed file claims gone from it (the judge's own contract,
      * profile_prune_ancestors): removing a file may leave the derived claim above
-     * it with nothing tracked beneath. The index answers that for every path a
-     * tree can hold — never the sheet's items, which omit unelevated symlinks —
-     * and the copy's own tracked claims answer it for the one path it cannot,
-     * an empty directory. Its keys are handed back where the writer keeps them,
-     * for its record phase. */
+     * it with nothing tracked beneath, and removing a directory claim leaves
+     * the derivation it was. The index answers that for every path a tree can
+     * hold — never the sheet's items, which omit unelevated symlinks — and the
+     * copy's own tracked claims answer it for the one path it cannot, an empty
+     * directory. Its keys are handed back where the writer keeps them, for its
+     * record phase. */
     err = profile_prune_ancestors(draft, pruned);
     if (err) return err;
 

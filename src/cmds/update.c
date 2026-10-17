@@ -453,9 +453,10 @@ static error_t update_profile(
 
         /* A deletion, of either kind, ahead of both arms — the directory arm's
          * look never meets a path the user removed. It takes the claim of the
-         * item's kind, a file's blob and FILE item or a directory's DIRECTORY
-         * item, never the other kind's at the name, so a directory claim the
-         * blob contradicted stands again once the blob is gone (core/profiles.h
+         * item's kind, a file's blob and FILE item or a directory's tracking —
+         * a deleted row is a tracked one (core/workspace.c classify_absent) —
+         * never the other kind's at the name, so a directory claim the blob
+         * contradicted stands again once the blob is gone (core/profiles.h
          * profile_remove). The row said the profile holds it, so one the commit
          * lacks — another writer's commit since the load — is the model's error
          * and stops the run, never a no-op. Then the bookkeeping, so the message

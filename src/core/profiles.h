@@ -766,13 +766,13 @@ error_t profile_find(
  * names chosen with it (profile_admit), and whether its edits move anything
  * (profile_changed). Every edit keeps the document's rules, stated here once:
  *   - a write touches its own kind: a removal takes its claim — a file's the
- *     blob and the FILE item at its name, a directory's the DIRECTORY item —
- *     never the other kind's at the same name, so a directory claim a removed
- *     blob contradicted stands again, carried, and a FILE item no blob backs
- *     rides a directory captured at its name. The one write across kinds is a
- *     blob's where a directory claim stands, no blob at or above its name in
- *     the base: the blob takes that claim's place, and a claim the base's blob
- *     at the name contradicts rides the write, carried;
+ *     blob and the FILE item at its name, a directory's tracking — never the
+ *     other kind's at the same name, so a directory claim a removed blob
+ *     contradicted stands again, carried, and a FILE item no blob backs rides a
+ *     directory captured at its name. The one write across kinds is a blob's
+ *     where a directory claim stands, no blob at or above its name in the base:
+ *     the blob takes that claim's place, and a claim the base's blob at the name
+ *     contradicts rides the write, carried;
  *   - the admission, asked of every blob the commit writes, a capture's and a
  *     restore's, and of every name a writer chooses before it reads a byte
  *     (profile_admit): a blob may stand at a name unless a tracked directory
@@ -785,15 +785,18 @@ error_t profile_find(
  *     A directory admitted is a claim the commit carries from its admission, so
  *     a blob chosen above it later meets it as it meets one the base holds;
  *   - the ancestors: a derived claim exists iff something tracked stands beneath
- *     it, and three edits keep that — the climb, which claims the way to a leaf
+ *     it, and four edits keep that — the climb, which claims the way to a leaf
  *     from the disk, each rung where its own name resolves
  *     (profile_capture_ancestors); the way a restored file stood on at its commit,
  *     brought back at each rung the base holds nothing at, with no disk read
- *     (profile_restore_file); and the prune, at the commit, of every derived
- *     claim nothing tracked stands beneath any longer (core/profiles.c
+ *     (profile_restore_file); a directory claim's removal, which takes its tracking
+ *     and leaves the claim the way to whatever stands beneath it, the attributes
+ *     it claimed kept (profile_remove); and the prune, at the commit, of every
+ *     derived claim nothing tracked stands beneath any longer (core/profiles.c
  *     profile_prune_ancestors), its key handed to the writer's record phase where
- *     it has one. Revert has none, so a record a rung its commit pruned stood
- *     on is released by the next load, which finds the claim gone (core/workspace.c
+ *     it has one — but a claim the base tracked, whose removal the writer names
+ *     itself. Revert has none, so a record a rung its commit pruned stood on is
+ *     released by the next load, which finds the claim gone (core/workspace.c
  *     workspace_orphan_authority);
  *   - the gate, each document held against the one the draft opened: a commit
  *     no edit of which moved the tree or the sheet makes nothing — no prune, no
@@ -922,9 +925,14 @@ error_t profile_admit(profile_draft_t *draft, path_kind_t kind, const char *stor
  *
  * FILE: the blob, and the FILE item at its name where one stands — refused in
  * sys/stage's words where the tree holds no entry there (sys/stage.h stage_remove,
- * ERR_NOT_FOUND). DIRECTORY: the DIRECTORY item — refused ERR_NOT_FOUND, "Profile
- * '%s' claims no directory at '%s'", where the sheet holds none. The other kind's
- * claim at the name is never taken, and a refusal leaves the commit as it was.
+ * ERR_NOT_FOUND). DIRECTORY: the claim's tracking, the item left the way to what
+ * stands beneath it — a derivation with the attributes it claimed, which the
+ * commit's prune takes where nothing tracked stands beneath it once every edit
+ * is in, whatever order a writer made them in (profile_draft_t, the ancestors)
+ * — refused ERR_NOT_FOUND, "Profile '%s' tracks no directory at '%s'", where
+ * the sheet tracks none there: a derivation stands for what stands beneath it,
+ * and no writer takes it. The other kind's claim at the name is never taken,
+ * and a refusal leaves the commit as it was.
  *
  * Readers: cmds/add.c cmd_add, the tracked claim its profile's own blob contradicts
  * at a name it captures a file at — the remedy that keeps the file, where the
@@ -1193,16 +1201,17 @@ error_t profile_changed(const profile_draft_t *draft, bool *out);
  *
  * Where no edit moved the tree or the sheet (profile_changed), nothing: no prune,
  * no save, no commit. Otherwise the prune, against the index the commit will
- * record, its keys appended to `pruned` where one is given; the sheet saved where
- * its claims are no longer the base's; then one commit (sys/stage.h stage_commit:
- * a tree equal to the opened one is none, and a head another writer moved since
- * the open is refused ERR_CONFLICT). One commit a draft. Whether it landed is
- * answered as sys/stage answers it: false where the gate stops it, and past the
- * gate the tree write's own answer — true where an edit the gate saw stands past
- * the prune, since it moved a content entry or a claim and a sheet whose claims
- * moved spells other bytes, and false where the prune took back the only edits
- * the gate saw: a climb's rungs nothing tracked stands beneath, authored and
- * pruned in one draft.
+ * record, its keys appended to `pruned` where one is given — every derivation
+ * it takes but a claim the base tracked, whose removal the writer names; the
+ * sheet saved where its claims are no longer the base's; then one commit
+ * (sys/stage.h stage_commit: a tree equal to the opened one is none, and a head
+ * another writer moved since the open is refused ERR_CONFLICT). One commit a
+ * draft. Whether it landed is answered as sys/stage answers it: false where the
+ * gate stops it, and past the gate the tree write's own answer — true where an
+ * edit the gate saw stands past the prune, since it moved a content entry or a
+ * claim and a sheet whose claims moved spells other bytes, and false where the
+ * prune took back the only edits the gate saw: a climb's rungs nothing tracked
+ * stands beneath, authored and pruned in one draft.
  *
  * Readers: cmds/add.c add_commit and cmds/update.c update_profile, which keep
  * the prune's keys and read whether the commit landed, so a capture that put
@@ -1214,9 +1223,10 @@ error_t profile_changed(const profile_draft_t *draft, bool *out);
  * @param message Commit message (must not be NULL)
  * @param out_committed Whether a commit was made (optional, can be NULL; false
  *                      where nothing moved, or on a failure)
- * @param pruned The keys the prune took, appended as copies in the array's arena
- *               (given its arena by string_array_init); NULL where the writer
- *               keeps none, one with no record phase
+ * @param pruned The keys the prune took but a claim the base tracked, appended
+ *               as copies in the array's arena (given its arena by
+ *               string_array_init); NULL where the writer keeps none, one with
+ *               no record phase
  * @return Error or NULL on success
  */
 error_t profile_commit(

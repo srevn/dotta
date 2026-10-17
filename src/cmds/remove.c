@@ -1177,11 +1177,12 @@ static error_t remove_paths(
 
     /* The plan, on the draft: each claim leaves the commit by its own kind
      * (core/profiles.h profile_remove) — a FILE claim its tree entry and its
-     * item, a DIRECTORY claim its item, the whole of its Git footprint — so a
-     * directory claim at a removed file's name stays, carried, and stands again
-     * once the blob is gone. Every claim is the base's own, taken once (the
-     * resolver's universe is the base's walk and the claims its tree contradicts),
-     * so neither of the removal's refusals can fire. */
+     * item, a DIRECTORY claim its tracking, the way staying where anything tracked
+     * stands beneath it — so a directory claim at a removed file's name stays,
+     * carried, and stands again once the blob is gone. Every claim is the base's
+     * own, taken once, and every directory claim a tracked one (the resolver's
+     * universe is the base's walk and the claims its tree contradicts, a derivation
+     * never among them), so neither of the removal's refusals can fire. */
     size_t removed_files = 0, removed_dirs = 0;
 
     /* The names this commit lets go, borrowed from the claims (arena), each once:

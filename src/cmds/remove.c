@@ -192,20 +192,27 @@ static string_array_t remove_hook_paths(
 }
 
 /**
- * One path a removal let go, and whose word decides its fate
+ * One path a removal let go, and whether a claim it took stands there
  *
  * A candidate is a path the removal's Git effect no longer claims, joined to
  * the record standing at it. The file route's commit lets go of the claims the
- * arguments named and the directory entries its prune took once nothing tracked
+ * arguments took and the directory entries its prune took once nothing tracked
  * stood beneath them; the profile route lets go of every path whose record names
  * the deleted profile. Only paths bearing this profile's record become candidates
  * — a record naming another profile is not ours to settle, and a path with no
  * record was never observed: nothing to settle.
  *
- * The routes part on one question — whether the user was asked. Only a named
- * path hears --delete-files with its own voice; a pruned entry lost its reason
- * rather than being asked for, and a profile deletion names the profile, not
- * its paths, so both leave the flag to the record's ownership (remove_settle).
+ * A candidate is taken where a claim the removal took stands at it — an argument's
+ * reach, or a claim of the deleted profile — joined first, so a path is taken
+ * however else the commit let it go. A rung the commit's prune took on a claim's
+ * way, and a path an earlier run let go, settle by the same rule and are counted
+ * nowhere (remove_settlement_t).
+ *
+ * The routes part on one question — whether the user was asked. Only a taken
+ * path of a removal that names paths hears --delete-files with its own voice; a
+ * pruned entry lost its reason rather than being asked for, and a profile deletion
+ * names the profile, not its paths, so both leave the flag to the record's
+ * ownership (remove_settle).
  *
  * The path is the filesystem one, as this profile deploys it; arena-backed, command
  * lifetime. The record borrows from the read its producer made
@@ -214,18 +221,20 @@ static string_array_t remove_hook_paths(
 typedef struct {
     const char *path;             /* Filesystem path, as this profile deploys it */
     const state_record_t *record; /* The record at that path; names the removed profile */
-    bool named;                   /* An argument's reach took it, so the flag speaks to it */
+    bool taken;                   /* A claim this removal takes stands at it */
 } remove_candidate_t;
 
 /**
- * What the settle loop did, counted by fate
+ * What the settle loop did to the paths the removal's claims stand at, counted
+ * by fate
  *
  * The fates are counted apart: under --delete-files several can occur in one
- * removal — the named paths ordered pruned by the next apply, a rung it only
- * emptied and dotta never created released here and now — and a receipt that
- * folded them would name work apply is not going to do. Each count is the paths
- * dotta answers for, both kinds: a directory it created on a removed file's way
- * is pruned or released by the same apply, and counted as the file is.
+ * removal — the named paths ordered pruned by the next apply, a fallback kept
+ * under another profile's row — and a receipt that folded them would name work
+ * apply is not going to do. Each count is the paths a taken candidate stands
+ * at, the unit of the success line above it, so a removal of one file says one
+ * path: the rungs on its way settle by the same rule and are counted nowhere,
+ * and the apply that prunes the ones dotta created says so in its own receipt.
  */
 typedef struct {
     size_t ordered;    /* Prune ordered — carried out by the next apply */
@@ -254,19 +263,21 @@ typedef struct {
  * candidate to ask it of.
  *
  * The flag is the user's word about the paths the removal NAMED, and only those
- * — named by the resolver's reach, not the typed line: an argument takes the
- * exact claim and every claim beneath a named directory (naming a directory means
- * untracking it whole), a named blob alone (remove_resolve), and the flag speaks
- * for all of them. The flag alone cannot make dotta delete a path it never created:
- * cleanup reads the order ahead of the ownership gate, by design, since a named
- * path the user wants gone must go whether dotta deployed it or only ever found
- * it. For a path the user did not name there is nothing to read ahead of, so
- * the gate answers, and it is read here because the record that carries it is
- * about to retire: dotta takes back what it created on the way in and leaves
- * what it merely found. The flag stays a ceiling over both — a plain remove
- * promises release and deletes nothing, whoever made the path. And no order
- * outranks a row: cleanup reads it behind the identity guard, so a copy a row
- * stands on under another spelling is released, the path being in the view.
+ * — the taken ones, where it names paths at all; a deletion names the profile,
+ * so every path of it hears the flag through the gate. Named by the resolver's
+ * reach, not the typed line: an argument takes the exact claim and every claim
+ * beneath a named directory (naming a directory means untracking it whole), a
+ * named blob alone (remove_resolve), and the flag speaks for all of them. The
+ * flag alone cannot make dotta delete a path it never created: cleanup reads
+ * the order ahead of the ownership gate, by design, since a named path the user
+ * wants gone must go whether dotta deployed it or only ever found it. For a path
+ * the user did not name there is nothing to read ahead of, so the gate answers,
+ * and it is read here because the record that carries it is about to retire:
+ * dotta takes back what it created on the way in and leaves what it merely found.
+ * The flag stays a ceiling over both — a plain remove promises release and deletes
+ * nothing, whoever made the path. And no order outranks a row: cleanup reads it
+ * behind the identity guard, so a copy a row stands on under another spelling
+ * is released, the path being in the view.
  *
  * One loop for both routes because the rule drifted while each spelled its own:
  * a let-go record's fate must not turn on which removal retired it. The gate
@@ -274,14 +285,15 @@ typedef struct {
  * born only for a path the user named or a copy dotta deployed (state_order_prune's
  * birth rule, core/state.h).
  *
- * Fates are counted as they enter the transaction; on error the caller rolls
- * back and zeroes its settlement — the rollback takes the writes with it.
+ * A taken candidate's fate is counted as it enters the transaction; on error
+ * the caller rolls back and zeroes its settlement — the rollback takes the writes
+ * with it.
  */
 static error_t remove_settle(
     const dotta_ctx_t *ctx,
     const remove_candidate_t *candidates,
     size_t count,
-    bool delete_files,
+    const cmd_remove_options_t *opts,
     remove_settlement_t *settlement
 ) {
     /* Nothing let go is recorded: no view to ask, and nothing to write */
@@ -302,23 +314,26 @@ static error_t remove_settle(
          * still holds there standing nowhere — beneath a blob, another of its
          * names at the place (core/manifest.h manifest_lookup_claim): another
          * profile's row is a fallback, and the removing profile's own claim leaves
-         * the path its, with nothing to count */
+         * the path its, with nothing to count. Otherwise the flag speaks to a
+         * path the removal named — a taken one, where it names paths — and through
+         * the gate to every other. Each arm counts a taken path alone */
         const manifest_row_t *row = manifest_lookup(after, candidate->path);
         if (!row) {
             row = manifest_lookup_claim(after, candidate->record->profile, candidate->path);
         }
         if (row) {
-            if (strcmp(row->profile, candidate->record->profile) != 0) {
+            if (candidate->taken && strcmp(row->profile, candidate->record->profile) != 0) {
                 settlement->fallback++;
             }
-        } else if (delete_files && (candidate->named || candidate->record->deployed_at > 0)) {
+        } else if (opts->delete_files &&
+            ((candidate->taken && !opts->delete_profile) || candidate->record->deployed_at > 0)) {
             err = state_order_prune(ctx->run.state, candidate->path, now);
             if (err) return err;
-            settlement->ordered++;
+            if (candidate->taken) settlement->ordered++;
         } else {
             err = state_retire(ctx->run.state, candidate->path);
             if (err) return err;
-            settlement->released++;
+            if (candidate->taken) settlement->released++;
         }
     }
 
@@ -376,7 +391,7 @@ static void remove_print_settlement(output_t *out, const remove_settlement_t *se
  * One candidate a path: what the commit let go at one place — a blob and the
  * directory claim at its own name, two names one binding places together, or a
  * claim and a rung the prune let go there — joins one record, which is settled
- * once. The claims come first, so a path an argument took is named however else
+ * once. The claims come first, so a path an argument took is taken however else
  * the commit let it go.
  *
  * Asked twice by its one caller (remove_paths): before the lock, whether there
@@ -419,13 +434,13 @@ static error_t remove_paths_candidates(
         if (!record || strcmp(record->profile, profile) != 0) continue;
         if (!hashmap_add(joined, filesystem_path, NULL)) continue;
         candidates[count++] = (remove_candidate_t){
-            .path = filesystem_path, .record = record, .named = true
+            .path = filesystem_path, .record = record, .taken = true
         };
     }
 
     /* The entries the commit's prune took: nobody asked for them, so the flag
      * does not speak to them — but where a claim the arguments took stands at
-     * one, it was joined above, named. One this machine cannot place stands
+     * one, it was joined above, taken. One this machine cannot place stands
      * nowhere, and no record of this run's can be there. */
     for (size_t i = 0; i < pruned->count; i++) {
         const char *filesystem_path = mount_resolve(
@@ -436,7 +451,7 @@ static error_t remove_paths_candidates(
         if (!record || strcmp(record->profile, profile) != 0) continue;
         if (!hashmap_add(joined, filesystem_path, NULL)) continue;
         candidates[count++] = (remove_candidate_t){
-            .path = filesystem_path, .record = record, .named = false
+            .path = filesystem_path, .record = record, .taken = false
         };
     }
 
@@ -450,10 +465,11 @@ static error_t remove_paths_candidates(
  *
  * Every record naming the profile, whether it was enabled or not, and whether
  * its tree still claimed the path or had let it go — the user is deleting the
- * profile and its files. None is named: a deletion names the profile, not its
- * paths, so --delete-files speaks only through the ownership gate (remove_settle),
- * and an observed record — a path dotta found rather than made — releases rather
- * than prunes.
+ * profile and its files. Its own claims are joined first, taken, so the receipt
+ * counts what the profile held (remove_settlement_t); but none is named: a deletion
+ * names the profile, not its paths, so --delete-files speaks only through the
+ * ownership gate (remove_settle), and an observed record — a path dotta found
+ * rather than made — releases rather than prunes.
  *
  * Asked twice by its one caller (remove_profile): before the prompt, for the
  * preview and whether there is anything to settle, and under the lock, what the
@@ -462,6 +478,8 @@ static error_t remove_paths_candidates(
 static error_t remove_profile_candidates(
     const dotta_ctx_t *ctx,
     const char *profile,
+    const remove_claim_t *claims,
+    size_t claim_count,
     remove_candidate_t **out,
     size_t *out_count
 ) {
@@ -475,13 +493,34 @@ static error_t remove_profile_candidates(
     if (err) return err;
     if (record_count == 0) return NULL;
 
+    /* Room for every record, each a path once, and the paths already joined, by
+     * a seen-set's one probe over the candidates' own strings (base/hashmap.h
+     * hashmap_add) */
     remove_candidate_t *candidates = arena_calloc(ctx->arena, record_count, sizeof(*candidates));
+    hashmap_t *joined = hashmap_borrow(ctx->arena, record_count);
     size_t count = 0;
 
+    /* The profile's claims, each joined to its record by a lookup in the read
+     * (state_find_record), once a path, as the file route joins its arguments'
+     * (remove_paths_candidates) */
+    for (size_t i = 0; i < claim_count; i++) {
+        const char *filesystem_path = claims[i].filesystem_path;
+        if (!filesystem_path) continue;
+        const state_record_t *record = state_find_record(records, record_count, filesystem_path);
+        if (!record || strcmp(record->profile, profile) != 0) continue;
+        if (!hashmap_add(joined, filesystem_path, NULL)) continue;
+        candidates[count++] = (remove_candidate_t){
+            .path = filesystem_path, .record = record, .taken = true
+        };
+    }
+
+    /* Then every other record naming the profile: a rung on a claim's way, a
+     * path an earlier run let go */
     for (size_t i = 0; i < record_count; i++) {
         if (strcmp(records[i].profile, profile) != 0) continue;
+        if (!hashmap_add(joined, records[i].filesystem_path, NULL)) continue;
         candidates[count++] = (remove_candidate_t){
-            .path = records[i].filesystem_path, .record = &records[i], .named = false
+            .path = records[i].filesystem_path, .record = &records[i], .taken = false
         };
     }
 
@@ -1292,9 +1331,7 @@ static error_t remove_paths(
             );
         }
         if (!err) {
-            err = remove_settle(
-                ctx, candidates, candidate_count, opts->delete_files, &settlement
-            );
+            err = remove_settle(ctx, candidates, candidate_count, opts, &settlement);
         }
 
         /* Commit transaction */
@@ -1519,7 +1556,9 @@ static error_t remove_profile(
     remove_candidate_t *candidates = NULL;
     size_t candidate_count = 0;
     remove_settlement_t settlement = { 0 };
-    err = remove_profile_candidates(ctx, opts->profile, &candidates, &candidate_count);
+    err = remove_profile_candidates(
+        ctx, opts->profile, claims, claim_count, &candidates, &candidate_count
+    );
     if (err) {
         /* The store's refusal says the read it refused */
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
@@ -1602,12 +1641,12 @@ static error_t remove_profile(
             err = state_disable_profile(state, opts->profile);
         }
         if (!err) {
-            err = remove_profile_candidates(ctx, opts->profile, &candidates, &candidate_count);
+            err = remove_profile_candidates(
+                ctx, opts->profile, claims, claim_count, &candidates, &candidate_count
+            );
         }
         if (!err) {
-            err = remove_settle(
-                ctx, candidates, candidate_count, opts->delete_files, &settlement
-            );
+            err = remove_settle(ctx, candidates, candidate_count, opts, &settlement);
         }
 
         /* Commit transaction */

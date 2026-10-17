@@ -317,6 +317,39 @@ static error_t remove_settle(
 }
 
 /**
+ * Print what became of the copies a removal let go, beneath its success line
+ *
+ * Once, after the act, by the fate each took rather than the flag that was typed:
+ * an order is work waiting for apply, and its line names it; a release is done;
+ * a fallback stays, another profile's row providing the path. A fate that took
+ * nothing says nothing, so a removal with nothing recorded — or a record phase
+ * that failed, with its warning — leaves the success line to stand alone.
+ *
+ * Readers: remove_paths and remove_profile — one printer, so the two routes say
+ * one split in one set of words.
+ */
+static void remove_print_settlement(output_t *out, const remove_settlement_t *settlement) {
+    if (settlement->ordered > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "  %zu path%s will be pruned when you run 'dotta apply'",
+            settlement->ordered, settlement->ordered == 1 ? "" : "s"
+        );
+    }
+    if (settlement->released > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "  %zu path%s released from management",
+            settlement->released, settlement->released == 1 ? "" : "s"
+        );
+    }
+    if (settlement->fallback > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "  %zu path%s still provided by another enabled profile",
+            settlement->fallback, settlement->fallback == 1 ? "" : "s"
+        );
+    }
+}
+
+/**
  * The candidates a removal of paths settles, as the record stands now
  *
  * The paths the commit let go, as this profile deploys them, each joined to the
@@ -1275,36 +1308,15 @@ static error_t remove_paths(
     /* Execute post-remove hook */
     hook_fire_post(config, out, &hook_inv);
 
-    /* Success, then what became of the copies the commit let go — said once,
-     * after the act, by the fate each took rather than the flag that was typed:
-     * an order is work waiting for apply, and its line names it; a release is
-     * done; a fallback stays, another profile's row providing the path. Nothing
-     * recorded — or a record phase that failed with its warning — leaves the
-     * success line to stand alone. */
+    /* Success, then what became of the copies the commit let go
+     * (remove_print_settlement) */
     char counts[64];
     remove_format_counts(counts, sizeof(counts), removed_files, removed_dirs);
     output_success(
         out, OUTPUT_NORMAL, "Removed %s from profile '%s'",
         counts, opts->profile
     );
-    if (settlement.ordered > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "  %zu path%s will be pruned when you run 'dotta apply'",
-            settlement.ordered, settlement.ordered == 1 ? "" : "s"
-        );
-    }
-    if (settlement.released > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "  %zu path%s released from management",
-            settlement.released, settlement.released == 1 ? "" : "s"
-        );
-    }
-    if (settlement.fallback > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "  %zu path%s still provided by another enabled profile",
-            settlement.fallback, settlement.fallback == 1 ? "" : "s"
-        );
-    }
+    remove_print_settlement(out, &settlement);
 
 cleanup:
     /* Free all resources in reverse order of allocation. state is borrowed from
@@ -1646,30 +1658,12 @@ static error_t remove_profile(
 
     /* Success message: every exit before the deletion is behind us (dry run,
      * cancel, error) — with what it took, which a question asked before it said
-     * too, and nothing else on an unasked run says. Then what became of the copies,
-     * as the file route says it (remove_paths): once, after the act, by the fate
-     * each took. */
+     * too, and nothing else on an unasked run says. Then what became of the copies
+     * the deletion let go (remove_print_settlement). */
     output_success(
         out, OUTPUT_NORMAL, "Profile '%s' deleted (%s)", opts->profile, counts
     );
-    if (settlement.ordered > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "  %zu path%s will be pruned when you run 'dotta apply'",
-            settlement.ordered, settlement.ordered == 1 ? "" : "s"
-        );
-    }
-    if (settlement.released > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "  %zu path%s released from management",
-            settlement.released, settlement.released == 1 ? "" : "s"
-        );
-    }
-    if (settlement.fallback > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "  %zu path%s still provided by another enabled profile",
-            settlement.fallback, settlement.fallback == 1 ? "" : "s"
-        );
-    }
+    remove_print_settlement(out, &settlement);
 
 cleanup:
     /* state is borrowed from the dispatcher — do not free it. state_rollback is

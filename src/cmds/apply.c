@@ -2925,7 +2925,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_print(
             out, OUTPUT_NORMAL,
             opts->dry_run ? "Would adopt {yellow}%zu{reset} file%s\n"
-                          : "Adopted {yellow}%zu{reset} file%s (now tracked)\n",
+                          : "Adopted {yellow}%zu{reset} file%s\n",
             adopted_count, adopted_count == 1 ? "" : "s"
         );
     }

@@ -739,14 +739,14 @@ static error_t remove_resolve(
  *
  * The claim removed there — the first, where the removal takes two at one place:
  * two of the profile's names, or a blob and the directory claim at its own name
- * — what each other profile claims there, in the order of their names, and the
- * row the enabled view stands there.
+ * — what each other profile claims there, in the order of their names, and whether
+ * an enabled one is among them.
  */
 typedef struct {
     const char *filesystem_path;
-    const char *storage_path;         /* the claim the removal takes there */
-    manifest_rows_t others;           /* each other profile's claim there */
-    const manifest_row_t *standing;   /* the enabled view's row there, or NULL */
+    const char *storage_path;   /* the claim the removal takes there */
+    manifest_rows_t others;     /* each other profile's claim there */
+    bool provided;              /* an enabled one among them: the path stays in the view */
 } remove_overlap_t;
 
 /**
@@ -757,6 +757,27 @@ typedef struct {
     const remove_overlap_t *entries;
     size_t count;
 } remove_overlaps_t;
+
+/**
+ * Whether an enabled profile is among the claimants at a shared path: its claim
+ * keeps the path in the view once the removal is done (remove_overlaps)
+ *
+ * @param state The store, whose enabled set is asked
+ * @param others Each other profile's claim at the path
+ * @param count How many
+ * @return true iff one of them is an enabled profile's
+ */
+static bool remove_provided(
+    const state_t *state, const manifest_row_t *const *others, size_t count
+) {
+    for (size_t i = 0; i < count; i++) {
+        if (state_enabled(state, others[i]->profile)) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 /**
  * What this removal shares with the other profiles
@@ -774,7 +795,16 @@ typedef struct {
  * What a failure means is remove_paths' to say, and it is advisory: it says what
  * it could not read and drops the section rather than refuse the untrack, since
  * a local profile nobody enabled must not stop the repair and must not hide a
- * claim in silence either. Only `standing` is read tolerantly (below).
+ * claim in silence either.
+ *
+ * `provided` is asked of the claimants the section holds against the enabled
+ * set, no view built for it (remove_provided): another enabled profile's claim
+ * at the path keeps it in the view once the removal is done — the row standing
+ * there now, or the one taking the place this profile's held — so the removal
+ * neither prunes nor releases the copy there, whatever the flag. Its one limit,
+ * stated: an enabled claimant beneath a third profile's blob, whose place the
+ * removed claim held, stands nowhere once that blob stands again, and the path
+ * goes with the blob's landing.
  *
  * Cost: one view per other local profile — a tree walk and a sheet load each —
  * then one lookup per removed path per profile. Everything the section holds is
@@ -813,13 +843,6 @@ static error_t remove_overlaps(
         if (err) return err;
     }
 
-    /* The enabled view, built tolerantly: remove must run on an enabled set the
-     * builder refuses (that is how an offending claim gets untracked), so a build
-     * it refuses leaves `enabled` NULL and every `standing` with it, its error
-     * dropped, and the closing lines keep their neutral wording */
-    manifest_t *enabled = NULL;
-    (void) manifest_build(ctx->run.repo, ctx->run.state, ctx->arena, &enabled);
-
     /* Each path asked once, so two claims the removal takes at one place — two
      * of the profile's names, or a blob and the directory claim at its own name
      * — are one line and one count: a seen-set's one probe over the claims' own
@@ -847,18 +870,11 @@ static error_t remove_overlaps(
         }
         if (other_count == 0) continue;
 
-        /* `standing` is the view's fact, not the record's, and asked at a shared
-         * path alone — which is sound: a row another enabled profile stands at
-         * the path is that profile's claim there, so it is among the others, or
-         * the layer's rung, which no profile claims (core/manifest.h
-         * manifest_holds_row) and which stands only where every claim at the
-         * path stands nowhere, the removed one among them, so the removal moves
-         * nothing on disk there and the closing line's own clause covers it */
         overlaps[count++] = (remove_overlap_t){
             .filesystem_path = filesystem_path,
             .storage_path = claims[i].storage_path,
             .others = { others, other_count },
-            .standing = manifest_lookup(enabled, filesystem_path),
+            .provided = remove_provided(ctx->run.state, others, other_count),
         };
     }
 
@@ -872,15 +888,17 @@ static error_t remove_overlaps(
  *
  * One line per shared path: the path, then each other profile and — where its
  * name for the place differs from the removed claim's — the name it holds it
- * under, since under two bindings one path wears two names. The closing line
- * says what the removal changes on disk: nothing, where another enabled profile's
- * row stands at one of the paths, and otherwise the fate `delete_files` chose.
+ * under, since under two bindings one path wears two names. The closing lines
+ * say what is true of the shared paths whatever the flag: the removal takes them
+ * from this profile alone, and where another enabled profile claims one, its
+ * copy stays on the filesystem. What becomes of every other copy is promised
+ * once before the act, by the question (remove_ask_paths) or the dry run, and
+ * said once after it, by the receipt (remove_print_settlement).
  */
 static void remove_print_overlaps(
     output_t *out,
     const remove_overlaps_t *overlaps,
-    const char *current_profile,
-    bool delete_files
+    const char *current_profile
 ) {
     if (overlaps->count == 0) return;
 
@@ -917,39 +935,21 @@ static void remove_print_overlaps(
         current_profile
     );
 
-    /* The first path another enabled profile's row stands at: the removal changes
-     * nothing on disk there */
-    size_t provided = 0;
-    for (; provided < overlaps->count; provided++) {
-        const manifest_row_t *standing = overlaps->entries[provided].standing;
-        if (standing && strcmp(standing->profile, current_profile) != 0) break;
-    }
-
-    if (provided < overlaps->count) {
-        output_warning(
-            out, OUTPUT_NORMAL,
-            "Some paths are provided by another enabled profile."
-        );
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Those paths will remain on the filesystem."
-        );
-    } else if (delete_files) {
-        /* The record rule in one clause: the fate applies only where nothing
-         * still provides the path — a remaining claimant makes it a fallback,
-         * reassigned or replaced on apply, never pruned. */
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Paths deployed from '%s' will be pruned on the next 'dotta apply' "
-            "unless another enabled profile still provides them.",
-            current_profile
-        );
-    } else {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Paths deployed from '%s' stay on the filesystem.",
-            current_profile
-        );
+    /* Said once, at the first path another enabled profile claims: the path stays
+     * in the view, so its copy is a fallback, acknowledged or replaced on apply,
+     * never pruned or released — the record rule in one clause */
+    for (size_t i = 0; i < overlaps->count; i++) {
+        if (overlaps->entries[i].provided) {
+            output_warning(
+                out, OUTPUT_NORMAL,
+                "Some paths are provided by another enabled profile."
+            );
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Those paths will remain on the filesystem."
+            );
+            break;
+        }
     }
     output_gap(out, OUTPUT_NORMAL);
 }
@@ -1010,12 +1010,17 @@ static output_answer_t remove_ask_paths(
     char counts[64];
     remove_format_counts(counts, sizeof(counts), files, dirs);
 
-    /* Prompt user */
+    /* The question, and beneath it the one promise the copies are made before
+     * the act, in the receipt's words (remove_print_settlement) */
+    if (opts->delete_files) {
+        return output_ask(
+            out, false, "Remove %s from profile '%s'?\n"
+            "(Deployed paths will be pruned when you run 'dotta apply')", counts, opts->profile
+        );
+    }
     return output_ask(
-        out, false, opts->delete_files
-        ? "Remove %s from profile '%s'?\n(Deployed files will be pruned on 'dotta apply')"
-        : "Remove %s from profile '%s'?\n(Deployed files will be released from management)",
-        counts, opts->profile
+        out, false, "Remove %s from profile '%s'?\n"
+        "(Deployed paths will be released from management)", counts, opts->profile
     );
 }
 
@@ -1025,8 +1030,9 @@ static output_answer_t remove_ask_paths(
  *
  * `counts` is the profile-holdings phrase from the count family
  * (output_format_counts, or its "counts unavailable" stand-in). The warning says
- * what the deletion takes ahead of the question it is the preamble of; where
- * none is asked, the receipt says it (remove_profile).
+ * what the deletion takes ahead of the question it is the preamble of, and beneath
+ * it the one promise the copies are made, in the receipt's words; where none is
+ * asked, the receipt says both (remove_profile).
  */
 static output_answer_t remove_ask_profile(
     const char *profile,
@@ -1048,12 +1054,12 @@ static output_answer_t remove_ask_profile(
     if (opts->delete_files) {
         output_info(
             out, OUTPUT_NORMAL,
-            "         Deployed paths will be pruned when you run 'dotta apply'."
+            "         Deployed paths will be pruned when you run 'dotta apply'"
         );
     } else {
         output_info(
             out, OUTPUT_NORMAL,
-            "         Deployed paths will be released from management."
+            "         Deployed paths will be released from management"
         );
     }
     return output_ask_destructive(out, "Continue?");
@@ -1107,9 +1113,10 @@ static error_t remove_paths(
     }
 
     /* The overlap section, BEFORE any operation */
-    remove_print_overlaps(out, &overlaps, opts->profile, opts->delete_files);
+    remove_print_overlaps(out, &overlaps, opts->profile);
 
-    /* Dry run - just show what would be removed */
+    /* Dry run: what would be removed, and the one promise the copies are made,
+     * as the question makes it (remove_ask_paths) */
     if (opts->dry_run) {
         size_t dry_files = 0, dry_dirs = 0;
         output_print(
@@ -1135,7 +1142,7 @@ static error_t remove_paths(
         if (opts->delete_files) {
             output_print(
                 out, OUTPUT_NORMAL,
-                "(Deployed paths would be removed on 'dotta apply')\n"
+                "(Deployed paths would be pruned when you run 'dotta apply')\n"
             );
         } else {
             output_print(
@@ -1481,12 +1488,24 @@ static error_t remove_profile(
         );
     }
 
-    /* Dry run */
+    /* Dry run: what the deletion takes, and the one promise the copies are made,
+     * as the question's preamble makes it (remove_ask_profile) */
     if (opts->dry_run) {
         output_print(
             out, OUTPUT_NORMAL, "Would delete profile '%s' (%s)\n",
             opts->profile, counts
         );
+        if (opts->delete_files) {
+            output_print(
+                out, OUTPUT_NORMAL,
+                "(Deployed paths would be pruned when you run 'dotta apply')\n"
+            );
+        } else {
+            output_print(
+                out, OUTPUT_NORMAL,
+                "(Deployed paths would be released from management)\n"
+            );
+        }
         goto cleanup;  /* err is NULL, will return success */
     }
 

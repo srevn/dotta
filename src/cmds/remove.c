@@ -1488,6 +1488,57 @@ static error_t remove_profile(
         );
     }
 
+    /* The remote, resolved up-front for two readers: where the profile stands
+     * against it, said before the act — in the dry run too, which previews what
+     * the deletion says before it acts — and the deletion's push below, whose
+     * credential helper reads the URL (its transfer context). No remote configured
+     * is an answer — the profile is this repository's alone, nothing pushed
+     * (sys/gitops.h names this read) — and every other failure is the run's,
+     * joined below with the upstream's own. */
+    err = gitops_resolve_default_remote(
+        repo, ctx->arena, &remote_name, &remote_url
+    );
+    if (error_code(err) == ERR_NOT_FOUND) {
+        err = NULL;
+    } else if (!err) {
+        /* A remote: where the profile stands against it */
+        upstream_info_t upstream_info;
+        err = upstream_analyze_profile(
+            repo, remote_name, opts->profile, &upstream_info
+        );
+        if (!err) {
+            /* Commits no remote holds — ahead of what it pushed, or never pushed
+             * at all: the deletion takes them with every other commit of the
+             * profile's, so they are said before it, unless --force. No sync
+             * first saves them: the deletion is pushed as well. */
+            if (!opts->force &&
+                (upstream_info.ahead > 0 || upstream_info.state == UPSTREAM_NO_REMOTE)) {
+                output_gap(out, OUTPUT_NORMAL);
+                output_warning(
+                    out, OUTPUT_NORMAL, "Profile '%s' has unpushed changes", opts->profile
+                );
+            }
+
+            /* Never pushed: no branch there for the deletion to delete */
+            if (upstream_info.state == UPSTREAM_NO_REMOTE) remote_name = NULL;
+        }
+    }
+    if (err) {
+        /* Where the profile stands is unknown — a remote the resolver could not
+         * choose, an upstream that would not read: said where unpushed changes
+         * are said, before the same confirmation, and --force skips it as it
+         * skips that warning. A refusal here would refuse past --force, where a
+         * positive finding only warns. */
+        if (!opts->force) {
+            output_gap(out, OUTPUT_NORMAL);
+            output_warning(
+                out, OUTPUT_NORMAL, "Cannot tell whether profile '%s' has unpushed "
+                "changes: %s", opts->profile, error_line(err)
+            );
+        }
+        err = NULL;
+    }
+
     /* Dry run: what the deletion takes, and the one promise the copies are made,
      * as the question's preamble makes it (remove_ask_profile) */
     if (opts->dry_run) {
@@ -1507,59 +1558,6 @@ static error_t remove_profile(
             );
         }
         goto cleanup;  /* err is NULL, will return success */
-    }
-
-    /* Check for unpushed changes, and detect the remote: remote_name is kept
-     * for pushing the deletion below. */
-    bool has_unpushed = false;
-    bool is_local_only = false;
-
-    /* Resolve remote name + URL up-front: the URL feeds the credential helper
-     * for the deletion's push further down (its transfer context). One resolve,
-     * two consumers. No remote configured is an answer — the profile is this
-     * repository's alone (sys/gitops.h names this read) — and every other failure
-     * is the run's, joined below with the upstream's own. */
-    err = gitops_resolve_default_remote(
-        repo, ctx->arena, &remote_name, &remote_url
-    );
-    if (error_code(err) == ERR_NOT_FOUND) {
-        is_local_only = true;
-        err = NULL;
-    } else if (!err) {
-        /* A remote: where the profile stands against it */
-        upstream_info_t upstream_info;
-        err = upstream_analyze_profile(
-            repo, remote_name, opts->profile, &upstream_info
-        );
-        if (!err) {
-            /* Never pushed, or ahead of what it pushed — the one finding the
-             * warning below is for */
-            is_local_only = upstream_info.state == UPSTREAM_NO_REMOTE;
-            has_unpushed = upstream_info.state == UPSTREAM_LOCAL_AHEAD ||
-                upstream_info.state == UPSTREAM_DIVERGED;
-        }
-    }
-    if (err) {
-        /* Where the profile stands is unknown — a remote the resolver could not
-         * choose, an upstream that would not read: said where unpushed changes
-         * are said, before the same confirmation, and --force skips it as it
-         * skips that warning. A refusal here would refuse past --force, where a
-         * positive finding only warns. */
-        if (!opts->force) {
-            output_gap(out, OUTPUT_NORMAL);
-            output_warning(
-                out, OUTPUT_NORMAL, "Cannot tell whether profile '%s' has unpushed "
-                "changes: %s", opts->profile, error_line(err)
-            );
-        }
-        err = NULL;
-    }
-
-    /* Warn about unpushed changes (only if profile has remote tracking) */
-    if (has_unpushed && !opts->force) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_warning(out, OUTPUT_NORMAL, "Profile '%s' has unpushed changes!", opts->profile);
-        output_hint(out, OUTPUT_NORMAL, "Run 'dotta sync' first to avoid data loss");
     }
 
     /* The candidates as the record stands before the prompt, on the borrowed
@@ -1683,9 +1681,10 @@ static error_t remove_profile(
         }
     }
 
-    /* Push the deletion to the remote, where there is one: sync needs it, since
-     * other repositories learn the branch is gone only from there. */
-    if (remote_name && !is_local_only) {
+    /* Push the deletion to the remote, unless the profile was never pushed there
+     * (remote_name NULL, above): sync needs it, since other repositories learn
+     * the branch is gone only from there. */
+    if (remote_name) {
         output_info(
             out, OUTPUT_NORMAL, "Pushing profile deletion to remote '%s'...",
             remote_name

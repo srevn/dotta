@@ -46,15 +46,15 @@ typedef enum {
  * Command options
  *
  * `mode`, `commit1`, `commit2` are derived by `diff_post_parse` from the three
- * classified positional buckets (git refs, files, profiles). `direction ==
+ * classified positional buckets (git refs, paths, profiles). `direction ==
  * DIFF_DIR_UNSET` (0) signals "no direction flag was supplied" so post_parse
  * can reject a direction in commit modes.
  */
 typedef struct {
     /* User-facing (read by cmd_diff) */
     diff_mode_t mode;           /* Diff mode */
-    char **files;               /* Workspace diff: file filters */
-    size_t file_count;          /* Number of files */
+    char **paths;               /* Path filters, each a file or a directory */
+    size_t path_count;          /* Number of paths */
     int direction;              /* Which direction to show */
     const char *commit1;        /* First commit (old) */
     const char *commit2;        /* Second commit (new, NULL = workspace) */

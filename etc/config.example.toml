@@ -58,12 +58,12 @@ auto_detect_new_files = true
 # Place executable scripts in the hooks directory with these names:
 #   - pre-apply    - Runs before applying profiles
 #   - post-apply   - Runs after applying profiles
-#   - pre-add      - Runs before adding files to a profile
-#   - post-add     - Runs after adding files to a profile
-#   - pre-remove   - Runs before removing files or deleting a profile
-#   - post-remove  - Runs after removing files or deleting a profile
-#   - pre-update   - Runs before updating profiles with modified files
-#   - post-update  - Runs after updating profiles with modified files
+#   - pre-add      - Runs before adding files or directories to a profile
+#   - post-add     - Runs after adding files or directories to a profile
+#   - pre-remove   - Runs before removing paths or deleting a profile
+#   - post-remove  - Runs after removing paths or deleting a profile
+#   - pre-update   - Runs before committing filesystem changes back to profiles
+#   - post-update  - Runs after committing filesystem changes back to profiles
 #   - pre-sync     - Runs before synchronizing with the remote
 #   - post-sync    - Runs after synchronizing with the remote
 #
@@ -91,12 +91,12 @@ timeout = 30
 
 pre_apply = true     # Run before applying profiles (e.g., backup current configs)
 post_apply = true    # Run after applying profiles (e.g., reload shell, restart services)
-pre_add = false      # Run before adding files (e.g., validate file contents)
-post_add = false     # Run after adding files (e.g., commit to git, notify team)
-pre_remove = false   # Run before removing files or deleting a profile (e.g., backup)
-post_remove = false  # Run after removing files or deleting a profile (e.g., notify)
-pre_update = false   # Run before updating profiles with modified files (e.g., validate changes)
-post_update = false  # Run after updating profiles with modified files (e.g., sync to remote, notify)
+pre_add = false      # Run before adding files or directories (e.g., validate file contents)
+post_add = false     # Run after adding files or directories (e.g., sync to remote, notify team)
+pre_remove = false   # Run before removing paths or deleting a profile (e.g., backup)
+post_remove = false  # Run after removing paths or deleting a profile (e.g., notify)
+pre_update = false   # Run before committing filesystem changes (e.g., validate changes)
+post_update = false  # Run after committing filesystem changes (e.g., sync to remote, notify)
 pre_sync = false     # Run before syncing with the remote (e.g., block on metered network)
 post_sync = false    # Run after syncing with the remote (e.g., notify, trigger downstream apply)
 

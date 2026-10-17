@@ -21,7 +21,7 @@
  * carries:
  *
  *   1. Profile filter     — CLI -p <names> (optional)
- *   2. Path filter        — CLI positional file arguments (optional)
+ *   2. Path filter        — CLI positional path arguments (optional)
  *   3. Exclude patterns   — CLI -e <patterns>            (optional)
  *
  * Constructed once per command via scope_build; consulted many times via predicates
@@ -107,8 +107,8 @@ typedef struct scope scope_t;
 typedef struct scope_inputs {
     char *const *profiles;          /* -p profile names (raw CLI) */
     size_t profile_count;
-    char *const *files;             /* Positional file arguments (raw CLI) */
-    size_t file_count;
+    char *const *paths;             /* Positional path arguments (raw CLI) */
+    size_t path_count;
     char *const *exclude_patterns;  /* -e exclude patterns (raw CLI) */
     size_t exclude_count;
 } scope_inputs_t;
@@ -342,7 +342,7 @@ const string_array_t *scope_profiles(const scope_t *s);
 /* -------------------------------------------------------------------- */
 
 /**
- * Raw path filter (NULL when no positional file args were given).
+ * Raw path filter (NULL when no positional path args were given).
  *
  * Consumers that read the filter itself — diff (a commit range selected delta
  * by delta, a commit's view compared under it, the coverage answers over the
@@ -363,7 +363,7 @@ const pathspec_t *scope_paths(const scope_t *s);
 /** True if a CLI profile filter was given (-p). */
 bool scope_filters_profiles(const scope_t *s);
 
-/** True if CLI positional file arguments were given. */
+/** True if CLI positional path arguments were given. */
 bool scope_filters_paths(const scope_t *s);
 
 /* -------------------------------------------------------------------- */

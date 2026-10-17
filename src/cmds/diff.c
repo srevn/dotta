@@ -448,7 +448,7 @@ static void present_diffs_for_direction(
         /* Filter 1: Only process FILES (skip directories) */
         if (item->item_kind != PATH_KIND_FILE) continue;
 
-        /* Filter 2: Check file filter (user-specified files) */
+        /* Filter 2: Check the path filter (user-specified paths) */
         if (!scope_accepts_path(
             scope, item->filesystem_path, item->storage_path, PATH_KIND_FILE
             )) {
@@ -641,7 +641,7 @@ static int print_diff_line_cb(
  *
  * @param view The commit's view (must not be NULL; its rows are the command arena's
  *             and live until command end)
- * @param file_filter File filter for CLI (can be NULL for no filter)
+ * @param path_filter Path filter for CLI (can be NULL for no filter)
  * @param opts Command options (must not be NULL)
  * @param cache Shared content cache (the run's, must not be NULL)
  * @param out Output context (must not be NULL)
@@ -650,7 +650,7 @@ static int print_diff_line_cb(
  */
 static error_t compare_tree_files_to_filesystem(
     const manifest_t *view,
-    const pathspec_t *file_filter,
+    const pathspec_t *path_filter,
     const cmd_diff_options_t *opts,
     content_cache_t *cache,
     output_t *out,
@@ -674,8 +674,8 @@ static error_t compare_tree_files_to_filesystem(
         /* A directory row: no content to diff */
         if (entry->type == PATH_TYPE_DIRECTORY) continue;
 
-        /* Check file filter */
-        if (!pathspec_matches(file_filter, filesystem_path, storage_path, PATH_KIND_FILE)) {
+        /* Check the path filter */
+        if (!pathspec_matches(path_filter, filesystem_path, storage_path, PATH_KIND_FILE)) {
             continue;
         }
 
@@ -791,7 +791,7 @@ static error_t compare_tree_files_to_filesystem(
 }
 
 /**
- * Validate file filter entries against a view
+ * Validate path filter entries against a view
  *
  * Asks each filter entry alone — an exact path by equality or ancestry, a pattern
  * by whether it matches at any rung, either polarity — against the view's rows,
@@ -817,7 +817,7 @@ static error_t compare_tree_files_to_filesystem(
  * each arm asks it before anything is compared: an entry is answered beside a
  * diff as well as in place of one, and the answer is the same under --name-only.
  *
- * @param file_filter File filter to validate (NULL = no filter, nothing to answer)
+ * @param path_filter Path filter to validate (NULL = no filter, nothing to answer)
  * @param view The view the arm compares against (must not be NULL)
  * @param what What the view's paths are on the screen: "active path" for the
  *             enabled view, "path of the commit" for one commit's (must not be
@@ -828,25 +828,25 @@ static error_t compare_tree_files_to_filesystem(
  *         always under no filter
  */
 static bool validate_filter_paths(
-    const pathspec_t *file_filter,
+    const pathspec_t *path_filter,
     const manifest_t *view,
     const char *what,
     output_t *out
 ) {
-    if (!file_filter) return true;
+    if (!path_filter) return true;
 
     manifest_rows_t rows = manifest_rows(view);
     size_t covered = 0;     /* Entries reaching a file row */
     size_t unmatched = 0;   /* Entries reaching nothing, each warned */
 
-    for (size_t e = 0; e < pathspec_count(file_filter); e++) {
+    for (size_t e = 0; e < pathspec_count(path_filter); e++) {
         /* The row the entry reaches: a file row ends the search, content being
          * what a diff shows, and a directory row stands until one does */
         const manifest_row_t *reached = NULL;
         for (size_t i = 0; i < rows.count; i++) {
             const manifest_row_t *row = rows.entries[i];
             if (!pathspec_entry_matches_at(
-                file_filter, e,
+                path_filter, e,
                 row->filesystem_path,
                 row->storage_path,
                 path_type_kind(row->type)
@@ -864,7 +864,7 @@ static bool validate_filter_paths(
         }
 
         /* A directory row alone has nothing to diff; no row at all is warned */
-        pathspec_entry_t entry = pathspec_entry_at(file_filter, e);
+        pathspec_entry_t entry = pathspec_entry_at(path_filter, e);
         if (reached && entry.glob) {
             output_info(
                 out, OUTPUT_NORMAL,
@@ -948,7 +948,7 @@ static error_t diff_commit_to_workspace(
      * set). */
     const string_array_t *searched = scope_profiles(scope);
     const string_array_t *filter = scope_filters_profiles(scope) ? searched : NULL;
-    const pathspec_t *file_filter = scope_paths(scope);
+    const pathspec_t *path_filter = scope_paths(scope);
 
     error_t err = NULL;
     git_commit *commit = NULL;
@@ -1014,21 +1014,21 @@ static error_t diff_commit_to_workspace(
      * anything is compared, as the workspace arm answers it over its own. Where
      * no entry reaches content, nothing can diff, and the answers are the whole
      * report. */
-    if (!validate_filter_paths(file_filter, historical, "path of the commit", out)) {
+    if (!validate_filter_paths(path_filter, historical, "path of the commit", out)) {
         goto cleanup;
     }
 
     /* Step 6: Compare the commit's view against the current filesystem */
     size_t diff_count = 0;
     err = compare_tree_files_to_filesystem(
-        historical, file_filter, opts, cache, out, &diff_count
+        historical, path_filter, opts, cache, out, &diff_count
     );
     if (err) goto cleanup;
 
     /* Under a filter the comparison passed over every row outside it, so an empty
      * one claims the scope, in the workspace arm's words; else the whole */
     if (diff_count == 0 && !opts->name_only) {
-        if (file_filter) {
+        if (path_filter) {
             output_info(out, OUTPUT_NORMAL, "No differences in scope");
         } else {
             output_info(
@@ -1148,7 +1148,7 @@ static error_t diff_commits(
     /* The profiles -p names, or NULL: every enabled one */
     const string_array_t *filter = scope_filters_profiles(scope)
         ? scope_profiles(scope) : NULL;
-    const pathspec_t *file_filter = scope_paths(scope);
+    const pathspec_t *path_filter = scope_paths(scope);
 
     error_t err = NULL;
     git_commit *commit1 = NULL;
@@ -1201,12 +1201,12 @@ static error_t diff_commits(
      * selection is borrowed for the call: libgit2 reads the payload only while
      * generating. */
     delta_select_t selection = {
-        .filter = file_filter, .mounts = mounts, .profile = profile,
+        .filter = path_filter, .mounts = mounts, .profile = profile,
         .arena  = arena
     };
     git_diff_options diff_opts;
     git_diff_options_init(&diff_opts, GIT_DIFF_OPTIONS_VERSION);
-    if (file_filter) {
+    if (path_filter) {
         diff_opts.notify_cb = select_delta;
         diff_opts.payload = &selection;
     }
@@ -1423,7 +1423,7 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
      *                    the order the historical arms' search asks in).
      *   scope_profiles — the profiles that search asks: -p's where it names any
      *                    (scope_filters_profiles), else the enabled set.
-     *   scope_paths    — CLI positional file filter (the range arm's delta
+     *   scope_paths    — CLI positional path filter (the range arm's delta
      *                    selection, the commit arm's comparison, and the coverage
      *                    answers both arms with a view give).
      *   the predicates — the workspace arm's presentation (scope_accepts_path,
@@ -1433,8 +1433,8 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     scope_inputs_t scope_inputs = {
         .profiles      = opts->profiles,
         .profile_count = opts->profile_count,
-        .files         = opts->files,
-        .file_count    = opts->file_count,
+        .paths         = opts->paths,
+        .path_count    = opts->path_count,
     };
     error_t err = scope_build(repo, manifest, &scope_inputs, ctx->arena, &scope);
     if (err) return err;
@@ -1473,7 +1473,7 @@ error_t cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
 
 /* Command-local positional classes. Start at 1 to reserve 0 for the engine's
  * "unclassified" sentinel (see args.h:args_class_t). */
-enum diff_class { DIFF_CLASS_FILE = 1, DIFF_CLASS_GIT_REF, DIFF_CLASS_PROFILE, };
+enum diff_class { DIFF_CLASS_PATH = 1, DIFF_CLASS_GIT_REF, DIFF_CLASS_PROFILE, };
 
 /**
  * Positional classifier for diff.
@@ -1481,7 +1481,7 @@ enum diff_class { DIFF_CLASS_FILE = 1, DIFF_CLASS_GIT_REF, DIFF_CLASS_PROFILE, }
  * Three-way split, each bucket claimed by a token that announces itself and the
  * last taking what announces nothing:
  *   - Looks like a ref → git_refs[] bucket (diff mode selector).
- *   - Announces a path → files[] bucket (workspace file filter).
+ *   - Announces a path → paths[] bucket (path filter).
  *   - Else             → profiles[] bucket (profile filter).
  *
  * The commit's shape is asked first, so a revision whose pattern holds a glob's
@@ -1495,7 +1495,7 @@ enum diff_class { DIFF_CLASS_FILE = 1, DIFF_CLASS_GIT_REF, DIFF_CLASS_PROFILE, }
  */
 static args_class_t diff_classify(const char *tok) {
     if (refspec_looks_like_commit(tok)) return DIFF_CLASS_GIT_REF;
-    if (path_input_announces_path(tok)) return DIFF_CLASS_FILE;
+    if (path_input_announces_path(tok)) return DIFF_CLASS_PATH;
     return DIFF_CLASS_PROFILE;
 }
 
@@ -1604,10 +1604,10 @@ static const args_opt_t diff_opts[] = {
         cmd_diff_options_t,name_only,
         "Print changed file names only"
     ),
-    /* Classified positionals: files go to files[], git refs to git_refs[],
+    /* Classified positionals: paths go to paths[], git refs to git_refs[],
      * everything else to profiles[]. The classify() function above decides. */
     ARGS_POSITIONAL(
-        DIFF_CLASS_FILE,   cmd_diff_options_t, files, file_count
+        DIFF_CLASS_PATH,   cmd_diff_options_t, paths, path_count
     ),
     ARGS_POSITIONAL(
         DIFF_CLASS_GIT_REF,cmd_diff_options_t, git_refs, git_ref_count
@@ -1621,13 +1621,13 @@ static const args_opt_t diff_opts[] = {
 const args_command_t spec_diff = {
     .name         = "diff",
     .summary      = "Show differences between profiles and filesystem",
-    .usage        = "%s diff [options] [<commit>] [<commit>] [<file>...]",
+    .usage        = "%s diff [options] [<commit>] [<commit>] [<path>...]",
     .description  =
         "Modes:\n"
         "  (no args)             Workspace diff (profile <-> filesystem).\n"
         "  <commit>              Commit -> workspace.\n"
         "  <commit> <commit>     Commit -> commit (must share a profile).\n"
-        "  [<file>...]           Restrict any mode to the named files.\n",
+        "  [<path>...]           Restrict any mode to the named paths.\n",
     .examples     =
         "  %s diff                          # Preview apply (default)\n"
         "  %s diff --name-only              # Only changed file names\n"

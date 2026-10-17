@@ -1,5 +1,5 @@
 /**
- * add.c - Add files to profiles
+ * add.c - Add files and directories to profiles
  */
 
 #include "cmds/add.h"
@@ -217,7 +217,7 @@ typedef struct {
  * The prefix is folded and the tail is not: the decision is about where the
  * argument was *spelled from*, and folding the tail first destroys it —
  * `<target>/../secret` folds to a path outside the target, would be re-rooted
- * under it, and would name a different file that may well exist. Past the boundary
+ * under it, and would name a different path that may well exist. Past the boundary
  * the tail is read as typed: a link inside the jail that reaches outside is typed
  * inside and named for where it lands.
  *
@@ -772,7 +772,7 @@ static error_t add_collect(
  *         the path
  */
 static error_t add_refuse_excluded(
-    const add_walk_t *walk, const char *file, const manifest_row_t *held,
+    const add_walk_t *walk, const char *path, const manifest_row_t *held,
     const char *filesystem_path, const char *storage_path, path_kind_t kind
 ) {
     arena_t *arena = walk->ctx->arena;
@@ -798,7 +798,7 @@ static error_t add_refuse_excluded(
 
         /* The operation's own -e: this command said it, and nothing is offered. */
         if (verdict.origin == IGNORE_ORIGIN_CLI) {
-            return error_create(ERR_INVALID_ARG, "'%s' is ignored by %s", file, rule);
+            return error_create(ERR_INVALID_ARG, "'%s' is ignored by %s", path, rule);
         }
 
         /* No pattern reaches the rung: the switch is Git's rules' way past, and
@@ -807,12 +807,12 @@ static error_t add_refuse_excluded(
         if (!negation && verdict.origin == IGNORE_ORIGIN_SOURCE) {
             return error_create(
                 ERR_INVALID_ARG, "'%s' is ignored by %s, which no -e re-opens; "
-                "respect_gitignore = false turns Git's rules off", file, rule
+                "respect_gitignore = false turns Git's rules off", path, rule
             );
         }
         if (!negation) {
             return error_create(
-                ERR_INVALID_ARG, "'%s' is ignored by %s, which no -e re-opens", file, rule
+                ERR_INVALID_ARG, "'%s' is ignored by %s, which no -e re-opens", path, rule
             );
         }
 
@@ -840,13 +840,13 @@ static error_t add_refuse_excluded(
     if (err) {
         return error_wrap(
             err, "Cannot tell whether '%s' is ignored by Git's ignore rules; "
-            "respect_gitignore = false turns Git's rules off", file
+            "respect_gitignore = false turns Git's rules off", path
         );
     }
     if (offered.count == 0) return NULL;
 
     return error_create(
-        ERR_INVALID_ARG, "'%s' is ignored by %s; -e %s %s it%s", file,
+        ERR_INVALID_ARG, "'%s' is ignored by %s; -e %s %s it%s", path,
         ignore_verdict_describe(arena, &first),
         string_array_join(arena, &offered, " -e "),
         offered.count == 1 ? "re-opens" : "re-open",
@@ -1520,7 +1520,7 @@ static error_t add_commit(
  * reads, since the new HEAD does not have them.
  *
  * Target Update (existing profile):
- *   When adding custom/ files to an already-enabled profile, the target must be
+ *   When adding custom/ paths to an already-enabled profile, the target must be
  *   stored in state BEFORE the view is built — the same target-before-build
  *   ordering as the new profile's enable. Written only when the run brought one;
  *   the pre-flight refused a differing value, so the UPSERT binds an unbound
@@ -1987,8 +1987,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_ADD,
         .profile    = opts->profile,
-        .files      = opts->files,
-        .file_count = opts->file_count,
+        .paths      = opts->paths,
+        .path_count = opts->path_count,
         .dry_run    = opts->dry_run,
     };
 
@@ -2047,12 +2047,12 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * places: the absent path's clause, the three sentences the dedup gate owes,
      * the choice of name, and the membership gate that is the one place a second
      * name for one path can be born. */
-    for (size_t i = 0; i < opts->file_count; i++) {
-        const char *file = opts->files[i];
+    for (size_t i = 0; i < opts->path_count; i++) {
+        const char *path = opts->paths[i];
         const char *filesystem_path = NULL;
         const char *typed = NULL;   /* The name the user wrote, or NULL for a spelling */
 
-        if (label_prefixes(file)) {
+        if (label_prefixes(path)) {
             /* A storage shape, read by the one resolver that reads input shapes
              * — a name and never a path, since the same predicate dispatched
              * here. It validates the shape and sheds a trailing slash, so `add
@@ -2060,7 +2060,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * and `add p home/` names the namespace's own directory as `add p
              * ~` names the same place by its spelling (infra/path.h). */
             path_input_t arg;
-            err = path_input_resolve(file, ctx->arena, &arg);
+            err = path_input_resolve(path, ctx->arena, &arg);
             if (err) goto cleanup;
 
             /* The keys the predicate above can hand this head, and what each is
@@ -2088,7 +2088,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             if (!filesystem_path) {
                 err = error_create(
                     ERR_INVALID_ARG, "'%s' has no filesystem path for '%s' on this "
-                    "machine; --target gives the profile one", file, opts->profile
+                    "machine; --target gives the profile one", path, opts->profile
                 );
                 goto cleanup;
             }
@@ -2099,9 +2099,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * names what it folded; the argument, as typed, is said over it —
              * the one key the user wrote, and the one every refusal of this
              * argument's steps is said under (base/error.h "Messages"). */
-            err = add_spell(file, target, ctx->arena, &filesystem_path);
+            err = add_spell(path, target, ctx->arena, &filesystem_path);
             if (err) {
-                err = error_wrap(err, "Cannot add '%s'", file);
+                err = error_wrap(err, "Cannot add '%s'", path);
                 goto cleanup;
             }
         }
@@ -2127,7 +2127,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 if (typed) {
                     err = error_create(
                         ERR_NOT_FOUND, "Path not found: %s (storage path '%s'); ./%s "
-                        "reads it relative to here", filesystem_path, file, file
+                        "reads it relative to here", filesystem_path, path, path
                     );
                     goto cleanup;
                 }
@@ -2140,11 +2140,11 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                  * beside the target it was re-rooted beneath, which is the way
                  * out: one spelled as the target is spelled, or relative to it,
                  * is read inside it as typed. */
-                if (target && file[0] == '/') {
-                    if (!add_inside(file, target, ctx->arena)) {
+                if (target && path[0] == '/') {
+                    if (!add_inside(path, target, ctx->arena)) {
                         err = error_create(
                             ERR_NOT_FOUND, "Path not found: %s ('%s' re-rooted beneath "
-                            "the target at %s)", filesystem_path, file, target
+                            "the target at %s)", filesystem_path, path, target
                         );
                         goto cleanup;
                     }
@@ -2162,7 +2162,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 err = error_create(
                     ERR_INVALID_ARG,
                     "'%s' is a %s, and a profile holds files, symlinks and "
-                    "directories", file, fs_stat_noun(&st)
+                    "directories", path, fs_stat_noun(&st)
                 );
                 goto cleanup;
 
@@ -2234,7 +2234,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * name it, or name a directory above it, is refused here as any ignored
          * directory is, unless the profile already tracks it; at "/" the path
          * names no entry and asks nothing. */
-        err = add_refuse_excluded(&walk, file, held, filesystem_path, storage_path, kind);
+        err = add_refuse_excluded(&walk, path, held, filesystem_path, storage_path, kind);
         if (err) goto cleanup;
 
         /* A kind the claim contradicts: what stands there now is not what the
@@ -2323,7 +2323,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * a claim they did not mention is not this command's to do. */
         err = profile_admit(draft, kind, storage_path);
         if (err) {
-            err = error_wrap(err, "Cannot add '%s'", file);
+            err = error_wrap(err, "Cannot add '%s'", path);
             goto cleanup;
         }
 
@@ -2336,7 +2336,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             err = add_collect(&walk, scratch, filesystem_path, 0);
             arena_free(scratch);
             if (err) {
-                err = error_wrap(err, "Cannot add '%s'", file);
+                err = error_wrap(err, "Cannot add '%s'", path);
                 goto cleanup;
             }
 
@@ -2881,10 +2881,10 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Route the raw positional bucket into `profile` and `files[]` — the one place
+ * Route the raw positional bucket into `profile` and `paths[]` — the one place
  * the arguments' shape is judged, which cmd_add trusts:
- *   1. -p/--profile was given: every positional is a file path.
- *   2. -p not given: first positional is the profile, rest are files.
+ *   1. -p/--profile was given: every positional is a path.
+ *   2. -p not given: first positional is the profile, rest are paths.
  *
  * The count check lives here, after the routing, so the error message can reference
  * the effective invariant rather than a raw count.
@@ -2897,18 +2897,18 @@ static error_t add_post_parse(
     cmd_add_options_t *o = opts_v;
 
     if (o->profile != NULL) {
-        o->files = o->positional_args;
-        o->file_count = o->positional_count;
+        o->paths = o->positional_args;
+        o->path_count = o->positional_count;
     } else {
         if (o->positional_count == 0) {
             return error_create(ERR_INVALID_ARG, "Profile name is required");
         }
         o->profile = o->positional_args[0];
-        o->files = o->positional_args + 1;
-        o->file_count = o->positional_count - 1;
+        o->paths = o->positional_args + 1;
+        o->path_count = o->positional_count - 1;
     }
 
-    if (o->file_count == 0) {
+    if (o->path_count == 0) {
         return error_create(ERR_INVALID_ARG, "At least one path is required");
     }
     return NULL;

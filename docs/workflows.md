@@ -4,10 +4,10 @@ Common day-to-day workflows with dotta.
 
 ## The Core Cycle: Add, Apply, Update
 
-### Adding Files
+### Adding Files and Directories
 
 ```bash
-# Add files to a profile (first arg is profile name)
+# Add files or directories to a profile (first arg is profile name)
 dotta add global ~/.bashrc
 dotta add darwin ~/.config/fish
 
@@ -58,7 +58,7 @@ dotta apply --keep-orphans
 After editing deployed files in place:
 
 ```bash
-# Commit all modified files back to their profiles
+# Commit every modified path back to its profile
 dotta update
 
 # Update a specific file

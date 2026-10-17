@@ -11,6 +11,7 @@
 #   DOTTA_REPO_DIR    - Path to dotta repository
 #   DOTTA_COMMAND     - Command being executed ("apply")
 #   DOTTA_PROFILE     - Space-separated list of profiles being applied
+#   DOTTA_PATH_COUNT  - Always "0" for apply
 #   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
 #
 

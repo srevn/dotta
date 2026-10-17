@@ -1,63 +1,40 @@
 #!/usr/bin/env bash
 #
-# post-add hook - Runs after adding files to a profile
+# post-add hook - Runs after adding files or directories to a profile
 #
-# This script runs after dotta has successfully added files to a profile.
-# Use it to commit changes, trigger CI/CD, notify team, etc.
+# This script runs after dotta has added paths to a profile and committed
+# them to its branch. Use it to publish the profile, trigger CI/CD, notify
+# team, etc.
 #
 # Environment variables provided by dotta:
 #   DOTTA_REPO_DIR    - Path to dotta repository
 #   DOTTA_COMMAND     - Command being executed ("add")
 #   DOTTA_PROFILE     - Profile name that was modified
-#   DOTTA_FILE_COUNT  - Number of files
-#   DOTTA_FILE_0      - First file path (0-indexed)
-#   DOTTA_FILE_1      - Second file path
-#   DOTTA_FILE_N      - Nth file path (where N = 0 to COUNT-1)
+#   DOTTA_PATH_COUNT  - Number of paths, as given: each a file or a directory
+#   DOTTA_PATH_0      - First path (0-indexed)
+#   DOTTA_PATH_1      - Second path
+#   DOTTA_PATH_N      - Nth path (where N = 0 to COUNT-1)
 #   DOTTA_DRY_RUN     - Always "0" — post-add does not fire on dry-run
 #
 
 set -euo pipefail
 
-echo "Post-add: Processing files added to profile '$DOTTA_PROFILE'..."
+echo "Post-add: profile '$DOTTA_PROFILE' was given $DOTTA_PATH_COUNT path(s):"
+for ((i=0; i<DOTTA_PATH_COUNT; i++)); do
+    var_name="DOTTA_PATH_$i"
+    echo "  - ${!var_name}"
+done
 
-# File count is provided by dotta
-echo "Added $DOTTA_FILE_COUNT file(s) to profile."
-
-# Example: Auto-commit to git (if repo_dir is a git repo)
-if [[ -d "$DOTTA_REPO_DIR/.git" ]]; then
-    echo "Committing changes to git..."
-    cd "$DOTTA_REPO_DIR"
-
-    # Check if there are changes
-    if ! git diff --quiet || ! git diff --cached --quiet; then
-        git add -A
-
-        # Build file list for commit message
-        file_list=""
-        for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
-            var_name="DOTTA_FILE_$i"
-            file_list+="  - ${!var_name}"$'\n'
-        done
-
-        # Create commit message
-        commit_msg="Add files to $DOTTA_PROFILE profile
-
-Added files:
-$file_list
-Auto-committed by dotta post-add hook"
-
-        git commit -m "$commit_msg"
-        echo "  Committed to git successfully!"
-
-        # Example: Auto-push (use with caution!)
-        # if git remote | grep -q origin; then
-        #     echo "Pushing to origin..."
-        #     git push origin "$(git branch --show-current)"
-        # fi
-    else
-        echo "  No changes to commit."
-    fi
-fi
+# Example: Publish the profile's branch (uncomment to enable). dotta committed
+# the add itself, so the push is sync's: prefer 'dotta sync' over a raw
+# 'git push' so divergence handling, hooks, and credential plumbing all behave
+# consistently.
+# if command -v dotta &>/dev/null; then
+#     echo "Syncing profile '$DOTTA_PROFILE' to remote..."
+#     dotta sync -p "$DOTTA_PROFILE" || {
+#         echo "  WARNING: dotta sync returned non-zero exit code" >&2
+#     }
+# fi
 
 echo "Post-add completed successfully!"
 exit 0

@@ -65,7 +65,7 @@
  *     reach the array through dotta_registry() so the cmds layer never names
  *     the registry symbol.
  *
- * Ordered for root-help readability: setup → file ops → deploy/undo → inspect →
+ * Ordered for root-help readability: setup → path ops → deploy/undo → inspect →
  * remote → profile/remote mgmt → config → passthrough → special. Every projection
  * (dispatch, help, fish export) walks this array, so the order is the display
  * order everywhere. NULL-terminated for `for (size_t i = 0; reg[i] != NULL; i++)`

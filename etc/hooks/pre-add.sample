@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# pre-add hook - Runs before adding files to a profile
+# pre-add hook - Runs before adding files or directories to a profile
 #
-# This script runs before dotta adds files to a profile.
+# This script runs before dotta adds paths to a profile.
 # Use it to validate file contents, check for secrets, etc.
 #
 # Exit with non-zero status to abort the add operation.
@@ -11,10 +11,10 @@
 #   DOTTA_REPO_DIR    - Path to dotta repository
 #   DOTTA_COMMAND     - Command being executed ("add")
 #   DOTTA_PROFILE     - Profile name being modified
-#   DOTTA_FILE_COUNT  - Number of files
-#   DOTTA_FILE_0      - First file path (0-indexed)
-#   DOTTA_FILE_1      - Second file path
-#   DOTTA_FILE_N      - Nth file path (where N = 0 to COUNT-1)
+#   DOTTA_PATH_COUNT  - Number of paths, as given: each a file or a directory
+#   DOTTA_PATH_0      - First path (0-indexed)
+#   DOTTA_PATH_1      - Second path
+#   DOTTA_PATH_N      - Nth path (where N = 0 to COUNT-1)
 #   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
 #
 
@@ -22,37 +22,53 @@ set -euo pipefail
 
 echo "Pre-add: Validating files before adding to profile '$DOTTA_PROFILE'..."
 
-# Example: Check for secrets in files
-echo "Checking for potential secrets..."
 secrets_found=0
 
-# Iterate through files using indexed variables (handles spaces correctly)
-for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
-    # Get file path from indexed variable
-    var_name="DOTTA_FILE_$i"
-    file="${!var_name}"
+# Check one regular file: secrets, then its size
+check_file() {
+    local file="$1"
 
-    if [[ -f "$file" ]]; then
-        # Check for common secret patterns
-        if grep -qiE '(password|secret|api[_-]?key|token|private[_-]?key)' "$file" 2>/dev/null; then
-            echo "  WARNING: Potential secret found in: $file" >&2
-            echo "  Please review this file carefully before adding!" >&2
-            secrets_found=$((secrets_found + 1))
-        fi
-
-        # Check for AWS credentials
-        if grep -qE 'AKIA[0-9A-Z]{16}' "$file" 2>/dev/null; then
-            echo "  ERROR: AWS access key detected in: $file" >&2
-            exit 1
-        fi
-
-        # Check for private SSH keys
-        if grep -q 'BEGIN.*PRIVATE KEY' "$file" 2>/dev/null; then
-            echo "  ERROR: Private SSH key detected in: $file" >&2
-            echo "  Do not add private keys to dotfiles!" >&2
-            exit 1
-        fi
+    # Check for common secret patterns
+    if grep -qiE '(password|secret|api[_-]?key|token|private[_-]?key)' "$file" 2>/dev/null; then
+        echo "  WARNING: Potential secret found in: $file" >&2
+        echo "  Please review this file carefully before adding!" >&2
+        secrets_found=$((secrets_found + 1))
     fi
+
+    # Check for AWS credentials
+    if grep -qE 'AKIA[0-9A-Z]{16}' "$file" 2>/dev/null; then
+        echo "  ERROR: AWS access key detected in: $file" >&2
+        exit 1
+    fi
+
+    # Check for private SSH keys
+    if grep -q 'BEGIN.*PRIVATE KEY' "$file" 2>/dev/null; then
+        echo "  ERROR: Private SSH key detected in: $file" >&2
+        echo "  Do not add private keys to dotfiles!" >&2
+        exit 1
+    fi
+
+    # Warn if the file is larger than 1MB
+    local size
+    size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo 0)
+    if [[ $size -gt 1048576 ]]; then
+        echo "  WARNING: Large file ($((size / 1024))KB): $file" >&2
+        echo "  Consider using git-lfs or ignoring this file." >&2
+    fi
+}
+
+echo "Checking for potential secrets and large files..."
+
+# Iterate through the paths using indexed variables (handles spaces correctly).
+# A path is a file or a directory: every regular file at or beneath it is
+# checked, a link left alone, since dotta adds the link and never its target.
+for ((i=0; i<DOTTA_PATH_COUNT; i++)); do
+    var_name="DOTTA_PATH_$i"
+    path="${!var_name}"
+
+    while IFS= read -r -d '' file; do
+        check_file "$file"
+    done < <(find "$path" -type f -print0 2>/dev/null)
 done
 
 if [[ $secrets_found -gt 0 ]]; then
@@ -60,22 +76,6 @@ if [[ $secrets_found -gt 0 ]]; then
     echo "Found $secrets_found file(s) with potential secrets."
     echo "Please review carefully. Proceeding with add..."
 fi
-
-# Example: Validate file sizes
-echo "Checking file sizes..."
-for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
-    var_name="DOTTA_FILE_$i"
-    file="${!var_name}"
-
-    if [[ -f "$file" ]]; then
-        size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo 0)
-        # Warn if file is larger than 1MB
-        if [[ $size -gt 1048576 ]]; then
-            echo "  WARNING: Large file ($((size / 1024))KB): $file" >&2
-            echo "  Consider using git-lfs or ignoring this file." >&2
-        fi
-    fi
-done
 
 echo "Pre-add validation passed!"
 exit 0

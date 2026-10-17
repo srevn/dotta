@@ -135,8 +135,8 @@ Hook scripts run before/after operations. Place executable scripts in the hooks 
 - `DOTTA_PROFILE` -- the profile for add and remove; the space-separated list of profiles for apply, update and sync
 - `DOTTA_REMOTE` -- the remote's name (sync hooks)
 - `DOTTA_DRY_RUN` -- `"1"` if dry-run, `"0"` otherwise (a post-hook never runs on a dry run)
-- `DOTTA_FILE_COUNT` -- number of files (add/remove/update hooks)
-- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... -- individual file paths
+- `DOTTA_PATH_COUNT` -- number of paths, each a file or a directory: add's and update's arguments as given, every path a removal takes a claim at; `0` for apply and sync
+- `DOTTA_PATH_0`, `DOTTA_PATH_1`, ... -- each path
 
 See [`etc/hooks/README.md`](../etc/hooks/README.md) for hook samples and detailed documentation.
 

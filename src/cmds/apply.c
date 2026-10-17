@@ -2255,8 +2255,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     scope_inputs_t scope_inputs = {
         .profiles         = opts->profiles,
         .profile_count    = opts->profile_count,
-        .files            = opts->files,
-        .file_count       = opts->file_count,
+        .paths            = opts->paths,
+        .path_count       = opts->path_count,
         .exclude_patterns = opts->exclude_patterns,
         .exclude_count    = opts->exclude_count,
     };
@@ -2658,7 +2658,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Warn if a file filter was given but matched no managed path at all (what
+    /* Warn if a path filter was given but matched no managed path at all (what
      * a flag withholds counts as matched — the filter found it). Asked after
      * both planners: a path can name an orphan as well as an active row, and
      * finding either is a match. */
@@ -3148,8 +3148,8 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_APPLY,
         .profile    = string_array_join(ctx->arena,scope_profiles(scope),  " "),
-        .files      = NULL,
-        .file_count = 0,
+        .paths      = NULL,
+        .path_count = 0,
         .dry_run    = opts->dry_run,
     };
 
@@ -3413,14 +3413,14 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
 /* Command-local positional classes. Start at 1 to reserve 0 for the engine's
  * "unclassified" sentinel (see args.h:args_class_t). */
-enum apply_class { APPLY_CLASS_FILE = 1, APPLY_CLASS_PROFILE, };
+enum apply_class { APPLY_CLASS_PATH = 1, APPLY_CLASS_PROFILE, };
 
 /**
- * Positional classifier: a token that announces a path goes to files[], and what
+ * Positional classifier: a token that announces a path goes to paths[], and what
  * announces nothing is a profile name (infra/path.h path_input_announces_path).
  */
 static args_class_t apply_classify(const char *tok) {
-    return path_input_announces_path(tok) ? APPLY_CLASS_FILE
+    return path_input_announces_path(tok) ? APPLY_CLASS_PATH
                                           : APPLY_CLASS_PROFILE;
 }
 
@@ -3491,13 +3491,13 @@ static const args_opt_t apply_opts[] = {
         cmd_apply_options_t,verbosity,        DOTTA_VERBOSITY_VERBOSE,
         "Verbose output"
     ),
-    /* Positionals: bare `<file>` tokens append to files[]; bare `<profile>` tokens
+    /* Positionals: bare `<path>` tokens append to paths[]; bare `<profile>` tokens
      * append to profiles[]. The -p/--profile flag above targets the same profiles[]
      * array, so `-p darwin foo` and `darwin foo` produce the same list in argv
      * order. */
     ARGS_POSITIONAL(
-        APPLY_CLASS_FILE,
-        cmd_apply_options_t,files,            file_count
+        APPLY_CLASS_PATH,
+        cmd_apply_options_t,paths,            path_count
     ),
     ARGS_POSITIONAL(
         APPLY_CLASS_PROFILE,
@@ -3509,7 +3509,7 @@ static const args_opt_t apply_opts[] = {
 const args_command_t spec_apply = {
     .name         = "apply",
     .summary      = "Deploy enabled profiles to the filesystem",
-    .usage        = "%s apply [options] [profile|file]...",
+    .usage        = "%s apply [options] [profile|path]...",
     .description  =
         "Converge the filesystem with enabled profiles: deploy new and\n"
         "updated files, prune files orphaned by disabled profiles, and\n"
@@ -3531,10 +3531,10 @@ const args_command_t spec_apply = {
         "  %s apply                            # Deploy all enabled profiles\n"
         "  %s apply --force                    # Lift the consent skips (overwrite, prune)\n"
         "  %s apply -p work                    # Filter to 'work' profile\n"
-        "  %s apply -p work ~/.bashrc          # Profile + file filter\n"
+        "  %s apply -p work ~/.bashrc          # Profile + path filter\n"
         "  %s apply ~/.bashrc ~/.zshrc         # Deploy specific files only\n"
         "  %s apply -n                         # Preview without writing\n"
-        "  %s apply --exclude '.ssh/*'         # Protect matched files\n",
+        "  %s apply --exclude '.ssh/*'         # Protect matched paths\n",
     .epilogue     =
         "See also:\n"
         "  %s status          # Preview pending deployment\n"

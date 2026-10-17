@@ -160,7 +160,7 @@ static error_t remove_list_claims(
  * or two names one binding places together — is one entry: a hook is told the
  * paths the removal reaches, never how many claims stood at each. The first claim
  * at a path places it, so the list keeps the claims' order. A claim this machine
- * places nowhere hands its name instead, the shape a hook comparing DOTTA_FILE_N
+ * places nowhere hands its name instead, the shape a hook comparing DOTTA_PATH_N
  * against $HOME has always received here.
  *
  * Readers: remove_paths (the claims its arguments took) and remove_profile (every
@@ -195,7 +195,7 @@ static string_array_t remove_hook_paths(
  * One path a removal let go, and whether a claim it took stands there
  *
  * A candidate is a path the removal's Git effect no longer claims, joined to
- * the record standing at it. The file route's commit lets go of the claims the
+ * the record standing at it. The path route's commit lets go of the claims the
  * arguments took and the directory entries its prune took once nothing tracked
  * stood beneath them; the profile route lets go of every path whose record names
  * the deleted profile. Only paths bearing this profile's record become candidates
@@ -501,7 +501,7 @@ static error_t remove_profile_candidates(
     size_t count = 0;
 
     /* The profile's claims, each joined to its record by a lookup in the read
-     * (state_find_record), once a path, as the file route joins its arguments'
+     * (state_find_record), once a path, as the path route joins its arguments'
      * (remove_paths_candidates) */
     for (size_t i = 0; i < claim_count; i++) {
         const char *filesystem_path = claims[i].filesystem_path;
@@ -583,9 +583,8 @@ static bool remove_contradicted(
  * A claim this machine places nowhere — an unbound custom/ one — keeps a NULL
  * path and no path argument reaches it; its name still does, which is how such
  * a claim is untracked at all. Nothing stands in for the path: the screens print
- * the name outright, the hook's file list renders it where there is no path to
- * hand over, and the overlap analysis and the record read the NULL as the fact
- * it is.
+ * the name outright, the hooks are handed it where there is no path to hand over,
+ * and the overlap analysis and the record read the NULL as the fact it is.
  *
  * @param ctx Dispatch context (must not be NULL). ctx->run.mounts covers HOME,
  *            ROOT, and every enabled profile's binding.
@@ -1212,8 +1211,8 @@ static error_t remove_paths(
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
         .profile    = opts->profile,
-        .files      = hook_paths.entries,
-        .file_count = hook_paths.count,
+        .paths      = hook_paths.entries,
+        .path_count = hook_paths.count,
         .dry_run    = opts->dry_run,
     };
 
@@ -1602,15 +1601,15 @@ static error_t remove_profile(
     }
 
     /* The hooks are handed the path of every claim the profile goes with, each
-     * once, by the producer the file route's hooks read (remove_hook_paths):
+     * once, by the producer the path route's hooks read (remove_hook_paths):
      * HOME and ROOT place every home/ and root/ claim, and a custom/ claim with
      * no binding here hands its name. The list is the command arena's. */
     const string_array_t hook_paths = remove_hook_paths(ctx->arena, claims, claim_count);
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
         .profile    = opts->profile,
-        .files      = hook_paths.entries,
-        .file_count = hook_paths.count,
+        .paths      = hook_paths.entries,
+        .path_count = hook_paths.count,
         .dry_run    = opts->dry_run,
     };
 
@@ -1945,7 +1944,7 @@ static const args_opt_t remove_opts[] = {
     ARGS_FLAG(
         "i interactive",
         cmd_remove_options_t,interactive,
-        "Prompt for each file"
+        "Prompt for each path"
     ),
     ARGS_FLAG_SET(
         "v verbose",

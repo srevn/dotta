@@ -93,7 +93,7 @@ error_t scope_build(
     /* 4. The path filter: one matcher over both keys a managed path has, each
      *    input read in the key its own shape names (infra/pathspec) — and none,
      *    every path in, where no positional was given. */
-    error_t err = pathspec_create(in->files, in->file_count, arena, &s->paths);
+    error_t err = pathspec_create(in->paths, in->path_count, arena, &s->paths);
     if (err) return err;
 
     /* 5. The -e layer, compiled once (core/ignore): a pattern the grammar refuses

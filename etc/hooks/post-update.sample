@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# post-update hook - Runs after updating profiles with modified files
+# post-update hook - Runs after committing filesystem changes back to profiles
 #
 # This script runs after dotta has committed filesystem-side changes
 # back to the affected profile branches. Use it to push the new
@@ -12,16 +12,17 @@
 #   DOTTA_REPO_DIR    - Path to dotta repository
 #   DOTTA_COMMAND     - Command being executed ("update")
 #   DOTTA_PROFILE     - Space-separated list of profiles that were updated
-#   DOTTA_FILE_COUNT  - Number of files
-#   DOTTA_FILE_0      - First file path (0-indexed)
-#   DOTTA_FILE_1      - Second file path
-#   DOTTA_FILE_N      - Nth file path (where N = 0 to COUNT-1)
+#   DOTTA_PATH_COUNT  - Number of paths given, each a file or a directory;
+#                       0 when the full workspace was updated
+#   DOTTA_PATH_0      - First path (0-indexed)
+#   DOTTA_PATH_1      - Second path
+#   DOTTA_PATH_N      - Nth path (where N = 0 to COUNT-1)
 #   DOTTA_DRY_RUN     - Always "0" — post-update does not fire on dry-run
 #
 
 set -euo pipefail
 
-echo "Post-update: profile(s) '$DOTTA_PROFILE' received $DOTTA_FILE_COUNT change(s)."
+echo "Post-update: profile(s) '$DOTTA_PROFILE' updated."
 
 # Example: Push the updated profile branches upstream.
 # Prefer 'dotta sync' over a raw 'git push' so divergence handling, hooks,

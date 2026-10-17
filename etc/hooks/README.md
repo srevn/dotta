@@ -44,6 +44,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "apply"
 - `DOTTA_PROFILE` - Space-separated list of profiles being applied
+- `DOTTA_PATH_COUNT` - Always "0" for apply
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
 
 **Exit Behavior:**
@@ -66,6 +67,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "apply"
 - `DOTTA_PROFILE` - Space-separated list of profiles being applied
+- `DOTTA_PATH_COUNT` - Always "0" for apply
 - `DOTTA_DRY_RUN` - Always "0" — post-apply does not fire on dry-run
 
 **Exit Behavior:**
@@ -73,7 +75,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 ### `pre-add`
 
-**When:** Before adding files to a profile
+**When:** Before adding files or directories to a profile
 **Use For:** Validating file contents, checking for secrets, size checks
 
 **Example Use Cases:**
@@ -87,8 +89,8 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "add"
 - `DOTTA_PROFILE` - Profile name being modified
-- `DOTTA_FILE_COUNT` - Number of files
-- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
+- `DOTTA_PATH_COUNT` - Number of paths: the arguments as given (file or dir)
+- `DOTTA_PATH_0`, `DOTTA_PATH_1`, ... - Each path, as given (0-indexed)
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
 
 **Exit Behavior:**
@@ -97,12 +99,11 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 ### `post-add`
 
-**When:** After adding files to a profile
-**Use For:** Auto-committing, CI/CD triggers, team notifications
+**When:** After adding files or directories to a profile
+**Use For:** Publishing the profile, CI/CD triggers, team notifications
 
 **Example Use Cases:**
-- Auto-commit changes to git
-- Push to remote repository
+- Push the profile to its remote with `dotta sync` (dotta committed the add)
 - Trigger CI/CD pipelines
 - Send Slack/Discord notifications
 - Generate profile documentation
@@ -112,8 +113,8 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "add"
 - `DOTTA_PROFILE` - Profile name that was modified
-- `DOTTA_FILE_COUNT` - Number of files
-- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
+- `DOTTA_PATH_COUNT` - Number of paths: the arguments as given (file or dir)
+- `DOTTA_PATH_0`, `DOTTA_PATH_1`, ... - Each path, as given (0-indexed)
 - `DOTTA_DRY_RUN` - Always "0" — post-add does not fire on dry-run
 
 **Exit Behavior:**
@@ -121,11 +122,11 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 ### `pre-remove`
 
-**When:** Before removing files from a profile or deleting a profile
-**Use For:** Backing up files, validating removal, preventing accidental deletion
+**When:** Before removing paths from a profile or deleting a profile
+**Use For:** Backing up paths, validating removal, preventing accidental deletion
 
 **Example Use Cases:**
-- Create backup of files about to be removed
+- Create backup of the paths about to be removed
 - Prevent removal of critical config files
 - Notify team about profile deletions
 
@@ -133,11 +134,11 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "remove"
 - `DOTTA_PROFILE` - Profile name being modified or deleted
-- `DOTTA_FILE_COUNT` - Number of entries: one per path the removal takes a claim
+- `DOTTA_PATH_COUNT` - Number of paths: one per path the removal takes a claim
   at, a directory the profile tracks as well as a file — every path the profile
   tracks, when it is deleted — each once, however many claims stand there; a
   directory the profile only passes through is none of them
-- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Each entry's path (0-indexed)
+- `DOTTA_PATH_0`, `DOTTA_PATH_1`, ... - Each path (0-indexed)
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
 
 **Exit Behavior:**
@@ -146,7 +147,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 ### `post-remove`
 
-**When:** After removing files from a profile or deleting a profile
+**When:** After removing paths from a profile or deleting a profile
 **Use For:** Cleanup, notifications, auditing
 
 **Example Use Cases:**
@@ -159,8 +160,8 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "remove"
 - `DOTTA_PROFILE` - Profile name that was modified or deleted
-- `DOTTA_FILE_COUNT` - Number of entries: the ones `pre-remove` was handed
-- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Each entry's path (0-indexed)
+- `DOTTA_PATH_COUNT` - Number of paths: the ones `pre-remove` was handed
+- `DOTTA_PATH_0`, `DOTTA_PATH_1`, ... - Each path (0-indexed)
 - `DOTTA_DRY_RUN` - Always "0" — post-remove does not fire on dry-run
 
 **Exit Behavior:**
@@ -168,7 +169,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 ### `pre-update`
 
-**When:** Before updating profiles with modified files
+**When:** Before committing filesystem changes back to profiles
 **Use For:** Validating changes, checking for conflicts, creating checkpoints
 
 **Example Use Cases:**
@@ -181,8 +182,9 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "update"
 - `DOTTA_PROFILE` - Space-separated list of profiles being updated
-- `DOTTA_FILE_COUNT` - Number of files (if specific files given)
-- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
+- `DOTTA_PATH_COUNT` - Number of paths: the arguments as given (file or dir); 0
+  on a run given none, which updates every modified path
+- `DOTTA_PATH_0`, `DOTTA_PATH_1`, ... - Each path, as given (0-indexed)
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
 
 **Exit Behavior:**
@@ -191,7 +193,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 ### `post-update`
 
-**When:** After updating profiles with modified files
+**When:** After committing filesystem changes back to profiles
 **Use For:** Syncing changes, notifications, triggering deployments
 
 **Example Use Cases:**
@@ -204,8 +206,9 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "update"
 - `DOTTA_PROFILE` - Space-separated list of profiles that were updated
-- `DOTTA_FILE_COUNT` - Number of files
-- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
+- `DOTTA_PATH_COUNT` - Number of paths: the arguments as given (file or dir); 0
+  on a run given none, which updates every modified path
+- `DOTTA_PATH_0`, `DOTTA_PATH_1`, ... - Each path, as given (0-indexed)
 - `DOTTA_DRY_RUN` - Always "0" — post-update does not fire on dry-run
 
 **Exit Behavior:**
@@ -227,7 +230,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_COMMAND` - Always "sync"
 - `DOTTA_PROFILE` - Space-separated list of profiles being synced
 - `DOTTA_REMOTE` - Resolved remote name (e.g., "origin")
-- `DOTTA_FILE_COUNT` - Always "0" for sync
+- `DOTTA_PATH_COUNT` - Always "0" for sync
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
 
 **Exit Behavior:**
@@ -257,7 +260,7 @@ asymmetry every hook pair carries.
 - `DOTTA_COMMAND` - Always "sync"
 - `DOTTA_PROFILE` - Space-separated list of profiles that were synced
 - `DOTTA_REMOTE` - Resolved remote name (e.g., "origin")
-- `DOTTA_FILE_COUNT` - Always "0" for sync
+- `DOTTA_PATH_COUNT` - Always "0" for sync
 - `DOTTA_DRY_RUN` - Always "0" — post-sync does not fire on dry-run
 
 **Exit Behavior:**
@@ -318,13 +321,13 @@ a `sudo`'d one. `HOME` is the directory dotta itself resolved and classified
 path tested against it gets the answer dotta would give:
 
 ```bash
-case "$file" in
+case "$path" in
     "$HOME"/*) echo "under home/" ;;
 esac
 ```
 
-`DOTTA_FILE_*` is not guaranteed absolute: several commands pass the paths on
-to the hook as they received them. Make a path absolute before comparing it.
+`DOTTA_PATH_*` is not guaranteed absolute: add and update pass the paths on to
+the hook as they received them. Make a path absolute before comparing it.
 
 Sudo's own variables (`SUDO_USER`, `SUDO_UID`, ...) are left as they were, so
 a hook that wants to know how the run was started can still tell.
@@ -387,8 +390,8 @@ exit 0
 
 1. **Never hardcode secrets** in hook scripts
 2. **Use environment variables** for sensitive data
-3. **Validate inputs:** Always validate file paths from `DOTTA_FILE_N` variables
-4. **Use indexed variables:** Iterate via `DOTTA_FILE_COUNT` and `DOTTA_FILE_N` for safe file handling
+3. **Validate inputs:** Always validate the paths from `DOTTA_PATH_N` variables — each a file or a directory
+4. **Use indexed variables:** Iterate via `DOTTA_PATH_COUNT` and `DOTTA_PATH_N` for safe path handling
 5. **Be careful with auto-push:** Could expose sensitive data
 6. **Limit permissions:** Hooks should only modify what they need
 
@@ -407,9 +410,9 @@ Test hooks manually:
 export DOTTA_REPO_DIR=~/.local/share/dotta/repo
 export DOTTA_COMMAND=add
 export DOTTA_PROFILE=test
-export DOTTA_FILE_COUNT=2
-export DOTTA_FILE_0="file1.txt"
-export DOTTA_FILE_1="file2.txt"
+export DOTTA_PATH_COUNT=2
+export DOTTA_PATH_0="file1.txt"
+export DOTTA_PATH_1="dir1"
 export DOTTA_DRY_RUN=0
 
 # Run hook
@@ -434,20 +437,15 @@ rsync -a --files-from=<(dotta list --files) ~ "$backup_dir/" || true
 echo "Backup created: $backup_dir"
 ```
 
-### Workflow 2: Auto-Commit on Add
+### Workflow 2: Push on Add
 
 ```bash
 # post-add
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$DOTTA_REPO_DIR"
-
-if ! git diff --quiet; then
-    git add -A
-    git commit -m "Add to $DOTTA_PROFILE: $DOTTA_FILE_COUNT files"
-    git push origin main
-fi
+# dotta committed the add to the profile's branch itself; publish it
+dotta sync -p "$DOTTA_PROFILE"
 ```
 
 ### Workflow 3: Secret Detection
@@ -457,13 +455,14 @@ fi
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Iterate through all files using indexed variables
-for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
-    var_name="DOTTA_FILE_$i"
-    file="${!var_name}"
+# Iterate through all paths using indexed variables: each is a file or a
+# directory, and grep -r reads a file and every file beneath a directory alike
+for ((i=0; i<DOTTA_PATH_COUNT; i++)); do
+    var_name="DOTTA_PATH_$i"
+    path="${!var_name}"
 
-    if grep -qiE '(api[_-]?key|password|secret|token)' "$file"; then
-        echo "ERROR: Potential secret in $file" >&2
+    if grep -rqiE '(api[_-]?key|password|secret|token)' "$path"; then
+        echo "ERROR: Potential secret in $path" >&2
         exit 1
     fi
 done

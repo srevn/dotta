@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# post-remove hook - Runs after removing files or deleting a profile
+# post-remove hook - Runs after removing paths or deleting a profile
 #
-# This script runs after dotta has removed files from a profile or
+# This script runs after dotta has removed paths from a profile or
 # deleted a profile. Use it for audit logging, notifications, or
 # cleanup of related external resources.
 #
@@ -12,10 +12,10 @@
 #   DOTTA_REPO_DIR    - Path to dotta repository
 #   DOTTA_COMMAND     - Command being executed ("remove")
 #   DOTTA_PROFILE     - Profile name that was modified or deleted
-#   DOTTA_FILE_COUNT  - Number of entries: the ones pre-remove was handed
-#   DOTTA_FILE_0      - First entry's path (0-indexed)
-#   DOTTA_FILE_1      - Second entry's path
-#   DOTTA_FILE_N      - Nth entry's path (where N = 0 to COUNT-1)
+#   DOTTA_PATH_COUNT  - Number of paths: the ones pre-remove was handed
+#   DOTTA_PATH_0      - First path (0-indexed)
+#   DOTTA_PATH_1      - Second path
+#   DOTTA_PATH_N      - Nth path (where N = 0 to COUNT-1)
 #   DOTTA_DRY_RUN     - Always "0" — post-remove does not fire on dry-run
 #
 
@@ -29,9 +29,9 @@ mkdir -p "$(dirname "$audit_log")"
     printf '%s\tprofile=%s\tcount=%s' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         "$DOTTA_PROFILE" \
-        "$DOTTA_FILE_COUNT"
-    for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
-        var_name="DOTTA_FILE_$i"
+        "$DOTTA_PATH_COUNT"
+    for ((i=0; i<DOTTA_PATH_COUNT; i++)); do
+        var_name="DOTTA_PATH_$i"
         printf '\t%s' "${!var_name}"
     done
     printf '\n'

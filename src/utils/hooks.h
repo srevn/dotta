@@ -40,11 +40,15 @@ typedef enum {
  *   cmd        Which command is firing (ADD/REMOVE/APPLY/UPDATE/SYNC).
  *   profile    NULL → no DOTTA_PROFILE env. Single profile name for
  *              add/remove; space-joined profile list for apply/update/sync.
- *   files      NULL → no DOTTA_FILE_* env. Otherwise borrowed array.
- *   file_count Number of entries in files (0 if files is NULL).
+ *   paths      NULL → DOTTA_PATH_COUNT=0 alone. Otherwise borrowed array, each
+ *              a file or a directory: add's and update's arguments as given (none
+ *              on an update given none), remove's every path a claim the removal
+ *              takes stands at — its name where this machine places the claim
+ *              nowhere (cmds/remove.c remove_hook_paths). Apply and sync hand none.
+ *   path_count Number of entries in paths (0 if paths is NULL).
  *   extras     NULL → no extra env vars. Otherwise NULL-terminated
  *              "KEY=VALUE" string array, appended after the standard DOTTA_*
- *              and DOTTA_FILE_N surface (before the system environ pass-through,
+ *              and DOTTA_PATH_N surface (before the system environ pass-through,
  *              so authoritative values are not shadowed). Borrowed pointers —
  *              must outlive the fire.
  *   dry_run    Sets DOTTA_DRY_RUN for pre-hook; suppresses post-hook.
@@ -52,8 +56,8 @@ typedef enum {
 typedef struct {
     hook_cmd_t cmd;
     const char *profile;
-    char *const *files;
-    size_t file_count;
+    char *const *paths;
+    size_t path_count;
     char *const *extras;
     bool dry_run;
 } hook_invocation_t;
@@ -71,7 +75,7 @@ typedef struct {
  *
  * A hook that did not run, or ran and failed, is ERR_INTERNAL — a mode that will
  * not exec, an exec that failed, a timeout, a signal, a non-zero exit; beside
- * them a context past 10,000 files is ERR_INVALID_ARG, and a spawn the process
+ * them a context past 10,000 paths is ERR_INVALID_ARG, and a spawn the process
  * layer could not make keeps its own code (sys/process.h process_run) — and nothing
  * branches on the code. Never ERR_PERMISSION, however permission-shaped the cause:
  * that code is a refusal an identity met (base/error.h "Codes"), and a hook that

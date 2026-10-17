@@ -1,5 +1,5 @@
 /**
- * remove.h - Remove files from profiles or delete profiles
+ * remove.h - Remove paths from profiles or delete profiles
  *
  * Provides two main operations:
  * 1. Remove specific files/directories from a profile
@@ -40,7 +40,7 @@ typedef struct {
     /* Safety flags */
     bool dry_run;               /* Show what would be removed without doing it */
     bool force;                 /* Skip confirmations */
-    bool interactive;           /* Prompt for each file */
+    bool interactive;           /* Prompt for each path */
 
     /* Output flags */
     int verbosity;              /* dotta_verbosity_t (int for ARGS_FLAG_SET) */

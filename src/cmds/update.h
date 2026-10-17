@@ -1,8 +1,9 @@
 /**
- * update.h - Update profiles with modified files
+ * update.h - Commit filesystem changes back to profiles
  *
- * Syncs filesystem changes back into profiles.
- * The reverse operation of apply (filesystem -> repo instead of repo -> filesystem).
+ * Syncs filesystem changes back into profiles: what changed on disk at the paths
+ * they claim, and the new files beneath a tracked directory. The reverse operation
+ * of apply (filesystem -> repo instead of repo -> filesystem).
  */
 
 #ifndef DOTTA_CMD_UPDATE_H
@@ -15,15 +16,15 @@
 /**
  * Update command options
  *
- * `files` and `profiles` are populated from the raw positional bucket by
- * `update_post_parse`. The first positional is a file path or a profile name by
- * whether it announces a path (infra/path.h path_input_announces_path); remaining
- * positionals are always file paths.
+ * `paths` and `profiles` are populated from the raw positional bucket by
+ * `update_post_parse`. The first positional is a path or a profile name by whether
+ * it announces a path (infra/path.h path_input_announces_path); remaining
+ * positionals are always paths.
  */
 typedef struct {
     /* User-facing (read by cmd_update). */
-    char **files;                   /* Specific files to update (NULL = all) */
-    size_t file_count;              /* Number of files */
+    char **paths;                   /* Specific paths to update (NULL = all) */
+    size_t path_count;              /* Number of paths */
     char **profiles;                /* Specific profiles (NULL = use state/config) */
     size_t profile_count;           /* Number of profiles */
     const char *message;            /* Custom commit message */
@@ -43,7 +44,7 @@ typedef struct {
 /**
  * Update command implementation
  *
- * Finds modified files and updates their source profiles with the changes.
+ * Finds the modified paths and commits each change to the profile it belongs to.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

@@ -1718,8 +1718,8 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_SYNC,
         .profile    = string_array_join(ctx->arena,scope_profiles(scope),  " "),
-        .files      = NULL,
-        .file_count = 0,
+        .paths      = NULL,
+        .path_count = 0,
         .extras     = sync_extras,
         .dry_run    = opts->dry_run,
     };

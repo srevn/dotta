@@ -95,7 +95,7 @@
  *   (multiple class rows)  are polymorphic by shape. The classifier
  *                          maps each token to a class; matching rows route to
  *                          distinct fields. Example: `dotta apply
- *                          [profile|file]...` — both kinds can appear in any order.
+ *                          [profile|path]...` — both kinds can appear in any order.
  *
  * If two or more fit, prefer the tree: it gives per-sub `--help` for free, the
  * sub names and their summaries in the completion rules, and no hand-rolled
@@ -146,7 +146,7 @@ typedef enum args_kind {
  * nothing more. Each command that needs polymorphic positionals declares a
  * command-local enum and returns those values from `classify()`. The engine has
  * no interest in the value space beyond `class_accept == classify(tok)`, so domain
- * vocabulary (profiles, files, git refs, ...) stays out of this header.
+ * vocabulary (profiles, paths, git refs, ...) stays out of this header.
  *
  * Commands without polymorphic positionals don't touch this field at all — they
  * use `ARGS_POSITIONAL_ANY` / `ARGS_POSITIONAL_ANY_ARG` and the zero-initialized
@@ -246,12 +246,14 @@ typedef struct args_completion {
 
 /**
  * What the hook may ask the shell to add beside its candidates: its own completion
- * of `current` as a path — every path, or directories only. One thing at most;
- * a path completion includes the directories.
+ * of `current`, in the shells' own words — files, or directories only (bash's
+ * -f and -d, zsh's _files and _directories, fish's __fish_complete_path and
+ * __fish_complete_directories). One thing at most; a file completion includes
+ * the directories, as every shell's does, a file being reached through them.
  */
 typedef enum args_want {
     ARGS_WANT_NONE,    /* Nothing beyond the candidates printed */
-    ARGS_WANT_FILES,   /* Native path completion of `current` */
+    ARGS_WANT_FILES,   /* Native file completion of `current`, directories included */
     ARGS_WANT_DIRS     /* Native directory completion of `current` */
 } args_want_t;
 

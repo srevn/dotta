@@ -20,7 +20,7 @@
 #   DOTTA_COMMAND     - Command being executed ("sync")
 #   DOTTA_PROFILE     - Space-separated list of profiles being synced
 #   DOTTA_REMOTE      - Resolved remote name (e.g., "origin")
-#   DOTTA_FILE_COUNT  - Always "0" for sync
+#   DOTTA_PATH_COUNT  - Always "0" for sync
 #   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
 #
 

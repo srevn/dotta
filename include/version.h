@@ -31,7 +31,7 @@
  */
 #define DOTTA_VERSION_MAJOR 0
 #define DOTTA_VERSION_MINOR 172
-#define DOTTA_VERSION_PATCH 70
+#define DOTTA_VERSION_PATCH 71
 
 /**
  * Pre-release suffix, including a leading dash when present.

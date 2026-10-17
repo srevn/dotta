@@ -39,8 +39,8 @@ typedef struct {
     const char *repo_dir;
     const char *command;
     const char *profile;
-    char *const *files;
-    size_t file_count;
+    char *const *paths;
+    size_t path_count;
     char *const *extras;
     bool dry_run;
 } hook_context_t;
@@ -92,7 +92,7 @@ static bool hook_is_enabled(const config_t *config, hook_type_t type) {
  * The hook's environment, a string array in `arena`: the DOTTA_* surface, the
  * command's extras, then the process's own environment with its DOTTA_* left
  * out, so the surface above cannot be shadowed. An envp as it stands — it always
- * holds DOTTA_DRY_RUN and DOTTA_FILE_COUNT, so its spine exists and is ended.
+ * holds DOTTA_DRY_RUN and DOTTA_PATH_COUNT, so its spine exists and is ended.
  */
 static void hook_env(const hook_context_t *context, arena_t *arena, string_array_t *env) {
     extern char **environ;
@@ -100,17 +100,17 @@ static void hook_env(const hook_context_t *context, arena_t *arena, string_array
     string_array_init(env, arena, 0);
 
     /* DOTTA_* surface — the store's directory, two optional, two always-on, then
-     * per-file. */
+     * one per path. */
     string_array_pushf(env, "DOTTA_REPO_DIR=%s", context->repo_dir);
     if (context->command) string_array_pushf(env, "DOTTA_COMMAND=%s", context->command);
     if (context->profile) string_array_pushf(env, "DOTTA_PROFILE=%s", context->profile);
 
     string_array_pushf(env, "DOTTA_DRY_RUN=%s", context->dry_run ? "1" : "0");
-    string_array_pushf(env, "DOTTA_FILE_COUNT=%zu", context->file_count);
+    string_array_pushf(env, "DOTTA_PATH_COUNT=%zu", context->path_count);
 
-    /* Indexed file variables: DOTTA_FILE_0, DOTTA_FILE_1, ... */
-    for (size_t i = 0; i < context->file_count; i++) {
-        string_array_pushf(env, "DOTTA_FILE_%zu=%s", i, context->files[i]);
+    /* Indexed path variables: DOTTA_PATH_0, DOTTA_PATH_1, ... */
+    for (size_t i = 0; i < context->path_count; i++) {
+        string_array_pushf(env, "DOTTA_PATH_%zu=%s", i, context->paths[i]);
     }
 
     /* Per-command extras (e.g. DOTTA_REMOTE for sync). Appended before the environ
@@ -181,12 +181,12 @@ static error_t hook_execute(
         goto cleanup;
     }
 
-    /* Sanity check: bound DOTTA_FILE_N env explosion. */
-    if (context->file_count > 10000) {
+    /* Sanity check: bound DOTTA_PATH_N env explosion. */
+    if (context->path_count > 10000) {
         err = error_create(
             ERR_INVALID_ARG,
-            "Hook '%s': too many files in context (%zu, limit: 10000)",
-            hook_type_name(type), context->file_count
+            "Hook '%s': too many paths in context (%zu, limit: 10000)",
+            hook_type_name(type), context->path_count
         );
         goto cleanup;
     }
@@ -322,8 +322,8 @@ static error_t hook_fire(
         .repo_dir   = config->repo_dir,
         .command    = cmd_name(inv->cmd),
         .profile    = inv->profile,
-        .files      = inv->files,
-        .file_count = inv->file_count,
+        .paths      = inv->paths,
+        .path_count = inv->path_count,
         .extras     = inv->extras,
         .dry_run    = inv->dry_run,
     };

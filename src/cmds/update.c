@@ -1,5 +1,5 @@
 /**
- * update.c - Update profiles with modified files
+ * update.c - Commit filesystem changes back to profiles
  */
 
 #include "cmds/update.h"
@@ -1306,8 +1306,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     scope_inputs_t scope_inputs = {
         .profiles         = opts->profiles,
         .profile_count    = opts->profile_count,
-        .files            = opts->files,
-        .file_count       = opts->file_count,
+        .paths            = opts->paths,
+        .path_count       = opts->path_count,
         .exclude_patterns = opts->exclude_patterns,
         .exclude_count    = opts->exclude_count,
     };
@@ -1378,11 +1378,11 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             "Filter: Including new files from tracked directories (--include-new)"
         );
     }
-    if (opts->file_count > 0) {
+    if (opts->path_count > 0) {
         output_info(
             out, OUTPUT_VERBOSE,
             "Filter: Limiting to %zu specified path%s",
-            opts->file_count, opts->file_count == 1 ? "" : "s"
+            opts->path_count, opts->path_count == 1 ? "" : "s"
         );
     }
     if (opts->exclude_count > 0) {
@@ -1438,7 +1438,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
     if (refused[WORKSPACE_ROUTE_DISPLACED_DERIVED] > 0) {
         output_info(
-            out, OUTPUT_NORMAL, opts->file_count > 0
+            out, OUTPUT_NORMAL, opts->path_count > 0
                 ? "%zu path%s skipped: not looked at, beneath a squatted directory"
                 : "%zu path%s skipped: not looked at, beneath a squatted directory — "
             "'dotta update <dir>' re-derives the way there",
@@ -1543,7 +1543,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
     if (refused[WORKSPACE_ROUTE_KIND_DERIVED] > 0) {
         output_info(
-            out, OUTPUT_NORMAL, opts->file_count > 0
+            out, OUTPUT_NORMAL, opts->path_count > 0
                 ? "%zu path%s skipped: a different kind stands at a directory dotta "
             "only passes through"
                 : "%zu path%s skipped: a different kind stands at a directory dotta "
@@ -1603,7 +1603,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * leaves grow as the walk finds them rather than into room for the whole
      * view: a named path picks a few rows out of all of them. */
     manifest_rows_t derive_rows = { 0 };
-    if (opts->file_count > 0) {
+    if (opts->path_count > 0) {
         workspace_items_t active = workspace_active(ws);
         const manifest_row_t **leaves = NULL;
         size_t leaf_count = 0;
@@ -1713,8 +1713,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_UPDATE,
         .profile    = string_array_join(ctx->arena,scope_profiles(scope),  " "),
-        .files      = opts->files,
-        .file_count = opts->file_count,
+        .paths      = opts->paths,
+        .path_count = opts->path_count,
         .dry_run    = opts->dry_run,
     };
 
@@ -1887,16 +1887,16 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Route the raw positional bucket into `files[]` and `profiles[]`.
+ * Route the raw positional bucket into `paths[]` and `profiles[]`.
  *
  * Positional rule (differs from add — position-dependent):
- *   - First positional: a file path or a profile name, by whether it announces
- *     a path (infra/path.h path_input_announces_path). A file path lands in
- *     `files`; a name lands in `profiles`.
- *   - Remaining positionals: always file paths.
+ *   - First positional: a path or a profile name, by whether it announces a path
+ *     (infra/path.h path_input_announces_path). A path lands in `paths`; a name
+ *     lands in `profiles`.
+ *   - Remaining positionals: always paths.
  *
  * Profiles from `-p` are already populated in `profiles` by the APPEND row; a
- * positional profile appends onto that list. Files go into a fresh arena-backed
+ * positional profile appends onto that list. Paths go into a fresh arena-backed
  * array.
  */
 static error_t update_post_parse(
@@ -1909,14 +1909,14 @@ static error_t update_post_parse(
         return NULL;
     }
 
-    /* Worst case: every positional becomes a file. */
-    char **files = arena_calloc(arena, o->positional_count, sizeof(*files));
-    size_t file_count = 0;
+    /* Worst case: every positional becomes a path. */
+    char **paths = arena_calloc(arena, o->positional_count, sizeof(*paths));
+    size_t path_count = 0;
 
     for (size_t i = 0; i < o->positional_count; i++) {
         char *arg = o->positional_args[i];
 
-        /* Only the first positional is ambiguous (profile or file). It becomes
+        /* Only the first positional is ambiguous (profile or path). It becomes
          * a profile only if -p was not given AND it announces no path. */
         if (i == 0 && o->profile_count == 0 &&
             !path_input_announces_path(arg)) {
@@ -1928,12 +1928,12 @@ static error_t update_post_parse(
             continue;
         }
 
-        files[file_count++] = arg;
+        paths[path_count++] = arg;
     }
 
-    if (file_count > 0) {
-        o->files = files;
-        o->file_count = file_count;
+    if (path_count > 0) {
+        o->paths = paths;
+        o->path_count = path_count;
     }
 
     return NULL;
@@ -2030,7 +2030,7 @@ static const args_opt_t update_opts[] = {
 const args_command_t spec_update = {
     .name         = "update",
     .summary      = "Commit filesystem changes back to profiles",
-    .usage        = "%s update [options] [profile|file]...",
+    .usage        = "%s update [options] [profile|path]...",
     .description  =
         "Commit filesystem modifications to the matching profile branches\n"
         "(the reverse direction of 'apply'). Mode is captured alongside\n"
@@ -2043,7 +2043,7 @@ const args_command_t spec_update = {
         "  security.confirm_new_files toggles the prompt. --include-new\n"
         "  and --only-new override both for this invocation.\n",
     .examples     =
-        "  %s update                             # All modified files\n"
+        "  %s update                             # Every modified path\n"
         "  %s update ~/.bashrc                   # Specific file\n"
         "  %s update -p global                   # Filter to 'global'\n"
         "  %s update --include-new               # Modified + new files\n"

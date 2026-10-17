@@ -1,7 +1,7 @@
 /**
- * add.h - Add files to profiles
+ * add.h - Add files and directories to profiles
  *
- * Captures files onto a profile's draft (core/profiles.h profile_draft_t) and
+ * Captures paths onto a profile's draft (core/profiles.h profile_draft_t) and
  * commits it: nothing is checked out, nothing is written under $TMPDIR.
  */
 
@@ -15,14 +15,14 @@
 /**
  * Command options
  *
- * `profile` and `files` are populated from the raw positional bucket by
+ * `profile` and `paths` are populated from the raw positional bucket by
  * `add_post_parse`. Consumers read only the user-facing fields.
  */
 typedef struct {
     /* User-facing (read by cmd_add). */
     const char *profile;     /* Profile name (required) */
-    char **files;            /* Array of file paths (required) */
-    size_t file_count;       /* Number of files */
+    char **paths;            /* The paths to add, each a file or a directory (required) */
+    size_t path_count;       /* Number of paths */
     const char *target;      /* Deployment target (optional, for custom/ storage) */
     const char *message;     /* Commit message (optional) */
     char **exclude_patterns; /* Exclude patterns (glob) - read-only */
@@ -38,7 +38,7 @@ typedef struct {
 } cmd_add_options_t;
 
 /**
- * Add files to a profile
+ * Add files and directories to a profile
  *
  * Captures onto the profile's branch what is new to it, and commits once: a path
  * the profile already holds — a file, a directory it tracks — is left as it stands,

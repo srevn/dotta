@@ -188,7 +188,7 @@ dotta remove <profile> --delete-profile    # every profile whose history holds c
 dotta key clear
 dotta key set                              # the NEW passphrase: with nothing left to
                                            #   verify against, it is confirmed by typing twice
-dotta add <profile> <files> --encrypt      # re-sealed
+dotta add <profile> <paths> --encrypt      # re-sealed
 ```
 
 A repository must keep at least one profile, so if the only profile is the encrypted one, create another (`dotta add <other> <some file>`) before deleting it.
@@ -204,7 +204,7 @@ dotta apply                                # plaintext on disk under the old epo
 dotta remove <profile> --delete-profile    # every profile whose history holds ciphertext
 dotta git update-ref -d refs/dotta/epoch
 dotta init --strength paranoid
-dotta add <profile> <files> --encrypt
+dotta add <profile> <paths> --encrypt
 ```
 
 The order matters. `dotta init` refuses to mint an epoch while any encrypted file is still reachable through Git history, preventing accidental permanent data loss:

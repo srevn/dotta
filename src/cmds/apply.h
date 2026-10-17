@@ -1,7 +1,8 @@
 /**
  * apply.h - Apply profiles to filesystem
  *
- * Deploys files from profiles to the filesystem.
+ * Deploys what the enabled profiles claim to the filesystem: files, links and
+ * the directories they track.
  */
 
 #ifndef DOTTA_CMD_APPLY_H
@@ -17,8 +18,8 @@
 typedef struct {
     char **profiles;            /* Profile names (NULL = use state/config) */
     size_t profile_count;       /* Number of profiles */
-    char **files;               /* Specific files to apply (NULL = all files) */
-    size_t file_count;          /* Number of files */
+    char **paths;               /* Specific paths to apply (NULL = all) */
+    size_t path_count;          /* Number of paths */
     bool force;                 /* Override deploy's conflicts and cleanup's skip reasons */
     bool dry_run;               /* Don't actually deploy */
     bool keep_orphans;          /* Don't remove orphaned files (opt-out from default cleanup) */

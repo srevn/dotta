@@ -671,9 +671,9 @@ static error_t update_profile(
      * and what it let go — the bookkeeping, so an item the walk skipped is not
      * named. Both kinds, a captured directory claim being a path the commit took
      * as surely as a blob is (utils/commit.h). A retired claim is named with
-     * them (it leaves the view by this commit); an authored one only rides, the
-     * pruned-keys precedent, so a derivation that only refreshed names nothing
-     * and the message's path list says so. */
+     * them (it leaves the view by this commit); an authored one only rides, as
+     * what the commit's prune takes does, so a derivation that only refreshed
+     * names nothing and the message's path list says so. */
     size_t named_count = commit->captured_count + commit->deleted_count + ancestors_retired.count;
     const char **storage_paths = arena_calloc(
         ctx->arena, named_count, sizeof(*storage_paths)
@@ -705,22 +705,20 @@ static error_t update_profile(
      * about the disk, and drives the commit it needs, how the remedy for a rung
      * the world moved under works at all — while imported redundancy rides a
      * commit and never drives one. Its prune takes what nothing stands on any
-     * longer, its keys counted for the line below: the entry leaves the view by
-     * this commit, and its record is the next apply's to decide. And whether it
-     * landed, the commit's own answer, false for captures that put back what
-     * the profile holds, which a hook rewriting a file between the decision and
-     * the capture makes */
-    string_array_t pruned;
-    string_array_init(&pruned, ctx->arena, 0);
+     * longer, counted for the line below: the claim leaves the view by this commit,
+     * and its record is the next apply's to decide. And whether it landed, the
+     * commit's own answer, false for captures that put back what the profile
+     * holds, which a hook rewriting a file between the decision and the capture
+     * makes */
+    size_t pruned = 0;
     error_t err = profile_commit(
         draft, commit_message(ctx->arena, ctx->config, &msg_ctx), &commit->committed, &pruned
     );
     if (err) return err;
 
-    if (pruned.count > 0) {
+    if (pruned > 0) {
         output_info(
-            out, OUTPUT_VERBOSE, "  Pruned %zu redundant directory entr%s",
-            pruned.count, pruned.count == 1 ? "y" : "ies"
+            out, OUTPUT_VERBOSE, "  Pruned %zu ancestor claim%s", pruned, pruned == 1 ? "" : "s"
         );
     }
 

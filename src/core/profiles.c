@@ -1671,24 +1671,22 @@ static bool profile_tracked_beneath(const profile_draft_t *draft, const char *ke
  * just gone (`dotta add ~/dir/f.conf`, then `dotta remove` of that file). One
  * forward pass decides each derivation where it meets it and removes it there:
  * a decision reads the index and the tracked claims alone, and the prune moves
- * neither, so a removal changes no later decision, and the keys come back in
- * key order.
+ * neither, so a removal changes no later decision.
  *
- * The keys are the paths the commit lets go that the writer did not name: a claim
- * the base tracked is derived here only where a writer's removal took its tracking,
- * and that writer names it, so a removal reports its claim once whatever order
- * it took the claims beneath in.
+ * The count is of the paths the commit lets go that the writer did not name: a
+ * claim the base tracked is derived here only where a writer's removal took its
+ * tracking, and that writer names it, so a removal reports its claim once whatever
+ * order it took the claims beneath in.
  *
  * Reader: profile_commit, past its gate.
  *
  * @param draft The draft
- * @param pruned Receives the key of each derivation pruned but a claim the base
- *               tracked, appended as copies in the array's arena; NULL where
- *               the writer keeps none
+ * @param out_pruned Counts each derivation pruned but a claim the base tracked;
+ *                   NULL where the writer counts none
  * @return Error or NULL on success: a failed look at the index, which must not
  *         prune
  */
-static error_t profile_prune_ancestors(profile_draft_t *draft, string_array_t *pruned) {
+static error_t profile_prune_ancestors(profile_draft_t *draft, size_t *out_pruned) {
     git_index *index = stage_index(draft->stage);
 
     metadata_items_t directories = metadata_items(draft->sheet, PATH_KIND_DIRECTORY);
@@ -1726,15 +1724,15 @@ static error_t profile_prune_ancestors(profile_draft_t *draft, string_array_t *p
             continue;
         }
 
-        /* Nothing stands beneath it: its key handed back where the caller keeps
-         * them — but a claim the base tracked, whose tracking a writer's removal
-         * took (profile_remove), and which that writer names itself; then the
-         * derivation goes, and the slice is read again, the removal having moved
-         * every entry past the cursor down one */
+        /* Nothing stands beneath it: counted where the writer counts — but a
+         * claim the base tracked, whose tracking a writer's removal took
+         * (profile_remove), and which that writer names itself; then the derivation
+         * goes, and the slice is read again, the removal having moved every entry
+         * past the cursor down one */
         const metadata_item_t *was = metadata_find_item(
             draft->base->sheet, PATH_KIND_DIRECTORY, dir->key
         );
-        if (pruned && !(was && was->tracked)) string_array_push(pruned, dir->key);
+        if (out_pruned && !(was && was->tracked)) (*out_pruned)++;
         metadata_remove_item(draft->sheet, PATH_KIND_DIRECTORY, dir->key);
         directories = metadata_items(draft->sheet, PATH_KIND_DIRECTORY);
     }
@@ -1743,15 +1741,15 @@ static error_t profile_prune_ancestors(profile_draft_t *draft, string_array_t *p
 }
 
 error_t profile_commit(
-    profile_draft_t *draft, const char *message, bool *out_committed,
-    string_array_t *pruned
+    profile_draft_t *draft, const char *message, bool *out_committed, size_t *out_pruned
 ) {
     CHECK_NULL(draft);
     CHECK_NULL(message);
 
-    /* No commit until the tree write answers one: every return before it says
-     * nothing was committed */
+    /* Nothing committed until the tree write answers one, and nothing pruned
+     * until the prune counts it: a return before either says so */
     if (out_committed) *out_committed = false;
+    if (out_pruned) *out_pruned = 0;
 
     /* Nothing an edit moved: nothing prunes, nothing is saved, nothing commits
      * — imported redundancy rides a commit and never drives one */
@@ -1766,8 +1764,8 @@ error_t profile_commit(
      * the derivation it was. The index answers that for every path a tree can
      * hold — never the sheet's items, which omit unelevated symlinks — and the
      * copy's own tracked claims answer it for the one path it cannot, an empty
-     * directory. Its keys are handed back where the writer keeps them. */
-    err = profile_prune_ancestors(draft, pruned);
+     * directory. What it takes is counted for a writer that asks. */
+    err = profile_prune_ancestors(draft, out_pruned);
     if (err) return err;
 
     /* The sheet, saved only where its claims are no longer the base's: a commit

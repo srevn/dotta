@@ -1155,9 +1155,9 @@ static error_t remove_paths(
 
     /* One atomic commit: the file claims leave the tree, and the sheet follows
      * in the same tree write where its claims moved — pruned first of the derived
-     * directory entries the removals left nothing tracked beneath, whose keys
-     * come back in `pruned` (core/profiles.h profile_commit). All-or-nothing:
-     * any failure up to here leaves every ref where it was. */
+     * claims the removals left nothing tracked beneath, counted in `pruned`
+     * (core/profiles.h profile_commit). All-or-nothing: any failure up to here
+     * leaves every ref where it was. */
     commit_message_context_t msg_ctx = {
         .action        = COMMIT_ACTION_REMOVE,
         .profile       = opts->profile,
@@ -1166,14 +1166,12 @@ static error_t remove_paths(
         .custom_msg    = opts->message,
         .target_commit = NULL
     };
-    string_array_t pruned;   /* Directory entries the commit's prune took (storage paths) */
-    string_array_init(&pruned, ctx->arena, 0);
+    size_t pruned = 0;
     err = profile_commit(draft, commit_message(ctx->arena, config, &msg_ctx), NULL, &pruned);
     if (err) goto cleanup;
-    if (pruned.count > 0) {
+    if (pruned > 0) {
         output_info(
-            out, OUTPUT_VERBOSE, "Pruned %zu redundant directory entr%s",
-            pruned.count, pruned.count == 1 ? "y" : "ies"
+            out, OUTPUT_VERBOSE, "Pruned %zu ancestor claim%s", pruned, pruned == 1 ? "" : "s"
         );
     }
 

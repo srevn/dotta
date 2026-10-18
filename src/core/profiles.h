@@ -795,10 +795,10 @@ error_t profile_find(
  *     and leaves the claim the way to whatever stands beneath it, the attributes
  *     it claimed kept (profile_remove); and the prune, at the commit, of every
  *     derived claim nothing tracked stands beneath any longer (core/profiles.c
- *     profile_prune_ancestors), its key handed back where the writer keeps them
- *     — but a claim the base tracked, whose removal the writer names itself;
- *     the record of every rung it took is the next load's to decide, as of every
- *     claim a commit lets go (core/workspace.c workspace_analyze_orphans);
+ *     profile_prune_ancestors), counted for a writer that asks — but a claim
+ *     the base tracked, whose removal the writer names itself; the record of
+ *     every rung it took is the next load's to decide, as of every claim a commit
+ *     lets go (core/workspace.c workspace_analyze_orphans);
  *   - the gate, each document held against the one the draft opened: a commit
  *     no edit of which moved the tree or the sheet makes nothing — no prune, no
  *     save, no commit — so imported redundancy rides a commit and never drives
@@ -1073,8 +1073,9 @@ error_t profile_capture_directory(
  *     an answer of "no".
  * The two outs are shaped by what a writer can do with them: a claim authored
  * has no consequence beyond the sheet, so its count is the whole report, while
- * a claim retired leaves the view by the commit and its record behind, and only
- * the key names that — one key a name, so two keys can place one path.
+ * a claim retired leaves the view by the commit, and a writer's message names
+ * it by its key (cmds/update.c update_profile) — one key a name, so two keys
+ * can place one path.
  *
  * Total and idempotent: nothing refuses the climb and no rung stops it, and each
  * climb decides every rung it passes, so a rung two leaves share is decided at
@@ -1202,38 +1203,37 @@ error_t profile_changed(const profile_draft_t *draft, bool *out);
  *
  * Where no edit moved the tree or the sheet (profile_changed), nothing: no prune,
  * no save, no commit. Otherwise the prune, against the index the commit will
- * record, its keys appended to `pruned` where one is given — every derivation
- * it takes but a claim the base tracked, whose removal the writer names; the
- * sheet saved where its claims are no longer the base's; then one commit
- * (sys/stage.h stage_commit: a tree equal to the opened one is none, and a head
- * another writer moved since the open is refused ERR_CONFLICT). One commit a
- * draft. Whether it landed is answered as sys/stage answers it: false where the
- * gate stops it, and past the gate the tree write's own answer — true where an
- * edit the gate saw stands past the prune, since it moved a content entry or a
- * claim and a sheet whose claims moved spells other bytes, and false where the
- * prune took back the only edits the gate saw: a climb's rungs nothing tracked
- * stands beneath, authored and pruned in one draft.
+ * record, counted where a count is asked — every derivation it takes but a claim
+ * the base tracked, whose removal the writer names; the sheet saved where its
+ * claims are no longer the base's; then one commit (sys/stage.h stage_commit: a
+ * tree equal to the opened one is none, and a head another writer moved since
+ * the open is refused ERR_CONFLICT). One commit a draft. Whether it landed is
+ * answered as sys/stage answers it: false where the gate stops it, and past the
+ * gate the tree write's own answer — true where an edit the gate saw stands past
+ * the prune, since it moved a content entry or a claim and a sheet whose claims
+ * moved spells other bytes, and false where the prune took back the only edits
+ * the gate saw: a climb's rungs nothing tracked stands beneath, authored and
+ * pruned in one draft.
  *
- * Readers: cmds/add.c add_commit and cmds/update.c update_profile, which keep
- * the prune's keys and read whether the commit landed, so a capture that put
- * back what the profile holds commits nothing — add says so, and update neither
- * reports nor records it; cmds/remove.c remove_paths, which keeps the keys; and
- * cmds/revert.c cmd_revert, which keeps none.
+ * Readers: cmds/add.c add_commit and cmds/update.c update_profile, which count
+ * the prune and read whether the commit landed, so a capture that put back what
+ * the profile holds commits nothing — add says so, and update neither reports
+ * nor records it; cmds/remove.c remove_paths, which counts the prune; and
+ * cmds/revert.c cmd_revert, which asks neither.
  *
  * @param draft The draft (must not be NULL)
  * @param message Commit message (must not be NULL)
  * @param out_committed Whether a commit was made (optional, can be NULL; false
  *                      where nothing moved, or on a failure)
- * @param pruned The keys the prune took but a claim the base tracked, appended
- *               as copies in the array's arena (given its arena by
- *               string_array_init); NULL where the writer keeps none
+ * @param out_pruned How many derivations the prune took but a claim the base
+ *                   tracked (optional, can be NULL; 0 where nothing moved)
  * @return Error or NULL on success
  */
 error_t profile_commit(
     profile_draft_t *draft,
     const char *message,
     bool *out_committed,
-    string_array_t *pruned
+    size_t *out_pruned
 );
 
 /**

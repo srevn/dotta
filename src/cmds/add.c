@@ -1435,20 +1435,19 @@ static error_t add_capture(const add_walk_t *walk, add_path_t *path) {
  * @param out_committed Whether a commit was made: false where no edit moved either
  *                      document, so a re-add of what the profile already holds
  *                      moves nothing (must not be NULL)
- * @param pruned The derivations the commit's prune took, appended by key (must
- *               not be NULL; given its arena by string_array_init)
+ * @param out_pruned How many derivations the commit's prune took (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t add_commit(
     const add_walk_t *walk,
     const cmd_add_options_t *opts,
     bool *out_committed,
-    string_array_t *pruned
+    size_t *out_pruned
 ) {
     CHECK_NULL(walk);
     CHECK_NULL(opts);
     CHECK_NULL(out_committed);
-    CHECK_NULL(pruned);
+    CHECK_NULL(out_pruned);
 
     /* The names this commit takes, borrowed from the claims the walk listed them
      * under: every listed path has one (add_list). Both kinds, in the order every
@@ -1480,7 +1479,7 @@ static error_t add_commit(
     /* Create commit */
     return profile_commit(
         walk->draft, commit_message(walk->ctx->arena, walk->ctx->config, &msg_ctx),
-        out_committed, pruned
+        out_committed, out_pruned
     );
 }
 
@@ -2623,17 +2622,15 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * commit whose edits moved nothing — a --force re-capture of what the profile
      * already had, byte for byte — makes none, and the summary says so
      * (core/profiles.h profile_commit). Its two outs: whether it landed, which
-     * the receipt reads, and the derivations its prune took, by key, which the
-     * line below counts; the record of each is the next apply's to decide. */
+     * the receipt reads, and how many derivations its prune took, which the line
+     * below says; the record of each is the next apply's to decide. */
     bool committed = false;
-    string_array_t pruned;
-    string_array_init(&pruned, ctx->arena, 0);
+    size_t pruned = 0;
     err = add_commit(&walk, opts, &committed, &pruned);
     if (err) goto cleanup;
-    if (pruned.count > 0) {
+    if (pruned > 0) {
         output_info(
-            out, OUTPUT_VERBOSE, "Pruned %zu redundant directory entr%s",
-            pruned.count, pruned.count == 1 ? "y" : "ies"
+            out, OUTPUT_VERBOSE, "Pruned %zu ancestor claim%s", pruned, pruned == 1 ? "" : "s"
         );
     }
 

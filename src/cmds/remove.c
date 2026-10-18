@@ -407,10 +407,10 @@ cleanup:
  *
  * The orders the record phase committed, one a copy, said as what the next apply
  * does with them in the ordinary case: deletes each — an edited copy it skips
- * instead, and one displaced beneath a record's memory it releases, which that
- * apply's preview names. Nothing ordered says nothing: a default removal, or a
- * record phase that refused, with its warning, leaves the success line to stand
- * alone.
+ * instead, and it releases one displaced beneath a record's memory or a directory
+ * holding what no apply removes, which that apply's preview names. Nothing ordered
+ * says nothing: a default removal, or a record phase that refused, with its
+ * warning, leaves the success line to stand alone.
  *
  * Readers: remove_paths and remove_profile — one printer, so the two routes say
  * one consent in one set of words.

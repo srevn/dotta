@@ -919,8 +919,9 @@ static inline divergence_type_t workspace_claims_moved(
  *     stands and apply creates only for a claim it deploys.
  *
  * Readers: the apply hint of cmds/sync.c cmd_sync and of cmds/profile.c
- * profile_enable and profile_disable, each off the view after its change. A reader
- * not on this list is a bug.
+ * profile_enable and profile_disable, each off the view after its change and
+ * worded true of every arm above — apply's aim, no outcome. A reader not on this
+ * list is a bug.
  *
  * @param view The view the record is held against (must not be NULL)
  * @param records The record, as core/state.h state_records reads it (NULL when

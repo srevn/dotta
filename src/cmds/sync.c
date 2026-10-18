@@ -1833,8 +1833,8 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * blob the pull brought now stands above is p's overridden, never a release
      * either: its copy is that blob's landing's, which clears it.
      *
-     * Sync does not deploy. Apply's divergence analysis does that, which is what
-     * the hint closing the report points at.
+     * Sync does not deploy, nor settle what a pull let go: apply's divergence
+     * analysis does both, which is what the hint closing the report points at.
      *
      * A failed build is not sync's failure — every Git ref already moved and
      * stands — and its message carries the repair (a tree that will not load,
@@ -2020,13 +2020,17 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         /* The hint states a fact about the record, not about this sync: the record
          * owes apply work against the view the Git phase produced (core/workspace.h
          * workspace_pending), whatever began it — this pull, an earlier one
-         * reviewed with status instead of apply, a scope change, a revert. The
-         * block is a delta and prints once; the hint prints for as long as the
-         * work stands, and a pull that moved only the way to a claim — a derived
-         * directory's mode — moves neither. */
+         * reviewed with status instead of apply, a scope change, a revert — and
+         * whatever the work is, so its words name apply's aim and no outcome.
+         * The block is a delta and prints once; the hint prints for as long as
+         * the work stands, and a pull that moved only the way to a claim — a
+         * derived directory's mode — moves neither. */
         if (workspace_pending(after, records, record_count)) {
             output_gap(out, OUTPUT_NORMAL);
-            output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy");
+            output_hint(
+                out, OUTPUT_NORMAL,
+                "Run 'dotta apply' to bring the workspace in line with the enabled profiles"
+            );
         }
     }
 

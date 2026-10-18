@@ -16,7 +16,7 @@ dotta profile enable global darwin
 # ✓ Enabled global
 # ✓ Enabled darwin
 #
-# Hint: Run 'dotta apply' to deploy paths
+# Hint: Run 'dotta apply' to bring the workspace in line with the enabled profiles
 
 # Disable a profile (files will be removed on next apply)
 dotta profile disable darwin

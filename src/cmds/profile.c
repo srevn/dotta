@@ -697,10 +697,14 @@ static error_t profile_enable(
      * leaves (core/workspace.h workspace_pending) — whatever began it, this enable
      * or a change no apply has followed — and nowhere else: a profile enabled
      * again before an apply let its copies go owes it nothing, and neither does
-     * one this machine places nothing of */
+     * one this machine places nothing of. Whatever the work is, too: the words
+     * name apply's aim and no outcome */
     if (workspace_pending(after, records, record_count)) {
         output_gap(out, OUTPUT_NORMAL);
-        output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy paths");
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta apply' to bring the workspace in line with the enabled profiles"
+        );
     }
 
     return NULL;
@@ -716,9 +720,10 @@ static error_t profile_enable(
  *      copied before the deletes replace the row cache they borrow from.
  *   2. Write scope to state — state_disable_profile per validated target;
  *      enabled_profiles is now authoritative for the target set, the line gone
- *      whole, target included. Nothing else is written: what the next apply prunes
- *      or releases is derivable — the disabled profile's records are no longer
- *      in the view, and the orphan analysis asks Git about each.
+ *      whole, target included. Nothing else is written: what the next apply does
+ *      at each path the profile leaves is derivable — the view after holds none
+ *      of its claims, and the orphan analysis decides each record left with no
+ *      row (core/workspace.c workspace_analyze_orphans).
  *   3. The view after and the record — manifest_build over the post-disable set,
  *      and the record held against it: whether the next apply has work there
  *      (core/workspace.h workspace_pending). A set that will not build is warned
@@ -887,12 +892,15 @@ static error_t profile_disable(
     }
 
     /* The next step, where the record owes apply work against the view the save
-     * leaves (core/workspace.h workspace_pending), as enable's — none where nothing
-     * this machine recorded leaves with the profile, nor where no view after
-     * was built to ask */
+     * leaves (core/workspace.h workspace_pending), as enable's and in its words
+     * — none where nothing this machine recorded leaves with the profile, nor
+     * where no view after was built to ask */
     if (after && workspace_pending(after, records, record_count)) {
         output_gap(out, OUTPUT_NORMAL);
-        output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed paths");
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta apply' to bring the workspace in line with the enabled profiles"
+        );
     }
 
     return NULL;
@@ -1417,7 +1425,7 @@ const args_command_t spec_profile = {
     .usage              = "%s profile <subcommand> [options]",
     .description        =
         "Enabling a profile is a persistent choice that marks it for deployment.\n"
-        "Run 'dotta apply' to synchronize the workspace with the set of enabled profiles.\n",
+        "Run 'dotta apply' to bring the workspace in line with the enabled profiles.\n",
     .notes              =
         "Manage which profiles are used in your current workspace.\n"
         "Profile States:\n"

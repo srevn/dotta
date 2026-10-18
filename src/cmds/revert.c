@@ -85,6 +85,32 @@ static error_t revert_claim_held(
 }
 
 /**
+ * Whether a head's tree leaves a name room for the one file a revert restores
+ *
+ * Git's one-entry rule at the name the write uses, asked of the kind of entry
+ * the tree alone holds there (core/profiles.h profile_entry): a blob, or nothing,
+ * leaves the name room; a subtree or a gitlink holds no file there, whatever
+ * the commit holds. Never profile_holds' kind, which the sheet may answer
+ * DIRECTORY: a directory claim the sheet alone holds never stands in the way —
+ * the restore takes its place where it stands, and carries it where the head's
+ * blob contradicts it (cmd_revert step 15).
+ *
+ * Readers: revert_select_profile, of each profile holding the argument — those
+ * a file can be restored into decide the search; cmd_revert step 11, of the profile
+ * the revert acts on. A reader not on this list is a bug.
+ */
+static bool revert_restorable(profile_held_kind_t kind) {
+    switch (kind) {
+        case PROFILE_HELD_NOTHING:
+        case PROFILE_HELD_FILE:      return true;
+        case PROFILE_HELD_DIRECTORY:
+        case PROFILE_HELD_SUBMODULE: return false;
+    }
+
+    CHECK_ARG(false, "a held kind no enumerator names");
+}
+
+/**
  * Which profile the revert acts on
  *
  * The profile question, and only that. What that profile calls the argument is
@@ -98,12 +124,19 @@ static error_t revert_claim_held(
  * holds, and a path the profile deleted is the case a revert exists for.
  *
  * Without: the search. Every local profile, enabled or not, is asked what it
- * holds at the argument, in the key the argument named, and the one that holds
- * it is the answer. None is refused as an absence, whose way through is -p;
- * several, as ambiguous, each listed beside its own name for the argument. Complete
- * or an error: a profile the search cannot read stops it whichever profile it
- * is, since a list short by one is a falsely unique answer, and the refusal's
- * clause names the flag that reads one profile instead of all of them.
+ * holds at the argument, in the key the argument named, and each that holds it
+ * whether a file can be restored into it there (revert_restorable). Those that
+ * can decide: the one is the answer, and several are refused as ambiguous, each
+ * listed beside its own name for the argument. Where none can — every holder's
+ * head holds a directory or a gitlink at its name — the first holder is the answer,
+ * and its read refuses it by its noun as it would refuse any of them (cmd_revert
+ * steps 8 and 11): no -p could make another the revert's. That read resolves
+ * the commit first, so a revision the first holder lacks is refused before the
+ * noun is read (stated). None holding it is refused as an absence, whose way
+ * through is -p. Complete or an error: a profile the search cannot read stops
+ * it whichever profile it is, since a list short by one is a falsely unique answer,
+ * and the refusal's clause names the flag that reads one profile instead of all
+ * of them.
  */
 static error_t revert_select_profile(
     const dotta_ctx_t *ctx,
@@ -139,14 +172,17 @@ static error_t revert_select_profile(
     string_array_t profiles;
     error_t err = gitops_list_branches(repo, ctx->arena, &profiles);
 
-    /* Each profile loaded once and asked in the key the argument named. The
-     * question is every local profile's, not the enabled set's, whose holder
-     * the view answers (core/manifest.h manifest_holder: show, list). A profile
-     * names a path once and holds a name once, so each answers once at most:
-     * the first holder is kept as itself — the answer, where it is the only one
-     * — and every holder is spelled as found, beside its own name for the argument,
-     * which is all the refusal for several reads. */
+    /* Each profile loaded once and asked in the key the argument named, and each
+     * that holds it what its head's tree holds at its own name for it — the entry
+     * the read meets there (cmd_revert step 11). The question is every local
+     * profile's, not the enabled set's, whose holder the view answers
+     * (core/manifest.h manifest_holder: show, list). A profile names a path once
+     * and holds a name once, so each answers once at most. Two are kept as
+     * themselves — the first holder, and the first a file can be restored into
+     * — and each that can is spelled as found, beside its own name for the
+     * argument, which is all the refusal for several reads. */
     const char *holder = NULL;
+    const char *restorable = NULL;
     string_array_t holders;
     string_array_init(&holders, ctx->arena, 0);
     for (size_t i = 0; !err && i < profiles.count; i++) {
@@ -176,12 +212,18 @@ static error_t revert_select_profile(
             err = profile_holds(profile, arg->storage_path, &held);
             if (!err && held.kind != PROFILE_HELD_NOTHING) storage_path = arg->storage_path;
         }
-        profile_free(profile);
 
-        if (storage_path) {
-            if (!holder) holder = profiles.entries[i];
-            string_array_pushf(&holders, "%s (%s)", profiles.entries[i], storage_path);
-        }
+        profile_held_t entry;
+        if (storage_path) err = profile_entry(profile, storage_path, &entry);
+        profile_free(profile);
+        if (err) break;
+        if (!storage_path) continue;
+
+        if (!holder) holder = profiles.entries[i];
+        if (!revert_restorable(entry.kind)) continue;
+
+        if (!restorable) restorable = profiles.entries[i];
+        string_array_pushf(&holders, "%s (%s)", profiles.entries[i], storage_path);
     }
     if (err) {
         /* The search crosses every local profile, so one this command has nothing
@@ -196,7 +238,7 @@ static error_t revert_select_profile(
         );
     }
 
-    if (holders.count == 0) {
+    if (!holder) {
         /* Held at no head, every profile having answered: a file deleted from
          * its profile is the case a revert exists for, and naming the profile
          * is what reaches it — a profile named is not asked what its head holds
@@ -207,14 +249,20 @@ static error_t revert_select_profile(
         );
     }
 
-    /* One holder: the profile the revert acts on */
-    if (holders.count == 1) {
-        *out_profile = holder;
+    /* One a file can be restored into: the profile the revert acts on. None:
+     * every holder's head holds a directory or a gitlink at its name, and the
+     * first answers — its read refuses it by its noun, as it would refuse each,
+     * where the refusal for several would send the user to a -p that refuses
+     * again. */
+    if (holders.count <= 1) {
+        *out_profile = restorable ? restorable : holder;
         return NULL;
     }
 
     /* Several: the way through is the clause, because no key tells them apart
-     * here — a path asks every profile again, and each answers as before. */
+     * here — a path asks every profile again, and each answers as before. The
+     * count and the list are the choices -p has, so a holder no file can be
+     * restored into is not among them. */
     return error_create(
         ERR_INVALID_ARG,
         "'%s' is held by %zu profiles: %s; -p names one", subject,
@@ -725,19 +773,16 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* Step 11: what the head holds at that name. It may be nothing — a path the
      * profile deleted is exactly what a revert brings back — and where it holds
-     * anything it is a blob, because a revert restores one file's bytes.
-     *
-     * The tree alone, on purpose: Git's one-entry rule about the name the write
-     * uses (core/profiles.h profile_entry), by value, and a directory claim the
-     * sheet holds there never stands in its way — the restore takes its place
-     * where it stands, and carries it where this entry's blob contradicts it
-     * (step 15). So the sheet must not answer here. */
+     * anything it is a blob, because a revert restores one file's bytes: the
+     * question the search asked of every holder (revert_restorable). The tree
+     * alone, on purpose, so a directory claim the sheet holds never stands in
+     * its way, and by value (core/profiles.h profile_entry): the entry's identity
+     * is what the preview diffs. */
     profile_held_t head;
     err = profile_entry(head_profile, restored.storage_path, &head);
     if (err) goto cleanup;
 
-    if (head.kind == PROFILE_HELD_DIRECTORY ||
-        head.kind == PROFILE_HELD_SUBMODULE) {
+    if (!revert_restorable(head.kind)) {
         err = error_create(
             ERR_INVALID_ARG, "'%s' is %s in profile '%s'; revert restores one file",
             restored.storage_path,

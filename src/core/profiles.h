@@ -632,9 +632,11 @@ typedef struct {
  * Readers: profile_holds, which asks it first and the sheet on its silence;
  * profile_find, whose file claim is the blob it answers; cmds/revert.c cmd_revert,
  * at the name the restore writes in the head (step 11), the entry's identity
- * what the preview diffs; core/workspace.c workspace_orphan_authority, for a
- * file record, folding a failure to UNVERIFIED; the encryption policy's prior —
- * the blob the profile holds at the name in the tree its draft opened at, judged
+ * what the preview diffs, and revert_select_profile, at each holder's own name
+ * for the argument — whether a file can be restored there (revert_restorable,
+ * the one question both ask); core/workspace.c workspace_orphan_authority, for
+ * a file record, folding a failure to UNVERIFIED; the encryption policy's prior
+ * — the blob the profile holds at the name in the tree its draft opened at, judged
  * by its own bytes, and none where no blob stands — at each capture (cmds/update.c
  * update_capture) and in add's decision pass (cmds/add.c cmd_add).
  *
@@ -683,14 +685,15 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * rung of the way a restore brings back, where whatever the base holds keeps
  * the rung (profile_restore_file). A reader not on this list is a bug. Three
  * neighbours ask profile_entry instead, the tree alone: revert's read of the
- * head at the name it writes (cmds/revert.c cmd_revert, step 11), where a directory
- * claim is never refused — it gives way to the write where it stands, and rides
- * it where the head's blob contradicts it; the orphan probe's file arm
- * (core/workspace.c workspace_orphan_authority), which asks whether a blob still
- * backs a file record, a subtree and a gitlink standing at a name without making
- * a file claim — its directory arm asking profile_find; and the encryption prior
- * of update's captures and of add's decision pass (cmds/update.c update_capture,
- * cmds/add.c cmd_add), a blob's bytes or none.
+ * head at the name it writes (cmds/revert.c cmd_revert, step 11), and of each
+ * holder's head in its search (revert_select_profile, at the holder's own name
+ * for the argument), where a directory claim is never refused — it gives way to
+ * the write where it stands, and rides it where the head's blob contradicts it;
+ * the orphan probe's file arm (core/workspace.c workspace_orphan_authority),
+ * which asks whether a blob still backs a file record, a subtree and a gitlink
+ * standing at a name without making a file claim — its directory arm asking
+ * profile_find; and the encryption prior of update's captures and of add's decision
+ * pass (cmds/update.c update_capture, cmds/add.c cmd_add), a blob's bytes or none.
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
  *                tree is silent

@@ -805,10 +805,12 @@ const char *state_target(
  * In strcmp order (the principle above). Readers, and what each takes from it:
  *   - core/workspace.c workspace_partition: pairs each record with the active
  *     item at its path by the items' own search (workspace_find_active); the
- *     orphans keep strcmp order, which the join's walk (workspace_load), their
- *     search (workspace_find_item: workspace_find's and the scan's) and the
- *     diverged items' orphan listing (workspace_list, which the screens print)
- *     rest on
+ *     orphans keep strcmp order, which the join's walk (workspace_load), the
+ *     release's walk back over them, every path beneath a directory decided before
+ *     it (workspace_analyze_orphans), their searches (workspace_find_item:
+ *     workspace_find's, the scan's and the release's; workspace_items_beneath,
+ *     the block beneath a path) and the diverged items' orphan listing
+ *     (workspace_list, which the screens print) rest on
  *   - cmds/add.c add_write_record (the takeover note, and whose record a path
  *     its commit let go holds) and add_refuse_ancestry (whose node a link above
  *     a capture is), cmds/update.c update_write_record (whose record a path a

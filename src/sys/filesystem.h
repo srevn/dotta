@@ -657,7 +657,7 @@ typedef enum {
  * permission denied, an I/O error), for a NULL path, and for an entry whose path
  * could not be built: the walk stopped without asking, so "cannot tell" is the
  * answer — never OCCUPIED, which a caller may read as a settled fact about the
- * directory (core/cleanup's permanent fate retires the record on it).
+ * directory (core/workspace's release retires the record on it).
  *
  * @param path Directory path to check (NULL reads UNREADABLE)
  * @param vouch Predicate answering "look past that entry" (may be NULL)

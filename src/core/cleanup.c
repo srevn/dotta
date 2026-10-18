@@ -7,17 +7,17 @@
  *
  * The verdict re-verifies nothing and touches neither disk, Git nor state — every
  * input is a field of the workspace item, written once at load, and no vocabulary
- * of a lower layer is read to interpret one. Preflight takes two looks past it,
- * neither a property any earlier phase could have recorded: the readdir, because
- * what is left in a directory after this run's removals is decided by this run;
- * and the parent's reach, because whether this run may make a removal is a fact
- * about the run, not the item.
+ * of a lower layer is read to interpret one. Preflight reads two things past
+ * it, neither a property any earlier phase could have recorded: what is left in
+ * a directory after this run's removals, off this run's own verdicts on the orphans
+ * beneath it, because this run decides it; and the parent's reach, its one look
+ * at the disk, because whether this run may make a removal is a fact about the
+ * run, not the item.
  */
 
 #include "core/cleanup.h"
 
 #include <limits.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -215,11 +215,12 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
     if (item->state == WORKSPACE_STATE_RELEASED) {
         /* Git no longer backs the path — the branch was deleted, the path was
          * removed from it — dotta never deployed it (the workspace's ownership
-         * gate), or another kind of node stands in its place; the workspace's
-         * load found it either way. The path stays on disk to protect the user's
-         * data, and the record retires because dotta cannot manage what Git cannot
-         * restore, and does not remove what it did not put there: it is released
-         * from dotta's management, not pruned.
+         * gate), another kind of node stands in its place, a row stands on its
+         * entry under another spelling, or it is a directory holding what no
+         * apply removes; the workspace's load found it either way. The path stays
+         * on disk to protect the user's data, and the record retires because
+         * dotta cannot manage what Git cannot restore, and does not remove what
+         * it did not put there: it is released from dotta's management, not pruned.
          *
          * Decided before --force is consulted: --force prunes what would be
          * skipped, never what is released. */
@@ -251,7 +252,8 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
 
     if (item->item_kind == PATH_KIND_DIRECTORY) {
         /* A directory the workspace could not stat or read is skipped whatever
-         * --force says; otherwise the readdir finishes the verdict. */
+         * --force says; otherwise what is left in it once this run has acted
+         * finishes the verdict (cleanup_preflight). */
         return (item->divergence & DIVERGENCE_UNVERIFIED) ? CLEANUP_SKIPPED
                                                           : CLEANUP_PRUNABLE;
     }
@@ -281,74 +283,51 @@ static int cleanup_depth_order(const void *a, const void *b) {
 }
 
 /**
- * What an entry met beneath an orphaned directory amounts to, for that directory's
- * own verdict
+ * Does this run empty a directory? — every orphan beneath it gone once the run
+ * has acted
  *
- * A directory's fate is the strongest class left in it once this run has acted:
- * nothing but gone entries and it is prunable; a skipped one and it is skipped
- * too, the same transient as that entry; a permanent one and it is released,
- * because nothing dotta will ever do empties it. Every present planned item records
- * its class as its verdict is taken, so a directory's walk reads its children's
- * fates off the set; FATE_UNPLANNED is hashmap_get's NULL — the entry is outside
- * the plan — and the workspace item says which of the other two it is
- * (vouch_entry).
+ * Asked of a directory the load left a prune candidate: the load released every
+ * directory holding what no apply removes — an active path beneath it, an orphan
+ * it released, a node no record names (core/workspace.c workspace_analyze_orphans)
+ * — so what stands in this one is the load's orphans beneath it and OS metadata,
+ * nothing else. It empties exactly where each of those orphans is gone: absent
+ * at the load, or one this run prunes — the files of the pass before, and the
+ * directories beneath it, decided before it, deepest first. One that is not —
+ * skipped, refused, or one the plan does not reach: -e spared, outside -p or
+ * the path filter, or waiting with the orphans it displaces — stays in it, and
+ * the directory waits with it: scope decides reach, never verdict, so the run
+ * that removes them all removes the directory too.
+ *
+ * At any depth, never the entries alone: a directory between is an orphan of
+ * the load's whose own verdict is in the set, so depth adds nothing, and the
+ * block is one search (core/workspace.h workspace_orphans_beneath). What else
+ * can lie beneath — a released orphan, in a directory the load could not read,
+ * whose own skip holds this one anyway — is in no set of removals, and holds it
+ * too.
+ *
+ * Membership is keyed by filesystem path, the record's own key, the spelling
+ * the load's readdir met each entry by.
+ *
+ * @param ws The workspace the plan was built from
+ * @param prunable The paths this run prunes, decided so far
+ * @param path The directory
+ * @return Whether nothing but OS metadata is left in it once this run has acted
  */
-typedef enum {
-    FATE_UNPLANNED = 0,
-    FATE_GONE,        /* This run prunes it — the hole the walk looks through */
-    FATE_SKIPPED,     /* This run skips it — transient: update, --force, root, the run that reaches it */
-    FATE_PERMANENT    /* This run releases it, or never touches it — nothing of dotta's comes back for it */
-} fate_t;
+static bool cleanup_emptied(const workspace_t *ws, const hashmap_t *prunable, const char *path) {
+    workspace_items_t beneath = workspace_orphans_beneath(ws, path);
 
-/**
- * The emptiness walk's context: the fate set, the workspace for an entry outside
- * the plan, and whether a skipped entry was met on the way
- */
-typedef struct {
-    const hashmap_t *fates;     /* filesystem path → fate_t, every present planned item */
-    const workspace_t *ws;
-    bool skipped;
-} walk_t;
+    for (size_t i = 0; i < beneath.count; i++) {
+        const workspace_item_t *orphan = beneath.entries[i];
 
-/**
- * Look past this directory entry?
- *
- * The vouch predicate of the verdict phase's emptiness walk. Gone and skipped
- * entries are looked past — a skipped one noted, because the directory then waits
- * with it — and a permanent one stops the walk: the directory is occupied by
- * something this run will not remove and no later run will either.
- *
- * An entry the set holds no fate for — outside the plan — is read off the item
- * the load holds at its path (workspace_find). ORPHANED is skipped: the scope
- * did not reach it this run (-e, -p, a path filter), or it waits with the orphans
- * it displaces, an unfiltered run would decide it, and scope decides reach, never
- * verdict — so a filtered run must not change its parent's fate. Everything else
- * is permanent: a RELEASED orphan stays where it is; an active path (the view
- * has a row, and a row's item is never an orphan's) stands in an enabled profile's
- * name; an entry the load holds no item for is the user's. A landing's orphan
- * is never met here: the directory dotta's node above a row stands in holds that
- * row beneath it too, which the view makes permanent before any readdir
- * (cleanup_preflight), and the one a copy beneath a standing blob stands in lies
- * beneath that blob as well, a landing's itself.
- *
- * Membership is keyed by filesystem path, which is why the entry arrives as a
- * full path rather than a basename.
- */
-static bool vouch_entry(const char *child, void *ctx) {
-    walk_t *walk = ctx;
-    fate_t fate = (fate_t) (uintptr_t) hashmap_get(walk->fates, child);
-
-    if (fate == FATE_UNPLANNED) {
-        const workspace_item_t *item = workspace_find(walk->ws, child);
-
-        fate = item && item->state == WORKSPACE_STATE_ORPHANED ? FATE_SKIPPED : FATE_PERMANENT;
+        /* Not there: gone at the load, or displaced — its squatter, which stands
+         * in the directory, is the one whose fate decides */
+        if (orphan->occupant == FS_OCCUPANT_NONE || orphan->displaced != WORKSPACE_DISPLACED_NONE) {
+            continue;
+        }
+        if (!hashmap_has(prunable, orphan->filesystem_path)) return false;
     }
 
-    if (fate == FATE_SKIPPED) {
-        walk->skipped = true;
-    }
-
-    return fate != FATE_PERMANENT;
+    return true;
 }
 
 /**
@@ -402,26 +381,24 @@ cleanup_preflight_t *cleanup_preflight(
 
     /* The verdicts and their ten buckets are the arena's, beside the items they
      * borrow, and nothing frees them. Neither pass reads a bucket — the directory
-     * pass asks the fate set below — so each item is added to its bucket as its
-     * verdict is taken, and the ten are filled once both passes are done: a bucket
-     * nothing was added to is the empty slice, and needs no guard downstream. */
+     * pass asks the prunable set below — so each item is added to its bucket as
+     * its verdict is taken, and the ten are filled once both passes are done: a
+     * bucket nothing was added to is the empty slice, and needs no guard
+     * downstream. */
     cleanup_preflight_t *verdicts = arena_calloc(arena, 1, sizeof(*verdicts));
     workspace_buckets_t *buckets = workspace_buckets_create(arena);
 
-    /* The fate of every present planned item, in one set: the directory pass
-     * asks it about every entry it meets. Borrowed keys, all workspace-owned;
-     * the values are fate_t, never NULL, so hashmap_get's NULL is "outside the
-     * plan". The set is the arena's, as the verdicts are. */
-    hashmap_t *fates = hashmap_borrow(
-        arena, plan->files.count + plan->directories.count
-    );
+    /* The paths this run prunes, in one set, which the directory pass asks of
+     * every orphan beneath a candidate (cleanup_emptied). Borrowed keys, all
+     * workspace-owned; the set is the arena's, as the verdicts are. */
+    hashmap_t *prunable = hashmap_borrow(arena, plan->files.count + plan->directories.count);
 
     /* One verdict per file, read off the item, then one probe for the ones it
-     * cleared. An absent file joins neither the prune count nor the fate set:
-     * no filesystem effect to preview, and no walk meets it. */
+     * cleared, which join the set. An absent file joins neither the prune count
+     * nor the set: no filesystem effect to preview, and nothing of it stands in
+     * a directory. */
     for (size_t i = 0; i < plan->files.count; i++) {
         const workspace_item_t *item = plan->files.entries[i];
-        fate_t fate = FATE_UNPLANNED;
 
         switch (cleanup_verdict(item, force)) {
             case CLEANUP_ABSENT:
@@ -430,12 +407,10 @@ cleanup_preflight_t *cleanup_preflight(
 
             case CLEANUP_RELEASED:
                 workspace_buckets_add(buckets, item, &verdicts->released_files);
-                fate = FATE_PERMANENT;
                 break;
 
             case CLEANUP_SKIPPED:
                 workspace_buckets_add(buckets, item, &verdicts->skipped_files);
-                fate = FATE_SKIPPED;
                 break;
 
             case CLEANUP_PRUNABLE:
@@ -444,15 +419,11 @@ cleanup_preflight_t *cleanup_preflight(
                  * exactly as a skip does. */
                 if (cleanup_refused(item->filesystem_path)) {
                     workspace_buckets_add(buckets, item, &verdicts->refused_files);
-                    fate = FATE_SKIPPED;
                 } else {
                     workspace_buckets_add(buckets, item, &verdicts->prunable_files);
-                    fate = FATE_GONE;
+                    hashmap_add(prunable, item->filesystem_path, NULL);
                 }
                 break;
-        }
-        if (fate != FATE_UNPLANNED) {
-            hashmap_set(fates, item->filesystem_path, (void *) (uintptr_t) fate);
         }
     }
 
@@ -471,98 +442,55 @@ cleanup_preflight_t *cleanup_preflight(
     for (size_t i = 0; i < dir_count; i++) dirs[i] = plan->directories.entries[i];
     qsort(dirs, dir_count, sizeof(*dirs), cleanup_depth_order);
 
-    /* A directory's verdict is the strongest class left in it once this run has
-     * acted (fate_t): prunable when everything in it is OS metadata or gone;
-     * skipped while something skipped is left; released once something permanent
-     * is. That is what the prune arrives at by acting, read here in one pass —
-     * no second look, no iterating to a fixpoint: a directory's own fate enters
-     * the set as it is decided, which is what lets a parent read each child's
-     * class off the set — its pruned children gone, its skipped ones skipped,
-     * its released ones permanent.
+    /* A directory the load did not release is prunable where this run empties
+     * it, and skipped while an orphan in it stays. That is what the prune arrives
+     * at by acting, read here in one pass — no second look, no iterating to a
+     * fixpoint: a directory enters the set as it is decided, which is what lets
+     * a parent read each child's removal off the set.
      *
      * Each is added to its bucket in walk order, so every directory bucket holds
      * its items deepest first. */
     for (size_t i = 0; i < dir_count; i++) {
         const workspace_item_t *item = dirs[i];
         const char *path = item->filesystem_path;
-        fate_t fate = FATE_UNPLANNED;
 
         switch (cleanup_verdict(item, force)) {
             case CLEANUP_ABSENT:
-                /* A pure state reclaim: no filesystem effect to preview, and no
-                 * walk meets it. */
+                /* A pure state reclaim: no filesystem effect to preview */
                 workspace_buckets_add(buckets, item, &verdicts->absent_dirs);
                 break;
 
             case CLEANUP_RELEASED:
-                /* Left alone — unprobed, because nothing about its contents changes
-                 * the answer — and the record retires. */
+                /* Left alone, unprobed — the load released it, by what it holds
+                 * or for a reason of the record's — and the record retires */
                 workspace_buckets_add(buckets, item, &verdicts->released_dirs);
-                fate = FATE_PERMANENT;
                 break;
 
             case CLEANUP_SKIPPED:
-                /* The workspace could not verify it; the directory above it waits
-                 * with it. */
+                /* The workspace could not verify it, or its home moved; the
+                 * directory above it waits with it */
                 workspace_buckets_add(buckets, item, &verdicts->skipped_dirs);
-                fate = FATE_SKIPPED;
                 break;
 
             case CLEANUP_PRUNABLE:
                 /* A directory the workspace saw and can read (the occupant is
-                 * DIRECTORY: anything else in its place was released above).
-                 * What is left in it after this run, and then the run's reach,
-                 * finish the verdict.
-                 *
-                 * An active path beneath it, on disk yet or not, makes it the
-                 * ancestor of an enabled row — one ensure_parents would create
-                 * anyway — and nothing dotta does empties it: permanent, known
-                 * from the view before any look at the disk. The readdir meets
-                 * the rows deployed already (an active path's entry is permanent,
-                 * vouch_entry); the view answers for the ones deployment will
-                 * put there, this run or a later one that reaches them, which
-                 * is why the disk cannot. Read from the view and never the
-                 * deployment plan, so -p, -e or a path filter cannot move it:
-                 * scope decides reach, never verdict.
-                 *
-                 * Otherwise one readdir, which stops at the first permanent entry
-                 * and notes any skipped one it passed. UNREADABLE is a directory
-                 * that was readable at load and is not now — the world moved,
-                 * and it is skipped like a refusal on removal, not released. */
-                if (workspace_active_beneath(ws, path)) {
-                    fate = FATE_PERMANENT;
-                } else {
-                    walk_t walk = { .fates = fates, .ws = ws, .skipped = false };
-
-                    switch (fs_directory_emptiness(path, vouch_entry, &walk)) {
-                        case FS_DIR_OCCUPIED:   fate = FATE_PERMANENT;
-                            break;
-                        case FS_DIR_UNREADABLE: fate = FATE_SKIPPED;
-                            break;
-                        case FS_DIR_EMPTY:      fate = walk.skipped ? FATE_SKIPPED : FATE_GONE;
-                            break;
-                    }
-                }
-
-                if (fate == FATE_GONE && cleanup_refused(path)) {
-                    /* Nothing but gone entries left, and not this run's to remove:
-                     * skipped, as a refused file is, for the run that holds root.
-                     * Asked last, of what the run would otherwise remove, so a
-                     * directory a permanent entry keeps is released whoever owns
-                     * its parent. */
+                 * DIRECTORY: anything else in its place was released at the load),
+                 * holding nothing that stays — the load released every one that
+                 * does: prunable where this run empties it, skipped while an
+                 * orphan in it stays, for the run that removes it */
+                if (!cleanup_emptied(ws, prunable, path)) {
+                    workspace_buckets_add(buckets, item, &verdicts->skipped_dirs);
+                } else if (cleanup_refused(path)) {
+                    /* Not this run's to remove: skipped, as a refused file is,
+                     * for the run that holds root — the reach asked last, of
+                     * what the run would otherwise remove */
                     workspace_buckets_add(buckets, item, &verdicts->refused_dirs);
-                    fate = FATE_SKIPPED;
                 } else {
-                    workspace_items_t *slice = (fate == FATE_GONE) ? &verdicts->prunable_dirs
-                                             : (fate == FATE_SKIPPED) ? &verdicts->skipped_dirs
-                                                                      : &verdicts->released_dirs;
-                    workspace_buckets_add(buckets, item, slice);
+                    /* Its parent reads it when its own turn comes */
+                    workspace_buckets_add(buckets, item, &verdicts->prunable_dirs);
+                    hashmap_add(prunable, path, NULL);
                 }
                 break;
-        }
-        if (fate != FATE_UNPLANNED) {
-            /* Its parent must read it when its own turn comes. */
-            hashmap_set(fates, path, (void *) (uintptr_t) fate);
         }
     }
 
@@ -588,11 +516,12 @@ cleanup_preflight_t *cleanup_preflight(
  * the old iterate-until-stable loop existed.
  *
  * fs_remove_empty_dir is the mechanism and also the guard: it clears the OS
- * metadata the prediction looked past and nothing else, and it refuses — before
- * touching anything — the moment it meets an entry it may not remove. So an entry
- * that arrived while the prompt waited, or a child whose own removal failed above,
- * stops the removal instead of going with it. That refusal is the "not empty"
- * verdict by another route — ERR_CONFLICT — not a failure.
+ * metadata the load's readdir looked past and nothing else, and it refuses —
+ * before touching anything — the moment it meets an entry it may not remove. So
+ * an entry that arrived since the load, while the prompt waited or before it,
+ * or a child whose own removal failed above, stops the removal instead of going
+ * with it. That refusal is the "not empty" verdict by another route — ERR_CONFLICT
+ * — not a failure.
  *
  * Both probes run again here even though the verdicts are taken, because the
  * mechanisms cannot tell the receipt what they found: fs_remove_file and

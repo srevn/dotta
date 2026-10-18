@@ -99,7 +99,8 @@ struct workspace {
     size_t file_count;                           /* The file items, active[dir_count ..] */
 
     /* The orphan items: the records whose path the view lacks, in the snapshot's
-     * strcmp order, which the join's walk and their searches (workspace_find_item,
+     * strcmp order, which the join's walk, the release's walk back over them
+     * (workspace_analyze_orphans) and their searches (workspace_find_item,
      * workspace_items_beneath) rest on. Read-only — no row names an orphan's
      * path, so no writer ever reaches one; the orphan analysis asks Git why each
      * is here. Each is looked at by the join on every load (workspace_load),
@@ -197,10 +198,11 @@ static bool workspace_path_precedes(const workspace_item_t *a, const workspace_i
  * The item at a path in one sorted array — one kind's active items, or the orphans
  * — or NULL
  *
- * Two askers search the orphans, each to a bound of its own: workspace_find to
- * the analyzed prefix it lends, the scan's leaf guard to every record, analyzed
- * or not (workspace_scan). No such array is ever NULL (workspace_partition), so
- * an empty one is searched as it stands.
+ * Three askers search the orphans, each to a bound of its own: workspace_find
+ * to the analyzed prefix it lends, the scan's leaf guard to every record, analyzed
+ * or not (workspace_scan), and the release's readdir to every orphan, the ladder
+ * done and the bound not yet set (workspace_transient). No such array is ever
+ * NULL (workspace_partition), so an empty one is searched as it stands.
  */
 static workspace_item_t *workspace_find_item(
     workspace_item_t *const *items,
@@ -241,7 +243,7 @@ static workspace_item_t *workspace_find_active(const workspace_t *ws, const char
  * Readers: workspace_look, over the orphans, of a path a link stands at — a row's
  * or a record's — whether a record beneath it would be looked at through the
  * link; workspace_active_beneath, over each kind's active items;
- * workspace_displaced_orphans, over the analyzed orphans, the block it lends.
+ * workspace_orphans_beneath, over the analyzed orphans, the block it lends.
  *
  * @param items One sorted array of the workspace's (never NULL:
  *              workspace_partition)
@@ -626,11 +628,11 @@ static void workspace_add_unscanned(
  * Dotta's node in a landing's way: an orphan record of a file or a link whose
  * look found the node the record knows, standing where the view's rows beneath
  * it need a directory. A directory record with a row beneath is no such node —
- * a directory squats nothing, and cleanup's preflight holds it permanent — and
- * neither is another node in the record's place, which dotta has no record of
- * (the orphan analysis's retyped arm), nor one whose look failed: the rows beneath
- * are looked at then, and meet the same cause where it lies on their way, and
- * the record takes the scope exit's arms (stated).
+ * a directory squats nothing, and the load releases it, the row's ancestor
+ * (workspace_analyze_orphans) — and neither is another node in the record's place,
+ * which dotta has no record of (the orphan analysis's retyped arm), nor one whose
+ * look failed: the rows beneath are looked at then, and meet the same cause where
+ * it lies on their way, and the record takes the scope exit's arms (stated).
  *
  * The one producer of the fact for the join's note, taken before any look beneath
  * (workspace_look), and the ladder's state, taken after the walk
@@ -2056,9 +2058,9 @@ static void workspace_index_entries(workspace_t *ws) {
  * A file: disk against what dotta last confirmed there (workspace_compare_orphan);
  * one whose record confirmed nothing has nothing to be measured against, and is
  * left unmeasured. A directory: nothing to measure — what is left in it is read
- * where its removal is decided (cleanup's emptiness rule) — only whether it can
- * be: one dotta cannot stat or cannot read is unverified, as an unstattable file
- * is, until the user can say what is in it.
+ * once the ladder is done, where it decides the release (workspace_analyze_orphans)
+ * — only whether it can be: one dotta cannot stat or cannot read is unverified,
+ * as an unstattable file is, until the user can say what is in it.
  *
  * Each arm answers one question and only that one — whose refusal, if any — and
  * the tail answers the other for all three: a copy dotta could not measure reads
@@ -2095,9 +2097,9 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
          * and the errno says whose refusal it was. */
         item->fault = workspace_code_fault(error_errno_code(item->lstat_errno));
     } else if (item->item_kind == PATH_KIND_DIRECTORY) {
-        /* A directory: read for the readdir, search for the walk's look at an
-         * entry named like OS metadata (fs_directory_emptiness). Any failure
-         * leaves it unmeasured, and the errno, faccessat's, says whose. */
+        /* A directory: read for the release's readdir, search for the walk's
+         * look at an entry named like OS metadata (fs_directory_emptiness). Any
+         * failure leaves it unmeasured, and the errno, faccessat's, says whose. */
         if (fs_eaccess(item->filesystem_path, R_OK | X_OK) < 0) {
             item->fault = workspace_code_fault(error_errno_code(errno));
         }
@@ -2139,12 +2141,44 @@ static void workspace_look_orphan(workspace_t *ws, workspace_item_t *item) {
 }
 
 /**
+ * Is a directory orphan's entry transient? — the release's readdir looks past
+ * it (sys/filesystem.h fs_directory_emptiness)
+ *
+ * An orphan the ladder left a scope exit's (ORPHANED) is transient: some run of
+ * dotta's removes it, or skips it until one can, so it keeps nothing in the
+ * directory for good. Anything else keeps the directory: an orphan the load
+ * released, a directory among them, decided before its parent
+ * (workspace_analyze_orphans); a node no record names, the user's — a row's is
+ * answered before the readdir. No displaced orphan is met: its squatter stands
+ * between it and every directory the readdir reads. Nor is a landing's: dotta's
+ * node above a row, or a copy beneath a standing blob, has its row beneath the
+ * directory, which the view releases before any readdir. Met by the spelling
+ * the walk joined, the record's own key: an orphan recorded under another spelling
+ * of its path is a stranger here, which keeps the directory — a release, never
+ * a prune (stated).
+ *
+ * Asked while the orphan analysis is still deciding, so every orphan is searched
+ * (workspace_find_item), the analyzed bound not yet set.
+ *
+ * @param entry The entry's full path (must not be NULL)
+ * @param ctx The workspace
+ * @return Whether the directory may be empty without it
+ */
+static bool workspace_transient(const char *entry, void *ctx) {
+    const workspace_t *ws = ctx;
+    const workspace_item_t *orphan = workspace_find_item(ws->orphans, ws->orphan_count, entry);
+
+    return orphan && orphan->state == WORKSPACE_STATE_ORPHANED;
+}
+
+/**
  * Analyze the orphans — the records whose path the view lacks
  *
  * Each was set aside by workspace_partition because no active row names its path:
  * the partition itself is the orphan predicate, and nothing about why a record
- * is here is stored anywhere. Both kinds walk one loop; the record's kind says
- * which questions apply.
+ * is here is stored anywhere. Both kinds walk one ladder, the record's kind saying
+ * which questions apply; then the directories it left a scope exit's walk a second
+ * pass, which reads the ladder's verdicts on what lies in them.
  *
  * Per orphan, in order — the ancestry, presence, the occupant's kind, the entry,
  * position, above a row and beneath a blob, the prune order, the ownership gate,
@@ -2201,11 +2235,11 @@ static void workspace_look_orphan(workspace_t *ws, workspace_item_t *item) {
  *     is overridden all the same, and its landing never removes it;
  *   - the prune order (remove --delete-files): the user chose the fate of the
  *     deployed copy, and Git is not asked. Honoured only with a reference to
- *     measure the copy against — a directory (cleanup's emptiness rule decides)
- *     or a file with a confirmed blob. A prune-ordered file dotta never matched
- *     against anything falls through to the gate: nothing could tell a clean
- *     copy from an edited one, and the user learns at status and apply that the
- *     copy stays, instead of a skip every run;
+ *     measure the copy against — a directory (what is left in it decides) or a
+ *     file with a confirmed blob. A prune-ordered file dotta never matched against
+ *     anything falls through to the gate: nothing could tell a clean copy from
+ *     an edited one, and the user learns at status and apply that the copy stays,
+ *     instead of a skip every run;
  *   - the ownership gate: a record dotta never owned — observed, or confirmed
  *     but never deployed — names a path the user put there before it was active.
  *     Released: the copy is left alone, the record retires, and no tree is asked
@@ -2231,18 +2265,26 @@ static void workspace_look_orphan(workspace_t *ws, workspace_item_t *item) {
  *     lookup it could not make is this orphan's skip and never the load's — the
  *     rule the file analysis takes for its own looks.
  *
+ * Then, deepest first, each directory the ladder left a scope exit's — present,
+ * looked at, readable — by what is left in it. One holding what no apply removes
+ * — an active path beneath it, on disk yet or not, an orphan the load released,
+ * a node no record names — is RELEASED, whatever the run reaches or --force says;
+ * one holding nothing but orphans the ladder left a scope exit's, and OS metadata,
+ * stays ORPHANED, prunable where a run removes them all, which is cleanup's to
+ * say (core/cleanup.h cleanup_preflight); one readable at the measure and not
+ * at the readdir is UNVERIFIED, skipped as one the measure could not read.
+ *
  * Divergence for a file the analysis measures — a prunable copy or an overridden
  * one, and a node, which the join measured before it — is disk against what dotta
  * last confirmed there, the record (workspace_compare_orphan); one whose record
  * confirmed nothing is left unmeasured. A directory's verdict is what is left
- * in it, read where its removal is decided (cleanup's emptiness rule), so there
- * is nothing to measure, only whether it can be: a directory dotta cannot stat,
- * read or search — the path, or a component above it — is UNVERIFIED, the bit
- * an unstattable file carries, and skipped until the user can say what is in
- * it. That is one fs_eaccess per present directory orphan (read and search: the
- * walk lstat's an entry named like OS metadata to see that it is a file); the
- * readdir itself stays cleanup's, because what is left in a directory depends
- * on the plan. Both are the measure's (workspace_measure).
+ * in it, so there is nothing to measure, only whether it can be read: a directory
+ * dotta cannot stat, read or search — the path, or a component above it — is
+ * UNVERIFIED, the bit an unstattable file carries, and skipped until the user
+ * can say what is in it. That is one fs_eaccess per present directory orphan
+ * (read and search: the readdir lstat's an entry named like OS metadata to see
+ * that it is a file), the measure's (workspace_measure); the readdir is the second
+ * pass's, and what is left once a run has acted is cleanup's.
  *
  * This enables status to predict apply behavior (cleanup_verdict reads the same
  * item, and cleanup_skip_reason maps the same bits to the skip):
@@ -2251,8 +2293,9 @@ static void workspace_look_orphan(workspace_t *ws, workspace_item_t *item) {
  * - DIVERGENCE_MODE/OWNERSHIP -> The claim changed, apply will skip
  * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
  * - WORKSPACE_STATE_RELEASED -> Git let go, dotta never deployed it, a row of
- *   the view stands on this very entry under another spelling of its path, or
- *   (with DIVERGENCE_TYPE) another kind of path stands there; apply releases
+ *   the view stands on this very entry under another spelling of its path, (with
+ *   DIVERGENCE_TYPE) another kind of path stands there, or it is a directory
+ *   holding what no apply removes; apply releases
  * - WORKSPACE_STATE_OVERRIDDEN -> a blob the view stands is above it; apply clears
  *   it with that blob's landing, unasked where untouched, else under --force,
  *   never where its look failed (core/deploy.h deploy_clearance)
@@ -2265,10 +2308,11 @@ static void workspace_look_orphan(workspace_t *ws, workspace_item_t *item) {
  * occupant travels with the item for cleanup's verdict phase, which reads the
  * same look.
  *
- * Each arm writes the orphan's verdict onto its item, and the partition's —
- * ORPHANED, nothing wrong — stands where an arm has nothing to write. Nothing
- * is listed here: the diverged items list the orphans once the walk is done
- * (workspace_list), up to the bound it writes last (analyzed_count).
+ * Each arm writes the orphan's verdict onto its item, the second pass a directory's
+ * over the ladder's, and the partition's — ORPHANED, nothing wrong — stands where
+ * neither has anything to write. Nothing is listed here: the diverged items list
+ * the orphans once both passes are done (workspace_list), up to the bound written
+ * last (analyzed_count).
  */
 static void workspace_analyze_orphans(workspace_t *ws) {
     if (ws->orphan_count == 0) {
@@ -2410,11 +2454,11 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * one no row stands on. Divergence still protects an edited copy —
          * cleanup's skip reasons read the same bits.
          *
-         * Only where the copy can be measured at all: a directory against cleanup's
-         * emptiness rule, a file against a confirmed blob. The schema CHECK
-         * (state.c: ownership implies confirmation) guarantees an owned file
-         * record its blob, so for files this discriminates only when deployed_at
-         * == 0 — a prune-ordered record dotta never deployed. */
+         * Only where the copy can be measured at all: a directory by what is
+         * left in it, a file against a confirmed blob. The schema CHECK (state.c:
+         * ownership implies confirmation) guarantees an owned file record its
+         * blob, so for files this discriminates only when deployed_at == 0 — a
+         * prune-ordered record dotta never deployed. */
         if (record->ordered_at > 0 &&
             (item->item_kind == PATH_KIND_DIRECTORY || workspace_base(record))) {
             workspace_measure(ws, item);
@@ -2503,8 +2547,58 @@ static void workspace_analyze_orphans(workspace_t *ws) {
 
     hashmap_clear(authority_cache, workspace_authority_cache_free);
 
-    /* Every orphan analyzed, by a walk that cannot fail: the diverged items list
-     * them from here (workspace_list). */
+    /* What is left in a directory decides its release, and turns on nothing the
+     * run decides: a directory holding what no apply removes is released whatever
+     * the run reaches or --force says, so the load reads it, of every directory
+     * the ladder left a scope exit's — present, looked at, readable — and prune
+     * against skip stays cleanup's (core/cleanup.h cleanup_preflight). Deepest
+     * first: every path beneath a directory sorts after it in the orphans' order
+     * (core/state.h state_records), so walked in reverse each child is decided
+     * before the readdir of the directory above it meets its entry. */
+    for (size_t i = ws->orphan_count; i-- > 0;) {
+        workspace_item_t *item = ws->orphans[i];
+        const char *path = item->filesystem_path;
+
+        if (item->item_kind != PATH_KIND_DIRECTORY || item->state != WORKSPACE_STATE_ORPHANED ||
+            item->occupant != FS_OCCUPANT_DIRECTORY || (item->divergence & DIVERGENCE_UNVERIFIED)) {
+            continue;
+        }
+
+        /* An active path beneath it holds it for its row, whose landing would
+         * create it anyway — asked of the view, which answers for the rows
+         * deployment has yet to put there as for those it has, where the disk
+         * cannot; else one readdir, stopped at the first entry it cannot look
+         * past (workspace_transient). Held in its type: the conditional's own
+         * is int, and only a switch over an enum is held to every value */
+        const fs_emptiness_t emptiness = workspace_active_beneath(ws, path)
+            ? FS_DIR_OCCUPIED : fs_directory_emptiness(path, workspace_transient, ws);
+
+        switch (emptiness) {
+            case FS_DIR_OCCUPIED:
+                /* Released whole: a released item carries no relocation
+                 * (workspace_relocation_t) */
+                item->state = WORKSPACE_STATE_RELEASED;
+                item->relocation = WORKSPACE_RELOCATION_NONE;
+                break;
+
+            case FS_DIR_UNREADABLE:
+                /* Readable at the measure and not now — the world moved: nothing
+                 * can be said of what is left in it, so it is skipped as one
+                 * the measure could not read, never released */
+                item->divergence = DIVERGENCE_UNVERIFIED;
+                item->fault = WORKSPACE_FAULT_UNVERIFIED;
+                break;
+
+            case FS_DIR_EMPTY:
+                /* Nothing but the orphans the ladder left a scope exit's, and
+                 * OS metadata: prunable where a run removes them all, cleanup's
+                 * to say */
+                break;
+        }
+    }
+
+    /* Every orphan analyzed, by two walks that cannot fail: the diverged items
+     * list them from here (workspace_list). */
     ws->analyzed_count = ws->orphan_count;
 }
 
@@ -3708,6 +3802,17 @@ bool workspace_active_beneath(const workspace_t *ws, const char *path) {
 }
 
 /**
+ * The orphans strictly beneath `path` — the block of the analyzed orphans
+ */
+workspace_items_t workspace_orphans_beneath(const workspace_t *ws, const char *path) {
+    if (!ws || !path) return (workspace_items_t){ 0 };
+
+    /* Of the analyzed orphans alone, as the orphans' lender lends them
+     * (analyzed_count): a load that declined the analysis lends none */
+    return workspace_items_beneath(ws->orphans, ws->analyzed_count, path);
+}
+
+/**
  * The squatted directory above `path`, or NULL — the view's claims
  */
 const workspace_squatted_t *workspace_squatted_ancestor(
@@ -3744,9 +3849,7 @@ workspace_items_t workspace_displaced_orphans(
         return (workspace_items_t){ 0 };
     }
 
-    /* Of the analyzed orphans alone, as the orphans' lender lends them
-     * (analyzed_count): a load that declined the analysis lends none */
-    return workspace_items_beneath(ws->orphans, ws->analyzed_count, path);
+    return workspace_orphans_beneath(ws, path);
 }
 
 /**
@@ -4219,11 +4322,11 @@ bool workspace_item_tags(
 
         case WORKSPACE_STATE_RELEASED:
             /* Released from management — Git let the claim go, dotta never deployed
-             * it, another kind of path stands in its place, or a row stands on
-             * its very entry under another spelling of its path. The path is
-             * left on disk, the record retires. Always present: the orphan analysis
-             * decides presence first, so an absent record never reaches this
-             * state. */
+             * it, another kind of path stands in its place, a row stands on its
+             * very entry under another spelling of its path, or it is a directory
+             * holding what no apply removes. The path is left on disk, the record
+             * retires. Always present: the orphan analysis decides presence first,
+             * so an absent record never reaches this state. */
             if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                 tags_out[tag_count++] = "released";
             }

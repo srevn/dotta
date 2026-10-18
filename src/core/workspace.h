@@ -359,7 +359,8 @@ typedef enum {
  * read the record and the view, never the actor. NONE on every item that is not
  * a relocation — an orphan whose profile holds its name at no other path, and
  * every state but ORPHANED (the arms that release a copy or skip it decide before
- * the read, and a DEPLOYED item's claim is at its own path). Two names a profile
+ * the read, the one release after it — a directory's, by what it holds — sets
+ * NONE again, and a DEPLOYED item's claim is at its own path). Two names a profile
  * holds read NONE all the same, being in none of its rows: one its settle did
  * not keep at its new path, the move landing two of its names there, and a second
  * chain through one path. Under a moved home their copies go as any orphan's,
@@ -423,12 +424,12 @@ typedef enum {
  * NONE` iff the item carries DIVERGENCE_UNVERIFIED. Only DEPLOYED (both kinds),
  * ORPHANED, OVERRIDDEN and OBSTRUCTING items can carry one, and UNSCANNED always
  * does — RELEASED is born of answers, never of a failed look (the record's
- * ownership, Git's, a look that found another kind, and the entry's compare,
- * which a look that failed leaves unasked, and which writes its release whole
- * over a node the join measured), and UNDEPLOYED, DELETED and UNTRACKED of looks
- * that answered. And only a file row can be LOCKED: a directory seals no content,
- * so every fault it can carry comes from an errno, and the scan reads no content
- * at all.
+ * ownership, Git's, a look that found another kind, the entry's compare, which
+ * a look that failed leaves unasked, and which writes its release whole over a
+ * node the join measured, and what a directory holds, read only where its measure
+ * found it readable), and UNDEPLOYED, DELETED and UNTRACKED of looks that answered.
+ * And only a file row can be LOCKED: a directory seals no content, so every fault
+ * it can carry comes from an errno, and the scan reads no content at all.
  *
  * Readers: workspace_item_tags (the tag — [locked] / [unreadable] / [unverified],
  * the same word on every arm), status's two keys — Unverifiable's and Issues' —
@@ -941,9 +942,10 @@ bool workspace_pending(
  *
  * Pass by value. Lifetime is the producer's:
  * - the workspace's own — the active items, both kinds or one (workspace_active,
- *   workspace_directories, workspace_files), the orphans, whole or the block an
- *   item's note displaces (workspace_orphans, workspace_displaced_orphans), and
- *   the diverged items (workspace_diverged) — borrow for the workspace's life;
+ *   workspace_directories, workspace_files), the orphans, whole, the block beneath
+ *   a path or the block an item's note displaces (workspace_orphans,
+ *   workspace_orphans_beneath, workspace_displaced_orphans), and the diverged
+ *   items (workspace_diverged) — borrow for the workspace's life;
  * - a classification's buckets (workspace_buckets_t: deploy's plan, core/deploy.h
  *   deploy_partition_t; cleanup's plan and verdicts, core/cleanup.h; status's
  *   sections, cmds/status.c status_print_workspace; update's partition,
@@ -1155,8 +1157,9 @@ typedef struct workspace workspace_t;
  *   landing needs its place — a row of the view beneath it, or a blob above it
  *   — and Git authority, at one ref lookup and a lazy tree load per profile with
  *   present, owned orphans, the sheet beside it where a directory orphan needs
- *   one, and one tree lookup per such orphan. Read by core/cleanup.c
- *   cleanup_plan_build (the settle, apply's cleanup), core/deploy.c
+ *   one, and one tree lookup per such orphan — and what is left in a directory,
+ *   at one readdir per directory the ladder leaves a scope exit's. Read by
+ *   core/cleanup.c cleanup_plan_build (the settle, apply's cleanup), core/deploy.c
  *   deploy_plan_build (the landing's orphans: the nodes it replaces, the copies
  *   it clears) and cmds/status.c status_print_workspace (Issues, Released paths
  *   and Overridden copies).
@@ -1402,7 +1405,7 @@ workspace_items_t workspace_orphans(const workspace_t *ws);
  * that outlives the workspace does not extend them.
  *
  * A pass that must read what it decided while it decides keeps an index of its
- * own beside the buckets (core/cleanup.c cleanup_preflight's fate set;
+ * own beside the buckets (core/cleanup.c cleanup_preflight's prunable set;
  * core/deploy.c deploy_preflight's replaced nodes, whose fates the rows beneath
  * them read); a producer that builds a new element per decision keeps typed arrays
  * of it instead (core/deploy.h deploy_preflight_t's verdicts and skips, the
@@ -1465,13 +1468,11 @@ void workspace_buckets_fill(workspace_buckets_t *buckets);
  * (workspace_diverged). Pure value return — no allocation, no error path; the
  * item is valid for the workspace's lifetime.
  *
- * For a reader walking the disk, which meets a path cold: core/cleanup.c
- * vouch_entry, whose emptiness walk meets an entry no verdict decided and asks
- * whether it is an orphan the scope did not reach; core/deploy.c vouch_clearance,
- * whose clearance's walk meets every entry beneath a blob row's path and asks
- * whether a landing may remove it, and on whose word (core/deploy.h
- * deploy_clearance) — on a load that declined the orphan analysis each reads as
- * a stranger's and stops the walk, the safe direction; core/deploy.c
+ * For a reader walking the disk, which meets a path cold: core/deploy.c
+ * vouch_clearance, whose clearance's walk meets every entry beneath a blob row's
+ * path and asks whether a landing may remove it, and on whose word (core/deploy.h
+ * deploy_clearance) — on a load that declined the orphan analysis an orphan reads
+ * as a stranger's and stops the walk, the safe direction; core/deploy.c
  * holdable_directory, whose landing climb meets a present ancestor and asks whether
  * the view names a directory there. Each asks its own question of the item: an
  * orphan carries no row, and an active item never takes an orphan's state. A
@@ -1499,16 +1500,40 @@ const workspace_item_t *workspace_find(
  * asks the view itself (core/manifest.h manifest_active_beneath): the same rows,
  * by the same relation.
  *
- * Readers: core/cleanup.c cleanup_preflight (an orphaned directory the view holds
- * a row beneath is the ancestor of an enabled row, and permanent); workspace.c
- * workspace_obstructs (dotta's file or link the view's rows beneath need a
- * directory in the place of). A reader not on this list is a bug.
+ * Readers: workspace.c workspace_analyze_orphans (a directory orphan the view
+ * holds a row beneath is the ancestor of an enabled row, released whatever the
+ * disk holds) and workspace_obstructs (dotta's file or link the view's rows beneath
+ * need a directory in the place of). A reader not on this list is a bug.
  *
  * @param ws Workspace (NULL answers false)
  * @param path Directory to ask about, as a key spells one (NULL answers false)
  * @return true where an active path lies strictly beneath it
  */
 bool workspace_active_beneath(const workspace_t *ws, const char *path);
+
+/**
+ * The orphans strictly beneath `path` — the block of the analyzed orphans its
+ * key opens
+ *
+ * At any depth, in the orphans' order, which holds the ones beneath a path in
+ * one block (base/string.h str_path_beneath_order), never "the orphans after
+ * it": strcmp puts a sibling the path merely prefixes ("d-x", "d.conf") between
+ * the path and them. Pure value return — no allocation, no error path; the analyzed
+ * orphans alone (workspace_orphans), so a load that declined the analysis lends
+ * none.
+ *
+ * Readers: core/cleanup.c cleanup_emptied — a directory orphan the load did not
+ * release holds the orphans beneath it and nothing else that stays, so a run
+ * empties it where each of them goes (workspace.c workspace_analyze_orphans,
+ * the release by what is left); workspace_displaced_orphans, the block beneath
+ * an item's own note. A reader not on this list is a bug.
+ *
+ * @param ws Workspace (NULL returns an empty slice)
+ * @param path Directory to ask about, as a key spells one (NULL returns an empty
+ *        slice)
+ * @return Borrowed sub-slice of the orphans, valid for the workspace's lifetime
+ */
+workspace_items_t workspace_orphans_beneath(const workspace_t *ws, const char *path);
 
 /**
  * A squatted directory, and whose claim holds it
@@ -1608,20 +1633,17 @@ const workspace_squatted_t *workspace_squatted_ancestor(
 );
 
 /**
- * The orphans an item's own squatter displaces — the block of the analyzed orphans
- * strictly beneath its path, where the load noted a squatter there and no note
+ * The orphans an item's own squatter displaces — the orphans beneath its path
+ * (workspace_orphans_beneath), where the load noted a squatter there and no note
  * above it reaches them; else none
  *
  * Each was withheld its look by that squatter and carries its class: every class
  * reaches the orphans beneath its squatter, the outermost answering
  * (workspace_displaced_t). The note at an orphan's own path is always the outermost
  * — its look was taken, so no note above it reached it — and a row's need not
- * be, beneath a squatter only a record remembers. The orphans' order holds the
- * ones beneath a path in one block (base/string.h str_path_beneath_order), never
- * "the orphans after it": strcmp puts a sibling the path merely prefixes ("d-x",
- * "d.conf") between the path and them. Pure value return — no allocation, no
- * error path; the analyzed orphans alone (workspace_orphans), so a load that
- * declined the analysis lends none.
+ * be, beneath a squatter only a record remembers. Pure value return — no
+ * allocation, no error path; the analyzed orphans alone, as that block is, so a
+ * load that declined the analysis lends none.
  *
  * Readers: core/cleanup.c cleanup_plan_build — a note at an orphan's path lasts
  * only as long as the orphan's record, which the run reaches only with every

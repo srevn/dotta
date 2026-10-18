@@ -650,8 +650,8 @@ static void status_print_workspace(
                  * though --force only turns a skip into a prune, and never moves
                  * an orphan between the two sections: a reclaim and a release
                  * touch nothing on disk and are listed apart; a prune and a skip
-                 * are Issues, a directory's prune unfinished until apply reads
-                 * what is left in it */
+                 * are Issues, a directory's prune skipped all the same while an
+                 * orphan in it stays */
                 switch (cleanup_verdict(item, false)) {
                     case CLEANUP_ABSENT:
                     case CLEANUP_RELEASED:
@@ -1173,10 +1173,9 @@ static void status_print_workspace(
          * and reads what those tags say and nothing else — never the kind, the
          * relocation's class or what a directory holds, which no tag carries —
          * so it is true of every line it stands over. The bare [orphaned] key
-         * is the header's, a file's and a directory's: a directory's prune waits
-         * on what is left in it, which apply's preview names — and where what
-         * is left is a path dotta keeps or never created, apply releases it:
-         * such a directory stays here, and keeps the line Dirty (stated). A key
+         * is the header's, a file's and a directory's: apply prunes a directory
+         * once the orphans in it go, and skips it while one of them stays — that
+         * orphan's own line says why, and apply's preview names the skip. A key
          * says what becomes of the item and not whether its parent admits the
          * run: a parent that refuses it is apply's skip line to name (stated). */
         status_legend_t legend = { .arena = frame };
@@ -1366,15 +1365,19 @@ static void status_print_workspace(
 
                 case WORKSPACE_STATE_RELEASED:
                     /* The bare [released] key, a file's and a directory's, written
-                     * true of both. Its claim "no longer stands": Git dropped
-                     * it, or Git still carries it where a blob of its profile
-                     * leaves it no room. */
+                     * true of both: a disjunction, each line it stands over true
+                     * by one of its causes. Its claim "no longer stands": Git
+                     * dropped it, or Git still carries it where a blob of its
+                     * profile leaves it no room. And what no apply removes, in
+                     * a directory: an active path beneath it, an orphan the load
+                     * released, a node no record names. */
                     hint = (item->divergence & DIVERGENCE_TYPE)
                         ? "what dotta put there is gone, another kind of path stands "
                         "in its place; apply releases it, the path stays"
                         : "its claim no longer stands in Git, dotta never deployed it, "
-                        "or it is another spelling of a path dotta manages; apply "
-                        "releases it, the path stays";
+                        "it is another spelling of a path dotta manages, or it is a "
+                        "directory holding what no apply removes; apply releases it, "
+                        "the path stays";
                     break;
 
                 case WORKSPACE_STATE_DEPLOYED:

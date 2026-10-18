@@ -119,10 +119,10 @@ static bool deploy_needs_work(const workspace_item_t *item) {
          * reads off the orphans (deploy_plan_build) and the way replaces — no
          * active item, and no work of its own. */
         case WORKSPACE_STATE_RELEASED:
-            /* The path left its profile in Git (an external commit, a pulled
-             * removal, a vanished branch), or dotta never deployed it, and it
-             * was released from management. Never needs deployment — cleanup
-             * reports it and apply's record phase retires its record. */
+            /* An orphan the load released from management, for one of the reasons
+             * the orphan analysis names (core/workspace.c
+             * workspace_analyze_orphans). Never needs deployment — cleanup reports
+             * it and apply's record phase retires its record. */
             break;
     }
 

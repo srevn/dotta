@@ -12,16 +12,17 @@
  *
  * Why the verdicts are a phase of their own and not part of the plan: the plan
  * is (workspace, scope) alone — which orphans this run may touch — and a verdict
- * needs looks at the disk that a plan has no business taking: the readdir that
- * finishes a directory's, and the one probe of the parent that finishes either
- * kind's (may this run make the removal at all).
+ * needs what a plan has no business deciding: what is left in a directory once
+ * this run has acted, read off this run's own verdicts on the orphans beneath
+ * it, and the one probe of the parent that finishes either kind's (may this run
+ * make the removal at all).
  *
- * The verdicts are a function of what the workspace's load wrote on the item —
- * the occupant, divergence, Git authority — of the view, of the plan, and of
- * --force. A confirmation prompt may sit between preflight and execute; nothing
- * here looks again across it, and nothing pretends to: execute reports what it
- * finds (a path gone by then, a directory that gained an entry) and re-decides
- * nothing. The same stance as core/deploy.
+ * The verdicts are a function of what the workspace's load wrote on the items —
+ * the occupant, divergence, Git authority, a directory's release by what it holds
+ * — of the plan, and of --force. A confirmation prompt may sit between preflight
+ * and execute; nothing here looks again across it, and nothing pretends to: execute
+ * reports what it finds (a path gone by then, a directory that gained an entry)
+ * and re-decides nothing. The same stance as core/deploy.
  *
  * One producer per fact:
  * - what stands at an orphan's path: the workspace's lstat, carried on the item
@@ -33,17 +34,21 @@
  *   holds (cleanup_plan_t): cleanup_verdict, from the item — RELEASED ⇒ released
  *   (left on disk, record retires — never pruned, --force included: dotta removes
  *   what it deployed and Git still backs, and lets go of what Git lost, of what
- *   it never deployed, of a path another kind of node stands at, and of a key
- *   that spells a path a row stands on under another spelling); a relocated home/
- *   claim ⇒ skipped unless --force, either kind (the copy is the claim's old
- *   home — see the verdict table); a file with a cleanup_skip_reason ⇒ skipped
- *   unless --force; a directory the workspace could not verify ⇒ skipped, --force
- *   included; else prunable, a directory's remainder permitting
- * - what is left in a directory after this run: fs_directory_emptiness, vouching
- *   for what this run prunes and for what it merely skips (preflight;
- *   cleanup_preflight_t has the classes), and fs_remove_empty_dir, which removes
- *   exactly what that walk looks past as gone and refuses anything else before
- *   touching it (execute)
+ *   it never deployed, of a path another kind of node stands at, of a key that
+ *   spells a path a row stands on under another spelling, and of a directory
+ *   holding what no apply removes); a relocated home/ claim ⇒ skipped unless
+ *   --force, either kind (the copy is the claim's old home — see the verdict
+ *   table); a file with a cleanup_skip_reason ⇒ skipped unless --force; a directory
+ *   the workspace could not verify ⇒ skipped, --force included; else prunable,
+ *   a directory's remainder permitting
+ * - what a directory holds that no apply removes: the load's readdir, which
+ *   releases it (core/workspace.c workspace_analyze_orphans: RELEASED, read off
+ *   the item like every other release)
+ * - what is left in a directory the load did not release, once this run has acted:
+ *   its orphans, by this run's verdicts on them (preflight; cleanup_preflight_t
+ *   has the classes), and fs_remove_empty_dir, which removes the OS metadata
+ *   the load's readdir looked past and refuses anything else before touching it
+ *   (execute)
  * - whether this run is denied a removal the item's facts cleared: the parent's
  *   bits, asked for write and search (fs_denied), once per such item (preflight
  *   — the refused buckets). The one fact here that is the run's and not the path's,
@@ -67,12 +72,12 @@
  * are the workspace's, so none outlives the arena the workspace was loaded into.
  *
  * Integration:
- * - workspace.h: orphan detection, the occupant, Git authority, divergence; the
- *                orphans a squatter displaces, for the plan's reach; the view
- *                (the active paths beneath a directory) and the items (an entry
- *                no verdict decided) for a directory's remainder
+ * - workspace.h: orphan detection, the occupant, Git authority, divergence, a
+ *                directory's release by what it holds; the orphans a squatter
+ *                displaces, for the plan's reach; the orphans beneath a directory,
+ *                for its remainder
  * - scope.h:     the three filter dimensions
- * - filesystem.h: the emptiness walk, the removals, execute's probe
+ * - filesystem.h: the parent's reach, the removals, execute's probe
  */
 
 #ifndef DOTTA_CLEANUP_H
@@ -264,14 +269,15 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  * What becomes of a planned orphan, read off the item alone
  *
  * The verdict buckets of cleanup_preflight_t, as a value — PRUNABLE split once
- * more there, by the run's reach. One producer, and its readers: core/cleanup.c
- * cleanup_preflight, which fills the buckets by it; and cmds/status.c
- * status_print_workspace, which files a scope exit's orphan by it, unforced —
- * ABSENT and RELEASED listed apart, nothing on disk changing, and SKIPPED and
- * PRUNABLE under Issues, a directory's PRUNABLE unfinished there (stated). A
- * reader not on this list is a bug. Status's keys read the tags instead: a key
- * speaks for every line carrying them, a verdict for one item. In the order the
- * tests are taken — the occupant, the state, the divergence bits:
+ * more there, by the run's reach and a directory's remainder. One producer, and
+ * its readers: core/cleanup.c cleanup_preflight, which fills the buckets by it;
+ * and cmds/status.c status_print_workspace, which files a scope exit's orphan
+ * by it, unforced — ABSENT and RELEASED listed apart, nothing on disk changing,
+ * and SKIPPED and PRUNABLE under Issues, a directory's PRUNABLE skipped all the
+ * same while an orphan beneath it stays (stated). A reader not on this list is
+ * a bug. Status's keys read the tags instead: a key speaks for every line carrying
+ * them, a verdict for one item. In the order the tests are taken — the occupant,
+ * the state, the divergence bits:
  *
  *   occupant NONE                         ABSENT     record retires, no effect
  *   state RELEASED                        RELEASED   left alone, record retires
@@ -332,16 +338,18 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    finishes. A file: removed,
  *                                                    once the parent admits the
  *                                                    run. A directory: prunable
- *                                                    once nothing but gone entries
- *                                                    is left in it and the parent
+ *                                                    once every orphan beneath
+ *                                                    it is gone and the parent
  *                                                    admits the run, skipped
- *                                                    while a skipped one is,
- *                                                    released once a permanent
- *                                                    one is (the classes are on
+ *                                                    while one stays — the load
+ *                                                    released every directory
+ *                                                    holding what no apply removes
+ *                                                    (the classes are on
  *                                                    cleanup_preflight_t)
  *
- * PRUNABLE is the one verdict the item alone cannot finish: the remainder and
- * the reach are preflight's, from the disk.
+ * PRUNABLE is the one verdict the item alone cannot finish: the remainder, off
+ * this run's verdicts on the orphans beneath a directory, and the reach, off
+ * the parent's bits, are preflight's.
  *
  * Never asked of a landing's orphan, which the plan never holds — dotta's node
  * above a row, a copy beneath a standing blob: its fate is the landing's
@@ -352,7 +360,7 @@ typedef enum {
     CLEANUP_ABSENT,      /* Not on disk at load → record retires, no filesystem effect */
     CLEANUP_RELEASED,    /* Left on disk → record retires */
     CLEANUP_SKIPPED,     /* Left on disk → record stays */
-    CLEANUP_PRUNABLE     /* Removed — a directory, once the readdir agrees */
+    CLEANUP_PRUNABLE     /* Removed — a directory, once this run empties it */
 } cleanup_verdict_t;
 
 /**
@@ -410,33 +418,32 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  * write bit the invoker lacks.
  *
  * A directory is predicted against this same run's own effects — what is left
- * in it once the run has acted. What the readdir meets falls into three classes,
- * and the verdict is the strongest one met:
+ * in it once the run has acted. The load released every directory holding what
+ * no apply removes (core/workspace.c workspace_analyze_orphans): an active path
+ * beneath it, on disk already or not, so the directory is the ancestor of an
+ * enabled row, one ensure_parents would create anyway; an orphan the load released;
+ * anything else — the user's. So one planned here holds the load's orphans beneath
+ * it and OS metadata, nothing else, and each falls into one of two classes:
  *
- *   gone        OS metadata; an entry this run prunes (prunable_files, and
- *               prunable_dirs beneath it)
- *   skipped     an entry this run skips (skipped_files, skipped_dirs beneath);
+ *   gone        OS metadata; an orphan this run prunes (prunable_files, and
+ *               prunable_dirs beneath it); an orphan that is not there — absent
+ *               at the load, or displaced, its squatter what stands in the
+ *               directory
+ *   skipped     an orphan this run skips or is refused (skipped_*, refused_*);
  *               an orphan the plan does not reach (-e spared, outside -p or the
- *               path filter), or one waiting with the orphans it displaces, whose
- *               state is ORPHANED — transient by the same rule: scope decides
- *               reach, never verdict, so an unfiltered run would decide it and
- *               a filtered run must not change its parent's fate
- *   permanent   an entry this run releases (released_files, released_dirs
- *               beneath); an orphan the plan does not reach, or one waiting,
- *               whose state is RELEASED; an active path — the view has a row
- *               beneath the directory, on disk already or not, so the directory
- *               is the ancestor of an enabled row, one ensure_parents would create
- *               anyway; anything else — the user's
+ *               path filter), or one waiting with the orphans it displaces —
+ *               transient by the same rule: scope decides reach, never verdict,
+ *               so an unfiltered run would decide it and a filtered run must
+ *               not change its parent's fate
  *
  *   nothing but gone left      prunable
- *   a skipped entry left       skipped   — transient: update, --force, or the
- *                                          run that reaches it
- *   a permanent entry left     released  — nothing dotta will ever do empties it
+ *   a skipped orphan left      skipped   — transient: update, --force, root, or
+ *                                          the run that reaches it
  *
- * That is what the prune arrives at by acting, read off the plan here in one
- * deepest-first pass, so the preview can say "2 will be pruned" about directories
- * that still hold the files this run prunes: the ordinary shape of disabling a
- * profile.
+ * That is what the prune arrives at by acting, read off this run's verdicts here
+ * in one deepest-first pass (cleanup.c cleanup_emptied), so the preview can say
+ * "2 will be pruned" about directories that still hold the files this run prunes:
+ * the ordinary shape of disabling a profile.
  *
  * Released for a directory means what it means for a file — dotta's claim on
  * the path ends, the path stays. A directory holding something not dotta's to
@@ -447,9 +454,11 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  * directory is empty by hand. That trade buys a status that goes quiet when there
  * is nothing left for apply to do, where a skip would nag every run.
  *
- * Exact except where the world moves underneath it — a change made while the
- * confirmation prompt waits, an I/O failure — and the run reports whatever it
- * could not do. prunable_dirs is deepest first.
+ * Exact except where the world moves underneath it — a change made since the
+ * load, while the confirmation prompt waits or before it, an I/O failure — and
+ * the run reports whatever it could not do: an entry that arrived in a directory
+ * since its readdir is the removal's refusal (fs_remove_empty_dir, skipped_dirs
+ * on the receipt). prunable_dirs is deepest first.
  */
 typedef struct {
     /* Files */
@@ -460,10 +469,10 @@ typedef struct {
     workspace_items_t absent_files;      /* Not on disk at load → record retires, no filesystem effect */
 
     /* Directories */
-    workspace_items_t prunable_dirs;     /* Present; nothing but gone entries left → removed */
-    workspace_items_t refused_dirs;      /* Present; nothing but gone entries left, the parent denies this run → left alone, record stays */
-    workspace_items_t skipped_dirs;      /* Present; a skipped entry left, could not be verified, or its home moved → left alone, record stays */
-    workspace_items_t released_dirs;     /* Released by the workspace, or a permanent entry left → left alone, record retires */
+    workspace_items_t prunable_dirs;     /* Present; every orphan in it gone → removed */
+    workspace_items_t refused_dirs;      /* Present; every orphan in it gone, the parent denies this run → left alone, record stays */
+    workspace_items_t skipped_dirs;      /* Present; an orphan left in it, could not be verified, or its home moved → left alone, record stays */
+    workspace_items_t released_dirs;     /* Released by the workspace → left alone, record retires */
     workspace_items_t absent_dirs;       /* Not there → record retires */
 } cleanup_preflight_t;
 
@@ -474,19 +483,18 @@ typedef struct {
  * workspace load — then, for a prunable one, the parent's reach (one fs_denied).
  * Directories, deepest first — an order this pass establishes (cleanup.c
  * cleanup_depth_order): cleanup_verdict from the item likewise (a released or
- * unverified directory is left alone, unprobed), then for each candidate the
- * view (an active path beneath it) and one readdir, against the files above,
- * the directories already decided beneath them, and — for an entry outside the
- * plan — its workspace item; then, for one nothing but gone entries is left in,
- * the parent's reach. The reach is asked last, of what the run would otherwise
- * remove: a directory a permanent entry keeps is released whoever owns its parent.
+ * unverified directory is left alone, unprobed — the load released every one
+ * holding what no apply removes), then for each candidate the orphans beneath
+ * it (cleanup.c cleanup_emptied), against the files above and the directories
+ * already decided beneath them; then, for one this run empties, the parent's
+ * reach. The reach is asked last, of what the run would otherwise remove: a
+ * directory an orphan keeps is skipped whoever owns its parent.
  *
  * READ-ONLY: modifies neither the filesystem, the state database nor Git.
  *
  * @param arena Arena the verdicts and their buckets live in (must not be NULL)
- * @param ws Workspace the plan was built from (must not be NULL; the view answers
- *        for the active paths beneath a directory, the items for the entries
- *        outside the plan)
+ * @param ws Workspace the plan was built from (must not be NULL; it lends the
+ *        orphans beneath a directory, for its remainder)
  * @param plan Cleanup plan (must not be NULL)
  * @param force --force: prune what would be skipped too; never a released file,
  *        never a directory's UNVERIFIED (cleanup_verdict), never a refusal (root

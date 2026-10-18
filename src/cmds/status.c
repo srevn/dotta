@@ -418,6 +418,83 @@ static void status_print_manifest(
 }
 
 /**
+ * A section's key: a line per tag string its rows show, with the hint the section
+ * gave the first of them, in the order the rows show them — so the column beneath
+ * reads back against the list above it
+ *
+ * Built a row at a time beside the list (status_legend_add) and printed after
+ * it (status_print_legend). Each section picks a row's hint where it adds the
+ * row, from what the tags say and nothing else, so one hint is true of every
+ * row carrying its tags. A value of the frame its sections are made in: nothing
+ * frees one.
+ */
+typedef struct {
+    arena_t *arena;                                        /* The frame: the keys and their strings */
+    struct { const char *tags; const char *hint; } *keys;  /* One per tag string, as first shown */
+    size_t count;
+    size_t capacity;
+    size_t width;                                          /* The widest tag string: the column's */
+} status_legend_t;
+
+/**
+ * Key a row's tags: once per tag string, the first row's hint kept
+ *
+ * @param legend The section's legend (must not be NULL)
+ * @param tags The row's tags, as workspace_item_tags gave them
+ * @param tag_count How many
+ * @param hint The section's hint for them (NULL: the header speaks for them)
+ */
+static void status_legend_add(
+    status_legend_t *legend, const char *const *tags, size_t tag_count, const char *hint
+) {
+    if (!hint) return;
+
+    /* The bracketing and spacing the list gives the row's tags, in room for any
+     * row's: six tags at most (WORKSPACE_ITEM_MAX_TAGS), a dozen letters each */
+    char key[WORKSPACE_ITEM_MAX_TAGS * 16] = "";
+    for (size_t t = 0; t < tag_count; t++) {
+        size_t used = strlen(key);
+        snprintf(key + used, sizeof(key) - used, "%s[%s]", t > 0 ? " " : "", tags[t]);
+    }
+
+    for (size_t i = 0; i < legend->count; i++) {
+        if (strcmp(legend->keys[i].tags, key) == 0) {
+            return;
+        }
+    }
+
+    legend->keys = arena_grow(
+        legend->arena, legend->keys, &legend->capacity, legend->count + 1,
+        sizeof(*legend->keys)
+    );
+    legend->keys[legend->count].tags = arena_strdup(legend->arena, key);
+    legend->keys[legend->count].hint = hint;
+    legend->count++;
+
+    size_t len = strlen(key);
+    if (len > legend->width) legend->width = len;
+}
+
+/**
+ * Print a section's key beneath its list: a gap, then a dimmed line per tag string,
+ * the strings aligned — nothing where no row was keyed
+ *
+ * @param out Output context (must not be NULL)
+ * @param legend The section's legend (must not be NULL)
+ */
+static void status_print_legend(output_t *out, const status_legend_t *legend) {
+    if (legend->count == 0) return;
+
+    output_gap(out, OUTPUT_NORMAL);
+    for (size_t i = 0; i < legend->count; i++) {
+        output_hintline(
+            out, OUTPUT_NORMAL, "  %-*s - %s",
+            (int) legend->width, legend->keys[i].tags, legend->keys[i].hint
+        );
+    }
+}
+
+/**
  * Print the workspace status
  *
  * Shows the consistency between the view, the record and the filesystem: the
@@ -801,13 +878,8 @@ static void status_print_workspace(
         );
 
         /* Keyed by the exact tags the line shows, the way Issues is keyed, so
-         * the column below reads back against the one above. Three classes
-         * (workspace_fault_t), and the policy bit before the class and a pending
-         * reassignment after it can each ride on the line ([unencrypted]
-         * [unreadable] [reassigned]), so twelve keys bound the domain. */
-        struct { char tags[64]; const char *hint; } legend[12];
-        size_t legend_count = 0;
-        size_t legend_width = 0;
+         * the column below reads back against the one above */
+        status_legend_t legend = { .arena = frame };
 
         for (size_t i = 0; i < unverifiable.count; i++) {
             const workspace_item_t *item = unverifiable.entries[i];
@@ -859,44 +931,12 @@ static void status_print_workspace(
                         "meets it prints why";
                     break;
             }
-
-            /* Same bracketing and spacing the list gives the item line, so the
-             * column below matches the one above */
-            char key[64] = "";
-            for (size_t t = 0; t < tag_count; t++) {
-                size_t used = strlen(key);
-                snprintf(
-                    key + used, sizeof(key) - used, "%s[%s]",
-                    t > 0 ? " " : "", tags[t]
-                );
-            }
-
-            size_t slot = 0;
-            while (slot < legend_count && strcmp(legend[slot].tags, key) != 0) {
-                slot++;
-            }
-            if (slot == legend_count &&
-                legend_count < sizeof(legend) / sizeof(legend[0])) {
-                size_t len = strlen(key);
-                memcpy(legend[legend_count].tags, key, len + 1);
-                legend[legend_count].hint = hint;
-                legend_count++;
-                if (len > legend_width) legend_width = len;
-            }
+            status_legend_add(&legend, tags, tag_count, hint);
         }
 
         output_list_render(list);
         output_list_free(list);
-
-        if (legend_count > 0) {
-            output_gap(out, OUTPUT_NORMAL);
-            for (size_t i = 0; i < legend_count; i++) {
-                output_hintline(
-                    out, OUTPUT_NORMAL, "  %-*s - %s",
-                    (int) legend_width, legend[i].tags, legend[i].hint
-                );
-            }
-        }
+        status_print_legend(out, &legend);
     }
 
     /* Section 5: Uncommitted Changes */
@@ -1105,20 +1145,8 @@ static void status_print_workspace(
          * is the header's, a file's and a directory's: a directory's prune waits
          * on what is left in it, which apply's preview names (stated). A key
          * says what becomes of the item and not whether its parent admits the
-         * run: a parent that refuses it is apply's skip line to name (stated).
-         *
-         * [orphaned] and one of ten — absence, a squatter, one of three failed
-         * looks, the content, one claim axis or both, or nothing — the last eight
-         * with or without [relocated], which no absent or displaced orphan carries;
-         * [released] with or without [type]; and [obstructing] and one of eight
-         * — one of three failed looks, the content, one claim axis or both, or
-         * nothing: twenty-eight keys bound the domain (core/workspace.c
-         * workspace_item_tags, its ORPHANED, RELEASED and OBSTRUCTING arms). A
-         * legend that held fewer would drop a key in silence, and the header
-         * would promise its line a prune. */
-        struct { char tags[64]; const char *hint; } legend[28];
-        size_t legend_count = 0;
-        size_t legend_width = 0;
+         * run: a parent that refuses it is apply's skip line to name (stated). */
+        status_legend_t legend = { .arena = frame };
 
         for (size_t i = 0; i < orphaned.count; i++) {
             const workspace_item_t *item = orphaned.entries[i];
@@ -1261,45 +1289,12 @@ static void status_print_workspace(
                         false, "the orphaned bucket holds ORPHANED, RELEASED and OBSTRUCTING alone"
                     );
             }
-            if (!hint) continue;
-
-            /* Same bracketing and spacing the list gives the item line, so the
-             * column below matches the one above */
-            char key[64] = "";
-            for (size_t t = 0; t < tag_count; t++) {
-                size_t used = strlen(key);
-                snprintf(
-                    key + used, sizeof(key) - used, "%s[%s]",
-                    t > 0 ? " " : "", tags[t]
-                );
-            }
-
-            size_t slot = 0;
-            while (slot < legend_count && strcmp(legend[slot].tags, key) != 0) {
-                slot++;
-            }
-            if (slot == legend_count &&
-                legend_count < sizeof(legend) / sizeof(legend[0])) {
-                size_t len = strlen(key);
-                memcpy(legend[legend_count].tags, key, len + 1);
-                legend[legend_count].hint = hint;
-                legend_count++;
-                if (len > legend_width) legend_width = len;
-            }
+            status_legend_add(&legend, tags, tag_count, hint);
         }
 
         output_list_render(list);
         output_list_free(list);
-
-        if (legend_count > 0) {
-            output_gap(out, OUTPUT_NORMAL);
-            for (size_t i = 0; i < legend_count; i++) {
-                output_hintline(
-                    out, OUTPUT_NORMAL, "  %-*s - %s",
-                    (int) legend_width, legend[i].tags, legend[i].hint
-                );
-            }
-        }
+        status_print_legend(out, &legend);
     }
 
     /* The sections are printed, and their frame goes with them */

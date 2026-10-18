@@ -1875,11 +1875,15 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
              * what the pull added and updated, what passed to another profile,
              * what another's blob stands over, what left. A departure here is a
              * Git-side removal, so an orphan it leaves is one apply releases
-             * (the record retires, the copy stays) — save one beneath a blob
-             * the view after stands, which that blob's landing clears, counted
-             * released all the same (stated); a departure with no record has no
-             * filesystem effect and asks nothing of the user, so it is not
-             * counted. */
+             * (the record retires, the copy stays) — save where an arm the orphan
+             * analysis asks ahead of Git decides otherwise (core/workspace.c
+             * workspace_analyze_orphans), each counted released all the same
+             * (stated): a copy already gone, reclaimed; dotta's node above a
+             * row the view after stands, which the landing beneath it replaces;
+             * a copy beneath a blob it stands, which that blob's landing clears;
+             * and a copy the user ordered pruned, where it can be measured. A
+             * departure with no record has no filesystem effect and asks nothing
+             * of the user, so it is not counted. */
             output_print(out, OUTPUT_NORMAL, "  %s:", s->profile);
             const char *sep = " ";
             if (s->added > 0) {

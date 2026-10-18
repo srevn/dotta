@@ -935,14 +935,20 @@ error_t state_retire(state_t *state, const char *filesystem_path);
  * fate of a copy nothing backs any more — one the removal named, or one dotta
  * deployed; never a copy dotta merely found under an unnamed path (the gate the
  * one settle loop enforces, cmds/remove remove_settle) — and apply is to prune
- * it: a clean copy no row stands on under another spelling, whose record the
- * workspace's orphan analysis releases ahead of the order, the path being in
- * the view; cleanup's skip reasons still protect a modified one. A missing record
- * is a no-op success: the UPDATE matches no row, since nothing was ever observed
- * at the path. At birth an ordered path is out of the view by construction —
- * the settle loop runs only over paths the post-commit view lacks, whichever
- * remove route called it. A repeated order re-stamps: the order standing is the
- * latest.
+ * it where the orphan analysis reaches the order (core/workspace.c
+ * workspace_analyze_orphans). The arms it asks before the order decide first,
+ * position among them (below): a copy beneath a squatter is released unlooked-at,
+ * one already gone reclaimed, another node in its place released, and so is a
+ * key a row stands on under another spelling, the path being in the view. The
+ * order is honoured only where the copy can be measured — a directory by what
+ * is left in it, a file against the blob dotta confirmed — so a file it never
+ * confirmed falls through to the ownership gate, which releases it: dotta owns
+ * no file it did not confirm (state_record_t). Cleanup's skip reasons still protect
+ * a modified one. A missing record is a no-op success: the UPDATE matches no
+ * row, since nothing was ever observed at the path. At birth an ordered path is
+ * out of the view by construction — the settle loop runs only over paths the
+ * post-commit view lacks, whichever remove route called it. A repeated order
+ * re-stamps: the order standing is the latest.
  *
  * An order lives only while its path is out of the view. Read in exactly one
  * place — the workspace's orphan analysis, behind position: a copy above a row

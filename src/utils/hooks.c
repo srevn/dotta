@@ -15,6 +15,7 @@
 #include "base/string.h"
 #include "sys/filesystem.h"
 #include "sys/process.h"
+#include "utils/config.h"
 
 /* --- Internal types ------------------------------------------------------ */
 
@@ -32,11 +33,10 @@ typedef enum {
     HOOK_POST_SYNC,
 } hook_type_t;
 
-/* Hook environment. Pointers are borrowed from the configuration, the invocation
- * and its backing strings; this struct is stack-allocated in hook_fire and lives
- * only for the duration of one hook_execute call. */
+/* Hook environment. Pointers are borrowed from the invocation and its backing
+ * strings, the command's word a literal; this struct is stack-allocated in
+ * hook_fire and lives only for the duration of one hook_execute call. */
 typedef struct {
-    const char *repo_dir;
     const char *command;
     const char *profile;
     char *const *paths;
@@ -89,19 +89,23 @@ static bool hook_is_enabled(const config_t *config, hook_type_t type) {
 }
 
 /**
- * The hook's environment, a string array in `arena`: the DOTTA_* surface, the
- * command's extras, then the process's own environment with its DOTTA_* left
- * out, so the surface above cannot be shadowed. An envp as it stands — it always
- * holds DOTTA_DRY_RUN and DOTTA_PATH_COUNT, so its spine exists and is ended.
+ * The hook's environment, a string array in `arena`: the run's configuration
+ * and the process's own environment with its DOTTA_* left out (utils/config.h
+ * config_child_env), then the DOTTA_* surface and the command's extras, which
+ * nothing the process holds can shadow. An envp as it stands — it always holds
+ * DOTTA_DRY_RUN and DOTTA_PATH_COUNT, so its spine exists and is ended.
  */
-static void hook_env(const hook_context_t *context, arena_t *arena, string_array_t *env) {
-    extern char **environ;
-
+static void hook_env(
+    const config_t *config, const hook_context_t *context, arena_t *arena,
+    string_array_t *env
+) {
     string_array_init(env, arena, 0);
 
-    /* DOTTA_* surface — the store's directory, two optional, two always-on, then
-     * one per path. */
-    string_array_pushf(env, "DOTTA_REPO_DIR=%s", context->repo_dir);
+    /* The run's configuration — the store's directory it settled, the file it
+     * read — and the process's environment beneath it */
+    config_child_env(config, config->repo_dir, env);
+
+    /* DOTTA_* surface — two optional, two always-on, then one per path. */
     if (context->command) string_array_pushf(env, "DOTTA_COMMAND=%s", context->command);
     if (context->profile) string_array_pushf(env, "DOTTA_PROFILE=%s", context->profile);
 
@@ -113,17 +117,10 @@ static void hook_env(const hook_context_t *context, arena_t *arena, string_array
         string_array_pushf(env, "DOTTA_PATH_%zu=%s", i, context->paths[i]);
     }
 
-    /* Per-command extras (e.g. DOTTA_REMOTE for sync). Appended before the environ
-     * pass-through so the DOTTA_* filter at the next step doesn't shadow them
-     * with stale process-env values. */
+    /* Per-command extras (e.g. DOTTA_REMOTE for sync), the surface's own: the
+     * process's DOTTA_* never reached the environment, so no stale value of one
+     * stands beside it. */
     for (char *const *e = context->extras; e && *e; e++) string_array_push(env, *e);
-
-    /* Copy system environment variables (PATH, HOME, etc.) — DOTTA_* are skipped
-     * so our authoritative surface above isn't shadowed. */
-    for (char **e = environ; *e; e++) {
-        if (str_starts_with(*e, "DOTTA_")) continue;
-        string_array_push(env, *e);
-    }
 }
 
 /**
@@ -192,7 +189,7 @@ static error_t hook_execute(
     }
 
     string_array_t env;
-    hook_env(context, frame, &env);
+    hook_env(config, context, frame, &env);
 
     char *argv[] = { (char *) hook_path, NULL };  /* execve's type; never written */
     process_spec_t spec = {
@@ -319,7 +316,6 @@ static error_t hook_fire(
     process_result_t *out_result
 ) {
     const hook_context_t ctx = {
-        .repo_dir   = config->repo_dir,
         .command    = cmd_name(inv->cmd),
         .profile    = inv->profile,
         .paths      = inv->paths,

@@ -10,6 +10,7 @@
 #
 # Environment variables provided by dotta:
 #   DOTTA_REPO_DIR    - Path to dotta repository
+#   DOTTA_CONFIG_FILE - Path to the configuration file the run read
 #   DOTTA_COMMAND     - Command being executed ("update")
 #   DOTTA_PROFILE     - Space-separated list of profiles being updated
 #   DOTTA_PATH_COUNT  - Number of paths given, each a file or a directory;

@@ -10,6 +10,7 @@
 #include <tomlc17.h>
 
 #include "base/arena.h"
+#include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/gitignore.h"
@@ -222,6 +223,10 @@ config_t *config_create_default(arena_t *arena) {
      * HOME spelled there. */
     config_t *config = arena_calloc(arena, 1, sizeof(*config));
 
+    /* The file it is read from: the default location, until the variable names
+     * another (config_load) */
+    config->file = str_path_join(arena, identity()->home, DEFAULT_CONFIG_FILE);
+
     /* Set defaults */
     config->repo_dir = str_path_join(arena, identity()->home, DEFAULT_REPO_DIR);
     config->strict_mode = false;
@@ -272,18 +277,6 @@ config_t *config_create_default(arena_t *arena) {
     config->session_timeout = 3600;                /* 1 hour */
 
     return config;
-}
-
-/**
- * The configuration file's path, in the arena: $DOTTA_CONFIG_FILE when it is
- * set, its tilde expanded, else the default location beneath HOME.
- */
-static error_t config_get_path(arena_t *arena, const char **out) {
-    const char *env_path = getenv("DOTTA_CONFIG_FILE");
-    if (env_path && env_path[0] != '\0') return fs_expand_tilde(env_path, arena, out);
-
-    *out = str_path_join(arena, identity()->home, DEFAULT_CONFIG_FILE);
-    return NULL;
 }
 
 /**
@@ -418,8 +411,8 @@ static error_t read_sections(toml_datum_t top, config_t *config, arena_t *arena)
 }
 
 /**
- * The configuration file at `path` into `config`. No file is an empty one: every
- * key keeps its default.
+ * The configuration's file into it. No file is an empty one: every key keeps
+ * its default.
  *
  * Read through the funnel (sys/filesystem), so whether the file is there and
  * whether it can be read are one answer at the run's one reach: absence is the
@@ -428,9 +421,9 @@ static error_t read_sections(toml_datum_t top, config_t *config, arena_t *arena)
  * as long as the read of its sections, and every result is freed with toml_free,
  * as the library documents — a failed parse's too.
  */
-static error_t read_file(const char *path, config_t *config, arena_t *arena) {
+static error_t read_file(config_t *config, arena_t *arena) {
     buffer_t text = BUFFER_INIT;
-    error_t err = fs_read_file(path, &text);
+    error_t err = fs_read_file(config->file, &text);
     if (error_code(err) == ERR_NOT_FOUND) {
         /* No config file - every key keeps its default */
         return NULL;
@@ -439,7 +432,7 @@ static error_t read_file(const char *path, config_t *config, arena_t *arena) {
 
     /* A read is capped at 256 MB, far below INT_MAX, and ends in the NUL the
      * parser checks for; the parse copies what it keeps. */
-    toml_result_t result = toml_parse_named(text.data, (int) text.size, path);
+    toml_result_t result = toml_parse_named(text.data, (int) text.size, config->file);
     buffer_deinit(&text);
 
     err = result.ok
@@ -455,16 +448,23 @@ error_t config_load(arena_t *arena, config_t **out) {
 
     *out = NULL;
 
-    const char *path = NULL;
-    error_t err = config_get_path(arena, &path);
-    if (err) return err;
-
-    /* Start with defaults */
+    /* Start with defaults, the file's own location among them */
     config_t *config = config_create_default(arena);
+    error_t err = NULL;
+
+    /* The variable outranks the default location: the file it names, read as
+     * the kernel will open it (sys/filesystem.h fs_make_absolute), so a child
+     * handed it reads the same file from whatever directory it runs in
+     * (config_child_env) — and a refusal names the variable. */
+    const char *env_file = getenv("DOTTA_CONFIG_FILE");
+    if (env_file && env_file[0] != '\0') {
+        err = fs_make_absolute(env_file, arena, &config->file);
+        if (err) return error_wrap(err, "Invalid DOTTA_CONFIG_FILE");
+    }
 
     /* The file over the defaults: each key it names is checked as it is read
      * (read_key), a directory as the spelling it is (read_path). */
-    err = read_file(path, config, arena);
+    err = read_file(config, arena);
 
     /* The directories, each read once as the kernel will open it (sys/filesystem.h
      * fs_make_absolute), and only from the value that won: the hooks' is the
@@ -488,7 +488,7 @@ error_t config_load(arena_t *arena, config_t **out) {
     /* Every failure is wrapped once, with the file: the chain beneath it names
      * what in the file, and why. A refused configuration's parts stay in the
      * arena, which its owner frees whole. */
-    if (err) return error_wrap(err, "Failed to load configuration '%s'", path);
+    if (err) return error_wrap(err, "Failed to load configuration '%s'", config->file);
 
     /* The variable outranks the file and the default: the store's directory it
      * names, read as the file's is — and a refusal names the variable. */
@@ -504,6 +504,27 @@ error_t config_load(arena_t *arena, config_t **out) {
 const char *config_repo_dir_from_env(void) {
     const char *dir = getenv("DOTTA_REPO_DIR");
     return (dir && dir[0] != '\0') ? dir : NULL;
+}
+
+void config_child_env(const config_t *config, const char *repo_dir, string_array_t *env) {
+    extern char **environ;
+
+    CHECK_NULL(config);
+    CHECK_NULL(repo_dir);
+    CHECK_NULL(env);
+
+    /* The run's configuration: the store the child acts on, and the file this
+     * configuration is read from */
+    string_array_pushf(env, "DOTTA_REPO_DIR=%s", repo_dir);
+    string_array_pushf(env, "DOTTA_CONFIG_FILE=%s", config->file);
+
+    /* The process's own environment (PATH, HOME, …), every DOTTA_* it holds left
+     * out — an outer hook's surface, a passphrase a cached run never read — so
+     * each the child sees is the run's */
+    for (char **e = environ; *e; e++) {
+        if (str_starts_with(*e, "DOTTA_")) continue;
+        string_array_push(env, *e);
+    }
 }
 
 const config_strategy_t config_strategies[CONFIG_STRATEGY_COUNT] = {

@@ -43,6 +43,8 @@ typedef enum {
  * Configuration structure
  */
 struct config {
+    const char *file;            /* The file it is read from, there or not: DOTTA_CONFIG_FILE, else the default — absolute, folded */
+
     /* [core] */
     const char *repo_dir;        /* The store's directory: DOTTA_REPO_DIR, else this key, else the default — absolute, folded */
     bool strict_mode;            /* Refuse where the repo's state would otherwise be proceeded past */

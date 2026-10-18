@@ -24,45 +24,40 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/output.h"
-#include "base/string.h"
 #include "sys/bootstrap.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
 #include "sys/process.h"
+#include "utils/config.h"
 
 /* Per-script timeout. Bootstrap scripts may install packages, compile software,
  * or download large artefacts; 10 minutes is generous without being unbounded. */
 #define BOOTSTRAP_TIMEOUT_SECONDS 600
 
 /**
- * The DOTTA_* environment for a live bootstrap script, layered on top of a filtered
- * copy of the parent's environment (DOTTA_* stripped to prevent shadowing), as
- * a string array in `arena`: an envp as it stands.
+ * The environment for a live bootstrap script, as a string array in `arena`:
+ * the run's configuration and the parent's environment with its DOTTA_* left
+ * out (utils/config.h config_child_env), then the script's own DOTTA_* — an envp
+ * as it stands.
  */
 static void bootstrap_env(
-    const char *repo_dir,
+    const bootstrap_spec_t *spec,
     const char *profile,
     const char *all_profiles,
     arena_t *arena,
     string_array_t *env
 ) {
-    extern char **environ;
-
     string_array_init(env, arena, 0);
 
+    /* The run's configuration over the store being bootstrapped — the spec's,
+     * which a clone makes wherever it was told — and the parent's environment
+     * beneath it */
+    config_child_env(spec->config, spec->repo_dir, env);
+
     /* DOTTA_DRY_RUN is the live path's: a dry run spawns nothing */
-    string_array_pushf(env, "DOTTA_REPO_DIR=%s", repo_dir);
     string_array_pushf(env, "DOTTA_PROFILE=%s", profile);
     string_array_pushf(env, "DOTTA_PROFILES=%s", all_profiles);
     string_array_push(env, "DOTTA_DRY_RUN=0");
-
-    /* Passthrough parent env, skipping DOTTA_* to preserve the invariant that
-     * our four variables are the authoritative DOTTA_* surface visible to the
-     * child. */
-    for (char **e = environ; *e; e++) {
-        if (str_starts_with(*e, "DOTTA_")) continue;
-        string_array_push(env, *e);
-    }
 }
 
 /**
@@ -107,42 +102,41 @@ static error_t script_error(const process_result_t *r) {
  * bootstrap_extract_to_temp and the exec — the window is tight by design.
  */
 static error_t run_live(
-    git_repository *repo,
+    const bootstrap_spec_t *spec,
     const char *profile,
-    const char *repo_dir,
     const char *all_profiles
 ) {
     char *temp_path = NULL;
     arena_t *frame = NULL;
     process_result_t result = { 0 };
 
-    error_t err = bootstrap_extract_to_temp(repo, profile, &temp_path);
+    error_t err = bootstrap_extract_to_temp(spec->repo, profile, &temp_path);
     if (err) goto cleanup;
 
     /* The script's environment, in a frame of the spawn's own: read by the child
      * at its exec, and dropped with the frame once the script has run */
     frame = arena_create(0);
     string_array_t env;
-    bootstrap_env(repo_dir, profile, all_profiles, frame, &env);
+    bootstrap_env(spec, profile, all_profiles, frame, &env);
 
     /* Run the script from the invoker's HOME (sys/identity — under sudo the user's,
      * not /root) so it behaves like a normal interactive shell session: relative
-     * paths in the script resolve under $HOME. The spec carries `repo_dir` as
-     * the fallback for a home the child cannot enter. */
+     * paths in the script resolve under $HOME. The store's directory is the
+     * fallback for a home the child cannot enter. */
     char *argv[] = { temp_path, NULL };
-    process_spec_t spec = {
+    process_spec_t child = {
         .argv              = argv,
         .envp              = env.entries,
         .stdin_policy      = PROCESS_STDIN_INHERIT,
         .capture           = false,
         .stream_fd         = STDOUT_FILENO,
         .work_dir          = identity()->home,
-        .work_dir_fallback = repo_dir,
+        .work_dir_fallback = spec->repo_dir,
         .timeout_seconds   = BOOTSTRAP_TIMEOUT_SECONDS,
         .pgrp_policy       = PROCESS_PGRP_SHARED,
     };
 
-    err = process_run(&spec, &result);
+    err = process_run(&child, &result);
     if (err) goto cleanup;
 
     err = script_error(&result);
@@ -181,6 +175,7 @@ static error_t run_dry(git_repository *repo, const char *profile) {
 bootstrap_receipt_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
     CHECK_NULL(out);
     CHECK_NULL(spec);
+    CHECK_NULL(spec->config);
     CHECK_NULL(spec->repo);
     CHECK_NULL(spec->repo_dir);
     CHECK_NULL(spec->profiles);
@@ -222,9 +217,7 @@ bootstrap_receipt_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) 
 
         error_t step_err = spec->dry_run
             ? run_dry(spec->repo, profile)
-            : run_live(
-            spec->repo, profile, spec->repo_dir, all_profiles
-            );
+            : run_live(spec, profile, all_profiles);
 
         if (!step_err) {
             output_print(

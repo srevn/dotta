@@ -38,10 +38,12 @@
  * spelled from home (base/gitignore.h), refuse the load, the entry named by its
  * line and column.
  *
- * The two directories are settled here too, each read as the kernel will open
- * it (sys/filesystem.h fs_make_absolute: the tilde expanded, a relative one joined
- * onto the working directory, the whole folded where the kernel reads the fold
- * the same), so every reader meets one spelling: [hooks] hooks_dir, and the store's
+ * The file and the two directories are settled here too, each read as the kernel
+ * will open it (sys/filesystem.h fs_make_absolute: the tilde expanded, a relative
+ * one joined onto the working directory, the whole folded where the kernel reads
+ * the fold the same), so every reader meets one spelling, a child of the run
+ * among them (config_child_env): the file — DOTTA_CONFIG_FILE where it is set,
+ * else the default — kept as config_t's file; [hooks] hooks_dir; and the store's
  * — DOTTA_REPO_DIR where it is set, else [core] repo_dir, else the default beneath
  * HOME. Each is read once, from the value that won: a spelling no load can settle
  * (a `~login` the system does not know) is refused here where it won, whether
@@ -60,10 +62,10 @@ error_t config_load(arena_t *arena, config_t **out);
  * The configuration with every key at its default
  *
  * Made in `arena`, which then holds the struct, every value config_load reads
- * into it and both compiled rulesets; a default is a literal, or a directory
- * spelled beneath the invoker's HOME — so the identity is established first
- * (sys/identity.h identity_init), as main() orders it. Nothing frees a
- * configuration: it goes with its arena.
+ * into it and both compiled rulesets; a default is a literal, or a location spelled
+ * beneath the invoker's HOME, the file's own among them — so the identity is
+ * established first (sys/identity.h identity_init), as main() orders it. Nothing
+ * frees a configuration: it goes with its arena.
  *
  * @param arena The arena it lives in (must not be NULL)
  * @return The configuration; never NULL
@@ -79,6 +81,30 @@ config_t *config_create_default(arena_t *arena);
  * the environment, unexpanded; an empty value is NULL.
  */
 const char *config_repo_dir_from_env(void);
+
+/**
+ * The environment a child of the run inherits: the run's configuration, then
+ * the process's own environment with every DOTTA_* it holds left out
+ *
+ * DOTTA_REPO_DIR, the store the child acts on — `repo_dir`: the configuration's,
+ * or the store a clone made — and DOTTA_CONFIG_FILE, the file this configuration
+ * is read from (config_t's file), both absolute: a dotta the child runs, from
+ * whatever directory, reads the run's configuration and opens the run's store,
+ * never the defaults. Every other DOTTA_* the process holds is left out — an
+ * outer hook's surface, the passphrase a run answered from its cache never read
+ * (sys/passphrase.h) — so the DOTTA_* surface its builder pushes after this is
+ * the child's whole DOTTA_* view, and nothing the process holds shadows it.
+ * DOTTA_EDITOR goes with them: a child's editor is the process's $VISUAL or $EDITOR
+ * (stated). Pushed onto `env`, which the caller initialized.
+ *
+ * Readers: utils/hooks.c hook_env, utils/bootstrap.c bootstrap_env. A reader
+ * not on this list is a bug.
+ *
+ * @param config The run's configuration (must not be NULL)
+ * @param repo_dir The store the child acts on, absolute (must not be NULL)
+ * @param env The child's environment, initialized (must not be NULL)
+ */
+void config_child_env(const config_t *config, const char *repo_dir, string_array_t *env);
 
 /**
  * The divergence strategies, by the word [sync] diverged_strategy and `sync

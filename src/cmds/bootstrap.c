@@ -39,6 +39,7 @@ static const char *const BOOTSTRAP_TEMPLATE =
     "#\n"
     "# Environment variables:\n"
     "#   DOTTA_REPO_DIR    - Path to dotta repository\n"
+    "#   DOTTA_CONFIG_FILE - Path to the configuration file the run read\n"
     "#   DOTTA_PROFILE     - Current profile name\n"
     "#   DOTTA_PROFILES    - All profiles being bootstrapped\n"
     "#   HOME              - User home directory\n"
@@ -315,6 +316,7 @@ static error_t bootstrap_run(
     }
 
     bootstrap_spec_t spec = {
+        .config        = ctx->config,
         .repo          = repo,
         .repo_dir      = ctx->config->repo_dir,
         .profiles      = &found,
@@ -528,6 +530,7 @@ const args_command_t spec_bootstrap = {
     .description =
         "Environment Variables:\n"
         "  DOTTA_REPO_DIR    Path to the dotta repository.\n"
+        "  DOTTA_CONFIG_FILE Path to the configuration file the run read.\n"
         "  DOTTA_PROFILE     Current profile name.\n"
         "  DOTTA_PROFILES    Space-separated list of all profiles being bootstrapped.\n"
         "  HOME              User home directory.\n",

@@ -42,6 +42,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "apply"
 - `DOTTA_PROFILE` - Space-separated list of profiles being applied
 - `DOTTA_PATH_COUNT` - Always "0" for apply
@@ -65,6 +66,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "apply"
 - `DOTTA_PROFILE` - Space-separated list of profiles being applied
 - `DOTTA_PATH_COUNT` - Always "0" for apply
@@ -87,6 +89,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "add"
 - `DOTTA_PROFILE` - Profile name being modified
 - `DOTTA_PATH_COUNT` - Number of paths: the arguments as given (file or dir)
@@ -111,6 +114,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "add"
 - `DOTTA_PROFILE` - Profile name that was modified
 - `DOTTA_PATH_COUNT` - Number of paths: the arguments as given (file or dir)
@@ -132,6 +136,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "remove"
 - `DOTTA_PROFILE` - Profile name being modified or deleted
 - `DOTTA_PATH_COUNT` - Number of paths: one per path the removal takes a claim
@@ -158,6 +163,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "remove"
 - `DOTTA_PROFILE` - Profile name that was modified or deleted
 - `DOTTA_PATH_COUNT` - Number of paths: the ones `pre-remove` was handed
@@ -180,6 +186,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "update"
 - `DOTTA_PROFILE` - Space-separated list of profiles being updated
 - `DOTTA_PATH_COUNT` - Number of paths: the arguments as given (file or dir); 0
@@ -204,6 +211,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "update"
 - `DOTTA_PROFILE` - Space-separated list of profiles that were updated
 - `DOTTA_PATH_COUNT` - Number of paths: the arguments as given (file or dir); 0
@@ -227,6 +235,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "sync"
 - `DOTTA_PROFILE` - Space-separated list of profiles being synced
 - `DOTTA_REMOTE` - Resolved remote name (e.g., "origin")
@@ -257,6 +266,7 @@ asymmetry every hook pair carries.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
 - `DOTTA_COMMAND` - Always "sync"
 - `DOTTA_PROFILE` - Space-separated list of profiles that were synced
 - `DOTTA_REMOTE` - Resolved remote name (e.g., "origin")
@@ -331,6 +341,14 @@ the hook as they received them. Make a path absolute before comparing it.
 
 Sudo's own variables (`SUDO_USER`, `SUDO_UID`, ...) are left as they were, so
 a hook that wants to know how the run was started can still tell.
+
+### A dotta your hook runs is the run's own
+
+`DOTTA_REPO_DIR` and `DOTTA_CONFIG_FILE` name the store and the configuration
+file the run read, absolute, so a `dotta` your hook runs acts on the same store
+under the same configuration from any directory. Every other `DOTTA_*` variable
+the run was started with is left out of the hook's environment, an outer hook's
+among them.
 
 ### The store's write lock
 
@@ -408,6 +426,7 @@ Test hooks manually:
 ```bash
 # Set up environment
 export DOTTA_REPO_DIR=~/.local/share/dotta/repo
+export DOTTA_CONFIG_FILE=~/.config/dotta/config.toml
 export DOTTA_COMMAND=add
 export DOTTA_PROFILE=test
 export DOTTA_PATH_COUNT=2

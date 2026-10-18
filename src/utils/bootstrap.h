@@ -26,6 +26,8 @@
  * for the duration of bootstrap_fire().
  *
  * Fields:
+ *   config         The run's configuration, which each spawned script is handed
+ *                  as DOTTA_CONFIG_FILE (utils/config.h config_child_env).
  *   repo           Open Git repository.
  *   repo_dir       Absolute path to the repository. Becomes
  *                  DOTTA_REPO_DIR for each spawned script. May differ from
@@ -43,6 +45,7 @@
  *                  profiles, the receipt counting the failures.
  */
 typedef struct {
+    const config_t *config;
     git_repository *repo;
     const char *repo_dir;
     const string_array_t *profiles;
@@ -74,10 +77,10 @@ typedef struct {
  *     No /tmp writes, no process spawns.
  *   - Live run: extracts the script to a tight-scoped temp file and execs it
  *     under sys/process with these settings:
- *       - Environment: DOTTA_REPO_DIR, DOTTA_PROFILE, DOTTA_PROFILES
- *         (space-separated list of scripts being run), DOTTA_DRY_RUN (always
- *         "0" on the live path). Parent env passes through with DOTTA_* stripped
- *         to avoid shadowing.
+ *       - Environment: DOTTA_REPO_DIR, DOTTA_CONFIG_FILE, DOTTA_PROFILE,
+ *         DOTTA_PROFILES (space-separated list of scripts being run), DOTTA_DRY_RUN
+ *         (always "0" on the live path). Parent env passes through with every
+ *         other DOTTA_* left out (utils/config.h config_child_env).
  *       - Working directory: $HOME if set, else spec->repo_dir.
  *       - Stdin: inherited (scripts may prompt the user).
  *       - Process group: SHARED — terminal Ctrl+C reaches both dotta and the
@@ -94,7 +97,7 @@ typedef struct {
  *     caller's to say.
  *
  * Preconditions:
- *   - spec->repo, spec->repo_dir, spec->profiles are non-NULL.
+ *   - spec->config, spec->repo, spec->repo_dir, spec->profiles are non-NULL.
  *   - out != NULL AND out->stream == stdout. A contract check defends the second
  *     invariant: bootstrap script output bypasses `out` and writes directly to
  *     STDOUT_FILENO, so interleaving is correct only when `out` also routes to

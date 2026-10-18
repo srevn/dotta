@@ -863,11 +863,14 @@ const char *fs_tmpdir(void);
  * and of the working directory.
  *
  * Readers: the store's directory, the one reading its two sources share so that
- * the two can be compared — the configured one, settled at load (utils/config.c),
- * and a create-style command's positional (utils/repo.c repo_create_target);
- * and the hooks' directory beside it. A CLI argument that names a key goes to
- * the argument's reading instead (infra/path.h), which spells the working directory
- * for a key before it joins and folds by the string alone.
+ * the two can be compared — the configured one, settled at load (utils/config.c
+ * config_load), and a create-style command's positional (utils/repo.c
+ * repo_create_target); the hooks' directory beside it; and the configuration's
+ * own file, settled before the load reads it, so a child of the run handed it
+ * reads the same file from any directory (utils/config.h config_child_env). A
+ * CLI argument that names a key goes to the argument's reading instead
+ * (infra/path.h), which spells the working directory for a key before it joins
+ * and folds by the string alone.
  *
  * Examples:
  *   /home/user/mylink -> /home/user/mylink (even if mylink is a symlink)

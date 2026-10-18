@@ -88,11 +88,12 @@ error_t passphrase_prompt(
  * is read, so nothing this run execs afterwards inherits it; a run answered from
  * a cache never reads it, and for that run it stays set. The second case is covered
  * elsewhere, not here: the two children that run scripts — a hook, a bootstrap
- * — are handed an environment with every DOTTA_* variable stripped (utils/hooks,
- * utils/bootstrap), read or unread, and the rest (`dotta git`, the editor) inherit
- * exactly what the invoker's own shell already held. The trade-off the variable
- * makes (it is visible to ps(1) until the read) is the user's to accept, and
- * this function prints nothing about it.
+ * — are handed an environment with every DOTTA_* variable the process holds
+ * stripped, read or unread, each one they see being the run's own (utils/config.h
+ * config_child_env), and the rest (`dotta git`, the editor) inherit exactly what
+ * the invoker's own shell already held. The trade-off the variable makes (it is
+ * visible to ps(1) until the read) is the user's to accept, and this function
+ * prints nothing about it.
  *
  * @param out_passphrase  The passphrase's own mapping. Caller owns; release
  *                        with secure_free(p, *out_len + 1).

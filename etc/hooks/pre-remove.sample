@@ -10,6 +10,7 @@
 #
 # Environment variables provided by dotta:
 #   DOTTA_REPO_DIR    - Path to dotta repository
+#   DOTTA_CONFIG_FILE - Path to the configuration file the run read
 #   DOTTA_COMMAND     - Command being executed ("remove")
 #   DOTTA_PROFILE     - Profile name being modified or deleted
 #   DOTTA_PATH_COUNT  - Number of paths: one per path the removal takes a

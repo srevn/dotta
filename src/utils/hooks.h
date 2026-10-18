@@ -47,10 +47,11 @@ typedef enum {
  *              nowhere (cmds/remove.c remove_hook_paths). Apply and sync hand none.
  *   path_count Number of entries in paths (0 if paths is NULL).
  *   extras     NULL → no extra env vars. Otherwise NULL-terminated
- *              "KEY=VALUE" string array, appended after the standard DOTTA_*
- *              and DOTTA_PATH_N surface (before the system environ pass-through,
- *              so authoritative values are not shadowed). Borrowed pointers —
- *              must outlive the fire.
+ *              "DOTTA_<KEY>=VALUE" string array, the command's own surface,
+ *              appended after the standard DOTTA_* and DOTTA_PATH_N surface.
+ *              The process's environment comes first with every DOTTA_* of its
+ *              left out (utils/config.h config_child_env), so nothing shadows
+ *              them. Borrowed pointers — must outlive the fire.
  *   dry_run    Sets DOTTA_DRY_RUN for pre-hook; suppresses post-hook.
  */
 typedef struct {
@@ -82,7 +83,10 @@ typedef struct {
  * did not run is none.
  *
  * The hook's DOTTA_REPO_DIR is the store's directory the configuration settled
- * (`config->repo_dir`), and its path the configured hooks directory's.
+ * (`config->repo_dir`), its DOTTA_CONFIG_FILE the file the configuration was
+ * read from (`config->file`) — both absolute, so a dotta the hook runs is the
+ * run's own (utils/config.h config_child_env) — and its path the configured hooks
+ * directory's.
  */
 error_t hook_fire_pre(
     const config_t *config,

@@ -131,6 +131,7 @@ Hook scripts run before/after operations. Place executable scripts in the hooks 
 
 **Environment variables passed to hooks:**
 - `DOTTA_REPO_DIR` -- repository path
+- `DOTTA_CONFIG_FILE` -- the configuration file the run read
 - `DOTTA_COMMAND` -- operation name (`apply`, `add`, `remove`, `update`, `sync`)
 - `DOTTA_PROFILE` -- the profile for add and remove; the space-separated list of profiles for apply, update and sync
 - `DOTTA_REMOTE` -- the remote's name (sync hooks)
@@ -203,7 +204,7 @@ dotta bootstrap --dry-run
 ```
 
 Bootstrap scripts are stored as `.bootstrap` in each profile branch and receive:
-- `DOTTA_REPO_DIR`, `DOTTA_PROFILE`, `DOTTA_PROFILES`, `HOME`, `DOTTA_DRY_RUN`
+- `DOTTA_REPO_DIR`, `DOTTA_CONFIG_FILE`, `DOTTA_PROFILE`, `DOTTA_PROFILES`, `HOME`, `DOTTA_DRY_RUN`
 
 They run as the invoker, never as root. `HOME`, `USER` and `LOGNAME` name the user who typed the command, even when the run obtained root through `sudo`, and `HOME` is the same home directory dotta resolved the `home/` paths against.
 

@@ -68,8 +68,9 @@
  *
  * Integration:
  * - workspace.h: orphan detection, the occupant, Git authority, divergence; the
- *                view (the active paths beneath a directory) and the items (an
- *                entry no verdict decided) for a directory's remainder
+ *                orphans a squatter displaces, for the plan's reach; the view
+ *                (the active paths beneath a directory) and the items (an entry
+ *                no verdict decided) for a directory's remainder
  * - scope.h:     the three filter dimensions
  * - filesystem.h: the emptiness walk, the removals, execute's probe
  */
@@ -97,6 +98,15 @@
  * never whether it reaches them. A named path outranks the blanket flag, as -e
  * outranks --skip-existing in deploy's plan (core/deploy.h deploy_partition_t).
  *
+ * An orphan whose own note displaces orphans the run does not reach — out of
+ * scope, or spared by -e — waits for a run that reaches them all (`displacing`):
+ * counted for a path filter's match, said at -v alone (stated), never touched.
+ * The note lasts only as long as the orphan's record, so released alone that
+ * record would take with it what keeps a later load from looking through its
+ * node at them, and pruning there (core/workspace.h workspace_displaced_orphans).
+ * Asked after -e and --keep-orphans, each of which leaves it alone already; a
+ * run that reaches them all settles it with them.
+ *
  * A landing's orphan is no orphan cleanup settles: dotta's node above a row
  * (WORKSPACE_STATE_OBSTRUCTING), whose place the landing of the rows beneath it
  * needs, and a copy beneath a standing blob (WORKSPACE_STATE_OVERRIDDEN), which
@@ -121,6 +131,7 @@ typedef struct {
     workspace_items_t directories;   /* ORPHANED / RELEASED directory items in scope */
     workspace_items_t excluded;      /* Both kinds, spared by -e — reported, never touched */
     workspace_items_t kept;          /* Both kinds, kept by --keep-orphans — reported, never touched */
+    workspace_items_t displacing;    /* Both kinds, displacing an orphan the run does not reach — never touched */
 } cleanup_plan_t;
 
 /**
@@ -130,7 +141,9 @@ typedef struct {
  * an exhaustive switch over the state: ORPHANED and RELEASED kept, an OBSTRUCTING
  * node and an OVERRIDDEN copy left to their landing (core/deploy.h). Gates each
  * on scope_accepts_profile ∧ scope_accepts_path(kind), then routes it by
- * scope_is_excluded(kind), then keep_orphans, then item_kind.
+ * scope_is_excluded(kind), then keep_orphans, then whether the run reaches every
+ * orphan its own note displaces (core/workspace.h workspace_displaced_orphans),
+ * then item_kind.
  *
  * @param arena Arena the plan and its buckets live in (must not be NULL)
  * @param ws Workspace loaded with orphan analysis (must not be NULL)
@@ -150,7 +163,7 @@ cleanup_plan_t *cleanup_plan_build(
 /**
  * True when the plan carries nothing this run may act on
  *
- * Excluded and kept items are not work: they are reported and left alone.
+ * Excluded, kept and displacing items are not work: each is left alone.
  */
 static inline bool cleanup_plan_is_empty(const cleanup_plan_t *plan) {
     return plan->files.count == 0 && plan->directories.count == 0;
@@ -160,16 +173,17 @@ static inline bool cleanup_plan_is_empty(const cleanup_plan_t *plan) {
  * How many items the plan classified — both kinds, every bucket
  *
  * Distinct from cleanup_plan_is_empty, which counts only *work*: a plan of nothing
- * but spared or kept items is empty there and non-zero here. Apply reads this
- * beside deploy_plan_item_count — which counts the landing's orphans — to tell
- * a path filter that named nothing dotta manages from one whose paths are all
- * spared or kept: an orphan the filter found is a match, whatever its verdict
- * and whatever a flag keeps of it.
+ * but spared, kept or waiting items is empty there and non-zero here. Apply reads
+ * this beside deploy_plan_item_count — which counts the landing's orphans — to
+ * tell a path filter that named nothing dotta manages from one whose paths are
+ * all spared, kept or waiting: an orphan the filter found is a match, whatever
+ * its verdict and whatever leaves it alone.
  *
  * The bucket set lives here so a consumer never has to enumerate it.
  */
 static inline size_t cleanup_plan_item_count(const cleanup_plan_t *plan) {
-    return plan->files.count + plan->directories.count + plan->excluded.count + plan->kept.count;
+    return plan->files.count + plan->directories.count + plan->excluded.count +
+           plan->kept.count + plan->displacing.count;
 }
 
 /* ── Verdicts ─────────────────────────────────────────────────────── */
@@ -269,7 +283,11 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    record has gone, released
  *                                                    or pruned in this one, and
  *                                                    no witness of the squat
- *                                                    remains
+ *                                                    remains — and no run retires
+ *                                                    that record without this
+ *                                                    orphan, the plan reaching
+ *                                                    the one only with the other
+ *                                                    (cleanup_plan_build)
  *   a SHARED relocation, unforced         SKIPPED    both kinds. The claim
  *                                                    projects at a different
  *                                                    filesystem path now, in a
@@ -395,16 +413,16 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  *               prunable_dirs beneath it)
  *   skipped     an entry this run skips (skipped_files, skipped_dirs beneath);
  *               an orphan the plan does not reach (-e spared, outside -p or the
- *               path filter) whose state is ORPHANED — transient by the same
- *               rule: scope decides reach, never verdict, so an unfiltered run
- *               would decide it and a filtered run must not change its parent's
- *               fate
+ *               path filter), or one waiting with the orphans it displaces, whose
+ *               state is ORPHANED — transient by the same rule: scope decides
+ *               reach, never verdict, so an unfiltered run would decide it and
+ *               a filtered run must not change its parent's fate
  *   permanent   an entry this run releases (released_files, released_dirs
- *               beneath); an orphan the plan does not reach whose state is
- *               RELEASED; an active path — the view has a row beneath the
- *               directory, on disk already or not, so the directory is the ancestor
- *               of an enabled row, one ensure_parents would create anyway; anything
- *               else — the user's
+ *               beneath); an orphan the plan does not reach, or one waiting,
+ *               whose state is RELEASED; an active path — the view has a row
+ *               beneath the directory, on disk already or not, so the directory
+ *               is the ancestor of an enabled row, one ensure_parents would create
+ *               anyway; anything else — the user's
  *
  *   nothing but gone left      prunable
  *   a skipped entry left       skipped   — transient: update, --force, or the

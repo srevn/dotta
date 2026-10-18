@@ -100,12 +100,12 @@ struct workspace {
 
     /* The orphan items: the records whose path the view lacks, in the snapshot's
      * strcmp order, which the join's walk and their searches (workspace_find_item,
-     * workspace_item_beneath) rest on. Read-only — no row names an orphan's path,
-     * so no writer ever reaches one; the orphan analysis asks Git why each is
-     * here. Each is looked at by the join on every load (workspace_load), and
-     * no reader is lent one the load did not analyze: the diverged items list,
-     * and a path finds, the analyzed prefix and no other, which is every orphan
-     * or none (workspace_list, workspace_find). Never NULL
+     * workspace_items_beneath) rest on. Read-only — no row names an orphan's
+     * path, so no writer ever reaches one; the orphan analysis asks Git why each
+     * is here. Each is looked at by the join on every load (workspace_load),
+     * and no reader is lent one the load did not analyze: the diverged items
+     * list, and a path finds, the analyzed prefix and no other, which is every
+     * orphan or none (workspace_list, workspace_find). Never NULL
      * (workspace_partition). */
     workspace_item_t **orphans;                  /* Arena; singles, never moved */
     size_t orphan_count;                         /* Number of orphans */
@@ -136,8 +136,10 @@ struct workspace {
      * by the look that found one and asked before every look after it, which
      * writes the answer onto the item it withholds the look from (workspace_look,
      * workspace_squatter_above); lent whole to a caller holding a path
-     * (workspace_squatted_ancestor); paths borrowed from the rows and the records.
-     * Almost always empty, which is what makes every ask free. */
+     * (workspace_squatted_ancestor); asked at an item's own path for the orphans
+     * its note displaces (workspace_displaced_orphans); paths borrowed from the
+     * rows and the records. Almost always empty, which is what makes every ask
+     * free. */
     workspace_squatted_t *squatted;              /* Arena; sized by the partition, never grown */
     size_t squatted_count;
 
@@ -163,8 +165,8 @@ struct workspace {
  * orphans, a parent before every path beneath it whichever kind (workspace_load);
  * what the untracked scan's registration reads for the tie among one profile's
  * rows standing at one directory; and the one each kind's searches rest on
- * (workspace_find_item, workspace_item_beneath). The view holds one row per path,
- * so the order is total.
+ * (workspace_find_item, workspace_items_beneath). The view holds one row per
+ * path, so the order is total.
  */
 static int workspace_kind_order(const void *a, const void *b) {
     const workspace_item_t *ia = *(const workspace_item_t *const *) a;
@@ -225,24 +227,29 @@ static workspace_item_t *workspace_find_active(const workspace_t *ws, const char
 }
 
 /**
- * Does an item of one sorted array — one kind's active items, or the orphans —
- * lie strictly beneath `path`?
+ * The items of one sorted array — one kind's active items, or the orphans —
+ * strictly beneath `path`
  *
  * The array is in strcmp order, so the keys beneath the path sort in one block
- * of it (base/string.h str_path_beneath_order): one lower bound answers —
- * workspace_find_item's search, asked of the paths beneath a path rather than
- * of the path.
+ * of it (base/string.h str_path_beneath_order), never "the items after the path":
+ * strcmp puts a sibling the path merely prefixes ("d-x", "d.conf") between the
+ * path and them. Two lower bounds find the block — workspace_find_item's search,
+ * asked of the paths beneath a path rather than of the path: one past every key
+ * the order puts before it, where it opens, and one past every key in it, where
+ * it ends. An empty block is the answer that nothing lies beneath.
  *
  * Readers: workspace_look, over the orphans, of a path a link stands at — a row's
  * or a record's — whether a record beneath it would be looked at through the
- * link; workspace_active_beneath, over each kind's active items.
+ * link; workspace_active_beneath, over each kind's active items;
+ * workspace_displaced_orphans, over the analyzed orphans, the block it lends.
  *
  * @param items One sorted array of the workspace's (never NULL:
  *              workspace_partition)
  * @param count Its items
  * @param path The directory asked about (must not be NULL)
+ * @return The block, a sub-slice of `items`: valid as long as the array is
  */
-static bool workspace_item_beneath(
+static workspace_items_t workspace_items_beneath(
     workspace_item_t *const *items, size_t count, const char *path
 ) {
     const size_t len = strlen(path);
@@ -259,9 +266,25 @@ static bool workspace_item_beneath(
             hi = mid;
         }
     }
+    const size_t first = lo;
 
-    /* So the first key past them opens the block, or none lies beneath */
-    return lo < count && str_path_beneath_order(items[lo]->filesystem_path, path, len) == 0;
+    /* Then past every key in it: no key from its first on sorts before it, so
+     * the first that is not beneath the path sorts past them all */
+    hi = count;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+
+        if (str_path_beneath_order(items[mid]->filesystem_path, path, len) == 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    return (workspace_items_t){
+        .entries = (const workspace_item_t *const *) (items + first),
+        .count = lo - first,
+    };
 }
 
 /**
@@ -405,10 +428,12 @@ static workspace_fault_t workspace_error_fault(error_t err) {
  * Empty on every healthy load, which is what makes every ask free.
  *
  * Readers: workspace_look, before every look the load takes — it takes them all,
- * and writes the answer onto the item it withholds the look from — and
+ * and writes the answer onto the item it withholds the look from —
  * workspace_squatted_ancestor, the view-only face that lends the answer whole
  * to a caller that needs the squatter itself (core/deploy.c check_ancestry and
- * deploy_plan_build, cmds/update.c cmd_update).
+ * deploy_plan_build, cmds/update.c cmd_update), and workspace_displaced_orphans,
+ * of an item's own path: whether the note there is the outermost over the orphans
+ * beneath it.
  *
  * @param ws Workspace (must not be NULL)
  * @param path The asker's path (must not be NULL)
@@ -433,6 +458,28 @@ static const workspace_squatted_t *workspace_squatter_above(
     }
 
     return outermost;
+}
+
+/**
+ * Is `path` itself a squatted directory the load noted?
+ *
+ * Whether a look noted a squatter at its own item's path (workspace_look): the
+ * twin of workspace_squatter_above, which answers the notes above a path. A scan
+ * of the list, empty on every healthy load.
+ *
+ * Readers: workspace_displaced_orphans. A reader not on this list is a bug.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param path The path asked about (must not be NULL)
+ */
+static bool workspace_squatted(const workspace_t *ws, const char *path) {
+    for (size_t i = 0; i < ws->squatted_count; i++) {
+        if (strcmp(ws->squatted[i].filesystem_path, path) == 0) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /**
@@ -682,7 +729,7 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
     } else if (workspace_obstructs(ws, item)) {
         claim = WORKSPACE_DISPLACED_CONFLICT;
     } else if (item->occupant == FS_OCCUPANT_SYMLINK &&
-        workspace_item_beneath(ws->orphans, ws->orphan_count, item->filesystem_path)) {
+        workspace_items_beneath(ws->orphans, ws->orphan_count, item->filesystem_path).count > 0) {
         claim = WORKSPACE_DISPLACED_RECORD;
     } else {
         return NULL;
@@ -3656,8 +3703,8 @@ bool workspace_active_beneath(const workspace_t *ws, const char *path) {
 
     /* Each kind's half in its own order, as workspace_find_active asks one path:
      * the directory items, then the file items */
-    return workspace_item_beneath(ws->active, ws->dir_count, path) ||
-           workspace_item_beneath(ws->active + ws->dir_count, ws->file_count, path);
+    return workspace_items_beneath(ws->active, ws->dir_count, path).count > 0 ||
+           workspace_items_beneath(ws->active + ws->dir_count, ws->file_count, path).count > 0;
 }
 
 /**
@@ -3675,6 +3722,31 @@ const workspace_squatted_t *workspace_squatted_ancestor(
      * themselves (the reach rule, workspace_displaced_t), and this probe's askers
      * need the squatter itself, which no item carries. */
     return workspace_squatter_above(ws, path, false);
+}
+
+/**
+ * The orphans an item's own squatter displaces — the block beneath its note
+ */
+workspace_items_t workspace_displaced_orphans(
+    const workspace_t *ws,
+    const workspace_item_t *item
+) {
+    if (!ws || !item) return (workspace_items_t){ 0 };
+
+    /* A squatter at the item's own path, and the outermost over what lies beneath
+     * it: no note above the path reaches an orphan (workspace_squatter_above),
+     * so this one withheld the look of each orphan beneath. An orphan's own note
+     * always is the outermost — its look was taken, so no note above it reached
+     * it — and a row's need not be: beneath a squatter only a record remembers,
+     * the orphans beneath the row are that squatter's. */
+    const char *path = item->filesystem_path;
+    if (!workspace_squatted(ws, path) || workspace_squatter_above(ws, path, true)) {
+        return (workspace_items_t){ 0 };
+    }
+
+    /* Of the analyzed orphans alone, as the orphans' lender lends them
+     * (analyzed_count): a load that declined the analysis lends none */
+    return workspace_items_beneath(ws->orphans, ws->analyzed_count, path);
 }
 
 /**

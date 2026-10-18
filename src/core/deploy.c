@@ -237,7 +237,7 @@ typedef struct {
  * beneath no blob; beneath a view row's squatter it finds none. The copies are
  * one block of the list, which holds them in path order, by its lower bound
  * (base/string.h str_path_beneath_order), as core/workspace.c
- * workspace_item_beneath bounds its arrays: every orphan beneath a blob row is
+ * workspace_items_beneath bounds its arrays: every orphan beneath a blob row is
  * a copy, no node lying beneath a blob, whose rows beneath would stand beneath
  * it. A directory row reaches no copy: the copies beneath its path lie beneath
  * a blob row beneath it, that row's.

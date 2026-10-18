@@ -267,11 +267,16 @@ typedef enum {
  *                       beneath it, the link being the one node a key beneath
  *                       resolves through. The orphans beneath it, the ORPHANED
  *                       and RELEASED items, are not looked at, and nothing else
- *                       is. A view row beneath such a path — another kind of
- *                       node where a directory record was — is read through it:
- *                       no enabled claim names the path — one that did would
- *                       stand there over the row as a blob, or lose its place
- *                       to the row and leave a directory row there (core/manifest.c
+ *                       is. Noted at a record's path, it lasts only as long as
+ *                       that record, which retires only with them: a run reaches
+ *                       the record only with every orphan its note displaces
+ *                       (core/cleanup.c cleanup_plan_build), so no later load
+ *                       looks through the node at what it displaced. A view row
+ *                       beneath such a path — another kind of node where a
+ *                       directory record was — is read through it: no enabled
+ *                       claim names the path — one that did would stand there
+ *                       over the row as a blob, or lose its place to the row
+ *                       and leave a directory row there (core/manifest.c
  *                       manifest_layer) — and dotta keeps no record of the node,
  *                       so it is the machine's, which the row's profile's
  *                       derivation met and claimed no rung at (core/profiles.h
@@ -935,8 +940,9 @@ bool workspace_pending(
  *
  * Pass by value. Lifetime is the producer's:
  * - the workspace's own — the active items, both kinds or one (workspace_active,
- *   workspace_directories, workspace_files), and the diverged items
- *   (workspace_diverged) — borrow for the workspace's life;
+ *   workspace_directories, workspace_files), the orphans, whole or the block an
+ *   item's note displaces (workspace_orphans, workspace_displaced_orphans), and
+ *   the diverged items (workspace_diverged) — borrow for the workspace's life;
  * - a classification's buckets (workspace_buckets_t: deploy's plan, core/deploy.h
  *   deploy_partition_t; cleanup's plan and verdicts, core/cleanup.h; status's
  *   sections, cmds/status.c status_print_workspace; update's partition,
@@ -1523,7 +1529,8 @@ bool workspace_active_beneath(const workspace_t *ws, const char *path);
  * or not (workspace.c workspace_analyze_directory, workspace_look_orphan) — and
  * an item the squatted directory reaches carries it as its displaced class —
  * the outermost's, where two reach the item — and a caller holding a path is
- * lent the element itself (workspace_squatted_ancestor).
+ * lent the element itself (workspace_squatted_ancestor), one holding an item
+ * the orphans the note at its path displaces (workspace_displaced_orphans).
  *
  * The workspace's own list element, lent: the list is one arena block, sized by
  * the partition for every item that could note one and never grown, so a pointer
@@ -1599,6 +1606,36 @@ typedef struct {
 const workspace_squatted_t *workspace_squatted_ancestor(
     const workspace_t *ws,
     const char *path
+);
+
+/**
+ * The orphans an item's own squatter displaces — the block of the analyzed orphans
+ * strictly beneath its path, where the load noted a squatter there and no note
+ * above it reaches them; else none
+ *
+ * Each was withheld its look by that squatter and carries its class: every class
+ * reaches the orphans beneath its squatter, the outermost answering
+ * (workspace_displaced_t). The note at an orphan's own path is always the outermost
+ * — its look was taken, so no note above it reached it — and a row's need not
+ * be, beneath a squatter only a record remembers. The orphans' order holds the
+ * ones beneath a path in one block (base/string.h str_path_beneath_order), never
+ * "the orphans after it": strcmp puts a sibling the path merely prefixes ("d-x",
+ * "d.conf") between the path and them. Pure value return — no allocation, no
+ * error path; the analyzed orphans alone (workspace_orphans), so a load that
+ * declined the analysis lends none.
+ *
+ * Readers: core/cleanup.c cleanup_plan_build — a note at an orphan's path lasts
+ * only as long as the orphan's record, which the run reaches only with every
+ * orphan the note displaces (core/cleanup.h cleanup_plan_t). A reader not on
+ * this list is a bug.
+ *
+ * @param ws Workspace (NULL returns an empty slice)
+ * @param item An item of the workspace's (NULL returns an empty slice)
+ * @return Borrowed sub-slice of the orphans, valid for the workspace's lifetime
+ */
+workspace_items_t workspace_displaced_orphans(
+    const workspace_t *ws,
+    const workspace_item_t *item
 );
 
 /**

@@ -35,6 +35,30 @@
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
+ * Does the run reach every one of these orphans — each in scope by profile and
+ * path, and no -e sparing it (core/scope.h scope_accepts_entry)?
+ *
+ * The plan's own gates, asked of the orphans an orphan's note displaces
+ * (cleanup_plan_build): each one the run reaches is planned beside the note's
+ * record and released with it (cleanup_verdict's displaced arm). An empty slice
+ * is reached.
+ */
+static bool cleanup_reaches_all(const scope_t *scope, workspace_items_t orphans) {
+    for (size_t i = 0; i < orphans.count; i++) {
+        const workspace_item_t *orphan = orphans.entries[i];
+
+        if (!scope_accepts_entry(
+            scope, orphan->profile, orphan->filesystem_path, orphan->storage_path,
+            orphan->item_kind
+            )) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
  * Build the cleanup plan
  */
 cleanup_plan_t *cleanup_plan_build(
@@ -47,9 +71,9 @@ cleanup_plan_t *cleanup_plan_build(
     CHECK_NULL(ws);
     CHECK_NULL(scope);
 
-    /* The plan and its four buckets are the arena's, beside the items they borrow,
+    /* The plan and its five buckets are the arena's, beside the items they borrow,
      * and nothing frees a plan. Each orphan in scope is added to its bucket as
-     * the walk decides it, and the four are filled once the walk is done. */
+     * the walk decides it, and the five are filled once the walk is done. */
     cleanup_plan_t *plan = arena_calloc(arena, 1, sizeof(*plan));
     workspace_items_t orphans = workspace_orphans(ws);
     workspace_buckets_t *buckets = workspace_buckets_create(arena);
@@ -93,11 +117,17 @@ cleanup_plan_t *cleanup_plan_build(
 
         /* A path -e names is spared and every other one --keep-orphans keeps —
          * the named path first, the blanket flag after it — each reported by
-         * the caller and never touched; what neither withholds goes by its kind. */
+         * the caller and never touched. One whose own note displaces an orphan
+         * the run does not reach waits for a run that reaches them all: released
+         * alone, its record would take the note with it, and a later run would
+         * look at them through its node (core/cleanup.h cleanup_plan_t). What
+         * none of these leaves alone goes by its kind. */
         if (scope_is_excluded(scope, item->storage_path, item->item_kind)) {
             workspace_buckets_add(buckets, item, &plan->excluded);
         } else if (keep_orphans) {
             workspace_buckets_add(buckets, item, &plan->kept);
+        } else if (!cleanup_reaches_all(scope, workspace_displaced_orphans(ws, item))) {
+            workspace_buckets_add(buckets, item, &plan->displacing);
         } else if (item->item_kind == PATH_KIND_DIRECTORY) {
             workspace_buckets_add(buckets, item, &plan->directories);
         } else {
@@ -204,7 +234,9 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
          * The path stays, the record retires: the same letting-go as a retyped
          * path, one level up. Terminal on purpose — a skip would prune on the
          * NEXT run, once the squatted path's own record has gone, released or
-         * pruned in this one, and no witness of the squat remains. */
+         * pruned in this one, and no witness of the squat remains — and no run
+         * retires that record without this orphan: the plan reaches the one only
+         * with the other (cleanup_plan_build). */
         return CLEANUP_RELEASED;
     }
 
@@ -288,16 +320,16 @@ typedef struct {
  *
  * An entry the set holds no fate for — outside the plan — is read off the item
  * the load holds at its path (workspace_find). ORPHANED is skipped: the scope
- * did not reach it this run (-e, -p, a path filter), an unfiltered run would
- * decide it, and scope decides reach, never verdict — so a filtered run must
- * not change its parent's fate. Everything else is permanent: a RELEASED orphan
- * stays where it is; an active path (the view has a row, and a row's item is
- * never an orphan's) stands in an enabled profile's name; an entry the load holds
- * no item for is the user's. A landing's orphan is never met here: the directory
- * dotta's node above a row stands in holds that row beneath it too, which the
- * view makes permanent before any readdir (cleanup_preflight), and the one a
- * copy beneath a standing blob stands in lies beneath that blob as well, a
- * landing's itself.
+ * did not reach it this run (-e, -p, a path filter), or it waits with the orphans
+ * it displaces, an unfiltered run would decide it, and scope decides reach, never
+ * verdict — so a filtered run must not change its parent's fate. Everything else
+ * is permanent: a RELEASED orphan stays where it is; an active path (the view
+ * has a row, and a row's item is never an orphan's) stands in an enabled profile's
+ * name; an entry the load holds no item for is the user's. A landing's orphan
+ * is never met here: the directory dotta's node above a row stands in holds that
+ * row beneath it too, which the view makes permanent before any readdir
+ * (cleanup_preflight), and the one a copy beneath a standing blob stands in lies
+ * beneath that blob as well, a landing's itself.
  *
  * Membership is keyed by filesystem path, which is why the entry arrives as a
  * full path rather than a basename.

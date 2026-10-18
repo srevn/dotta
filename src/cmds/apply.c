@@ -2621,6 +2621,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *                           by path is still skipped, a released one still
      *                           let go.
      *
+     * Whatever the filter, an orphan whose own note displaces orphans the filter
+     * leaves out waits with them (core/cleanup.h cleanup_plan_t).
+     *
      * --keep-orphans keeps every orphan in scope -e does not spare: counted for
      * the filter's match and reported, decided by no stage. The plan's kept bucket
      * is what every later stage reads, so none re-encodes the flag. */
@@ -2630,8 +2633,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     cleanup_plan_t *cleanup_plan = cleanup_plan_build(ctx->arena, ws, scope, opts->keep_orphans);
 
     /* Mirror the deployment-loop trace: for each orphan -e spared or --keep-orphans
-     * kept, emit a per-file line. output_print gates on the verbosity level, so
-     * non-verbose runs pay only the loop cost. */
+     * kept, or one the run leaves with the orphans it displaces, emit a per-file
+     * line. output_print gates on the verbosity level, so non-verbose runs pay
+     * only the loop cost. */
     for (size_t i = 0; i < cleanup_plan->excluded.count; i++) {
         output_print(
             out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
@@ -2642,6 +2646,12 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_print(
             out, OUTPUT_VERBOSE, "  Preserving orphan (kept): %s\n",
             cleanup_plan->kept.entries[i]->filesystem_path
+        );
+    }
+    for (size_t i = 0; i < cleanup_plan->displacing.count; i++) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  Preserving orphan (an orphan it displaces stays): %s\n",
+            cleanup_plan->displacing.entries[i]->filesystem_path
         );
     }
 

@@ -1400,8 +1400,12 @@ static void status_print_workspace(
     /* The sections are printed, and their frame goes with them */
     arena_free(frame);
 
-    /* The diverged items the filter hides, counted */
+    /* The diverged items the filter hides, counted. Where a section printed —
+     * the filter hid fewer than all, and every item in scope is listed in one —
+     * the note is set apart from the last of them, whose last line it would read
+     * as; under the bare line it is that line's own. */
     if (hidden > 0) {
+        if (diverged.count > hidden) output_gap(out, OUTPUT_NORMAL);
         output_print(
             out, OUTPUT_NORMAL, "  {dim}(%zu item%s hidden){reset}\n",
             hidden, hidden == 1 ? "" : "s"

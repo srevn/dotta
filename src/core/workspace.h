@@ -306,17 +306,17 @@ typedef enum {
  * be read" and "could not be verified". The four that name the squatter say
  * "beneath a squatted directory" (cmds/update.c cmd_update's four census lines,
  * cmds/diff.c get_status_message_from_item, cmds/sync.c cmd_sync's note,
- * cmds/status.c status_print_workspace's Issues hint), and where the squatter
- * is dotta's own copy the first two add its state in the squatter's own words —
- * "changed in Git", "changed in Git and on disk"; the Displaced paths header,
- * where the word is grounded, spells the squatter out instead.
+ * cmds/status.c status_print_workspace's key for a displaced orphan), and where
+ * the squatter is dotta's own copy the first two add its state in the squatter's
+ * own words — "changed in Git", "changed in Git and on disk"; the Displaced paths
+ * header, where the word is grounded, spells the squatter out instead.
  *
  * Readers: workspace_item_route, core/cleanup.c cleanup_verdict, core/deploy.c
  * deploy_needs_work and deploy_plan_build (the --skip-existing test, and the
  * node a row lies beneath: deploy_reach), workspace.c workspace_item_tags (the
  * DEPLOYED arm's [displaced], beside which only what no look decides or disproves
  * rides, and the ORPHANED arm's rider), cmds/status.c status_print_workspace's
- * Issues hint, and cmds/diff.c get_status_message_from_item and
+ * key for a displaced orphan, and cmds/diff.c get_status_message_from_item and
  * show_file_diff_from_workspace (the colour ladder and the content gate),
  * should_show_item_for_direction beside them; cmds/update.c cmd_update (the named
  * derivation's leaves, climbed beneath the user's squatter at a rung alone, the
@@ -1157,8 +1157,8 @@ typedef struct workspace workspace_t;
  *   one, and one tree lookup per such orphan. Read by core/cleanup.c
  *   cleanup_plan_build (the settle, apply's cleanup), core/deploy.c
  *   deploy_plan_build (the landing's orphans: the nodes it replaces, the copies
- *   it clears) and cmds/status.c status_print_workspace (Issues, and Overridden
- *   copies).
+ *   it clears) and cmds/status.c status_print_workspace (Issues, Released paths
+ *   and Overridden copies).
  * - analyze_untracked — every regular file and symlink beneath a tracked directory
  *   that no enabled profile claims and dotta has no record of, at a readdir walk
  *   per tracked directory, and every place it could not look (UNSCANNED). Read
@@ -1288,10 +1288,8 @@ error_t workspace_load(
  * row's look found gone). An active path with none of these is not among them,
  * and is lent among the active items all the same (workspace_active, and its
  * kind's: workspace_directories, workspace_files). So a load holding none is
- * clean, and one is clean over a scope iff it holds none of the scope's items
- * but overridden copies — each listed, its work the landing of the blob standing
- * over it, which that row's own line counts. cmds/status.c status_print_workspace
- * reads its status line that way, filtered or not.
+ * clean. cmds/status.c status_print_workspace reads its status line off them,
+ * filtered or not, and says there which of them the line counts.
  *
  * @param ws Workspace (NULL returns an empty slice)
  * @return Borrowed slice over the diverged items

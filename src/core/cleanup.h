@@ -264,10 +264,14 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  * What becomes of a planned orphan, read off the item alone
  *
  * The verdict buckets of cleanup_preflight_t, as a value — PRUNABLE split once
- * more there, by the run's reach: one producer, read by the verdict phase to
- * fill them. Status's keys read the tags instead: a key speaks for every line
- * carrying them, a verdict for one item (cmds/status.c status_print_workspace).
- * In the order the tests are taken — the occupant, the state, the divergence bits:
+ * more there, by the run's reach. One producer, and its readers: core/cleanup.c
+ * cleanup_preflight, which fills the buckets by it; and cmds/status.c
+ * status_print_workspace, which files a scope exit's orphan by it, unforced —
+ * ABSENT and RELEASED listed apart, nothing on disk changing, and SKIPPED and
+ * PRUNABLE under Issues, a directory's PRUNABLE unfinished there (stated). A
+ * reader not on this list is a bug. Status's keys read the tags instead: a key
+ * speaks for every line carrying them, a verdict for one item. In the order the
+ * tests are taken — the occupant, the state, the divergence bits:
  *
  *   occupant NONE                         ABSENT     record retires, no effect
  *   state RELEASED                        RELEASED   left alone, record retires

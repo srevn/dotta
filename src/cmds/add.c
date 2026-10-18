@@ -1773,8 +1773,8 @@ static error_t add_write_record(
      * captured through the arrangement is judged on its own occupant either way,
      * and a retire that fails ends the phase without refusing the add — the retry
      * re-anchors and re-runs no retire, the sheet already lacking the claim, so
-     * the stranded record stays apply's to release under status's Issues exactly
-     * as before. Enablement was not consulted on the way here: the climb saw
+     * the stranded record is listed under status's Released paths until apply
+     * releases it. Enablement was not consulted on the way here: the climb saw
      * the disk contradict the claim, and the prune found nothing beneath it,
      * whatever the enabled set says, and the record either strands is stale under
      * a disabled profile exactly as under an enabled one. A rung some other profile

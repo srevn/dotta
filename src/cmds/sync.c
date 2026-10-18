@@ -1335,8 +1335,8 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      */
     if (!opts->force) {
         /* Orphans stay off — a Git probe per profile for items only the settle
-         * (apply's cleanup) and status's Issues read; the guard counts the view's
-         * rows, and the block after the Git phase diffs two views. */
+         * (apply's cleanup) and status's orphan sections read; the guard counts
+         * the view's rows, and the block after the Git phase diffs two views. */
         workspace_options_t ws_opts = {
             .analyze_orphans   = false,
             .analyze_untracked = config->auto_detect_new_files  /* Respect config */

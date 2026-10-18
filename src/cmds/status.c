@@ -17,6 +17,7 @@
 #include "base/output.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
+#include "core/cleanup.h"
 #include "core/manifest.h"
 #include "core/scope.h"
 #include "core/state.h"
@@ -266,10 +267,10 @@ static void status_print_profiles(
     }
 
     /* The repairs, in the shape this screen spells a repair: a dimmed key and a
-     * sentence under the block it belongs to, keys aligned — what the Issues
-     * and Unverifiable lists do for their tags, with the yellow annotation above
-     * playing the tag's part. `Hint:` is apply's voice and sync's, and this channel
-     * was the only thing in status that spoke it.
+     * sentence under the block it belongs to, keys aligned — what the keyed lists
+     * do for their tags (status_legend_t), with the yellow annotation above playing
+     * the tag's part. `Hint:` is apply's voice and sync's, and this channel was
+     * the only thing in status that spoke it.
      *
      * Generic in both the profile and the path. The annotations say which profiles
      * carry them, so one filled name would read as the only one wherever two
@@ -346,8 +347,8 @@ static void status_print_profiles(
  * diverged (workspace_item_tags) — with the owning profile ("from P", or "P →
  * Q" for a pending reassignment). The one listing that shows the whole view rather
  * than what diverged from it; printed whatever the workspace's cleanliness. Orphans
- * are records, not rows — they stay in the Issues section. Scoped by the CLI
- * filter like every other section.
+ * are records, not rows — the workspace's sections list them
+ * (status_print_workspace). Scoped by the CLI filter like every other section.
  *
  * @param ws Workspace (must not be NULL, borrowed from caller)
  * @param scope Operation scope (must not be NULL; its filter dimension drives
@@ -500,10 +501,10 @@ static void status_print_legend(output_t *out, const status_legend_t *legend) {
  * Shows the consistency between the view, the record and the filesystem: the
  * status line, then the diverged items in actionable sections (git-like structure).
  *
- * The status line is one fold of the diverged items over the scope, decided and
- * worded the same whatever the filter: under -p it speaks for the filtered profiles
- * alone, so a clean one never reads Dirty for another's divergence, and what
- * the filter hides is counted beneath the sections.
+ * The status line is one fold of the items that ask the disk or the user something,
+ * over the scope, decided and worded the same whatever the filter: under -p it
+ * speaks for the filtered profiles alone, so a clean one never reads Dirty for
+ * another's divergence, and what the filter hides is counted beneath the sections.
  *
  * @param ws Workspace (must not be NULL, borrowed from caller)
  * @param manifest The view the workspace was loaded over (must not be NULL; an
@@ -530,27 +531,14 @@ static void status_print_workspace(
      * filtered profile that reads Clean still counts the divergence it hides. */
     if (diverged.count == 0 && !output_is_verbose(out)) return;
 
-    /* The status line, one fold whatever the filter: the diverged items it shows,
-     * those of them dotta could not verify, and those the filter hides. It shows
-     * every item in scope but an overridden copy, which a section of its own
-     * lists and which asks nothing of the user apart from the row standing over
-     * it, whose landing clears it — so a filter that hides that row reads Clean
-     * over the copy. A scope is Clean iff the line shows none. Invalid is reserved
-     * for what the analysis could not establish: an item carrying
-     * DIVERGENCE_UNVERIFIED (an unreadable path, a comparison that could not
-     * run, a Git probe that did not answer) is one no verb resolves by default
-     * — apply skips it and the user must look. Anything else shown is Dirty:
-     * work some verb takes, an orphan included — pending work, not an invalid
-     * workspace. With no filter every item is in scope and none is hidden. */
-    size_t shown = 0;
-    size_t unverified = 0;
+    /* The diverged items the filter hides, counted beneath the sections */
     size_t hidden = 0;
 
     /* The sections, in the order they print: each item in scope is added to its
-     * section's bucket as the walk decides it, and the ten are filled once the
-     * walk is done (core/workspace.h workspace_buckets_t). They are the printer's
-     * own, in a frame it frees once they are printed — nothing here outlives
-     * the call (include/runtime.h "Memory"). */
+     * section's bucket as the walk decides it, and the eleven are filled once
+     * the walk is done (core/workspace.h workspace_buckets_t). They are the
+     * printer's own, in a frame it frees once they are printed — nothing here
+     * outlives the call (include/runtime.h "Memory"). */
     arena_t *frame = arena_create(0);
     workspace_buckets_t *buckets = workspace_buckets_create(frame);
 
@@ -564,6 +552,7 @@ static void status_print_workspace(
     workspace_items_t new_files = { 0 };
     workspace_items_t overridden = { 0 };
     workspace_items_t orphaned = { 0 };
+    workspace_items_t released = { 0 };
 
     for (size_t i = 0; i < diverged.count; i++) {
         const workspace_item_t *item = diverged.entries[i];
@@ -577,18 +566,6 @@ static void status_print_workspace(
         if (!scope_accepts_profile(scope, item->profile)) {
             hidden++;
             continue;
-        }
-
-        /* The fold counts every item the line shows, never a section's size: an
-         * unverified orphan lists under Issues and still makes the line Invalid,
-         * and an overridden copy lists in a section of its own and leaves the
-         * line as it finds it — its work is the landing of the row standing over
-         * it, which the line counts where it shows that row */
-        if (item->state != WORKSPACE_STATE_OVERRIDDEN) {
-            shown++;
-            if (item->divergence & DIVERGENCE_UNVERIFIED) {
-                unverified++;
-            }
         }
 
         switch (item->state) {
@@ -641,8 +618,8 @@ static void status_print_workspace(
 
                     case WORKSPACE_ROUTE_CLEAN:
                         /* None: a diverged item has something to say
-                         * (workspace_diverged), and the fold above counted each
-                         * one */
+                         * (workspace_diverged); the line reads the sections, so
+                         * one filed nowhere would not count */
                         break;
                 }
                 break;
@@ -668,9 +645,29 @@ static void status_print_workspace(
 
             case WORKSPACE_STATE_ORPHANED:
             case WORKSPACE_STATE_RELEASED:
+                /* A scope exit's, filed by what apply does with it, read off
+                 * the item alone (core/cleanup.h cleanup_verdict) — unforced,
+                 * though --force only turns a skip into a prune, and never moves
+                 * an orphan between the two sections: a reclaim and a release
+                 * touch nothing on disk and are listed apart; a prune and a skip
+                 * are Issues, a directory's prune unfinished until apply reads
+                 * what is left in it */
+                switch (cleanup_verdict(item, false)) {
+                    case CLEANUP_ABSENT:
+                    case CLEANUP_RELEASED:
+                        workspace_buckets_add(buckets, item, &released);
+                        break;
+
+                    case CLEANUP_SKIPPED:
+                    case CLEANUP_PRUNABLE:
+                        workspace_buckets_add(buckets, item, &orphaned);
+                        break;
+                }
+                break;
+
             case WORKSPACE_STATE_OBSTRUCTING:
-                /* The orphans an engine settles: a scope exit's, or the landing's
-                 * of the rows beneath dotta's node — each keyed below by its own */
+                /* The landing's, of the rows beneath dotta's node: Issues, keyed
+                 * below by its own */
                 workspace_buckets_add(buckets, item, &orphaned);
                 break;
 
@@ -683,6 +680,35 @@ static void status_print_workspace(
     }
 
     workspace_buckets_fill(buckets);
+
+    /* The status line, one fold whatever the filter: the items of the sections
+     * that ask the disk or the user something, and those of them dotta could
+     * not verify. Three sections are listed and leave the line as they find it:
+     * an overridden copy, whose work is the landing of the row standing over
+     * it, which the line counts where it shows that row (stated: a filter that
+     * hides the row reads Clean over the copy); and what apply settles in the
+     * record alone, nothing on disk changing — a pure reassignment, a release,
+     * a reclaim. A scope is Clean iff the line counts none. Invalid is reserved
+     * for what the analysis could not establish: an item carrying
+     * DIVERGENCE_UNVERIFIED (an unreadable path, a comparison that could not
+     * run, a Git probe that did not answer) is one no verb resolves by default
+     * — apply skips it and the user must look. Anything else counted is Dirty:
+     * work that touches the disk or waits on the user, not an invalid workspace.
+     * With no filter every item is in scope and none is hidden. */
+    const workspace_items_t *counted[] = {
+        &conflicts, &squatted, &displaced, &unverifiable, &uncommitted, &undeployed,
+        &new_files, &orphaned,
+    };
+    size_t shown = 0;
+    size_t unverified = 0;
+    for (size_t b = 0; b < sizeof(counted) / sizeof(counted[0]); b++) {
+        shown += counted[b]->count;
+        for (size_t i = 0; i < counted[b]->count; i++) {
+            if (counted[b]->entries[i]->divergence & DIVERGENCE_UNVERIFIED) {
+                unverified++;
+            }
+        }
+    }
 
     output_section(out, OUTPUT_NORMAL, "Workspace status");
 
@@ -701,7 +727,8 @@ static void status_print_workspace(
         }
 
         /* Where the scope reaches no path, the sentence names its subject: the
-         * filter's profiles, or the whole workspace */
+         * filter's profiles, or the view, which holds none — whether or not the
+         * record still lists what apply lets go */
         if (scoped_paths > 0) {
             output_colored(
                 out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
@@ -716,7 +743,7 @@ static void status_print_workspace(
         } else {
             output_colored(
                 out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
-                "  Clean - all states aligned\n"
+                "  Clean - no active paths\n"
             );
         }
     } else if (unverified > 0) {
@@ -971,7 +998,9 @@ static void status_print_workspace(
         output_list_free(list);
     }
 
-    /* Section 6: Profile Reassignments */
+    /* Section 6: Profile reassignments — a clean row whose record names another
+     * profile, which apply acknowledges at its checkpoint in the record alone:
+     * listed, and the line leaves it as it finds it */
     if (reassigned.count > 0) {
         output_list_t *list = output_list_create(
             out, "Profile reassignments",
@@ -1130,7 +1159,9 @@ static void status_print_workspace(
         output_list_free(list);
     }
 
-    /* Section 10: Issues (orphaned) */
+    /* Section 10: Issues — the scope exit's orphans apply prunes or skips
+     * (core/cleanup.h cleanup_verdict: PRUNABLE, SKIPPED), and dotta's nodes
+     * the landing of the rows beneath them replaces */
     if (orphaned.count > 0) {
         output_list_t *list = output_list_create(
             out, "Issues",
@@ -1143,7 +1174,9 @@ static void status_print_workspace(
          * relocation's class or what a directory holds, which no tag carries —
          * so it is true of every line it stands over. The bare [orphaned] key
          * is the header's, a file's and a directory's: a directory's prune waits
-         * on what is left in it, which apply's preview names (stated). A key
+         * on what is left in it, which apply's preview names — and where what
+         * is left is a path dotta keeps or never created, apply releases it:
+         * such a directory stays here, and keeps the line Dirty (stated). A key
          * says what becomes of the item and not whether its parent admits the
          * run: a parent that refuses it is apply's skip line to name (stated). */
         status_legend_t legend = { .arena = frame };
@@ -1175,14 +1208,10 @@ static void status_print_workspace(
              * added to this bucket asks for an arm of its own here */
             switch (item->state) {
                 case WORKSPACE_STATE_ORPHANED:
-                    /* The tags' ladder: absence, a squatter, the failed look or
-                     * the bits, and the relocation beside the last two */
-                    if (item->occupant == FS_OCCUPANT_NONE) {
-                        hint = "already gone from disk; apply reclaims it";
-                    } else if (item->displaced != WORKSPACE_DISPLACED_NONE) {
-                        hint = "not looked at, beneath a squatted directory; "
-                            "apply releases it, the path stays";
-                    } else if (item->divergence & DIVERGENCE_UNVERIFIED) {
+                    /* The tags' ladder past absence and a squatter, which the
+                     * section switch lists apart (section 11): the failed look
+                     * or the bits, and the relocation beside them */
+                    if (item->divergence & DIVERGENCE_UNVERIFIED) {
                         /* Worded by whose remedy the failed look is, so the hint
                          * and its tag say the same thing (workspace_fault_t). A
                          * directory shares [unreadable] and [unverified], and
@@ -1223,19 +1252,6 @@ static void status_print_workspace(
                         hint = "the claim moved with its target or home; apply prunes "
                             "the old copy, but under a moved home only --force does";
                     }
-                    break;
-
-                case WORKSPACE_STATE_RELEASED:
-                    /* The bare [released] key, a file's and a directory's, written
-                     * true of both. Its claim "no longer stands": Git dropped
-                     * it, or Git still carries it where a blob of its profile
-                     * leaves it no room. */
-                    hint = (item->divergence & DIVERGENCE_TYPE)
-                        ? "what dotta put there is gone, another kind of path stands "
-                        "in its place; apply releases it, the path stays"
-                        : "its claim no longer stands in Git, dotta never deployed it, "
-                        "or it is another spelling of a path dotta manages; apply "
-                        "releases it, the path stays";
                     break;
 
                 case WORKSPACE_STATE_OBSTRUCTING:
@@ -1283,10 +1299,94 @@ static void status_print_workspace(
                 case WORKSPACE_STATE_DELETED:
                 case WORKSPACE_STATE_UNTRACKED:
                 case WORKSPACE_STATE_UNSCANNED:
+                case WORKSPACE_STATE_RELEASED:
                 case WORKSPACE_STATE_OVERRIDDEN:
                     /* The section switch above files no other state here */
                     CHECK_ARG(
-                        false, "the orphaned bucket holds ORPHANED, RELEASED and OBSTRUCTING alone"
+                        false, "the orphaned bucket holds ORPHANED and OBSTRUCTING alone"
+                    );
+            }
+            status_legend_add(&legend, tags, tag_count, hint);
+        }
+
+        output_list_render(list);
+        output_list_free(list);
+        status_print_legend(out, &legend);
+    }
+
+    /* Section 11: Released paths — the scope exit's orphans apply settles in
+     * the record alone (core/cleanup.h cleanup_verdict: ABSENT, RELEASED): it
+     * retires each record and touches nothing on disk, which is what the header
+     * says of every line; the key says why, by the tags each line shows, the
+     * Issues key's shape. Last, since nothing here asks the user anything, and
+     * the line leaves it as it finds it. */
+    if (released.count > 0) {
+        output_list_t *list = output_list_create(
+            out, "Released paths",
+            "run \"dotta apply\" to let them go; nothing on disk changes"
+        );
+        status_legend_t legend = { .arena = frame };
+
+        for (size_t i = 0; i < released.count; i++) {
+            const workspace_item_t *item = released.entries[i];
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char metadata[256];
+            char path[PATH_MAX + 2];
+
+            if (!workspace_item_tags(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                continue;
+            }
+            snprintf(
+                path, sizeof(path), "%s%s", item->filesystem_path,
+                path_kind_suffix(item->item_kind)
+            );
+            output_list_add(
+                list, tags, tag_count, color, path, metadata
+            );
+
+            const char *hint = NULL;
+
+            /* By the state, exhaustive as the section switch above is, so a state
+             * added to this bucket asks for an arm of its own here */
+            switch (item->state) {
+                case WORKSPACE_STATE_ORPHANED:
+                    /* The tags' ladder: absence, then a squatter above — the
+                     * two an orphan is let go for here (cleanup_verdict) */
+                    if (item->occupant == FS_OCCUPANT_NONE) {
+                        hint = "already gone from disk; apply reclaims it";
+                    } else if (item->displaced != WORKSPACE_DISPLACED_NONE) {
+                        hint = "not looked at, beneath a squatted directory; "
+                            "apply releases it, the path stays";
+                    }
+                    break;
+
+                case WORKSPACE_STATE_RELEASED:
+                    /* The bare [released] key, a file's and a directory's, written
+                     * true of both. Its claim "no longer stands": Git dropped
+                     * it, or Git still carries it where a blob of its profile
+                     * leaves it no room. */
+                    hint = (item->divergence & DIVERGENCE_TYPE)
+                        ? "what dotta put there is gone, another kind of path stands "
+                        "in its place; apply releases it, the path stays"
+                        : "its claim no longer stands in Git, dotta never deployed it, "
+                        "or it is another spelling of a path dotta manages; apply "
+                        "releases it, the path stays";
+                    break;
+
+                case WORKSPACE_STATE_DEPLOYED:
+                case WORKSPACE_STATE_UNDEPLOYED:
+                case WORKSPACE_STATE_DELETED:
+                case WORKSPACE_STATE_UNTRACKED:
+                case WORKSPACE_STATE_UNSCANNED:
+                case WORKSPACE_STATE_OVERRIDDEN:
+                case WORKSPACE_STATE_OBSTRUCTING:
+                    /* The section switch above files no other state here */
+                    CHECK_ARG(
+                        false, "the released bucket holds ORPHANED and RELEASED alone"
                     );
             }
             status_legend_add(&legend, tags, tag_count, hint);

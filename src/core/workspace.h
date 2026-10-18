@@ -1663,9 +1663,10 @@ workspace_items_t workspace_displaced_orphans(
  *      carries no bits at all and the bare arm would colour it as a prune
  *   1. "type" (RED) - File type changed (symlink ↔ regular), most severe
  *   2. "modified" (YELLOW) - Disk content moved away from what dotta confirmed
- *   3. "stale" (CYAN when alone: apply-side work, like "undeployed") - Git moved
- *      past what dotta last reconciled, the bytes, the kind or a claim; next to
- *      "modified" or "type" it names a conflict and the primary tag's colour stands
+ *   3. "stale" (CYAN when alone and no violation rides: apply-side work, like
+ *      "undeployed") - Git moved past what dotta last reconciled, the bytes,
+ *      the kind or a claim; next to "modified" or "type" it names a conflict
+ *      and the primary tag's colour stands
  *   4. Secondary: "mode", "ownership" - the claim axes that differ, whoever moved
  *      them; "unencrypted" - the blob against the policy, beside "displaced" too
  *   5. "locked" / "unreadable" / "unverified" (MAGENTA when still the default) -
@@ -1688,7 +1689,8 @@ workspace_items_t workspace_displaced_orphans(
  *
  * The function handles special cases:
  *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)
- *   - ENCRYPTION divergence upgrades color to MAGENTA if still the default
+ *   - ENCRYPTION divergence upgrades color to MAGENTA over every colour but TYPE's
+ *     RED, apply-side work's CYAN among them
  *   - ENCRYPTION is the one divergence a row carries where nothing was measured
  *     at its path: an UNDEPLOYED row — the copy is not on disk to have diverged
  *     from, but the blob apply is about to write violates the policy, and that

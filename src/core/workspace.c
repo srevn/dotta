@@ -3956,8 +3956,9 @@ bool workspace_item_tags(
                      * it say what differs, not who moved each, since apply
                      * converges them alike. Alone it is apply-side work — the
                      * same CYAN as [undeployed], none of the user's bytes is
-                     * overwritten; next to [modified] or [type] it names a conflict
-                     * and the primary tag's colour stands. */
+                     * overwritten — which the blob's violation below outranks;
+                     * next to [modified] or [type] it names a conflict and the
+                     * primary tag's colour stands. */
                     if (tag_count == 0) {
                         *color_out = OUTPUT_COLOR_CYAN;
                     }
@@ -3991,14 +3992,16 @@ bool workspace_item_tags(
             /* The blob's verdict, on either arm: Git's alone, so no look decides
              * it and it rides beside [displaced] too — the row is written fresh
              * once the squatter goes, so this may be the last screen before it
-             * lands, as on an UNDEPLOYED row. Upgrade color to MAGENTA if still
-             * the default (not TYPE divergence): encryption issues get their
-             * own treatment, the displaced line's included. */
+             * lands, as on an UNDEPLOYED row. MAGENTA over every colour but
+             * [type]'s RED, the CYAN of apply-side work among them: cyan is the
+             * colour of work that costs the user nothing, and the plaintext a
+             * stale row's landing writes is the cost the UNDEPLOYED arm's MAGENTA
+             * says. */
             if (item->divergence & DIVERGENCE_ENCRYPTION) {
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "unencrypted";
                 }
-                if (*color_out == OUTPUT_COLOR_YELLOW) {
+                if (*color_out != OUTPUT_COLOR_RED) {
                     *color_out = OUTPUT_COLOR_MAGENTA;
                 }
             }

@@ -213,14 +213,14 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
     }
 
     if (item->state == WORKSPACE_STATE_RELEASED) {
-        /* Git no longer backs the path — the branch was deleted, the path was
-         * removed from it — dotta never deployed it (the workspace's ownership
-         * gate), another kind of node stands in its place, a row stands on its
-         * entry under another spelling, or it is a directory holding what no
-         * apply removes; the workspace's load found it either way. The path stays
-         * on disk to protect the user's data, and the record retires because
-         * dotta cannot manage what Git cannot restore, and does not remove what
-         * it did not put there: it is released from dotta's management, not pruned.
+        /* Git no longer backs a file — the branch was deleted, the path was removed
+         * from it — dotta never deployed it (the workspace's ownership gate),
+         * another kind of node stands in its place, a row stands on its entry
+         * under another spelling, or it is a directory holding what no apply
+         * removes; the workspace's load found it either way. The path stays on
+         * disk to protect the user's data, and the record retires because dotta
+         * cannot manage what Git cannot restore, and does not remove what it
+         * did not put there: it is released from dotta's management, not pruned.
          *
          * Decided before --force is consulted: --force prunes what would be
          * skipped, never what is released. */

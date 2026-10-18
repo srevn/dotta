@@ -65,7 +65,8 @@ typedef struct {
  * they are ordered pruned, and deleted when 'dotta apply' is run. Either fate
  * is this machine's own — the order a column of its record — while the commit
  * is the branch every machine reads: another machine meets it at its next sync
- * and releases its own copies at its next apply, under the flag or not.
+ * and settles its own copies at its next apply, as every let-go, under the flag
+ * or not.
  *
  * Executes hooks; never touches deployed files. Writes the record for what the
  * commit let go (retire, or prune-order under --delete-files) — the record phase

@@ -340,11 +340,12 @@ typedef enum {
  *
  * A relocation is an orphan whose own claim its profile still holds at another
  * path, standing there or not: the record's (profile, storage path) pair found
- * the profile's row, which projects elsewhere (workspace_analyze_orphans). What
- * becomes of the copy left behind turns on one question — did the user move the
- * claim, or did the ground move under it — and the answer is the mounting rule
- * of the namespace the claim is named in (infra/label.h), not the place either
- * side stands at, nor what precedence stands at the new one:
+ * the profile's row of the record's kind, which projects elsewhere
+ * (workspace_analyze_orphans). What becomes of the copy left behind turns on
+ * one question — did the user move the claim, or did the ground move under it —
+ * and the answer is the mounting rule of the namespace the claim is named in
+ * (infra/label.h), not the place either side stands at, nor what precedence stands
+ * at the new one:
  *
  *   SHARED    home/ and root/ mount where the machine says — the invoker's HOME
  *             and `/`. Neither is anyone's to re-target, so a claim that moved
@@ -1155,14 +1156,13 @@ typedef struct workspace workspace_t;
  * - analyze_orphans — every record whose path the view lacks, either kind, off
  *   the look the join took at it: presence, ownership, divergence, whether a
  *   landing needs its place — a row of the view beneath it, or a blob above it
- *   — and Git authority, at one ref lookup and a lazy tree load per profile with
- *   present, owned orphans, the sheet beside it where a directory orphan needs
- *   one, and one tree lookup per such orphan — and what is left in a directory,
- *   at one readdir per directory the ladder leaves a scope exit's. Read by
- *   core/cleanup.c cleanup_plan_build (the settle, apply's cleanup), core/deploy.c
- *   deploy_plan_build (the landing's orphans: the nodes it replaces, the copies
- *   it clears) and cmds/status.c status_print_workspace (Issues, Released paths
- *   and Overridden copies).
+ *   — and a file's Git authority, at one ref lookup and a lazy tree load per
+ *   profile with present, owned file orphans, and one tree lookup per such orphan
+ *   — and what is left in a directory, at one readdir per directory the ladder
+ *   leaves a scope exit's. Read by core/cleanup.c cleanup_plan_build (the settle,
+ *   apply's cleanup), core/deploy.c deploy_plan_build (the landing's orphans:
+ *   the nodes it replaces, the copies it clears) and cmds/status.c
+ *   status_print_workspace (Issues, Released paths and Overridden copies).
  * - analyze_untracked — every regular file and symlink beneath a tracked directory
  *   that no enabled profile claims and dotta has no record of, at a readdir walk
  *   per tracked directory, and every place it could not look (UNSCANNED). Read

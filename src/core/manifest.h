@@ -788,13 +788,13 @@ typedef struct {
  *
  * A profile the state enables and Git no longer holds contributes nothing: it
  * is not among manifest_profiles, and every record it left is an orphan no branch
- * backs, which the workspace reads as released (core/workspace.c
- * workspace_orphan_authority). Missing is an observation, never an error
- * (manifest_build): the health channel's fact about a profile, where
- * manifest_unbound, manifest_unkept and manifest_contradicted are its facts about
- * claims. Only Git surgery, or a state write that failed after `remove` deleted
- * the branch, leaves one. Empty on every build whose enabled profiles all have
- * their branches, and on one profile's view.
+ * backs, which the workspace reads as a file released and a directory by what
+ * is left in it (core/workspace.c workspace_analyze_orphans). Missing is an
+ * observation, never an error (manifest_build): the health channel's fact about
+ * a profile, where manifest_unbound, manifest_unkept and manifest_contradicted
+ * are its facts about claims. Only Git surgery, or a state write that failed
+ * after `remove` deleted the branch, leaves one. Empty on every build whose enabled
+ * profiles all have their branches, and on one profile's view.
  *
  * The screen says **no branch**: the header's word is what the build found of
  * the profile, the screen's is what it lacks — the branch a fetch brings back,
@@ -1030,7 +1030,8 @@ const manifest_row_t *manifest_lookup_claim(
  * name is the upgrade if a measure ever shows the scan.
  *
  * Reader: the relocation read (core/workspace.c workspace_analyze_orphans), once
- * per BACKED orphan, each of which has already cost a Git tree probe.
+ * per owned orphan Git did not let go — a file it backs, which has already cost
+ * a Git tree probe, and a directory, which Git is not asked of.
  *
  * @param manifest Manifest (NULL returns NULL)
  * @param profile The claim's profile (NULL names no row)
@@ -1436,7 +1437,8 @@ typedef struct {
  *     record at the path: orphaned. What apply does there is the orphan analysis's
  *     (core/workspace.c workspace_analyze_orphans): a copy beneath a blob `after`
  *     stands is that blob's landing's, and otherwise the record's order, its
- *     ownership and Git say whether apply prunes the copy or releases it
+ *     ownership and — a file's Git, a directory's what is left in it — say whether
+ *     apply prunes the copy or releases it
  *   Overlap semantics, by where the claim standing over A's at path X is
  *   (core/manifest.c manifest_layer): at X, B gets added or updated for X and A
  *   reassigned; beneath X, A's blob there having lost its place to the claims

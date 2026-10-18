@@ -33,14 +33,15 @@
  *   node above a row and a copy beneath a standing blob, which the plan never
  *   holds (cleanup_plan_t): cleanup_verdict, from the item — RELEASED ⇒ released
  *   (left on disk, record retires — never pruned, --force included: dotta removes
- *   what it deployed and Git still backs, and lets go of what Git lost, of what
- *   it never deployed, of a path another kind of node stands at, of a key that
- *   spells a path a row stands on under another spelling, and of a directory
- *   holding what no apply removes); a relocated home/ claim ⇒ skipped unless
- *   --force, either kind (the copy is the claim's old home — see the verdict
- *   table); a file with a cleanup_skip_reason ⇒ skipped unless --force; a directory
- *   the workspace could not verify ⇒ skipped, --force included; else prunable,
- *   a directory's remainder permitting
+ *   a file it deployed that Git still backs and a directory it created that the
+ *   run empties, and lets go of a file Git lost, of what it never deployed, of
+ *   a path another kind of node stands at, of a key that spells a path a row
+ *   stands on under another spelling, and of a directory holding what no apply
+ *   removes); a relocated home/ claim ⇒ skipped unless --force, either kind (the
+ *   copy is the claim's old home — see the verdict table); a file with a
+ *   cleanup_skip_reason ⇒ skipped unless --force; a directory the workspace could
+ *   not verify ⇒ skipped, --force included; else prunable, a directory's remainder
+ *   permitting
  * - what a directory holds that no apply removes: the load's readdir, which
  *   releases it (core/workspace.c workspace_analyze_orphans: RELEASED, read off
  *   the item like every other release)

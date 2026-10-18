@@ -277,8 +277,8 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *
  * The binding and the claim are what an orphan (a record whose path the view
  * lacks) is measured against — the claim is a file orphan's reference on disk,
- * and the binding names the profile asked whether it still holds the path — and
- * an owned record whose profile ≠ the profile of the row at its path is a
+ * and the binding names the profile asked whether it still holds a file's claim
+ * — and an owned record whose profile ≠ the profile of the row at its path is a
  * reassignment apply has not acknowledged: on a file row and on a directory the
  * profile tracks, never on a derived ancestor claim nobody made, and across kinds
  * only while a look finds the record's own node still standing (core/workspace.h

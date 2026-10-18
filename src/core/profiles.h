@@ -249,14 +249,14 @@ typedef struct profile profile_t;
  * — the sheet waits for the first question that needs it — so the open cannot fail.
  *
  * Readers: core/manifest.c manifest_build (each enabled head gitops_branch_tree
- * found) and core/workspace.c workspace_orphan_authority (each orphan's profile's
- * head, found the same way), cmds/revert.c cmd_revert (its target commit's),
- * cmds/diff.c diff_commit_to_workspace (the commit's), cmds/export.c cmd_export,
- * cmds/show.c cmd_show and cmds/list.c list_file_history (the tree the verb
- * selected), cmds/list.c list_profiles and list_files (the tree of the head each
- * listing read, so what each prints is that commit's); profile_load, at the head
- * it read; and a profile's draft, at the tree its stage opened at — a head, or
- * Git's empty tree (profile_draft_open, profile_draft_orphan).
+ * found) and core/workspace.c workspace_orphan_authority (each file orphan's
+ * profile's head, found the same way), cmds/revert.c cmd_revert (its target
+ * commit's), cmds/diff.c diff_commit_to_workspace (the commit's), cmds/export.c
+ * cmd_export, cmds/show.c cmd_show and cmds/list.c list_file_history (the tree
+ * the verb selected), cmds/list.c list_profiles and list_files (the tree of the
+ * head each listing read, so what each prints is that commit's); profile_load,
+ * at the head it read; and a profile's draft, at the tree its stage opened at —
+ * a head, or Git's empty tree (profile_draft_open, profile_draft_orphan).
  *
  * @param name Whose claims these are (must not be NULL; copied)
  * @param tree The tree (must not be NULL; borrowed, and outlives the handle)
@@ -689,11 +689,11 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * holder's head in its search (revert_select_profile, at the holder's own name
  * for the argument), where a directory claim is never refused — it gives way to
  * the write where it stands, and rides it where the head's blob contradicts it;
- * the orphan probe's file arm (core/workspace.c workspace_orphan_authority),
- * which asks whether a blob still backs a file record, a subtree and a gitlink
- * standing at a name without making a file claim — its directory arm asking
- * profile_find; and the encryption prior of update's captures and of add's decision
- * pass (cmds/update.c update_capture, cmds/add.c cmd_add), a blob's bytes or none.
+ * the orphan probe (core/workspace.c workspace_orphan_authority), which asks
+ * whether a blob still backs a file record, a subtree and a gitlink standing at
+ * a name without making a file claim; and the encryption prior of update's captures
+ * and of add's decision pass (cmds/update.c update_capture, cmds/add.c cmd_add),
+ * a blob's bytes or none.
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
  *                tree is silent
@@ -729,10 +729,9 @@ error_t profile_holds(profile_t *profile, const char *storage_path, profile_held
  * cmds/export.c export_collect_storage (a file claim and a directory claim, both
  * TOLERANT: the single-file copy, or the copy's root), cmds/revert.c
  * revert_target_claim (a file claim, STRICT: the claim the commit holds, which
- * the restore writes), core/workspace.c workspace_orphan_authority (a directory
- * claim, STRICT: whether the profile still backs an orphan's directory), and a
- * profile's draft at each rung of the way a restore brings back (a directory
- * claim, STRICT, of the commit's profile: profile_restore_file).
+ * the restore writes), and a profile's draft at each rung of the way a restore
+ * brings back (a directory claim, STRICT, of the commit's profile:
+ * profile_restore_file).
  *
  * @param profile Handle (must not be NULL)
  * @param read The sheet's policy for this question
@@ -798,9 +797,8 @@ error_t profile_find(
  *     derived claim nothing tracked stands beneath any longer (core/profiles.c
  *     profile_prune_ancestors), its key handed to the writer's record phase where
  *     it has one — but a claim the base tracked, whose removal the writer names
- *     itself. Revert has none, so a record a rung its commit pruned stood on is
- *     released by the next load, which finds the claim gone (core/workspace.c
- *     workspace_orphan_authority);
+ *     itself. Revert has none, so the record a rung its commit pruned stood on
+ *     is decided by the next load (core/workspace.c workspace_analyze_orphans);
  *   - the gate, each document held against the one the draft opened: a commit
  *     no edit of which moved the tree or the sheet makes nothing — no prune, no
  *     save, no commit — so imported redundancy rides a commit and never drives

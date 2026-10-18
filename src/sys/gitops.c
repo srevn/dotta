@@ -44,9 +44,9 @@ error_t gitops_init(void) {
      * it — a git_tree_entry_bypath, or a descent's git_tree_lookup — re-reads,
      * inflates and SHA-1-verifies each tree on the way down. Two loops ask once
      * per item, quadratic where the items scale with the directory's own width:
-     * core/workspace.c per orphaned record (workspace_orphan_authority), and
-     * core/profiles.c per directory item of a sheet (profile_blob_above, asked
-     * by the walk and profile_contradicted at each item, and by the point
+     * core/workspace.c per orphaned file record (workspace_orphan_authority),
+     * and core/profiles.c per directory item of a sheet (profile_blob_above,
+     * asked by the walk and profile_contradicted at each item, and by the point
      * questions).
      *
      * Trees: no ceiling. Blobs: libgit2's zero, never cached — infra/content

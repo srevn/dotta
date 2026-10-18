@@ -14,9 +14,9 @@
  * - content and type: the tree's (a blob, a link, an executable) — never restated
  *   here, and the tree's word wins over a stale item's kind (read for one name
  *   by core/profiles.h profile_entry, which profile_holds and profile_find ask
- *   — and, for the claim an orphan's record remembers, by core/workspace.c
- *   workspace_orphan_authority, through profile_entry for a file and profile_find
- *   for a directory; for the whole profile by core/profiles.c profile_walk)
+ *   — and, for the blob a file orphan's record remembers, by core/workspace.c
+ *   workspace_orphan_authority, through profile_entry; for the whole profile by
+ *   core/profiles.c profile_walk)
  * - permission bits: the sheet's ("mode") — Git's filemode holds one bit of them
  *   (owner-execute), the sheet holds them all
  * - ownership: the sheet's ("owner"/"group"), two names either of which may be
@@ -594,13 +594,10 @@ error_t metadata_capture_directory(
  * cmds/show.c show_file), the file listing's verbose marks through the profile's
  * tolerant walk (core/profiles.h profile_walk, from cmds/list.c list_files, warned;
  * the listing is the tree's and stands, the marks are the sheet's and do not),
- * the orphan authority's third answer through the profile's strict read
- * (core/profiles.h profile_find, from core/workspace.c workspace_orphan_authority,
- * which folds the failure to UNVERIFIED and never to "no claims"), the completion's
- * offer through the profile's strict walk (core/profiles.h profile_walk, from
- * cmds/completion.c completion_directories, which drops the failure as every
- * completion source drops its own: cmds/completion.h), remove's own directory
- * offer the same way through its strict walk and profile_contradicted
+ * the completion's offer through the profile's strict walk (core/profiles.h
+ * profile_walk, from cmds/completion.c completion_directories, which drops the
+ * failure as every completion source drops its own: cmds/completion.h), remove's
+ * own directory offer the same way through its strict walk and profile_contradicted
  * (core/profiles.h, from cmds/remove.c remove_complete), and the claims a profile's
  * deletion takes, whose paths its hooks are handed, through the profile's tolerant
  * walk and profile_contradicted (core/profiles.h, from cmds/remove.c

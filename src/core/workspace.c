@@ -1562,21 +1562,15 @@ static error_t workspace_compare_orphan(workspace_t *ws, workspace_item_t *item)
 /**
  * Per-profile authority cache entry (one analysis pass)
  *
- * Each read is made once, at the first row that needs it, and kept for the pass
- * with what it met: the answer, or the failure, which answers every later row
- * that needs the read — UNVERIFIED, the read asked no more: a failure minted
- * once per cause and answered again (base/error.h). A failed read skips only
- * the rows that need it: a sheet that will not load fails the directory questions
- * the tree leaves open, never a file's claim or a directory's a blob stands at
- * or above, which are the tree's to answer. The pass is the retry boundary, as
- * a source filter is (sys/source.h): the next load reads afresh.
+ * The head is read once, at the profile's first file row, and kept for the pass
+ * with what it met: the tree, or the failure, which answers every later row of
+ * the profile — UNVERIFIED, the read asked no more: a failure minted once per
+ * cause and answered again (base/error.h). The pass is the retry boundary, as a
+ * source filter is (sys/source.h): the next load reads afresh.
  *
- * The head is read at the profile's first row, and the profile is opened at it
- * there, wherever it stands. The sheet is the profile's: read at the first
- * directory question the tree leaves open (a blob at the name or above it answers
- * one alone), and kept by the handle with its failure (core/profiles.h
- * profile_find). A head without metadata.json holds an empty sheet, so a profile
- * that never wrote one backs no directory — an answer, never a failure.
+ * The profile is opened at a head that stands, and asked of its tree alone
+ * (core/profiles.h profile_entry): a blob is a file claim whatever the sheet
+ * says, so the sheet is never read here.
  */
 typedef struct {
     git_tree *tree;             /* The branch's head; NULL where it is gone, or on a failure */
@@ -1596,7 +1590,8 @@ static void workspace_authority_cache_free(void *value) {
 }
 
 /**
- * What the profile that deployed an orphan says of the claim its record remembers
+ * What the profile that deployed a file orphan says of the claim its record
+ * remembers
  */
 typedef enum {
     ORPHAN_AUTHORITY_BACKED,      /* The profile holds the claim the record remembers, at its name */
@@ -1605,19 +1600,19 @@ typedef enum {
 } orphan_authority_t;
 
 /**
- * Git's authority over an orphan
+ * Git's authority over a file orphan
  *
- * "Does the profile that deployed this path still hold the claim its record
- * remembers?" — at the record's storage name, a claim of the record's kind: a
- * blob of any filemode for a file, a DIRECTORY item no blob stands at or above
- * for a directory. That is the profile's walk asked of one name before anything
- * is placed — the file claim a blob makes, which the tree alone holds
- * (core/profiles.h profile_entry), and the directory claim profile_find answers
- * — so the probe and the view agree on every name, a disabled profile's custom/
- * name among them, which has no binding to be placed by.
+ * "Does the profile that deployed this file still hold the claim its record
+ * remembers?" — at the record's storage name, a blob of any filemode. That is
+ * the profile's walk asked of one name before anything is placed: the file claim
+ * a blob makes, which the tree alone holds (core/profiles.h profile_entry), so
+ * the probe and the view agree on every name, a disabled profile's custom/ name
+ * among them, which has no binding to be placed by. A directory is never asked:
+ * it holds no bytes, so Git has nothing to back, and what is left in it decides
+ * its fate (workspace_analyze_orphans).
  *
- * One kind of row reaches this probe — a record whose path the view lacks, and
- * which no standing blob stands above (a copy beneath one is overridden first,
+ * One kind of row reaches this probe — a file record whose path the view lacks,
+ * and which no standing blob stands above (a copy beneath one is overridden first,
  * workspace_analyze_orphans), so no enabled profile holds a claim there — and
  * three reasons it may be there are what the probe tells apart:
  *   - the profile is disabled: it still holds the claim, and the deployed copy
@@ -1628,8 +1623,7 @@ typedef enum {
  *   - Git let go: the branch was deleted, rebased or git rm'd behind the record,
  *     an enabled branch is dead, a pulled removal arrived, or the name was retyped
  *     — a removal and an addition, the claim the record remembers the half removed
- *     — or a blob came to stand above a directory claim's name, which leaves
- *     the claim no room; and the deployed copy is left alone.
+ *     — and the deployed copy is left alone.
  * The enabled set cannot tell the second from the third; only a live look at
  * Git can. Taken here, every reader of orphan items shares one verdict, and
  * cleanup's verdict phase reads nothing but the item.
@@ -1641,19 +1635,18 @@ typedef enum {
  *   UNVERIFIED  a lookup or a load failed. LOST would retire the record and
  *               BACKED would prune the copy, so neither is guessed: the caller
  *               marks the orphan DIVERGENCE_UNVERIFIED, skipped until Git answers
- *               (a file until --force, core/cleanup.h cleanup_verdict)
+ *               or --force (core/cleanup.h cleanup_verdict)
  *
  * No failure is raised: each one says only that the probe could not answer, which
  * UNVERIFIED already says — the orphan's skip, never the load's, the rule every
- * failed look in this file takes. A read's failure is kept for the pass and answers
- * every later row that needs the read — the head's on the profile's entry, the
- * sheet's on its profile — and the next load asks afresh
+ * failed look in this file takes. The head's failure is kept for the pass and
+ * answers every later row of the profile, and the next load asks afresh
  * (workspace_authority_cache_t).
  *
  * @param repo Repository (must not be NULL)
  * @param cache profile → workspace_authority_cache_t (borrowed keys, owned values)
- * @param item The orphan: its record's profile, storage path and kind — whose
- *        claims, which name, and the kind of claim to find there (must not be NULL)
+ * @param item The file orphan: its record's profile and storage path — whose
+ *        claims, and which name (must not be NULL)
  * @return The answer
  */
 static orphan_authority_t workspace_orphan_authority(
@@ -1683,49 +1676,24 @@ static orphan_authority_t workspace_orphan_authority(
         return ORPHAN_AUTHORITY_LOST;
     }
 
-    if (item->item_kind == PATH_KIND_FILE) {
-        /* The tree at the name, and the tree alone: Git's one-entry rule
-         * (core/profiles.h profile_entry), which the sheet must not answer —
-         * one that will not load never skips a copy the tree releases. Three
-         * answers, not two: a subtree that will not load on the way is a failure
-         * to look, never an absence — and this row's alone, kept by nothing,
-         * since another name may have a way past it. It is worded for the row
-         * and dropped, one per file record beneath such a subtree, the bound
-         * the directory arm keeps too. */
-        profile_held_t held;
-        error_t err = profile_entry(cached->profile, item->storage_path, &held);
-        if (err) return ORPHAN_AUTHORITY_UNVERIFIED;
-
-        /* A file claim is a blob of any filemode — bytes, an executable, a link's
-         * target — and nothing else at the name is one: a subtree is the way to
-         * what lies beneath it and a gitlink is nothing dotta writes, so neither
-         * holds a byte of the copy on disk. A blob or a gitlink above the name
-         * leaves nothing there to find, so this is the walk's answer at every
-         * rung. */
-        return held.kind == PROFILE_HELD_FILE ? ORPHAN_AUTHORITY_BACKED : ORPHAN_AUTHORITY_LOST;
-    }
-
-    /* A directory claim lives in the sheet alone — a tree holds no empty directory
-     * — and the one a record remembers is the claim the profile's walk shows at
-     * the name (core/profiles.h profile_find): a blob there or at a rung above
-     * it contradicts it and answers without the sheet, which the handle reads
-     * once and keeps with its failure; a subtree or a gitlink vetoes nothing,
-     * and a FILE item claims no directory. Read strictly: whether the claim stands
-     * is the sheet's question, so one that will not load skips the copy. */
-    const profile_claim_t *claim = NULL;
-    error_t err = profile_find(
-        cached->profile, PROFILE_READ_STRICT, PATH_KIND_DIRECTORY, item->storage_path, &claim
-    );
-
-    /* A failure is one the probe cannot answer, which UNVERIFIED already says,
-     * and is dropped: the sheet's is the handle's, minted once; the tree's is
-     * worded by profile_find for this row, one per directory record beneath a
-     * subtree the store lacks — the bound of what this loop keeps (base/error.h
-     * "Lifetime"). */
+    /* The tree at the name, and the tree alone: Git's one-entry rule
+     * (core/profiles.h profile_entry), which the sheet must not answer — one
+     * that will not load never skips a copy the tree releases. Three answers,
+     * not two: a subtree that will not load on the way is a failure to look,
+     * never an absence — and this row's alone, kept by nothing, since another
+     * name may have a way past it. It is worded for the row and dropped, one
+     * per file record beneath such a subtree, the bound of what this loop keeps
+     * (base/error.h "Lifetime"). */
+    profile_held_t held;
+    error_t err = profile_entry(cached->profile, item->storage_path, &held);
     if (err) return ORPHAN_AUTHORITY_UNVERIFIED;
 
-    /* The claim the walk shows backs the copy; none lets it go */
-    return claim ? ORPHAN_AUTHORITY_BACKED : ORPHAN_AUTHORITY_LOST;
+    /* A file claim is a blob of any filemode — bytes, an executable, a link's
+     * target — and nothing else at the name is one: a subtree is the way to what
+     * lies beneath it and a gitlink is nothing dotta writes, so neither holds a
+     * byte of the copy on disk. A blob or a gitlink above the name leaves nothing
+     * there to find, so this is the walk's answer at every rung. */
+    return held.kind == PROFILE_HELD_FILE ? ORPHAN_AUTHORITY_BACKED : ORPHAN_AUTHORITY_LOST;
 }
 
 /**
@@ -2078,13 +2046,14 @@ static void workspace_index_entries(workspace_t *ws) {
  * input as the passphrase (crypto/keymgr.h).
  *
  * Readers: the orphan analysis's three arms that keep the copy dotta's — position
- * beneath a blob, the user's prune order, and Git's backing
- * (workspace_analyze_orphans) — and the join's look at dotta's node above a row,
- * whose class every path beneath it reads (workspace_look_orphan). A fact, not
- * a verdict: cleanup's still skips a prunable copy for a divergence or a reason
- * of its own, and an overridden copy's and a node's is the consent their landing
- * asks (core/deploy.h deploy_clearance) — a directory's status's alone, its landing
- * reading what it holds afresh.
+ * beneath a blob, the user's prune order, and the owned tail, a file Git backs
+ * or a directory, which Git is not asked of (workspace_analyze_orphans) — and
+ * the join's look at dotta's node above a row, whose class every path beneath
+ * it reads (workspace_look_orphan). A fact, not a verdict: cleanup's still skips
+ * a prunable copy for a divergence or a reason of its own, and an overridden
+ * copy's and a node's is the consent their landing asks (core/deploy.h
+ * deploy_clearance) — a directory's status's alone, its landing reading what it
+ * holds afresh.
  *
  * @param ws Workspace (provides the run's content reader)
  * @param item The orphan's item, beneath no squatter and not absent: an occupant
@@ -2182,7 +2151,7 @@ static bool workspace_transient(const char *entry, void *ctx) {
  *
  * Per orphan, in order — the ancestry, presence, the occupant's kind, the entry,
  * position, above a row and beneath a blob, the prune order, the ownership gate,
- * then Git authority:
+ * then a file's Git authority, and the relocation read:
  *   - the ancestry: a squatter above the copy — a directory row of the view, a
  *     directory record the looker found squatted, or a link over a record beneath
  *     it — means no look was taken at all, and the record is released with nothing
@@ -2244,26 +2213,28 @@ static bool workspace_transient(const char *entry, void *ctx) {
  *     but never deployed — names a path the user put there before it was active.
  *     Released: the copy is left alone, the record retires, and no tree is asked
  *     about it;
- *   - Git authority (workspace_orphan_authority) for an owned record: a departure
+ *   - Git authority (workspace_orphan_authority) for an owned file: a departure
  *     dotta discovers in Git — the branch deleted, rebased or git rm'd, a pulled
  *     removal, a dead enabled branch, the name retyped to the other kind — is
  *     LOST, and the deployed copy is left alone (RELEASED); BACKED (a disabled
- *     profile, a moved target) is dotta's to prune, divergence permitting — and
- *     carries the relocation read: a BACKED orphan whose claim its profile still
- *     holds elsewhere, standing there or not, carries the class of the namespace
- *     the claim lands in (workspace_relocation_t), read where the row is found
- *     and the row not kept, and that class picks the fate (cleanup_verdict).
- *     Elsewhere is another string, and where the row stands another entry: a
- *     row standing on the record's very entry was the entry's arm above. UNVERIFIED
- *     keeps the orphan skipped until Git answers, since LOST would retire the
- *     record and BACKED would remove the copy and neither is a guess to make: a
- *     directory whatever --force says, a file until --force, which lifts every
- *     skip a file carries (core/cleanup.h cleanup_verdict) — and so removes a
- *     copy LOST would have released. Skipped and not measured: no reader shows
- *     a bit beside UNVERIFIED, so a compare would only give the item a second
- *     reason for the one fate it already has. The probe raises nothing, so a
- *     lookup it could not make is this orphan's skip and never the load's — the
- *     rule the file analysis takes for its own looks.
+ *     profile, a moved target) is dotta's to prune, divergence permitting.
+ *     UNVERIFIED keeps the orphan skipped until Git answers, since LOST would
+ *     retire the record and BACKED would remove the copy and neither is a guess
+ *     to make — until --force, which lifts every skip a file carries
+ *     (core/cleanup.h cleanup_verdict), and so removes a copy LOST would have
+ *     released. Skipped and not measured: no reader shows a bit beside UNVERIFIED,
+ *     so a compare would only give the item a second reason for the one fate it
+ *     already has. The probe raises nothing, so a lookup it could not make is
+ *     this orphan's skip and never the load's — the rule the file analysis takes
+ *     for its own looks. An owned directory is not asked: it holds no bytes, so
+ *     Git has nothing to back, and what is left in it decides (below);
+ *   - the relocation read, of an owned file Git backs and of an owned directory:
+ *     one whose claim its profile still holds elsewhere, of its own kind and
+ *     standing there or not, carries the class of the namespace the claim lands
+ *     in (workspace_relocation_t), read where the row is found and the row not
+ *     kept, and that class picks the fate (cleanup_verdict). Elsewhere is another
+ *     string, and where the row stands another entry: a row standing on the
+ *     record's very entry was the entry's arm above.
  *
  * Then, deepest first, each directory the ladder left a scope exit's — present,
  * looked at, readable — by what is left in it. One holding what no apply removes
@@ -2292,10 +2263,10 @@ static bool workspace_transient(const char *entry, void *ctx) {
  * - DIVERGENCE_CONTENT -> Modified, apply will skip
  * - DIVERGENCE_MODE/OWNERSHIP -> The claim changed, apply will skip
  * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
- * - WORKSPACE_STATE_RELEASED -> Git let go, dotta never deployed it, a row of
- *   the view stands on this very entry under another spelling of its path, (with
- *   DIVERGENCE_TYPE) another kind of path stands there, or it is a directory
- *   holding what no apply removes; apply releases
+ * - WORKSPACE_STATE_RELEASED -> Git let go of a file, dotta never deployed it,
+ *   a row of the view stands on this very entry under another spelling of its
+ *   path, (with DIVERGENCE_TYPE) another kind of path stands there, or it is a
+ *   directory holding what no apply removes; apply releases
  * - WORKSPACE_STATE_OVERRIDDEN -> a blob the view stands is above it; apply clears
  *   it with that blob's landing, unasked where untouched, else under --force,
  *   never where its look failed (core/deploy.h deploy_clearance)
@@ -2326,10 +2297,10 @@ static void workspace_analyze_orphans(workspace_t *ws) {
     hashmap_t *authority_cache = hashmap_borrow(ws->arena, 8);
 
     /* The walk cannot fail: a folded error is not the walk's — the probe's failures
-     * are the orphan's skip, a read's kept for the pass (the head's on its
-     * profile's entry, the sheet's on the entry's profile) and a subtree's on
-     * the way to one name that row's alone, and the measure's are its bit, dropped
-     * at the call that raised it; none is carried out of the walk. */
+     * are the orphan's skip, the head's kept for the pass on its profile's entry
+     * and a subtree's on the way to one name that row's alone, and the measure's
+     * are its bit, dropped at the call that raised it; none is carried out of
+     * the walk. */
     for (size_t i = 0; i < ws->orphan_count; i++) {
         workspace_item_t *item = ws->orphans[i];
         const state_record_t *record = item->record;
@@ -2473,30 +2444,36 @@ static void workspace_analyze_orphans(workspace_t *ws) {
             continue;
         }
 
-        /* Owned: ask the profile that deployed it whether it still holds the
+        /* Owned. A directory holds no bytes, so Git has nothing to back: what
+         * is left in it decides — released by the pass after this walk where it
+         * holds what no apply removes, else cleanup's prune once a run empties
+         * it — and the relocation read and the measure below take it from here.
+         * A file: ask the profile that deployed it whether it still holds the
          * claim this record remembers. */
-        switch (workspace_orphan_authority(ws->repo, authority_cache, item)) {
-            case ORPHAN_AUTHORITY_UNVERIFIED:
-                /* Git could not vouch for the path — a lookup that failed — and
-                 * neither LOST nor BACKED is a guess to make: it stays, and cleanup
-                 * skips it (CLEANUP_SKIP_UNVERIFIED), a file until --force. Not
-                 * measured, unlike a backed copy below: no reader shows a bit
-                 * beside UNVERIFIED, so a compare would only give the item a
-                 * second reason for the fate it already has. Its class is
-                 * UNVERIFIED whatever went wrong: the probe meets Git alone,
-                 * never a key or a permission. */
-                item->divergence = DIVERGENCE_UNVERIFIED;
-                item->fault = WORKSPACE_FAULT_UNVERIFIED;
-                continue;
+        if (item->item_kind == PATH_KIND_FILE) {
+            switch (workspace_orphan_authority(ws->repo, authority_cache, item)) {
+                case ORPHAN_AUTHORITY_UNVERIFIED:
+                    /* Git could not vouch for the path — a lookup that failed —
+                     * and neither LOST nor BACKED is a guess to make: it stays,
+                     * and cleanup skips it (CLEANUP_SKIP_UNVERIFIED) until --force.
+                     * Not measured, unlike a backed copy below: no reader shows
+                     * a bit beside UNVERIFIED, so a compare would only give the
+                     * item a second reason for the fate it already has. Its class
+                     * is UNVERIFIED whatever went wrong: the probe meets Git
+                     * alone, never a key or a permission. */
+                    item->divergence = DIVERGENCE_UNVERIFIED;
+                    item->fault = WORKSPACE_FAULT_UNVERIFIED;
+                    continue;
 
-            case ORPHAN_AUTHORITY_LOST:
-                /* Git cannot back the path. Left on disk, record retires — so
-                 * there is nothing a content comparison would decide. */
-                item->state = WORKSPACE_STATE_RELEASED;
-                continue;
+                case ORPHAN_AUTHORITY_LOST:
+                    /* Git cannot back the path. Left on disk, record retires —
+                     * so there is nothing a content comparison would decide. */
+                    item->state = WORKSPACE_STATE_RELEASED;
+                    continue;
 
-            case ORPHAN_AUTHORITY_BACKED:
-                break;
+                case ORPHAN_AUTHORITY_BACKED:
+                    break;
+            }
         }
 
         /* The relocation read: a relocated orphan is one whose claim its profile
@@ -2515,10 +2492,11 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * The class picks the fate at cleanup_verdict, and root/ never gets here
          * — its projection is fixed, so a root/ claim's old and new locations
          * are one string and the record was never orphaned. And strictly its
-         * own kind: BACKED said the profile holds a claim of that kind at the
-         * name, and the profile holds no claim of the other kind under it. Asked
-         * on this arm alone, where Git backs the name: it scans the profile's
-         * own rows, and a disabled profile has none in the view.
+         * own kind: a row of the other kind under the name is the name retyped,
+         * another claim, never this one moved — which BACKED rules out for a
+         * file, and the row's own type alone for a directory, Git not asked there.
+         * Asked of a file Git backs and of every owned directory: it scans the
+         * profile's own rows, and a disabled profile has none in the view.
          *
          * The class is read here, where the row is found, and the row is not
          * kept: an orphan item carries none, which is how the entries tell a
@@ -2531,7 +2509,10 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * are one string (manifest_lookup_storage matches it exactly), and a
          * name the view holds was validated where the profile was read, so the
          * projection below asserts nothing not already established. */
-        if (manifest_lookup_storage(ws->manifest, item->profile, item->storage_path)) {
+        const manifest_row_t *row = manifest_lookup_storage(
+            ws->manifest, item->profile, item->storage_path
+        );
+        if (row && path_type_kind(row->type) == item->item_kind) {
             switch (label_of(item->storage_path)) {
                 case LABEL_HOME:
                 case LABEL_ROOT:

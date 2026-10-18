@@ -706,8 +706,7 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
  *
  * DELETED is a statement of intent: the user removed something a profile says
  * stands here, and update's job is to commit that removal and propagate it to
- * every machine. Two facts have to hold before absence can be read that way,
- * and each answers half of it.
+ * every machine. Three facts have to hold before absence can be read that way.
  *
  * The claim has to assert the path. Every kind does but one: an ancestor claim
  * says what the rung is to be if dotta has to create it, never that the rung
@@ -729,6 +728,22 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
  * node the claim asserts was never here to be removed, so its absence deletes
  * nothing and update must not commit it as a removal.
  *
+ * And the node dotta saw has to be the claim's profile's. A record names the
+ * claim dotta last reconciled its node against, a directory's as much as a file's
+ * (core/state.h state_record_t), so another profile's record witnessed that
+ * profile's node, and its absence deletes nothing of this claim's: update would
+ * commit the removal into a profile whose node never stood here, and every machine
+ * would lose the claim at its next sync. The row is UNDEPLOYED, apply's to land,
+ * and the record its history — where dotta owns it, a reassignment that landing
+ * acknowledges (core/workspace.h workspace_reassigned). The profile alone, as
+ * the reassignment asks it: another of the profile's names for the path is the
+ * same profile's node. Where the state cannot tell the user's deletion of the
+ * claim's node from that of another profile's — under a reassignment apply has
+ * not acknowledged, or over a directory another profile's derivation observed
+ * first — this errs the safe way: apply lands the row, nothing propagates, and
+ * the deletion is the user's to commit once that landing has written the row's
+ * record.
+ *
  * The record still answers "has dotta seen this path" for an ancestor claim —
  * the ownership gate reads it. Only a claim that asserts the path may read that
  * answer as intent.
@@ -739,7 +754,8 @@ static workspace_state_t classify_absent(
 ) {
     if (manifest_is_derived(row)) return WORKSPACE_STATE_UNDEPLOYED;
 
-    return record && record->kind == workspace_type_occupant(row->type)
+    return record && record->kind == workspace_type_occupant(row->type) &&
+           strcmp(record->profile, row->profile) == 0
            ? WORKSPACE_STATE_DELETED
            : WORKSPACE_STATE_UNDEPLOYED;
 }
@@ -3004,12 +3020,13 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
          * earns its keep. An observed tracked directory was deleted by the user
          * (update propagates the removal); a never-observed one was never there,
          * nor was one observed only as another kind of node (a file where the
-         * claim is now a directory); and an ancestor claim asserts nothing to
-         * have been deleted whatever its record says — apply's job is to create
-         * it, never to commit a phantom deletion. No divergence: the path is
-         * absent. The item is listed either way, its state not DEPLOYED
-         * (workspace_list), and deploy's ancestors pass reads absence off its
-         * occupant, not its state. */
+         * claim is now a directory) or only as another profile's (that record
+         * is the row's history, which apply's landing acknowledges where dotta
+         * owns it); and an ancestor claim asserts nothing to have been deleted
+         * whatever its record says — apply's job is to create it, never to commit
+         * a phantom deletion. No divergence: the path is absent. The item is
+         * listed either way, its state not DEPLOYED (workspace_list), and deploy's
+         * ancestors pass reads absence off its occupant, not its state. */
         item->state = classify_absent(row, record);
         return;
     }
@@ -3772,19 +3789,11 @@ bool workspace_item_tags(
                 *color_out = OUTPUT_COLOR_MAGENTA;
             }
 
-            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
-            break;
-
-        case WORKSPACE_STATE_DELETED:
-            if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
-                tags_out[tag_count++] = "deleted";
-            }
-            *color_out = OUTPUT_COLOR_RED;
-
-            /* A pending reassignment shows on a deleted path too: the record
-             * still names the profile that deployed the copy, and apply's redeploy
-             * from the new owner is what acknowledges it — the same pair the
-             * DEPLOYED arm prints. */
+            /* A pending reassignment rides an undeployed path: absence over another
+             * profile's record is no deletion of the row's claim (classify_absent),
+             * and the record still names the profile that deployed the copy —
+             * apply's landing from the new owner is what acknowledges it, the
+             * same pair the DEPLOYED arm prints. */
             if (workspace_reassigned(item->row, item->record, item->occupant)) {
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "reassigned";
@@ -3796,6 +3805,17 @@ bool workspace_item_tags(
             } else {
                 snprintf(metadata_buf, metadata_size, "from %s", item->profile);
             }
+            break;
+
+        case WORKSPACE_STATE_DELETED:
+            if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
+                tags_out[tag_count++] = "deleted";
+            }
+            *color_out = OUTPUT_COLOR_RED;
+
+            /* No reassignment rides a deletion: its record is the row's own
+             * profile's (classify_absent) */
+            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
             break;
 
         case WORKSPACE_STATE_DEPLOYED: {

@@ -50,26 +50,27 @@
  *   over a non-directory. Either arm's window is the one step after its removal,
  *   the rename or the mkdir: refused there, or killed, the run leaves the path
  *   empty over the record that stood, which reads [deleted] wherever a claim of
- *   that record's kind asserts the path — at once where it is the row's own kind
- *   — until a plain apply creates it (core/workspace.c classify_absent). A copy
- *   whose removal is refused fails its row with that removal's cause, every removal
- *   before it standing and its record retired (cmds/apply.c apply_write_record):
- *   no row stands beneath a standing blob, so no later act's way runs through
- *   what is left. The clearance is preflight's look, and the removals meet what
- *   the prompt's window left: a directory copy a link replaced in that window
- *   turns the removals beneath it into removals inside the link's target, as
- *   cleanup's prune does (stated); and, unlike git, the clearance does not refuse
- *   the process's working directory (stated). Dotta's node goes on the way to
- *   the first act beneath it, after that act's content read and before its node
- *   is created, since the temporary is created in the directory that takes the
- *   node's place or beneath it: a write refused there leaves that directory
- *   standing empty and the node gone, its bytes Git's where dotta confirmed them,
- *   and a create refused after its unlink leaves the path empty with the node's
- *   record kept, which the next load reads absent and reclaims. The node goes
- *   alone, never through it, so a link's target keeps whatever was written through
- *   it — an edit of a row beneath included, which no screen names, nothing beneath
- *   the node being looked at (core/workspace.h workspace_displaced_t) — and the
- *   row lands Git's bytes (stated)
+ *   that record's kind and profile asserts the path — at once where it is the
+ *   row's own — and [undeployed] under any other, until a plain apply creates
+ *   it (core/workspace.c classify_absent). A copy whose removal is refused fails
+ *   its row with that removal's cause, every removal before it standing and its
+ *   record retired (cmds/apply.c apply_write_record): no row stands beneath a
+ *   standing blob, so no later act's way runs through what is left. The clearance
+ *   is preflight's look, and the removals meet what the prompt's window left: a
+ *   directory copy a link replaced in that window turns the removals beneath it
+ *   into removals inside the link's target, as cleanup's prune does (stated);
+ *   and, unlike git, the clearance does not refuse the process's working directory
+ *   (stated). Dotta's node goes on the way to the first act beneath it, after
+ *   that act's content read and before its node is created, since the temporary
+ *   is created in the directory that takes the node's place or beneath it: a
+ *   write refused there leaves that directory standing empty and the node gone,
+ *   its bytes Git's where dotta confirmed them, and a create refused after its
+ *   unlink leaves the path empty with the node's record kept, which the next
+ *   load reads absent and reclaims. The node goes alone, never through it, so a
+ *   link's target keeps whatever was written through it — an edit of a row beneath
+ *   included, which no screen names, nothing beneath the node being looked at
+ *   (core/workspace.h workspace_displaced_t) — and the row lands Git's bytes
+ *   (stated)
  * - Directories are materialized in two phases: held at a working mode (the mode
  *   owed, owner rwx on: deploy_working_mode) while the run writes beneath them,
  *   then released to the exact mode owed, deepest first, by the caller once every

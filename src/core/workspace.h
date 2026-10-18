@@ -690,11 +690,13 @@ static inline compare_result_t workspace_compare_confirmed(
  * workspace_type_occupant above). Of the row's kind, the record is the row's
  * own node's history, and the reassignment stands whatever the look found: a
  * copy the user edited, replaced or deleted is still the one the record names,
- * and the write that answers the row re-stamps the record under it. Of another
- * kind, it is another node's — a link where the row claims a file, a file where
- * it claims a directory — reassigned only while that node stands: the row's
- * deployment then replaces dotta's own node, and the replacement is the
- * acknowledgement, the line a same-kind reassignment reads. A look that found
+ * and the write that answers the row re-stamps the record under it — for a deleted
+ * copy, apply's landing: absence over another profile's record reads UNDEPLOYED,
+ * never the user's deletion of the row's claim (core/workspace.c classify_absent).
+ * Of another kind, it is another node's — a link where the row claims a file, a
+ * file where it claims a directory — reassigned only while that node stands:
+ * the row's deployment then replaces dotta's own node, and the replacement is
+ * the acknowledgement, the line a same-kind reassignment reads. A look that found
  * anything else found that node gone — the row's own kind in its place, another
  * node, or nothing — and there is nothing to reassign: the path reads as one
  * the record does not name, and where the row's own kind stands the load's flush
@@ -730,18 +732,19 @@ static inline compare_result_t workspace_compare_confirmed(
  *
  * Readers: the route table, with the item's — the diverged items list a clean
  * row that carries this through it (core/workspace.c workspace_list) — and the
- * tags (workspace_item_tags), with the item's; diff's filter, its "acknowledged
- * by apply" line and its status colour (cmds/diff.c), with the item's; apply's
- * two acknowledgement loops — the writers that move the record onto the row's
- * profile — with the item's, and its pending reassignments off the verdicts and
- * its record phase, with the verdict's (cmds/apply.c cmd_apply,
- * apply_write_record); and the record's owed work, with none, which asks it of
- * the record against a view with no workspace at all, workspace_stale answering
- * first across kinds (workspace_pending below). A record's WRITER asks the whole
- * binding — profile and storage path both — which is manifest_is_claim; this is
- * the half the screens name and the receipts count. Not manifest_diff_stats_t's
- * `reassigned`, which counts one transition's own delta between two views; this
- * is the record against the view, standing from whenever it began.
+ * tags' DEPLOYED and UNDEPLOYED arms (workspace_item_tags), with the item's;
+ * diff's filter, its "acknowledged by apply" line and its status colour
+ * (cmds/diff.c), with the item's; apply's two acknowledgement loops — the writers
+ * that move the record onto the row's profile — with the item's, and its pending
+ * reassignments off the verdicts and its record phase, with the verdict's
+ * (cmds/apply.c cmd_apply, apply_write_record); and the record's owed work, with
+ * none, which asks it of the record against a view with no workspace at all,
+ * workspace_stale answering first across kinds (workspace_pending below). A
+ * record's WRITER asks the whole binding — profile and storage path both — which
+ * is manifest_is_claim; this is the half the screens name and the receipts count.
+ * Not manifest_diff_stats_t's `reassigned`, which counts one transition's own
+ * delta between two views; this is the record against the view, standing from
+ * whenever it began.
  *
  * The record against the view has three words, and this is the binding's — the
  * one of the three that reads the look; workspace_stale below is the content's,
@@ -988,18 +991,18 @@ typedef struct {
  * the node) and is not drift-prone. DELETED earns that triviality upstream, four
  * times: classify_absent reads absence as a deletion only for a claim that asserts
  * its path, so an ancestor claim never arrives here; only over a record of the
- * claim's own kind, so a path where dotta only ever saw another kind of node
- * never does either; only where a look was taken, so a path whose absence the
- * squatter above it caused is a displaced DEPLOYED item instead
- * (workspace_displaced_t); and only over a record no removal of dotta's own made
- * untrue — the replace of dotta's node above a row retires the record of every
- * row beneath it, which no look wrote, nor any capture once a row stood beneath
- * the node (cmds/add.c add_refuse_ancestry; cmds/apply.c apply_write_record),
- * save where the world cut the replacing run short: a replace stopped between
- * its unlink and its create (core/deploy.h, the Removals bullet), or a run killed,
- * or its record refused, before that phase. Every DELETED item can therefore
- * bear update's verb. Callers keep their state switch and read this table for
- * the DEPLOYED arm alone.
+ * claim's own kind and profile, so a path where dotta only ever saw another kind
+ * of node, or another profile's, never does either; only where a look was taken,
+ * so a path whose absence the squatter above it caused is a displaced DEPLOYED
+ * item instead (workspace_displaced_t); and only over a record no removal of
+ * dotta's own made untrue — the replace of dotta's node above a row retires the
+ * record of every row beneath it, which no look wrote, nor any capture once a
+ * row stood beneath the node (cmds/add.c add_refuse_ancestry; cmds/apply.c
+ * apply_write_record), save where the world cut the replacing run short: a replace
+ * stopped between its unlink and its create (core/deploy.h, the Removals bullet),
+ * or a run killed, or its record refused, before that phase. Every DELETED item
+ * can therefore bear update's verb. Callers keep their state switch and read
+ * this table for the DEPLOYED arm alone.
  */
 typedef enum {
     WORKSPACE_ROUTE_CLEAN,              /* No divergence, no reassignment */
@@ -1657,7 +1660,8 @@ const workspace_squatted_t *workspace_squatted_ancestor(
  *
  * Metadata Format:
  *   - "from {profile}" - Standard source profile
- *   - "{old} → {new}" - Profile reassignment transition
+ *   - "{old} → {new}" - A pending reassignment (workspace_reassigned), on a
+ *     deployed row and on an undeployed one
  *   - "in {profile}" - For the scan's items: a new file, and a place the scan
  *     could not look, whose one tag is the fault's word (MAGENTA), beside the
  *     join's "from" line where both stand at one path

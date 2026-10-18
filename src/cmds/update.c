@@ -343,7 +343,8 @@ static void update_partition(
             }
 
             case WORKSPACE_STATE_DELETED:
-                /* Removed from disk since deployment: the deletion is update's
+                /* Removed from disk since dotta saw the claim's own node there
+                 * (core/workspace.c classify_absent): the deletion is update's
                  * to commit, unless the user asked about new files alone. One
                  * fate for both kinds, and a deleted violator is a deletion too:
                  * its commit resolves the violation by removing the plaintext. */

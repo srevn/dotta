@@ -188,7 +188,8 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  * exists iff dotta has observed the node its kind names at the path while it
  * was active — seen standing there, or put there: there is no "never observed"
  * row — the row's existence is the observation (core/workspace.c classify_absent
- * reads it, of the kind the record names), and no column restates it.
+ * reads it, of the kind and the profile the record names), and no column restates
+ * it.
  *
  * Four groups of columns, one rule each. The store writes a record whole and
  * asks nothing of it (state_write), so each rule is kept where a record is built:

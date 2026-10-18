@@ -1929,8 +1929,8 @@ static void apply_print_cleanup_refused(
  * as the user's [mode], update's to commit, until a plain apply narrows it —
  * and a node the run replaced, whose record the next load releases, another kind
  * standing there, while a row beneath it the run did not land keeps the record
- * written through the node and reads [deleted], as a kill before the phase leaves
- * it. The caller renders the fate.
+ * written through the node and reads [deleted] where that record names its profile,
+ * as a kill before the phase leaves it. The caller renders the fate.
  *
  * @param ctx Dispatch context (must not be NULL; writes the state it holds, in
  *            the run's transaction)
@@ -2021,7 +2021,8 @@ static error_t apply_write_record(
      * where the run reaches it and read absent where it does not, a reclaim. A
      * run killed between a replace and this phase leaves the node's record over
      * the directory, read [released] [type] and retired by the next apply, and
-     * a row's beneath it, read [deleted] where the row did not land (stated). */
+     * a row's beneath it, read [deleted] where the row did not land and the record
+     * names its profile (stated). */
     workspace_items_t active = workspace_active(ws);
 
     for (size_t r = 0; r < deploy_receipt->replaced.count; r++) {

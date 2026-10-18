@@ -553,9 +553,9 @@ error_t state_commit(state_t *state);
  *     load owes the record is decided from its view and its record read, both
  *     taken before any lock, so it is written only where the store is still the
  *     one they read.
- * A caller that decides under the lock it takes — update's record phase, remove's
- * settle, interactive's save — reads the store as it stands, and owes the question
- * nothing (state_begin).
+ * A caller that decides under the lock it takes — update's, remove's and revert's
+ * record phases, interactive's save — reads the store as it stands, and owes
+ * the question nothing (state_begin).
  *
  * @param state State (must not be NULL, must not be in transaction)
  * @return Error or NULL on success
@@ -811,16 +811,15 @@ const char *state_target(
  *     workspace_find's, the scan's and the release's; workspace_items_beneath,
  *     the block beneath a path) and the diverged items' orphan listing
  *     (workspace_list, which the screens print) rest on
- *   - cmds/add.c add_write_record (the takeover note, and whose record a path
- *     its commit let go holds) and add_refuse_ancestry (whose node a link above
- *     a capture is), cmds/update.c update_write_record (whose record a path a
- *     commit let go holds, read under the phase's lock), cmds/remove.c
- *     remove_paths_candidates (the settle's candidates, read before the lock
- *     and under it), and core/manifest.c manifest_diff (whether a departed claim
- *     leaves an orphan, handed the array by cmds/sync.c cmd_sync): by path, through
- *     state_find_record, which rests on strcmp order
- *   - cmds/remove.c remove_profile_candidates (every record naming the profile,
- *     read before the prompt and under the lock) and core/workspace.c
+ *   - cmds/add.c add_write_record (the takeover note) and add_refuse_ancestry
+ *     (whose node a link above a capture is), cmds/update.c update_write_record
+ *     (whose record a deleted path holds, read under the phase's lock),
+ *     cmds/revert.c revert_write_record (whose record the restored place holds,
+ *     read before the lock and under it), and core/manifest.c manifest_diff
+ *     (whether a departed claim leaves an orphan, handed the array by cmds/sync.c
+ *     cmd_sync): by path, through state_find_record, which rests on strcmp order
+ *   - cmds/remove.c remove_owes and remove_write_record (every record the removal
+ *     reaches by its binding, before the lock and under it) and core/workspace.c
  *     workspace_pending (every record against a view, with no workspace and no
  *     disk, handed the array by cmds/sync.c cmd_sync and cmds/profile.c
  *     profile_enable and profile_disable): walks, key order unread
@@ -848,11 +847,11 @@ error_t state_records(
  * one in another order misses what it holds. The empty snapshot — NULL, count 0
  * — holds nothing.
  *
- * Readers: cmds/add.c add_write_record (the takeover note, and the let-go's join)
- * and add_refuse_ancestry (whose node a link above a capture is), cmds/update.c
- * update_write_record (the let-go's join), cmds/remove.c remove_paths_candidates
- * (the settle's candidates), core/manifest.c manifest_diff (whether a departed
- * claim leaves an orphan).
+ * Readers: cmds/add.c add_write_record (the takeover note) and add_refuse_ancestry
+ * (whose node a link above a capture is), cmds/update.c update_write_record (a
+ * deleted path's record, which its reclaim retires), cmds/revert.c revert_reclaims
+ * (the restored place's), core/manifest.c manifest_diff (whether a departed claim
+ * leaves an orphan).
  *
  * @param records The snapshot (NULL when count is 0)
  * @param count Records in it
@@ -912,17 +911,16 @@ error_t state_write(state_t *state, const state_record_t *record);
  * a column of the row that cannot outlive it. Whatever ended the record — a prune,
  * a reclaim, an absence, a let-go, a deletion committed — and whatever stands
  * at the path, the path is forgotten: a claim that later returns to it starts
- * from its first look, as at a path dotta never saw. So the write is blind and
- * needs no look at disk first, which is what lets add and update retire the records
- * their commits let go without asking whether anything still stands.
+ * from its first look, as at a path dotta never saw. So the write is blind: whoever
+ * ends the record has asked what it needed first — apply its verdict, a reclaim
+ * its look.
  *
- * A missing record is success, the DELETE matching nothing: add's record phase
- * can name one place twice, its climb dropping the place under each of its names,
- * and the second retire finds the first one's done. Readers: apply's record phase,
- * for every orphan it settles (cmds/apply.c apply_write_record); and the verbs,
- * each for its own profile's records at what its commit let go — remove's settle,
- * update's record phase and add's (cmds/remove.c remove_settle, cmds/update.c
- * update_write_record, cmds/add.c add_write_record).
+ * A missing record is success, the DELETE matching nothing. Readers: apply's
+ * record phase, for every orphan it settles (cmds/apply.c apply_write_record);
+ * and the reclaims, each of the record of a node already gone at a claim its
+ * commit changed — update's committed deletions, remove's taken claims, revert's
+ * restored place (cmds/update.c update_write_record, cmds/remove.c
+ * remove_write_record, cmds/revert.c revert_write_record).
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose record retires (must not be NULL)
@@ -934,23 +932,23 @@ error_t state_retire(state_t *state, const char *filesystem_path);
  * Order a managed path's deployed copy pruned
  *
  * Stamps the record's order (ordered_at = now): remove --delete-files chose the
- * fate of a copy nothing backs any more — one the removal named, or one dotta
- * deployed; never a copy dotta merely found under an unnamed path (the gate the
- * one settle loop enforces, cmds/remove remove_settle) — and apply is to prune
- * it where the orphan analysis reaches the order (core/workspace.c
- * workspace_analyze_orphans). The arms it asks before the order decide first,
- * position among them (below): a copy beneath a squatter is released unlooked-at,
- * one already gone reclaimed, another node in its place released, and so is a
- * key a row stands on under another spelling, the path being in the view. The
- * order is honoured only where the copy can be measured — a directory by what
- * is left in it, a file against the blob dotta confirmed — so a file it never
- * confirmed falls through to the ownership gate, which releases it: dotta owns
+ * fate of a copy its commit let go — this machine's copy of a claim the removal
+ * took, on a deletion only one dotta created, and only where the copy can be
+ * measured (cmds/remove.c remove_orders) — and apply is to prune it where the
+ * orphan analysis reaches the order (core/workspace.c workspace_analyze_orphans).
+ * The arms it asks before the order decide first, position among them (below):
+ * a copy beneath a squatter is released unlooked-at, one already gone reclaimed,
+ * another node in its place released, and so is a key a row stands on under another
+ * spelling, the path being in the view. The order is honoured only where the
+ * copy can be measured — a directory by what is left in it, a file against the
+ * blob dotta confirmed (core/workspace.h workspace_measurable) — the condition
+ * it is born under, so a file dotta never confirmed is never ordered: dotta owns
  * no file it did not confirm (state_record_t). Cleanup's skip reasons still protect
  * a modified one. A missing record is a no-op success: the UPDATE matches no
  * row, since nothing was ever observed at the path. At birth an ordered path is
- * out of the view by construction — the settle loop runs only over paths the
- * post-commit view lacks, whichever remove route called it. A repeated order
- * re-stamps: the order standing is the latest.
+ * out of the view by construction — the record phase orders only a path the view
+ * after the removal lacks (cmds/remove.c remove_write_record), on either route.
+ * A repeated order re-stamps: the order standing is the latest.
  *
  * An order lives only while its path is out of the view. Read in exactly one
  * place — the workspace's orphan analysis, behind position: a copy above a row

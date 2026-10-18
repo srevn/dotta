@@ -239,4 +239,4 @@ dotta remove test --delete-profile
 dotta remove global ~/.bashrc --dry-run
 ```
 
-Removing changes the Git repository only. By default the file stays where it is and dotta stops managing it; with `--delete-files`, the next `dotta apply` removes the copies dotta deployed. `remove` says which happened to each path, and a path another enabled profile still provides stays, deployed from that profile.
+Removing changes only the profile in Git; nothing on disk changes until the next `dotta apply`. By default, that apply leaves the deployed paths where they are and stops managing them. With `--delete-files`, it deletes them instead, unless you have edited them since, and `remove` reports how many it marked. A path another enabled profile still provides stays, deployed from that profile.

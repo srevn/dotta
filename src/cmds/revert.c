@@ -25,6 +25,7 @@
 #include "infra/content.h"
 #include "infra/mount.h"
 #include "infra/path.h"
+#include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
 #include "sys/revision.h"
@@ -609,6 +610,104 @@ static error_t revert_print_diff(
 }
 
 /**
+ * Whether the record at the restored place is this profile's — the one a revert's
+ * reclaim retires
+ *
+ * Asked of the read before the lock, whether to take it, and of the one under
+ * it, which decides (revert_write_record). The storage name is not asked: another
+ * of the profile's names at the place is the same profile's node.
+ *
+ * @param records The record, as a read gave it (NULL when record_count is 0)
+ * @param record_count Records in it
+ * @param profile The reverted profile (must not be NULL)
+ * @param filesystem_path The restored claim's place (must not be NULL)
+ * @return Whether the record there names the profile
+ */
+static bool revert_reclaims(
+    const state_record_t *records, size_t record_count, const char *profile,
+    const char *filesystem_path
+) {
+    const state_record_t *record = state_find_record(records, record_count, filesystem_path);
+
+    return record && strcmp(record->profile, profile) == 0;
+}
+
+/**
+ * Write the record a revert owes: the reclaim of the restored place, where its
+ * node is gone
+ *
+ * A revert changes Git and nothing on disk, and the next load reads the restored
+ * claim against the record at its place: [stale] over a copy that stands, apply's
+ * to bring. Over a node already gone that record is the history of a node the
+ * user removed — under an earlier removal of the claim, or Git's — and would
+ * read the restored claim's absence as the user's deletion again (core/workspace.c
+ * classify_absent), every screen sending the user to undo the revert. So it
+ * retires, and the claim starts from its first look, apply's to land (core/state.h
+ * state_retire). This profile's record alone, whatever its kind, the enabled
+ * set or no, and whatever row stands there now: it is the restored claim's own
+ * history, which would misread its absence wherever that claim comes to stand —
+ * beneath a higher profile's row, once that row leaves before an apply.
+ *
+ * The look first: a node standing there — every revert of a deployed file — reads
+ * no record and takes no lock. Then whether this profile's record stands there,
+ * before the lock, so a revert that owes nothing takes none and a store with no
+ * database grows none — a read that fails owes the lock, as remove's does
+ * (cmds/remove.c remove_owes) — and again under it, which decides (core/state.h
+ * state_begin).
+ *
+ * @param ctx Dispatch context (must not be NULL)
+ * @param profile The reverted profile (must not be NULL)
+ * @param filesystem_path The restored claim's place here, or NULL where this
+ *        machine places it nowhere (nothing to do)
+ * @return Error or NULL on success; the transaction is ended either way
+ */
+static error_t revert_write_record(
+    const dotta_ctx_t *ctx, const char *profile, const char *filesystem_path
+) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(profile);
+
+    /* A node standing there is the copy the record describes, apply's to bring:
+     * no record is read and no lock taken. The look decides for the lock below,
+     * taken an instant after it */
+    if (!filesystem_path || fs_lstat_occupant(filesystem_path, NULL) != FS_OCCUPANT_NONE) {
+        return NULL;
+    }
+
+    /* Before the lock, whether this profile's record stands there. A read that
+     * fails owes the lock: the read under it asks again, and says why where it
+     * fails again, so this one's error is dropped */
+    state_t *state = ctx->run.state;
+    state_record_t *records = NULL;
+    size_t record_count = 0;
+    if (!state_records(state, ctx->arena, &records, &record_count) &&
+        !revert_reclaims(records, record_count, profile, filesystem_path)) {
+        return NULL;
+    }
+
+    /* And under it, which decides */
+    error_t err = state_begin(state);
+    if (err) return err;
+
+    err = state_records(state, ctx->arena, &records, &record_count);
+    if (err) goto cleanup;
+
+    if (revert_reclaims(records, record_count, profile, filesystem_path)) {
+        err = state_retire(state, filesystem_path);
+        if (err) goto cleanup;
+    }
+
+    err = state_commit(state);
+
+cleanup:
+    /* The transaction ends here either way: a refused one is rolled back, and a
+     * committed one has already ended (state_rollback finds none to end) */
+    state_rollback(state);
+
+    return err;
+}
+
+/**
  * Revert command implementation
  */
 error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
@@ -1061,8 +1160,9 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * name the restore wrote, borrowed for the call — and the commit restored
      * from, whole. It prunes a derived claim nothing stands beneath any longer
      * — imported redundancy alone, since a restore makes no claim redundant —
-     * and keeps no keys: a revert writes no record, and the next load releases
-     * one a pruned rung stood on (core/profiles.h profile_draft_t). */
+     * and keeps no keys: the record of a rung it pruned is the next load's to
+     * decide, as of every claim a commit lets go (core/profiles.h
+     * profile_draft_t). */
     char target_hex[GIT_OID_SHA1_HEXSIZE + 1];
     git_oid_tostr(target_hex, sizeof(target_hex), git_commit_id(target_commit));
     const char *paths[] = { restored.storage_path };
@@ -1077,10 +1177,21 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     err = profile_commit(draft, commit_message(ctx->arena, config, &msg_ctx), NULL, NULL);
     if (err) goto cleanup;
 
-    /* Step 21: Report. Nothing to write: the revert moved the branch HEAD, and
-     * the next load's view carries the reverted blob — the record stays where
-     * apply last confirmed it, so the workspace reads the result as [stale] until
-     * apply deploys it. A disabled profile's revert reaches no view at all. */
+    /* Step 21: the record phase, at the place step 7 resolved — the restored
+     * claim's (revert_write_record). Non-fatal: the commit stands, so the store's
+     * refusal is warned in its own words. */
+    err = revert_write_record(ctx, profile, filesystem_path);
+    if (err) {
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
+        err = NULL;
+    }
+
+    /* Step 22: Report. The revert moved the branch HEAD, and the next load's
+     * view carries the reverted blob: over a copy that stands, the record stays
+     * where apply last confirmed it, so the workspace reads the result as [stale]
+     * until apply deploys it; over one already gone, the reclaim above left no
+     * record, so it reads [undeployed]. A disabled profile's revert reaches no
+     * view at all. */
     output_success(
         out, OUTPUT_NORMAL, "Reverted %s in profile '%s'", restored.storage_path,
         profile

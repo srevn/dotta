@@ -795,10 +795,10 @@ error_t profile_find(
  *     and leaves the claim the way to whatever stands beneath it, the attributes
  *     it claimed kept (profile_remove); and the prune, at the commit, of every
  *     derived claim nothing tracked stands beneath any longer (core/profiles.c
- *     profile_prune_ancestors), its key handed to the writer's record phase where
- *     it has one — but a claim the base tracked, whose removal the writer names
- *     itself. Revert has none, so the record a rung its commit pruned stood on
- *     is decided by the next load (core/workspace.c workspace_analyze_orphans);
+ *     profile_prune_ancestors), its key handed back where the writer keeps them
+ *     — but a claim the base tracked, whose removal the writer names itself;
+ *     the record of every rung it took is the next load's to decide, as of every
+ *     claim a commit lets go (core/workspace.c workspace_analyze_orphans);
  *   - the gate, each document held against the one the draft opened: a commit
  *     no edit of which moved the tree or the sheet makes nothing — no prune, no
  *     save, no commit — so imported redundancy rides a commit and never drives
@@ -1226,8 +1226,7 @@ error_t profile_changed(const profile_draft_t *draft, bool *out);
  *                      where nothing moved, or on a failure)
  * @param pruned The keys the prune took but a claim the base tracked, appended
  *               as copies in the array's arena (given its arena by
- *               string_array_init); NULL where the writer keeps none, one with
- *               no record phase
+ *               string_array_init); NULL where the writer keeps none
  * @return Error or NULL on success
  */
 error_t profile_commit(

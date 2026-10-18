@@ -1684,7 +1684,7 @@ static bool profile_tracked_beneath(const profile_draft_t *draft, const char *ke
  * @param draft The draft
  * @param pruned Receives the key of each derivation pruned but a claim the base
  *               tracked, appended as copies in the array's arena; NULL where
- *               the writer keeps none, one with no record phase
+ *               the writer keeps none
  * @return Error or NULL on success: a failed look at the index, which must not
  *         prune
  */
@@ -1766,8 +1766,7 @@ error_t profile_commit(
      * the derivation it was. The index answers that for every path a tree can
      * hold — never the sheet's items, which omit unelevated symlinks — and the
      * copy's own tracked claims answer it for the one path it cannot, an empty
-     * directory. Its keys are handed back where the writer keeps them, for its
-     * record phase. */
+     * directory. Its keys are handed back where the writer keeps them. */
     err = profile_prune_ancestors(draft, pruned);
     if (err) return err;
 

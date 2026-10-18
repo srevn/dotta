@@ -39,7 +39,9 @@ typedef struct {
  * Execute revert command
  *
  * Reverts a file in a profile to its state at the specified commit. This command
- * modifies the Git repository only - deployed files remain unchanged until 'dotta
+ * modifies the Git repository, and the record only where the restored place's
+ * node is gone — its reclaim, so the restored claim reads as undeployed and never
+ * as the user's deletion again; deployed files remain unchanged until 'dotta
  * apply' is run.
  *
  * Everything the revert writes is decided before any of it is shown, and shown
@@ -93,6 +95,7 @@ typedef struct {
  *    commit's own name for the file wherever it differs
  * 8. Prompts for confirmation (unless --force)
  * 9. Creates one commit: the restored blob, its claim and its way
+ * 10. Retires this profile's record at the restored place, where its node is gone
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

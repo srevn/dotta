@@ -32,15 +32,16 @@
  *   Retirements (state_retire, from apply's record phase and the verbs) go to
  *   the database directly — no later reader in the run consults a retired path.
  *
- *   Exception: the verbs — add, remove, and update after its commit — write the
- *   record through state.h directly, against the post-commit view they build
- *   with manifest_build: add and update what their captures committed, where
- *   that view says the claim stands, and each the retirements — remove's orders
- *   too — of its own profile's records at what its commit let go. add and remove
- *   load no workspace, and nothing reads update's after its record write, so
- *   there is no snapshot for the write to desync. profile enable / disable write
- *   only the enabled set, sync writes nothing, and completion reads the
- *   dispatcher's view alone.
+ *   Exception: the verbs — add, remove, revert, and update after its commit —
+ *   write the record through state.h directly, what only their commit knows:
+ *   add and update what their captures committed, where the post-commit view
+ *   they build with manifest_build says the claim stands; update, remove and
+ *   revert the reclaim, the record of a node already gone retiring at a claim
+ *   their commit changed; remove the orders --delete-files gives. add, remove
+ *   and revert load no workspace, and nothing reads update's after its record
+ *   write, so there is no snapshot for the write to desync. profile enable /
+ *   disable write only the enabled set, sync writes nothing, and completion reads
+ *   the dispatcher's view alone.
  *
  *   The workspace's products (rows, records, verdicts) are read through the
  *   workspace; the run's resources (the repository, the content cache) are read
@@ -83,6 +84,7 @@
 #include "core/state.h"
 #include "infra/compare.h"
 #include "infra/content.h"
+#include "infra/label.h"
 
 /* The most tags one item's line carries — six, on a deployed item: [modified],
  * [stale], [mode], [ownership], [unencrypted] and [reassigned]. A kind that
@@ -368,20 +370,39 @@ typedef enum {
  * unskipped — clean ones, which the next apply under the real home lands again.
  *
  * Assigned once, by the orphan analysis where it reads the relocation (workspace.c
- * workspace_analyze_orphans), off the label; the row it finds there is not kept,
- * so an orphan item carries no row. Trusted downstream, as the displaced class
- * is. Readers: cleanup's two verdicts, which skip a SHARED relocation unless
- * --force and prune a BOUND one — the reason is cleanup's and lives there
- * (core/cleanup.h) — and the three screens that ask only whether there is a
- * relocation at all: the [relocated] tag (workspace_item_tags), apply's prune
- * split, status's [relocated] key. The presence question is this field against
- * NONE at every one of them.
+ * workspace_analyze_orphans), off the label (workspace_label_relocation below);
+ * the row it finds there is not kept, so an orphan item carries no row. Trusted
+ * downstream, as the displaced class is. Readers: cleanup's two verdicts, which
+ * skip a SHARED relocation unless --force and prune a BOUND one — the reason is
+ * cleanup's and lives there (core/cleanup.h) — and the three screens that ask
+ * only whether there is a relocation at all: the [relocated] tag
+ * (workspace_item_tags), apply's prune split, status's [relocated] key. The
+ * presence question is this field against NONE at every one of them.
  */
 typedef enum {
     WORKSPACE_RELOCATION_NONE = 0,  /* Not a relocation */
     WORKSPACE_RELOCATION_SHARED,    /* home/, root/ — the machine places the root */
     WORKSPACE_RELOCATION_BOUND      /* custom/ — the profile's binding places it */
 } workspace_relocation_t;
+
+/**
+ * The class a relocated claim's namespace gives it — the label alone
+ *
+ * The rule of workspace_relocation_t, read once: home/ and root/ are SHARED,
+ * custom/ is BOUND. Readers: core/workspace.c workspace_analyze_orphans (the
+ * relocation read), cmds/remove.c remove_reaches (the copies --delete-files
+ * reaches, a SHARED one only where its claim stands here now). A reader not on
+ * this list is a bug.
+ */
+static inline workspace_relocation_t workspace_label_relocation(label_t label) {
+    switch (label) {
+        case LABEL_HOME:
+        case LABEL_ROOT:   return WORKSPACE_RELOCATION_SHARED;
+        case LABEL_CUSTOM: return WORKSPACE_RELOCATION_BOUND;
+    }
+
+    CHECK_ARG(false, "a label no enumerator names");
+}
 
 /**
  * Why a look failed — the class of DIVERGENCE_UNVERIFIED, by whose remedy it is
@@ -791,16 +812,30 @@ static inline bool workspace_reassigned(
  *
  * Readers: core/workspace.c workspace_analyze_file (the bytes' base: the fast
  * path's stat and the second question), workspace_analyze_directory (whether
- * dotta's own squatter is the copy it confirmed), workspace_analyze_orphans (an
- * order measured against a confirmed blob) and workspace_measure (a file compared
- * only against one); workspace_stale below (whether the bytes are asked at all);
- * workspace_untouched below (whether a measured copy is the one dotta confirmed);
- * cmds/add.c add_refuse_ancestry (whether only --force replaces dotta's own link
- * above a capture, the half of workspace_untouched no measure is needed for). A
- * reader not on this list is a bug.
+ * dotta's own squatter is the copy it confirmed) and workspace_measure (a file
+ * compared only against one); workspace_measurable below (whether a file's order
+ * has what to measure the copy against); workspace_stale below (whether the bytes
+ * are asked at all); workspace_untouched below (whether a measured copy is the
+ * one dotta confirmed); cmds/add.c add_refuse_ancestry (whether only --force
+ * replaces dotta's own link above a capture, the half of workspace_untouched no
+ * measure is needed for). A reader not on this list is a bug.
  */
 static inline const state_record_t *workspace_base(const state_record_t *record) {
     return record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;
+}
+
+/**
+ * Measurable: the record holds what the copy at its path is measured against —
+ * a directory, which what is left in it decides, or a file whose blob dotta
+ * confirmed
+ *
+ * The one condition under which a prune order is honoured (core/workspace.c
+ * workspace_analyze_orphans) and so the one under which it is born (cmds/remove.c
+ * remove_orders): a file dotta never confirmed could not be told clean from edited.
+ * Readers: those two. A reader not on this list is a bug.
+ */
+static inline bool workspace_measurable(const state_record_t *record) {
+    return record->kind == FS_OCCUPANT_DIRECTORY || workspace_base(record) != NULL;
 }
 
 /**
@@ -1004,15 +1039,20 @@ typedef struct {
  * claim's own kind and profile, so a path where dotta only ever saw another kind
  * of node, or another profile's, never does either; only where a look was taken,
  * so a path whose absence the squatter above it caused is a displaced DEPLOYED
- * item instead (workspace_displaced_t); and only over a record no removal of
- * dotta's own made untrue — the replace of dotta's node above a row retires the
- * record of every row beneath it, which no look wrote, nor any capture once a
- * row stood beneath the node (cmds/add.c add_refuse_ancestry; cmds/apply.c
- * apply_write_record), save where the world cut the replacing run short: a replace
+ * item instead (workspace_displaced_t); and only over a record no act of dotta's
+ * own made untrue — the replace of dotta's node above a row retires the record
+ * of every row beneath it, which no look wrote, nor any capture once a row stood
+ * beneath the node (cmds/add.c add_refuse_ancestry; cmds/apply.c
+ * apply_write_record), and a commit that changed the claim at a path whose node
+ * was gone retires the record there, the reclaim (cmds/update.c
+ * update_write_record, cmds/remove.c remove_write_record, cmds/revert.c
+ * revert_write_record) — save where the world cut the writing run short: a replace
  * stopped between its unlink and its create (core/deploy.h, the Removals bullet),
  * or a run killed, or its record refused, before that phase. Every DELETED item
- * can therefore bear update's verb. Callers keep their state switch and read
- * this table for the DEPLOYED arm alone.
+ * can therefore bear update's verb, save a claim returning by a route no verb
+ * writes to a node the user removed after its record was last written
+ * (core/workspace.c classify_absent, stated). Callers keep their state switch
+ * and read this table for the DEPLOYED arm alone.
  */
 typedef enum {
     WORKSPACE_ROUTE_CLEAN,              /* No divergence, no reassignment */

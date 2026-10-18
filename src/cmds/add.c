@@ -1500,12 +1500,13 @@ static error_t add_commit(
  *   1. Scope. A new profile is enabled here with its deployment target — creating
  *      a profile via add enables it, in the same transaction as the record. An
  *      existing profile has rows in the view only if it is already enabled: not
- *      enabled skips the anchor pass (nothing to win) and the target UPSERT
- *      (enable's business), never the settle
+ *      enabled, nothing is written — no row for a capture to win, and the target
+ *      UPSERT enable's business
  *   2. Build the view; anchor each capture where its own claim stands at the
- *      path the walk read it at, its record the capture's; settle what the commit
- *      let go — the ancestor claims the climb retired, and the derivations the
- *      commit's prune took — where the record there is this profile's
+ *      path the walk read it at, its record the capture's. What the commit let
+ *      go — an ancestor claim the climb retired, a derivation its prune took —
+ *      is the next apply's, decided with the landings it may stand in the way
+ *      of (core/workspace.c workspace_analyze_orphans)
  *   3. Commit the transaction (state_save), and finish it either way
  *
  * CRITICAL ORDER: step 1 must precede step 2. The builder's own table is built
@@ -1534,10 +1535,11 @@ static error_t add_commit(
  *   record another profile's deployment had written is taken over — the write
  *   rewrites the record under this profile — and counted for the receipt: nothing
  *   later says so (apply acknowledges a reassignment the scope made, not one
- *   the user's own add made).
+ *   the user's own add made). A copy another profile let go counts as taken over
+ *   while its record waits for the apply that releases it.
  *
  * Error Handling:
- *   - Profile not enabled and nothing let go → NULL, with nothing written
+ *   - Profile not enabled → NULL, with nothing written
  *   - A refused statement ends the phase at the first one. The phase's writes
  *     are one transaction and a database that refuses one write may have ended
  *     it, so every write past an unexamined refusal is a coin flip between "in
@@ -1559,20 +1561,16 @@ static error_t add_commit(
  *   alone (cmds/apply.c, the adoption loop).
  *
  * Performance: one view build and one read of the record, then each path captured
- * or let go looked up in both — O(N log A), N = those paths, A = records
+ * looked up in both — O(N log A), N = those paths, A = records
  *
  * @param walk The selection (must not be NULL): the context — the repository,
- *             the state and the command arena — the profile added to, the files
- *             and the directories the walk listed, each with the record its capture
- *             made, and the view they were named under, whose table places what
- *             the settle retires
+ *             the state and the command arena — the profile added to, and the
+ *             files and the directories the walk listed, each with the record
+ *             its capture made
  * @param target The binding the run brought, absolute, or NULL: written for a
  *               new profile and an enabled one (the UPSERT keeps a row's own
  *               for a NULL)
  * @param profile_created This add created the profile's branch: enable it here
- * @param ancestors_retired The ancestor claims the climb dropped, by key (must
- *                          not be NULL)
- * @param pruned The derivations the commit's prune took, by key (must not be NULL)
  * @param receipt What the phase did, zeroed first (must not be NULL)
  * @return Error or NULL on success (non-fatal - caller treats as warning)
  */
@@ -1580,13 +1578,9 @@ static error_t add_write_record(
     const add_walk_t *walk,
     const char *target,
     bool profile_created,
-    const string_array_t *ancestors_retired,
-    const string_array_t *pruned,
     add_receipt_t *receipt
 ) {
     CHECK_NULL(walk);
-    CHECK_NULL(ancestors_retired);
-    CHECK_NULL(pruned);
     CHECK_NULL(receipt);
 
     const dotta_ctx_t *ctx = walk->ctx;
@@ -1619,201 +1613,136 @@ static error_t add_write_record(
          * spelling or binds an unbound row. */
         err = state_enable_profile(state, profile, target);
         if (err) goto cleanup;
-    } else if (!state_enabled(state, profile) &&
-        ancestors_retired->count == 0 && pruned->count == 0) {
-        /* Nothing to write at all: no row for a capture to win, a target the
-         * run brought left unbound (enable's business, when the user gets there),
-         * and no claim let go. The settle below is not gated on enablement —
-         * the commit dropped whatever `ancestors_retired` and `pruned` name
-         * whatever the enabled set says, and a path the commit let go settles
-         * by its record — but with nothing let go it has nothing to do either. */
-        goto cleanup;                                  /* err is NULL */
     }
 
-    /* STEP 2: Build the view; anchor the rows this profile won; settle what the
-     * commit let go.
+    /* A profile no row holds has nothing for a capture to win — a target the
+     * run brought stays unbound, enable's business when the user gets there —
+     * and what its commit let go, a rung its climb dropped or a derivation its
+     * prune took, is the next apply's, decided with the landings it may stand
+     * in the way of (core/workspace.c workspace_analyze_orphans): nothing to
+     * write */
+    if (!state_enabled(state, profile)) goto cleanup;   /* err is NULL */
+
+    /* STEP 2: Build the view; anchor the rows this profile won.
      *
      * The builder reads the rows as STEP 1 left them — a new row, or a target
-     * re-bound — so a path under the just-bound target is a custom/ row here. A
-     * disabled profile contributes no rows, and that is the build the settle
-     * wants: its guard asks what the view still claims without this profile. */
+     * re-bound — so a path under the just-bound target is a custom/ row here. */
     manifest_t *manifest = NULL;
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 
     /* The record as it stands first, read before the write that rewrites it, so
-     * a takeover is known, and so is whose record each path the commit let go
-     * holds — for a disabled profile as for an enabled one — looked up by path
-     * in the read (state_find_record). One read serves both: the anchor pass
-     * writes only where a capture's row stands, and the let-go acts only where
-     * none does. */
+     * a takeover is known — looked up by path in the read (state_find_record) */
     state_record_t *records = NULL;
     size_t record_count = 0;
     err = state_records(state, ctx->arena, &records, &record_count);
     if (err) goto cleanup;
 
-    if (state_enabled(state, profile)) {
-        time_t now = time(NULL);
+    time_t now = time(NULL);
 
-        /* Both lists, one rule and one count: each capture's record is what it
-         * committed, a directory's carrying no content because its capture set
-         * none, so nothing here asks the kind — and the accounting cannot drift
-         * apart between two loops, as it once did, the directory count the receipt
-         * printed being the sheet's, taken before the pass that could refuse it.
-         *
-         * Both kinds earn one event. A path was captured from disk, so it is
-         * dotta's to prune on scope exit — the ownership the gate asks for, which
-         * nothing later grants a directory that was already there: apply observes
-         * those and anchors only the ones it creates, so an unowned directory
-         * is released where an owned one is pruned. Cleanup's emptiness rule
-         * guards their contents.
-         *
-         * The view says whose the path is, and nothing the record says: the
-         * capture's record is written only where the row standing at the path
-         * the walk read IS the capture's claim, both halves (core/manifest.h's
-         * manifest_is_claim). No round trip through the name: for every listing
-         * mount_resolve of its own claim is that path (the key invariant,
-         * cmds/add.h), and the table this view was built from is the table the
-         * walk used — STEP 1 wrote the very binding it holds.
-         *
-         * What Git holds at the name is not the record's to say either. The key
-         * cannot move under the command — the run holds the store's write lock,
-         * so the rows the view is built from are the rows the walk's table was
-         * — but the lock is not Git's, and another writer's commit can land between
-         * this add's and this build: other bytes at the name, another claim,
-         * another kind, or no name. The first three leave the claim standing,
-         * and the record carries the capture as it was made, so the next load
-         * reads Git's move past it ([stale]) and never bytes dotta put there;
-         * the last is a miss.
-         *
-         * A miss is three things, each counted where the row that says it is in
-         * hand, so the receipt names the cause it checked rather than a difference:
-         * another claim stands over the capture — another profile's at its path,
-         * the claims beneath it where it is a blob, which leave a directory row
-         * at its place, or a blob above it, which leaves no row at its path; or
-         * another name of this very profile that the settle kept stands there,
-         * which a machine whose roots held two names apart can commit and a sync
-         * can bring here; or the profile no longer names the path by this name
-         * at all, a later commit having removed it. Where a row stands, it is
-         * someone else's word, and so is the record at the path.
-         *
-         * The profile's own contribution answers whether the name is still its,
-         * first, and that is what lets the arms below read an absent row: a name
-         * the profile holds that stands nowhere has a row at its path or a standing
-         * blob above it (core/manifest.h manifest_holds_name), so no row is the
-         * blob above. The capture is overridden there, and its copy — the bytes
-         * the capture just read, which nothing deployed — is written down as an
-         * observation, the capture's record with no deployment stamp: the load
-         * reads such a copy as the landing's of the blob standing over it, which
-         * clears it as dotta's own copy, its bytes the commit's (core/workspace.c
-         * workspace_analyze_orphans), where an unrecorded node would be a
-         * stranger's beneath it, stopping that landing. The copy alone: a directory
-         * on its way that no record names — one made after the blob came to stand,
-         * where no row is left for a load to observe — is the user's, and stops
-         * the landing all the same (stated). Overridden at its own path, it stays
-         * unrecorded: there the record would be the frame's base for the row
-         * standing at the path (core/workspace.h workspace_base), and apply would
-         * replace the capture unasked as dotta's own copy.
-         *
-         * A refused statement ends the pass. The phase's writes are one transaction
-         * and a database that refuses one write may have ended it — SQLite rolls
-         * back under a whole class of errors — so every write after an unexamined
-         * refusal is a coin flip between "in the transaction" and "committed on
-         * its own". The first refusal is the phase's failure, which is what makes
-         * the receipt's recovery line true of every prior state: nothing this
-         * phase wrote stands. Non-fatal is still the contract one level up —
-         * Git's commit stands and the receipt names the retry. */
-        const ptr_array_t *captured[] = { &walk->files, &walk->directories };
-        for (size_t b = 0; b < sizeof(captured) / sizeof(captured[0]); b++) {
-            for (size_t i = 0; i < captured[b]->count; i++) {
-                const add_path_t *path = captured[b]->entries[i];
+    /* Both lists, one rule and one count: each capture's record is what it
+     * committed, a directory's carrying no content because its capture set none,
+     * so nothing here asks the kind — and the accounting cannot drift apart between
+     * two loops, as it once did, the directory count the receipt printed being
+     * the sheet's, taken before the pass that could refuse it.
+     *
+     * Both kinds earn one event. A path was captured from disk, so it is dotta's
+     * to prune on scope exit — the ownership the gate asks for, which nothing
+     * later grants a directory that was already there: apply observes those and
+     * anchors only the ones it creates, so an unowned directory is released where
+     * an owned one is pruned. Cleanup's emptiness rule guards their contents.
+     *
+     * The view says whose the path is, and nothing the record says: the capture's
+     * record is written only where the row standing at the path the walk read
+     * IS the capture's claim, both halves (core/manifest.h's manifest_is_claim).
+     * No round trip through the name: for every listing mount_resolve of its
+     * own claim is that path (the key invariant, cmds/add.h), and the table this
+     * view was built from is the table the walk used — STEP 1 wrote the very
+     * binding it holds.
+     *
+     * What Git holds at the name is not the record's to say either. The key cannot
+     * move under the command — the run holds the store's write lock, so the rows
+     * the view is built from are the rows the walk's table was — but the lock
+     * is not Git's, and another writer's commit can land between this add's and
+     * this build: other bytes at the name, another claim, another kind, or no
+     * name. The first three leave the claim standing, and the record carries
+     * the capture as it was made, so the next load reads Git's move past it
+     * ([stale]) and never bytes dotta put there; the last is a miss.
+     *
+     * A miss is three things, each counted where the row that says it is in hand,
+     * so the receipt names the cause it checked rather than a difference: another
+     * claim stands over the capture — another profile's at its path, the claims
+     * beneath it where it is a blob, which leave a directory row at its place,
+     * or a blob above it, which leaves no row at its path; or another name of
+     * this very profile that the settle kept stands there, which a machine whose
+     * roots held two names apart can commit and a sync can bring here; or the
+     * profile no longer names the path by this name at all, a later commit having
+     * removed it. Where a row stands, it is someone else's word, and so is the
+     * record at the path.
+     *
+     * The profile's own contribution answers whether the name is still its, first,
+     * and that is what lets the arms below read an absent row: a name the profile
+     * holds that stands nowhere has a row at its path or a standing blob above
+     * it (core/manifest.h manifest_holds_name), so no row is the blob above.
+     * The capture is overridden there, and its copy — the bytes the capture just
+     * read, which nothing deployed — is written down as an observation, the
+     * capture's record with no deployment stamp: the load reads such a copy as
+     * the landing's of the blob standing over it, which clears it as dotta's
+     * own copy, its bytes the commit's (core/workspace.c
+     * workspace_analyze_orphans), where an unrecorded node would be a stranger's
+     * beneath it, stopping that landing. The copy alone: a directory on its way
+     * that no record names — one made after the blob came to stand, where no
+     * row is left for a load to observe — is the user's, and stops the landing
+     * all the same (stated). Overridden at its own path, it stays unrecorded:
+     * there the record would be the frame's base for the row standing at the
+     * path (core/workspace.h workspace_base), and apply would replace the capture
+     * unasked as dotta's own copy.
+     *
+     * A refused statement ends the pass. The phase's writes are one transaction
+     * and a database that refuses one write may have ended it — SQLite rolls
+     * back under a whole class of errors — so every write after an unexamined
+     * refusal is a coin flip between "in the transaction" and "committed on its
+     * own". The first refusal is the phase's failure, which is what makes the
+     * receipt's recovery line true of every prior state: nothing this phase wrote
+     * stands. Non-fatal is still the contract one level up — Git's commit stands
+     * and the receipt names the retry. */
+    const ptr_array_t *captured[] = { &walk->files, &walk->directories };
+    for (size_t b = 0; b < sizeof(captured) / sizeof(captured[0]); b++) {
+        for (size_t i = 0; i < captured[b]->count; i++) {
+            const add_path_t *path = captured[b]->entries[i];
 
-                const manifest_row_t *row = manifest_lookup(manifest, path->filesystem_path);
-                if (!manifest_is_claim(row, profile, path->claim.storage_path)) {
-                    if (!manifest_holds_name(
-                        manifest, profile, path->filesystem_path, path->claim.storage_path
-                        )) {
-                        receipt->gone++;
-                    } else if (!row) {
-                        err = state_write(state, &path->record);
-                        if (err) goto cleanup;
-                        receipt->overridden++;
-                    } else if (manifest_is_derived(row) || strcmp(row->profile, profile) != 0) {
-                        receipt->overridden++;
-                    } else {
-                        receipt->unkept++;
-                    }
-                    continue;
+            const manifest_row_t *row = manifest_lookup(manifest, path->filesystem_path);
+            if (!manifest_is_claim(row, profile, path->claim.storage_path)) {
+                if (!manifest_holds_name(
+                    manifest, profile, path->filesystem_path, path->claim.storage_path
+                    )) {
+                    receipt->gone++;
+                } else if (!row) {
+                    err = state_write(state, &path->record);
+                    if (err) goto cleanup;
+                    receipt->overridden++;
+                } else if (manifest_is_derived(row) || strcmp(row->profile, profile) != 0) {
+                    receipt->overridden++;
+                } else {
+                    receipt->unkept++;
                 }
-
-                /* The ownership event: what the capture committed, and the phase's
-                 * stamp */
-                state_record_t record = path->record;
-                record.deployed_at = now;
-
-                err = state_write(state, &record);
-                if (err) goto cleanup;
-
-                const state_record_t *was = state_find_record(
-                    records, record_count, row->filesystem_path
-                );
-                if (was && was->deployed_at > 0 && strcmp(was->profile, profile) != 0) {
-                    receipt->taken_over++;
-                }
-            }
-        }
-    }
-
-    /* What the commit let go: an ancestor claim the climb retired, and a derivation
-     * the commit's prune took, each leave the view by this very commit, so its
-     * record settles here rather than orphaning until an apply gets around to
-     * it — the record the commit stranded is the commit's to settle. It refuses
-     * nothing while it stands: a directory only a record remembers reaches no
-     * view row (the reach rule, core/workspace.h), so the leaf this add just
-     * captured through the arrangement is judged on its own occupant either way,
-     * and a retire that fails ends the phase without refusing the add — the retry
-     * re-anchors and re-runs no retire, the sheet already lacking the claim, so
-     * the stranded record is listed under status's Released paths until apply
-     * releases it. Enablement was not consulted on the way here: the climb saw
-     * the disk contradict the claim, and the prune found nothing beneath it,
-     * whatever the enabled set says, and the record either strands is stale under
-     * a disabled profile exactly as under an enabled one. A rung some other profile
-     * still claims keeps its row and its record — the retire is this profile's
-     * word about its own claim, never about the path — and an unbound claim names
-     * nothing on this machine to retire. */
-    const string_array_t *let_go[] = { ancestors_retired, pruned };
-    for (size_t b = 0; b < sizeof(let_go) / sizeof(let_go[0]); b++) {
-        for (size_t i = 0; i < let_go[b]->count; i++) {
-            /* Placed by the table the walk named through, which the view lends
-             * back (manifest_mounts): a name let go stands nowhere until it gives
-             * one. Two can give one path — the climb drops a place under every
-             * name the profile derives it by — and the second retire there finds
-             * no record, which is no failure (core/state.h state_retire). A row
-             * standing there keeps the record, and so does a claim the profile
-             * still holds there standing nowhere — beneath a blob, another of
-             * its names at the place — which holds the copy as a row would
-             * (core/manifest.h manifest_lookup_claim) */
-            const char *filesystem_path = mount_resolve(
-                ctx->arena, manifest_mounts(walk->view), profile, let_go[b]->entries[i]
-            );
-            if (!filesystem_path || manifest_lookup(manifest, filesystem_path) ||
-                manifest_lookup_claim(manifest, profile, filesystem_path)) {
                 continue;
             }
 
-            /* This profile's record alone, the join remove's candidates make
-             * (cmds/remove.c remove_paths_candidates): a record naming another
-             * profile is that profile's, which its own load decides. A retire
-             * here would have its scope exit forget the copy dotta created and,
-             * where a link took the place, look through it at the orphans the
-             * record displaces (core/workspace.h workspace_displaced_t, RECORD) */
-            const state_record_t *record = state_find_record(
-                records, record_count, filesystem_path
-            );
-            if (!record || strcmp(record->profile, profile) != 0) continue;
+            /* The ownership event: what the capture committed, and the phase's
+             * stamp */
+            state_record_t record = path->record;
+            record.deployed_at = now;
 
-            err = state_retire(state, filesystem_path);
+            err = state_write(state, &record);
             if (err) goto cleanup;
+
+            const state_record_t *was = state_find_record(
+                records, record_count, row->filesystem_path
+            );
+            if (was && was->deployed_at > 0 && strcmp(was->profile, profile) != 0) {
+                receipt->taken_over++;
+            }
         }
     }
 
@@ -2632,9 +2561,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * over both lists: a directory the walk listed has a chain of its own, and
      * an empty one has no file beneath it to carry that chain. Scope-blind by
      * design, as the pass that reads it is — an exclusion names a path, never
-     * the way to it. Its two outs: the claims it authored or refreshed, counted
-     * for the line below, and the ones it retired, by key, which leave the view
-     * by this commit and are settled by the record phase once it lands.
+     * the way to it. Its two outs: the claims it authored or refreshed, and the
+     * ones it retired, by key, each counted for the lines below — a retired claim
+     * leaves the view by this commit, and its record is the next apply's to decide
+     * (core/workspace.c workspace_analyze_orphans).
      */
     size_t ancestors_captured = 0;
     string_array_t ancestors_retired;
@@ -2688,13 +2618,13 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* The commit, where an edit moved either document — a capture, a directory
      * claimed, a climb that authored or retired, the claim the remedy above gave
-     * up — its prune taking what nothing stands on any longer, its keys for the
-     * record phase, and the sheet saved only where its claims moved, a hand's
-     * spelling kept otherwise. A commit whose edits moved nothing — a --force
-     * re-capture of what the profile already had, byte for byte — makes none,
-     * and the summary says so (core/profiles.h profile_commit). Its two outs:
-     * whether it landed, which the receipt reads, and the derivations its prune
-     * took, by key, which the record phase settles. */
+     * up — its prune taking what nothing stands on any longer, and the sheet
+     * saved only where its claims moved, a hand's spelling kept otherwise. A
+     * commit whose edits moved nothing — a --force re-capture of what the profile
+     * already had, byte for byte — makes none, and the summary says so
+     * (core/profiles.h profile_commit). Its two outs: whether it landed, which
+     * the receipt reads, and the derivations its prune took, by key, which the
+     * line below counts; the record of each is the next apply's to decide. */
     bool committed = false;
     string_array_t pruned;
     string_array_init(&pruned, ctx->arena, 0);
@@ -2731,9 +2661,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      */
     add_receipt_t receipt = { 0 };
 
-    error_t record_err = add_write_record(
-        &walk, target, !profile_exists, &ancestors_retired, &pruned, &receipt
-    );
+    error_t record_err = add_write_record(&walk, target, !profile_exists, &receipt);
 
     /* Execute post-add hook. The record phase settled its own transaction before
      * returning, so the hook meets the database this run leaves — committed or

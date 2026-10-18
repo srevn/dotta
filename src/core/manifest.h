@@ -981,15 +981,12 @@ error_t manifest_holder(
  * off its own view and every other's off the enabled one (cmds/add.c
  * add_refuse_ancestry); whether a row a transition left no row at is its profile's
  * claim there still, standing nowhere, which counts it overridden rather than
- * departed (manifest_diff); whether a commit that let a claim go left its profile
- * holding the path all the same, which keeps the record a row would (cmds/add.c
- * add_write_record, cmds/update.c update_write_record, cmds/remove.c
- * remove_settle); whether any profile holds an explicit claim where the user's
- * node squats above a named update's leaf, a lost blob's place no re-derivation
- * frees (cmds/update.c cmd_update); whether the untracked scan's owner holds a
- * blob at a child no row of its own stands at (core/workspace.c workspace_scan);
- * and `ignore --test`'s note beneath a verdict that excludes a path its asker
- * holds, which the rules never reach (cmds/ignore.c ignore_test).
+ * departed (manifest_diff); whether any profile holds an explicit claim where
+ * the user's node squats above a named update's leaf, a lost blob's place no
+ * re-derivation frees (cmds/update.c cmd_update); whether the untracked scan's
+ * owner holds a blob at a child no row of its own stands at (core/workspace.c
+ * workspace_scan); and `ignore --test`'s note beneath a verdict that excludes a
+ * path its asker holds, which the rules never reach (cmds/ignore.c ignore_test).
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,

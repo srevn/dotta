@@ -793,6 +793,17 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
  * the deletion is the user's to commit once that landing has written the row's
  * record.
  *
+ * The witness ends where a commit reconciled the node's absence: a commit that
+ * changed the claim at a path whose node was gone retires the record there, the
+ * reclaim (cmds/update.c update_write_record, cmds/remove.c remove_write_record,
+ * cmds/revert.c revert_write_record), so a claim that returns — a revert's, a
+ * pull's re-add — starts from its first look and reads UNDEPLOYED. What no commit
+ * reconciled stays (stated): a claim returning by a route no verb writes — profile
+ * enable, a pulled re-add — to a path whose node the user removed after its record
+ * was last written, before any apply, reads DELETED for its own profile, and
+ * update would commit the removal of the claim that returned. The screens list
+ * it under the update they offer, and a plain apply lands the file again.
+ *
  * The record still answers "has dotta seen this path" for an ancestor claim —
  * the ownership gate reads it. Only a claim that asserts the path may read that
  * answer as intent.
@@ -2205,10 +2216,10 @@ static bool workspace_transient(const char *entry, void *ctx) {
  *   - the prune order (remove --delete-files): the user chose the fate of the
  *     deployed copy, and Git is not asked. Honoured only with a reference to
  *     measure the copy against — a directory (what is left in it decides) or a
- *     file with a confirmed blob. A prune-ordered file dotta never matched against
- *     anything falls through to the gate: nothing could tell a clean copy from
- *     an edited one, and the user learns at status and apply that the copy stays,
- *     instead of a skip every run;
+ *     file with a confirmed blob (workspace_measurable), the rule an order is
+ *     born under (cmds/remove.c remove_orders): nothing could tell a clean copy
+ *     dotta never confirmed from an edited one, so no order is born there, and
+ *     one that stood all the same would fall through to the gate;
  *   - the ownership gate: a record dotta never owned — observed, or confirmed
  *     but never deployed — names a path the user put there before it was active.
  *     Released: the copy is left alone, the record retires, and no tree is asked
@@ -2417,28 +2428,30 @@ static void workspace_analyze_orphans(workspace_t *ws) {
             continue;
         }
 
-        /* The user ordered the copy pruned — remove --delete-files over a path
-         * the removal named or a copy dotta deployed, the only births an order
-         * has (state_order_prune); Git is not asked. Read ahead of the ownership
-         * gate below by design: a named path must go whether dotta deployed it
-         * or only ever found it — and behind the guard above, so the copy is
-         * one no row stands on. Divergence still protects an edited copy —
-         * cleanup's skip reasons read the same bits.
+        /* The user ordered the copy pruned — remove --delete-files over a copy
+         * of a claim the removal named, or on a deletion one dotta created, the
+         * births an order has (cmds/remove.c remove_orders); Git is not asked.
+         * Read ahead of the ownership gate below by design: a named path must
+         * go whether dotta deployed it or only ever found it — and behind the
+         * guard above, so the copy is one no row stands on. Divergence still
+         * protects an edited copy — cleanup's skip reasons read the same bits.
          *
-         * Only where the copy can be measured at all: a directory by what is
-         * left in it, a file against a confirmed blob. The schema CHECK (state.c:
-         * ownership implies confirmation) guarantees an owned file record its
-         * blob, so for files this discriminates only when deployed_at == 0 — a
-         * prune-ordered record dotta never deployed. */
-        if (record->ordered_at > 0 &&
-            (item->item_kind == PATH_KIND_DIRECTORY || workspace_base(record))) {
+         * Only where the copy can be measured at all (core/workspace.h
+         * workspace_measurable): a directory by what is left in it, a file against
+         * a confirmed blob — the rule an order is born under, read again where
+         * it is honoured. The schema CHECK (state.c: ownership implies
+         * confirmation) guarantees an owned file record its blob, so for files
+         * this discriminates only when deployed_at == 0 — a record dotta never
+         * deployed, which no order is born on unconfirmed. */
+        if (record->ordered_at > 0 && workspace_measurable(record)) {
             workspace_measure(ws, item);
             continue;
         }
 
         /* The ownership gate: dotta never put this here. Released — the copy is
-         * left alone and the record retires. A prune-ordered file with no confirmed
-         * blob lands here too: there is nothing to measure the order against. */
+         * left alone and the record retires. A prune order with no copy to measure
+         * would land here too, should one stand: none is born there, nothing
+         * telling a clean copy from an edited one. */
         if (record->deployed_at == 0) {
             item->state = WORKSPACE_STATE_RELEASED;
             continue;
@@ -2513,15 +2526,7 @@ static void workspace_analyze_orphans(workspace_t *ws) {
             ws->manifest, item->profile, item->storage_path
         );
         if (row && path_type_kind(row->type) == item->item_kind) {
-            switch (label_of(item->storage_path)) {
-                case LABEL_HOME:
-                case LABEL_ROOT:
-                    item->relocation = WORKSPACE_RELOCATION_SHARED;
-                    break;
-                case LABEL_CUSTOM:
-                    item->relocation = WORKSPACE_RELOCATION_BOUND;
-                    break;
-            }
+            item->relocation = workspace_label_relocation(label_of(item->storage_path));
         }
         workspace_measure(ws, item);
     }

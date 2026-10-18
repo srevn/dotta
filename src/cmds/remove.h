@@ -5,8 +5,8 @@
  * 1. Remove specific files/directories from a profile
  * 2. Delete an entire profile branch
  *
- * Architectural principle: This command modifies the Git repository only.
- * Filesystem synchronization is handled by 'dotta apply'.
+ * Architectural principle: this command modifies the Git repository and nothing
+ * on disk; 'dotta apply' brings the filesystem in line.
  *
  * Removal is pure tree surgery — no content is captured, nothing needs a working
  * copy — so the Git phase is one draft, the profile's next commit (core/profiles.h
@@ -35,7 +35,7 @@ typedef struct {
 
     /* Operation modes */
     bool delete_profile;        /* Delete entire profile branch */
-    bool delete_files;          /* The deployed copies removed by the next apply */
+    bool delete_files;          /* The deployed paths deleted at the next apply */
 
     /* Safety flags */
     bool dry_run;               /* Show what would be removed without doing it */
@@ -60,17 +60,18 @@ typedef struct {
  * - If delete_profile=true: Deletes the entire profile branch
  * - If delete_profile=false: Removes specified files from profile
  *
- * This command modifies the Git repository only. By default, deployed paths are
- * released from management and remain on the filesystem. With delete_files=true,
- * they are ordered pruned, and deleted when 'dotta apply' is run. Either fate
- * is this machine's own — the order a column of its record — while the commit
- * is the branch every machine reads: another machine meets it at its next sync
- * and settles its own copies at its next apply, as every let-go, under the flag
- * or not.
+ * This command modifies the Git repository and nothing on disk: the deployed
+ * copies of what it removes are the next apply's to settle, decided with the
+ * landings they may stand in the way of. With delete_files=true, this machine's
+ * copies of the claims it removes are ordered pruned — those the next apply can
+ * measure, and on a deletion those dotta created. The order is this machine's
+ * own, a column of its record; another machine meets the commit at its next sync
+ * and settles its own copies at its next apply.
  *
- * Executes hooks; never touches deployed files. Writes the record for what the
- * commit let go (retire, or prune-order under --delete-files) — the record phase
- * is non-fatal: Git stands even when the record write fails.
+ * Executes hooks; never touches deployed files. Writes the record only for what
+ * its commit knows: the reclaim of a claim it took whose node is gone, the orders,
+ * a deletion's enabled row — non-fatal: Git stands even when the record write
+ * fails.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

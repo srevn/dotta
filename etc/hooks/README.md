@@ -38,7 +38,6 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - Create timestamped backups of current configs
 - Verify required environment variables are set
 - Check system resources (disk space, memory)
-- Pull latest changes from remote repo
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
@@ -73,7 +72,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_DRY_RUN` - Always "0" — post-apply does not fire on dry-run
 
 **Exit Behavior:**
-- Exit 0 or non-zero: Apply already completed, exit code logged only
+- Exit 0 or non-zero: a non-zero exit is warned, with the hook's output; the apply has already completed
 
 ### `pre-add`
 
@@ -122,7 +121,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_DRY_RUN` - Always "0" — post-add does not fire on dry-run
 
 **Exit Behavior:**
-- Exit 0 or non-zero: Add already completed, exit code logged only
+- Exit 0 or non-zero: a non-zero exit is warned, with the hook's output; the add has already completed
 
 ### `pre-remove`
 
@@ -171,7 +170,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_DRY_RUN` - Always "0" — post-remove does not fire on dry-run
 
 **Exit Behavior:**
-- Exit 0 or non-zero: Remove already completed, exit code logged only
+- Exit 0 or non-zero: a non-zero exit is warned, with the hook's output; the remove has already completed
 
 ### `pre-update`
 
@@ -220,7 +219,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_DRY_RUN` - Always "0" — post-update does not fire on dry-run
 
 **Exit Behavior:**
-- Exit 0 or non-zero: Update already completed, exit code logged only
+- Exit 0 or non-zero: a non-zero exit is warned, with the hook's output; the update has already completed
 
 ### `pre-sync`
 
@@ -255,7 +254,9 @@ asymmetry every hook pair carries.
 
 ### `post-sync`
 
-**When:** After synchronizing with the remote (state_commit succeeded)
+**When:** After synchronizing with the remote, once sync's report is printed — a
+profile that failed to push or pull included; a sync that stops before it, a
+fetch that failed among them, fires none
 **Use For:** Cross-machine signaling, notifications, triggering downstream apply
 
 **Example Use Cases:**
@@ -274,11 +275,11 @@ asymmetry every hook pair carries.
 - `DOTTA_DRY_RUN` - Always "0" — post-sync does not fire on dry-run
 
 **Exit Behavior:**
-- Exit 0 or non-zero: Sync already completed, exit code logged only
+- Exit 0 or non-zero: a non-zero exit is warned, with the hook's output; the sync has already completed
 
-**Note:** post-sync fires only after `state_commit` succeeds at the
-storage layer. Individual profiles may still have diverged or failed —
-run `dotta status` inside the hook if per-profile detail is needed.
+**Note:** post-sync fires once sync's report is printed, so individual
+profiles may still have diverged or failed — run `dotta status` inside the
+hook if per-profile detail is needed.
 
 ## Hook Configuration
 
@@ -352,10 +353,9 @@ among them.
 
 ### The store's write lock
 
-`dotta add` and `dotta apply` hold the store's database write lock for the whole
-run — deliberately, so two of them cannot interleave. The lock is taken before
-the `pre-` hook fires and released once the command's own record write is
-finished, which is before the `post-` hook fires.
+`dotta add` and `dotta apply` hold the store's database write lock from before
+their `pre-` hook fires to the end of their own record write, which is before
+the `post-` hook fires — deliberately, so two of them cannot interleave.
 
 So a hook of either command can read the store freely, but must not run a `dotta`
 command that itself writes state: from a `pre-add` or `pre-apply` hook such a
@@ -450,10 +450,12 @@ set -euo pipefail
 backup_dir="$HOME/.dotta-backups/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$backup_dir"
 
-# Backup all current dotfiles
-rsync -a --files-from=<(dotta list --files) ~ "$backup_dir/" || true
-
-echo "Backup created: $backup_dir"
+# Back up every home/ file the profiles being applied claim, as it stands now:
+# Git lists each profile's names, which dotta passes through
+for profile in $DOTTA_PROFILE; do
+    dotta git ls-tree -r --name-only "$profile" -- home/
+done | sed 's|^home/||' | sort -u > "$backup_dir.list"
+rsync -a --files-from="$backup_dir.list" ~ "$backup_dir/" || true
 ```
 
 ### Workflow 2: Push on Add
@@ -603,4 +605,4 @@ exit 0
 
 - Main configuration: `etc/config.example.toml`
 - Hook samples: `etc/hooks/*.sample`
-- Security guide: `docs/security.md`
+- Hooks in the configuration guide: `docs/configuration.md` (Hooks)

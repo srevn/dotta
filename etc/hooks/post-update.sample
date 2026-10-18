@@ -6,7 +6,8 @@
 # back to the affected profile branches. Use it to push the new
 # commits upstream, fire CI, or notify collaborators.
 #
-# Exit code is logged but the update has already completed.
+# A non-zero exit is warned, with the hook's output; the update has already
+# completed.
 #
 # Environment variables provided by dotta:
 #   DOTTA_REPO_DIR    - Path to dotta repository
@@ -27,13 +28,15 @@ echo "Post-update: profile(s) '$DOTTA_PROFILE' updated."
 
 # Example: Push the updated profile branches upstream.
 # Prefer 'dotta sync' over a raw 'git push' so divergence handling, hooks,
-# and credential plumbing all behave consistently.
+# and credential plumbing all behave consistently. A sync that fails exits the
+# hook non-zero, so dotta warns with the sync's own output beside it.
 if command -v dotta &>/dev/null; then
     echo "Syncing updated profiles to remote..."
     # shellcheck disable=SC2086
-    dotta sync -p $DOTTA_PROFILE || {
-        echo "  WARNING: dotta sync returned non-zero exit code" >&2
-    }
+    if ! dotta sync -p $DOTTA_PROFILE; then
+        echo "  ERROR: dotta sync failed" >&2
+        exit 1
+    fi
 fi
 
 echo "Post-update completed successfully!"

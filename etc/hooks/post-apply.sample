@@ -16,17 +16,21 @@
 
 set -euo pipefail
 
+# What you should read on success goes to the terminal: dotta prints a hook's
+# output only beside its failure (README, "Output is captured, not streamed").
+# No terminal, no notice — and no failure.
+to_terminal() { { printf '%s\n' "$*" > /dev/tty; } 2>/dev/null || true; }
+
 echo "Post-apply: Reloading configurations..."
 
-# Example: Reload shell configuration
-if [[ -n "${BASH_VERSION:-}" ]]; then
-    echo "Reloading bash configuration..."
-    # Note: Can't reload in this process, just notify user
-    echo "  Run: source ~/.bashrc"
-elif [[ -n "${ZSH_VERSION:-}" ]]; then
-    echo "Reloading zsh configuration..."
-    echo "  Run: source ~/.zshrc"
-fi
+# Example: Shell configuration. A hook cannot reload the shell that ran dotta,
+# so it tells the user how: for their login shell ($SHELL), never the bash this
+# script runs in.
+login_shell="${SHELL:-}"
+case "${login_shell##*/}" in
+    bash) to_terminal "Post-apply: run 'source ~/.bashrc' to pick up shell changes" ;;
+    zsh)  to_terminal "Post-apply: run 'source ~/.zshrc' to pick up shell changes" ;;
+esac
 
 # Example: Reload tmux configuration
 if command -v tmux &>/dev/null && [[ -n "${TMUX:-}" ]]; then

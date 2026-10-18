@@ -6,7 +6,8 @@
 # deleted a profile. Use it for audit logging, notifications, or
 # cleanup of related external resources.
 #
-# Exit code is logged but the operation has already completed.
+# A non-zero exit is warned, with the hook's output; the remove has already
+# completed.
 #
 # Environment variables provided by dotta:
 #   DOTTA_REPO_DIR    - Path to dotta repository

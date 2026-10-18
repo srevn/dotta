@@ -29,12 +29,14 @@ done
 # Example: Publish the profile's branch (uncomment to enable). dotta committed
 # the add itself, so the push is sync's: prefer 'dotta sync' over a raw
 # 'git push' so divergence handling, hooks, and credential plumbing all behave
-# consistently.
+# consistently. A sync that fails exits the hook non-zero, so dotta warns with
+# the sync's own output beside it.
 # if command -v dotta &>/dev/null; then
 #     echo "Syncing profile '$DOTTA_PROFILE' to remote..."
-#     dotta sync -p "$DOTTA_PROFILE" || {
-#         echo "  WARNING: dotta sync returned non-zero exit code" >&2
-#     }
+#     if ! dotta sync -p "$DOTTA_PROFILE"; then
+#         echo "  ERROR: dotta sync failed" >&2
+#         exit 1
+#     fi
 # fi
 
 echo "Post-add completed successfully!"

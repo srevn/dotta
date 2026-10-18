@@ -127,7 +127,7 @@ Hook scripts run before/after operations. Place executable scripts in the hooks 
 
 **Behavior:**
 - Pre-hooks can abort operations by exiting with a non-zero status
-- Post-hooks run after the operation completes; their exit code is logged but does not affect the operation
+- Post-hooks run after the operation completes; a non-zero exit is warned, with the hook's output, and does not affect the operation
 
 **Environment variables passed to hooks:**
 - `DOTTA_REPO_DIR` -- repository path

@@ -21,6 +21,11 @@
 
 set -euo pipefail
 
+# What you should read on success goes to the terminal: dotta prints a hook's
+# output only beside its failure (README, "Output is captured, not streamed").
+# No terminal, no warning — and no failure.
+to_terminal() { { printf '%s\n' "$*" > /dev/tty; } 2>/dev/null || true; }
+
 echo "Pre-add: Validating files before adding to profile '$DOTTA_PROFILE'..."
 
 secrets_found=0
@@ -31,8 +36,8 @@ check_file() {
 
     # Check for common secret patterns
     if grep -qiE '(password|secret|api[_-]?key|token|private[_-]?key)' "$file" 2>/dev/null; then
-        echo "  WARNING: Potential secret found in: $file" >&2
-        echo "  Please review this file carefully before adding!" >&2
+        to_terminal "  WARNING: Potential secret found in: $file"
+        to_terminal "  Please review this file carefully before adding!"
         secrets_found=$((secrets_found + 1))
     fi
 
@@ -53,8 +58,8 @@ check_file() {
     local size
     size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo 0)
     if [[ $size -gt 1048576 ]]; then
-        echo "  WARNING: Large file ($((size / 1024))KB): $file" >&2
-        echo "  Consider using git-lfs or ignoring this file." >&2
+        to_terminal "  WARNING: Large file ($((size / 1024))KB): $file"
+        to_terminal "  Consider using git-lfs or ignoring this file."
     fi
 }
 
@@ -73,9 +78,9 @@ for ((i=0; i<DOTTA_PATH_COUNT; i++)); do
 done
 
 if [[ $secrets_found -gt 0 ]]; then
-    echo ""
-    echo "Found $secrets_found file(s) with potential secrets."
-    echo "Please review carefully. Proceeding with add..."
+    to_terminal ""
+    to_terminal "Found $secrets_found file(s) with potential secrets."
+    to_terminal "Please review carefully. Proceeding with add..."
 fi
 
 echo "Pre-add validation passed!"

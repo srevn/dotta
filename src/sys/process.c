@@ -130,13 +130,21 @@ static bool process_kill_and_wait(
 }
 
 /**
- * Set FD_CLOEXEC on a pipe pair, ignoring failures (the explicit close-loop in
- * the child still handles fd cleanup; CLOEXEC is defense-in-depth for any future
- * code path that doesn't follow the close-loop discipline).
+ * A pipe for `program`'s spawn, both ends closed at an exec; its refusal names
+ * the program
+ *
+ * For the exec's pipe the mark is the protocol: its write end, closed by the
+ * exec, tells the parent the exec happened. For the others it is a second guard
+ * beside the child's close loop (process_child). F_SETFD fails only for a
+ * descriptor that is not open, and pipe() has just opened both.
  */
-static void set_pipe_cloexec(int fds[2]) {
+static error_t process_pipe(int fds[2], const char *program) {
+    if (pipe(fds) != 0) {
+        return error_errno(errno, "Failed to create a pipe for '%s'", program);
+    }
     (void) fcntl(fds[0], F_SETFD, FD_CLOEXEC);
     (void) fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+    return NULL;
 }
 
 /**
@@ -375,7 +383,7 @@ static error_t process_drain(
             if (errno == EINTR) {
                 continue;
             }
-            err = error_errno(errno, "select on child pipe");
+            err = error_errno(errno, "Failed to read the output of '%s'", spec->argv[0]);
             break;
         }
         if (rs == 0) {
@@ -388,7 +396,7 @@ static error_t process_drain(
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
                 continue;
             }
-            err = error_errno(errno, "read child pipe");
+            err = error_errno(errno, "Failed to read the output of '%s'", spec->argv[0]);
             break;
         }
         if (n == 0) {
@@ -419,49 +427,38 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     CHECK_NULL(spec->argv);
     CHECK_NULL(spec->envp);
 
-    if (spec->argv[0] == NULL || spec->argv[0][0] == '\0') {
-        return error_create(
-            ERR_INVALID_ARG,
-            "process_spec.argv[0] must be a non-empty path"
-        );
-    }
-    if (spec->timeout_seconds < 0) {
-        return error_create(
-            ERR_INVALID_ARG,
-            "process_spec.timeout_seconds must be >= 0 (got %d)",
-            spec->timeout_seconds
-        );
-    }
-
-    /* stdin_content / stdin_content_len are load-bearing only for BUFFER; any
-     * stray setting under INHERIT/DEVNULL means the caller expected a stdin payload
-     * that will not be delivered. Reject rather than silently ignore. */
-    if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
-        if (spec->stdin_content_len > 0 && !spec->stdin_content) {
-            return error_create(
-                ERR_INVALID_ARG,
-                "stdin_content_len > 0 but stdin_content is NULL"
-            );
-        }
-        if (spec->stdin_content_len > PROCESS_STDIN_BUFFER_MAX) {
-            return error_create(
-                ERR_INVALID_ARG,
-                "stdin_content_len %zu exceeds PROCESS_STDIN_BUFFER_MAX (%d)",
-                spec->stdin_content_len, PROCESS_STDIN_BUFFER_MAX
-            );
-        }
-    } else if (spec->stdin_content != NULL || spec->stdin_content_len > 0) {
-        return error_create(
-            ERR_INVALID_ARG,
-            "stdin_content set but stdin_policy is not PROCESS_STDIN_BUFFER"
-        );
-    }
+    /* The spec's shape is its caller's to keep (process_spec_t): a stdin payload
+     * is load-bearing only for BUFFER, so one set under INHERIT or DEVNULL is a
+     * payload the caller expected and the child would never read */
+    CHECK_ARG(
+        spec->argv[0] != NULL && spec->argv[0][0] != '\0', "argv[0] names no program"
+    );
+    CHECK_ARG(spec->timeout_seconds >= 0, "a time limit below zero");
+    CHECK_ARG(
+        spec->stdin_policy == PROCESS_STDIN_BUFFER ||
+        (spec->stdin_content == NULL && spec->stdin_content_len == 0),
+        "a payload the stdin policy never delivers"
+    );
+    CHECK_ARG(
+        spec->stdin_content != NULL || spec->stdin_content_len == 0,
+        "a payload length with no payload"
+    );
+    CHECK_ARG(
+        spec->stdin_content_len <= PROCESS_STDIN_BUFFER_MAX,
+        "a payload past PROCESS_STDIN_BUFFER_MAX"
+    );
+    CHECK_ARG(
+        spec->stdin_policy != PROCESS_STDIN_INHERIT ||
+        spec->pgrp_policy == PROCESS_PGRP_SHARED,
+        "a child on dotta's stdin in a process group of its own"
+    );
 
     /* Zero result so every path through cleanup leaves callers with a well-defined
      * struct. */
     *result = (process_result_t) { 0 };
 
     /* All resources initialized to safe sentinels. */
+    const char *program = spec->argv[0];
     int pipefd[2] = { -1, -1 };
     int errfd[2] = { -1, -1 };
     int stdin_pipe[2] = { -1, -1 };
@@ -472,27 +469,19 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     error_t err = NULL;
 
     /* Output pipe (child stdout/stderr → parent). */
-    if (pipe(pipefd) != 0) {
-        return error_errno(errno, "Failed to create output pipe");
-    }
-    set_pipe_cloexec(pipefd);
+    err = process_pipe(pipefd, program);
+    if (err) goto cleanup;
 
     /* Exec-errno self-pipe (child writes errno+_exit on exec failure; on exec
      * success, FD_CLOEXEC closes the write end and parent reads EOF). */
-    if (pipe(errfd) != 0) {
-        err = error_errno(errno, "Failed to create exec-errno pipe");
-        goto cleanup;
-    }
-    set_pipe_cloexec(errfd);
+    err = process_pipe(errfd, program);
+    if (err) goto cleanup;
 
     /* Stdin payload pipe (parent writes spec->stdin_content; child reads from
      * its stdin). Only created for BUFFER policy. */
     if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
-        if (pipe(stdin_pipe) != 0) {
-            err = error_errno(errno, "Failed to create stdin pipe");
-            goto cleanup;
-        }
-        set_pipe_cloexec(stdin_pipe);
+        err = process_pipe(stdin_pipe, program);
+        if (err) goto cleanup;
     }
 
     /* The capture, made before the fork where one is asked for. */
@@ -502,7 +491,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
 
     pid = fork();
     if (pid < 0) {
-        err = error_errno(errno, "Failed to fork");
+        err = error_errno(errno, "Failed to fork '%s'", program);
         goto cleanup;
     }
 
@@ -593,8 +582,8 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
                 pid, kill_target, SIGKILL, PROCESS_GRACE_KILL_SECONDS, &status
                 )) {
                 err = error_create(
-                    ERR_FS, "Child PID %d failed to terminate after SIGKILL",
-                    (int) pid
+                    ERR_FS, "Failed to kill '%s' (pid %d), which outlived its "
+                    "time limit", program, (int) pid
                 );
                 goto cleanup;
             }
@@ -614,7 +603,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
                 if (errno == EINTR) {
                     continue;
                 }
-                err = error_errno(errno, "waitpid");
+                err = error_errno(errno, "Failed to wait for '%s'", program);
                 goto cleanup;
             }
 
@@ -719,10 +708,8 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
     /* The exec's errno comes back over a self-pipe the exec closes, so a program
      * that could not be run is told from one that exited 127. */
     int errfd[2] = { -1, -1 };
-    if (pipe(errfd) != 0) {
-        return error_errno(errno, "Failed to create exec-errno pipe");
-    }
-    set_pipe_cloexec(errfd);
+    error_t err = process_pipe(errfd, argv[0]);
+    if (err) return err;
 
     /* The keyboard's signals held across the fork, until the parent ignores them
      * below: a Ctrl-C in between is neither dotta's death nor lost to the child,
@@ -735,11 +722,11 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
 
     pid_t pid = fork();
     if (pid < 0) {
-        int e = errno;
+        err = error_errno(errno, "Failed to fork '%s'", argv[0]);
         (void) sigprocmask(SIG_SETMASK, &before, NULL);
         close(errfd[0]);
         close(errfd[1]);
-        return error_errno(e, "Failed to fork");
+        return err;
     }
 
     if (pid == 0) {

@@ -256,15 +256,10 @@ static error_t hook_fire(
         .pgrp_policy       = PROCESS_PGRP_NEW,
     };
 
-    /* The primitive's own refusals — a pipe, a fork, a wait — name no program:
-     * the hook is what they were not handed */
+    /* The primitive's own refusals — a pipe, a fork, a wait — name the hook by
+     * its path, the program they were handed */
     err = process_run(&spec, out_result);
-    if (err) {
-        err = error_wrap(err, "Cannot run hook '%s'", hook_name);
-        goto cleanup;
-    }
-
-    err = hook_failure(config, hook_name, out_result);
+    if (!err) err = hook_failure(config, hook_name, out_result);
 
 cleanup:
     arena_free(frame);

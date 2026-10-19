@@ -274,7 +274,8 @@ static buffer_t build_credential_request(
  *
  * Shared by fill / approve / reject. Shell-free: the child is spawned via
  * `sys/process` using execve — no popen, no heredoc, no interpolation of user
- * data into any command string.
+ * data into any command string. A request past PROCESS_STDIN_BUFFER_MAX is refused
+ * before any helper runs.
  *
  * `capture` controls whether the helper's response is captured into `*result`.
  * Approve/reject pass false (fire-and-forget, output ignored); fill passes true.
@@ -286,6 +287,18 @@ static error_t run_credential_helper(
     bool capture,
     process_result_t *result
 ) {
+    /* The request carries the credential, so its length is the user's data: bounded
+     * here, where it becomes the helper's stdin, in the words of what it carries.
+     * Beneath, the bound is the spec's contract (sys/process.h
+     * PROCESS_STDIN_BUFFER_MAX). */
+    if (request_len > PROCESS_STDIN_BUFFER_MAX) {
+        return error_create(
+            ERR_INVALID_ARG,
+            "Cannot hand 'git credential %s' a request of %zu bytes, past the "
+            "bound of %d", subcommand, request_len, PROCESS_STDIN_BUFFER_MAX
+        );
+    }
+
     /* `env` locates `git` on PATH; process_run does no PATH lookup of its own
      * (argv[0] must be an absolute path). */
     char *const argv[] = {

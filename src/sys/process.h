@@ -92,7 +92,8 @@ extern volatile sig_atomic_t active_child_pgid;
  *
  * INHERIT — child inherits parent's STDIN_FILENO (typically the controlling
  *           terminal). Use for interactive scripts that need to prompt the user
- *           (read -p, etc.).
+ *           (read -p, etc.) — from dotta's own process group (PROCESS_PGRP_SHARED),
+ *           since a background group's read of the terminal stops it (SIGTTIN).
  * DEVNULL — child's STDIN_FILENO is redirected to /dev/null. Use for
  *           non-interactive children that must never block on a terminal read.
  * BUFFER  — child's STDIN_FILENO reads from a pipe the primitive
@@ -120,6 +121,12 @@ typedef enum {
  * macOS's is 16384, with PIPE_BUF itself at 4096 / 512 respectively. Picking
  * 4096 is a comfortable ceiling across realistic targets — larger payloads need
  * a future extension that interleaves stdin writes with the stdout select loop.
+ *
+ * The caller's contract, checked at entry: a payload a user's data sizes is bounded
+ * where it is built, in the words of what it carries — sys/credentials.c
+ * run_credential_helper, whose request holds the credential, so a credential
+ * past the bound is never handed to a helper (approve and reject warn, a fill
+ * finds nothing).
  */
 #define PROCESS_STDIN_BUFFER_MAX 4096
 
@@ -143,9 +150,11 @@ typedef enum {
  *          die together on user interrupt (e.g., long-running interactive scripts).
  * NEW    — child is placed in its own process group (pgid = pid)
  *          via setpgid(). Timeout kills target the whole group via kill(-pid,
- *          ...), so sub-processes the child spawns are reaped along with it.
- *          Trade-off: terminal-driven SIGINT no longer reaches the child group;
- *          only the parent dies.
+ *          ...), so sub-processes the child spawns are killed along with it.
+ *          The terminal's signals reach the group only through dotta, which
+ *          forwards each terminating one (active_child_pgid). Never a child on
+ *          dotta's stdin (PROCESS_STDIN_INHERIT): a background group's read of
+ *          the terminal stops it (SIGTTIN).
  */
 typedef enum {
     PROCESS_PGRP_SHARED,
@@ -160,7 +169,10 @@ typedef enum {
  * keep the underlying storage (argv strings, envp strings, work_dir strings)
  * valid for the duration of the process_run() call.
  *
- * Invariants (validated at entry):
+ * Its shape is the caller's contract, checked at entry (base/error.h CHECK_ARG):
+ * a spec is built by code, never read from a user, so one that breaks it is a
+ * bug and dies there — and a caller whose payload a user's data sizes bounds it
+ * first (PROCESS_STDIN_BUFFER_MAX).
  * - argv non-NULL; argv[0] non-NULL and non-empty. The primitive does NOT perform
  *   PATH lookup — argv[0] should be an absolute path the caller has already
  *   resolved.
@@ -178,6 +190,8 @@ typedef enum {
  *   entering the capture loop; if the child exits before consuming it (EPIPE on
  *   the write), that is not a primitive-level error — exec_failed / exit_code
  *   carry the real cause.
+ * - stdin_policy PROCESS_STDIN_INHERIT under PROCESS_PGRP_SHARED alone
+ *   (process_pgrp_t).
  */
 typedef struct {
     char *const *argv;              /* argv[0] = absolute path; NULL-terminated */
@@ -257,11 +271,12 @@ typedef struct {
  *   - the child timed out and was killed (result->timed_out is true),
  *   - exec failed in the child (result->exec_failed + exec_errno).
  *
- * Returns a non-NULL error_t only for failures the primitive itself encountered:
- *   - invalid spec (argv[0] missing or empty, etc.)           → ERR_INVALID_ARG
- *   - pipe(), fork(), or clock_gettime() failed                → ERR_FS
- *   - select()/read()/waitpid() returned an unrecoverable error → ERR_FS
- *   - "we tried to kill a timed-out child but it never reaped"  → ERR_FS
+ * Returns non-NULL only for a failure of the primitive itself, each naming the
+ * program it was handed (argv[0]), so no caller names it again: a pipe or the
+ * fork it could not make, the child's output it could not read, a wait that failed
+ * — the errno's code (base/error.h error_errno) — or a child its time limit
+ * outlived that SIGKILL did not end, ERR_FS. A spec that breaks its contract
+ * dies at the check (process_spec_t).
  *
  * Caller composes the user-facing error message from result fields plus its own
  * context (script name, hook name, etc.).
@@ -302,8 +317,8 @@ void process_result_deinit(process_result_t *result);
  * Populates *result on every path, as process_run does: exit_code and signal_num
  * from the wait status, exec_failed and exec_errno when the program could not
  * be run (the child's errno, over a self-pipe); no capture, no timeout. Returns
- * non-NULL only for a failure of the primitive itself: the pipe, the fork or
- * the wait.
+ * non-NULL only for a failure of the primitive itself — the pipe, the fork or
+ * the wait — naming argv[0], as process_run's do.
  *
  * @param argv NULL-terminated; argv[0] a program name or path (must not be NULL)
  * @param result Outcome (must not be NULL)

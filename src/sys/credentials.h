@@ -121,8 +121,10 @@ int credential_make_default(git_credential **out);
  * and the caller falls through to its anonymous / default path. Error_t is returned
  * only for unusual conditions worth surfacing to the user — exec failure, timeout,
  * malformed helper response, a response past the capture's bound (never read in
- * part: PROCESS_CAPTURE_MAX). The common "helper has no creds for this URL" outcome
- * is signalled by NULL out-params and a NULL return value.
+ * part: PROCESS_CAPTURE_MAX), a request past the bound a helper is handed
+ * (PROCESS_STDIN_BUFFER_MAX: a username from the URL past it). The common "helper
+ * has no creds for this URL" outcome is signalled by NULL out-params and a NULL
+ * return value.
  *
  * Caller frees `*out_user` / `*out_pass` with buffer_secure_free (using
  * `strlen(buf) + 1` as the length).
@@ -146,7 +148,9 @@ error_t credential_helper_fill(
  *
  * No-op if `user` or `pass` is NULL or empty. A non-zero exit from a read-only
  * helper that doesn't implement approve is NOT an error — many helpers are
- * query-only by design. Returns an error only for exec failure or timeout.
+ * query-only by design. Returns an error only for a field that would break the
+ * protocol, a request past the bound a helper is handed (sys/process.h
+ * PROCESS_STDIN_BUFFER_MAX: the credential is not stored), exec failure or timeout.
  */
 error_t credential_helper_approve(
     const credential_url_t *u, const char *user, const char *pass

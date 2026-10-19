@@ -74,10 +74,11 @@ typedef struct {
  * bit fails open, said by its notice; and a hooks directory whose names cannot
  * be looked up is said once, naming the directory. On failure, prints captured
  * hook output (if any) at OUTPUT_QUIET, the refusal's reason at every level,
- * and returns the refusal, which names its hook (Hook 'pre-<cmd>' …). Callers
- * should goto-cleanup on non-NULL return. The capture keeps the hook's first
- * PROCESS_CAPTURE_MAX bytes and counts the rest ("... and N more bytes"); a hook
- * is never stopped for what it writes (sys/process.h).
+ * and returns the refusal, which names its hook (Hook 'pre-<cmd>' …, or its path
+ * where the process layer could not spawn it). Callers should goto-cleanup on
+ * non-NULL return. The capture keeps the hook's first PROCESS_CAPTURE_MAX bytes
+ * and counts the rest ("... and N more bytes"); a hook is never stopped for what
+ * it writes (sys/process.h).
  *
  * A runnable hook that could not be run, or ran and failed, is ERR_INTERNAL —
  * an exec that failed, a timeout, a signal, a non-zero exit; beside them a context

@@ -305,7 +305,7 @@ terminal or read an answer from it (`/dev/tty`). A signal sent to dotta alone
 
 ## Writing Hooks
 
-### Output is captured, not streamed
+### Output is captured, or live under -v
 
 Dotta sends a hook's stdout and stderr into a temporary file — in
 `$TMPDIR`, else `/tmp`, unlinked as soon as it is made — reads it once
@@ -319,6 +319,11 @@ A hook therefore needs a temporary directory where a file can be
 created: where none can be, dotta refuses to run it. What a hook prints
 stays in that directory until the file is last closed, and a hook that
 prints without bound fills it while it runs.
+
+Under `-v` (`--verbose`, or `verbosity = "verbose"` in `[output]`) a
+hook's stdout and stderr are dotta's own instead: what it prints
+reaches the terminal as it prints it, between dotta's own lines, and
+nothing is kept — a failing hook's output stands where it wrote it.
 
 This matters for long-running `post-*` scripts (webhook callouts,
 desktop notifications, notification daemons). If you want visible
@@ -425,7 +430,7 @@ exit 0
 
 ### Debugging Hooks
 
-Run dotta with verbose output to see hook execution:
+Run dotta with `--verbose` to see what a hook prints, live as it runs:
 
 ```bash
 dotta add --profile test ~/.bashrc --verbose

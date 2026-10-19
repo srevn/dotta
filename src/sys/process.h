@@ -134,6 +134,10 @@ typedef enum {
  * wait. Every other policy waits on the child alone: the wait ends at its exit,
  * and a task it leaves runs on, writing where the child wrote.
  *
+ * INHERIT — dotta's own stdout and stderr: what the user watches live, between
+ *           dotta's own lines, as the child writes it — a hook under -v
+ *           (utils/hooks) — nothing of it kept. A reader that goes away ends
+ *           the child at its next write (SIGPIPE).
  * DEVNULL — /dev/null: output nobody reads, a credential helper's to approve or
  *           reject (sys/credentials). Opened before the fork: one that cannot
  *           be opened refuses the run, never leaves the child dotta's output.
@@ -157,6 +161,7 @@ typedef enum {
  * result's by process_result_deinit.
  */
 typedef enum {
+    PROCESS_OUTPUT_INHERIT,
     PROCESS_OUTPUT_DEVNULL,
     PROCESS_OUTPUT_CAPTURE,
     PROCESS_OUTPUT_STREAM,

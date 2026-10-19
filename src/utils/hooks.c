@@ -246,13 +246,15 @@ static error_t hook_fire(
 
     /* The hook's output goes into a file, read once it exits for the caller to
      * show beside its failure: the wait is on the hook alone, so a task it leaves
-     * running holds nothing (sys/process.h PROCESS_OUTPUT_FILE). */
+     * running holds nothing (sys/process.h PROCESS_OUTPUT_FILE). Under -v it is
+     * dotta's own, live as the hook writes it (PROCESS_OUTPUT_INHERIT). */
     char *argv[] = { (char *) hook_path, NULL };  /* execve's type; never written */
     process_spec_t spec = {
         .argv              = argv,
         .envp              = env.entries,
         .stdin_policy      = PROCESS_STDIN_DEVNULL,
-        .output_policy     = PROCESS_OUTPUT_FILE,
+        .output_policy     = output_is_verbose(out) ? PROCESS_OUTPUT_INHERIT
+                                                    : PROCESS_OUTPUT_FILE,
         .work_dir          = NULL,
         .work_dir_fallback = NULL,
         .timeout_seconds   = config->hook_timeout,

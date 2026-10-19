@@ -273,8 +273,9 @@ static error_t process_stdin_open(
 /**
  * The descriptors an output policy needs before the fork: where the child writes,
  * `*child`, and what the parent reads, `*parent` — a pipe's two ends (CAPTURE,
- * STREAM), a file's (FILE), /dev/null for the child alone (DEVNULL). Each -1
- * where the policy has none, and both on a refusal, which names the program.
+ * STREAM), a file's (FILE), /dev/null for the child alone (DEVNULL), neither
+ * (INHERIT). Each -1 where the policy has none, and both on a refusal, which
+ * names the program.
  */
 static error_t process_output_open(
     const process_spec_t *spec, int *parent, int *child
@@ -283,6 +284,9 @@ static error_t process_output_open(
     *child = -1;
 
     switch (spec->output_policy) {
+        case PROCESS_OUTPUT_INHERIT:
+            return NULL;
+
         case PROCESS_OUTPUT_DEVNULL:
             /* Opened here, where its failure is a refusal: the child could only
              * keep dotta's output in its place */
@@ -365,8 +369,8 @@ static _Noreturn void process_child_fail(int errfd, int code) {
  * — then the exec
  *
  * `in` is what the stdin policy opened for the child, -1 for dotta's own
- * (process_stdin_open), `out` what the output policy opened for it
- * (process_output_open), `errfd` the exec's pipe's write end: each above 2
+ * (process_stdin_open), `out` what the output policy opened for it, -1 for dotta's
+ * own (process_output_open), `errfd` the exec's pipe's write end: each above 2
  * (main.c), so no dup2 here overwrites another's source. No error_t, no malloc,
  * no return: a failure is its errno over the exec's pipe (process_child_fail).
  */
@@ -382,7 +386,7 @@ static _Noreturn void process_child(
     if (identity_drop_child() != 0) process_child_fail(errfd, 126);
 
     if (in >= 0 && dup2(in, STDIN_FILENO) < 0) process_child_fail(errfd, 126);
-    if (dup2(out, STDOUT_FILENO) < 0 || dup2(out, STDERR_FILENO) < 0) {
+    if (out >= 0 && (dup2(out, STDOUT_FILENO) < 0 || dup2(out, STDERR_FILENO) < 0)) {
         process_child_fail(errfd, 126);
     }
 

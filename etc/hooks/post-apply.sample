@@ -17,7 +17,8 @@
 set -euo pipefail
 
 # What you should read on success goes to the terminal: dotta prints a hook's
-# output only beside its failure (README, "Output is captured, not streamed").
+# output only beside its failure, unless run with -v (README, "Output is
+# captured, or live under -v").
 # No terminal, no notice — and no failure.
 to_terminal() { { printf '%s\n' "$*" > /dev/tty; } 2>/dev/null || true; }
 

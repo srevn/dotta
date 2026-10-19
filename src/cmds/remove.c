@@ -1015,10 +1015,11 @@ static error_t remove_paths(
     /* Selection: -i narrows the run, each claim asked beside its name, beneath
      * the overlap section and before anything fires — so the hooks and the plan
      * below see exactly what will happen, a declined claim out before the pre-hook
-     * names the set. A claim no answer came for refuses the run: -i asked of
-     * each, and a selection with one unanswered is no selection. None binds a
-     * dry run, which lists every claim; and a selection that keeps none ends
-     * the run, which fires no hook. */
+     * names the set. Each is a consent question, answered by a terminal or a
+     * pipe, as a script answers it (base/output.h output_ask); a claim no answer
+     * came for refuses the run: -i asked of each, and a selection with one
+     * unanswered is no selection. None binds a dry run, which lists every claim;
+     * and a selection that keeps none ends the run, which fires no hook. */
     if (opts->interactive && !opts->dry_run) {
         size_t kept = 0;
         for (size_t i = 0; i < claim_count; i++) {
@@ -1534,15 +1535,6 @@ error_t cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
     /* Branch: delete a profile, or remove paths from one */
     if (opts->delete_profile) {
         return remove_profile(ctx, opts);
-    }
-
-    /* Interactive mode requires a terminal for user prompts — refused at entry,
-     * before any hook fires or any work begins */
-    if (opts->interactive && !isatty(STDIN_FILENO)) {
-        return error_create(
-            ERR_INVALID_ARG,
-            "Interactive mode requires a terminal (stdin is not a TTY)"
-        );
     }
 
     return remove_paths(ctx, opts);

@@ -256,7 +256,6 @@ static error_t hook_fire(
         .work_dir          = NULL,
         .work_dir_fallback = NULL,
         .timeout_seconds   = config->hook_timeout,
-        .pgrp_policy       = PROCESS_PGRP_NEW,
     };
 
     /* The primitive's own refusals — a pipe, a fork, a wait — name the hook by

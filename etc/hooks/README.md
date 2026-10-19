@@ -297,6 +297,12 @@ One that is there but cannot run — no execute bit, no regular file — is igno
 with a warning naming why, and a hooks directory dotta cannot search is named
 once a run.
 
+A hook that outlives `timeout` is ended — the hook itself, not what it started.
+It runs in dotta's own process group, as git's hooks run in git's: Ctrl-C at
+the terminal ends dotta and the hook alike, and a hook may write to the
+terminal or read an answer from it (`/dev/tty`). A signal sent to dotta alone
+(`kill`) does not reach it.
+
 ## Writing Hooks
 
 ### Output is captured, not streamed

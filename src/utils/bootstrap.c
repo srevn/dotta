@@ -97,9 +97,10 @@ static error_t bootstrap_failure(const process_result_t *r) {
  * Execute one profile's bootstrap script.
  *
  * Extracts to a secure temp file, builds the environment, execs via sys/process
- * in PROCESS_PGRP_SHARED so terminal Ctrl+C reaches the child, then unlinks the
- * temp file unconditionally. The extracted file exists only between
- * bootstrap_extract_to_temp and the exec — the window is tight by design.
+ * — in dotta's process group, as every child, so terminal Ctrl+C reaches the
+ * child — then unlinks the temp file unconditionally. The extracted file exists
+ * only between bootstrap_extract_to_temp and the exec — the window is tight by
+ * design.
  */
 static error_t bootstrap_live(
     const bootstrap_spec_t *spec,
@@ -132,7 +133,6 @@ static error_t bootstrap_live(
         .work_dir          = identity()->home,
         .work_dir_fallback = spec->repo_dir,
         .timeout_seconds   = BOOTSTRAP_TIMEOUT_SECONDS,
-        .pgrp_policy       = PROCESS_PGRP_SHARED,
     };
 
     err = process_run(&child, &result);

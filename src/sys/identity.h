@@ -10,8 +10,8 @@
  *
  * A process fact, not a run member: it is read beneath the run (the mount table,
  * the session cache, the signature) and it is one for every run of the process,
- * so it lives at file scope in the layer that asks the kernel, the way sys/process
- * publishes the child's process group, and never on the context.
+ * so it lives at file scope in the layer that asks the kernel, and never on the
+ * context.
  *
  * The invoker
  * -----------

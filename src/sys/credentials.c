@@ -323,7 +323,6 @@ static error_t credential_helper_run(
         .stdin_content_len = request_len,
         .output_policy     = output_policy,
         .timeout_seconds   = CRED_HELPER_TIMEOUT_SECONDS,
-        .pgrp_policy       = PROCESS_PGRP_SHARED,
     };
     return process_run(&spec, result);
 }

@@ -86,8 +86,6 @@ typedef struct {
  *       - Output: stdout and stderr copied to dotta's stdout as they come, and
  *         drained to the script's end whatever the reader does (sys/process.h
  *         PROCESS_OUTPUT_STREAM).
- *       - Process group: SHARED — terminal Ctrl+C reaches both dotta and the
- *         child, which is the correct behavior for interactive bootstrap work.
  *       - Timeout: 600 seconds per script.
  *
  * Returns the receipt, and never an error: a script that fails — its exec, its

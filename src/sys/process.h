@@ -14,8 +14,8 @@
  *   SIGALRM mutation, no global signal-handler state, no prev_alarm restoration
  *   dance.
  * - Caller chooses the load-bearing knobs (stdin policy, output policy, working
- *   directory, process-group policy); the primitive does not homogenize behavior
- *   that callers genuinely need to differ on.
+ *   directory, time limit); the primitive does not homogenize behavior that callers
+ *   genuinely need to differ on.
  * - What dotta wrote lands ahead of anything the child writes: every stdio stream
  *   is flushed before the fork, as git flushes before every child
  *   (lib/git/run-command.c start_command).
@@ -46,18 +46,16 @@
  * - The child becomes the invoker for good before exec (identity_drop_child,
  *   sys/identity): under sudo a hook or a script never runs as root. A failure
  *   there is reported like an exec failure, errno over the self-pipe.
- * - Terminating-signal forwarding (PROCESS_PGRP_NEW only): the primitive publishes
- *   the child's pgid into the volatile sig_atomic_t global `active_child_pgid`
- *   (its own, defined in process.c) for the duration of the child's lifetime,
- *   and clears it on every exit path. The terminating signals are held from before
- *   the fork until the group is set and published, so one that arrives in between
- *   is forwarded as well — none falls between the fork and the publication. The
- *   host program's handler for PROCESS_TERMINATING_SIGNALS must read this and
- *   forward via kill(-pgid, signum) before it re-raises, so terminal Ctrl+C kills
- *   the parent and the spawned child group atomically — and a hangup or a kill
- *   does too, which the kernel never delivers to a group of the child's own.
- *   PROCESS_PGRP_SHARED children leave the global at zero — the kernel delivers
- *   terminal signals to the entire foreground process group directly.
+ * - Every child runs in dotta's process group, part of the job the user started,
+ *   as git runs every child it starts (lib/git/run-command.c start_command sets
+ *   no group). The terminal's signals — Ctrl+C, Ctrl+\, a hangup — reach it as
+ *   they reach dotta, and the terminal is its as dotta's: a write to /dev/tty,
+ *   an answer read from it, tostop or not, where from a group of its own the
+ *   read would stop it (SIGTTIN) and under tostop the write (SIGTTOU). So the
+ *   time limit's kill ends the child alone, never what it started, and a signal
+ *   sent to dotta alone — kill(1), a supervisor — reaches no child: one writing
+ *   into dotta's pipe dies at its next write once dotta is gone (SIGPIPE), one
+ *   writing to a file, the terminal or /dev/null runs on.
  */
 
 #ifndef DOTTA_PROCESS_H
@@ -69,29 +67,17 @@
 #include <types.h>
 
 /**
- * Pgid of the currently running PROCESS_PGRP_NEW child, or 0 when no such child
- * is active. Defined in process.c and read by the host program's terminating-signal
- * handler — see the "Threading, descriptor and signal model" comment above for
- * the contract.
- *
- * Volatile sig_atomic_t for async-signal-safe access from a handler (POSIX
- * requirement).
- */
-extern volatile sig_atomic_t active_child_pgid;
-
-/**
- * The terminating signals: those whose default action ends dotta, which a hook
- * must not outlive and a changed terminal must not survive
+ * The terminating signals: those whose default action ends dotta, which a changed
+ * terminal must not survive
  *
  * An initializer for an int array. The host program catches each (main.c
- * terminating_signal: the armed terminal put back, the signal forwarded to
- * active_child_pgid's group, then re-raised), and the child resets each it finds
- * caught before exec. A signal the host inherited ignored stays ignored in both
- * — a backgrounded dotta, nohup. SIGABRT is one: the death's abort(3) raises it
- * (base/error.h error_die), so a hook dies with a run that broke a contract as
- * with one a user ended, and a sanitizer that aborts has said its report first.
- * SIGSEGV and SIGBUS are not here: the debug build's AddressSanitizer reports
- * them, and a handler of dotta's would swallow the report.
+ * terminating_signal: the armed terminal put back, then re-raised), and the child
+ * resets each it finds caught before exec. A signal the host inherited ignored
+ * stays ignored in both — a backgrounded dotta, nohup. SIGABRT is one: the death's
+ * abort(3) raises it (base/error.h error_die), so a run that broke a contract
+ * puts the terminal back as one a user ended does, and a sanitizer that aborts
+ * has said its report first. SIGSEGV and SIGBUS are not here: the debug build's
+ * AddressSanitizer reports them, and a handler of dotta's would swallow the report.
  */
 #define PROCESS_TERMINATING_SIGNALS { SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGABRT }
 
@@ -100,8 +86,7 @@ extern volatile sig_atomic_t active_child_pgid;
  *
  * INHERIT — child inherits parent's STDIN_FILENO (typically the controlling
  *           terminal). Use for interactive scripts that need to prompt the user
- *           (read -p, etc.) — from dotta's own process group (PROCESS_PGRP_SHARED),
- *           since a background group's read of the terminal stops it (SIGTTIN).
+ *           (read -p, etc.).
  * DEVNULL — child's STDIN_FILENO is redirected to /dev/null. Use for
  *           non-interactive children that must never block on a terminal read.
  *           Opened before the fork: one that cannot be opened refuses the run,
@@ -192,25 +177,6 @@ typedef enum {
 #define PROCESS_CAPTURE_MAX ((size_t) 1024 * 1024)
 
 /**
- * Process-group policy for the spawned child.
- *
- * SHARED — child stays in the parent's process group. Ctrl+C from the controlling
- *          terminal is delivered to both. Use when dotta and the child should
- *          die together on user interrupt (e.g., long-running interactive scripts).
- * NEW    — child is placed in its own process group (pgid = pid)
- *          via setpgid(). Timeout kills target the whole group via kill(-pid,
- *          ...), so sub-processes the child spawns are killed along with it.
- *          The terminal's signals reach the group only through dotta, which
- *          forwards each terminating one (active_child_pgid). Never a child on
- *          dotta's stdin (PROCESS_STDIN_INHERIT): a background group's read of
- *          the terminal stops it (SIGTTIN).
- */
-typedef enum {
-    PROCESS_PGRP_SHARED,
-    PROCESS_PGRP_NEW,
-} process_pgrp_t;
-
-/**
  * Subprocess specification.
  *
  * Value type built by the caller — typically with designated initializers — and
@@ -237,8 +203,6 @@ typedef enum {
  *   the output is read; if the child exits before consuming it (EPIPE on the
  *   write), that is not a primitive-level error — exec_failed / exit_code carry
  *   the real cause.
- * - stdin_policy PROCESS_STDIN_INHERIT under PROCESS_PGRP_SHARED alone
- *   (process_pgrp_t).
  */
 typedef struct {
     char *const *argv;              /* argv[0] = absolute path; NULL-terminated */
@@ -250,7 +214,6 @@ typedef struct {
     const char *work_dir;           /* NULL = inherit parent's CWD */
     const char *work_dir_fallback;  /* NULL = no fallback */
     int timeout_seconds;            /* 0 = no timeout */
-    process_pgrp_t pgrp_policy;
 } process_spec_t;
 
 /**

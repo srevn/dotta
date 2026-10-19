@@ -385,11 +385,10 @@ static int run_spec(
  *
  * Puts back what dotta changed of the terminal — the editor's raw mode, the
  * passphrase prompt's hidden echo, a hidden cursor (base/terminal.h
- * terminal_restore_armed) — forwards the signal to any active child process group
- * — sys/process.h's active_child_pgid, published by process_run() while a
- * PROCESS_PGRP_NEW child is alive, the terminating signals held across its fork
- * until then, so a hook dies atomically with dotta — and re-raises with the default
- * disposition so the kernel can terminate the process.
+ * terminal_restore_armed) — and re-raises with the default disposition so the
+ * kernel can terminate the process. A child is forwarded nothing: it runs in
+ * dotta's process group (sys/process.h), where the terminal's signals reach it
+ * as they reach dotta, and a signal sent to dotta alone is dotta's alone.
  *
  * No resource cleanup runs here by design. Signal handlers must stay AS-safe
  * per POSIX SUSv4 §2.4.3 — which rules out malloc/free (needed by libgit2 teardown)
@@ -400,20 +399,13 @@ static int run_spec(
  * and no ref (sys/stage), and SQLite WAL mode auto-rolls-back any in-flight
  * transaction.
  *
- * AS-safe primitives used: tcsetattr(3), write(2), kill(2), signal(2), raise(3)
- * per SUSv4 §2.4.3. Reading volatile sig_atomic_t is atomic by definition.
+ * AS-safe primitives used: tcsetattr(3), write(2), signal(2), raise(3) per SUSv4
+ * §2.4.3. Reading volatile sig_atomic_t is atomic by definition.
  */
 static void terminating_signal(int signum) {
     /* The terminal first: whatever follows, the user's shell gets back the settings
      * it lent, and a cursor it can see. */
     terminal_restore_armed();
-
-    /* Forward next, so the child group starts dying even if the default disposition
-     * takes non-trivial time to kick in. */
-    sig_atomic_t cpgid = active_child_pgid;
-    if (cpgid > 0) {
-        (void) kill(-(pid_t) cpgid, signum);
-    }
 
     /* Re-raise signal with default handler to ensure proper exit */
     signal(signum, SIG_DFL);
@@ -594,10 +586,10 @@ int main(int argc, char **argv) {
     }
 
     /* Install the terminating signals' handler, so a changed terminal is put
-     * back and a child process group (a spawned hook) dies atomically with dotta.
-     * Keymgr teardown is command-scoped and happens via keymgr_free on the dispatch
-     * return path, not here — see terminating_signal. The handler runs once:
-     * every terminating signal waits while it does. */
+     * back before dotta dies of one. Keymgr teardown is command-scoped and happens
+     * via keymgr_free on the dispatch return path, not here — see
+     * terminating_signal. The handler runs once: every terminating signal waits
+     * while it does. */
     static const int terminating[] = PROCESS_TERMINATING_SIGNALS;
     struct sigaction handler = { 0 };
     handler.sa_handler = terminating_signal;

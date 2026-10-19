@@ -87,6 +87,11 @@ typedef struct {
  * layer could not make; a hook writing without bound fills that directory while
  * it runs; and what a hook prints stands there until the file's last close.
  *
+ * The hook runs in dotta's process group, as git's do (sys/process.h): the terminal
+ * is its as dotta's — a line written to /dev/tty, an answer read from it — and
+ * the terminal's Ctrl+C ends both. The time limit ends the hook alone, never
+ * what it started, and a signal sent to dotta alone does not reach it.
+ *
  * A runnable hook that could not be run, or ran and failed, is ERR_INTERNAL —
  * an exec that failed, a timeout, a signal, a non-zero exit — never ERR_PERMISSION,
  * however permission-shaped the cause: that code is a refusal an identity met

@@ -72,16 +72,6 @@
  * in this time, we abandon and let init reap. */
 #define PROCESS_GRACE_ORPHAN_SECONDS 1
 
-/* The pgid of the PROCESS_PGRP_NEW child process_run() is running, zero otherwise:
- * published once the child's group is set, the terminating signals held across
- * the fork until then, and cleared on every exit path below. The host program's
- * terminating-signal handler reads it through the declaration in process.h and
- * forwards the signal to the group, so a Ctrl+C kills dotta and the spawned hook
- * atomically rather than orphaning the hook. PROCESS_PGRP_SHARED children leave
- * it at zero — the kernel already delivers terminal signals to the whole foreground
- * group. */
-volatile sig_atomic_t active_child_pgid = 0;
-
 /**
  * Write all `n` bytes of `buf` to `fd`, retrying on partial writes and EINTR,
  * until done or refused. A refusal costs the bytes alone, whoever the caller: a
@@ -161,18 +151,19 @@ static pid_t process_reap(pid_t pid, const struct timespec *deadline, int *statu
 }
 
 /**
- * End a child its limit outlived: SIGTERM to `target` (the child, or its group's
- * negated pgid), SIGKILL once the grace has passed. True once reaped, its status
- * in *status. The single source of the SIGTERM/SIGKILL escalation.
+ * End a child its limit outlived: SIGTERM, SIGKILL once the grace has passed.
+ * True once reaped, its status in *status. The single source of the SIGTERM/SIGKILL
+ * escalation. The child alone: what it started shares dotta's process group,
+ * which no kill of dotta's may reach (the header).
  */
-static bool process_kill(pid_t pid, pid_t target, int *status) {
+static bool process_kill(pid_t pid, int *status) {
     /* kill() failure is non-fatal — the target may already be gone, in which
      * case the reap tells. */
-    (void) kill(target, SIGTERM);
+    (void) kill(pid, SIGTERM);
     struct timespec grace = process_deadline(PROCESS_GRACE_TERM_SECONDS);
     if (process_reap(pid, &grace, status) == pid) return true;
 
-    (void) kill(target, SIGKILL);
+    (void) kill(pid, SIGKILL);
     grace = process_deadline(PROCESS_GRACE_KILL_SECONDS);
     return process_reap(pid, &grace, status) == pid;
 }
@@ -336,10 +327,9 @@ static error_t process_output_open(
  * signal to SIG_DFL itself, and this covers the window before it the way execve()
  * would — a terminating signal the parent catches goes back to its default, and
  * one it inherited ignored stays ignored. SIGPIPE is dotta's own ignore (main.c),
- * never the child's, and the mask is cleared — both parents block signals across
- * the fork (process_run the terminating ones, process_foreground the keyboard's),
- * and one that arrived since lands here, on its default. Called in the child
- * alone: no error_t, no malloc.
+ * never the child's, and the mask is cleared — process_foreground blocks the
+ * keyboard's signals across its fork, and one that arrived since lands here, on
+ * its default. Called in the child alone: no error_t, no malloc.
  */
 static void process_child_signals(void) {
     static const int terminating[] = PROCESS_TERMINATING_SIGNALS;
@@ -370,9 +360,9 @@ static _Noreturn void process_child_fail(int errfd, int code) {
 }
 
 /**
- * The child, from the fork to its exec: its signals and its group, the invoker's
- * identity, its stdin and its output, every other descriptor closed, its working
- * directory — then the exec
+ * The child, from the fork to its exec: its signals, the invoker's identity,
+ * its stdin and its output, every other descriptor closed, its working directory
+ * — then the exec
  *
  * `in` is what the stdin policy opened for the child, -1 for dotta's own
  * (process_stdin_open), `out` what the output policy opened for it
@@ -385,10 +375,6 @@ static _Noreturn void process_child(
 ) {
     /* The child's signals, its own before exec (process_child_signals). */
     process_child_signals();
-
-    if (spec->pgrp_policy == PROCESS_PGRP_NEW) {
-        (void) setpgid(0, 0);
-    }
 
     /* The invoker's child, for good (sys/identity), before anything the child
      * does — the chdir, the exec, the script. Reported as an exec failure is:
@@ -687,11 +673,6 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
         spec->stdin_content_len <= PROCESS_STDIN_BUFFER_MAX,
         "a payload past PROCESS_STDIN_BUFFER_MAX"
     );
-    CHECK_ARG(
-        spec->stdin_policy != PROCESS_STDIN_INHERIT ||
-        spec->pgrp_policy == PROCESS_PGRP_SHARED,
-        "a child on dotta's stdin in a process group of its own"
-    );
 
     /* Zero result so every path through cleanup leaves callers with a well-defined
      * struct. */
@@ -705,7 +686,6 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     int output_child = -1;
     int errfd[2] = { -1, -1 };
     pid_t pid = -1;
-    pid_t kill_target = -1;
     process_capture_t capture = { 0 };
     int status = 0;
     error_t err = NULL;
@@ -735,45 +715,17 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
      * (lib/git/run-command.c start_command). */
     (void) fflush(NULL);
 
-    /* The terminating signals held from before the fork until the child's group
-     * is set and published: one that arrives in between lands once it is, and
-     * is forwarded — never lost while a child of a group of its own runs on past
-     * dotta. The child clears the mask with its signals (process_child_signals). */
-    static const int signals[] = PROCESS_TERMINATING_SIGNALS;
-    sigset_t terminating, before;
-    sigemptyset(&terminating);
-    for (size_t i = 0; i < sizeof(signals) / sizeof(*signals); i++) {
-        sigaddset(&terminating, signals[i]);
-    }
-    (void) sigprocmask(SIG_BLOCK, &terminating, &before);
-
     pid = fork();
+    if (pid < 0) {
+        err = error_errno(errno, "Failed to fork '%s'", program);
+        goto cleanup;
+    }
+
     if (pid == 0) {
         process_child(spec, stdin_child, output_child, errfd[1]);
     }
 
     /* ───── Parent ──────────────────────────────────────────────── */
-
-    /* The fork's outcome, the signals still held: its refusal, or the child's
-     * group set and published. Race-mitigate: the pgrp is set even if the child
-     * has not yet executed setpgid(0,0) itself. setpgid() is idempotent with
-     * respect to the (pid,pid) target; EACCES (child already exec'd) is acceptable
-     * because the child's own setpgid ran before exec. */
-    if (pid < 0) {
-        err = error_errno(errno, "Failed to fork '%s'", program);
-    } else if (spec->pgrp_policy == PROCESS_PGRP_NEW) {
-        (void) setpgid(pid, pid);
-        active_child_pgid = (sig_atomic_t) pid;
-        kill_target = -pid;
-    } else {
-        kill_target = pid;
-    }
-
-    /* Let go on both outcomes, before anything else can fail: a signal held since
-     * the fork lands now, and the handler forwards it to the group just published
-     * (main.c terminating_signal). */
-    (void) sigprocmask(SIG_SETMASK, &before, NULL);
-    if (err) goto cleanup;
 
     /* Close the child's ends — what it reads, where it writes, the exec's pipe's
      * write end: the child holds its own of each. */
@@ -828,7 +780,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     }
 
     /* A child its limit outlived, ended (process_kill) */
-    if (result->timed_out && !process_kill(pid, kill_target, &status)) {
+    if (result->timed_out && !process_kill(pid, &status)) {
         err = error_create(
             ERR_FS, "Failed to kill '%s' (pid %d), which outlived its time limit",
             program, (int) pid
@@ -854,12 +806,6 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     capture.bytes = NULL;
 
 cleanup:
-    /* Stop the async signal handler from chasing this pgid before the synchronous
-     * orphan reap below fires its own kill(). Two scopes, one source of truth:
-     * the global is for the handler; kill_target is for in-function cleanup.
-     * Pre-fork failure paths write 0-over-0 — harmless. */
-    active_child_pgid = 0;
-
     if (stdin_parent >= 0) close(stdin_parent);
     if (stdin_child >= 0) close(stdin_child);
     if (output_parent >= 0) close(output_parent);
@@ -871,7 +817,7 @@ cleanup:
      * failure prevented the normal wait paths from running. Best-effort; if it
      * does not die in the orphan window, the kernel reaps when dotta exits. */
     if (pid > 0) {
-        (void) kill(kill_target, SIGKILL);
+        (void) kill(pid, SIGKILL);
         struct timespec grace = process_deadline(PROCESS_GRACE_ORPHAN_SECONDS);
         (void) process_reap(pid, &grace, &status);
     }

@@ -956,7 +956,10 @@ error_t state_retire(state_t *state, const char *filesystem_path);
  * landing and unasked where the copy is untouched — and ended by every record
  * written whole (state_write): the flush's, where the path has re-entered the
  * view, and an ownership event's; and gone with its record (a retire; apply
- * executing the prune is one).
+ * executing the prune is one). So a view that holds the path for a moment ends
+ * it: a profile enabled and disabled again, with a load between, leaves the copy
+ * to the next apply's release, the user's to remove by hand — stated, not guarded,
+ * the bytes being Git's.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose deployed copy is to be pruned (must not be

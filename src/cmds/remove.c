@@ -924,18 +924,59 @@ static output_answer_t remove_ask_paths(
 }
 
 /**
+ * Print what a deletion takes, and the one promise remove makes the copies
+ *
+ * One fact in two tenses: a dry run's lines, or the warning a question is the
+ * preamble of. `counts` is the profile-holdings phrase from the count family
+ * (output_format_counts, or its "counts unavailable" stand-in), and the promise
+ * is the one a removal of paths makes (remove_ask_paths). Where no question is
+ * asked, nothing previews the deletion: the receipt says what it took and the
+ * consent it recorded (remove_profile).
+ *
+ * Readers: remove_profile (its dry run) and remove_ask_profile (the question's
+ * preamble).
+ */
+static void remove_print_deletion(
+    output_t *out, const cmd_remove_options_t *opts, const char *counts
+) {
+    if (opts->dry_run) {
+        output_print(
+            out, OUTPUT_NORMAL, "Would delete profile '%s' (%s)\n",
+            opts->profile, counts
+        );
+        if (opts->delete_files) {
+            output_print(
+                out, OUTPUT_NORMAL,
+                "(Deployed paths would be deleted at the next 'dotta apply')\n"
+            );
+        } else {
+            output_print(out, OUTPUT_NORMAL, "(Deployed paths would stay on disk)\n");
+        }
+    } else {
+        output_gap(out, OUTPUT_NORMAL);
+        output_warning(
+            out, OUTPUT_NORMAL, "This will delete profile '%s' (%s)",
+            opts->profile, counts
+        );
+        if (opts->delete_files) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "         Deployed paths will be deleted at the next 'dotta apply'"
+            );
+        } else {
+            output_info(out, OUTPUT_NORMAL, "         Deployed paths stay on disk");
+        }
+    }
+}
+
+/**
  * Ask whether to delete a profile — or answer yes where --force or the
  * configuration gave the answer
  *
- * `counts` is the profile-holdings phrase from the count family
- * (output_format_counts, or its "counts unavailable" stand-in). The warning says
- * what the deletion takes ahead of the question it is the preamble of, and beneath
- * it the one promise remove makes the copies, as a removal of paths makes it
- * (remove_ask_paths); where none is asked, the receipt says what the deletion
- * took and the consent it recorded (remove_profile).
+ * The question's preamble is the deletion said in the present
+ * (remove_print_deletion).
  */
 static output_answer_t remove_ask_profile(
-    const char *profile,
     const char *counts,
     const cmd_remove_options_t *opts,
     const config_t *config,
@@ -946,19 +987,7 @@ static output_answer_t remove_ask_profile(
         return OUTPUT_ANSWER_YES;
     }
 
-    output_gap(out, OUTPUT_NORMAL);
-    output_warning(
-        out, OUTPUT_NORMAL, "This will delete profile '%s' (%s)",
-        profile, counts
-    );
-    if (opts->delete_files) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "         Deployed paths will be deleted at the next 'dotta apply'"
-        );
-    } else {
-        output_info(out, OUTPUT_NORMAL, "         Deployed paths stay on disk");
-    }
+    remove_print_deletion(out, opts, counts);
     return output_ask_destructive(out, "Continue?");
 }
 
@@ -1374,28 +1403,17 @@ static error_t remove_profile(
         err = NULL;
     }
 
-    /* Dry run: what the deletion takes, and the one promise the copies are made,
-     * as the question's preamble makes it (remove_ask_profile) */
+    /* Dry run: what the deletion takes, and the one promise the copies are made
+     * — the question's preamble, in the future tense (remove_print_deletion) */
     if (opts->dry_run) {
-        output_print(
-            out, OUTPUT_NORMAL, "Would delete profile '%s' (%s)\n",
-            opts->profile, counts
-        );
-        if (opts->delete_files) {
-            output_print(
-                out, OUTPUT_NORMAL,
-                "(Deployed paths would be deleted at the next 'dotta apply')\n"
-            );
-        } else {
-            output_print(out, OUTPUT_NORMAL, "(Deployed paths would stay on disk)\n");
-        }
+        remove_print_deletion(out, opts, counts);
         goto cleanup;  /* err is NULL, will return success */
     }
 
     /* Confirm deletion. Declined is the user's word, and no failure; unanswered
      * — off a terminal, where a destructive question is never asked — nobody
      * declined: the run's refusal, naming the flag that answers in advance. */
-    switch (remove_ask_profile(opts->profile, counts, opts, config, out)) {
+    switch (remove_ask_profile(counts, opts, config, out)) {
         case OUTPUT_ANSWER_YES:
             break;
         case OUTPUT_ANSWER_NO:

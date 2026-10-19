@@ -1331,6 +1331,90 @@ static void add_print_labels(const add_walk_t *walk) {
 }
 
 /**
+ * Say what the add would do: the run's lines in the future tense
+ *
+ * Every line is the decision's — the walk's lists, the names they were listed
+ * under, each file's verdict — and the one remedy a preview can name closes them.
+ * What only a capture or the commit can say is the run's alone (cmds/add.h).
+ *
+ * @param walk The selection: its lists, its profile and the view it named through,
+ *             and the context's output and rows (must not be NULL)
+ * @param target The --target the run brought, as typed; NULL without one
+ * @param profile_exists The pre-flight's answer: the profile's branch stands
+ */
+static void add_print_preview(const add_walk_t *walk, const char *target, bool profile_exists) {
+    output_t *out = walk->ctx->out;
+
+    /* The captures' own lines, in their order and in the future tense: every
+     * directory, then every file, by the capture its listed occupant chooses
+     * and sealed as the decision pass said. What a capture reads off its source
+     * — the mode and the owner a claim takes — is the capture's. */
+    for (size_t i = 0; i < walk->directories.count; i++) {
+        const add_path_t *path = walk->directories.entries[i];
+        output_info(
+            out, OUTPUT_VERBOSE, "Would track directory: %s -> %s",
+            path->filesystem_path, path->claim.storage_path
+        );
+    }
+    for (size_t i = 0; i < walk->files.count; i++) {
+        const add_path_t *path = walk->files.entries[i];
+        if (path->should_encrypt) {
+            output_info(
+                out, OUTPUT_VERBOSE, "Would encrypt: %s -> %s",
+                path->filesystem_path, path->claim.storage_path
+            );
+        }
+        output_info(
+            out, OUTPUT_VERBOSE,
+            path->occupant == FS_OCCUPANT_SYMLINK ? "Would add symlink: %s -> %s"
+                                                  : "Would add: %s -> %s",
+            path->filesystem_path, path->claim.storage_path
+        );
+    }
+
+    /* The receipt's block in the future tense, arm for arm but one: whether the
+     * commit moves anything is the bytes' to say, so a preview counts what it
+     * would capture and "Nothing changed" is the run's alone. */
+    if (walk->files.count > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "Would add %zu file%s to profile '%s'",
+            walk->files.count, walk->files.count == 1 ? "" : "s", walk->profile
+        );
+        if (walk->directories.count > 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Would track %zu director%s for change detection",
+                walk->directories.count, walk->directories.count == 1 ? "y" : "ies"
+            );
+        }
+    } else {
+        output_info(
+            out, OUTPUT_NORMAL, "Would track %zu director%s in profile '%s'",
+            walk->directories.count, walk->directories.count == 1 ? "y" : "ies",
+            walk->profile
+        );
+    }
+    add_print_labels(walk);
+    if (!profile_exists) {
+        output_info(
+            out, OUTPUT_NORMAL, "Would create profile '%s' and enable it",
+            walk->profile
+        );
+    }
+    output_gap(out, OUTPUT_NORMAL);
+
+    /* The one remedy a preview can name: no row holds the profile and this add
+     * does not create it, so enable comes next — the tail's question, asked before
+     * any phase has run, off the rows the dispatcher loaded. What the rows would
+     * take otherwise is the post-commit view's to say, and a preview builds
+     * none. */
+    if (profile_exists && !state_enabled(walk->ctx->run.state, walk->profile)) {
+        add_print_enable(out, walk->profile, target, walk->view);
+        output_gap(out, OUTPUT_NORMAL);
+    }
+}
+
+/**
  * Capture one listed path onto the profile's draft
  *
  * As the kind it was listed as: the occupant chooses the capture, and each capture
@@ -2375,74 +2459,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * — and a copy of its sheet, whose admitted claims are dropped unsaved with
      * it. The pre-add hook was told it is a dry run; the post-add hook is below. */
     if (opts->dry_run) {
-        /* The captures' own lines, in their order and in the future tense: every
-         * directory, then every file, by the capture its listed occupant chooses
-         * and sealed as the decision pass said. What a capture reads off its
-         * source — the mode and the owner a claim takes — is the capture's. */
-        for (size_t i = 0; i < walk.directories.count; i++) {
-            const add_path_t *path = walk.directories.entries[i];
-            output_info(
-                out, OUTPUT_VERBOSE, "Would track directory: %s -> %s",
-                path->filesystem_path, path->claim.storage_path
-            );
-        }
-        for (size_t i = 0; i < walk.files.count; i++) {
-            const add_path_t *path = walk.files.entries[i];
-            if (path->should_encrypt) {
-                output_info(
-                    out, OUTPUT_VERBOSE, "Would encrypt: %s -> %s",
-                    path->filesystem_path, path->claim.storage_path
-                );
-            }
-            output_info(
-                out, OUTPUT_VERBOSE,
-                path->occupant == FS_OCCUPANT_SYMLINK ? "Would add symlink: %s -> %s"
-                                                      : "Would add: %s -> %s",
-                path->filesystem_path, path->claim.storage_path
-            );
-        }
-
-        /* The receipt's block in the future tense, arm for arm but one: whether
-         * the commit moves anything is the bytes' to say, so a preview counts
-         * what it would capture and "Nothing changed" is the run's alone. */
-        if (walk.files.count > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "Would add %zu file%s to profile '%s'",
-                walk.files.count, walk.files.count == 1 ? "" : "s", opts->profile
-            );
-            if (walk.directories.count > 0) {
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "Would track %zu director%s for change detection",
-                    walk.directories.count, walk.directories.count == 1 ? "y" : "ies"
-                );
-            }
-        } else {
-            output_info(
-                out, OUTPUT_NORMAL, "Would track %zu director%s in profile '%s'",
-                walk.directories.count, walk.directories.count == 1 ? "y" : "ies",
-                opts->profile
-            );
-        }
-        add_print_labels(&walk);
-        if (!profile_exists) {
-            output_info(
-                out, OUTPUT_NORMAL, "Would create profile '%s' and enable it",
-                opts->profile
-            );
-        }
-        output_gap(out, OUTPUT_NORMAL);
-
-        /* The one remedy a preview can name: no row holds the profile and this
-         * add does not create it, so enable comes next — the tail's question,
-         * asked before any phase has run, off the rows the dispatcher loaded.
-         * What the rows would take otherwise is the post-commit view's to say,
-         * and a preview builds none. */
-        if (profile_exists && !state_enabled(state, opts->profile)) {
-            add_print_enable(out, opts->profile, opts->target, view);
-            output_gap(out, OUTPUT_NORMAL);
-        }
-
+        add_print_preview(&walk, opts->target, profile_exists);
         output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
         goto cleanup;                                    /* err is NULL */
     }

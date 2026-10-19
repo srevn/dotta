@@ -59,6 +59,16 @@ typedef struct {
 } sync_results_t;
 
 /**
+ * What the workspace guard found (sync_guard): what a pull of the run's scope
+ * puts at risk, and the conflicts among it — both read by the consent cmd_sync
+ * asks over them
+ */
+typedef struct {
+    size_t blocking;   /* Update's work and the conflicts: what the consent is asked over */
+    size_t conflicts;  /* Status's Conflicts, no default verb: the cancel's remedies turn on it */
+} sync_guard_t;
+
+/**
  * Fast-forward a branch to its remote-tracking ref, and nothing else; *updated
  * says whether it moved
  */
@@ -1270,6 +1280,354 @@ static void epoch_reconcile(
 }
 
 /**
+ * The workspace guard: what a pull of the run's scope puts at risk, counted and
+ * said
+ *
+ * The load and its flush, the count over the diverged items the scope accepts,
+ * and the report: strict_mode's refusal, the warning the consent is asked beneath
+ * (cmd_sync), or the notes of what blocks nothing. Unforced runs alone: --force
+ * syncs over whatever the workspace holds, and loads none.
+ *
+ * @param ctx Dispatch context (must not be NULL): the store, the view ahead of
+ *            the Git phase, and the arena the workspace lives in
+ * @param scope The run's scope (must not be NULL)
+ * @param guard What the guard found (must not be NULL; zero where it refuses)
+ * @return Error or NULL on success: the load's or the flush's, or strict_mode's
+ *         refusal
+ */
+static error_t sync_guard(const dotta_ctx_t *ctx, const scope_t *scope, sync_guard_t *guard) {
+    const config_t *config = ctx->config;
+    output_t *out = ctx->out;
+
+    *guard = (sync_guard_t){ 0 };
+
+    /* Orphans stay off — a Git probe per profile for items only the settle (apply's
+     * cleanup) and status's orphan sections read; the guard counts the view's
+     * rows, and the block after the Git phase diffs two views. */
+    workspace_options_t ws_opts = {
+        .analyze_orphans   = false,
+        .analyze_untracked = config->auto_detect_new_files  /* Respect config */
+    };
+    workspace_t *ws = NULL;
+    error_t err = workspace_load(
+        ctx->run.repo, ctx->run.state, config, ctx->run.content_cache, ctx->run.manifest,
+        &ws_opts, ctx->arena, &ws
+    );
+    if (err) return err;
+
+    /* What the load owes the record — its observations, its confirmations, the
+     * voids of orders the view took back (core/workspace.h workspace_flush) —
+     * the confirmations seeding the fast path for subsequent status/apply calls.
+     * The flush keeps the failure of the transaction it takes, so sync's workspace
+     * validation reads what the load read whatever the flush met. */
+    err = workspace_flush(ws);
+    if (err) return err;
+
+    /* Count what stands between this workspace and a clean sync, in the scope
+     * the run names: a pull of the named profiles moves nothing of the others',
+     * so their divergence is neither at risk nor this run's to send to update
+     * (scope_accepts_profile — the filter status's sections apply). The deployed
+     * partition is read off the one route table (workspace_item_route — the same
+     * table status's sections and update's filter read, so sync cannot route an
+     * item a third way), the other states by the state switch beside it. One
+     * item, one count. */
+    workspace_items_t diverged = workspace_diverged(ws);
+
+    /* The rule the arms below follow: sync blocks on update's work and on the
+     * conflicts update refuses and the user must decide; it reports, and never
+     * blocks on, what no verb takes by default and what one named verb resolves.
+     * A squatted tracked directory is a decision (--force, add --force, remove)
+     * and blocks, as dotta's own copy does where the user edited it and Git moved
+     * past it, at a rung as anywhere; a rung dotta only passes through that the
+     * user squats has one verb and no decision — the same fact that gives it
+     * its own status section — and blocks nothing, as dotta's own copy untouched
+     * does, apply's; and a child beneath any of them is not an edit a pull can
+     * conflict with, so it blocks nothing either. */
+    size_t uncommitted_count = 0; /* CAPTURE — update's to commit */
+    size_t conflict_count = 0;    /* CONFLICT ∪ KIND — status's Conflicts: no default verb */
+    size_t deleted_count = 0;     /* DELETED state — update's to commit */
+    size_t untracked_count = 0;   /* UNTRACKED state — update --include-new's */
+    size_t unverified_count = 0;  /* UNVERIFIABLE, UNSCANNED — dotta could not look; blocks nothing */
+    size_t squatted_count = 0;    /* KIND_DERIVED — a rung dotta only passes through; blocks nothing */
+    size_t displaced_count = 0;   /* DISPLACED_* — dotta did not look; blocks nothing */
+
+    for (size_t i = 0; i < diverged.count; i++) {
+        const workspace_item_t *item = diverged.entries[i];
+
+        if (!scope_accepts_profile(scope, item->profile)) {
+            continue;
+        }
+
+        switch (item->state) {
+            case WORKSPACE_STATE_DEPLOYED:
+                switch (workspace_item_route(item)) {
+                    case WORKSPACE_ROUTE_DISPLACED_TRACKED:
+                    case WORKSPACE_ROUTE_DISPLACED_DERIVED:
+                    case WORKSPACE_ROUTE_DISPLACED_STALE:
+                    case WORKSPACE_ROUTE_DISPLACED_CONFLICT:
+                        /* Beneath a squatter: nothing there was looked at, so
+                         * there is no local edit here for a pull to conflict
+                         * with — the squatter's own row is the work, and it is
+                         * counted under its own arm, or dotta's node at no row
+                         * is, the landing's, which this load does not lend. Counted
+                         * to be reported, never to block. */
+                        displaced_count++;
+                        break;
+
+                    case WORKSPACE_ROUTE_UNVERIFIABLE:
+                        /* No committable work by definition — the guard is about
+                         * local edits a pull would turn into conflicts, and a
+                         * path dotta could not read has none to commit. Counted
+                         * to be reported, never to block. */
+                        unverified_count++;
+                        break;
+
+                    case WORKSPACE_ROUTE_CONFLICT:
+                    case WORKSPACE_ROUTE_KIND:
+                        /* Neither verb's by default (status's Conflicts): both
+                         * sides moved — the bytes or the kind, at a rung as
+                         * anywhere: dotta's copy the user edited where Git moved
+                         * past it is the user's decision — or a kind the copy
+                         * cannot commit. update refuses these, so neither the
+                         * report's next steps nor the cancel's remedies (cmd_sync)
+                         * send them there. */
+                        conflict_count++;
+                        break;
+
+                    case WORKSPACE_ROUTE_KIND_DERIVED:
+                        /* A different kind stands at a directory dotta only passes
+                         * through: never planned, so nothing beneath it is dotta's
+                         * to lose to a pull, and one named verb resolves it ('dotta
+                         * update <dir>'). Counted to be reported, never to
+                         * block. */
+                        squatted_count++;
+                        break;
+
+                    case WORKSPACE_ROUTE_CAPTURE:
+                        /* update's work — every capturable divergence, ownership
+                         * and encryption included: a policy-violating blob is
+                         * uncommitted work exactly here, where a push would publish
+                         * it. */
+                        uncommitted_count++;
+                        break;
+
+                    case WORKSPACE_ROUTE_STALE:
+                    case WORKSPACE_ROUTE_REASSIGNED:
+                    case WORKSPACE_ROUTE_CLEAN:
+                        /* Apply's side or nothing: Git moved past what dotta
+                         * last reconciled — the bytes or a claim — and disk did
+                         * not, the user's claims riding included, or a pending
+                         * reassignment. No local work a pull puts at risk. */
+                        break;
+                }
+                break;
+
+            case WORKSPACE_STATE_DELETED:
+                deleted_count++;
+                break;
+
+            case WORKSPACE_STATE_UNTRACKED:
+                untracked_count++;
+                break;
+
+            case WORKSPACE_STATE_UNSCANNED:
+                /* Where the scan could not look: nothing there to commit, so no
+                 * local edit a pull could turn into a conflict — said as a deployed
+                 * path dotta could not look at is, never blocking. The note's
+                 * "'dotta status' lists them" holds: sync scans where status
+                 * does, under the one switch. */
+                unverified_count++;
+                break;
+
+            case WORKSPACE_STATE_UNDEPLOYED:
+            case WORKSPACE_STATE_ORPHANED:
+            case WORKSPACE_STATE_RELEASED:
+            case WORKSPACE_STATE_OVERRIDDEN:
+            case WORKSPACE_STATE_OBSTRUCTING:
+                /* Not sync's concern — handled by apply command. The orphans'
+                 * states are never emitted here anyway: they come only from orphan
+                 * analysis, which this load switches off. */
+                break;
+        }
+    }
+
+    size_t blocking_count = uncommitted_count + conflict_count +
+        deleted_count + untracked_count;
+
+    if (blocking_count > 0) {
+        if (config->strict_mode) {
+            /* Strict mode: the report says what blocks, and the refusal why.
+             * The lines carry status's section vocabulary — one item, one line
+             * — and the unverifiable count rides along as an advisory so the
+             * paths the analysis could not settle are never silent. A dry run
+             * is refused alike: the refusal is what the sync would do, where
+             * the non-strict question is consent, which a dry run is owed none
+             * of. */
+            output_section(out, OUTPUT_NORMAL, "Workspace has uncommitted changes");
+            output_gap(out, OUTPUT_NORMAL);
+
+            if (uncommitted_count > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL, "  %zu uncommitted change%s",
+                    uncommitted_count, uncommitted_count == 1 ? "" : "s"
+                );
+            }
+            if (conflict_count > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL, "  %zu conflict%s",
+                    conflict_count, conflict_count == 1 ? "" : "s"
+                );
+            }
+            if (deleted_count > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL, "  %zu deleted path%s",
+                    deleted_count, deleted_count == 1 ? "" : "s"
+                );
+            }
+            if (untracked_count > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL, "  %zu new untracked file%s",
+                    untracked_count, untracked_count == 1 ? "" : "s"
+                );
+            }
+            if (unverified_count > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL, "  %zu unverifiable path%s",
+                    unverified_count, unverified_count == 1 ? "" : "s"
+                );
+            }
+            if (squatted_count > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL, "  %zu squatted ancestor%s",
+                    squatted_count, squatted_count == 1 ? "" : "s"
+                );
+            }
+            if (displaced_count > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL, "  %zu displaced path%s",
+                    displaced_count, displaced_count == 1 ? "" : "s"
+                );
+            }
+
+            output_gap(out, OUTPUT_NORMAL);
+            output_hintline(out, OUTPUT_NORMAL, "Next steps:");
+            if (conflict_count > 0) {
+                output_hintline(
+                    out, OUTPUT_NORMAL,
+                    "  Conflicts:      dotta diff, apply --force, add --force, or remove"
+                );
+            }
+            if (uncommitted_count + deleted_count > 0) {
+                output_hintline(out, OUTPUT_NORMAL, "  Commit changes: dotta update");
+            }
+            if (untracked_count > 0) {
+                output_hintline(
+                    out, OUTPUT_NORMAL,
+                    "  New files:      dotta update --include-new"
+                );
+            }
+            output_hintline(out, OUTPUT_NORMAL, "  Synchronize:    dotta sync");
+
+            /* The refusal whole, on stderr, whatever the level: how much blocks,
+             * the key that makes it block, and the flag past it — which no step
+             * above names, the steps being the report's. */
+            return error_create(
+                ERR_VALIDATION, "Cannot sync with %zu uncommitted item%s under "
+                "strict_mode; --force syncs anyway", blocking_count,
+                blocking_count == 1 ? "" : "s"
+            );
+        }
+
+        /* Non-strict mode: warn, beneath which the user's confirmation of a run
+         * that pulls or pushes is asked (cmd_sync)
+         *
+         * The risk: syncing before committing local changes can turn them into
+         * conflicts. If the pull moves a file the user edited, the edit becomes
+         * [modified] [stale] — update will not commit over Git's newer content,
+         * and no verb takes it by default: the user decides (the cancel's hint
+         * names the two flags that do).
+         *
+         * Safe workflow: update → sync → resolve any divergence explicitly
+         */
+        output_warning(
+            out, OUTPUT_NORMAL, "Workspace has %zu uncommitted change%s",
+            blocking_count, blocking_count == 1 ? "" : "s"
+        );
+
+        /* Show breakdown in verbose mode */
+        if (uncommitted_count > 0) {
+            output_info(out, OUTPUT_VERBOSE, "  %zu uncommitted", uncommitted_count);
+        }
+        if (conflict_count > 0) {
+            output_info(
+                out, OUTPUT_VERBOSE, "  %zu conflict%s",
+                conflict_count, conflict_count == 1 ? "" : "s"
+            );
+        }
+        if (deleted_count > 0) {
+            output_info(out, OUTPUT_VERBOSE, "  %zu deleted", deleted_count);
+        }
+        if (untracked_count > 0) {
+            output_info(out, OUTPUT_VERBOSE, "  %zu untracked", untracked_count);
+        }
+        if (unverified_count > 0) {
+            output_info(out, OUTPUT_VERBOSE, "  %zu unverifiable", unverified_count);
+        }
+        if (squatted_count > 0) {
+            output_info(out, OUTPUT_VERBOSE, "  %zu squatted", squatted_count);
+        }
+        if (displaced_count > 0) {
+            output_info(out, OUTPUT_VERBOSE, "  %zu displaced", displaced_count);
+        }
+
+        /* Said only where update has work: the risk is to that work, and a block
+         * of conflicts alone has none, update refusing every one */
+        if (blocking_count > conflict_count) {
+            output_info(
+                out, OUTPUT_NORMAL, "Syncing before 'update' may lead to conflicts."
+            );
+        }
+    } else {
+        /* Nothing blocks, but not every path is settled: say so and proceed.
+         * Silence here once hid real divergence — the one route the old fold
+         * never counted. A path the analysis could not read no verb resolves;
+         * the user must look (status's Unverifiable section carries the way out).
+         * A squatted rung dotta only passes through has its one verb, and status's
+         * own section names it; a path beneath a squatter waits on the squatter,
+         * and status lists both. */
+        if (unverified_count > 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Note: %zu path%s could not be verified ('dotta status' lists %s)",
+                unverified_count, unverified_count == 1 ? "" : "s",
+                unverified_count == 1 ? "it" : "them"
+            );
+        }
+        if (squatted_count > 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Note: %zu squatted ancestor%s — a different kind stands at a "
+                "directory dotta only passes through ('dotta status' lists %s)",
+                squatted_count, squatted_count == 1 ? "" : "s",
+                squatted_count == 1 ? "it" : "them"
+            );
+        }
+        if (displaced_count > 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Note: %zu path%s not looked at, beneath a squatted directory "
+                "('dotta status' lists %s)",
+                displaced_count, displaced_count == 1 ? "" : "s",
+                displaced_count == 1 ? "it" : "them"
+            );
+        }
+    }
+
+    *guard = (sync_guard_t){ .blocking = blocking_count, .conflicts = conflict_count };
+    return NULL;
+}
+
+/**
  * Sync command implementation
  */
 error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
@@ -1278,14 +1636,12 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;
-    content_cache_t *content_cache = ctx->run.content_cache;
     const manifest_t *before = ctx->run.manifest;  /* The view ahead of the Git phase: the dispatcher's */
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     /* Declare all resources, initialized to NULL. */
     error_t err = NULL;
-    workspace_t *ws = NULL;
     manifest_t *after = NULL;                  /* The view after the Git phase */
     scope_t *scope = NULL;
     const char *remote_name = NULL;
@@ -1326,386 +1682,67 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Validate workspace - sync requires clean workspace (no uncommitted changes)
      *
-     * Skip entirely when --force is used: the clean check result is unused, and
-     * workspace_load can be expensive (filesystem analysis, directory scanning).
-     * Either way the view ahead of the Git phase is `before` — the dispatcher's,
-     * which the workspace joins in the non-forced arm and which --force reads
-     * as it is, no disk involved. The block after the Git phase diffs it against
-     * the view the pulls produced.
+     * Skip entirely when --force is used: the guard's answer is unused, and its
+     * load can be expensive (filesystem analysis, directory scanning). Either
+     * way the view ahead of the Git phase is `before` — the dispatcher's, which
+     * the guard's workspace joins and which --force reads as it is, no disk
+     * involved. The block after the Git phase diffs it against the view the pulls
+     * produced.
      */
+    sync_guard_t guard = { 0 };
     if (!opts->force) {
-        /* Orphans stay off — a Git probe per profile for items only the settle
-         * (apply's cleanup) and status's orphan sections read; the guard counts
-         * the view's rows, and the block after the Git phase diffs two views. */
-        workspace_options_t ws_opts = {
-            .analyze_orphans   = false,
-            .analyze_untracked = config->auto_detect_new_files  /* Respect config */
-        };
-        err = workspace_load(
-            repo, state, config, content_cache, before, &ws_opts, ctx->arena, &ws
-        );
+        err = sync_guard(ctx, scope, &guard);
         if (err) goto cleanup;
+    }
 
-        /* What the load owes the record — its observations, its confirmations,
-         * the voids of orders the view took back (core/workspace.h workspace_flush)
-         * — the confirmations seeding the fast path for subsequent status/apply
-         * calls. The flush keeps the failure of the transaction it takes, so
-         * sync's workspace validation reads what the load read whatever the flush
-         * met. */
-        err = workspace_flush(ws);
-        if (err) goto cleanup;
-
-        /* Count what stands between this workspace and a clean sync, in the scope
-         * the run names: a pull of the named profiles moves nothing of the others',
-         * so their divergence is neither at risk nor this run's to send to update
-         * (scope_accepts_profile — the filter status's sections apply). The
-         * deployed partition is read off the one route table (workspace_item_route
-         * — the same table status's sections and update's filter read, so sync
-         * cannot route an item a third way), the other states by the state switch
-         * beside it. One item, one count. */
-        workspace_items_t diverged = workspace_diverged(ws);
-
-        /* The rule the arms below follow: sync blocks on update's work and on
-         * the conflicts update refuses and the user must decide; it reports,
-         * and never blocks on, what no verb takes by default and what one named
-         * verb resolves. A squatted tracked directory is a decision (--force,
-         * add --force, remove) and blocks, as dotta's own copy does where the
-         * user edited it and Git moved past it, at a rung as anywhere; a rung
-         * dotta only passes through that the user squats has one verb and no
-         * decision — the same fact that gives it its own status section — and
-         * blocks nothing, as dotta's own copy untouched does, apply's; and a
-         * child beneath any of them is not an edit a pull can conflict with, so
-         * it blocks nothing either. */
-        size_t uncommitted_count = 0; /* CAPTURE — update's to commit */
-        size_t conflict_count = 0;    /* CONFLICT ∪ KIND — status's Conflicts: no default verb */
-        size_t deleted_count = 0;     /* DELETED state — update's to commit */
-        size_t untracked_count = 0;   /* UNTRACKED state — update --include-new's */
-        size_t unverified_count = 0;  /* UNVERIFIABLE, UNSCANNED — dotta could not look; blocks nothing */
-        size_t squatted_count = 0;    /* KIND_DERIVED — a rung dotta only passes through; blocks nothing */
-        size_t displaced_count = 0;   /* DISPLACED_* — dotta did not look; blocks nothing */
-
-        for (size_t i = 0; i < diverged.count; i++) {
-            const workspace_item_t *item = diverged.entries[i];
-
-            if (!scope_accepts_profile(scope, item->profile)) {
-                continue;
+    if (guard.blocking > 0) {
+        /* The user's consent, defaulting to no: a terminal's answer or a pipe's
+         * — the question discards nothing, so any stdin answers it — or yes where
+         * none is owed, a dry run pulling and pushing nothing, the report above
+         * its preview. Declined or unanswered, the run stops before the Git phase
+         * and says what to do first: declined is the user's word, a cancel and
+         * no failure; no answer, nobody declined, and the run is refused as strict
+         * mode refuses it, naming the flag that syncs anyway. */
+        const output_answer_t answer = opts->dry_run
+            ? OUTPUT_ANSWER_YES : output_ask(out, false, "Continue anyway?");
+        if (answer != OUTPUT_ANSWER_YES) {
+            output_gap(out, OUTPUT_NORMAL);
+            if (answer == OUTPUT_ANSWER_NO) {
+                output_info(out, OUTPUT_NORMAL, "Sync cancelled");
             }
-
-            switch (item->state) {
-                case WORKSPACE_STATE_DEPLOYED:
-                    switch (workspace_item_route(item)) {
-                        case WORKSPACE_ROUTE_DISPLACED_TRACKED:
-                        case WORKSPACE_ROUTE_DISPLACED_DERIVED:
-                        case WORKSPACE_ROUTE_DISPLACED_STALE:
-                        case WORKSPACE_ROUTE_DISPLACED_CONFLICT:
-                            /* Beneath a squatter: nothing there was looked at,
-                             * so there is no local edit here for a pull to conflict
-                             * with — the squatter's own row is the work, and it
-                             * is counted under its own arm, or dotta's node at
-                             * no row is, the landing's, which this load does
-                             * not lend. Counted to be reported, never to block. */
-                            displaced_count++;
-                            break;
-
-                        case WORKSPACE_ROUTE_UNVERIFIABLE:
-                            /* No committable work by definition — the guard is
-                             * about local edits a pull would turn into conflicts,
-                             * and a path dotta could not read has none to commit.
-                             * Counted to be reported, never to block. */
-                            unverified_count++;
-                            break;
-
-                        case WORKSPACE_ROUTE_CONFLICT:
-                        case WORKSPACE_ROUTE_KIND:
-                            /* Neither verb's by default (status's Conflicts):
-                             * both sides moved — the bytes or the kind, at a
-                             * rung as anywhere: dotta's copy the user edited
-                             * where Git moved past it is the user's decision —
-                             * or a kind the copy cannot commit. update refuses
-                             * these, so the hints below must not send them
-                             * there. */
-                            conflict_count++;
-                            break;
-
-                        case WORKSPACE_ROUTE_KIND_DERIVED:
-                            /* A different kind stands at a directory dotta only
-                             * passes through: never planned, so nothing beneath
-                             * it is dotta's to lose to a pull, and one named
-                             * verb resolves it ('dotta update <dir>'). Counted
-                             * to be reported, never to block. */
-                            squatted_count++;
-                            break;
-
-                        case WORKSPACE_ROUTE_CAPTURE:
-                            /* update's work — every capturable divergence,
-                             * ownership and encryption included: a policy-violating
-                             * blob is uncommitted work exactly here, where a
-                             * push would publish it. */
-                            uncommitted_count++;
-                            break;
-
-                        case WORKSPACE_ROUTE_STALE:
-                        case WORKSPACE_ROUTE_REASSIGNED:
-                        case WORKSPACE_ROUTE_CLEAN:
-                            /* Apply's side or nothing: Git moved past what dotta
-                             * last reconciled — the bytes or a claim — and disk
-                             * did not, the user's claims riding included, or a
-                             * pending reassignment. No local work a pull puts
-                             * at risk. */
-                            break;
-                    }
-                    break;
-
-                case WORKSPACE_STATE_DELETED:
-                    deleted_count++;
-                    break;
-
-                case WORKSPACE_STATE_UNTRACKED:
-                    untracked_count++;
-                    break;
-
-                case WORKSPACE_STATE_UNSCANNED:
-                    /* Where the scan could not look: nothing there to commit,
-                     * so no local edit a pull could turn into a conflict — said
-                     * as a deployed path dotta could not look at is, never
-                     * blocking. The note's "'dotta status' lists them" holds:
-                     * sync scans where status does, under the one switch. */
-                    unverified_count++;
-                    break;
-
-                case WORKSPACE_STATE_UNDEPLOYED:
-                case WORKSPACE_STATE_ORPHANED:
-                case WORKSPACE_STATE_RELEASED:
-                case WORKSPACE_STATE_OVERRIDDEN:
-                case WORKSPACE_STATE_OBSTRUCTING:
-                    /* Not sync's concern — handled by apply command. The orphans'
-                     * states are never emitted here anyway: they come only from
-                     * orphan analysis, which this load switches off. */
-                    break;
+            if (guard.conflicts > 0) {
+                /* The status Conflicts header's remedies, a kind both sides moved
+                 * among the conflicts: add keeps disk's only where the kind
+                 * matches, and apply --force replaces a directory only with all
+                 * it holds. Update refuses every one of them, so its clause rides
+                 * only where it has work beside them */
+                output_hint(
+                    out, OUTPUT_NORMAL,
+                    "Resolve conflicts first: 'dotta diff' compares; 'dotta apply "
+                    "--force' keeps Git's (a directory only if all dotta's), 'dotta add "
+                    "--force' keeps disk's when the kind matches, 'dotta remove' "
+                    "untracks%s",
+                    guard.blocking > guard.conflicts
+                        ? "; 'dotta update' commits the rest" : ""
+                );
+            } else {
+                output_hint(
+                    out, OUTPUT_NORMAL,
+                    "Run 'dotta update' first to commit local changes"
+                );
             }
-        }
-
-        size_t blocking_count = uncommitted_count + conflict_count +
-            deleted_count + untracked_count;
-
-        if (blocking_count > 0) {
-            if (config->strict_mode) {
-                /* Strict mode: the report says what blocks, and the refusal why.
-                 * The lines carry status's section vocabulary — one item, one
-                 * line — and the unverifiable count rides along as an advisory
-                 * so the paths the analysis could not settle are never silent.
-                 * A dry run is refused alike: the refusal is what the sync would
-                 * do, where the non-strict question is consent, which a dry run
-                 * is owed none of. */
-                output_section(out, OUTPUT_NORMAL, "Workspace has uncommitted changes");
-                output_gap(out, OUTPUT_NORMAL);
-
-                if (uncommitted_count > 0) {
-                    output_info(
-                        out, OUTPUT_NORMAL, "  %zu uncommitted change%s",
-                        uncommitted_count, uncommitted_count == 1 ? "" : "s"
-                    );
-                }
-                if (conflict_count > 0) {
-                    output_info(
-                        out, OUTPUT_NORMAL, "  %zu conflict%s",
-                        conflict_count, conflict_count == 1 ? "" : "s"
-                    );
-                }
-                if (deleted_count > 0) {
-                    output_info(
-                        out, OUTPUT_NORMAL, "  %zu deleted path%s",
-                        deleted_count, deleted_count == 1 ? "" : "s"
-                    );
-                }
-                if (untracked_count > 0) {
-                    output_info(
-                        out, OUTPUT_NORMAL, "  %zu new untracked file%s",
-                        untracked_count, untracked_count == 1 ? "" : "s"
-                    );
-                }
-                if (unverified_count > 0) {
-                    output_info(
-                        out, OUTPUT_NORMAL, "  %zu unverifiable path%s",
-                        unverified_count, unverified_count == 1 ? "" : "s"
-                    );
-                }
-                if (squatted_count > 0) {
-                    output_info(
-                        out, OUTPUT_NORMAL, "  %zu squatted ancestor%s",
-                        squatted_count, squatted_count == 1 ? "" : "s"
-                    );
-                }
-                if (displaced_count > 0) {
-                    output_info(
-                        out, OUTPUT_NORMAL, "  %zu displaced path%s",
-                        displaced_count, displaced_count == 1 ? "" : "s"
-                    );
-                }
-
-                output_gap(out, OUTPUT_NORMAL);
-                output_hintline(out, OUTPUT_NORMAL, "Next steps:");
-                if (conflict_count > 0) {
-                    output_hintline(
-                        out, OUTPUT_NORMAL,
-                        "  Conflicts:      dotta diff, apply --force, add --force, or remove"
-                    );
-                }
-                if (uncommitted_count + deleted_count > 0) {
-                    output_hintline(out, OUTPUT_NORMAL, "  Commit changes: dotta update");
-                }
-                if (untracked_count > 0) {
-                    output_hintline(
-                        out, OUTPUT_NORMAL,
-                        "  New files:      dotta update --include-new"
-                    );
-                }
-                output_hintline(out, OUTPUT_NORMAL, "  Synchronize:    dotta sync");
-
-                /* The refusal whole, on stderr, whatever the level: how much
-                 * blocks, the key that makes it block, and the flag past it —
-                 * which no step above names, the steps being the report's. */
+            if (answer == OUTPUT_ANSWER_NONE) {
                 err = error_create(
-                    ERR_VALIDATION, "Cannot sync with %zu uncommitted item%s under "
-                    "strict_mode; --force syncs anyway", blocking_count,
-                    blocking_count == 1 ? "" : "s"
-                );
-                goto cleanup;
-            }
-
-            /* Non-strict mode: warn, and require the user's confirmation of a
-             * run that pulls or pushes
-             *
-             * The risk: syncing before committing local changes can turn them
-             * into conflicts. If the pull moves a file the user edited, the edit
-             * becomes [modified] [stale] — update will not commit over Git's
-             * newer content, and no verb takes it by default: the user decides
-             * (the cancel hint below names the two flags that do).
-             *
-             * Safe workflow: update → sync → resolve any divergence explicitly
-             */
-            output_warning(
-                out, OUTPUT_NORMAL, "Workspace has %zu uncommitted change%s",
-                blocking_count, blocking_count == 1 ? "" : "s"
-            );
-
-            /* Show breakdown in verbose mode */
-            if (uncommitted_count > 0) {
-                output_info(out, OUTPUT_VERBOSE, "  %zu uncommitted", uncommitted_count);
-            }
-            if (conflict_count > 0) {
-                output_info(
-                    out, OUTPUT_VERBOSE, "  %zu conflict%s",
-                    conflict_count, conflict_count == 1 ? "" : "s"
+                    ERR_VALIDATION, "Cannot sync with %zu uncommitted item%s without a "
+                    "confirmation, and none was read; --force syncs anyway",
+                    guard.blocking, guard.blocking == 1 ? "" : "s"
                 );
             }
-            if (deleted_count > 0) {
-                output_info(out, OUTPUT_VERBOSE, "  %zu deleted", deleted_count);
-            }
-            if (untracked_count > 0) {
-                output_info(out, OUTPUT_VERBOSE, "  %zu untracked", untracked_count);
-            }
-            if (unverified_count > 0) {
-                output_info(out, OUTPUT_VERBOSE, "  %zu unverifiable", unverified_count);
-            }
-            if (squatted_count > 0) {
-                output_info(out, OUTPUT_VERBOSE, "  %zu squatted", squatted_count);
-            }
-            if (displaced_count > 0) {
-                output_info(out, OUTPUT_VERBOSE, "  %zu displaced", displaced_count);
-            }
-
-            /* Said only where update has work: the risk is to that work, and a
-             * block of conflicts alone has none, update refusing every one */
-            if (blocking_count > conflict_count) {
-                output_info(
-                    out, OUTPUT_NORMAL, "Syncing before 'update' may lead to conflicts."
-                );
-            }
-
-            /* The user's consent, defaulting to no: a terminal's answer or a
-             * pipe's — the question discards nothing, so any stdin answers it —
-             * or yes where none is owed, a dry run pulling and pushing nothing,
-             * the report above its preview. Declined or unanswered, the run stops
-             * before the Git phase and says what to do first: declined is the
-             * user's word, a cancel and no failure; no answer, nobody declined,
-             * and the run is refused as strict mode refuses it, naming the flag
-             * that syncs anyway. */
-            const output_answer_t answer = opts->dry_run
-                ? OUTPUT_ANSWER_YES : output_ask(out, false, "Continue anyway?");
-            if (answer != OUTPUT_ANSWER_YES) {
-                output_gap(out, OUTPUT_NORMAL);
-                if (answer == OUTPUT_ANSWER_NO) {
-                    output_info(out, OUTPUT_NORMAL, "Sync cancelled");
-                }
-                if (conflict_count > 0) {
-                    /* The status Conflicts header's remedies, a kind both sides
-                     * moved among the conflicts: add keeps disk's only where
-                     * the kind matches, and apply --force replaces a directory
-                     * only with all it holds. Update refuses every one of them,
-                     * so its clause rides only where it has work beside them */
-                    output_hint(
-                        out, OUTPUT_NORMAL,
-                        "Resolve conflicts first: 'dotta diff' compares; 'dotta apply "
-                        "--force' keeps Git's (a directory only if all dotta's), 'dotta add "
-                        "--force' keeps disk's when the kind matches, 'dotta remove' "
-                        "untracks%s",
-                        blocking_count > conflict_count
-                            ? "; 'dotta update' commits the rest" : ""
-                    );
-                } else {
-                    output_hint(
-                        out, OUTPUT_NORMAL,
-                        "Run 'dotta update' first to commit local changes"
-                    );
-                }
-                if (answer == OUTPUT_ANSWER_NONE) {
-                    err = error_create(
-                        ERR_VALIDATION, "Cannot sync with %zu uncommitted item%s without a "
-                        "confirmation, and none was read; --force syncs anyway",
-                        blocking_count, blocking_count == 1 ? "" : "s"
-                    );
-                }
-                goto cleanup;  /* err is NULL for a decline: a cancel, not an error */
-            }
-
-            /* Confirmed, or no consent owed: proceed */
-            output_info(out, OUTPUT_VERBOSE, "Proceeding with uncommitted changes");
-        } else {
-            /* Nothing blocks, but not every path is settled: say so and proceed.
-             * Silence here once hid real divergence — the one route the old fold
-             * never counted. A path the analysis could not read no verb resolves;
-             * the user must look (status's Unverifiable section carries the way
-             * out). A squatted rung dotta only passes through has its one verb,
-             * and status's own section names it; a path beneath a squatter waits
-             * on the squatter, and status lists both. */
-            if (unverified_count > 0) {
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "Note: %zu path%s could not be verified ('dotta status' lists %s)",
-                    unverified_count, unverified_count == 1 ? "" : "s",
-                    unverified_count == 1 ? "it" : "them"
-                );
-            }
-            if (squatted_count > 0) {
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "Note: %zu squatted ancestor%s — a different kind stands at a "
-                    "directory dotta only passes through ('dotta status' lists %s)",
-                    squatted_count, squatted_count == 1 ? "" : "s",
-                    squatted_count == 1 ? "it" : "them"
-                );
-            }
-            if (displaced_count > 0) {
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "Note: %zu path%s not looked at, beneath a squatted directory "
-                    "('dotta status' lists %s)",
-                    displaced_count, displaced_count == 1 ? "" : "s",
-                    displaced_count == 1 ? "it" : "them"
-                );
-            }
+            goto cleanup;  /* err is NULL for a decline: a cancel, not an error */
         }
+
+        /* Confirmed, or no consent owed: proceed */
+        output_info(out, OUTPUT_VERBOSE, "Proceeding with uncommitted changes");
     }
 
     /* Build the hook invocation. Same struct is reused for both pre-sync (here)

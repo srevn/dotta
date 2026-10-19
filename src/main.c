@@ -5,6 +5,7 @@
  */
 
 #include <cJSON.h>
+#include <fcntl.h>
 #include <git2.h>
 #include <runtime.h>
 #include <signal.h>
@@ -13,6 +14,7 @@
 #include <string.h>
 #include <tomlc17.h>
 #include <types.h>
+#include <unistd.h>
 
 #include "base/arena.h"
 #include "base/args.h"
@@ -418,6 +420,22 @@ static void terminating_signal(int signum) {
 }
 
 int main(int argc, char **argv) {
+    /* Open each standard descriptor dotta was started without, onto /dev/null
+     *
+     * First, before the run opens any other descriptor, which would take the
+     * lowest free one: at 0, 1 or 2 it would be read as dotta's stdin, written
+     * as its report, or overwritten in a child by the dup2 that sets the child's
+     * own (sys/process.h). SQLite moves its own opens off those slots
+     * (lib/sqlite3/sqlite3.c robust_open), but the configuration, libgit2 and
+     * clone's credentials open before the store does. /dev/null changes nothing
+     * dotta was given: no input, and nowhere for output. git's rule at its start
+     * (lib/git/setup.c sanitize_stdfds); where /dev/null will not open, the run
+     * goes on as it was started.
+     */
+    int null_fd = open("/dev/null", O_RDWR);
+    while (null_fd >= 0 && null_fd < STDERR_FILENO) null_fd = dup(null_fd);
+    if (null_fd > STDERR_FILENO) close(null_fd);
+
     /* Line-buffer the report
      *
      * dotta writes one document to stdout and, from several layers, diagnostics

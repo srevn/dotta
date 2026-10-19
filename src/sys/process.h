@@ -21,9 +21,12 @@
  * - Result struct is stack-allocated by the caller and populated on every code
  *   path.
  *
- * Threading and signal model:
+ * Threading, descriptor and signal model:
  * - Single-threaded: must not be called concurrently from multiple threads. The
  *   implementation does not synchronize.
+ * - The standard descriptors: the host program has 0, 1 and 2 open from its start
+ *   (main.c main, its first lines), so no descriptor the primitive opens sits
+ *   at one of them for a child's dup2 to overwrite.
  * - SIGPIPE: caller must have SIGPIPE ignored (typically via signal(SIGPIPE,
  *   SIG_IGN) at process startup). The streaming code path will otherwise terminate
  *   the parent on a broken sink.
@@ -60,7 +63,8 @@
 /**
  * Pgid of the currently running PROCESS_PGRP_NEW child, or 0 when no such child
  * is active. Defined in process.c and read by the host program's terminating-signal
- * handler — see the "Threading and signal model" comment above for the contract.
+ * handler — see the "Threading, descriptor and signal model" comment above for
+ * the contract.
  *
  * Volatile sig_atomic_t for async-signal-safe access from a handler (POSIX
  * requirement).

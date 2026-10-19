@@ -372,12 +372,8 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
         if (spec->stdin_policy == PROCESS_STDIN_DEVNULL) {
             int dn = open("/dev/null", O_RDONLY);
             if (dn >= 0) {
-                if (dn != STDIN_FILENO) {
-                    (void) dup2(dn, STDIN_FILENO);
-                    close(dn);
-                }
-                /* If dn == STDIN_FILENO (parent had stdin closed), it is already
-                 * in the right slot — leave it open. */
+                (void) dup2(dn, STDIN_FILENO);
+                close(dn);
             }
             /* If open failed, child inherits whatever stdin parent had. No clean
              * way to report from the child here; the worst case is the script
@@ -386,18 +382,12 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
             /* Parent holds the write end; close it so the child cannot see its
              * own stdin source as writable. */
             close(stdin_pipe[1]);
-            if (stdin_pipe[0] != STDIN_FILENO) {
-                if (dup2(stdin_pipe[0], STDIN_FILENO) < 0) {
-                    int e = errno;
-                    (void) write_full(errfd[1], &e, sizeof(e));
-                    _exit(126);
-                }
-                close(stdin_pipe[0]);
+            if (dup2(stdin_pipe[0], STDIN_FILENO) < 0) {
+                int e = errno;
+                (void) write_full(errfd[1], &e, sizeof(e));
+                _exit(126);
             }
-            /* If stdin_pipe[0] == STDIN_FILENO already (parent's stdin was closed
-             * pre-fork), it is in the right slot — leave it open. The explicit
-             * closes above make stdin_pipe[0]/[1] invisible to the close-fds
-             * loop below. */
+            close(stdin_pipe[0]);
         }
 
         if (dup2(pipefd[1], STDOUT_FILENO) < 0

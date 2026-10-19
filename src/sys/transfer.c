@@ -234,12 +234,10 @@ static void transfer_commit_credential_decision(transfer_context_t *ctx) {
         ? credential_helper_approve(&u, ctx->username, ctx->password)
         : credential_helper_reject(&u, ctx->username, ctx->password);
 
+    /* In the refusal's own words: they name the helper ('git credential approve',
+     * or reject), so nothing leads them */
     if (err) {
-        output_warning(
-            ctx->output, OUTPUT_NORMAL,
-            "credential helper: %s",
-            error_line(err)
-        );
+        output_warning(ctx->output, OUTPUT_NORMAL, "%s", error_line(err));
     }
 
     credential_url_deinit(&u);
@@ -543,11 +541,9 @@ int transfer_credentials_callback(
 
             if (err) {
                 /* Exec failure / timeout / malformed response — surface to the
-                 * user so they can diagnose helper issues. */
-                output_warning(
-                    ctx->output, OUTPUT_NORMAL,
-                    "credential helper: %s", error_line(err)
-                );
+                 * user so they can diagnose helper issues, in the refusal's own
+                 * words: they name the helper ('git credential fill'). */
+                output_warning(ctx->output, OUTPUT_NORMAL, "%s", error_line(err));
             }
         }
 

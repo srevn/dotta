@@ -356,15 +356,13 @@ static error_t helper_outcome_error(
 ) {
     if (result->exec_failed) {
         return error_create(
-            ERR_INTERNAL,
-            "git credential %s failed to execute (errno=%d)",
-            subcommand, result->exec_errno
+            ERR_INTERNAL, "Cannot run 'git credential %s': %s",
+            subcommand, strerror(result->exec_errno)
         );
     }
     if (result->timed_out) {
         return error_create(
-            ERR_INTERNAL,
-            "git credential %s timed out after %d seconds",
+            ERR_INTERNAL, "'git credential %s' timed out after %d seconds",
             subcommand, CRED_HELPER_TIMEOUT_SECONDS
         );
     }
@@ -373,7 +371,7 @@ static error_t helper_outcome_error(
     if (result->output_dropped > 0) {
         return error_create(
             ERR_INTERNAL,
-            "git credential %s wrote more than %zu bytes, and a response is "
+            "'git credential %s' wrote more than %zu bytes, and a response is "
             "never read in part", subcommand, PROCESS_CAPTURE_MAX
         );
     }
@@ -389,8 +387,9 @@ static error_t helper_outcome_error(
  * subprocess stdin pipe assembled in build_credential_request.
  *
  * A non-zero exit from the helper is NOT propagated as an error — many helpers
- * are read-only and don't implement approve/reject. Only exec failure or timeout
- * produce an error_t; the caller decides whether to surface it.
+ * are read-only and don't implement approve/reject. Only a credential the helper
+ * cannot be handed, an exec failure or a timeout produce an error_t, each naming
+ * the helper; the caller decides whether to surface it.
  */
 static error_t credential_helper_commit(
     const char *subcommand,
@@ -404,8 +403,8 @@ static error_t credential_helper_commit(
     if (!is_valid_credential_field(username) ||
         !is_valid_credential_field(password)) {
         return error_create(
-            ERR_INVALID_ARG,
-            "credential field contains protocol-breaking characters"
+            ERR_INVALID_ARG, "Cannot hand 'git credential %s' a credential holding "
+            "a line break, which ends a field in its protocol", subcommand
         );
     }
 
@@ -547,8 +546,8 @@ error_t credential_helper_fill(
         buffer_secure_free(user_buf, strlen(user_buf) + 1);
         buffer_secure_free(pass_buf, strlen(pass_buf) + 1);
         return error_create(
-            ERR_INTERNAL,
-            "git credential helper returned malformed fields"
+            ERR_INTERNAL, "'git credential fill' answered a credential holding a "
+            "line break, which ends a field in its protocol"
         );
     }
 

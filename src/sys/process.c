@@ -240,10 +240,10 @@ static error_t process_stdin_open(
  * signal to SIG_DFL itself, and this covers the window before it the way execve()
  * would — a terminating signal the parent catches goes back to its default, and
  * one it inherited ignored stays ignored. SIGPIPE is dotta's own ignore (main.c),
- * never the child's; SIGALRM goes back too, and the mask is cleared — both parents
- * block signals across the fork (process_run the terminating ones,
- * process_foreground the keyboard's), and one that arrived since lands here, on
- * its default. Called in the child alone: no error_t, no malloc.
+ * never the child's, and the mask is cleared — both parents block signals across
+ * the fork (process_run the terminating ones, process_foreground the keyboard's),
+ * and one that arrived since lands here, on its default. Called in the child
+ * alone: no error_t, no malloc.
  */
 static void process_child_signals(void) {
     static const int terminating[] = PROCESS_TERMINATING_SIGNALS;
@@ -255,7 +255,6 @@ static void process_child_signals(void) {
         }
     }
     signal(SIGPIPE, SIG_DFL);
-    signal(SIGALRM, SIG_DFL);
 
     sigset_t empty;
     sigemptyset(&empty);

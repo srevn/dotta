@@ -36,9 +36,9 @@
  *   waitpid() with default disposition.
  * - The child resets each terminating signal it finds caught
  *   (PROCESS_TERMINATING_SIGNALS) to SIG_DFL — one the parent inherited ignored
- *   stays ignored, as execve keeps it — resets SIGPIPE and SIGALRM, and clears
- *   its signal mask before exec, so no handler of the parent's runs between fork
- *   and exec.
+ *   stays ignored, as execve keeps it — resets SIGPIPE, dotta's own ignore, and
+ *   clears its signal mask before exec, so no handler of the parent's runs between
+ *   fork and exec.
  * - The child becomes the invoker for good before exec (identity_drop_child,
  *   sys/identity): under sudo a hook or a script never runs as root. A failure
  *   there is reported like an exec failure, errno over the self-pipe.

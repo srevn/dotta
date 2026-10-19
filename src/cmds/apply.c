@@ -3018,10 +3018,14 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Nothing pends on the filesystem: report the bookkeeping (if any) and leave.
-     * Privilege checks, preflight, hooks and the prompt are for runs that touch
-     * disk — pure state bookkeeping skips them. Nothing is written past the
-     * checkpoint, so there is nothing left to save. */
+    /* Nothing pends: neither plan holds work, so the run's whole story is what
+     * the checkpoint committed — the adoptions and the clean reassignments, the
+     * present, recorded before any hook whatever the run does next — said above,
+     * and it leaves here, firing no hook, as every command's nothing-to-do exit
+     * fires none. A run with work, whatever it touches, goes on through preflight,
+     * its hooks and its question: a release or a reclaim alone is a run as a
+     * deploy is, and only the question weighs the disk (below). Nothing is written
+     * past the checkpoint, so there is nothing left to save. */
     if (deploy_plan_is_empty(deploy_plan) && cleanup_plan_is_empty(cleanup_plan)) {
         /* A run whose clean reassignments were said above has told its whole
          * story; any other says why nothing else happens. */
@@ -3180,15 +3184,17 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
         /* Compose the prompt from the non-zero parts — "Deploy 2 files, converge
          * 1 directory, replace 1 orphaned file and prune 3 orphaned files?". No
-         * part means every pending action is state-only reclamation (e.g. an
-         * all-absent orphan set) — non-destructive, no consent needed. The three
-         * destructive deploy verbs reach this prompt only over dotta's own copy
-         * as it confirmed it, which Git holds and the removal loses nothing of:
-         * a squatter Git moved past (core/deploy.c deploy_preflight's type rung),
-         * dotta's node above the rows the run lands, and the copies beneath the
-         * file rows it lands (core/deploy.h deploy_clearance); any other needs
-         * --force, and --force is the consent. The replace and the clearing are
-         * deploy's acts, so their parts come before cleanup's. */
+         * part means no act of the run touches the disk — a release, a reclaim,
+         * a row skipped — so nothing there is lost, and no consent is owed, where
+         * the pre-apply hook above fired all the same: the question weighs the
+         * disk, the hooks bracket the run. The three destructive deploy verbs
+         * reach this prompt only over dotta's own copy as it confirmed it, which
+         * Git holds and the removal loses nothing of: a squatter Git moved past
+         * (core/deploy.c deploy_preflight's type rung), dotta's node above the
+         * rows the run lands, and the copies beneath the file rows it lands
+         * (core/deploy.h deploy_clearance); any other needs --force, and --force
+         * is the consent. The replace and the clearing are deploy's acts, so
+         * their parts come before cleanup's. */
         size_t deploy_count = deploy_verdicts->files.count;
         size_t converge_count = deploy_verdicts->directories.count;
         size_t replace_count = deploy_verdicts->replaces.count;

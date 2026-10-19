@@ -874,7 +874,7 @@ static void remove_format_counts(
 
 /**
  * Ask whether to remove the claims the arguments took — or answer yes where no
- * question is owed: --force, a dry run, a removal below the threshold
+ * question is owed: --force, a removal below the threshold
  */
 static output_answer_t remove_ask_paths(
     const remove_claim_t *claims,
@@ -885,9 +885,6 @@ static output_answer_t remove_ask_paths(
 ) {
     /* Skip confirmation if --force */
     if (opts->force) return OUTPUT_ANSWER_YES;
-
-    /* Skip confirmation for dry run */
-    if (opts->dry_run) return OUTPUT_ANSWER_YES;
 
     /* Check config threshold */
     size_t threshold = 5; /* Default threshold */
@@ -931,10 +928,7 @@ static output_answer_t remove_ask_paths(
  * (output_format_counts, or its "counts unavailable" stand-in), and the promise
  * is the one a removal of paths makes (remove_ask_paths). Where no question is
  * asked, nothing previews the deletion: the receipt says what it took and the
- * consent it recorded (remove_profile).
- *
- * Readers: remove_profile (its dry run) and remove_ask_profile (the question's
- * preamble).
+ * consent it recorded (remove_profile, its one reader).
  */
 static void remove_print_deletion(
     output_t *out, const cmd_remove_options_t *opts, const char *counts
@@ -967,28 +961,6 @@ static void remove_print_deletion(
             output_info(out, OUTPUT_NORMAL, "         Deployed paths stay on disk");
         }
     }
-}
-
-/**
- * Ask whether to delete a profile — or answer yes where --force or the
- * configuration gave the answer
- *
- * The question's preamble is the deletion said in the present
- * (remove_print_deletion).
- */
-static output_answer_t remove_ask_profile(
-    const char *counts,
-    const cmd_remove_options_t *opts,
-    const config_t *config,
-    output_t *out
-) {
-    /* Skip confirmation if --force, or where the configuration asks none */
-    if (opts->force || !config->confirm_destructive) {
-        return OUTPUT_ANSWER_YES;
-    }
-
-    remove_print_deletion(out, opts, counts);
-    return output_ask_destructive(out, "Continue?");
 }
 
 /**
@@ -1040,6 +1012,42 @@ static error_t remove_paths(
     /* The overlap section, BEFORE any operation */
     remove_print_overlaps(out, &overlaps, opts->profile);
 
+    /* Selection: -i narrows the run, each claim asked beside its name, beneath
+     * the overlap section and before anything fires — so the hooks and the plan
+     * below see exactly what will happen, a declined claim out before the pre-hook
+     * names the set. A claim no answer came for refuses the run: -i asked of
+     * each, and a selection with one unanswered is no selection. None binds a
+     * dry run, which lists every claim; and a selection that keeps none ends
+     * the run, which fires no hook. */
+    if (opts->interactive && !opts->dry_run) {
+        size_t kept = 0;
+        for (size_t i = 0; i < claim_count; i++) {
+            switch (output_ask(
+                out, false, "Remove %s%s?",
+                claims[i].storage_path, path_kind_suffix(claims[i].kind)
+                )) {
+                case OUTPUT_ANSWER_YES:
+                    claims[kept++] = claims[i];
+                    break;
+                case OUTPUT_ANSWER_NO:
+                    output_info(out, OUTPUT_VERBOSE, "Skipped: %s", claims[i].storage_path);
+                    break;
+                case OUTPUT_ANSWER_NONE:
+                    err = error_create(
+                        ERR_VALIDATION, "Cannot choose what to remove: -i asks of each "
+                        "path, and no answer was read for '%s'", claims[i].storage_path
+                    );
+                    goto cleanup;
+            }
+        }
+        claim_count = kept;
+
+        if (claim_count == 0) {
+            output_info(out, OUTPUT_NORMAL, "Nothing removed");
+            goto cleanup;
+        }
+    }
+
     /* Dry run: what would be removed, and the one promise the copies are made,
      * as the question makes it (remove_ask_paths) */
     if (opts->dry_run) {
@@ -1072,13 +1080,31 @@ static error_t remove_paths(
         } else {
             output_print(out, OUTPUT_NORMAL, "(Deployed paths would stay on disk)\n");
         }
-
-        goto cleanup;  /* err is NULL, will return success */
     }
 
-    /* Confirm operation. Declined is the user's word, and no failure; unanswered
-     * — the input ended before a line — nobody declined, and the run did not do
-     * what it was asked: its refusal, naming the flag that answers in advance. */
+    /* The pre-remove hook, over the decided removal — a dry run's too, told so
+     * (DOTTA_DRY_RUN=1) — handed the paths the accepted claims stand at, each
+     * once (remove_hook_paths), as placed by the resolver. The draft opened before
+     * it, so a commit it makes to the branch refuses this removal's, and a branch
+     * it deletes comes back with it (sys/stage.h). */
+    const string_array_t hook_paths = remove_hook_paths(ctx->arena, claims, claim_count);
+    const hook_invocation_t hook_inv = {
+        .cmd        = HOOK_CMD_REMOVE,
+        .profile    = opts->profile,
+        .paths      = hook_paths.entries,
+        .path_count = hook_paths.count,
+        .dry_run    = opts->dry_run,
+    };
+
+    err = hook_fire_pre(config, out, &hook_inv);
+    if (err) goto cleanup;
+
+    if (opts->dry_run) goto cleanup;  /* err is NULL, will return success */
+
+    /* Confirm operation: the consent, after the hook. Declined is the user's
+     * word, and no failure; unanswered — the input ended before a line — nobody
+     * declined, and the run did not do what it was asked: its refusal, naming
+     * the flag that answers in advance. */
     switch (remove_ask_paths(claims, claim_count, opts, config, out)) {
         case OUTPUT_ANSWER_YES:
             break;
@@ -1092,56 +1118,6 @@ static error_t remove_paths(
             );
             goto cleanup;
     }
-
-    /* Selection: the accepted claims, before anything fires. In interactive mode
-     * each claim is confirmed here, so the hooks and the plan below see exactly
-     * what will happen — a declined claim is out before the pre-hook names the
-     * set, and a claim no answer came for refuses the run: -i asked of each,
-     * and a selection with one unanswered is no selection. */
-    if (opts->interactive) {
-        size_t kept = 0;
-        for (size_t i = 0; i < claim_count; i++) {
-            switch (output_ask(
-                out, false, "Remove %s%s?",
-                claims[i].storage_path, path_kind_suffix(claims[i].kind)
-                )) {
-                case OUTPUT_ANSWER_YES:
-                    claims[kept++] = claims[i];
-                    break;
-                case OUTPUT_ANSWER_NO:
-                    output_info(out, OUTPUT_VERBOSE, "Skipped: %s", claims[i].storage_path);
-                    break;
-                case OUTPUT_ANSWER_NONE:
-                    err = error_create(
-                        ERR_VALIDATION, "Cannot choose what to remove: -i asks of each "
-                        "path, and no answer was read for '%s'", claims[i].storage_path
-                    );
-                    goto cleanup;
-            }
-        }
-        claim_count = kept;
-    }
-    if (claim_count == 0) {
-        output_info(out, OUTPUT_NORMAL, "Nothing removed");
-        goto cleanup;
-    }
-
-    /* The hooks are handed the paths the accepted claims stand at, each once
-     * (remove_hook_paths), as placed by the resolver. Reached only on non-dry-run:
-     * the dry-run branch above early-cleanups before this point, so dry_run is
-     * always false here in practice — still passed for honesty. */
-    const string_array_t hook_paths = remove_hook_paths(ctx->arena, claims, claim_count);
-    const hook_invocation_t hook_inv = {
-        .cmd        = HOOK_CMD_REMOVE,
-        .profile    = opts->profile,
-        .paths      = hook_paths.entries,
-        .path_count = hook_paths.count,
-        .dry_run    = opts->dry_run,
-    };
-
-    /* Execute pre-remove hook */
-    err = hook_fire_pre(config, out, &hook_inv);
-    if (err) goto cleanup;
 
     /* The plan, on the draft: each claim leaves the commit by its own kind
      * (core/profiles.h profile_remove) — a FILE claim its tree entry and its
@@ -1403,36 +1379,33 @@ static error_t remove_profile(
         err = NULL;
     }
 
-    /* Dry run: what the deletion takes, and the one promise the copies are made
-     * — the question's preamble, in the future tense (remove_print_deletion) */
-    if (opts->dry_run) {
-        remove_print_deletion(out, opts, counts);
-        goto cleanup;  /* err is NULL, will return success */
+    /* The consent the deletion owes — none under --force, where the configuration
+     * asks none, or in a dry run — is a person's at a terminal (base/output.h
+     * output_ask_destructive): off one it is refused here, at the decision, before
+     * the preview and the hook — and after the warnings above, which say what
+     * --force, the refusal's way through, deletes unasked */
+    const bool asks = !opts->force && config->confirm_destructive && !opts->dry_run;
+    if (asks && !isatty(STDIN_FILENO)) {
+        err = error_create(
+            ERR_VALIDATION, "Cannot delete profile '%s' without a confirmation, "
+            "which only a terminal gives; --force deletes it without asking",
+            opts->profile
+        );
+        goto cleanup;
     }
 
-    /* Confirm deletion. Declined is the user's word, and no failure; unanswered
-     * — off a terminal, where a destructive question is never asked — nobody
-     * declined: the run's refusal, naming the flag that answers in advance. */
-    switch (remove_ask_profile(counts, opts, config, out)) {
-        case OUTPUT_ANSWER_YES:
-            break;
-        case OUTPUT_ANSWER_NO:
-            output_gap(out, OUTPUT_NORMAL);
-            output_print(out, OUTPUT_NORMAL, "Cancelled\n");
-            goto cleanup;  /* err is NULL, will return success */
-        case OUTPUT_ANSWER_NONE:
-            err = error_create(
-                ERR_VALIDATION, "Cannot delete profile '%s' without a confirmation, "
-                "which only a terminal gives; --force deletes it without asking",
-                opts->profile
-            );
-            goto cleanup;
-    }
+    /* The preview: what the deletion takes, and the one promise the copies are
+     * made — a dry run's lines, or the question's preamble where one is asked
+     * (remove_print_deletion); an unasked deletion previews nothing it then does
+     * at once */
+    if (opts->dry_run || asks) remove_print_deletion(out, opts, counts);
 
-    /* The hooks are handed the path of every claim the profile goes with, each
-     * once, by the producer the path route's hooks read (remove_hook_paths):
+    /* The pre-remove hook, over the decided deletion — a dry run's too, told so
+     * (DOTTA_DRY_RUN=1) — handed the path of every claim the profile goes with,
+     * each once, by the producer the path route's hooks read (remove_hook_paths):
      * HOME and ROOT place every home/ and root/ claim, and a custom/ claim with
-     * no binding here hands its name. The list is the command arena's. */
+     * no binding here hands its name. The list is the command arena's. The deletion
+     * reads no draft: it deletes the branch whatever the hook committed. */
     const string_array_t hook_paths = remove_hook_paths(ctx->arena, claims, claim_count);
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
@@ -1442,9 +1415,30 @@ static error_t remove_profile(
         .dry_run    = opts->dry_run,
     };
 
-    /* Execute pre-remove hook */
     err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
+
+    if (opts->dry_run) goto cleanup;  /* err is NULL, will return success */
+
+    /* Confirm the deletion: the consent, after the hook. Declined is the user's
+     * word, and no failure; unanswered — the terminal's input ended — nobody
+     * declined: the run's refusal, naming the flag that answers in advance. */
+    if (asks) {
+        switch (output_ask_destructive(out, "Continue?")) {
+            case OUTPUT_ANSWER_YES:
+                break;
+            case OUTPUT_ANSWER_NO:
+                output_gap(out, OUTPUT_NORMAL);
+                output_print(out, OUTPUT_NORMAL, "Cancelled\n");
+                goto cleanup;  /* err is NULL, will return success */
+            case OUTPUT_ANSWER_NONE:
+                err = error_create(
+                    ERR_VALIDATION, "Cannot delete profile '%s' without a confirmation, "
+                    "and none was read; --force deletes it without asking", opts->profile
+                );
+                goto cleanup;
+        }
+    }
 
     /* No filesystem deletion here either — see the Architectural note in
      * remove_paths: apply owns deferred filesystem cleanup. */

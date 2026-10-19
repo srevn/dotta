@@ -32,7 +32,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 ### `pre-apply`
 
-**When:** Before applying profiles
+**When:** Before applying profiles: after apply's preview, before its question
 **Use For:** Backing up configs, validating environment, checking disk space
 
 **Example Use Cases:**
@@ -77,7 +77,8 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 ### `pre-add`
 
-**When:** Before adding files or directories to a profile
+**When:** Before adding files or directories to a profile: once the add has
+decided what it takes, after its preview under `-n`
 **Use For:** Validating file contents, checking for secrets, size checks
 
 **Example Use Cases:**
@@ -126,7 +127,9 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 ### `pre-remove`
 
-**When:** Before removing paths from a profile or deleting a profile
+**When:** Before removing paths from a profile or deleting a profile: once the
+removal has decided what it takes — after `-i`'s questions and its preview —
+and before its question
 **Use For:** Backing up paths, validating removal, preventing accidental deletion
 
 **Example Use Cases:**
@@ -175,7 +178,8 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 ### `pre-update`
 
-**When:** Before committing filesystem changes back to profiles
+**When:** Before committing filesystem changes back to profiles: after update's
+preview and its new-files question, before `-i`'s question
 **Use For:** Validating changes, checking for conflicts, creating checkpoints
 
 **Example Use Cases:**
@@ -224,7 +228,8 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 ### `pre-sync`
 
-**When:** Before synchronizing with the remote
+**When:** Before synchronizing with the remote: after sync's workspace check,
+before its question and the fetch
 **Use For:** Gating sync on network conditions, host policy, or remote reachability
 
 **Example Use Cases:**
@@ -246,12 +251,11 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - Exit 0: Continue with sync
 - Exit non-zero: Abort sync operation
 
-**Fire ordering:** Pre-sync fires *after* the workspace dirty-check has
-resolved (clean workspace, `--force`, or user explicitly confirmed dirty
-sync). Reaching pre-sync means sync is committed to attempting network
-operations, so pre/post run as a matched pair on the happy path. Network
-or push failures may still suppress post-sync — the same operational
-asymmetry every hook pair carries.
+**Fire ordering:** Pre-sync fires once sync has checked the workspace — a
+`strict_mode` refusal fires none — and before the question it asks over
+uncommitted changes, so it can fire over a sync the user then declines, with
+no post-sync after it. Network or push failures may suppress post-sync too —
+the same operational asymmetry every hook pair carries.
 
 ### `post-sync`
 
@@ -281,6 +285,28 @@ fetch that failed among them, fires none
 **Note:** post-sync fires once sync's report is printed, so individual
 profiles may still have diverged or failed — run `dotta status` inside the
 hook if per-profile detail is needed.
+
+## When a hook fires
+
+Every hook-bearing command runs one order: it decides what it will do, shows
+it, fires its `pre-` hook, asks its question, acts, writes its record and fires
+its `post-` hook — add, remove and update saying what they did after it, apply
+and sync as they act. Under `-n` the `pre-` hook fires told `DOTTA_DRY_RUN=1`,
+and no `post-` hook fires. So a `pre-` hook runs over a decided run: a run the
+command refused, or one with nothing to do, fires no hook, and a question the
+run owes but cannot ask — a destructive one off a terminal, without `--force` —
+refuses before the hook.
+
+What a `pre-` hook changes meets what the command decided: add and
+`remove <path>` read the profile before the hook, so a commit it makes refuses
+theirs and a branch it deletes comes back with their commit; update reads the
+profile after it and builds on the hook's commit; `remove --delete-profile`
+deletes the branch whatever the hook committed to it.
+
+sync decides twice: it checks the workspace before `pre-sync` and asks its
+question after it, and decides what to pull and push after the fetch that
+follows the hook — a diverged profile's `ours` or `theirs` question is asked
+there, profile by profile.
 
 ## Hook Configuration
 

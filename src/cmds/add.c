@@ -1876,9 +1876,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* The branch this add will write to: its draft is opened below when it is
      * there, an orphan's when it is not. Both answers are needed here, before
      * the command has any effect — a name Git's ref namespace cannot hold beside
-     * the names already there is refused now, ahead of the pre-add hook and the
-     * draft, because a refusal that has already run the user's hook is not a
-     * refusal.
+     * the names already there is refused now, ahead of the draft.
      *
      * A branch and any branch beneath it are exclusive, which is why a base profile
      * and its variants are (docs/profiles.md). libgit2 refuses at commit time
@@ -1973,9 +1971,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (err) goto cleanup;
 
     /* The -e layer, compiled once: a pattern the grammar refuses is refused here,
-     * under the flag's name and before the pre-add hook runs. The same rules
-     * are the builder's top layer, and the whole of what a claim meets
-     * (add_verdict). */
+     * under the flag's name. The same rules are the builder's top layer, and
+     * the whole of what a claim meets (add_verdict). */
     const gitignore_ruleset_t *excludes = NULL;
     err = ignore_excludes_compile(
         opts->exclude_patterns, opts->exclude_count, ctx->arena, &excludes
@@ -1993,19 +1990,6 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * for a brand-new profile the builder would otherwise try to load a
      * non-existent branch (a non-error, but no point walking that code path). */
     err = ignore_rules_create(repo, config, excludes, ctx->arena, &ignore_rules);
-    if (err) goto cleanup;
-
-    /* Build hook invocation */
-    const hook_invocation_t hook_inv = {
-        .cmd        = HOOK_CMD_ADD,
-        .profile    = opts->profile,
-        .paths      = opts->paths,
-        .path_count = opts->path_count,
-        .dry_run    = opts->dry_run,
-    };
-
-    /* Execute pre-add hook */
-    err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
     /* The profile's draft, as the pre-flight above resolved it: at the branch's
@@ -2371,8 +2355,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* Nothing new: every path the arguments reach is a claim the profile already
      * holds, left as it stands (add_list), so nothing is decided, captured,
      * committed or recorded — a preview and a run end here alike, in one line.
-     * The post-add hook follows an add that took something, and this one took
-     * nothing; the dispatcher's rollback ends a transaction nothing wrote in. */
+     * Neither hook fires: they bracket an add that takes something, and this
+     * one takes nothing; the dispatcher's rollback ends a transaction nothing
+     * wrote in. */
     if (walk.files.count == 0 && walk.directories.count == 0) {
         output_info(out, OUTPUT_NORMAL, "Nothing new to add to profile '%s'", opts->profile);
         goto cleanup;                                    /* err is NULL */
@@ -2437,8 +2422,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
     /* A preview ends here, and this is the whole of the difference between the
-     * two modes: everything above decided, and everything below reads the sources
-     * and writes.
+     * two modes: everything above decided, and everything below the pre-add hook
+     * reads the sources and writes.
      *
      * So a preview answers what the selection answers — every name, admitted
      * together against the tree and the claims the commit would carry
@@ -2457,9 +2442,29 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * holds indexes in memory over the tree the open read — Git's empty tree
      * for a profile that does not exist yet, read and never written (sys/stage.h)
      * — and a copy of its sheet, whose admitted claims are dropped unsaved with
-     * it. The pre-add hook was told it is a dry run; the post-add hook is below. */
+     * it. A preview says what the run would do, and its pre-add hook is told it
+     * is a dry run; the post-add hook is the run's. */
+    if (opts->dry_run) add_print_preview(&walk, opts->target, profile_exists);
+
+    /* The pre-add hook, over the decided add: every refusal above and the
+     * nothing-exit fired none — a refusal that has already run the user's hook
+     * is not a refusal — and a dry run's is told so (DOTTA_DRY_RUN=1). What the
+     * hook changes meets the decision: the draft opened before it, so a commit
+     * it makes to the branch refuses this add's and a branch it deletes comes
+     * back with it (sys/stage.h), and a listed path is read at its capture, as
+     * the hook leaves it. */
+    const hook_invocation_t hook_inv = {
+        .cmd        = HOOK_CMD_ADD,
+        .profile    = opts->profile,
+        .paths      = opts->paths,
+        .path_count = opts->path_count,
+        .dry_run    = opts->dry_run,
+    };
+
+    err = hook_fire_pre(config, out, &hook_inv);
+    if (err) goto cleanup;
+
     if (opts->dry_run) {
-        add_print_preview(&walk, opts->target, profile_exists);
         output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
         goto cleanup;                                    /* err is NULL */
     }

@@ -1695,16 +1695,39 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         if (err) goto cleanup;
     }
 
-    if (guard.blocking > 0) {
-        /* The user's consent, defaulting to no: a terminal's answer or a pipe's
-         * — the question discards nothing, so any stdin answers it — or yes where
-         * none is owed, a dry run pulling and pushing nothing, the report above
-         * its preview. Declined or unanswered, the run stops before the Git phase
-         * and says what to do first: declined is the user's word, a cancel and
-         * no failure; no answer, nobody declined, and the run is refused as strict
-         * mode refuses it, naming the flag that syncs anyway. */
-        const output_answer_t answer = opts->dry_run
-            ? OUTPUT_ANSWER_YES : output_ask(out, false, "Continue anyway?");
+    /* Build the hook invocation. Same struct is reused for both pre-sync (here)
+     * and post-sync (after the manifest block). The invocation's strings are
+     * the command arena's; sync_extras is a stack literal whose lifetime is
+     * cmd_sync's frame — covers both fire sites. */
+    char *const sync_extras[] = {
+        arena_str_format(ctx->arena, "DOTTA_REMOTE=%s", remote_name), NULL
+    };
+    const hook_invocation_t hook_inv = {
+        .cmd        = HOOK_CMD_SYNC,
+        .profile    = string_array_join(ctx->arena,scope_profiles(scope),  " "),
+        .paths      = NULL,
+        .path_count = 0,
+        .extras     = sync_extras,
+        .dry_run    = opts->dry_run,
+    };
+
+    /* The pre-sync hook, over the run the guard decided — strict_mode's refusal
+     * fired none — and before the consent the guard owes; a dry run's too, told
+     * so (DOTTA_DRY_RUN=1). sync decides twice: what to pull and push is the
+     * Git phase's, after the fetch that follows the hook, and a diverged profile's
+     * ours or theirs question is asked there, profile by profile. */
+    err = hook_fire_pre(config, out, &hook_inv);
+    if (err) goto cleanup;
+
+    if (guard.blocking > 0 && !opts->dry_run) {
+        /* The user's consent, after the hook, defaulting to no: a terminal's
+         * answer or a pipe's — the question discards nothing, so any stdin answers
+         * it. A dry run, pulling and pushing nothing, owes none: the guard's
+         * report is its preview. Declined or unanswered, the run stops before
+         * the Git phase and says what to do first: declined is the user's word,
+         * a cancel and no failure; no answer, nobody declined, and the run is
+         * refused as strict mode refuses it, naming the flag that syncs anyway. */
+        const output_answer_t answer = output_ask(out, false, "Continue anyway?");
         if (answer != OUTPUT_ANSWER_YES) {
             output_gap(out, OUTPUT_NORMAL);
             if (answer == OUTPUT_ANSWER_NO) {
@@ -1741,28 +1764,9 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             goto cleanup;  /* err is NULL for a decline: a cancel, not an error */
         }
 
-        /* Confirmed, or no consent owed: proceed */
+        /* Confirmed: proceed */
         output_info(out, OUTPUT_VERBOSE, "Proceeding with uncommitted changes");
     }
-
-    /* Build the hook invocation. Same struct is reused for both pre-sync (here)
-     * and post-sync (after the manifest block). The invocation's strings are
-     * the command arena's; sync_extras is a stack literal whose lifetime is
-     * cmd_sync's frame — covers both fire sites. */
-    char *const sync_extras[] = {
-        arena_str_format(ctx->arena, "DOTTA_REMOTE=%s", remote_name), NULL
-    };
-    const hook_invocation_t hook_inv = {
-        .cmd        = HOOK_CMD_SYNC,
-        .profile    = string_array_join(ctx->arena,scope_profiles(scope),  " "),
-        .paths      = NULL,
-        .path_count = 0,
-        .extras     = sync_extras,
-        .dry_run    = opts->dry_run,
-    };
-
-    err = hook_fire_pre(config, out, &hook_inv);
-    if (err) goto cleanup;
 
     /* Create transfer context for progress reporting. URL was resolved alongside
      * the remote name above; it feeds the credential helper here */
@@ -1855,7 +1859,10 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * before it. A true delta in both modes: a local external commit that predates
      * the sync is in `before` and `after` alike and is reported by its results
      * (status's [stale], [released]), not here; what the block names is what
-     * the pulls and resolutions above did to the view. Sync writes no state.
+     * the pulls and resolutions above did to the view. A commit the pre-sync
+     * hook makes is in `after` alone, and reads as the pull's: the hook runs
+     * over a run decided before it, and nothing reads again across it. Sync writes
+     * no state.
      *
      * Attribution is per enabled profile — scope_enabled, never the -p narrowed
      * scope_profiles: precedence runs across the whole enabled set, which is

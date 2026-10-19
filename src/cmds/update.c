@@ -1664,10 +1664,66 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * answered */
     update_print_preview(out, &partition);
 
-    /* The hooks fire around the work — after the nothing-exit (a no-op run fires
-     * nothing), before the prompt: apply's order. The preview's verdicts predate
-     * the pre-hook, but the capture stores execute-time bytes — a pre-hook that
-     * edits a candidate still commits what it wrote. */
+    /* The run's work: the accepted items — less the new files, where the user
+     * declines them below. A value the command holds; the partition's list is
+     * never edited. */
+    workspace_items_t work = partition.accepted;
+
+    /* New files no flag asked for — the config's scan found them — are added
+     * only with consent: a question that narrows the run, so the decision's,
+     * asked beneath the preview that lists what it narrows and before the hook,
+     * and binding no dry run, which executes nothing. Declining keeps the rest
+     * of the run — the preview named the new files separately, and the receipt
+     * reports what actually happens. What is left is asked the nothing-exit's
+     * own question, so a named run whose only accepted items were new files still
+     * re-derives the chains it named. */
+    if (!opts->dry_run && partition.new_files.count > 0 && config->confirm_new_files &&
+        !opts->include_new && !opts->only_new) {
+
+        /* The new files are an extra the run stands without: declined, or
+         * unanswered and said so with the flag that adds them, they leave the
+         * work alike. They are the accepted items' suffix: the discoveries follow
+         * every other diverged item (core/workspace.h workspace_diverged), and
+         * the partition keeps the order it walks in — so the rest of the run is
+         * the prefix before them. */
+        switch (output_ask(
+            out, false, "Found %zu new file%s. Add %s to profiles?",
+            partition.new_files.count, partition.new_files.count == 1 ? "" : "s",
+            partition.new_files.count == 1 ? "it" : "them"
+            )) {
+            case OUTPUT_ANSWER_YES:
+                break;
+            case OUTPUT_ANSWER_NO:
+                work.count -= partition.new_files.count;
+                break;
+            case OUTPUT_ANSWER_NONE:
+                output_info(
+                    out, OUTPUT_NORMAL, "%zu new file%s not added: no answer was "
+                    "read; --include-new adds %s", partition.new_files.count,
+                    partition.new_files.count == 1 ? "" : "s",
+                    partition.new_files.count == 1 ? "it" : "them"
+                );
+                work.count -= partition.new_files.count;
+                break;
+        }
+
+        /* Nothing left: the new files were the run's whole work, and they were
+         * left out — a run with nothing to do, which fires no hook */
+        if (work.count == 0 && derive_rows.count == 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "No modified files remaining after skipping new files"
+            );
+            return NULL;
+        }
+    }
+
+    /* The pre-update hook, over the decided run — the nothing-exit and the
+     * narrowing above it, a run left with nothing to do firing none — and before
+     * -i's consent; a dry run's too, told so (DOTTA_DRY_RUN=1). The preview's
+     * verdicts predate it, but the drafts open after it (update_execute) and
+     * the capture stores execute-time bytes: a commit it makes to a profile is
+     * the update's parent, and a candidate it edits is committed as it wrote it. */
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_UPDATE,
         .profile    = string_array_join(ctx->arena,scope_profiles(scope),  " "),
@@ -1679,76 +1735,21 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     err = hook_fire_pre(config, out, &hook_inv);
     if (err) return err;
 
-    /* The run's work: the accepted items — less the new files, where the user
-     * declines them below. A value the command holds; the partition's list is
-     * never edited. */
-    workspace_items_t work = partition.accepted;
-
-    /* The prompts — none bind a dry run: it executes nothing, so there is nothing
-     * to consent to */
-    if (!opts->dry_run) {
-        if (opts->interactive) {
-            /* -i asked to be asked: declined is the user's word, and no answer
-             * refuses the run, since nobody declined */
-            switch (output_ask(out, false, "Update these items?")) {
-                case OUTPUT_ANSWER_YES:
-                    break;
-                case OUTPUT_ANSWER_NO:
-                    output_info(out, OUTPUT_NORMAL, "Cancelled");
-                    return NULL;
-                case OUTPUT_ANSWER_NONE:
-                    return error_create(
-                        ERR_VALIDATION,
-                        "Cannot update: -i asks before updating, and no answer was read"
-                    );
-            }
-        }
-
-        /* New files no flag asked for — the config's scan found them — are added
-         * only with consent. Declining keeps the rest of the run — the preview
-         * named the new files separately, and the receipt reports what actually
-         * happens. What is left is asked the nothing-exit's own question, so a
-         * named run whose only accepted items were new files still re-derives
-         * the chains it named. */
-        if (partition.new_files.count > 0 && config->confirm_new_files &&
-            !opts->include_new && !opts->only_new) {
-
-            /* The new files are an extra the run stands without: declined, or
-             * unanswered and said so with the flag that adds them, they leave
-             * the work alike. They are the accepted items' suffix: the discoveries
-             * follow every other diverged item (core/workspace.h
-             * workspace_diverged), and the partition keeps the order it walks
-             * in — so the rest of the run is the prefix before them. */
-            switch (output_ask(
-                out, false, "Found %zu new file%s. Add %s to profiles?",
-                partition.new_files.count, partition.new_files.count == 1 ? "" : "s",
-                partition.new_files.count == 1 ? "it" : "them"
-                )) {
-                case OUTPUT_ANSWER_YES:
-                    break;
-                case OUTPUT_ANSWER_NO:
-                    work.count -= partition.new_files.count;
-                    break;
-                case OUTPUT_ANSWER_NONE:
-                    output_info(
-                        out, OUTPUT_NORMAL, "%zu new file%s not added: no answer was "
-                        "read; --include-new adds %s", partition.new_files.count,
-                        partition.new_files.count == 1 ? "" : "s",
-                        partition.new_files.count == 1 ? "it" : "them"
-                    );
-                    work.count -= partition.new_files.count;
-                    break;
-            }
-
-            /* Nothing left: the new files were the run's whole work, and they
-             * were left out */
-            if (work.count == 0 && derive_rows.count == 0) {
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "No modified files remaining after skipping new files"
-                );
+    /* -i asked to be asked: the consent, after the hook, binding no dry run.
+     * Declined is the user's word, and no answer refuses the run, since nobody
+     * declined */
+    if (opts->interactive && !opts->dry_run) {
+        switch (output_ask(out, false, "Update these items?")) {
+            case OUTPUT_ANSWER_YES:
+                break;
+            case OUTPUT_ANSWER_NO:
+                output_info(out, OUTPUT_NORMAL, "Cancelled");
                 return NULL;
-            }
+            case OUTPUT_ANSWER_NONE:
+                return error_create(
+                    ERR_VALIDATION,
+                    "Cannot update: -i asks before updating, and no answer was read"
+                );
         }
     }
 
@@ -1796,9 +1797,14 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
     }
 
-    /* The run's one line: what it committed — whole, or before the stop the error
-     * below names — or that it committed nothing. Said ahead of the stop and of
-     * the post-update hook, as apply's receipts are said ahead of its hook. */
+    /* The post-update hook, over a run whose every commit landed: a stop fires
+     * none, the error below naming it. The hooks layer suppresses it on a dry
+     * run. */
+    if (!err) hook_fire_post(config, out, &hook_inv);
+
+    /* The run's one line, after the post-update hook as add's and remove's follow
+     * theirs: what it committed — whole, or before the stop the error below names
+     * — or that it committed nothing */
     output_gap(out, OUTPUT_NORMAL);
     if (opts->dry_run) {
         output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
@@ -1831,12 +1837,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
     }
 
-    if (err) return err;
-
-    /* Execute post-update hook (the hooks layer suppresses it on a dry run) */
-    hook_fire_post(config, out, &hook_inv);
-
-    return NULL;
+    return err;
 }
 
 /* ══════════════════════════════════════════════════════════════════

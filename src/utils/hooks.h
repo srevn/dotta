@@ -84,6 +84,18 @@ typedef struct {
  * where the process layer could not spawn it). Callers should goto-cleanup on
  * non-NULL return.
  *
+ * Callers fire it over a decided run: once the command has decided what it will
+ * do and shown it, before the question it asks — a dry run's too, told so — so
+ * a run the command refused, or one with nothing to do, fires none, and a consent
+ * the run owes off a terminal, where no destructive question is asked
+ * (base/output.h output_ask_destructive), is refused before it. What the hook
+ * changes meets what was decided, and nothing reads again across it: a commit
+ * it makes to a profile refuses add's and remove's, whose drafts opened before
+ * it, and a branch it deletes comes back with their commit (sys/stage.h); update
+ * opens its drafts after it and builds on the hook's commit; a profile's deletion
+ * deletes the branch whatever the hook committed to it; and an enabled set it
+ * changes is the next run's, the decided run acting on the one it read.
+ *
  * The hook's stdout and stderr go into a file in the temporary directory, read
  * once the hook exits — the wait is on the hook alone, so a task it leaves running
  * holds nothing — its first PROCESS_CAPTURE_MAX bytes kept and the rest counted

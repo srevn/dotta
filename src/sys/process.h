@@ -9,8 +9,10 @@
  * way before exec, and report into one result.
  *
  * Design principles:
- * - Monotonic-clock timeout via select() — no SIGALRM mutation, no global
- *   signal-handler state, no prev_alarm restoration dance.
+ * - The time limit is one deadline on the monotonic clock, counted in the time
+ *   that passed: the drain's poll() and the reap's waits both end by it — no
+ *   SIGALRM mutation, no global signal-handler state, no prev_alarm restoration
+ *   dance.
  * - Caller chooses the load-bearing knobs (stdin policy, output handling, working
  *   directory, process-group policy); the primitive does not homogenize behavior
  *   that callers genuinely need to differ on.

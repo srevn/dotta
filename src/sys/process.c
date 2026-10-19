@@ -3,10 +3,12 @@
  *
  * Single linear procedure: validate spec → open the child's stdin
  * (process_stdin_open) and pipes (output + exec-errno) → fork → the child sets
- * up its environment and execs (process_child) → the parent drains output with
- * a monotonic-clock select() loop (process_drain), keeping what a capture asks
- * for (process_capture_t) → parent reaps the child (escalating SIGTERM→SIGKILL
- * on timeout) → parent decodes wait status into the result struct.
+ * up its environment and execs (process_child) → the parent drains output by
+ * poll() to the limit's deadline (process_drain), keeping what a capture asks
+ * for (process_capture_t) → parent reaps the child by the same deadline
+ * (process_reap), escalating SIGTERM→SIGKILL where the limit came first
+ * (process_kill) → parent reports the reaped child into the result struct
+ * (process_report).
  *
  * One cleanup label handles all error paths. Every resource (pipe fds, capture
  * buffer, stray child) is initialized to a sentinel so cleanup is unconditional
@@ -17,10 +19,12 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <poll.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/select.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -42,9 +46,14 @@
 #define PROCESS_FD_CAP 65536
 #define PROCESS_FD_FALLBACK 1024
 
-/* Polling cadence for the post-EOF and post-kill waitpid loops. 50ms is a balance
- * between wake-up latency and CPU burn. */
-#define PROCESS_POLL_INTERVAL_NS (50L * 1000L * 1000L)
+/* The reap's cadence (process_reap): a look at once, then a sleep of a millisecond,
+ * doubling to 50 ms — a child that exits at once is reaped at once, and one that
+ * runs on costs a wakeup every 50 ms. */
+#define PROCESS_REAP_FIRST_NS (1000L * 1000L)
+#define PROCESS_REAP_MAX_NS (50L * 1000L * 1000L)
+
+#define PROCESS_NS_PER_SECOND (1000L * 1000L * 1000L)
+#define PROCESS_NS_PER_MS (1000L * 1000L)
 
 /* Grace periods for the timeout escalation. SIGTERM gets the longer window; SIGKILL
  * is essentially instantaneous but we still bound the wait so a stuck reap doesn't
@@ -88,46 +97,77 @@ static ssize_t process_write(int fd, const void *buf, size_t n) {
     return (ssize_t) total;
 }
 
+/* The monotonic instant `seconds` from now, immune to wall-clock jumps */
+static struct timespec process_deadline(int seconds) {
+    struct timespec deadline = { 0, 0 };
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += seconds;
+
+    return deadline;
+}
+
+/* Nanoseconds from now until `deadline`, 0 once it has passed: a limit counted
+ * in the time that passed, never in the seconds the clock turned */
+static int64_t process_remaining(const struct timespec *deadline) {
+    struct timespec now = { 0, 0 };
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    int64_t left = (int64_t) (deadline->tv_sec - now.tv_sec) *
+        PROCESS_NS_PER_SECOND + (deadline->tv_nsec - now.tv_nsec);
+
+    return left > 0 ? left : 0;
+}
+
 /**
- * Send `sig` to `kill_target` (a pid or negative pgid), then poll waitpid(pid)
- * for up to `grace_seconds`. On reap, *status is filled and true is returned.
- * On grace expiry or unrecoverable waitpid error, false is returned.
- *
- * Used in three places: timeout-during-read, timeout-during-wait, and orphan
- * reap during cleanup. Single source of truth for the SIGTERM/SIGKILL escalation.
+ * waitpid by a deadline: `pid` once reaped, its status in *status; 0 where the
+ * deadline came first; -1 with errno where the wait failed. With no deadline
+ * (NULL) it waits as long as the child runs. Polls at once, then after a sleep
+ * from PROCESS_REAP_FIRST_NS doubling to PROCESS_REAP_MAX_NS, never past the
+ * deadline.
  */
-static bool process_kill_and_wait(
-    pid_t pid,
-    pid_t kill_target,
-    int sig,
-    int grace_seconds,
-    int *status
-) {
-    /* kill() failure is non-fatal — the target may already be gone, in which
-     * case waitpid() will tell us via reap or ECHILD. */
-    (void) kill(kill_target, sig);
-
-    struct timespec start = { 0, 0 };
-    clock_gettime(CLOCK_MONOTONIC, &start);
-
-    for ( ; ;) {
-        pid_t r = waitpid(pid, status, WNOHANG);
-        if (r == pid) {
-            return true;
-        }
-        if (r < 0 && errno != EINTR) {
-            return false;
-        }
-
-        struct timespec now = { 0, 0 };
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if ((now.tv_sec - start.tv_sec) >= (time_t) grace_seconds) {
-            return false;
-        }
-
-        struct timespec delay = { 0, PROCESS_POLL_INTERVAL_NS };
-        (void) nanosleep(&delay, NULL);
+static pid_t process_reap(pid_t pid, const struct timespec *deadline, int *status) {
+    if (!deadline) {
+        pid_t reaped;
+        do {
+            reaped = waitpid(pid, status, 0);
+        } while (reaped < 0 && errno == EINTR);
+        return reaped;
     }
+
+    int64_t interval = PROCESS_REAP_FIRST_NS;
+    for (;;) {
+        pid_t reaped = waitpid(pid, status, WNOHANG);
+        if (reaped == pid) return pid;
+        if (reaped < 0 && errno != EINTR) return -1;
+
+        int64_t left = process_remaining(deadline);
+        if (left == 0) return 0;
+
+        int64_t nap = interval < left ? interval : left;
+        struct timespec delay = {
+            .tv_sec  = (time_t) (nap / PROCESS_NS_PER_SECOND),
+            .tv_nsec = (long) (nap % PROCESS_NS_PER_SECOND),
+        };
+        (void) nanosleep(&delay, NULL);
+        interval = interval * 2 <
+            PROCESS_REAP_MAX_NS ? interval * 2 : PROCESS_REAP_MAX_NS;
+    }
+}
+
+/**
+ * End a child its limit outlived: SIGTERM to `target` (the child, or its group's
+ * negated pgid), SIGKILL once the grace has passed. True once reaped, its status
+ * in *status. The single source of the SIGTERM/SIGKILL escalation.
+ */
+static bool process_kill(pid_t pid, pid_t target, int *status) {
+    /* kill() failure is non-fatal — the target may already be gone, in which
+     * case the reap tells. */
+    (void) kill(target, SIGTERM);
+    struct timespec grace = process_deadline(PROCESS_GRACE_TERM_SECONDS);
+    if (process_reap(pid, &grace, status) == pid) return true;
+
+    (void) kill(target, SIGKILL);
+    grace = process_deadline(PROCESS_GRACE_KILL_SECONDS);
+    return process_reap(pid, &grace, status) == pid;
 }
 
 /**
@@ -145,6 +185,7 @@ static error_t process_pipe(int fds[2], const char *program) {
     }
     (void) fcntl(fds[0], F_SETFD, FD_CLOEXEC);
     (void) fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+
     return NULL;
 }
 
@@ -286,21 +327,42 @@ static _Noreturn void process_child(
 }
 
 /**
- * Compute remaining seconds until deadline. Returns 0 if the deadline has passed.
- * Returns -1 if no timeout is set.
+ * A reaped child, reported into its result: the errno its exec's pipe holds,
+ * where the child wrote one before its exit (process_child_fail), and its wait
+ * status — the code it exited with, or the signal that ended it and 128 past
+ * it. Both primitives' children.
+ *
+ * Read once the child is reaped, so the read never waits: the pipe's write end
+ * closed at the exec (FD_CLOEXEC) or at the child's exit, and the child forks
+ * nothing before its exec — where a read before the reap would wait out a child
+ * held before its exec, past any limit.
  */
-static long process_remaining(
-    const struct timespec *start,
-    int timeout_seconds
-) {
-    if (timeout_seconds <= 0) {
-        return -1;
+static void process_report(int errfd, int status, process_result_t *result) {
+    int exec_errno = 0;
+    ssize_t got;
+    do {
+        got = read(errfd, &exec_errno, sizeof(exec_errno));
+    } while (got < 0 && errno == EINTR);
+
+    if (got == (ssize_t) sizeof(exec_errno)) {
+        result->exec_failed = true;
+        result->exec_errno = exec_errno;
     }
-    struct timespec now = { 0, 0 };
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    long elapsed = (long) (now.tv_sec - start->tv_sec);
-    long remaining = (long) timeout_seconds - elapsed;
-    return remaining < 0 ? 0 : remaining;
+
+    /* exec_failed is independent — exit_code reflects what the wait returned
+     * (126 or 127 for a child that failed before its exec or at it), which is
+     * still useful information for the caller. */
+    if (WIFEXITED(status)) {
+        result->exit_code = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        result->signal_num = WTERMSIG(status);
+        result->exit_code = 128 + result->signal_num;
+    } else {
+        /* WIFSTOPPED or other unexpected wait state — should not occur because
+         * we do not pass WUNTRACED. Map to a generic failure so callers do not
+         * see uninitialized fields. */
+        result->exit_code = 1;
+    }
 }
 
 /**
@@ -324,6 +386,7 @@ static void process_capture_init(process_capture_t *capture, bool secure) {
         .capacity = PROCESS_CAPTURE_INITIAL,
         .secure = secure,
     };
+
     capture->bytes[0] = '\0';
 }
 
@@ -377,14 +440,14 @@ static void process_capture_deinit(process_capture_t *capture) {
 }
 
 /**
- * Read the child's output to the end of the pipe or to the limit, whichever comes
- * first — *timed_out says which. A capture keeps it (process_capture_add) and a
- * stream copies it to spec->stream_fd as it comes; kept or not, every chunk is
- * read, so a child past the bound never blocks on a full pipe and runs to its
- * own end.
+ * Read the child's output to the end of the pipe or to the deadline (none where
+ * NULL), whichever comes first — *timed_out says which. A capture keeps it
+ * (process_capture_add) and a stream copies it to spec->stream_fd as it comes;
+ * kept or not, every chunk is read, so a child past the bound never blocks on a
+ * full pipe and runs to its own end.
  */
 static error_t process_drain(
-    const process_spec_t *spec, int fd, const struct timespec *start,
+    const process_spec_t *spec, int fd, const struct timespec *deadline,
     process_capture_t *capture, bool *timed_out
 ) {
     char chunk[PROCESS_READ_CHUNK];
@@ -393,25 +456,25 @@ static error_t process_drain(
 
     *timed_out = false;
     for (;;) {
-        long remaining = process_remaining(start, spec->timeout_seconds);
-        if (spec->timeout_seconds > 0 && remaining == 0) {
-            *timed_out = true;
-            break;
+        /* The wait, by the deadline where there is one: its remaining milliseconds
+         * rounded up, so the poll never wakes short of it */
+        int wait_ms = -1;
+        if (deadline) {
+            int64_t left = process_remaining(deadline);
+            if (left == 0) {
+                *timed_out = true;
+                break;
+            }
+            int64_t ms = (left + PROCESS_NS_PER_MS - 1) / PROCESS_NS_PER_MS;
+            wait_ms = ms < INT_MAX ? (int) ms : INT_MAX;
         }
 
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        FD_SET(fd, &rfds);
-
-        struct timeval tv;
-        struct timeval *tvp = NULL;
-        if (remaining >= 0) {
-            tv.tv_sec = remaining;
-            tv.tv_usec = 0;
-            tvp = &tv;
-        }
-
-        int rs = select(fd + 1, &rfds, NULL, NULL, tvp);
+        /* poll(2), never select(2): an fd_set holds no descriptor at or past
+         * FD_SETSIZE, and the pipe's is the lowest one free at the spawn — past
+         * every pack descriptor libgit2 holds for the run
+         * (lib/libgit2/src/libgit2/mwindow.c git_mwindow_file_register) */
+        struct pollfd ready = { .fd = fd, .events = POLLIN };
+        int rs = poll(&ready, 1, wait_ms);
         if (rs < 0) {
             if (errno == EINTR) {
                 continue;
@@ -420,7 +483,7 @@ static error_t process_drain(
             break;
         }
         if (rs == 0) {
-            /* select timed out; loop iteration will reassess remaining. */
+            /* The deadline's turn: the loop's top asks it again. */
             continue;
         }
 
@@ -578,8 +641,8 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
         stdin_parent = -1;
     }
 
-    /* Non-blocking output pipe so the select+read loop never blocks past the
-     * timeout. */
+    /* Non-blocking output pipe so the drain's read never blocks past the
+     * deadline. */
     {
         int flags = fcntl(pipefd[0], F_GETFL, 0);
         if (flags >= 0) {
@@ -587,100 +650,36 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
         }
     }
 
-    /* Monotonic deadline. Immune to wall-clock jumps. */
-    struct timespec start = { 0, 0 };
-    clock_gettime(CLOCK_MONOTONIC, &start);
+    /* The limit's deadline, monotonic (process_deadline), or none */
+    struct timespec limit = process_deadline(spec->timeout_seconds);
+    const struct timespec *deadline = spec->timeout_seconds > 0 ? &limit : NULL;
 
-    err = process_drain(spec, pipefd[0], &start, &capture, &result->timed_out);
+    err = process_drain(spec, pipefd[0], deadline, &capture, &result->timed_out);
     if (err) goto cleanup;
 
-    /* Drain the exec-errno channel: 0 bytes (EOF) means execve succeeded and
-     * FD_CLOEXEC closed the write end; sizeof(int) bytes means the child wrote
-     * an errno before _exit. */
-    {
-        int e_buf = 0;
-        ssize_t er = read(errfd[0], &e_buf, sizeof(e_buf));
-        if (er == (ssize_t) sizeof(e_buf)) {
-            result->exec_failed = true;
-            result->exec_errno = e_buf;
+    /* The reap, by the deadline the drain did not meet: a child that closed its
+     * output and runs on (`exec >&-; sleep 9999`) is waited on here */
+    if (!result->timed_out) {
+        pid_t reaped = process_reap(pid, deadline, &status);
+        if (reaped < 0) {
+            err = error_errno(errno, "Failed to wait for '%s'", program);
+            goto cleanup;
         }
+        result->timed_out = reaped == 0;
     }
 
-    close(pipefd[0]);
-    pipefd[0] = -1;
-    close(errfd[0]);
-    errfd[0] = -1;
-
-    if (result->timed_out) {
-        if (!process_kill_and_wait(
-            pid, kill_target, SIGTERM, PROCESS_GRACE_TERM_SECONDS, &status
-            )) {
-            if (!process_kill_and_wait(
-                pid, kill_target, SIGKILL, PROCESS_GRACE_KILL_SECONDS, &status
-                )) {
-                err = error_create(
-                    ERR_FS, "Failed to kill '%s' (pid %d), which outlived its "
-                    "time limit", program, (int) pid
-                );
-                goto cleanup;
-            }
-        }
-        pid = -1;
-    } else {
-        /* Pipe drained (read returned 0). Child usually exits in the same instant;
-         * the loop's first WNOHANG catches that. The 50ms polling fallback handles
-         * "child closed stdout but kept running" (e.g., `exec >&-; sleep 9999`). */
-        for ( ; ;) {
-            pid_t r = waitpid(pid, &status, WNOHANG);
-            if (r == pid) {
-                pid = -1;
-                break;
-            }
-            if (r < 0) {
-                if (errno == EINTR) {
-                    continue;
-                }
-                err = error_errno(errno, "Failed to wait for '%s'", program);
-                goto cleanup;
-            }
-
-            long remaining = process_remaining(&start, spec->timeout_seconds);
-            if (spec->timeout_seconds > 0 && remaining == 0) {
-                result->timed_out = true;
-                if (!process_kill_and_wait(
-                    pid, kill_target, SIGTERM, PROCESS_GRACE_TERM_SECONDS, &status
-                    )) {
-                    (void) process_kill_and_wait(
-                        pid, kill_target, SIGKILL,
-                        PROCESS_GRACE_KILL_SECONDS, &status
-                    );
-                }
-                pid = -1;
-                break;
-            }
-
-            struct timespec delay = { 0, PROCESS_POLL_INTERVAL_NS };
-            (void) nanosleep(&delay, NULL);
-        }
+    /* A child its limit outlived, ended (process_kill) */
+    if (result->timed_out && !process_kill(pid, kill_target, &status)) {
+        err = error_create(
+            ERR_FS, "Failed to kill '%s' (pid %d), which outlived its time limit",
+            program, (int) pid
+        );
+        goto cleanup;
     }
+    pid = -1;
 
-    /* Decode wait status. exec_failed (already set from the errno pipe) is
-     * independent — exit_code reflects what the wait returned (typically 126/127
-     * for our child-side _exit), which is still useful information for the
-     * caller. */
-    if (WIFEXITED(status)) {
-        result->exit_code = WEXITSTATUS(status);
-        result->signal_num = 0;
-    } else if (WIFSIGNALED(status)) {
-        result->signal_num = WTERMSIG(status);
-        result->exit_code = 128 + result->signal_num;
-    } else {
-        /* WIFSTOPPED or other unexpected wait state — should not occur because
-         * we do not pass WUNTRACED. Map to a generic failure so callers do not
-         * see uninitialized fields. */
-        result->exit_code = 1;
-        result->signal_num = 0;
-    }
+    /* The child reaped, reported (process_report) */
+    process_report(errfd[0], status, result);
 
     /* Transfer capture ownership into the result. The secure flag mirrors the
      * capture's so process_result_deinit can scrub before free without re-deriving
@@ -711,10 +710,9 @@ cleanup:
      * failure prevented the normal wait paths from running. Best-effort; if it
      * does not die in the orphan window, the kernel reaps when dotta exits. */
     if (pid > 0) {
-        (void) process_kill_and_wait(
-            pid, kill_target, SIGKILL,
-            PROCESS_GRACE_ORPHAN_SECONDS, &status
-        );
+        (void) kill(kill_target, SIGKILL);
+        struct timespec grace = process_deadline(PROCESS_GRACE_ORPHAN_SECONDS);
+        (void) process_reap(pid, &grace, &status);
     }
 
     /* The capture, where ownership was not transferred (process_capture_deinit) */
@@ -793,45 +791,22 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
     (void) sigaction(SIGQUIT, &ignore, &saved_quit);
     (void) sigprocmask(SIG_SETMASK, &before, NULL);
 
-    /* End of file at the exec, the child's errno where it could not run. */
+    /* The child's end closed: the exec, or the child's exit, closes the last. */
     close(errfd[1]);
-    int exec_errno = 0;
-    ssize_t got;
-    do {
-        got = read(errfd[0], &exec_errno, sizeof(exec_errno));
-    } while (got < 0 && errno == EINTR);
-    close(errfd[0]);
 
     /* Reaped whatever it is doing, however long it takes: no timeout, for the
      * user is driving it. */
     int status = 0;
-    pid_t reaped;
-    do {
-        reaped = waitpid(pid, &status, 0);
-    } while (reaped < 0 && errno == EINTR);
-    int wait_errno = errno;
+    if (process_reap(pid, NULL, &status) < 0) {
+        err = error_errno(errno, "Failed to wait for '%s'", argv[0]);
+    }
 
     /* dotta's own answer to the keyboard back, the child gone. */
     (void) sigaction(SIGINT, &saved_int, NULL);
     (void) sigaction(SIGQUIT, &saved_quit, NULL);
 
-    if (reaped < 0) {
-        return error_errno(wait_errno, "Failed to wait for '%s'", argv[0]);
-    }
-
-    /* The wait status decoded as process_run decodes it. */
-    if (got == (ssize_t) sizeof(exec_errno)) {
-        result->exec_failed = true;
-        result->exec_errno = exec_errno;
-    }
-    if (WIFEXITED(status)) {
-        result->exit_code = WEXITSTATUS(status);
-    } else if (WIFSIGNALED(status)) {
-        result->signal_num = WTERMSIG(status);
-        result->exit_code = 128 + result->signal_num;
-    } else {
-        result->exit_code = 1;
-    }
-
-    return NULL;
+    /* Reported as process_run reports its child, once reaped (process_report) */
+    if (!err) process_report(errfd[0], status, result);
+    close(errfd[0]);
+    return err;
 }

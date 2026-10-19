@@ -50,6 +50,7 @@ static const char *hook_word(hook_cmd_t cmd) {
         case HOOK_CMD_APPLY:  return "apply";
         case HOOK_CMD_UPDATE: return "update";
         case HOOK_CMD_SYNC:   return "sync";
+        case HOOK_CMD_REVERT: return "revert";
     }
 
     CHECK_ARG(false, "a hook command no enumerator names");

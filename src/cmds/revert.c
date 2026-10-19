@@ -10,7 +10,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/buffer.h"
@@ -30,6 +32,7 @@
 #include "sys/identity.h"
 #include "sys/revision.h"
 #include "utils/commit.h"
+#include "utils/hooks.h"
 
 /**
  * The claim `profile` holds at `filesystem_path`, or NULL where it holds none
@@ -979,9 +982,10 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * after the prompt, with what the dry run should have said.
      *
      * Nothing is written to the repository: the id is one the commit already
-     * holds, or one the reseal hashed and step 20 stores, so a dry run or a
-     * declined prompt frees the draft and leaves the object database as it found
-     * it. The draft's base is still the head, so every read below is the head's. */
+     * holds, or one the reseal hashed and step 22 stores, so a dry run, a refusing
+     * hook or a declined prompt frees the draft and leaves the object database
+     * as it found it. The draft's base is still the head, so every read below
+     * is the head's. */
     err = profile_restore_file(draft, &restored, target_profile, target->storage_path);
     if (err) goto cleanup;
 
@@ -1002,7 +1006,21 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;  /* Not an error, just nothing to do */
     }
 
-    /* Step 17: Show preview (always, including dry-run) */
+    /* Step 17: the consent the revert owes — none under --force, where the
+     * configuration asks none, or in a dry run — is a person's at a terminal
+     * (base/output.h output_ask_destructive): off one it is refused here, at
+     * the decision, before the preview and the hook. A revert with nothing to
+     * do owes none, ended above. */
+    const bool asks = !opts->force && config->confirm_destructive && !opts->dry_run;
+    if (asks && !isatty(STDIN_FILENO)) {
+        err = error_create(
+            ERR_VALIDATION, "Cannot revert '%s' without a confirmation, which only "
+            "a terminal gives; --force reverts without asking", restored.storage_path
+        );
+        goto cleanup;
+    }
+
+    /* Step 18: Show preview (always, including dry-run) */
     output_section(out, OUTPUT_NORMAL, "Revert preview");
 
     const git_signature *author = git_commit_author(target_commit);
@@ -1105,30 +1123,46 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         }
     }
 
-    /* Step 18: Early exit for dry-run (preview shown, no changes to make) */
+    /* Step 19: the pre-revert hook, over the decided revert — a dry run's too,
+     * told so (DOTTA_DRY_RUN=1) — told the profile and the argument as given,
+     * as add and update are: a copy in the run's arena, the type every producer
+     * of the invocation holds (utils/hooks.h hook_invocation_t). The draft opened
+     * at step 4, so a commit the hook makes to the branch refuses this revert's,
+     * and a branch it deletes comes back with it (sys/stage.h). */
+    char *const hook_paths[] = { arena_strdup(ctx->arena, opts->file_path) };
+    const hook_invocation_t hook_inv = {
+        .cmd        = HOOK_CMD_REVERT,
+        .profile    = profile,
+        .paths      = hook_paths,
+        .path_count = 1,
+        .dry_run    = opts->dry_run,
+    };
+
+    err = hook_fire_pre(config, out, &hook_inv);
+    if (err) goto cleanup;
+
+    /* Step 20: a dry run ends here, its preview shown and nothing committed */
     if (opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Dry-run mode: No changes made");
+        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
         goto cleanup;
     }
 
-    /* Step 19: the confirmation, unless --force or the configuration gives it.
-     * Declined is the user's word, and no failure; unanswered — off a terminal,
-     * where a destructive question is never asked — nobody declined, and the
-     * run did not do what it was asked: its refusal, naming the flag that answers
-     * in advance. */
-    if (!opts->force && config->confirm_destructive) {
+    /* Step 21: the confirmation, after the hook, where one is owed (step 17).
+     * Declined is the user's word, and no failure; unanswered — the terminal's
+     * input ended — nobody declined, and the run did not do what it was asked:
+     * its refusal, naming the flag that answers in advance. */
+    if (asks) {
         switch (output_ask_destructive(out, "Revert file?")) {
             case OUTPUT_ANSWER_YES:
                 break;
             case OUTPUT_ANSWER_NO:
-                output_info(out, OUTPUT_NORMAL, "Aborted.");
-                goto cleanup;  /* err is NULL here: an abort is not a failure */
+                output_info(out, OUTPUT_NORMAL, "Cancelled");
+                goto cleanup;  /* err is NULL here: a cancel is not a failure */
             case OUTPUT_ANSWER_NONE:
                 err = error_create(
-                    ERR_VALIDATION, "Cannot revert '%s' without a confirmation, which "
-                    "only a terminal gives; --force reverts without asking",
-                    restored.storage_path
+                    ERR_VALIDATION, "Cannot revert '%s' without a confirmation, and "
+                    "none was read; --force reverts without asking", restored.storage_path
                 );
                 goto cleanup;
         }
@@ -1137,7 +1171,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Reverting file...\n");
 
-    /* Step 20: the write — the restore step 15 staged, in one commit on the head
+    /* Step 22: the write — the restore step 15 staged, in one commit on the head
      * the preview showed. A branch another writer moved since is refused by the
      * commit itself rather than by a second look at the head.
      *
@@ -1177,7 +1211,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     err = profile_commit(draft, commit_message(ctx->arena, config, &msg_ctx), NULL, NULL);
     if (err) goto cleanup;
 
-    /* Step 21: the record phase, at the place step 7 resolved — the restored
+    /* Step 23: the record phase, at the place step 7 resolved — the restored
      * claim's (revert_write_record). Non-fatal: the commit stands, so the store's
      * refusal is warned in its own words. */
     err = revert_write_record(ctx, profile, filesystem_path);
@@ -1186,7 +1220,11 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         err = NULL;
     }
 
-    /* Step 22: Report. The revert moved the branch HEAD, and the next load's
+    /* Step 24: the post-revert hook, the commit landed and the record phase's
+     * transaction ended, so the hook meets the store this run leaves */
+    hook_fire_post(config, out, &hook_inv);
+
+    /* Step 25: Report. The revert moved the branch HEAD, and the next load's
      * view carries the reverted blob: over a copy that stands, the record stays
      * where apply last confirmed it, so the workspace reads the result as [stale]
      * until apply deploys it; over one already gone, the reclaim above left no
@@ -1423,12 +1461,14 @@ const args_command_t spec_revert = {
         "     names a place once, and --force does not skip a refusal.\n"
         "  5. Answer 'nothing to do' when that whole state already stands.\n"
         "  6. Show the preview: the restored file, a diff, or a metadata-only\n"
-        "     change. A dry run stops here, having refused whatever the real\n"
-        "     run would have refused.\n"
-        "  7. Prompt for confirmation (bypassed by --force).\n"
-        "  8. Create one commit with the restored file and its metadata, and the\n"
+        "     change. Off a terminal, a revert that owes a confirmation is\n"
+        "     refused before it (--force owes none).\n"
+        "  7. Run the pre-revert hook. A dry run stops here, having refused\n"
+        "     what the real run would have refused, the confirmation aside.\n"
+        "  8. Prompt for confirmation (bypassed by --force).\n"
+        "  9. Create one commit with the restored file and its metadata, and the\n"
         "     directories it stood in, claimed as the commit claimed them where\n"
-        "     the profile no longer does.\n",
+        "     the profile no longer does; then run the post-revert hook.\n",
     .examples    =
         "  %s revert home/.bashrc HEAD~3              # Profile inferred\n"
         "  %s revert darwin home/.bashrc a4f2c8e      # Explicit profile\n"

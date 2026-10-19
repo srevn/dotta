@@ -286,27 +286,75 @@ fetch that failed among them, fires none
 profiles may still have diverged or failed — run `dotta status` inside the
 hook if per-profile detail is needed.
 
+### `pre-revert`
+
+**When:** Before reverting a file to a past commit: after revert's preview,
+before its question
+**Use For:** Guarding a profile's history, checking the version restored
+
+**Example Use Cases:**
+- Refuse a revert of a file other machines rely on
+- Check the restored version before it is committed
+- Record that a profile's history is being rewound
+
+**Environment Variables:**
+- `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
+- `DOTTA_COMMAND` - Always "revert"
+- `DOTTA_PROFILE` - Profile name being reverted
+- `DOTTA_PATH_COUNT` - Always "1"
+- `DOTTA_PATH_0` - The file, as given (a path or a storage path)
+- `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
+
+**Exit Behavior:**
+- Exit 0: Continue with revert
+- Exit non-zero: Abort revert operation
+
+### `post-revert`
+
+**When:** After reverting a file to a past commit
+**Use For:** Deploying the restored version, notifications, auditing
+
+**Example Use Cases:**
+- Run `dotta apply` to deploy the restored version (revert commits it alone)
+- Log the revert for auditing
+- Send a desktop notification
+
+**Environment Variables:**
+- `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_CONFIG_FILE` - Path to the configuration file the run read
+- `DOTTA_COMMAND` - Always "revert"
+- `DOTTA_PROFILE` - Profile name that was reverted
+- `DOTTA_PATH_COUNT` - Always "1"
+- `DOTTA_PATH_0` - The file, as given (a path or a storage path)
+- `DOTTA_DRY_RUN` - Always "0" — post-revert does not fire on dry-run
+
+**Exit Behavior:**
+- Exit 0 or non-zero: a non-zero exit is warned, with the hook's output; the revert has already completed
+
 ## When a hook fires
 
 Every hook-bearing command runs one order: it decides what it will do, shows
 it, fires its `pre-` hook, asks its question, acts, writes its record and fires
-its `post-` hook — add, remove and update saying what they did after it, apply
-and sync as they act. Under `-n` the `pre-` hook fires told `DOTTA_DRY_RUN=1`,
-and no `post-` hook fires. So a `pre-` hook runs over a decided run: a run the
-command refused, or one with nothing to do, fires no hook, and a question the
-run owes but cannot ask — a destructive one off a terminal, without `--force` —
-refuses before the hook.
+its `post-` hook — add, remove, update and revert saying what they did after
+it, apply and sync as they act. Under `-n` the `pre-` hook fires told
+`DOTTA_DRY_RUN=1`, and no `post-` hook fires. So a `pre-` hook runs over a
+decided run: a run the command refused, or one with nothing to do, fires no
+hook, and a question the run owes but cannot ask — a destructive one off a
+terminal, without `--force` — refuses before the hook.
 
-What a `pre-` hook changes meets what the command decided: add and
-`remove <path>` read the profile before the hook, so a commit it makes refuses
-theirs and a branch it deletes comes back with their commit; update reads the
-profile after it and builds on the hook's commit; `remove --delete-profile`
-deletes the branch whatever the hook committed to it.
+What a `pre-` hook changes meets what the command decided: add,
+`remove <path>` and revert read the profile before the hook, so a commit it
+makes refuses theirs and a branch it deletes comes back with their commit;
+update reads the profile after it and builds on the hook's commit;
+`remove --delete-profile` deletes the branch whatever the hook committed to it.
 
 sync decides twice: it checks the workspace before `pre-sync` and asks its
 question after it, and decides what to pull and push after the fetch that
 follows the hook — a diverged profile's `ours` or `theirs` question is asked
-there, profile by profile.
+there, profile by profile. The enabled-set writers (`profile enable`,
+`disable`, `reorder`, `interactive`, `clone`) and dotta's own files (`ignore`,
+`bootstrap --edit`) fire none.
 
 ## Hook Configuration
 

@@ -27,6 +27,7 @@ typedef enum {
     HOOK_CMD_APPLY,
     HOOK_CMD_UPDATE,
     HOOK_CMD_SYNC,
+    HOOK_CMD_REVERT,
 } hook_cmd_t;
 
 /**
@@ -38,20 +39,20 @@ typedef enum {
  * hook_fire_post().
  *
  * Fields:
- *   cmd        Which command is firing (ADD/REMOVE/APPLY/UPDATE/SYNC).
- *   profile    NULL → no DOTTA_PROFILE env. Single profile name for
- *              add/remove; space-joined profile list for apply/update/sync.
+ *   cmd        Which command is firing (ADD/REMOVE/APPLY/UPDATE/SYNC/REVERT).
+ *   profile    NULL → no DOTTA_PROFILE env. Single profile name for add,
+ *              remove and revert; space-joined profile list for apply/update/sync.
  *   paths      NULL → DOTTA_PATH_COUNT=0 alone. Otherwise borrowed array, each
- *              a file or a directory: add's and update's arguments as given (none
- *              on an update given none), remove's every path a claim the removal
- *              takes stands at — its name where this machine places the claim
- *              nowhere (cmds/remove.c remove_hook_paths). Apply and sync hand
- *              none. Handed in the environment, one variable a path, as git hands
- *              a hook its push options: a list the system will not carry in an
- *              exec's environment — past its limit on the whole (ARG_MAX), or
- *              past Linux's on one string — refuses the hook at its exec, said
- *              as the paths it cannot be handed; `chmod -x` the hook to run the
- *              command without it.
+ *              a file or a directory: add's, update's and revert's arguments as
+ *              given (none on an update given none), remove's every path a claim
+ *              the removal takes stands at — its name where this machine places
+ *              the claim nowhere (cmds/remove.c remove_hook_paths). Apply and
+ *              sync hand none. Handed in the environment, one variable a path,
+ *              as git hands a hook its push options: a list the system will not
+ *              carry in an exec's environment — past its limit on the whole
+ *              (ARG_MAX), or past Linux's on one string — refuses the hook at
+ *              its exec, said as the paths it cannot be handed; `chmod -x` the
+ *              hook to run the command without it.
  *   path_count Number of entries in paths (0 if paths is NULL).
  *   extras     NULL → no extra env vars. Otherwise NULL-terminated
  *              "DOTTA_<KEY>=VALUE" string array, the command's own surface,
@@ -90,11 +91,11 @@ typedef struct {
  * the run owes off a terminal, where no destructive question is asked
  * (base/output.h output_ask_destructive), is refused before it. What the hook
  * changes meets what was decided, and nothing reads again across it: a commit
- * it makes to a profile refuses add's and remove's, whose drafts opened before
- * it, and a branch it deletes comes back with their commit (sys/stage.h); update
- * opens its drafts after it and builds on the hook's commit; a profile's deletion
- * deletes the branch whatever the hook committed to it; and an enabled set it
- * changes is the next run's, the decided run acting on the one it read.
+ * it makes to a profile refuses add's, remove's and revert's, whose drafts opened
+ * before it, and a branch it deletes comes back with their commit (sys/stage.h);
+ * update opens its drafts after it and builds on the hook's commit; a profile's
+ * deletion deletes the branch whatever the hook committed to it; and an enabled
+ * set it changes is the next run's, the decided run acting on the one it read.
  *
  * The hook's stdout and stderr go into a file in the temporary directory, read
  * once the hook exits — the wait is on the hook alone, so a task it leaves running

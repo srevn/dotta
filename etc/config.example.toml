@@ -66,6 +66,8 @@ auto_detect_new_files = true
 #   - post-update  - Runs after committing filesystem changes back to profiles
 #   - pre-sync     - Runs before synchronizing with the remote
 #   - post-sync    - Runs after synchronizing with the remote
+#   - pre-revert   - Runs before reverting a file to a past commit
+#   - post-revert  - Runs after reverting a file to a past commit
 #
 # The file is the switch: a hook runs where it is executable, and chmod -x
 # switches one off.

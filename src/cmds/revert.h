@@ -42,14 +42,16 @@ typedef struct {
  * modifies the Git repository, and the record only where the restored place's
  * node is gone — its reclaim, so the restored claim reads as undeployed and never
  * as the user's deletion again; deployed files remain unchanged until 'dotta
- * apply' is run.
+ * apply' is run. Its hook pair brackets the commit: pre-revert over the decided
+ * revert, a dry run's too, and post-revert once the record is written.
  *
  * Everything the revert writes is decided before any of it is shown, and shown
  * before it is asked: a dry run and a real run reach the same verdict on the
  * same argument — the same admission, semantic and structural, the draft's own
- * refusals included — and the prompt is the only gate between the preview and
- * the commit. What no preview can foresee is what is left: a ref another writer
- * moved between the preview and the commit, a repository that will not write.
+ * refusals included — and the pre-revert hook and the prompt are the only gates
+ * between the preview and the commit. What no preview can foresee is what is
+ * left: a ref another writer moved between the preview and the commit — a
+ * pre-revert hook's commit among them — a repository that will not write.
  *
  * The two names. A revert restores what the commit held into the name the profile
  * holds at its head, and the key the user named is the key both trees are asked
@@ -91,11 +93,14 @@ typedef struct {
  *    and no object is written; the claim goes beside it, and the directory claims
  *    the file stood on at the commit wherever the head holds nothing
  * 6. Answers "nothing to do" when the restore moved neither document
- * 7. Shows the preview (restored / diff / mode and ownership only), naming the
+ * 7. Refuses, off a terminal, a confirmation it owes (unless --force)
+ * 8. Shows the preview (restored / diff / mode and ownership only), naming the
  *    commit's own name for the file wherever it differs
- * 8. Prompts for confirmation (unless --force)
- * 9. Creates one commit: the restored blob, its claim and its way
- * 10. Retires this profile's record at the restored place, where its node is gone
+ * 9. Fires the pre-revert hook, under --dry-run too, where a dry run ends
+ * 10. Prompts for confirmation (unless --force)
+ * 11. Creates one commit: the restored blob, its claim and its way
+ * 12. Retires this profile's record at the restored place, where its node is gone
+ * 13. Fires the post-revert hook
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

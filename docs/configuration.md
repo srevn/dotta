@@ -113,7 +113,7 @@ timeout = 30                          # Max execution time (seconds)
 
 Hook scripts run before/after operations. Place executable scripts in the hooks directory: the file is the switch — a hook runs where it is executable, and one that is there but cannot run (no execute bit, no regular file) is ignored with a warning naming why.
 
-**Available hooks:** `pre-apply`, `post-apply`, `pre-add`, `post-add`, `pre-remove`, `post-remove`, `pre-update`, `post-update`, `pre-sync`, `post-sync`
+**Available hooks:** `pre-apply`, `post-apply`, `pre-add`, `post-add`, `pre-remove`, `post-remove`, `pre-update`, `post-update`, `pre-sync`, `post-sync`, `pre-revert`, `post-revert`
 
 **Behavior:**
 - A pre-hook fires over a decided run: after the command's preview, before its question, under `-n` too; a run refused, or with nothing to do, fires none
@@ -124,11 +124,11 @@ Hook scripts run before/after operations. Place executable scripts in the hooks 
 **Environment variables passed to hooks:**
 - `DOTTA_REPO_DIR` -- repository path
 - `DOTTA_CONFIG_FILE` -- the configuration file the run read
-- `DOTTA_COMMAND` -- operation name (`apply`, `add`, `remove`, `update`, `sync`)
-- `DOTTA_PROFILE` -- the profile for add and remove; the space-separated list of profiles for apply, update and sync
+- `DOTTA_COMMAND` -- operation name (`apply`, `add`, `remove`, `update`, `sync`, `revert`)
+- `DOTTA_PROFILE` -- the profile for add, remove and revert; the space-separated list of profiles for apply, update and sync
 - `DOTTA_REMOTE` -- the remote's name (sync hooks)
 - `DOTTA_DRY_RUN` -- `"1"` if dry-run, `"0"` otherwise (a post-hook never runs on a dry run)
-- `DOTTA_PATH_COUNT` -- number of paths, each a file or a directory: add's and update's arguments as given, every path a removal takes a claim at; `0` for apply and sync
+- `DOTTA_PATH_COUNT` -- number of paths, each a file or a directory: add's, update's and revert's arguments as given, every path a removal takes a claim at; `0` for apply and sync
 - `DOTTA_PATH_0`, `DOTTA_PATH_1`, ... -- each path
 
 See [`etc/hooks/README.md`](../etc/hooks/README.md) for hook samples and detailed documentation.

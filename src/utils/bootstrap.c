@@ -65,8 +65,9 @@ static void bootstrap_env(
  *
  * Returns NULL iff the script ran to completion with exit code 0. Otherwise,
  * composes a short message keyed to the most specific reason available —
- * exec_failed takes precedence (child-side errno captures "bad shebang" / "ENOENT
- * interpreter"), then timeout, then signal, then non-zero exit.
+ * exec_failed takes precedence (child-side errno captures an interpreter the
+ * shebang names that is not there, ENOENT), then timeout, then signal, then
+ * non-zero exit.
  */
 static error_t bootstrap_failure(const process_result_t *r) {
     if (r->exec_failed) {

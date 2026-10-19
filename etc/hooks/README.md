@@ -399,6 +399,8 @@ answer, not this preview's.
 5. **Be idempotent:** Hooks may run multiple times
 6. **Handle missing commands gracefully:** Use `command -v` checks
 7. **Log what you're doing:** Help users understand what happened
+8. **Name your interpreter** on a `#!` line: a hook without one is run by
+   `/bin/sh`, as git runs one
 
 ### Script Template
 

@@ -72,6 +72,10 @@
  * in this time, we abandon and let init reap. */
 #define PROCESS_GRACE_ORPHAN_SECONDS 1
 
+/* The shell a file the kernel will not execute is handed to (process_child):
+ * POSIX's, git's SHELL_PATH by default */
+#define PROCESS_SHELL "/bin/sh"
+
 /**
  * Write all `n` bytes of `buf` to `fd`, retrying on partial writes and EINTR,
  * until done or refused. A refusal costs the bytes alone, whoever the caller: a
@@ -371,11 +375,13 @@ static _Noreturn void process_child_fail(int errfd, int code) {
  * `in` is what the stdin policy opened for the child, -1 for dotta's own
  * (process_stdin_open), `out` what the output policy opened for it, -1 for dotta's
  * own (process_output_open), `errfd` the exec's pipe's write end: each above 2
- * (main.c), so no dup2 here overwrites another's source. No error_t, no malloc,
- * no return: a failure is its errno over the exec's pipe (process_child_fail).
+ * (main.c), so no dup2 here overwrites another's source. `shell_argv` is the
+ * shell's vector over the program, PROCESS_SHELL then argv whole, for a file
+ * the kernel will not execute. No error_t, no malloc, no return: a failure is
+ * its errno over the exec's pipe (process_child_fail).
  */
 static _Noreturn void process_child(
-    const process_spec_t *spec, int in, int out, int errfd
+    const process_spec_t *spec, int in, int out, int errfd, char *const *shell_argv
 ) {
     /* The child's signals, its own before exec (process_child_signals). */
     process_child_signals();
@@ -413,6 +419,16 @@ static _Noreturn void process_child(
     }
 
     execve(spec->argv[0], spec->argv, spec->envp);
+
+    /* A file the kernel will not execute — a script with no #! line — is read
+     * by the shell, its path the shell's first argument, as git runs every command
+     * (lib/git/run-command.c prepare_cmd, start_command) and execvp every file
+     * (process_foreground). Where the shell cannot run either, the file's own
+     * errno is the one reported. */
+    if (errno == ENOEXEC) {
+        execve(PROCESS_SHELL, shell_argv, spec->envp);
+        errno = ENOEXEC;
+    }
     process_child_fail(errfd, 127);
 }
 
@@ -689,6 +705,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     int output_parent = -1;
     int output_child = -1;
     int errfd[2] = { -1, -1 };
+    char **shell_argv = NULL;
     pid_t pid = -1;
     process_capture_t capture = { 0 };
     int status = 0;
@@ -706,6 +723,15 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
      * success, FD_CLOEXEC closes the write end and parent reads EOF). */
     err = process_pipe(errfd, program);
     if (err) goto cleanup;
+
+    /* The shell's vector over the program, PROCESS_SHELL then argv whole, for a
+     * file the kernel will not execute (process_child): made here, since the
+     * child allocates nothing. */
+    size_t argc = 0;
+    while (spec->argv[argc]) argc++;
+    shell_argv = heap_alloc((argc + 2) * sizeof(*shell_argv));
+    shell_argv[0] = PROCESS_SHELL;
+    memcpy(shell_argv + 1, spec->argv, (argc + 1) * sizeof(*shell_argv));
 
     /* The capture, made before the fork where the policy keeps the output. */
     if (spec->output_policy == PROCESS_OUTPUT_CAPTURE ||
@@ -726,7 +752,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     }
 
     if (pid == 0) {
-        process_child(spec, stdin_child, output_child, errfd[1]);
+        process_child(spec, stdin_child, output_child, errfd[1], shell_argv);
     }
 
     /* ───── Parent ──────────────────────────────────────────────── */
@@ -828,6 +854,7 @@ cleanup:
 
     /* The capture, where ownership was not transferred (process_capture_deinit) */
     process_capture_deinit(&capture);
+    free(shell_argv);
 
     return err;
 }

@@ -21,8 +21,12 @@
  *   (lib/git/run-command.c start_command).
  * - Child reports execve() failure to the parent over a CLOEXEC self-pipe carrying
  *   errno, so the parent can distinguish "exec failed" from "the script exited
- *   127" — letting callers report the specific reason ("ENOEXEC: bad shebang")
- *   instead of a misleading proxy.
+ *   127" — letting callers report the specific reason (a missing interpreter's
+ *   ENOENT) instead of a misleading proxy.
+ * - A file the kernel will not execute (ENOEXEC: a script with no #! line) is
+ *   read by /bin/sh, its path the shell's first argument — git's retry for every
+ *   command it runs (lib/git/run-command.c prepare_cmd, start_command), and
+ *   execvp's (process_foreground) — so both primitives run such a file alike.
  * - Result struct is stack-allocated by the caller and populated on every code
  *   path.
  *

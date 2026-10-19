@@ -1701,16 +1701,18 @@ static void apply_print_cleanup_preview(
      * consequence, indented under the rows the way "Profile reassignments" closes
      * — not a remedy, which stands off — and that closing line carries the half
      * the header cannot: pruned removes and released keeps, and only the line
-     * under the rows says which. The causes are not listed: a release is the
-     * workspace's verdict (state RELEASED) and has four — Git let go, dotta never
-     * deployed it, another kind of path stands there, or the record is a stale
-     * key of a path a row stands on under another spelling — and cleanup has no
-     * per-row reason for it the way cleanup_skip_reason answers for a skip, so
-     * the only honest form would be a disjunction naming all four at every row.
-     * Hence the one thing true of all four: nothing on disk was touched. A second
-     * half saying what dotta stops doing ("no longer managed by dotta") was false
-     * of the fourth, which is about a file this same run may adopt eleven lines
-     * above, and the header says the rest. */
+     * under the rows says which. The causes are not listed: a release has five
+     * — the workspace's four (state RELEASED): Git let go, dotta never deployed
+     * it, another kind of path stands there, or the record is a stale key of a
+     * path a row stands on under another spelling; and a squatter above the path,
+     * whose orphan the load never looked at (core/cleanup.c cleanup_verdict's
+     * displaced arm) — and cleanup has no per-row reason for it the way
+     * cleanup_skip_reason answers for a skip, so the only honest form would be
+     * a disjunction naming all five at every row. Hence the one thing true of
+     * all five: nothing on disk was touched. A second half saying what dotta
+     * stops doing ("no longer managed by dotta") was false of the fourth, which
+     * is about a file this same run may adopt eleven lines above, and the header
+     * says the rest. */
     if (verdicts->released_files.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Released files");
 

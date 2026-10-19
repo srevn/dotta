@@ -45,7 +45,13 @@ typedef enum {
  *              a file or a directory: add's and update's arguments as given (none
  *              on an update given none), remove's every path a claim the removal
  *              takes stands at — its name where this machine places the claim
- *              nowhere (cmds/remove.c remove_hook_paths). Apply and sync hand none.
+ *              nowhere (cmds/remove.c remove_hook_paths). Apply and sync hand
+ *              none. Handed in the environment, one variable a path, as git hands
+ *              a hook its push options: a list the system will not carry in an
+ *              exec's environment — past its limit on the whole (ARG_MAX), or
+ *              past Linux's on one string — refuses the hook at its exec, said
+ *              as the paths it cannot be handed; `chmod -x` the hook to run the
+ *              command without it.
  *   path_count Number of entries in paths (0 if paths is NULL).
  *   extras     NULL → no extra env vars. Otherwise NULL-terminated
  *              "DOTTA_<KEY>=VALUE" string array, the command's own surface,
@@ -96,11 +102,11 @@ typedef struct {
  * what it started, and a signal sent to dotta alone does not reach it.
  *
  * A runnable hook that could not be run, or ran and failed, is ERR_INTERNAL —
- * an exec that failed, a timeout, a signal, a non-zero exit — never ERR_PERMISSION,
- * however permission-shaped the cause: that code is a refusal an identity met
- * (base/error.h "Codes"), and a hook that did not run is none. Beside them a
- * context past 10,000 paths is ERR_INVALID_ARG, and a spawn the process layer
- * could not make keeps its own code (sys/process.h process_run) — a temporary
+ * an exec that failed, paths the system would not hand it (hook_invocation_t),
+ * a timeout, a signal, a non-zero exit — never ERR_PERMISSION, however
+ * permission-shaped the cause: that code is a refusal an identity met (base/error.h
+ * "Codes"), and a hook that did not run is none. Beside them a spawn the process
+ * layer could not make keeps its own code (sys/process.h process_run) — a temporary
  * directory whose bits refuse the invoker the file is ERR_PERMISSION — and nothing
  * branches on the code.
  *

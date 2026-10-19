@@ -139,10 +139,19 @@ static void hook_env(
  *
  * The most specific reason first: exec_failed carries the errno of execve, chdir
  * or dup2, so the exit codes 126 and 127 are the script's own, read as any other.
+ * An environment the system refuses to hand on (E2BIG) is said as the paths the
+ * hook cannot be handed, where it was handed any (hook_invocation_t).
  */
 static error_t hook_failure(
-    const config_t *config, const char *name, const process_result_t *result
+    const config_t *config, const hook_invocation_t *inv, const char *name,
+    const process_result_t *result
 ) {
+    if (result->exec_failed && result->exec_errno == E2BIG && inv->path_count > 0) {
+        return error_create(
+            ERR_INTERNAL, "Hook '%s' cannot be handed its %zu paths: the system "
+            "refuses an environment that large", name, inv->path_count
+        );
+    }
     if (result->exec_failed) {
         return error_create(
             ERR_INTERNAL, "Hook '%s' failed: exec error: %s",
@@ -231,16 +240,6 @@ static error_t hook_fire(
             break;
     }
 
-    /* Sanity check: bound DOTTA_PATH_N env explosion. */
-    if (inv->path_count > 10000) {
-        err = error_create(
-            ERR_INVALID_ARG,
-            "Hook '%s': too many paths in context (%zu, limit: 10000)",
-            hook_name, inv->path_count
-        );
-        goto cleanup;
-    }
-
     string_array_t env;
     hook_env(config, inv, frame, &env);
 
@@ -263,7 +262,7 @@ static error_t hook_fire(
     /* The primitive's own refusals — a pipe, a fork, a wait — name the hook by
      * its path, the program they were handed */
     err = process_run(&spec, out_result);
-    if (!err) err = hook_failure(config, hook_name, out_result);
+    if (!err) err = hook_failure(config, inv, hook_name, out_result);
 
 cleanup:
     arena_free(frame);

@@ -303,6 +303,12 @@ the terminal ends dotta and the hook alike, and a hook may write to the
 terminal or read an answer from it (`/dev/tty`). A signal sent to dotta alone
 (`kill`) does not reach it.
 
+A hook is handed its paths in its environment, one variable a path, as git
+hands a hook its push options. A list the system will not carry in an
+environment — a removal of a large tracked tree, or of a whole profile —
+refuses the hook, and with it the command: `chmod -x` the hook to run the
+command without it.
+
 ## Writing Hooks
 
 ### Output is captured, or live under -v

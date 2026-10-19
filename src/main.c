@@ -387,8 +387,9 @@ static int run_spec(
  * passphrase prompt's hidden echo, a hidden cursor (base/terminal.h
  * terminal_restore_armed) — forwards the signal to any active child process group
  * — sys/process.h's active_child_pgid, published by process_run() while a
- * PROCESS_PGRP_NEW child is alive, so a hook dies atomically with dotta — and
- * re-raises with the default disposition so the kernel can terminate the process.
+ * PROCESS_PGRP_NEW child is alive, the terminating signals held across its fork
+ * until then, so a hook dies atomically with dotta — and re-raises with the default
+ * disposition so the kernel can terminate the process.
  *
  * No resource cleanup runs here by design. Signal handlers must stay AS-safe
  * per POSIX SUSv4 §2.4.3 — which rules out malloc/free (needed by libgit2 teardown)

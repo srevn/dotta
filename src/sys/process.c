@@ -66,12 +66,13 @@
 #define PROCESS_GRACE_ORPHAN_SECONDS 1
 
 /* The pgid of the PROCESS_PGRP_NEW child process_run() is running, zero otherwise:
- * published before the parent's own setpgid and cleared on every exit path below.
- * The host program's terminating-signal handler reads it through the declaration
- * in process.h and forwards the signal to the group, so a Ctrl+C kills dotta
- * and the spawned hook atomically rather than orphaning the hook.
- * PROCESS_PGRP_SHARED children leave it at zero — the kernel already delivers
- * terminal signals to the whole foreground group. */
+ * published once the child's group is set, the terminating signals held across
+ * the fork until then, and cleared on every exit path below. The host program's
+ * terminating-signal handler reads it through the declaration in process.h and
+ * forwards the signal to the group, so a Ctrl+C kills dotta and the spawned hook
+ * atomically rather than orphaning the hook. PROCESS_PGRP_SHARED children leave
+ * it at zero — the kernel already delivers terminal signals to the whole foreground
+ * group. */
 volatile sig_atomic_t active_child_pgid = 0;
 
 /**
@@ -239,9 +240,10 @@ static error_t process_stdin_open(
  * signal to SIG_DFL itself, and this covers the window before it the way execve()
  * would — a terminating signal the parent catches goes back to its default, and
  * one it inherited ignored stays ignored. SIGPIPE is dotta's own ignore (main.c),
- * never the child's; SIGALRM goes back too, and the mask is cleared — the
- * foreground child's parent blocks the keyboard's signals across the fork
- * (process_foreground). Called in the child alone: no error_t, no malloc.
+ * never the child's; SIGALRM goes back too, and the mask is cleared — both parents
+ * block signals across the fork (process_run the terminating ones,
+ * process_foreground the keyboard's), and one that arrived since lands here, on
+ * its default. Called in the child alone: no error_t, no malloc.
  */
 static void process_child_signals(void) {
     static const int terminating[] = PROCESS_TERMINATING_SIGNALS;
@@ -587,33 +589,45 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
         process_capture_init(&capture, spec->secure_capture);
     }
 
-    pid = fork();
-    if (pid < 0) {
-        err = error_errno(errno, "Failed to fork '%s'", program);
-        goto cleanup;
+    /* The terminating signals held from before the fork until the child's group
+     * is set and published: one that arrives in between lands once it is, and
+     * is forwarded — never lost while a child of a group of its own runs on past
+     * dotta. The child clears the mask with its signals (process_child_signals). */
+    static const int signals[] = PROCESS_TERMINATING_SIGNALS;
+    sigset_t terminating, before;
+    sigemptyset(&terminating);
+    for (size_t i = 0; i < sizeof(signals) / sizeof(*signals); i++) {
+        sigaddset(&terminating, signals[i]);
     }
+    (void) sigprocmask(SIG_BLOCK, &terminating, &before);
 
+    pid = fork();
     if (pid == 0) {
         process_child(spec, stdin_child, pipefd[1], errfd[1]);
     }
 
     /* ───── Parent ──────────────────────────────────────────────── */
 
-    /* Race-mitigate: ensure the child's pgrp is set even if it has not yet executed
-     * setpgid(0,0) itself. setpgid() is idempotent with respect to the (pid,pid)
-     * target; EACCES (child already exec'd) is acceptable because the child's
-     * own setpgid ran before exec. */
-    if (spec->pgrp_policy == PROCESS_PGRP_NEW) {
-        /* Publish before our own setpgid so the signal handler can forward to
-         * the child group during the sub-window where the child has setpgid'd
-         * but the parent has not. If neither side has called setpgid yet, the
-         * pgrp does not exist and kill(-pid) returns ESRCH — benign. */
-        active_child_pgid = (sig_atomic_t) pid;
+    /* The fork's outcome, the signals still held: its refusal, or the child's
+     * group set and published. Race-mitigate: the pgrp is set even if the child
+     * has not yet executed setpgid(0,0) itself. setpgid() is idempotent with
+     * respect to the (pid,pid) target; EACCES (child already exec'd) is acceptable
+     * because the child's own setpgid ran before exec. */
+    if (pid < 0) {
+        err = error_errno(errno, "Failed to fork '%s'", program);
+    } else if (spec->pgrp_policy == PROCESS_PGRP_NEW) {
         (void) setpgid(pid, pid);
+        active_child_pgid = (sig_atomic_t) pid;
         kill_target = -pid;
     } else {
         kill_target = pid;
     }
+
+    /* Let go on both outcomes, before anything else can fail: a signal held since
+     * the fork lands now, and the handler forwards it to the group just published
+     * (main.c terminating_signal). */
+    (void) sigprocmask(SIG_SETMASK, &before, NULL);
+    if (err) goto cleanup;
 
     /* Close the child's ends: its stdin's, and both pipes'. */
     if (stdin_child >= 0) {

@@ -45,13 +45,15 @@
  * - Terminating-signal forwarding (PROCESS_PGRP_NEW only): the primitive publishes
  *   the child's pgid into the volatile sig_atomic_t global `active_child_pgid`
  *   (its own, defined in process.c) for the duration of the child's lifetime,
- *   and clears it on every exit path. The host program's handler for
- *   PROCESS_TERMINATING_SIGNALS must read this and forward via kill(-pgid, signum)
- *   before it re-raises, so terminal Ctrl+C kills the parent and the spawned
- *   child group atomically — and a hangup or a kill does too, which the kernel
- *   never delivers to a group of the child's own. PROCESS_PGRP_SHARED children
- *   leave the global at zero — the kernel delivers terminal signals to the entire
- *   foreground process group directly.
+ *   and clears it on every exit path. The terminating signals are held from before
+ *   the fork until the group is set and published, so one that arrives in between
+ *   is forwarded as well — none falls between the fork and the publication. The
+ *   host program's handler for PROCESS_TERMINATING_SIGNALS must read this and
+ *   forward via kill(-pgid, signum) before it re-raises, so terminal Ctrl+C kills
+ *   the parent and the spawned child group atomically — and a hangup or a kill
+ *   does too, which the kernel never delivers to a group of the child's own.
+ *   PROCESS_PGRP_SHARED children leave the global at zero — the kernel delivers
+ *   terminal signals to the entire foreground process group directly.
  */
 
 #ifndef DOTTA_PROCESS_H

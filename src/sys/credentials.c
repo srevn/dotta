@@ -277,14 +277,16 @@ static buffer_t build_credential_request(
  * data into any command string. A request past PROCESS_STDIN_BUFFER_MAX is refused
  * before any helper runs.
  *
- * `capture` controls whether the helper's response is captured into `*result`.
- * Approve/reject pass false (fire-and-forget, output ignored); fill passes true.
+ * `output_policy` is where the helper's answer goes: fill's is its response,
+ * read into `*result` and kept as a secret is (PROCESS_OUTPUT_CAPTURE); approve's
+ * and reject's are read by nothing, and their wait is on the helper alone
+ * (PROCESS_OUTPUT_DEVNULL).
  */
-static error_t run_credential_helper(
+static error_t credential_helper_run(
     const char *subcommand,
     const char *request,
     size_t request_len,
-    bool capture,
+    process_output_t output_policy,
     process_result_t *result
 ) {
     /* The request carries the credential, so its length is the user's data: bounded
@@ -319,9 +321,7 @@ static error_t run_credential_helper(
         .stdin_policy      = PROCESS_STDIN_BUFFER,
         .stdin_content     = request,
         .stdin_content_len = request_len,
-        .capture           = capture,
-        .secure_capture    = capture,
-        .stream_fd         = -1,
+        .output_policy     = output_policy,
         .timeout_seconds   = CRED_HELPER_TIMEOUT_SECONDS,
         .pgrp_policy       = PROCESS_PGRP_SHARED,
     };
@@ -341,17 +341,16 @@ static void credential_request_secure_free(buffer_t *req) {
 }
 
 /**
- * Inspect a process_result_t for primitive-level helper failures (exec failed /
- * timed out / a response past the capture's bound) and synthesize an error_t
- * describing the cause. Returns NULL when the process completed normally — even
- * when the exit code is non-zero, since many helpers signal "no creds for this
- * URL" or "subcommand not implemented" via non-zero exit, which the caller treats
- * as a non-fatal outcome.
+ * A helper's outcome as its failure, naming the helper: an exec that failed, a
+ * timeout, a response past the capture's bound. NULL for a helper that ran to
+ * its end — even with a non-zero exit, since many helpers signal "no creds for
+ * this URL" or "subcommand not implemented" via non-zero exit, which the caller
+ * treats as a non-fatal outcome.
  *
  * `subcommand` is woven into the message so the caller doesn't need to repeat
  * the context.
  */
-static error_t helper_outcome_error(
+static error_t credential_helper_failure(
     const char *subcommand, const process_result_t *result
 ) {
     if (result->exec_failed) {
@@ -413,13 +412,13 @@ static error_t credential_helper_commit(
     );
 
     process_result_t result = { 0 };
-    error_t err = run_credential_helper(
-        subcommand, req.data, req.size, false, &result
+    error_t err = credential_helper_run(
+        subcommand, req.data, req.size, PROCESS_OUTPUT_DEVNULL, &result
     );
     credential_request_secure_free(&req);
 
     if (!err) {
-        err = helper_outcome_error(subcommand, &result);
+        err = credential_helper_failure(subcommand, &result);
     }
     process_result_deinit(&result);
     return err;
@@ -465,7 +464,9 @@ error_t credential_helper_fill(
     );
 
     process_result_t result = { 0 };
-    error_t err = run_credential_helper("fill", req.data, req.size, true, &result);
+    error_t err = credential_helper_run(
+        "fill", req.data, req.size, PROCESS_OUTPUT_CAPTURE, &result
+    );
 
     /* Request bytes (protocol, host, optionally username-from-URL) are
      * low-sensitivity, but scrub on the same path as approve/reject so the
@@ -473,15 +474,15 @@ error_t credential_helper_fill(
      * field. */
     credential_request_secure_free(&req);
 
-    /* All process_result_deinit paths below scrub the capture buffer automatically
-     * because run_credential_helper opted into secure_capture — no separate
-     * per-exit scrub call needed. */
+    /* Every process_result_deinit below wipes the capture as it frees it, as
+     * every capture is kept (sys/process.h process_output_t) — no separate per-exit
+     * scrub call needed. */
     if (err) {
         process_result_deinit(&result);
         return err;
     }
 
-    err = helper_outcome_error("fill", &result);
+    err = credential_helper_failure("fill", &result);
     if (err) {
         process_result_deinit(&result);
         return err;

@@ -151,6 +151,8 @@ error_t credential_helper_fill(
  * query-only by design. Returns an error only for a field that would break the
  * protocol, a request past the bound a helper is handed (sys/process.h
  * PROCESS_STDIN_BUFFER_MAX: the credential is not stored), exec failure or timeout.
+ * What the helper writes goes nowhere (sys/process.h PROCESS_OUTPUT_DEVNULL):
+ * nothing reads it, and the wait is on the helper alone.
  */
 error_t credential_helper_approve(
     const credential_url_t *u, const char *user, const char *pass

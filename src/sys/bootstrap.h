@@ -48,7 +48,8 @@ bool bootstrap_exists(git_repository *repo, const char *profile);
  * The tree is the caller's, read where its decision is made: the edit's, the
  * tree its stage opened at, so the script it opens is the one its commit lands
  * on (cmds/bootstrap.c bootstrap_edit); the show's and the dry run's, the branch's
- * head, loaded first (cmds/bootstrap.c bootstrap_show, utils/bootstrap.c run_dry).
+ * head, loaded first (cmds/bootstrap.c bootstrap_show, utils/bootstrap.c
+ * bootstrap_dry).
  *
  * On success, ownership of *out_content transfers to the caller, who must
  * buffer_deinit() it. On failure, *out_content is left in the zero-initialized
@@ -80,10 +81,10 @@ error_t bootstrap_read(
  * disk, so a bad shebang never produces a stale temp file.
  *
  * The file goes in TMPDIR (sys/filesystem.h fs_tmpdir). Its reader is the
- * orchestrator (utils/bootstrap.c run_live), which execs it and unlinks it at
- * once, so the file stands only for the length of the script's run; an edit creates
- * its own file (sys/editor.h editor_edit), never this executable one. The path
- * is the heap's: a transient of the run's.
+ * orchestrator (utils/bootstrap.c bootstrap_live), which execs it and unlinks
+ * it at once, so the file stands only for the length of the script's run; an
+ * edit creates its own file (sys/editor.h editor_edit), never this executable
+ * one. The path is the heap's: a transient of the run's.
  *
  * @param repo          Open Git repository (must not be NULL)
  * @param profile       Profile branch name (must not be NULL)

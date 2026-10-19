@@ -180,8 +180,9 @@ static error_t hook_failure(
  * cannot be looked up is said by the pre-fire alone, which every post-fire follows.
  * A runnable hook runs through the unified process primitive under the invocation's
  * environment (hook_env), its outcome its failure (hook_failure). The run's result
- * is the caller's, its stdout/stderr captured whatever the outcome, so the caller
- * prints it beside a failure (hook_print_output) and disposes it on every path.
+ * is the caller's, its stdout/stderr read from the file they went into whatever
+ * the outcome, so the caller prints it beside a failure (hook_print_output) and
+ * disposes it on every path.
  */
 static error_t hook_fire(
     const config_t *config, output_t *out, const hook_invocation_t *inv,
@@ -243,13 +244,15 @@ static error_t hook_fire(
     string_array_t env;
     hook_env(config, inv, frame, &env);
 
+    /* The hook's output goes into a file, read once it exits for the caller to
+     * show beside its failure: the wait is on the hook alone, so a task it leaves
+     * running holds nothing (sys/process.h PROCESS_OUTPUT_FILE). */
     char *argv[] = { (char *) hook_path, NULL };  /* execve's type; never written */
     process_spec_t spec = {
         .argv              = argv,
         .envp              = env.entries,
         .stdin_policy      = PROCESS_STDIN_DEVNULL,
-        .capture           = true,
-        .stream_fd         = -1,
+        .output_policy     = PROCESS_OUTPUT_FILE,
         .work_dir          = NULL,
         .work_dir_fallback = NULL,
         .timeout_seconds   = config->hook_timeout,

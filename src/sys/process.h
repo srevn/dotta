@@ -1,9 +1,9 @@
 /**
  * process.h - Unified subprocess primitive
  *
- * One linear procedure for "fork, build env, capture or stream output, enforce
- * timeout, reap" — replacing the parallel implementations previously in
- * utils/hooks.c and sys/bootstrap.c — and its one sibling for a child in the
+ * One linear procedure for "fork, build env, send the output where the caller
+ * says, enforce timeout, reap" — replacing the parallel implementations previously
+ * in utils/hooks.c and sys/bootstrap.c — and its one sibling for a child in the
  * foreground, which takes the terminal while dotta waits (process_foreground:
  * the editor, `dotta git`). Both children make their signals their own the same
  * way before exec, and report into one result.
@@ -13,9 +13,12 @@
  *   that passed: the drain's poll() and the reap's waits both end by it — no
  *   SIGALRM mutation, no global signal-handler state, no prev_alarm restoration
  *   dance.
- * - Caller chooses the load-bearing knobs (stdin policy, output handling, working
+ * - Caller chooses the load-bearing knobs (stdin policy, output policy, working
  *   directory, process-group policy); the primitive does not homogenize behavior
  *   that callers genuinely need to differ on.
+ * - What dotta wrote lands ahead of anything the child writes: every stdio stream
+ *   is flushed before the fork, as git flushes before every child
+ *   (lib/git/run-command.c start_command).
  * - Child reports execve() failure to the parent over a CLOEXEC self-pipe carrying
  *   errno, so the parent can distinguish "exec failed" from "the script exited
  *   127" — letting callers report the specific reason ("ENOEXEC: bad shebang")
@@ -30,8 +33,9 @@
  *   (main.c main, its first lines), so no descriptor the primitive opens sits
  *   at one of them for a child's dup2 to overwrite.
  * - SIGPIPE: caller must have SIGPIPE ignored (typically via signal(SIGPIPE,
- *   SIG_IGN) at process startup). The streaming code path will otherwise terminate
- *   the parent on a broken sink.
+ *   SIG_IGN) at process startup), so a payload written to a child that is gone,
+ *   or a copy to a reader that went away (PROCESS_OUTPUT_STREAM), is EPIPE and
+ *   never dotta's death.
  * - SIGCHLD: caller must NOT install a SIGCHLD handler. The implementation uses
  *   waitpid() with default disposition.
  * - The child resets each terminating signal it finds caught
@@ -107,7 +111,7 @@ extern volatile sig_atomic_t active_child_pgid;
  *           Use for subprocesses that consume a small fixed payload on stdin
  *           (e.g., `git credential fill` reading a protocol request). Payload
  *           is capped at PROCESS_STDIN_BUFFER_MAX so the single synchronous write
- *           performed before the capture loop never blocks on a pipe-buffer
+ *           performed before the output is read never blocks on a pipe-buffer
  *           shortage.
  */
 typedef enum {
@@ -119,28 +123,67 @@ typedef enum {
 /**
  * Upper bound on stdin_content_len for PROCESS_STDIN_BUFFER.
  *
- * The primitive writes the entire payload synchronously before the stdout capture
- * loop starts. For that write to be non-blocking even when the child has not
- * yet reached its consuming read, the payload must fit in the pipe buffer. POSIX
+ * The primitive writes the entire payload synchronously before the child's output
+ * is read. For that write to be non-blocking even when the child has not yet
+ * reached its consuming read, the payload must fit in the pipe buffer. POSIX
  * guarantees PIPE_BUF-sized writes are atomic, and the minimum PIPE_BUF
  * (_POSIX_PIPE_BUF) is 512 bytes; Linux's default pipe capacity is 65536 and
  * macOS's is 16384, with PIPE_BUF itself at 4096 / 512 respectively. Picking
  * 4096 is a comfortable ceiling across realistic targets — larger payloads need
- * a future extension that interleaves stdin writes with the stdout select loop.
+ * a future extension that interleaves the payload's writes with the output's reads.
  *
  * The caller's contract, checked at entry: a payload a user's data sizes is bounded
  * where it is built, in the words of what it carries — sys/credentials.c
- * run_credential_helper, whose request holds the credential, so a credential
+ * credential_helper_run, whose request holds the credential, so a credential
  * past the bound is never handed to a helper (approve and reject warn, a fill
  * finds nothing).
  */
 #define PROCESS_STDIN_BUFFER_MAX 4096
 
 /**
- * The most a capture keeps of a child's output, stdout and stderr together.
+ * Output policy for the spawned child: where its stdout and stderr go, together
+ * — and so what the wait on it ends at.
+ *
+ * A pipe (CAPTURE, STREAM) is read to its end: the wait ends once it is drained
+ * and the child reaped, so a task the child leaves holding the pipe holds the
+ * wait. Every other policy waits on the child alone: the wait ends at its exit,
+ * and a task it leaves runs on, writing where the child wrote.
+ *
+ * DEVNULL — /dev/null: output nobody reads, a credential helper's to approve or
+ *           reject (sys/credentials). Opened before the fork: one that cannot
+ *           be opened refuses the run, never leaves the child dotta's output.
+ * CAPTURE — onto a pipe read into memory as the child writes, kept to the bound
+ *           and counted past it (PROCESS_CAPTURE_MAX): a response the caller
+ *           parses (sys/credentials). Nothing of it touches a disk — the policy
+ *           for an output that holds a secret.
+ * STREAM  — onto a pipe copied to dotta's stdout as it comes, and drained to the
+ *           child's end whatever the reader does: a reader that went away costs
+ *           the copy, never the child — a bootstrap script (utils/bootstrap).
+ * FILE    — into an unlinked file in the temporary directory (sys/filesystem.h
+ *           fs_tmpdir), read once the child is reaped, kept to the bound and
+ *           counted past it: a hook's run (utils/hooks). A temporary directory
+ *           where no file can be created refuses the run; a child writing without
+ *           bound fills it while it runs, and what it writes stands there until
+ *           the file's last close — its own, or that of a task it left writing on.
+ *
+ * What a policy keeps (CAPTURE, FILE) is kept as a secret is, whatever wrote it
+ * — no policy can tell an output that holds one from one that does not: every
+ * buffer that held a byte of it is wiped before the allocator has it back, the
+ * result's by process_result_deinit.
+ */
+typedef enum {
+    PROCESS_OUTPUT_DEVNULL,
+    PROCESS_OUTPUT_CAPTURE,
+    PROCESS_OUTPUT_STREAM,
+    PROCESS_OUTPUT_FILE,
+} process_output_t;
+
+/**
+ * The most a policy that keeps a child's output keeps of it (CAPTURE, FILE),
+ * stdout and stderr together.
  *
  * What a child writes is the child's to size, never the memory dotta holds for
- * it: past the bound the capture keeps nothing more and counts what it drains
+ * it: past the bound the capture keeps nothing more and counts the rest
  * (result.output_dropped), and the child runs to its own end, never killed for
  * its volume. What a short capture means is the caller's to say — a credential
  * response read in part is refused (sys/credentials), a failed hook's output is
@@ -184,8 +227,6 @@ typedef enum {
  *   resolved.
  * - envp non-NULL. Use { NULL } for an empty environment.
  * - timeout_seconds >= 0. Zero means no timeout (wait forever).
- * - stream_fd is -1 (no streaming) or a writable fd the caller owns. The primitive
- *   does not close it.
  * - work_dir / work_dir_fallback NULL means "inherit". If both are set, the child
  *   tries work_dir first; on chdir failure, falls back to work_dir_fallback. If
  *   both fail, child exits with exec_failed=true and exec_errno=<chdir errno>.
@@ -193,9 +234,9 @@ typedef enum {
  *   == PROCESS_STDIN_BUFFER. When BUFFER, stdin_content must be non-NULL if
  *   stdin_content_len > 0, and stdin_content_len must not exceed
  *   PROCESS_STDIN_BUFFER_MAX. The primitive writes the full buffer once before
- *   entering the capture loop; if the child exits before consuming it (EPIPE on
- *   the write), that is not a primitive-level error — exec_failed / exit_code
- *   carry the real cause.
+ *   the output is read; if the child exits before consuming it (EPIPE on the
+ *   write), that is not a primitive-level error — exec_failed / exit_code carry
+ *   the real cause.
  * - stdin_policy PROCESS_STDIN_INHERIT under PROCESS_PGRP_SHARED alone
  *   (process_pgrp_t).
  */
@@ -205,9 +246,7 @@ typedef struct {
     process_stdin_t stdin_policy;
     const char *stdin_content;      /* non-NULL iff stdin_policy == BUFFER */
     size_t stdin_content_len;       /* bytes in stdin_content (≤ MAX) */
-    bool capture;                   /* true = collect stdout+stderr into result, up to the bound */
-    bool secure_capture;            /* scrub the capture buffer before any allocator hand-back */
-    int stream_fd;                  /* -1 = no streaming; else write each chunk */
+    process_output_t output_policy;
     const char *work_dir;           /* NULL = inherit parent's CWD */
     const char *work_dir_fallback;  /* NULL = no fallback */
     int timeout_seconds;            /* 0 = no timeout */
@@ -240,21 +279,18 @@ typedef struct {
  *                    exec_errno carries the errno from the failure.
  * - exec_errno     : errno value reported by the child via the
  *                    self-pipe. Zero when exec_failed is false.
- * - output         : capture buffer, NUL-terminated. Non-NULL whenever
- *                    spec.capture was true and the run returned no error — ""
- *                    for a child that wrote nothing. Caller may take ownership
- *                    by setting result.output = NULL before dispose; otherwise
- *                    dispose frees it.
+ * - output         : capture buffer, NUL-terminated. Non-NULL whenever the
+ *                    output policy keeps the output (PROCESS_OUTPUT_CAPTURE,
+ *                    FILE) and the run returned no error — "" for a child that
+ *                    wrote nothing. Caller may take ownership by setting
+ *                    result.output = NULL before dispose; otherwise dispose wipes
+ *                    and frees it.
  * - output_len     : number of bytes in output, excluding the
  *                    terminating NUL. Zero when output is NULL. At most
  *                    PROCESS_CAPTURE_MAX.
- * - output_dropped : bytes the child wrote past PROCESS_CAPTURE_MAX, drained
- *                    and not kept — output holds the first PROCESS_CAPTURE_MAX
- *                    and the rest is gone. Zero for a capture that kept everything.
- * - secure         : mirrors spec.secure_capture. When true,
- *                    process_result_deinit scrubs the capture buffer before free.
- *                    Ownership-transfer (output = NULL before dispose) bypasses
- *                    this scrub — the caller then owns scrubbing.
+ * - output_dropped : bytes the child wrote past PROCESS_CAPTURE_MAX, never kept
+ *                    — output holds the first PROCESS_CAPTURE_MAX and the rest
+ *                    is gone. Zero for a capture that kept everything.
  */
 typedef struct {
     int exit_code;
@@ -265,7 +301,6 @@ typedef struct {
     char *output;
     size_t output_len;
     size_t output_dropped;
-    bool secure;
 } process_result_t;
 
 /**
@@ -278,11 +313,12 @@ typedef struct {
  *   - exec failed in the child (result->exec_failed + exec_errno).
  *
  * Returns non-NULL only for a failure of the primitive itself, each naming the
- * program it was handed (argv[0]), so no caller names it again: a pipe or the
- * fork it could not make, the child's output it could not read, a wait that failed
- * — the errno's code (base/error.h error_errno) — or a child its time limit
- * outlived that SIGKILL did not end, ERR_FS. A spec that breaks its contract
- * dies at the check (process_spec_t).
+ * program it was handed (argv[0]), so no caller names it again: what a policy
+ * needs that it could not open — a pipe, /dev/null, the temporary file, which
+ * the refusal names too — or the fork it could not make, the child's output it
+ * could not read, a wait that failed — the errno's code (base/error.h error_errno)
+ * — or a child its time limit outlived that SIGKILL did not end, ERR_FS. A spec
+ * that breaks its contract dies at the check (process_spec_t).
  *
  * Caller composes the user-facing error message from result fields plus its own
  * context (script name, hook name, etc.).
@@ -296,10 +332,10 @@ error_t process_run(const process_spec_t *spec, process_result_t *result);
  * take ownership of the capture buffer before disposing, read result->output
  * (and result->output_len), then set result->output = NULL before calling.
  *
- * When result->secure is true (mirrored from spec.secure_capture), the capture
- * buffer is wiped before free so secrets do not linger on the freelist.
- * Ownership-transfer (output = NULL before dispose) bypasses the scrub — the
- * caller owns it from that point on.
+ * The capture buffer is wiped before it is freed, as every buffer that held a
+ * child's output is (process_output_t), so no secret lingers on the freelist.
+ * Ownership-transfer (output = NULL before dispose) bypasses the wipe — the caller
+ * owns it from that point on.
  */
 void process_result_deinit(process_result_t *result);
 

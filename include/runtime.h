@@ -485,11 +485,11 @@ typedef struct dotta_run {
  *
  *         No arena in reach: a function whose answer is not memory keeps what
  *         it builds and drops within the call in a frame of its own — a spawn's
- *         environment (`utils/hooks.c` hook_fire, `utils/bootstrap.c` run_live),
- *         a run's own lists (`utils/bootstrap.c` bootstrap_fire), a fetch's
- *         refspecs (`sys/gitops.c` gitops_fetch_branches), a diff's attribution
- *         index (`core/manifest.c` manifest_diff), the table with no binding a
- *         profile's need of a target is asked of (`core/profiles.c`
+ *         environment (`utils/hooks.c` hook_fire, `utils/bootstrap.c`
+ *         bootstrap_live), a run's own lists (`utils/bootstrap.c` bootstrap_fire),
+ *         a fetch's refspecs (`sys/gitops.c` gitops_fetch_branches), a diff's
+ *         attribution index (`core/manifest.c` manifest_diff), the table with
+ *         no binding a profile's need of a target is asked of (`core/profiles.c`
  *         profile_needs_target), a listing read to decide (`sys/filesystem.c`
  *         fs_remove_empty_dir, `sys/upstream.c` upstream_ensure_tracking_branch,
  *         `infra/epoch.c` epoch_walk), a printer's sections (`cmds/status.c`

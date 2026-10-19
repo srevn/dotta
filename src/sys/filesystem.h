@@ -828,11 +828,12 @@ error_t fs_working_directory(arena_t *arena, const char **out);
  * names one, else /tmp
  *
  * One answer for every such file, so no two of them drift: the editor's
- * (sys/editor.h editor_edit) and a bootstrap script's run (sys/bootstrap.h
- * bootstrap_extract_to_temp). An empty $TMPDIR names none, and /tmp is the
- * directory POSIX promises. Nothing is asked of the directory here: a file that
- * cannot be created in it is refused by the mkstemp that tried, naming it. A
- * write's own temporary is never created here: it stands beside its path
+ * (sys/editor.h editor_edit), a bootstrap script's run (sys/bootstrap.h
+ * bootstrap_extract_to_temp), and a child's output kept in a file (sys/process.c
+ * process_file, PROCESS_OUTPUT_FILE). An empty $TMPDIR names none, and /tmp is
+ * the directory POSIX promises. Nothing is asked of the directory here: a file
+ * that cannot be created in it is refused by the mkstemp that tried, naming it.
+ * A write's own temporary is never created here: it stands beside its path
  * (fs_temp_t).
  *
  * @return The directory (never NULL)

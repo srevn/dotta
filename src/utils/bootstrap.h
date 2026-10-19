@@ -83,6 +83,9 @@ typedef struct {
  *         other DOTTA_* left out (utils/config.h config_child_env).
  *       - Working directory: $HOME if set, else spec->repo_dir.
  *       - Stdin: inherited (scripts may prompt the user).
+ *       - Output: stdout and stderr copied to dotta's stdout as they come, and
+ *         drained to the script's end whatever the reader does (sys/process.h
+ *         PROCESS_OUTPUT_STREAM).
  *       - Process group: SHARED — terminal Ctrl+C reaches both dotta and the
  *         child, which is the correct behavior for interactive bootstrap work.
  *       - Timeout: 600 seconds per script.
@@ -99,9 +102,8 @@ typedef struct {
  * Preconditions:
  *   - spec->config, spec->repo, spec->repo_dir, spec->profiles are non-NULL.
  *   - out != NULL AND out->stream == stdout. A contract check defends the second
- *     invariant: bootstrap script output bypasses `out` and writes directly to
- *     STDOUT_FILENO, so interleaving is correct only when `out` also routes to
- *     stdout.
+ *     invariant: bootstrap script output bypasses `out` and is copied to dotta's
+ *     stdout, so interleaving is correct only when `out` also routes to stdout.
  */
 bootstrap_receipt_t bootstrap_fire(
     output_t *out,

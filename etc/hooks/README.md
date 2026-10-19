@@ -301,11 +301,18 @@ once a run.
 
 ### Output is captured, not streamed
 
-Dotta captures hook stdout and stderr in memory and only prints them
-when the hook reports a failure (non-zero exit, timeout, signal). On
-the happy path the buffered output is discarded silently, so anything
-your hook prints during normal operation is invisible in the terminal
-running dotta.
+Dotta sends a hook's stdout and stderr into a temporary file — in
+`$TMPDIR`, else `/tmp`, unlinked as soon as it is made — reads it once
+the hook exits, and prints it only when the hook reports a failure
+(non-zero exit, timeout, signal), up to its first mebibyte. On the
+happy path the output is discarded silently, so anything your hook
+prints during normal operation is invisible in the terminal running
+dotta.
+
+A hook therefore needs a temporary directory where a file can be
+created: where none can be, dotta refuses to run it. What a hook prints
+stays in that directory until the file is last closed, and a hook that
+prints without bound fills it while it runs.
 
 This matters for long-running `post-*` scripts (webhook callouts,
 desktop notifications, notification daemons). If you want visible
@@ -576,18 +583,21 @@ esac
 
 ### Async Hooks
 
-Run time-consuming tasks in background:
+Run time-consuming tasks in background. Dotta waits for the hook
+itself, never for what it leaves running: the command goes on once the
+hook exits, and the task runs on. What the task prints after the hook
+has exited is shown nowhere, so send it to a log of its own:
 
 ```bash
 #!/usr/bin/env bash
 # post-apply
 set -euo pipefail
 
-# Start long-running task in background
+# Start long-running task in background, its output in a log of its own
 {
     sleep 2
     update_vim_plugins
-} &
+} >> "$HOME/.local/state/dotta/hook.log" 2>&1 &
 
 # Continue immediately
 echo "Background task started"

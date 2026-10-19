@@ -68,7 +68,7 @@ static void bootstrap_env(
  * exec_failed takes precedence (child-side errno captures "bad shebang" / "ENOENT
  * interpreter"), then timeout, then signal, then non-zero exit.
  */
-static error_t script_error(const process_result_t *r) {
+static error_t bootstrap_failure(const process_result_t *r) {
     if (r->exec_failed) {
         return error_create(
             ERR_INTERNAL, "exec failed: %s", strerror(r->exec_errno)
@@ -101,7 +101,7 @@ static error_t script_error(const process_result_t *r) {
  * temp file unconditionally. The extracted file exists only between
  * bootstrap_extract_to_temp and the exec — the window is tight by design.
  */
-static error_t run_live(
+static error_t bootstrap_live(
     const bootstrap_spec_t *spec,
     const char *profile,
     const char *all_profiles
@@ -128,8 +128,7 @@ static error_t run_live(
         .argv              = argv,
         .envp              = env.entries,
         .stdin_policy      = PROCESS_STDIN_INHERIT,
-        .capture           = false,
-        .stream_fd         = STDOUT_FILENO,
+        .output_policy     = PROCESS_OUTPUT_STREAM,
         .work_dir          = identity()->home,
         .work_dir_fallback = spec->repo_dir,
         .timeout_seconds   = BOOTSTRAP_TIMEOUT_SECONDS,
@@ -139,7 +138,7 @@ static error_t run_live(
     err = process_run(&child, &result);
     if (err) goto cleanup;
 
-    err = script_error(&result);
+    err = bootstrap_failure(&result);
 
 cleanup:
     process_result_deinit(&result);
@@ -155,7 +154,7 @@ cleanup:
  * Dry-run: read the script at the branch's head into memory, validate its shebang,
  * free. No temp file, no subprocess, no environment build.
  */
-static error_t run_dry(git_repository *repo, const char *profile) {
+static error_t bootstrap_dry(git_repository *repo, const char *profile) {
     git_tree *tree = NULL;
     error_t err = gitops_load_branch_tree(repo, profile, &tree);
     if (err) return err;
@@ -180,10 +179,10 @@ bootstrap_receipt_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) 
     CHECK_NULL(spec->repo_dir);
     CHECK_NULL(spec->profiles);
 
-    /* Bootstrap script output is streamed directly to STDOUT_FILENO (bypassing
-     * `out`), so the orchestrator's progress lines and the child's output
-     * interleave correctly only when `out` routes to stdout. Guard the invariant
-     * loudly. */
+    /* A script's output is copied to dotta's stdout as it comes (sys/process.h
+     * PROCESS_OUTPUT_STREAM), bypassing `out`, so the orchestrator's progress
+     * lines and the child's output interleave correctly only when `out` routes
+     * to stdout. Guard the invariant loudly. */
     CHECK_ARG(out->stream == stdout, "out must route to stdout");
 
     /* The profiles are the caller's listing: every one has a script, which the
@@ -205,19 +204,16 @@ bootstrap_receipt_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) 
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->entries[i];
 
+        /* The progress line lands ahead of the script's output: the primitive
+         * flushes every stream before its fork (sys/process.h) */
         output_print(
             out, OUTPUT_NORMAL, "[%zu/%zu] Running %s/%s...\n",
             i + 1, profiles->count, profile, BOOTSTRAP_SCRIPT_NAME
         );
 
-        /* Flush the progress line so it lands on stdout before the child begins
-         * writing. Without this, redirected/piped stdout can interleave the child's
-         * raw writes ahead of our stdio-buffered line. */
-        fflush(out->stream);
-
         error_t step_err = spec->dry_run
-            ? run_dry(spec->repo, profile)
-            : run_live(spec, profile, all_profiles);
+            ? bootstrap_dry(spec->repo, profile)
+            : bootstrap_live(spec, profile, all_profiles);
 
         if (!step_err) {
             output_print(

@@ -76,17 +76,25 @@ typedef struct {
  * hook output (if any) at OUTPUT_QUIET, the refusal's reason at every level,
  * and returns the refusal, which names its hook (Hook 'pre-<cmd>' …, or its path
  * where the process layer could not spawn it). Callers should goto-cleanup on
- * non-NULL return. The capture keeps the hook's first PROCESS_CAPTURE_MAX bytes
- * and counts the rest ("... and N more bytes"); a hook is never stopped for what
- * it writes (sys/process.h).
+ * non-NULL return.
+ *
+ * The hook's stdout and stderr go into a file in the temporary directory, read
+ * once the hook exits — the wait is on the hook alone, so a task it leaves running
+ * holds nothing — its first PROCESS_CAPTURE_MAX bytes kept and the rest counted
+ * ("... and N more bytes"): a hook is never stopped for what it writes
+ * (sys/process.h PROCESS_OUTPUT_FILE). So a runnable hook needs a temporary
+ * directory where a file can be created, or it is refused as a spawn the process
+ * layer could not make; a hook writing without bound fills that directory while
+ * it runs; and what a hook prints stands there until the file's last close.
  *
  * A runnable hook that could not be run, or ran and failed, is ERR_INTERNAL —
- * an exec that failed, a timeout, a signal, a non-zero exit; beside them a context
- * past 10,000 paths is ERR_INVALID_ARG, and a spawn the process layer could not
- * make keeps its own code (sys/process.h process_run) — and nothing branches on
- * the code. Never ERR_PERMISSION, however permission-shaped the cause: that code
- * is a refusal an identity met (base/error.h "Codes"), and a hook that did not
- * run is none.
+ * an exec that failed, a timeout, a signal, a non-zero exit — never ERR_PERMISSION,
+ * however permission-shaped the cause: that code is a refusal an identity met
+ * (base/error.h "Codes"), and a hook that did not run is none. Beside them a
+ * context past 10,000 paths is ERR_INVALID_ARG, and a spawn the process layer
+ * could not make keeps its own code (sys/process.h process_run) — a temporary
+ * directory whose bits refuse the invoker the file is ERR_PERMISSION — and nothing
+ * branches on the code.
  *
  * The hook's DOTTA_REPO_DIR is the store's directory the configuration settled
  * (`config->repo_dir`), its DOTTA_CONFIG_FILE the file the configuration was

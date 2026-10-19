@@ -54,16 +54,6 @@ struct config {
     /* [hooks] */
     const char *hooks_dir;        /* Directory containing hook scripts — absolute, folded */
     int32_t hook_timeout;         /* Hook execution timeout in seconds (default: 30, 0 = no timeout) */
-    bool pre_apply;               /* Enable pre-apply hook */
-    bool post_apply;              /* Enable post-apply hook */
-    bool pre_add;                 /* Enable pre-add hook */
-    bool post_add;                /* Enable post-add hook */
-    bool pre_remove;              /* Enable pre-remove hook */
-    bool post_remove;             /* Enable post-remove hook */
-    bool pre_update;              /* Enable pre-update hook */
-    bool post_update;             /* Enable post-update hook */
-    bool pre_sync;                /* Enable pre-sync hook */
-    bool post_sync;               /* Enable post-sync hook */
 
     /* [security] */
     bool confirm_destructive;     /* Require confirmation before destructive operations */

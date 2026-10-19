@@ -682,19 +682,6 @@ error_t fs_remove_file(const char *path) {
     return NULL;
 }
 
-bool fs_file_exists(const char *path) {
-    if (!path || path[0] == '\0') {
-        return false;
-    }
-
-    struct stat st;
-    if (fs_stat(path, &st) < 0) {
-        return false;
-    }
-
-    return S_ISREG(st.st_mode);
-}
-
 /**
  * Directory operations
  */
@@ -1579,15 +1566,6 @@ error_t fs_set_permissions(const char *path, mode_t mode) {
     }
 
     return NULL;
-}
-
-bool fs_is_executable(const char *path) {
-    if (!path || path[0] == '\0') {
-        return false;
-    }
-
-    /* The running user's own question (filesystem.h): the raw call, on purpose. */
-    return faccessat(AT_FDCWD, path, X_OK, AT_EACCESS) == 0;
 }
 
 bool fs_exists(const char *path) {

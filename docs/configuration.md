@@ -107,21 +107,11 @@ as storage paths (`home/.bashrc`, `root/etc/hosts`).
 [hooks]
 hooks_dir = "~/.config/dotta/hooks"   # Hook script directory
 timeout = 30                          # Max execution time (seconds)
-pre_apply = true
-post_apply = true
-pre_add = false
-post_add = false
-pre_remove = false
-post_remove = false
-pre_update = false
-post_update = false
-pre_sync = false
-post_sync = false
 ```
 
 ## Hooks
 
-Hook scripts run before/after operations. Place executable scripts in the hooks directory.
+Hook scripts run before/after operations. Place executable scripts in the hooks directory: the file is the switch — a hook runs where it is executable, and one that is there but cannot run (no execute bit, no regular file) is ignored with a warning naming why.
 
 **Available hooks:** `pre-apply`, `post-apply`, `pre-add`, `post-add`, `pre-remove`, `post-remove`, `pre-update`, `post-update`, `pre-sync`, `post-sync`
 

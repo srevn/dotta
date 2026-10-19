@@ -67,6 +67,9 @@ auto_detect_new_files = true
 #   - pre-sync     - Runs before synchronizing with the remote
 #   - post-sync    - Runs after synchronizing with the remote
 #
+# The file is the switch: a hook runs where it is executable, and chmod -x
+# switches one off.
+#
 # Hooks receive environment variables with context about the operation.
 # If a pre-hook exits with non-zero status, the operation is aborted.
 #
@@ -84,21 +87,6 @@ hooks_dir = "~/.config/dotta/hooks"
 # Set to 0 to disable timeout (not recommended)
 # Default: 30
 timeout = 30
-
-# Enable/Disable Specific Hooks
-# You can selectively enable or disable hooks
-# Default: pre_apply=true, post_apply=true, all others=false
-
-pre_apply = true     # Run before applying profiles (e.g., backup current configs)
-post_apply = true    # Run after applying profiles (e.g., reload shell, restart services)
-pre_add = false      # Run before adding files or directories (e.g., validate file contents)
-post_add = false     # Run after adding files or directories (e.g., sync to remote, notify team)
-pre_remove = false   # Run before removing paths or deleting a profile (e.g., backup)
-post_remove = false  # Run after removing paths or deleting a profile (e.g., notify)
-pre_update = false   # Run before committing filesystem changes (e.g., validate changes)
-post_update = false  # Run after committing filesystem changes (e.g., sync to remote, notify)
-pre_sync = false     # Run before syncing with the remote (e.g., block on metered network)
-post_sync = false    # Run after syncing with the remote (e.g., notify, trigger downstream apply)
 
 
 # ============================================================================

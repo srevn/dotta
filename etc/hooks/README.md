@@ -19,7 +19,8 @@ Hooks allow you to run custom scripts before and after dotta operations.
    cp etc/hooks/post-sync.sample ~/.config/dotta/hooks/post-sync
    ```
 
-3. **Make them executable:**
+3. **Make them executable** — the file is the switch: a hook runs where it is
+   executable, and `chmod -x` switches it off:
    ```bash
    chmod +x ~/.config/dotta/hooks/*
    ```
@@ -283,22 +284,18 @@ hook if per-profile detail is needed.
 
 ## Hook Configuration
 
-Control hooks via `~/.config/dotta/config.toml`:
+`~/.config/dotta/config.toml` says where the hooks are and how long one may run:
 
 ```toml
 [hooks]
 hooks_dir = "~/.config/dotta/hooks"  # Where to find hooks
-pre_apply = true                      # Enable pre-apply
-post_apply = true                     # Enable post-apply
-pre_add = false                       # Disable pre-add (default)
-post_add = false                      # Disable post-add (default)
-pre_remove = false                    # Disable pre-remove (default)
-post_remove = false                   # Disable post-remove (default)
-pre_update = false                    # Disable pre-update (default)
-post_update = false                   # Disable post-update (default)
-pre_sync = false                      # Disable pre-sync (default)
-post_sync = false                     # Disable post-sync (default)
+timeout = 30                         # Seconds a hook may run (0: no limit)
 ```
+
+It switches none of them: a hook runs where its file is executable, as git's do.
+One that is there but cannot run — no execute bit, no regular file — is ignored
+with a warning naming why, and a hooks directory dotta cannot search is named
+once a run.
 
 ## Writing Hooks
 
@@ -508,17 +505,13 @@ done
 
 ### Hook Not Running
 
-1. **Check if enabled:**
-   ```bash
-   grep -A5 "\[hooks\]" ~/.config/dotta/config.toml
-   ```
-
-2. **Verify file exists and is executable:**
+1. **Verify file exists and is executable** — dotta warns of a hook it ignored,
+   naming why, and of a hooks directory it cannot search:
    ```bash
    ls -la ~/.config/dotta/hooks/
    ```
 
-3. **Test manually:**
+2. **Test manually:**
    ```bash
    bash -x ~/.config/dotta/hooks/pre-apply
    ```

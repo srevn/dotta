@@ -47,13 +47,15 @@
  * directory created, the directory a store goes in, a failed clone taken away —
  * and carries the reach with it; on the invoker's own paths it never fires.
  *
- * One more reads raw, and on purpose: a source repository's layout — its `.git`,
+ * Two more read raw, and on purpose. A source repository's layout — its `.git`,
  * a gitdir's HEAD, commondir, objects and refs — which sys/source discovers as
  * the invoker, because the repository's configuration is libgit2's to read as
  * the invoker, and a repository found through the reach would be one dotta could
  * not configure (sys/source.h). A refusal there is the repository's failure
  * (ERR_GIT), as git's is; the rule files beneath it are this module's, and so
- * is their refusal's reach.
+ * is their refusal's reach. And a hook's name (utils/hooks.c hook_find), looked
+ * up as the invoker its exec runs as: a hook found through the reach would be
+ * one the exec could not run.
  */
 
 #ifndef DOTTA_FILESYSTEM_H
@@ -395,14 +397,6 @@ error_t fs_copy_file(const char *src, const char *dst);
  * @return Error or NULL on success
  */
 error_t fs_remove_file(const char *path);
-
-/**
- * Check if file exists
- *
- * @param path File path (must not be NULL)
- * @return true if file exists and is a regular file
- */
-bool fs_file_exists(const char *path);
 
 /**
  * Check if filename is OS metadata (should be ignored during cleanup)
@@ -1047,18 +1041,6 @@ error_t fs_get_permissions(const char *path, mode_t *out);
 error_t fs_set_permissions(const char *path, mode_t mode);
 
 /**
- * Check if file is executable
- *
- * The running user's own question, not a managed path's: a hook is executable
- * iff the user who will run it may execute it, so this asks for the effective
- * user (faccessat, AT_EACCESS) and nothing more.
- *
- * @param path File path (must not be NULL)
- * @return true if the effective user may execute the file
- */
-bool fs_is_executable(const char *path);
-
-/**
  * Check if path exists (any type)
  *
  * @param path Path to check (must not be NULL)
@@ -1125,13 +1107,15 @@ bool fs_denied(const char *path, int amode);
  * "block device", "special file" — one spelling for the verbs that must name an
  * occupant they cannot take: infra/content.c content_capture_file and
  * content_capture_link (the capture's refusal), cmds/add.c add_collect and cmd_add
- * (the walk's skip and the argument's) — or one that is not the kind a claim
- * expects (infra/compare.c compare_generate_diff, the type-mismatch line a diff
- * renders). The input is that look's own stat: an lstat's, or the fstat of the
- * descriptor a capture already holds. There is no noun for NONE or UNKNOWN, which
- * are answers about the call and not about an occupant, and none for a look never
- * taken — what this returns is printed, so a noun made for a NULL would reach
- * the user as a kind nothing stands as.
+ * (the walk's skip and the argument's), utils/hooks.c hook_find (a hook's name
+ * the exec would refuse) — or one that is not the kind a claim expects
+ * (infra/compare.c compare_generate_diff, the type-mismatch line a diff renders).
+ * The input is that look's own stat: an lstat's, a stat's that followed a link
+ * as an exec does (hook_find), or the fstat of the descriptor a capture already
+ * holds. There is no noun for NONE or UNKNOWN, which are answers about the call
+ * and not about an occupant, and none for a look never taken — what this returns
+ * is printed, so a noun made for a NULL would reach the user as a kind nothing
+ * stands as.
  *
  * Why the stat and not fs_occupant_t: the enum deliberately folds FIFO, socket
  * and both devices into FS_OCCUPANT_OTHER, and the noun is exactly the reading

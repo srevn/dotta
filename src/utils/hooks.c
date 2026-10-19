@@ -5,8 +5,11 @@
 #include "utils/hooks.h"
 
 #include <config.h>
-#include <stdlib.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "base/arena.h"
 #include "base/array.h"
@@ -17,75 +20,81 @@
 #include "sys/process.h"
 #include "utils/config.h"
 
-/* --- Internal types ------------------------------------------------------ */
-
-/* Hook script name lookup. Also drives the pre/post mapping below. */
+/**
+ * A hook's phase: the first word of its name, before its command's
+ */
 typedef enum {
-    HOOK_PRE_ADD,
-    HOOK_POST_ADD,
-    HOOK_PRE_REMOVE,
-    HOOK_POST_REMOVE,
-    HOOK_PRE_APPLY,
-    HOOK_POST_APPLY,
-    HOOK_PRE_UPDATE,
-    HOOK_POST_UPDATE,
-    HOOK_PRE_SYNC,
-    HOOK_POST_SYNC,
-} hook_type_t;
+    HOOK_PHASE_PRE,   /* pre-<command>: before the act, a failure the command's refusal */
+    HOOK_PHASE_POST,  /* post-<command>: after the act, a failure warned; none on a dry run */
+} hook_phase_t;
 
-/* Hook environment. Pointers are borrowed from the invocation and its backing
- * strings, the command's word a literal; this struct is stack-allocated in
- * hook_fire and lives only for the duration of one hook_execute call. */
-typedef struct {
-    const char *command;
-    const char *profile;
-    char *const *paths;
-    size_t path_count;
-    char *const *extras;
-    bool dry_run;
-} hook_context_t;
+/**
+ * What stands at a hook's name, as the exec will meet it
+ *
+ * Looked up with the raw calls, never sys/filesystem's second try as root: a
+ * hook runs as the invoker (sys/identity.h identity_drop_child), so the invoker's
+ * answer is the one that holds, under sudo as without it.
+ */
+typedef enum {
+    HOOK_FOUND_ABSENT,    /* Nothing at the name, or a link to nothing: no hook */
+    HOOK_FOUND_UNKNOWN,   /* The name cannot be looked up, nor any other in its directory */
+    HOOK_FOUND_IGNORED,   /* What the exec would refuse: no regular file, no execute bit */
+    HOOK_FOUND_RUNNABLE,  /* A regular file the invoker may execute */
+} hook_found_t;
 
-/* --- Static dispatch tables --------------------------------------------- */
+/* The command's word: its hooks' names (pre-<word>, post-<word>) and DOTTA_COMMAND */
+static const char *hook_word(hook_cmd_t cmd) {
+    switch (cmd) {
+        case HOOK_CMD_ADD:    return "add";
+        case HOOK_CMD_REMOVE: return "remove";
+        case HOOK_CMD_APPLY:  return "apply";
+        case HOOK_CMD_UPDATE: return "update";
+        case HOOK_CMD_SYNC:   return "sync";
+    }
 
-static const char *const HOOK_NAMES[] = {
-    [HOOK_PRE_ADD] = "pre-add",
-    [HOOK_POST_ADD] = "post-add",
-    [HOOK_PRE_REMOVE] = "pre-remove",
-    [HOOK_POST_REMOVE] = "post-remove",
-    [HOOK_PRE_APPLY] = "pre-apply",
-    [HOOK_POST_APPLY] = "post-apply",
-    [HOOK_PRE_UPDATE] = "pre-update",
-    [HOOK_POST_UPDATE] = "post-update",
-    [HOOK_PRE_SYNC] = "pre-sync",
-    [HOOK_POST_SYNC] = "post-sync",
-};
-
-static const char *hook_type_name(hook_type_t type) {
-    CHECK_ARG(
-        (size_t) type < sizeof(HOOK_NAMES) / sizeof(HOOK_NAMES[0]),
-        "a hook type no name is kept for"
-    );
-    return HOOK_NAMES[type];
+    CHECK_ARG(false, "a hook command no enumerator names");
 }
 
 /**
- * Check whether the given hook type is enabled in config.
+ * What stands at a hook's path (hook_found_t) — the file is the switch, git's
+ * (lib/git/hook.c find_hook) — and, where it is unknown or ignored, the reason
+ * its notice gives, made in `arena` where it names the kind that stands
  */
-static bool hook_is_enabled(const config_t *config, hook_type_t type) {
-    switch (type) {
-        case HOOK_PRE_ADD:     return config->pre_add;
-        case HOOK_POST_ADD:    return config->post_add;
-        case HOOK_PRE_REMOVE:  return config->pre_remove;
-        case HOOK_POST_REMOVE: return config->post_remove;
-        case HOOK_PRE_APPLY:   return config->pre_apply;
-        case HOOK_POST_APPLY:  return config->post_apply;
-        case HOOK_PRE_UPDATE:  return config->pre_update;
-        case HOOK_POST_UPDATE: return config->post_update;
-        case HOOK_PRE_SYNC:    return config->pre_sync;
-        case HOOK_POST_SYNC:   return config->post_sync;
+static hook_found_t hook_find(const char *path, arena_t *arena, const char **reason) {
+    /* The name first, never followed: a directory that will not let it be looked
+     * up hides every name in it, a hook that is not there among them, so that
+     * is the directory's to say, never a hook's */
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        if (errno == ENOENT || errno == ENOTDIR) return HOOK_FOUND_ABSENT;
+        *reason = strerror(errno);
+        return HOOK_FOUND_UNKNOWN;
     }
 
-    return false;
+    /* A link is followed, as the exec follows it: to nothing, there is no hook;
+     * to what the invoker cannot reach, the hook is ignored for it */
+    if (S_ISLNK(st.st_mode) && stat(path, &st) != 0) {
+        if (errno == ENOENT || errno == ENOTDIR) return HOOK_FOUND_ABSENT;
+        *reason = strerror(errno);
+        return HOOK_FOUND_IGNORED;
+    }
+
+    if (!S_ISREG(st.st_mode)) {
+        *reason = arena_str_format(
+            arena, "it is a %s, not a regular file", fs_stat_noun(&st)
+        );
+        return HOOK_FOUND_IGNORED;
+    }
+
+    /* The mode, in its own words: the exec's for it, "Permission denied", reads
+     * as a refusal an identity met — one root would lift — and root lifts no
+     * missing +x */
+    if (faccessat(AT_FDCWD, path, X_OK, AT_EACCESS) != 0) {
+        *reason = errno == EACCES ? "it is not executable" : strerror(errno);
+        return HOOK_FOUND_IGNORED;
+    }
+
+    return HOOK_FOUND_RUNNABLE;
 }
 
 /**
@@ -96,7 +105,7 @@ static bool hook_is_enabled(const config_t *config, hook_type_t type) {
  * DOTTA_DRY_RUN and DOTTA_PATH_COUNT, so its spine exists and is ended.
  */
 static void hook_env(
-    const config_t *config, const hook_context_t *context, arena_t *arena,
+    const config_t *config, const hook_invocation_t *inv, arena_t *arena,
     string_array_t *env
 ) {
     string_array_init(env, arena, 0);
@@ -105,91 +114,134 @@ static void hook_env(
      * read — and the process's environment beneath it */
     config_child_env(config, config->repo_dir, env);
 
-    /* DOTTA_* surface — two optional, two always-on, then one per path. */
-    if (context->command) string_array_pushf(env, "DOTTA_COMMAND=%s", context->command);
-    if (context->profile) string_array_pushf(env, "DOTTA_PROFILE=%s", context->profile);
+    /* DOTTA_* surface — the command, its profile where it names one, two always-on,
+     * then one per path. */
+    string_array_pushf(env, "DOTTA_COMMAND=%s", hook_word(inv->cmd));
+    if (inv->profile) string_array_pushf(env, "DOTTA_PROFILE=%s", inv->profile);
 
-    string_array_pushf(env, "DOTTA_DRY_RUN=%s", context->dry_run ? "1" : "0");
-    string_array_pushf(env, "DOTTA_PATH_COUNT=%zu", context->path_count);
+    string_array_pushf(env, "DOTTA_DRY_RUN=%s", inv->dry_run ? "1" : "0");
+    string_array_pushf(env, "DOTTA_PATH_COUNT=%zu", inv->path_count);
 
     /* Indexed path variables: DOTTA_PATH_0, DOTTA_PATH_1, ... */
-    for (size_t i = 0; i < context->path_count; i++) {
-        string_array_pushf(env, "DOTTA_PATH_%zu=%s", i, context->paths[i]);
+    for (size_t i = 0; i < inv->path_count; i++) {
+        string_array_pushf(env, "DOTTA_PATH_%zu=%s", i, inv->paths[i]);
     }
 
     /* Per-command extras (e.g. DOTTA_REMOTE for sync), the surface's own: the
      * process's DOTTA_* never reached the environment, so no stale value of one
      * stands beside it. */
-    for (char *const *e = context->extras; e && *e; e++) string_array_push(env, *e);
+    for (char *const *e = inv->extras; e && *e; e++) string_array_push(env, *e);
 }
 
 /**
- * Execute hook script via the unified process primitive.
+ * A hook's outcome as its failure, naming the hook: NULL for one that ran to a
+ * zero exit
  *
- * Builds the hook environment, then delegates fork/exec/timeout/reap to
- * process_run(). Composes a domain-specific error from the result fields (exec
- * failure, timeout, signal, non-zero exit). The run's result is the caller's,
- * its stdout/stderr captured whatever the outcome, so the caller prints it beside
- * a failure (hook_print_output) and disposes it on every path.
- *
- * Returns NULL on success or if the hook is disabled/missing. Returns error if
- * the hook fails (exec, timeout, exit-code, signal) or if the primitive itself
- * failed.
+ * The most specific reason first: exec_failed carries the errno of execve, chdir
+ * or dup2, so the exit codes 126 and 127 are the script's own, read as any other.
  */
-static error_t hook_execute(
-    const config_t *config,
-    hook_type_t type,
-    const hook_context_t *context,
-    process_result_t *out_result
+static error_t hook_failure(
+    const config_t *config, const char *name, const process_result_t *result
 ) {
-    CHECK_NULL(config);
-    CHECK_NULL(context);
-    CHECK_NULL(out_result);
-
-    if (!hook_is_enabled(config, type)) {
-        return NULL;  /* Disabled - skip silently */
+    if (result->exec_failed) {
+        return error_create(
+            ERR_INTERNAL, "Hook '%s' failed: exec error: %s",
+            name, strerror(result->exec_errno)
+        );
+    }
+    if (result->timed_out) {
+        return error_create(
+            ERR_INTERNAL, "Hook '%s' exceeded timeout of %d seconds",
+            name, config->hook_timeout
+        );
+    }
+    if (result->signal_num) {
+        return error_create(
+            ERR_INTERNAL, "Hook '%s' terminated by signal %d",
+            name, result->signal_num
+        );
+    }
+    if (result->exit_code != 0) {
+        return error_create(
+            ERR_INTERNAL, "Hook '%s' failed with exit code %d",
+            name, result->exit_code
+        );
     }
 
-    /* The hook's path and the spawn's environment, in a frame of the call's own:
-     * the path read by the checks below and the child's exec, the environment
-     * by the child at its exec, both dropped with the frame once the hook has
-     * run. The directory is the one the configuration settled (utils/config.h). */
+    return NULL;
+}
+
+/**
+ * Fire the invocation's hook of one phase, where its file is executable
+ *
+ * The file is found as the exec will meet it (hook_find). Absent, nothing runs
+ * and nothing is said; what the exec would refuse is ignored with a notice naming
+ * why, git's advice (lib/git/hook.c find_hook); and a hooks directory whose names
+ * cannot be looked up is said by the pre-fire alone, which every post-fire follows.
+ * A runnable hook runs through the unified process primitive under the invocation's
+ * environment (hook_env), its outcome its failure (hook_failure). The run's result
+ * is the caller's, its stdout/stderr captured whatever the outcome, so the caller
+ * prints it beside a failure (hook_print_output) and disposes it on every path.
+ */
+static error_t hook_fire(
+    const config_t *config, output_t *out, const hook_invocation_t *inv,
+    hook_phase_t phase, process_result_t *out_result
+) {
+    /* The hook's name, its path and the spawn's environment, in a frame of the
+     * call's own: the name and the path read by the lookup below, its notice
+     * and the child's exec, the environment by the child at its exec, all dropped
+     * with the frame once the hook has run. The directory is the one the
+     * configuration settled (utils/config.h). */
     arena_t *frame = arena_create(0);
-    const char *hook_path = str_path_join(frame, config->hooks_dir, hook_type_name(type));
+    const char *hook_name = arena_str_format(
+        frame, "%s-%s", phase == HOOK_PHASE_PRE ? "pre" : "post", hook_word(inv->cmd)
+    );
+    const char *hook_path = str_path_join(frame, config->hooks_dir, hook_name);
+    const char *reason = NULL;
     error_t err = NULL;
 
-    /* Missing hook is not an error — silently skip. */
-    if (!fs_file_exists(hook_path)) goto cleanup;
+    /* A hook that will not run is no refusal: its notice is a failed post-hook's
+     * register (hook_fire_post), beside a run that goes on */
+    switch (hook_find(hook_path, frame, &reason)) {
+        case HOOK_FOUND_ABSENT:
+            goto cleanup;
 
-    /* Not a refusal the invoker met: fs_is_executable asks faccessat(X_OK) as
-     * the running user — the identity process_run will exec the hook under —
-     * and this is its clean no. ERR_PERMISSION is a refusal an identity met
-     * (base/error.h); a mode bit is not one, and a hook that did not run is the
-     * class its four siblings below are in. The check earns its place ahead of
-     * the exec by the message it makes: exec's own EACCES would reach the reader
-     * as "Permission denied", the reading this class exists to keep honest. The
-     * path is named because hooks_dir is the config's to choose and the type
-     * alone is not something a reader can act on. */
-    if (!fs_is_executable(hook_path)) {
-        err = error_create(
-            ERR_INTERNAL, "Hook '%s' at '%s' is not executable",
-            hook_type_name(type), hook_path
-        );
-        goto cleanup;
+        case HOOK_FOUND_UNKNOWN:
+            /* Every name in the directory meets it: said once a run, by the
+             * pre-fire every post-fire follows */
+            if (phase == HOOK_PHASE_PRE) {
+                output_warning(
+                    out, OUTPUT_NORMAL, "Hooks in '%s' cannot be looked up: %s",
+                    config->hooks_dir, reason
+                );
+            }
+            goto cleanup;
+
+        case HOOK_FOUND_IGNORED:
+            /* The path named: hooks_dir is the config's to choose, and the name
+             * alone is not something a reader can act on */
+            output_warning(
+                out, OUTPUT_NORMAL, "Hook '%s' at '%s' was ignored: %s",
+                hook_name, hook_path, reason
+            );
+            goto cleanup;
+
+        case HOOK_FOUND_RUNNABLE:
+            break;
     }
 
     /* Sanity check: bound DOTTA_PATH_N env explosion. */
-    if (context->path_count > 10000) {
+    if (inv->path_count > 10000) {
         err = error_create(
             ERR_INVALID_ARG,
             "Hook '%s': too many paths in context (%zu, limit: 10000)",
-            hook_type_name(type), context->path_count
+            hook_name, inv->path_count
         );
         goto cleanup;
     }
 
     string_array_t env;
-    hook_env(config, context, frame, &env);
+    hook_env(config, inv, frame, &env);
 
     char *argv[] = { (char *) hook_path, NULL };  /* execve's type; never written */
     process_spec_t spec = {
@@ -208,78 +260,15 @@ static error_t hook_execute(
      * the hook is what they were not handed */
     err = process_run(&spec, out_result);
     if (err) {
-        err = error_wrap(err, "Cannot run hook '%s'", hook_type_name(type));
+        err = error_wrap(err, "Cannot run hook '%s'", hook_name);
         goto cleanup;
     }
 
-    /* Map result fields to a domain-specific error. exec_failed is checked first
-     * because it carries the most specific reason (errno from execve / chdir /
-     * dup2). The 126/127 special-cases present in the legacy implementation are
-     * intentionally absent: with exec_failed in place, those exit codes only
-     * signal the script's own internal failures, which fall through to the generic
-     * "exit code N" branch. */
-    if (out_result->exec_failed) {
-        err = error_create(
-            ERR_INTERNAL, "Hook '%s' failed: exec error: %s",
-            hook_type_name(type), strerror(out_result->exec_errno)
-        );
-    } else if (out_result->timed_out) {
-        err = error_create(
-            ERR_INTERNAL, "Hook '%s' exceeded timeout of %d seconds",
-            hook_type_name(type), config->hook_timeout
-        );
-    } else if (out_result->signal_num) {
-        err = error_create(
-            ERR_INTERNAL, "Hook '%s' terminated by signal %d",
-            hook_type_name(type), out_result->signal_num
-        );
-    } else if (out_result->exit_code != 0) {
-        err = error_create(
-            ERR_INTERNAL, "Hook '%s' failed with exit code %d",
-            hook_type_name(type), out_result->exit_code
-        );
-    }
+    err = hook_failure(config, hook_name, out_result);
 
 cleanup:
     arena_free(frame);
-
     return err;
-}
-
-/**
- * Invocation-based API (hook_fire_pre / hook_fire_post)
- */
-static const char *cmd_name(hook_cmd_t cmd) {
-    switch (cmd) {
-        case HOOK_CMD_ADD:    return "add";
-        case HOOK_CMD_REMOVE: return "remove";
-        case HOOK_CMD_APPLY:  return "apply";
-        case HOOK_CMD_UPDATE: return "update";
-        case HOOK_CMD_SYNC:   return "sync";
-    }
-    CHECK_ARG(false, "a hook command no enumerator names");
-}
-
-static hook_type_t pre_type_for(hook_cmd_t cmd) {
-    switch (cmd) {
-        case HOOK_CMD_ADD:    return HOOK_PRE_ADD;
-        case HOOK_CMD_REMOVE: return HOOK_PRE_REMOVE;
-        case HOOK_CMD_APPLY:  return HOOK_PRE_APPLY;
-        case HOOK_CMD_UPDATE: return HOOK_PRE_UPDATE;
-        case HOOK_CMD_SYNC:   return HOOK_PRE_SYNC;
-    }
-    CHECK_ARG(false, "a hook command no enumerator names");
-}
-
-static hook_type_t post_type_for(hook_cmd_t cmd) {
-    switch (cmd) {
-        case HOOK_CMD_ADD:    return HOOK_POST_ADD;
-        case HOOK_CMD_REMOVE: return HOOK_POST_REMOVE;
-        case HOOK_CMD_APPLY:  return HOOK_POST_APPLY;
-        case HOOK_CMD_UPDATE: return HOOK_POST_UPDATE;
-        case HOOK_CMD_SYNC:   return HOOK_POST_SYNC;
-    }
-    CHECK_ARG(false, "a hook command no enumerator names");
 }
 
 /**
@@ -304,29 +293,6 @@ static void hook_print_output(
     }
 }
 
-/**
- * Stack-build a context from the configuration and the invocation and execute
- * the hook. The caller stack-allocates `out_result` and is responsible for calling
- * process_result_deinit() on every path.
- */
-static error_t hook_fire(
-    const config_t *config,
-    const hook_invocation_t *inv,
-    hook_type_t type,
-    process_result_t *out_result
-) {
-    const hook_context_t ctx = {
-        .command    = cmd_name(inv->cmd),
-        .profile    = inv->profile,
-        .paths      = inv->paths,
-        .path_count = inv->path_count,
-        .extras     = inv->extras,
-        .dry_run    = inv->dry_run,
-    };
-
-    return hook_execute(config, type, &ctx, out_result);
-}
-
 error_t hook_fire_pre(
     const config_t *config,
     output_t *out,
@@ -335,11 +301,13 @@ error_t hook_fire_pre(
     CHECK_NULL(config);
     CHECK_NULL(inv);
 
-    /* The refusal names its hook, pre-<command> (hook_execute), so the command
-     * says nothing over it */
+    /* The refusal names its hook, pre-<command> (hook_fire), so the command says
+     * nothing over it */
     process_result_t result = { 0 };
-    error_t err = hook_fire(config, inv, pre_type_for(inv->cmd), &result);
-    if (err) hook_print_output(out, OUTPUT_QUIET, &result);
+    error_t err = hook_fire(config, out, inv, HOOK_PHASE_PRE, &result);
+    if (err) {
+        hook_print_output(out, OUTPUT_QUIET, &result);
+    }
     process_result_deinit(&result);
     return err;
 }
@@ -355,9 +323,9 @@ void hook_fire_post(
     if (inv->dry_run) return;
 
     /* A failure the run goes past, warned in its own words: they name the hook,
-     * post-<command> (hook_execute) */
+     * post-<command> (hook_fire) */
     process_result_t result = { 0 };
-    error_t err = hook_fire(config, inv, post_type_for(inv->cmd), &result);
+    error_t err = hook_fire(config, out, inv, HOOK_PHASE_POST, &result);
     if (err) {
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
         hook_print_output(out, OUTPUT_NORMAL, &result);

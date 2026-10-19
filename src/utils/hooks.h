@@ -1,10 +1,11 @@
 /**
  * hooks.h - Hook execution system
  *
- * Provides pre/post command hooks for extensibility. Hooks are shell scripts
- * that run before or after commands. The entire public surface is two functions
- * — hook_fire_pre and hook_fire_post — plus the value type used to describe one
- * invocation.
+ * A hook is a file in the configured hooks directory, named for its phase and
+ * its command — pre-add, post-sync — and run before or after that command where
+ * the file is executable: the file is the switch, git's, and the configuration
+ * holds none beside it. The entire public surface is two functions — hook_fire_pre
+ * and hook_fire_post — plus the value type used to describe one invocation.
  */
 
 #ifndef DOTTA_HOOKS_H
@@ -17,8 +18,8 @@
 /**
  * Hook-bearing command
  *
- * The commands that invoke pre/post hooks. Maps internally to a pre_<cmd> /
- * post_<cmd> hook script pair.
+ * The commands that invoke pre/post hooks. Each names a pre-<cmd> / post-<cmd>
+ * hook pair by its word.
  */
 typedef enum {
     HOOK_CMD_ADD,
@@ -66,21 +67,25 @@ typedef struct {
 /**
  * Fire a pre-command hook
  *
- * Builds a hook environment from inv and runs the pre_<cmd> hook script (if
- * configured and present). On failure, prints captured hook output (if any) at
- * OUTPUT_QUIET, the refusal's reason at every level, and returns the refusal,
- * which names its hook (Hook 'pre-<cmd>' …). Callers should goto-cleanup on
- * non-NULL return. The capture keeps the hook's first PROCESS_CAPTURE_MAX bytes
- * and counts the rest ("... and N more bytes"); a hook is never stopped for what
- * it writes (sys/process.h).
+ * Builds a hook environment from inv and runs the pre-<cmd> hook where its file
+ * is executable. Absent — nothing at its name, or a link to nothing — nothing
+ * runs and nothing is said; what the exec would refuse — no execute bit, no regular
+ * file — is ignored with a notice naming why, so a guard that loses its execute
+ * bit fails open, said by its notice; and a hooks directory whose names cannot
+ * be looked up is said once, naming the directory. On failure, prints captured
+ * hook output (if any) at OUTPUT_QUIET, the refusal's reason at every level,
+ * and returns the refusal, which names its hook (Hook 'pre-<cmd>' …). Callers
+ * should goto-cleanup on non-NULL return. The capture keeps the hook's first
+ * PROCESS_CAPTURE_MAX bytes and counts the rest ("... and N more bytes"); a hook
+ * is never stopped for what it writes (sys/process.h).
  *
- * A hook that did not run, or ran and failed, is ERR_INTERNAL — a mode that will
- * not exec, an exec that failed, a timeout, a signal, a non-zero exit; beside
- * them a context past 10,000 paths is ERR_INVALID_ARG, and a spawn the process
- * layer could not make keeps its own code (sys/process.h process_run) — and nothing
- * branches on the code. Never ERR_PERMISSION, however permission-shaped the cause:
- * that code is a refusal an identity met (base/error.h "Codes"), and a hook that
- * did not run is none.
+ * A runnable hook that could not be run, or ran and failed, is ERR_INTERNAL —
+ * an exec that failed, a timeout, a signal, a non-zero exit; beside them a context
+ * past 10,000 paths is ERR_INVALID_ARG, and a spawn the process layer could not
+ * make keeps its own code (sys/process.h process_run) — and nothing branches on
+ * the code. Never ERR_PERMISSION, however permission-shaped the cause: that code
+ * is a refusal an identity met (base/error.h "Codes"), and a hook that did not
+ * run is none.
  *
  * The hook's DOTTA_REPO_DIR is the store's directory the configuration settled
  * (`config->repo_dir`), its DOTTA_CONFIG_FILE the file the configuration was
@@ -98,9 +103,11 @@ error_t hook_fire_pre(
  * Fire a post-command hook
  *
  * No-op if inv->dry_run is true. Otherwise builds a hook environment from inv
- * and runs the post_<cmd> hook script (if configured and present). Failures never
- * propagate: on error, prints a warning and any captured hook output, then swallows
- * the error. Its environment is hook_fire_pre's.
+ * and runs the post-<cmd> hook where its file is executable, as hook_fire_pre
+ * runs its own — a hooks directory whose names cannot be looked up said by the
+ * pre-fire alone, which every post-fire follows. Failures never propagate: on
+ * error, prints a warning and any captured hook output, then swallows the error.
+ * Its environment is hook_fire_pre's.
  */
 void hook_fire_post(
     const config_t *config,

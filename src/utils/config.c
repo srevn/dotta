@@ -235,16 +235,6 @@ config_t *config_create_default(arena_t *arena) {
 
     config->hooks_dir = str_path_join(arena, identity()->home, DEFAULT_HOOKS_DIR);
     config->hook_timeout = 30;  /* Default: 30 seconds */
-    config->pre_apply = true;
-    config->post_apply = true;
-    config->pre_add = false;
-    config->post_add = false;
-    config->pre_remove = false;
-    config->post_remove = false;
-    config->pre_update = false;
-    config->post_update = false;
-    config->pre_sync = false;
-    config->post_sync = false;
 
     config->confirm_destructive = true;
     config->confirm_new_files = true;  /* Default: confirm before adding new files */
@@ -302,26 +292,6 @@ static error_t read_key(
             return read_path(value, section, key, arena, &config->hooks_dir);
         if (strcmp(key, "timeout") == 0)
             return read_int(value, section, key, 0, INT32_MAX, &config->hook_timeout);
-        if (strcmp(key, "pre_apply") == 0)
-            return read_bool(value, section, key, &config->pre_apply);
-        if (strcmp(key, "post_apply") == 0)
-            return read_bool(value, section, key, &config->post_apply);
-        if (strcmp(key, "pre_add") == 0)
-            return read_bool(value, section, key, &config->pre_add);
-        if (strcmp(key, "post_add") == 0)
-            return read_bool(value, section, key, &config->post_add);
-        if (strcmp(key, "pre_remove") == 0)
-            return read_bool(value, section, key, &config->pre_remove);
-        if (strcmp(key, "post_remove") == 0)
-            return read_bool(value, section, key, &config->post_remove);
-        if (strcmp(key, "pre_update") == 0)
-            return read_bool(value, section, key, &config->pre_update);
-        if (strcmp(key, "post_update") == 0)
-            return read_bool(value, section, key, &config->post_update);
-        if (strcmp(key, "pre_sync") == 0)
-            return read_bool(value, section, key, &config->pre_sync);
-        if (strcmp(key, "post_sync") == 0)
-            return read_bool(value, section, key, &config->post_sync);
     } else if (strcmp(section, "security") == 0) {
         if (strcmp(key, "confirm_destructive") == 0)
             return read_bool(value, section, key, &config->confirm_destructive);

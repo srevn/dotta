@@ -96,6 +96,8 @@ extern volatile sig_atomic_t active_child_pgid;
  *           since a background group's read of the terminal stops it (SIGTTIN).
  * DEVNULL — child's STDIN_FILENO is redirected to /dev/null. Use for
  *           non-interactive children that must never block on a terminal read.
+ *           Opened before the fork: one that cannot be opened refuses the run,
+ *           never leaves the child dotta's stdin.
  * BUFFER  — child's STDIN_FILENO reads from a pipe the primitive
  *           fills with spec->stdin_content (stdin_content_len bytes) and closes.
  *           Use for subprocesses that consume a small fixed payload on stdin

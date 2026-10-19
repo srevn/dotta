@@ -1,11 +1,12 @@
 /**
  * process.c - Unified subprocess primitive implementation
  *
- * Single linear procedure: validate spec → open pipes (output + exec-errno) →
- * fork → the child sets up its environment and execs (process_child) → the parent
- * drains output with a monotonic-clock select() loop (process_drain), keeping
- * what a capture asks for (process_capture_t) → parent reaps the child (escalating
- * SIGTERM→SIGKILL on timeout) → parent decodes wait status into the result struct.
+ * Single linear procedure: validate spec → open the child's stdin
+ * (process_stdin_open) and pipes (output + exec-errno) → fork → the child sets
+ * up its environment and execs (process_child) → the parent drains output with
+ * a monotonic-clock select() loop (process_drain), keeping what a capture asks
+ * for (process_capture_t) → parent reaps the child (escalating SIGTERM→SIGKILL
+ * on timeout) → parent decodes wait status into the result struct.
  *
  * One cleanup label handles all error paths. Every resource (pipe fds, capture
  * buffer, stray child) is initialized to a sentinel so cleanup is unconditional
@@ -148,6 +149,49 @@ static error_t process_pipe(int fds[2], const char *program) {
 }
 
 /**
+ * The descriptors a stdin policy needs before the fork: what the child reads,
+ * `*child`, and the end the parent writes its payload into, `*parent` — a pipe's
+ * two ends (BUFFER), /dev/null for the child alone (DEVNULL), neither (INHERIT).
+ * Each -1 where the policy has none, and both on a refusal, which names the
+ * program.
+ */
+static error_t process_stdin_open(
+    const process_spec_t *spec, int *parent, int *child
+) {
+    *parent = -1;
+    *child = -1;
+
+    switch (spec->stdin_policy) {
+        case PROCESS_STDIN_INHERIT:
+            return NULL;
+
+        case PROCESS_STDIN_DEVNULL:
+            /* Opened here, where its failure is a refusal: the child could only
+             * keep dotta's stdin in its place */
+            *child = open("/dev/null", O_RDONLY | O_CLOEXEC);
+            if (*child < 0) {
+                return error_errno(
+                    errno, "Failed to open /dev/null for '%s'",
+                    spec->argv[0]
+                );
+            }
+            return NULL;
+
+        case PROCESS_STDIN_BUFFER: {
+            int fds[2];
+            error_t err = process_pipe(fds, spec->argv[0]);
+            if (err) return err;
+
+            *child = fds[0];
+            *parent = fds[1];
+            return NULL;
+        }
+    }
+
+    CHECK_ARG(false, "a stdin policy no enumerator names");
+}
+
+/**
  * A child's signals, made its own before exec — both primitives' children
  *
  * No handler of the parent's runs between fork and exec: execve() resets a caught
@@ -192,10 +236,11 @@ static _Noreturn void process_child_fail(int errfd, int code) {
  * identity, its stdin and its output, every other descriptor closed, its working
  * directory — then the exec
  *
- * `in` is the payload pipe's read end (PROCESS_STDIN_BUFFER), `out` the output
- * pipe's write end, `errfd` the exec's pipe's: each above 2 (main.c), so no dup2
- * here overwrites another's source. No error_t, no malloc, no return: a failure
- * is its errno over the exec's pipe (process_child_fail).
+ * `in` is what the stdin policy opened for the child, -1 for dotta's own
+ * (process_stdin_open), `out` the output pipe's write end, `errfd` the exec's
+ * pipe's: each above 2 (main.c), so no dup2 here overwrites another's source.
+ * No error_t, no malloc, no return: a failure is its errno over the exec's pipe
+ * (process_child_fail).
  */
 static _Noreturn void process_child(
     const process_spec_t *spec, int in, int out, int errfd
@@ -212,19 +257,7 @@ static _Noreturn void process_child(
      * errno over the self-pipe, 126. */
     if (identity_drop_child() != 0) process_child_fail(errfd, 126);
 
-    if (spec->stdin_policy == PROCESS_STDIN_DEVNULL) {
-        int dn = open("/dev/null", O_RDONLY);
-        if (dn >= 0) {
-            (void) dup2(dn, STDIN_FILENO);
-            close(dn);
-        }
-        /* If open failed, child inherits whatever stdin parent had. No clean
-         * way to report from the child here; the worst case is the script blocks
-         * on a terminal read and we time out. */
-    } else if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
-        if (dup2(in, STDIN_FILENO) < 0) process_child_fail(errfd, 126);
-    }
-
+    if (in >= 0 && dup2(in, STDIN_FILENO) < 0) process_child_fail(errfd, 126);
     if (dup2(out, STDOUT_FILENO) < 0 || dup2(out, STDERR_FILENO) < 0) {
         process_child_fail(errfd, 126);
     }
@@ -431,9 +464,13 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
      * is load-bearing only for BUFFER, so one set under INHERIT or DEVNULL is a
      * payload the caller expected and the child would never read */
     CHECK_ARG(
-        spec->argv[0] != NULL && spec->argv[0][0] != '\0', "argv[0] names no program"
+        spec->argv[0] != NULL && spec->argv[0][0] != '\0',
+        "argv[0] names no program"
     );
-    CHECK_ARG(spec->timeout_seconds >= 0, "a time limit below zero");
+    CHECK_ARG(
+        spec->timeout_seconds >= 0,
+        "a time limit below zero"
+    );
     CHECK_ARG(
         spec->stdin_policy == PROCESS_STDIN_BUFFER ||
         (spec->stdin_content == NULL && spec->stdin_content_len == 0),
@@ -459,14 +496,19 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
 
     /* All resources initialized to safe sentinels. */
     const char *program = spec->argv[0];
+    int stdin_parent = -1;
+    int stdin_child = -1;
     int pipefd[2] = { -1, -1 };
     int errfd[2] = { -1, -1 };
-    int stdin_pipe[2] = { -1, -1 };
     pid_t pid = -1;
     pid_t kill_target = -1;
     process_capture_t capture = { 0 };
     int status = 0;
     error_t err = NULL;
+
+    /* The child's stdin, opened before the fork (process_stdin_open). */
+    err = process_stdin_open(spec, &stdin_parent, &stdin_child);
+    if (err) goto cleanup;
 
     /* Output pipe (child stdout/stderr → parent). */
     err = process_pipe(pipefd, program);
@@ -476,13 +518,6 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
      * success, FD_CLOEXEC closes the write end and parent reads EOF). */
     err = process_pipe(errfd, program);
     if (err) goto cleanup;
-
-    /* Stdin payload pipe (parent writes spec->stdin_content; child reads from
-     * its stdin). Only created for BUFFER policy. */
-    if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
-        err = process_pipe(stdin_pipe, program);
-        if (err) goto cleanup;
-    }
 
     /* The capture, made before the fork where one is asked for. */
     if (spec->capture) {
@@ -496,7 +531,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     }
 
     if (pid == 0) {
-        process_child(spec, stdin_pipe[0], pipefd[1], errfd[1]);
+        process_child(spec, stdin_child, pipefd[1], errfd[1]);
     }
 
     /* ───── Parent ──────────────────────────────────────────────── */
@@ -517,7 +552,11 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
         kill_target = pid;
     }
 
-    /* Close the child's ends of both pipes. */
+    /* Close the child's ends: its stdin's, and both pipes'. */
+    if (stdin_child >= 0) {
+        close(stdin_child);
+        stdin_child = -1;
+    }
     close(pipefd[1]);
     pipefd[1] = -1;
     close(errfd[1]);
@@ -529,16 +568,14 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
      * yet reached its consuming read. EPIPE (child exec failed or exited before
      * reading) is benign — the exec-errno drain and wait-status decode below
      * surface the real cause. */
-    if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
-        close(stdin_pipe[0]);
-        stdin_pipe[0] = -1;
+    if (stdin_parent >= 0) {
         if (spec->stdin_content_len > 0) {
             (void) process_write(
-                stdin_pipe[1], spec->stdin_content, spec->stdin_content_len
+                stdin_parent, spec->stdin_content, spec->stdin_content_len
             );
         }
-        close(stdin_pipe[1]);
-        stdin_pipe[1] = -1;
+        close(stdin_parent);
+        stdin_parent = -1;
     }
 
     /* Non-blocking output pipe so the select+read loop never blocks past the
@@ -611,8 +648,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
             if (spec->timeout_seconds > 0 && remaining == 0) {
                 result->timed_out = true;
                 if (!process_kill_and_wait(
-                    pid, kill_target, SIGTERM,
-                    PROCESS_GRACE_TERM_SECONDS, &status
+                    pid, kill_target, SIGTERM, PROCESS_GRACE_TERM_SECONDS, &status
                     )) {
                     (void) process_kill_and_wait(
                         pid, kill_target, SIGKILL,
@@ -664,12 +700,12 @@ cleanup:
      * Pre-fork failure paths write 0-over-0 — harmless. */
     active_child_pgid = 0;
 
+    if (stdin_parent >= 0) close(stdin_parent);
+    if (stdin_child >= 0) close(stdin_child);
     if (pipefd[0] >= 0) close(pipefd[0]);
     if (pipefd[1] >= 0) close(pipefd[1]);
     if (errfd[0] >= 0) close(errfd[0]);
     if (errfd[1] >= 0) close(errfd[1]);
-    if (stdin_pipe[0] >= 0) close(stdin_pipe[0]);
-    if (stdin_pipe[1] >= 0) close(stdin_pipe[1]);
 
     /* Reap any stray child. We get here with pid > 0 only if a mid-execution
      * failure prevented the normal wait paths from running. Best-effort; if it

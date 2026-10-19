@@ -516,6 +516,11 @@ static error_t process_drain(
         }
     }
 
+    /* The chunk last held the tail of what the child wrote — a secret's, under
+     * a secure capture, its bytes past the bound among them — wiped as every
+     * buffer that held one is (base/secure.h) */
+    if (capture->secure) secure_wipe(chunk, sizeof(chunk));
+
     return err;
 }
 

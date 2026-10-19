@@ -2,8 +2,9 @@
  * process.c - Unified subprocess primitive implementation
  *
  * Single linear procedure: validate spec → open pipes (output + exec-errno) →
- * fork → child sets up its environment and execs → parent drains output with a
- * monotonic-clock select() loop → parent reaps the child (escalating
+ * fork → the child sets up its environment and execs (process_child) → the parent
+ * drains output with a monotonic-clock select() loop (process_drain), keeping
+ * what a capture asks for (process_capture_t) → parent reaps the child (escalating
  * SIGTERM→SIGKILL on timeout) → parent decodes wait status into the result struct.
  *
  * One cleanup label handles all error paths. Every resource (pipe fds, capture
@@ -68,7 +69,7 @@ volatile sig_atomic_t active_child_pgid = 0;
  * Returns the number of bytes written, or -1 if no progress was made before a
  * non-recoverable error.
  */
-static ssize_t write_full(int fd, const void *buf, size_t n) {
+static ssize_t process_write(int fd, const void *buf, size_t n) {
     const char *p = buf;
     size_t total = 0;
     while (n > 0) {
@@ -167,6 +168,83 @@ static void process_child_signals(void) {
 }
 
 /**
+ * A child's failure before its exec, or its exec's: the errno over the exec's
+ * pipe, which the parent reads into the result (exec_failed, exec_errno), then
+ * the exit — 126 for a step of the setup, 127 for the exec. Both primitives'
+ * children.
+ */
+static _Noreturn void process_child_fail(int errfd, int code) {
+    int e = errno;
+    (void) process_write(errfd, &e, sizeof(e));
+    _exit(code);
+}
+
+/**
+ * The child, from the fork to its exec: its signals and its group, the invoker's
+ * identity, its stdin and its output, every other descriptor closed, its working
+ * directory — then the exec
+ *
+ * `in` is the payload pipe's read end (PROCESS_STDIN_BUFFER), `out` the output
+ * pipe's write end, `errfd` the exec's pipe's: each above 2 (main.c), so no dup2
+ * here overwrites another's source. No error_t, no malloc, no return: a failure
+ * is its errno over the exec's pipe (process_child_fail).
+ */
+static _Noreturn void process_child(
+    const process_spec_t *spec, int in, int out, int errfd
+) {
+    /* The child's signals, its own before exec (process_child_signals). */
+    process_child_signals();
+
+    if (spec->pgrp_policy == PROCESS_PGRP_NEW) {
+        (void) setpgid(0, 0);
+    }
+
+    /* The invoker's child, for good (sys/identity), before anything the child
+     * does — the chdir, the exec, the script. Reported as an exec failure is:
+     * errno over the self-pipe, 126. */
+    if (identity_drop_child() != 0) process_child_fail(errfd, 126);
+
+    if (spec->stdin_policy == PROCESS_STDIN_DEVNULL) {
+        int dn = open("/dev/null", O_RDONLY);
+        if (dn >= 0) {
+            (void) dup2(dn, STDIN_FILENO);
+            close(dn);
+        }
+        /* If open failed, child inherits whatever stdin parent had. No clean
+         * way to report from the child here; the worst case is the script blocks
+         * on a terminal read and we time out. */
+    } else if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
+        if (dup2(in, STDIN_FILENO) < 0) process_child_fail(errfd, 126);
+    }
+
+    if (dup2(out, STDOUT_FILENO) < 0 || dup2(out, STDERR_FILENO) < 0) {
+        process_child_fail(errfd, 126);
+    }
+
+    /* Close every other inherited fd: the pipes' other ends — so the child never
+     * holds its own stdin's write end — and libgit2's and SQLite's handles, which
+     * must not leak into the script. errfd must survive — it carries any
+     * exec-failure errno back to the parent. */
+    long maxfd = sysconf(_SC_OPEN_MAX);
+    if (maxfd < 0 || maxfd > PROCESS_FD_CAP) {
+        maxfd = PROCESS_FD_FALLBACK;
+    }
+    for (int fd = STDERR_FILENO + 1; fd < (int) maxfd; fd++) {
+        if (fd != errfd) {
+            close(fd);
+        }
+    }
+
+    if (spec->work_dir && chdir(spec->work_dir) != 0 &&
+        (!spec->work_dir_fallback || chdir(spec->work_dir_fallback) != 0)) {
+        process_child_fail(errfd, 126);
+    }
+
+    execve(spec->argv[0], spec->argv, spec->envp);
+    process_child_fail(errfd, 127);
+}
+
+/**
  * Compute remaining seconds until deadline. Returns 0 if the deadline has passed.
  * Returns -1 if no timeout is set.
  */
@@ -185,60 +263,154 @@ static long process_remaining(
 }
 
 /**
- * Compute the next capacity in the doubling schedule.
- *
- * The smallest power-of-two step that fits `needed`, and never more than the
- * bound holds — PROCESS_CAPTURE_MAX and its NUL, which no `needed` exceeds, so
- * the doubling cannot overflow. Shared by both grow strategies so the size policy
- * stays in one place.
+ * What a capture keeps of the child's output: its first PROCESS_CAPTURE_MAX bytes,
+ * terminated, and the count of the rest. A secure capture holds a secret (a
+ * credential helper's response): every buffer that held a byte of it is wiped
+ * before the allocator has it back.
  */
-static size_t capture_next_capacity(size_t current, size_t needed) {
-    while (current < needed) {
-        current *= 2;
-    }
-    return current < PROCESS_CAPTURE_MAX + 1 ? current : PROCESS_CAPTURE_MAX + 1;
+typedef struct {
+    char *bytes;                  /* the kept bytes, NUL-terminated */
+    size_t len;                   /* bytes kept, the NUL not counted */
+    size_t capacity;              /* bytes' allocation, the NUL's byte among it */
+    size_t dropped;               /* bytes past the bound, drained and not kept */
+    bool secure;                  /* every allocation wiped before its free */
+} process_capture_t;
+
+/* A capture's first buffer, PROCESS_CAPTURE_INITIAL bytes, empty and terminated */
+static void process_capture_init(process_capture_t *capture, bool secure) {
+    *capture = (process_capture_t) {
+        .bytes = heap_alloc(PROCESS_CAPTURE_INITIAL),
+        .capacity = PROCESS_CAPTURE_INITIAL,
+        .secure = secure,
+    };
+    capture->bytes[0] = '\0';
 }
 
 /**
- * Grow the capture buffer to fit `needed` bytes. Returns the (possibly reallocated)
- * buffer and updates *capacity_inout.
+ * Keep a chunk of the child's output: as much of it as the bound has room for,
+ * the rest counted — the child's volume never sizes the capture (the header).
+ *
+ * The buffer doubles to fit, never past the bound and its NUL, which no chunk
+ * needs more than, so the doubling cannot overflow. A secure capture grows by
+ * malloc → memcpy → wipe → free, the old allocation wiped whole: a realloc may
+ * move the bytes and leave the old ones on the freelist unwiped. The cost is a
+ * copy and a wipe per doubling, and a credential helper's response fits the first
+ * buffer or one doubling of it.
  */
-static char *capture_grow(char *buf, size_t needed, size_t *capacity_inout) {
-    size_t cap = capture_next_capacity(*capacity_inout, needed);
-    char *grown = heap_realloc(buf, cap);
-    *capacity_inout = cap;
-    return grown;
-}
-
-/**
- * Secure variant of capture_grow.
- *
- * Used when the capture buffer holds secrets (passwords from a credential helper
- * response). realloc may relocate, leaving the old bytes on the freelist
- * unscrubbed; this helper performs an explicit malloc → memcpy → memzero → free
- * so every byte that ever held a secret is wiped before the page returns to the
- * allocator.
- *
- * `cur_len` is the number of valid bytes in `buf` (the live data to preserve).
- * The full prior capacity is zeroed so dead-store elimination cannot drop the
- * wipe and the entire allocation (not just the live prefix) is clean before free.
- *
- * Cost is one extra memcpy + memzero per grow event. The doubling schedule keeps
- * grow events O(log n), and for the realistic case (helper response slightly
- * over PROCESS_CAPTURE_INITIAL) only one grow fires per call.
- */
-static char *capture_grow_secure(
-    char *buf, size_t cur_len, size_t needed, size_t *capacity_inout
+static void process_capture_add(
+    process_capture_t *capture, const char *chunk, size_t n
 ) {
-    size_t cap = capture_next_capacity(*capacity_inout, needed);
-    char *grown = heap_alloc(cap);
-    if (buf) {
-        memcpy(grown, buf, cur_len);
-        secure_wipe(buf, *capacity_inout);
-        free(buf);
+    size_t room = PROCESS_CAPTURE_MAX - capture->len;
+    size_t keep = n < room ? n : room;
+    capture->dropped += n - keep;
+
+    size_t need = capture->len + keep + 1;
+    if (need > capture->capacity) {
+        size_t capacity = capture->capacity;
+        while (capacity < need) capacity *= 2;
+        if (capacity > PROCESS_CAPTURE_MAX + 1) capacity = PROCESS_CAPTURE_MAX + 1;
+
+        if (capture->secure) {
+            char *grown = heap_alloc(capacity);
+            memcpy(grown, capture->bytes, capture->len);
+            secure_wipe(capture->bytes, capture->capacity);
+            free(capture->bytes);
+            capture->bytes = grown;
+        } else {
+            capture->bytes = heap_realloc(capture->bytes, capacity);
+        }
+        capture->capacity = capacity;
     }
-    *capacity_inout = cap;
-    return grown;
+
+    memcpy(capture->bytes + capture->len, chunk, keep);
+    capture->len += keep;
+    capture->bytes[capture->len] = '\0';
+}
+
+/* A capture never handed to the result, freed — wiped first where secure, so
+ * partial-read bytes do not linger after a mid-capture failure */
+static void process_capture_deinit(process_capture_t *capture) {
+    if (capture->secure) secure_wipe(capture->bytes, capture->capacity);
+    free(capture->bytes);
+    *capture = (process_capture_t) { 0 };
+}
+
+/**
+ * Read the child's output to the end of the pipe or to the limit, whichever comes
+ * first — *timed_out says which. A capture keeps it (process_capture_add) and a
+ * stream copies it to spec->stream_fd as it comes; kept or not, every chunk is
+ * read, so a child past the bound never blocks on a full pipe and runs to its
+ * own end.
+ */
+static error_t process_drain(
+    const process_spec_t *spec, int fd, const struct timespec *start,
+    process_capture_t *capture, bool *timed_out
+) {
+    char chunk[PROCESS_READ_CHUNK];
+    bool stream_broken = false;
+    error_t err = NULL;
+
+    *timed_out = false;
+    for (;;) {
+        long remaining = process_remaining(start, spec->timeout_seconds);
+        if (spec->timeout_seconds > 0 && remaining == 0) {
+            *timed_out = true;
+            break;
+        }
+
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(fd, &rfds);
+
+        struct timeval tv;
+        struct timeval *tvp = NULL;
+        if (remaining >= 0) {
+            tv.tv_sec = remaining;
+            tv.tv_usec = 0;
+            tvp = &tv;
+        }
+
+        int rs = select(fd + 1, &rfds, NULL, NULL, tvp);
+        if (rs < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            err = error_errno(errno, "select on child pipe");
+            break;
+        }
+        if (rs == 0) {
+            /* select timed out; loop iteration will reassess remaining. */
+            continue;
+        }
+
+        ssize_t n = read(fd, chunk, sizeof(chunk));
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                continue;
+            }
+            err = error_errno(errno, "read child pipe");
+            break;
+        }
+        if (n == 0) {
+            break;  /* child closed its end of the pipe */
+        }
+
+        if (spec->capture) {
+            process_capture_add(capture, chunk, (size_t) n);
+        }
+
+        if (spec->stream_fd >= 0 && !stream_broken) {
+            ssize_t w = process_write(spec->stream_fd, chunk, (size_t) n);
+            if (w < 0) {
+                /* Sink is broken (likely EPIPE because the consumer closed its
+                 * end). Drop further chunks but keep draining so the child can
+                 * finish naturally rather than blocking on a full pipe. */
+                stream_broken = true;
+            }
+        }
+    }
+
+    return err;
 }
 
 error_t process_run(const process_spec_t *spec, process_result_t *result) {
@@ -295,12 +467,8 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     int stdin_pipe[2] = { -1, -1 };
     pid_t pid = -1;
     pid_t kill_target = -1;
-    char *capture = NULL;
-    size_t cap_len = 0;
-    size_t cap_capacity = 0;
-    size_t cap_dropped = 0;
+    process_capture_t capture = { 0 };
     int status = 0;
-    bool timed_out = false;
     error_t err = NULL;
 
     /* Output pipe (child stdout/stderr → parent). */
@@ -327,10 +495,9 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
         set_pipe_cloexec(stdin_pipe);
     }
 
-    /* Pre-allocate capture buffer if requested. */
+    /* The capture, made before the fork where one is asked for. */
     if (spec->capture) {
-        cap_capacity = PROCESS_CAPTURE_INITIAL;
-        capture = heap_alloc(cap_capacity);
+        process_capture_init(&capture, spec->secure_capture);
     }
 
     pid = fork();
@@ -340,95 +507,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     }
 
     if (pid == 0) {
-        /* ───── Child ─────────────────────────────────────────────
-         *
-         * From this point until execve(), no error_t / no malloc / no goto-cleanup.
-         * Failures write errno to errfd[1] (which the parent drains after our
-         * exit) and _exit(126|127).
-         */
-
-        /* The child's signals, its own before exec (process_child_signals). */
-        process_child_signals();
-
-        /* Belt-and-suspenders: cancel any inherited alarm. */
-        alarm(0);
-
-        if (spec->pgrp_policy == PROCESS_PGRP_NEW) {
-            (void) setpgid(0, 0);
-        }
-
-        /* The invoker's child, for good (sys/identity), before anything the child
-         * does — the chdir, the exec, the script. Reported as an exec failure
-         * is: errno over the self-pipe, 126. */
-        if (identity_drop_child() != 0) {
-            int e = errno;
-            (void) write_full(errfd[1], &e, sizeof(e));
-            _exit(126);
-        }
-
-        close(pipefd[0]);
-        close(errfd[0]);
-
-        if (spec->stdin_policy == PROCESS_STDIN_DEVNULL) {
-            int dn = open("/dev/null", O_RDONLY);
-            if (dn >= 0) {
-                (void) dup2(dn, STDIN_FILENO);
-                close(dn);
-            }
-            /* If open failed, child inherits whatever stdin parent had. No clean
-             * way to report from the child here; the worst case is the script
-             * blocks on a terminal read and we time out. */
-        } else if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
-            /* Parent holds the write end; close it so the child cannot see its
-             * own stdin source as writable. */
-            close(stdin_pipe[1]);
-            if (dup2(stdin_pipe[0], STDIN_FILENO) < 0) {
-                int e = errno;
-                (void) write_full(errfd[1], &e, sizeof(e));
-                _exit(126);
-            }
-            close(stdin_pipe[0]);
-        }
-
-        if (dup2(pipefd[1], STDOUT_FILENO) < 0
-            || dup2(pipefd[1], STDERR_FILENO) < 0) {
-            int e = errno;
-            (void) write_full(errfd[1], &e, sizeof(e));
-            _exit(126);
-        }
-        close(pipefd[1]);
-
-        /* Close every other inherited fd so libgit2/SQLite handles do not leak
-         * into the script. errfd[1] must survive — it carries any exec-failure
-         * errno back to the parent. */
-        long maxfd = sysconf(_SC_OPEN_MAX);
-        if (maxfd < 0 || maxfd > PROCESS_FD_CAP) {
-            maxfd = PROCESS_FD_FALLBACK;
-        }
-        for (int fd = STDERR_FILENO + 1; fd < (int) maxfd; fd++) {
-            if (fd != errfd[1]) {
-                close(fd);
-            }
-        }
-
-        if (spec->work_dir) {
-            if (chdir(spec->work_dir) != 0) {
-                if (!spec->work_dir_fallback || chdir(spec->work_dir_fallback) != 0) {
-                    int e = errno;
-                    (void) write_full(errfd[1], &e, sizeof(e));
-                    _exit(126);
-                }
-            }
-        }
-
-        execve(spec->argv[0], spec->argv, spec->envp);
-
-        /* execve only returns on failure. */
-        {
-            int e = errno;
-            (void) write_full(errfd[1], &e, sizeof(e));
-        }
-        _exit(127);
+        process_child(spec, stdin_pipe[0], pipefd[1], errfd[1]);
     }
 
     /* ───── Parent ──────────────────────────────────────────────── */
@@ -465,7 +544,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
         close(stdin_pipe[0]);
         stdin_pipe[0] = -1;
         if (spec->stdin_content_len > 0) {
-            (void) write_full(
+            (void) process_write(
                 stdin_pipe[1], spec->stdin_content, spec->stdin_content_len
             );
         }
@@ -486,89 +565,8 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     struct timespec start = { 0, 0 };
     clock_gettime(CLOCK_MONOTONIC, &start);
 
-    char buf[PROCESS_READ_CHUNK];
-    bool stream_broken = false;
-
-    for (;;) {
-        long remaining = process_remaining(&start, spec->timeout_seconds);
-        if (spec->timeout_seconds > 0 && remaining == 0) {
-            timed_out = true;
-            break;
-        }
-
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        FD_SET(pipefd[0], &rfds);
-
-        struct timeval tv;
-        struct timeval *tvp = NULL;
-        if (remaining >= 0) {
-            tv.tv_sec = remaining;
-            tv.tv_usec = 0;
-            tvp = &tv;
-        }
-
-        int rs = select(pipefd[0] + 1, &rfds, NULL, NULL, tvp);
-        if (rs < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            err = error_errno(errno, "select on child pipe");
-            goto cleanup;
-        }
-        if (rs == 0) {
-            /* select timed out; loop iteration will reassess remaining. */
-            continue;
-        }
-
-        ssize_t n = read(pipefd[0], buf, sizeof(buf));
-        if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-                continue;
-            }
-            err = error_errno(errno, "read child pipe");
-            goto cleanup;
-        }
-        if (n == 0) {
-            break;  /* child closed its end of the pipe */
-        }
-
-        if (spec->capture) {
-            /* The first PROCESS_CAPTURE_MAX bytes are kept, and the rest counted
-             * as the loop drains them: the child's volume never sizes the capture,
-             * and the child runs to its own end either way (the header). Kept
-             * or not, every chunk is read, so a child past the bound never blocks
-             * on a full pipe. */
-            size_t keep = (size_t) n;
-            if (keep > PROCESS_CAPTURE_MAX - cap_len) {
-                keep = PROCESS_CAPTURE_MAX - cap_len;
-            }
-            cap_dropped += (size_t) n - keep;
-
-            size_t need = cap_len + keep + 1;
-            if (need > cap_capacity) {
-                capture = spec->secure_capture
-                    ? capture_grow_secure(capture, cap_len, need, &cap_capacity)
-                    : capture_grow(capture, need, &cap_capacity);
-            }
-            memcpy(capture + cap_len, buf, keep);
-            cap_len += keep;
-        }
-
-        if (spec->stream_fd >= 0 && !stream_broken) {
-            ssize_t w = write_full(spec->stream_fd, buf, (size_t) n);
-            if (w < 0) {
-                /* Sink is broken (likely EPIPE because the consumer closed its
-                 * end). Drop further chunks but keep draining so the child can
-                 * finish naturally rather than blocking on a full pipe. */
-                stream_broken = true;
-            }
-        }
-    }
-
-    if (spec->capture) {
-        capture[cap_len] = '\0';
-    }
+    err = process_drain(spec, pipefd[0], &start, &capture, &result->timed_out);
+    if (err) goto cleanup;
 
     /* Drain the exec-errno channel: 0 bytes (EOF) means execve succeeded and
      * FD_CLOEXEC closed the write end; sizeof(int) bytes means the child wrote
@@ -587,7 +585,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     close(errfd[0]);
     errfd[0] = -1;
 
-    if (timed_out) {
+    if (result->timed_out) {
         if (!process_kill_and_wait(
             pid, kill_target, SIGTERM, PROCESS_GRACE_TERM_SECONDS, &status
             )) {
@@ -622,7 +620,7 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
 
             long remaining = process_remaining(&start, spec->timeout_seconds);
             if (spec->timeout_seconds > 0 && remaining == 0) {
-                timed_out = true;
+                result->timed_out = true;
                 if (!process_kill_and_wait(
                     pid, kill_target, SIGTERM,
                     PROCESS_GRACE_TERM_SECONDS, &status
@@ -645,7 +643,6 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
      * independent — exit_code reflects what the wait returned (typically 126/127
      * for our child-side _exit), which is still useful information for the
      * caller. */
-    result->timed_out = timed_out;
     if (WIFEXITED(status)) {
         result->exit_code = WEXITSTATUS(status);
         result->signal_num = 0;
@@ -661,14 +658,14 @@ error_t process_run(const process_spec_t *spec, process_result_t *result) {
     }
 
     /* Transfer capture ownership into the result. The secure flag mirrors the
-     * spec so process_result_deinit can scrub before free without re-deriving
+     * capture's so process_result_deinit can scrub before free without re-deriving
      * intent. */
     if (spec->capture) {
-        result->output = capture;
-        result->output_len = cap_len;
-        result->output_dropped = cap_dropped;
-        result->secure = spec->secure_capture;
-        capture = NULL;
+        result->output = capture.bytes;
+        result->output_len = capture.len;
+        result->output_dropped = capture.dropped;
+        result->secure = capture.secure;
+        capture.bytes = NULL;
     }
 
 cleanup:
@@ -695,13 +692,8 @@ cleanup:
         );
     }
 
-    /* Free capture buffer only if ownership was not transferred. Secure captures
-     * get a wipe first so partial-read bytes do not linger after a mid-capture
-     * failure. */
-    if (capture && spec->secure_capture) {
-        secure_wipe(capture, cap_capacity);
-    }
-    free(capture);
+    /* The capture, where ownership was not transferred (process_capture_deinit) */
+    process_capture_deinit(&capture);
 
     return err;
 }
@@ -754,22 +746,15 @@ error_t process_foreground(char *const argv[], process_result_t *result) {
         /* ───── Child ─────────────────────────────────────────────
          *
          * As process_run's: no error_t / no malloc until exec, and a failure
-         * writes its errno to the self-pipe and exits. */
+         * writes its errno to the self-pipe and exits (process_child_fail). */
         close(errfd[0]);
         process_child_signals();
 
         /* The invoker's child, for good (sys/identity), before the exec. */
-        if (identity_drop_child() != 0) {
-            int e = errno;
-            (void) write_full(errfd[1], &e, sizeof(e));
-            _exit(126);
-        }
+        if (identity_drop_child() != 0) process_child_fail(errfd[1], 126);
 
         execvp(argv[0], argv);
-
-        int e = errno;
-        (void) write_full(errfd[1], &e, sizeof(e));
-        _exit(127);
+        process_child_fail(errfd[1], 127);
     }
 
     /* ───── Parent ──────────────────────────────────────────────── */

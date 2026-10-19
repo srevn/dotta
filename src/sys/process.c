@@ -41,10 +41,14 @@
 /* Read chunk size for draining the child's output pipe. */
 #define PROCESS_READ_CHUNK 4096
 
-/* Cap for sysconf(_SC_OPEN_MAX) before the close-fds loop, so a pathological
- * RLIMIT_NOFILE doesn't cost millions of close() syscalls in the child. */
-#define PROCESS_FD_CAP 65536
-#define PROCESS_FD_FALLBACK 1024
+/* The bound of the child's close loop (process_child): the descriptor limit, at
+ * most git's 4096 (lib/git/run-command.c start_command), so a limit raised to a
+ * million costs no million close()s a spawn, and one sysconf cannot tell reads
+ * as the cap. A descriptor at or past it stands only in a run already holding
+ * thousands — libgit2's pack files, each close-on-exec
+ * (lib/libgit2/src/util/posix.c p_open) — and reaches the exec only where it is
+ * not. */
+#define PROCESS_FD_CAP 4096
 
 /* The reap's cadence (process_reap): a look at once, then a sleep of a millisecond,
  * doubling to 50 ms — a child that exits at once is reaped at once, and one that
@@ -304,13 +308,15 @@ static _Noreturn void process_child(
         process_child_fail(errfd, 126);
     }
 
-    /* Close every other inherited fd: the pipes' other ends — so the child never
-     * holds its own stdin's write end — and libgit2's and SQLite's handles, which
-     * must not leak into the script. errfd must survive — it carries any
+    /* Close every other inherited fd below the cap (PROCESS_FD_CAP): the pipes'
+     * other ends — so the child never holds its own stdin's write end — and
+     * libgit2's and SQLite's handles, which must not leak into the script: a
+     * socket of libgit2's is close-on-exec only where the platform has SOCK_CLOEXEC
+     * (lib/libgit2/src/util/posix.h). errfd must survive — it carries any
      * exec-failure errno back to the parent. */
     long maxfd = sysconf(_SC_OPEN_MAX);
     if (maxfd < 0 || maxfd > PROCESS_FD_CAP) {
-        maxfd = PROCESS_FD_FALLBACK;
+        maxfd = PROCESS_FD_CAP;
     }
     for (int fd = STDERR_FILENO + 1; fd < (int) maxfd; fd++) {
         if (fd != errfd) {

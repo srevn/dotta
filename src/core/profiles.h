@@ -148,7 +148,7 @@ string_array_t profile_detect(arena_t *arena, const string_array_t *available);
  * Sorts in place. Stable is not required — the key is total on distinct names,
  * and branch names are distinct.
  *
- * @param names Profile names to order in place (NULL is a no-op)
+ * @param names Profile names to order in place (must not be NULL)
  */
 void profile_order(string_array_t *names);
 

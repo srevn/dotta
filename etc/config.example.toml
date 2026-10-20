@@ -249,13 +249,18 @@ diverged_strategy = "warn"
 #   {datetime}      - Local timestamp with timezone (ISO 8601 format)
 #   {paths}         - Each change under its heading (Added, Updated, Removed),
 #                     at most five names a heading; one line where none
-#   {target_commit} - Target commit SHA (for revert operations, empty otherwise)
+#   {target_commit} - The commit a revert restores from; empty otherwise, so a
+#                     body line whose only variable it is shows on a revert alone
 #
 # A commit names what it changed: each file, and each directory the profile
 # tracks, whose claim it adds, updates or removes, under its change's heading,
 # as storage paths (home/.bashrc, root/etc/hosts, custom/…) — and {count}
 # counts them. The directories dotta derives above them are never named: a
 # commit that changed only those says so in one line in the headings' place.
+#
+# A body line holding variables, every one of which renders empty, is left out
+# with its newline, so the default body's Target line shows on a revert alone.
+# The title always stands.
 #
 # Default Templates (you can customize these):
 # --------------------------------------------
@@ -269,7 +274,7 @@ title = "{host}: {action} {profile}"
 
 # Commit Body Template
 # Default: Multi-line template with metadata
-# Example output:
+# Example output (for add operations; a revert's adds its Target line):
 #   Date: 2025-01-09 14:23:45 +0200
 #   User: john
 #   Host: macbook-pro
@@ -286,6 +291,7 @@ User: {user}
 Host: {host}
 Profile: {profile}
 Paths: {count}
+Target: {target_commit}
 
 {paths}
 """
@@ -309,37 +315,6 @@ Paths: {count}
 #     - home/.vimrc
 #
 #
-# Detailed Format:
-# ----------------
-# [commit]
-# title = "[{profile}] {action} by {user}@{host}"
-# body = """
-# Profile: {profile}
-# Action: {action_past}
-# Date: {datetime}
-# User: {user}
-# Host: {host}
-# Count: {count} path(s)
-#
-# {paths}
-# """
-#
-# Output:
-#   [darwin] Add by john@macbook-pro
-#
-#   Profile: darwin
-#   Action: Added
-#   Date: 2025-01-09 14:23:45 +0200
-#   User: john
-#   Host: macbook-pro
-#   Count: 3 path(s)
-#
-#   Added:
-#     - home/.bashrc
-#     - home/.tmux.conf
-#     - home/.vimrc
-#
-#
 # Git Conventional Commits:
 # --------------------------
 # [commit]
@@ -353,44 +328,6 @@ Paths: {count}
 #     - home/.bashrc
 #     - home/.tmux.conf
 #     - home/.vimrc
-#
-#
-# Revert-Aware Format:
-# --------------------
-# [commit]
-# title = "{action_past} {count} path(s) in {profile}"
-# body = """
-# Profile: {profile}
-# Action: {action}
-# Target: {target_commit}
-# {paths}
-#
-# Timestamp: {datetime}
-# """
-#
-# Output (for revert operations):
-#   Reverted 1 path(s) in global
-#
-#   Profile: global
-#   Action: Revert
-#   Target: 94d98791ced8cd927813ccf085714e7e1a3c5085
-#   Updated:
-#     - home/.bashrc
-#
-#   Timestamp: 2025-10-10 22:40:05 +0300
-#
-# Output (for add operations):
-#   Added 3 path(s) in darwin
-#
-#   Profile: darwin
-#   Action: Add
-#   Target:
-#   Added:
-#     - home/.bashrc
-#     - home/.tmux.conf
-#     - home/.vimrc
-#
-#   Timestamp: 2025-01-09 14:23:45 +0200
 #
 # ============================================================================
 

@@ -44,7 +44,7 @@ typedef struct {
     string_array_t updated;     /* Names whose claim it updates */
     string_array_t removed;     /* Names whose claim it removes */
     const char *custom_msg;     /* Custom message from -m flag (NULL or empty = use template) */
-    const char *target_commit;  /* Target commit SHA (revert alone, NULL otherwise) */
+    const char *target_commit;  /* The commit a revert restores from; NULL otherwise */
 } commit_message_context_t;
 
 /**
@@ -65,10 +65,17 @@ typedef struct {
  *   {datetime}      - Local timestamp with timezone (ISO 8601)
  *   {paths}         - Each change under its heading (Added, Updated, Removed),
  *                     at most five names a heading; one line where none
- *   {target_commit} - Target commit SHA (for revert operations, empty otherwise)
+ *   {target_commit} - The commit a revert restores from; empty otherwise, so a
+ *                     body line whose only variable it is shows on a revert alone
  *
- * A variable the table has no row for is left as the template spelled it, braces
- * and all, so a template is never silently emptied by a typo.
+ * A brace closes at the next `}` on its line: one its line leaves open is a
+ * character like any other. A variable the table has no row for is left as the
+ * template spelled it, braces and all, so a template is never silently emptied
+ * by a typo.
+ *
+ * The title always stands. A body line holding variables, every one of which
+ * rendered empty, is left out with the newline that parts it from the rest —
+ * its own, or, for the body's last line, the one before it.
  *
  * Every name a value carries — a path, the profile, the host, the user — is display
  * text the moment the template inserts it, read by every reader of the log: spelled

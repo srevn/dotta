@@ -99,7 +99,7 @@ string_array_t profile_detect(arena_t *arena, const string_array_t *available) {
     string_array_t profiles;
     string_array_init(&profiles, arena, 0);
 
-    /* 1. "global" — always first if present */
+    /* 1. "global", where available */
     if (string_array_contains(available, "global")) {
         string_array_push(&profiles, "global");
     }
@@ -168,7 +168,9 @@ static int profile_rank_order(const void *a, const void *b) {
 }
 
 void profile_order(string_array_t *names) {
-    if (!names || names->count < 2) {
+    CHECK_NULL(names);
+
+    if (names->count < 2) {
         return;
     }
 

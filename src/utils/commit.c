@@ -25,7 +25,7 @@
 /**
  * One template variable, and what it renders to
  *
- * The values a message is made of are resolved once and read by both substitutions,
+ * The values a message is made of are resolved once and read by both templates,
  * so a title and a body cannot disagree about one of them, and the header's list
  * of variables is one row each (utils/commit.h) — a row being where the name
  * and the value are written beside each other, which is what makes a transposition
@@ -35,7 +35,9 @@
  * A value is never NULL: NULL is the reader's word for "no such variable", and
  * what it does with one is leave the template's own bytes standing. A variable
  * that is legitimately absent — a target commit outside a revert — renders empty,
- * which is the row's business and not the reader's.
+ * which is the row's business and not the reader's: the reader names no variable,
+ * and leaves out a body line whose every variable rendered empty, whichever they
+ * are (commit_message).
  */
 typedef struct {
     const char *name;    /* As a template spells it, without the braces */
@@ -175,32 +177,48 @@ static void commit_paths(
 }
 
 /**
- * A template with its variables substituted, appended to `text`
+ * A span of a template with its variables substituted, appended to `text`,
+ * answering whether what it appended stands
  *
- * Replaces {variable} placeholders with the table's values. A name the table
- * has no row for is left as the template spelled it, braces and all, so a typo
- * empties no line and prose survives a stray brace.
+ * The span is whole lines of the template, each with its newline where it has
+ * one: the title, or one line of the body. Replaces {variable} placeholders with
+ * the table's values. A brace closes at the next `}` on its line, so one its
+ * line leaves open opens nothing; and a name the table has no row for is left
+ * as the template spelled it, braces and all, so a typo empties no line and prose
+ * survives a stray brace.
+ *
+ * What it appended stands unless the span held a variable the table answers for
+ * and every one it held rendered empty: its own text is the template's, the same
+ * in every message, and keeps nothing standing; a name the table has no row for
+ * renders as typed, and does.
  *
  * @param text Where the substitution is appended (must not be NULL)
- * @param template Template string with {variable} placeholders (must not be NULL)
+ * @param span The template's lines (must not be NULL)
+ * @param len The span's length: it ends past a newline, or at the template's end
  * @param vars The variables and their values, resolved once by the caller
  * @param var_count How many
+ * @return Whether what it appended stands
  */
-static void commit_substitute(
-    buffer_t *text, const char *template, const template_t *vars, size_t var_count
+static bool commit_substitute(
+    buffer_t *text, const char *span, size_t len, const template_t *vars, size_t var_count
 ) {
-    CHECK_NULL(template);
+    /* Whether the span held a variable the table answers for, and whether a braced
+     * run rendered something: a value, or a name no row answers */
+    bool held = false;
+    bool rendered = false;
 
-    /* Process template character by character. Two cases, each leaving the loop
+    /* Process the span character by character. Two cases, each leaving the loop
      * at its own line: what is not a variable, and what is shaped like one, whose
      * name the table answers for or does not. */
-    const char *p = template;
-    while (*p) {
-        /* Where this variable would end. A brace nothing closes opens nothing:
-         * it is a character of the template like any other, as is every character
-         * that is not a brace at all. */
-        const char *end = *p == '{' ? strchr(p, '}') : NULL;
-        if (!end) {
+    const char *p = span;
+    const char *end = span + len;
+    while (p < end) {
+        /* Where this variable would end: the next brace that closes on its line.
+         * A brace its line leaves open opens nothing: it is a character of the
+         * template like any other, as is every character that is not a brace at
+         * all. */
+        const char *close = *p == '{' ? p + strcspn(p, "}\n") : NULL;
+        if (!close || *close != '}') {
             buffer_append(text, p, 1);
             p++;
             continue;
@@ -209,7 +227,7 @@ static void commit_substitute(
         /* Substitute variable: the table's row for the whole name between the
          * braces, read where the template spells it — or no row at all */
         const char *name = p + 1;
-        size_t name_len = (size_t) (end - name);
+        size_t name_len = (size_t) (close - name);
         const char *value = NULL;
         for (size_t i = 0; i < var_count; i++) {
             if (strlen(vars[i].name) == name_len &&
@@ -221,13 +239,18 @@ static void commit_substitute(
 
         if (value) {
             buffer_append_string(text, value);
+            held = true;
+            rendered = rendered || value[0] != '\0';
         } else {
-            /* Unknown variable - keep as-is, braces and all */
-            buffer_append(text, p, (size_t) (end - p) + 1);
+            /* Unknown variable - keep as-is, braces and all: it renders as typed */
+            buffer_append(text, p, (size_t) (close - p) + 1);
+            rendered = true;
         }
 
-        p = end + 1;
+        p = close + 1;
     }
+
+    return !held || rendered;
 }
 
 /**
@@ -288,16 +311,39 @@ const char *commit_message(
     const size_t var_count = sizeof(vars) / sizeof(vars[0]);
 
     /* The title, and the body beneath a blank line — which stands only above a
-     * body its template did not substitute to nothing. */
+     * body its template did not substitute to nothing. The title is substituted
+     * whole, and stands whatever its variables rendered. */
     buffer_t text = BUFFER_INIT;
-    commit_substitute(&text, config->commit_title, vars, var_count);
+    (void) commit_substitute(
+        &text, config->commit_title, strlen(config->commit_title), vars, var_count
+    );
     size_t title_end = text.size;
     buffer_append_string(&text, "\n\n");
-    size_t body_at = text.size;
-    commit_substitute(&text, config->commit_body, vars, var_count);
+    size_t body_start = text.size;
+
+    /* The body a line at a time: a line and its newline are one step, and the
+     * last line may have none. A line that does not stand is left out with the
+     * newline that parts it from the rest — its own, or, for a last line that
+     * has none, the one before it — so the lines that stand are joined as the
+     * template joins them. */
+    const char *line = config->commit_body;
+    while (*line) {
+        size_t len = strcspn(line, "\n");
+        size_t step = len + (line[len] == '\n');
+        size_t line_start = text.size;
+
+        if (!commit_substitute(&text, line, step, vars, var_count)) {
+            buffer_resize(
+                &text,
+                line[len] == '\0' && line_start > body_start ? line_start - 1 : line_start
+            );
+        }
+
+        line += step;
+    }
 
     const char *message = arena_strndup(
-        arena, text.data, text.size == body_at ? title_end : text.size
+        arena, text.data, text.size == body_start ? title_end : text.size
     );
 
     buffer_deinit(&text);

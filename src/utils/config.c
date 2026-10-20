@@ -245,7 +245,9 @@ config_t *config_create_default(arena_t *arena) {
     config->verbosity = OUTPUT_NORMAL;
     config->color = OUTPUT_COLOR_AUTO;
 
-    /* [commit] defaults - match current hardcoded behavior */
+    /* [commit] defaults. The target line names the commit a revert restores from,
+     * and every other action's body leaves it out: its one variable renders empty
+     * there (utils/commit.h) */
     config->commit_title = "{host}: {action} {profile}";
     config->commit_body =
         "Date: {datetime}\n"
@@ -253,6 +255,7 @@ config_t *config_create_default(arena_t *arena) {
         "Host: {host}\n"
         "Profile: {profile}\n"
         "Paths: {count}\n"
+        "Target: {target_commit}\n"
         "\n"
         "{paths}";
 

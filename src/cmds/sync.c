@@ -804,18 +804,29 @@ static error_t sync_push_phase(
             }
 
             case UPSTREAM_LOCAL_AHEAD: {
-                /* theirs: discard local commits, reset to remote. Blocked by
-                 * --no-pull since resetting to remote incorporates remote state */
-                if (diverged_strategy == SYNC_STRATEGY_THEIRS && !no_pull) {
+                /* theirs: discard the local commits, reset to the remote — a
+                 * move a pull makes, so --no-pull withholds it and the profile
+                 * stays as it stands, neither reset nor pushed, as --no-push
+                 * withholds ours' force push */
+                if (diverged_strategy == SYNC_STRATEGY_THEIRS) {
                     output_colored(
                         out, OUTPUT_NORMAL, upstream_state_color(result->state),
                         "  %s %s: %zu commit%s ahead of remote\n",
                         upstream_state_symbol(result->state),
                         result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                     );
-                    handle_diverged_theirs(
-                        repo, remote_name, result, out, confirm_destructive
-                    );
+                    if (no_pull) {
+                        output_hint(
+                            out, OUTPUT_NORMAL,
+                            "    '%s' resolution skipped (--no-pull prevents "
+                            "incorporating remote changes)",
+                            config_strategies[SYNC_STRATEGY_THEIRS].name
+                        );
+                    } else {
+                        handle_diverged_theirs(
+                            repo, remote_name, result, out, confirm_destructive
+                        );
+                    }
                     break;
                 }
 

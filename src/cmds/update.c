@@ -952,6 +952,11 @@ static error_t update_execute(
     const workspace_item_t **items = arena_calloc(ctx->arena, work.count, sizeof(*items));
     const manifest_row_t **rows = arena_calloc(ctx->arena, derive_rows.count, sizeof(*rows));
 
+    /* What the walks say at normal — a skip a change since the load forced — is
+     * one block beneath the preview: one boundary above every profile's walk,
+     * paid by whichever of their lines is the first to print. At verbose each
+     * profile's section opens its own. */
+    output_gap(out, OUTPUT_NORMAL);
     for (size_t p = 0; p < enabled->count; p++) {
         const char *profile = enabled->entries[p];
 

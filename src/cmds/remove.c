@@ -1020,8 +1020,10 @@ static error_t remove_paths(
      * names the set. Each is a consent question, answered by a terminal or a
      * pipe, as a script answers it (base/output.h output_ask); a claim no answer
      * came for refuses the run: -i asked of each, and a selection with one
-     * unanswered is no selection. None binds a dry run, which lists every claim;
-     * and a selection that keeps none ends the run, which fires no hook. */
+     * unanswered is no selection. The refusal names that claim and no way on,
+     * since the asking is the flag the user typed. None binds a dry run, which
+     * lists every claim; and a selection that keeps none ends the run, which
+     * fires no hook. */
     if (opts->interactive && !opts->dry_run) {
         size_t kept = 0;
         for (size_t i = 0; i < claim_count; i++) {
@@ -1037,8 +1039,9 @@ static error_t remove_paths(
                     break;
                 case OUTPUT_ANSWER_NONE:
                     err = error_create(
-                        ERR_VALIDATION, "Cannot choose what to remove: -i asks of each "
-                        "path, and no answer was read for '%s'", claims[i].storage_path
+                        ERR_VALIDATION, "Cannot remove '%s' from profile '%s' without a "
+                        "confirmation, and none was read", claims[i].storage_path,
+                        opts->profile
                     );
                     goto cleanup;
             }

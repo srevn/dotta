@@ -563,7 +563,9 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                  * not output a level gates (base/output.h output_ask) and a
                  * configured quiet never declined it. The scripts are an extra
                  * the clone stands without, so no answer leaves them unrun as a
-                 * decline does, and says so. */
+                 * decline does, and says so with no way on: the Next steps below
+                 * name 'dotta bootstrap' wherever a script was left unrun
+                 * (bootstrap_owed). */
                 switch (output_ask(out, false, "Execute bootstrap scripts?")) {
                     case OUTPUT_ANSWER_YES:
                         run_bootstrap = true;
@@ -573,8 +575,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     case OUTPUT_ANSWER_NONE:
                         output_gap(out, OUTPUT_NORMAL);
                         output_info(
-                            out, OUTPUT_NORMAL, "Bootstrap scripts not run: no answer "
-                            "was read; 'dotta bootstrap' runs them"
+                            out, OUTPUT_NORMAL, "Bootstrap scripts not run: no answer was read"
                         );
                         break;
                 }

@@ -1743,7 +1743,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* -i asked to be asked: the consent, after the hook, binding no dry run.
      * Declined is the user's word, and no answer refuses the run, since nobody
-     * declined */
+     * declined — naming no way on, since the asking is the flag the user typed */
     if (opts->interactive && !opts->dry_run) {
         switch (output_ask(out, false, "Update these items?")) {
             case OUTPUT_ANSWER_YES:
@@ -1754,8 +1754,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 return NULL;
             case OUTPUT_ANSWER_NONE:
                 return error_create(
-                    ERR_VALIDATION,
-                    "Cannot update: -i asks before updating, and no answer was read"
+                    ERR_VALIDATION, "Cannot update without a confirmation, and none was read"
                 );
         }
     }

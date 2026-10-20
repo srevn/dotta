@@ -1734,7 +1734,7 @@ static const args_opt_t remove_opts[] = {
     ARGS_FLAG(
         "n dry-run",
         cmd_remove_options_t,dry_run,
-        "Preview without writing"
+        "Preview without committing or deleting"
     ),
     ARGS_FLAG(
         "f force",

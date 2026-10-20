@@ -1962,7 +1962,7 @@ static const args_opt_t update_opts[] = {
     ARGS_FLAG(
         "n dry-run",
         cmd_update_options_t,dry_run,
-        "Preview without writing"
+        "Preview without committing"
     ),
     ARGS_FLAG(
         "i interactive",
@@ -2012,7 +2012,7 @@ const args_command_t spec_update = {
         "  %s update -p global                   # Filter to 'global'\n"
         "  %s update --include-new               # Modified + new files\n"
         "  %s update --only-new                  # New files only\n"
-        "  %s update -n                          # Preview without writing\n"
+        "  %s update -n                          # Preview without committing\n"
         "  %s update --exclude '*.log'           # Skip log files\n"
         "  %s update -m \"Update shell config\"    # Custom commit message\n",
     .epilogue     =

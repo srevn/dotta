@@ -2241,7 +2241,7 @@ static const args_opt_t sync_opts[] = {
     ARGS_FLAG(
         "n dry-run",
         cmd_sync_options_t,dry_run,
-        "Preview without writing"
+        "Preview without pulling or pushing"
     ),
     ARGS_FLAG(
         "no-push",
@@ -2299,7 +2299,7 @@ const args_command_t spec_sync = {
         "  %s sync                    # All enabled profiles\n"
         "  %s sync global             # Single profile\n"
         "  %s sync global darwin      # Multiple profiles\n"
-        "  %s sync -n                 # Preview without writing\n"
+        "  %s sync -n                 # Preview without pulling or pushing\n"
         "  %s sync -f                 # Bypass clean-workspace check\n"
         "  %s sync --no-pull          # Push only\n"
         "  %s sync --diverged rebase  # Override divergence strategy\n",

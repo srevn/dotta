@@ -2940,7 +2940,7 @@ static const args_opt_t add_opts[] = {
     ARGS_FLAG(
         "n dry-run",
         cmd_add_options_t,           dry_run,
-        "Preview without writing"
+        "Preview without committing"
     ),
     ARGS_FLAG_SET(
         "v verbose",

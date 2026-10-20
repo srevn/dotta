@@ -1430,7 +1430,7 @@ static const args_opt_t revert_opts[] = {
     ARGS_FLAG(
         "n dry-run",
         cmd_revert_options_t,dry_run,
-        "Preview without writing"
+        "Preview without committing"
     ),
     ARGS_FLAG_SET(
         "v verbose",

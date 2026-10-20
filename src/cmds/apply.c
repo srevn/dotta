@@ -3490,7 +3490,7 @@ static const args_opt_t apply_opts[] = {
     ARGS_FLAG(
         "n dry-run",
         cmd_apply_options_t,dry_run,
-        "Preview without writing"
+        "Preview without applying"
     ),
     ARGS_FLAG(
         "keep-orphans",
@@ -3549,7 +3549,7 @@ const args_command_t spec_apply = {
         "  %s apply -p work                    # Filter to 'work' profile\n"
         "  %s apply -p work ~/.bashrc          # Profile + path filter\n"
         "  %s apply ~/.bashrc ~/.zshrc         # Deploy specific files only\n"
-        "  %s apply -n                         # Preview without writing\n"
+        "  %s apply -n                         # Preview without applying\n"
         "  %s apply --exclude '.ssh/*'         # Protect matched paths\n",
     .epilogue     =
         "See also:\n"

@@ -1072,14 +1072,14 @@ static error_t sync_failure(const sync_results_t *results) {
     );
 }
 
-/*
- * Render one of the two refusals: the local epoch reads, differs from the remote's
+/**
+ * Print one of the two refusals: the local epoch reads, differs from the remote's
  * canonical epoch, and keys reachable ciphertext (head or history, any branch).
  * Two independent encryption roots, and every hint below is licensed by the census
  * having attributed a blob to the one that stands here. Warn loudly and continue
  * — plaintext profiles still sync.
  */
-static void epoch_emit_conflict(output_t *out) {
+static void sync_print_epoch_conflict(output_t *out) {
     output_warning(
         out, OUTPUT_NORMAL,
         "Repository epoch conflict: the local epoch differs from the remote's; "
@@ -1098,17 +1098,22 @@ static void epoch_emit_conflict(output_t *out) {
     );
 }
 
-/*
- * Render the other: the local ref stands, yields no epoch, and this repository
+/**
+ * Print the other: the local ref stands, yields no epoch, and this repository
  * holds encrypted files that may be sealed under the bytes it carries. A different
  * finding from the conflict and so a different remedy — none of that one's three
- * hints fit a ref that is merely unreadable, where the salt blob is often intact
- * and one fetch away from whole. This is `epoch_init`'s refusal over the identical
- * state, said by the other verb. The fetch is the epoch's own restore refspec
- * (epoch.h), forced and naming the one ref, from the remote this sync reached,
- * on the condition the refspec's comment states.
+ * remedies fit a ref that is merely unreadable, where the salt blob is often
+ * intact and one fetch away from whole. This is `epoch_init`'s refusal over the
+ * identical state, said by the other verb. The fetch is the epoch's own restore
+ * refspec (epoch.h), forced and naming the one ref, from the remote this sync
+ * reached, on the condition the refspec's comment states.
+ *
+ * Reached with encryption off alone: while it is on, the dispatch refuses a ref
+ * that yields no epoch before any command runs (main.c open_run), naming the
+ * same restore and, beside it, encryption.enabled = false — the one way a run
+ * arrives here.
  */
-static void epoch_emit_damaged(output_t *out, const char *remote_name) {
+static void sync_print_epoch_damaged(output_t *out, const char *remote_name) {
     output_warning(
         out, OUTPUT_NORMAL,
         "Repository epoch left alone: '%s' cannot be read and this repository "
@@ -1123,17 +1128,17 @@ static void epoch_emit_damaged(output_t *out, const char *remote_name) {
     );
 }
 
-/*
- * Apply the CLI gates to epoch_resolve's verdict, render the outcome, and run
+/**
+ * Apply the CLI gates to epoch_resolve's verdict, print the outcome, and run
  * the chosen git action (establish via epoch_push, adopt via epoch_fetch). The
- * fact-finding already happened in infra/epoch; this layer is pure policy +
- * rendering.
+ * fact-finding already happened in infra/epoch; this layer is pure policy and
+ * printing.
  *
  * Runs before the fetch phase so the decision's census is never contaminated by
  * pulled remote ciphertext. Every outcome is best-effort — a warning and the
  * rest of the sync — which is why nothing here is returned: the two errors the
  * resolve produces, a local ref that would not read and a census that could not
- * finish, are verdicts to render, not a run to fail.
+ * finish, are verdicts to print, not a run to fail.
  *
  * The epoch is machinery, so it says as little as it can get away with. Five of
  * the seven verdicts are a verbose line or nothing at all: dotta either did the
@@ -1143,7 +1148,7 @@ static void epoch_emit_damaged(output_t *out, const char *remote_name) {
  * — and each is one line of finding plus one of remedy or cause. Nothing here
  * reports the census, the salt, or which of three routes reached an adopt.
  */
-static void epoch_reconcile(
+static void sync_reconcile_epoch(
     const dotta_ctx_t *ctx,
     const char *remote_name,
     transfer_context_t *xfer,
@@ -1220,11 +1225,11 @@ static void epoch_reconcile(
         }
 
         case EPOCH_RECONCILE_CONFLICT:
-            epoch_emit_conflict(out);
+            sync_print_epoch_conflict(out);
             return;  /* warn-and-continue; no git op */
 
         case EPOCH_RECONCILE_DAMAGED:
-            epoch_emit_damaged(out, remote_name);
+            sync_print_epoch_damaged(out, remote_name);
             return;  /* warn-and-continue; no git op */
 
         case EPOCH_RECONCILE_ADOPT: {
@@ -1782,7 +1787,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Reconcile the repository epoch with the remote. Placed before the fetch
      * phase so the divergence's census cannot see pulled remote ciphertext. */
-    epoch_reconcile(ctx, remote_name, xfer, opts);
+    sync_reconcile_epoch(ctx, remote_name, xfer, opts);
 
     /* Phase 1: Fetch profiles in sync scope from remote */
     err = sync_fetch_phase(ctx, remote_name, scope, xfer);

@@ -170,7 +170,7 @@ void gitops_close_repository(git_repository *repo);
  * ends under the sorted trait) is the failure. The reference comes back as it
  * is stored: a symbolic one is not resolved. A lookup that fails names the
  * reference, above libgit2's sentence where it has one, so a reader that prints
- * the failure as one line has said which (cmds/sync.c epoch_reconcile, over
+ * the failure as one line has said which (cmds/sync.c sync_reconcile_epoch, over
  * infra/epoch.c epoch_resolve's read of the local epoch).
  *
  * A miss leaves the handle on that fresh reference database, so a create-only

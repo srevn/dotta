@@ -89,8 +89,8 @@
  * and the local salt is gone for good — which no reader of a missing or unreadable
  * ref can tell apart, so each that names the restore names that condition with
  * it. The three refusals (main.c's dispatch, epoch_init's two arms) name the
- * refspec and no remote, which they cannot know; sync's epoch_emit_damaged has
- * its remote in hand and names the whole command. */
+ * refspec and no remote, which they cannot know; cmds/sync.c
+ * sync_print_epoch_damaged has its remote in hand and names the whole command. */
 #define EPOCH_RESTORE_REFSPEC "+" EPOCH_REF ":" EPOCH_REF
 
 /** Tree-entry names for the two blobs. */
@@ -233,8 +233,8 @@ error_t epoch_push(
  * Both codes are read by cmds/clone.c cmd_clone, which refuses a remote without
  * the ref as no dotta repository and warns past ERR_CRYPTO. Every failure names
  * the act and the remote — the transport's in libgit2's words after them
- * (base/error.h error_git) — so cmds/sync.c epoch_reconcile prints each whole
- * and reads no code.
+ * (base/error.h error_git) — so cmds/sync.c sync_reconcile_epoch prints each
+ * whole and reads no code.
  *
  * The install is a force: whatever the local ref held is replaced wholesale.
  * Whether that is safe is the caller's to decide, not this boundary's —

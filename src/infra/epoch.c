@@ -743,7 +743,7 @@ static void epoch_walk_commit(epoch_walk_t *walk, const git_oid *commit_oid) {
  * dependency). The walk holds no proof of its own: it answers by the rule at
  * the head of the walk, an asker's answer whatever was passed over, else the
  * first thing it could not read, which names where it stands — sync prints the
- * census's cause whole beneath its own question (`epoch_reconcile`). The revwalk
+ * census's cause whole, after its own words (`sync_reconcile_epoch`). The revwalk
  * speaks libgit2 directly the way sys/stats does. The epoch ref lives outside
  * refs/heads and is never walked.
  */

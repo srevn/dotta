@@ -3061,7 +3061,9 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * it, a learning's as much as a move, since the store cannot tell the two
      * apart; a status there owes only what this load could not record — a stat
      * taken in a second still open — or what the disk has done since, so the
-     * refusal is rare, and costs a run that executes nothing.
+     * refusal is rare, and costs a run that executes nothing. It says so in the
+     * engines' words, never the dry run's "applied": the present the checkpoint
+     * committed and said above it stands.
      *
      * A preview resumes none. It executes nothing, its prompt is gated above,
      * and the transaction it would hold across the exit below is one close_run
@@ -3099,11 +3101,6 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     cleanup_preflight_t *cleanup_verdicts = cleanup_preflight(
         ctx->arena, ws, cleanup_plan, opts->force
     );
-
-    /* What the record phase acknowledges behind the run's own writes, for the
-     * tail: each pending reassignment it writes, or none where it failed
-     * (apply_write_record). */
-    size_t acknowledged_count = 0;
 
     /* The pending reassignments, off the verdicts: a row preflight skipped is
      * not here — its reassignment rides a deployment that will not happen — and
@@ -3287,13 +3284,24 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     deploy_receipt_t *deploy_receipt = &(deploy_receipt_t){ 0 };
     cleanup_receipt_t *cleanup_receipt = &(cleanup_receipt_t){ 0 };
 
-    /* A dry run ends here. Both previews have printed, and neither engine is
-     * called: the verdicts are the run's decisions, and executing would teach a
-     * dry run nothing it does not already know. Everything below is for the run
-     * that writes — the two engines, then the record of what they did. */
+    /* A dry run ends here, beneath its pre-hook. Both previews have printed,
+     * and neither engine is called: the verdicts are the run's decisions, and
+     * executing would teach a dry run nothing it does not already know. What
+     * the record phase would acknowledge — the pending reassignments the preview
+     * named — is said in the conditional, and the run's last line names the act
+     * it did not do: apply's own verb, true of every act a run takes, the adoptions
+     * among them. The run that writes goes on to the two engines, then the record
+     * of what they did. */
     if (opts->dry_run) {
-        output_gap(out, OUTPUT_VERBOSE);
-        output_print(out, OUTPUT_VERBOSE, "Dry-run mode - no paths will be modified\n");
+        if (pending_reassignment_count > 0) {
+            output_gap(out, OUTPUT_NORMAL);
+            output_info(
+                out, OUTPUT_NORMAL, "Would acknowledge %zu profile reassignment%s",
+                pending_reassignment_count, pending_reassignment_count == 1 ? "" : "s"
+            );
+        }
+        output_gap(out, OUTPUT_NORMAL);
+        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was applied");
     } else {
         /* Carry the verdicts out (files-only, directories-only, or mixed — one
          * call). Reporting reads the result: outcomes, never plan counts. The
@@ -3336,34 +3344,23 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * names no remedy: the first refused statement ended the phase and the
          * rollback took the rest, so every path's record is what it was before
          * the run, and what the run wrote on disk the next apply reads back.
-         * One that landed says only the reassignments it acknowledged, at the
-         * tail. */
+         * One that landed says the pending reassignments it acknowledged, both
+         * kinds, rewritten behind the run's own writes (deployed files; converged
+         * directories) — the clean ones were said where they were written. */
+        size_t acknowledged_count = 0;
         error_t record_err = apply_write_record(
             ctx, ws, cleanup_verdicts, cleanup_receipt, deploy_receipt, now, &acknowledged_count
         );
         if (record_err) {
             output_gap(out, OUTPUT_NORMAL);
             output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
-        }
-    }
-
-    /* The pending reassignments this run acknowledged, both kinds: the ones the
-     * record phase rewrote behind the run's own writes (deployed files; converged
-     * directories), said once it landed — the clean ones were said where they
-     * were written. Dry-run previews the in-scope set the preview named. */
-    output_gap(out, OUTPUT_NORMAL);
-    if (opts->dry_run) {
-        if (pending_reassignment_count > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "Would acknowledge %zu profile reassignment%s",
-                pending_reassignment_count, pending_reassignment_count == 1 ? "" : "s"
+        } else if (acknowledged_count > 0) {
+            output_gap(out, OUTPUT_NORMAL);
+            output_print(
+                out, OUTPUT_NORMAL, "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
+                acknowledged_count, acknowledged_count == 1 ? "" : "s"
             );
         }
-    } else if (acknowledged_count > 0) {
-        output_print(
-            out, OUTPUT_NORMAL, "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
-            acknowledged_count, acknowledged_count == 1 ? "" : "s"
-        );
     }
 
     /* Execute post-apply hook. The record phase settled the run's transaction

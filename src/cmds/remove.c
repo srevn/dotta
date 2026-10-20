@@ -1107,7 +1107,12 @@ static error_t remove_paths(
     err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
-    if (opts->dry_run) goto cleanup;  /* err is NULL, will return success */
+    /* A dry run ends here, beneath its pre-hook, in the act it did not do */
+    if (opts->dry_run) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
+        goto cleanup;  /* err is NULL, will return success */
+    }
 
     /* Confirm operation: the consent, after the hook. Declined is the user's
      * word, and no failure; unanswered — the input ended before a line — nobody
@@ -1432,7 +1437,12 @@ static error_t remove_profile(
     err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
-    if (opts->dry_run) goto cleanup;  /* err is NULL, will return success */
+    /* A dry run ends here, beneath its pre-hook, in the act it did not do */
+    if (opts->dry_run) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was deleted");
+        goto cleanup;  /* err is NULL, will return success */
+    }
 
     /* Confirm the deletion: the consent, after the hook. Declined is the user's
      * word, and no failure; unanswered — the terminal's input ended — nobody

@@ -213,7 +213,7 @@ typedef struct {
  * The mode a claim stands for: its own, else its type's floor
  *
  * 0644 for a file, 0755 for an executable, the directory default for a directory
- * (core/metadata.h DIR_MODE_DEFAULT), and 0 on a link, which carries none — the
+ * (include/types.h DIR_MODE_DEFAULT), and 0 on a link, which carries none — the
  * row's don't-care. A claimed 0000 is a claim. The one producer of the floor
  * the view's rows carry (core/manifest.h manifest_row_t, "Totality").
  *

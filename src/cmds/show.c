@@ -18,7 +18,6 @@
 #include "base/timeutil.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
-#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"

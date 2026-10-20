@@ -97,10 +97,12 @@
  * load from a tree and the save to a stage — is a profile's own, read by one
  * module: the handle decodes it, and a profile's draft edits a copy of it
  * (core/profiles.c profile_load_sheet, profile_walk, profile_draft_seed and the
- * draft's edits). The claim's attributes on this host — the directory default,
- * the unclaimed mode, ownership as this host's ids, and the captures that read
- * a claim off a look — are every layer's that places or prints a claim, each
- * name below listing its readers.
+ * draft's edits). The claim's attributes on this host — ownership as this host's
+ * ids, and the captures that read a claim off a look — are every layer's that
+ * places or prints a claim, each name below listing its readers. The mode a claim
+ * does not make and a directory's floor are the prelude's, which the decoded
+ * claim carries as the item does (include/types.h MODE_UNCLAIMED,
+ * DIR_MODE_DEFAULT).
  *
  * Memory: a sheet is a container (include/runtime.h "Memory"). It lives in the
  * arena it was made in — a profile's, which keeps the sheet its tree holds, or
@@ -164,49 +166,13 @@
 #include <sys/stat.h>
 #include <types.h>
 
-#include "sys/stage.h"
+/* The save puts the sheet onto a stage (sys/stage.h), by pointer: named here
+ * and defined there */
+typedef struct stage stage_t;
 
 #define METADATA_VERSION 6
 #define METADATA_DIR ".dotta"
 #define METADATA_FILE_PATH METADATA_DIR "/metadata.json"
-
-/**
- * Default mode for a directory claim that names none
- *
- * Mirrors the umask default any newly-mkdir'd directory gets on Linux/ macOS/BSD
- * (0755 = rwxr-xr-x) — the mode a chain of parents gets when nothing claims them.
- *
- * A value, never evidence: what a directory claim means is said by its kind and
- * its "tracked" word, never by the bits it carries, so nothing compares a mode
- * against this to read intent back out of it. Readers, each supplying the answer
- * where a claim named none: the claim's floor, which the view's rows take
- * (core/profiles.c profile_claim_mode), the layer's rung at a place a blob lost,
- * which no claim names (core/manifest.c manifest_rung), deploy's creation of a
- * rung no claim covers (core/deploy.c create_ancestor), and export's
- * materialisation — each arm's root and every directory the copy completes
- * (cmds/export.c export_collect_profile, export_collect_storage,
- * export_collect_filesystem, complete_directories).
- */
-#define DIR_MODE_DEFAULT 0755
-
-/**
- * The mode a claim does not make
- *
- * Permission bits run 0000–0777 and 0000 is one of them: `chmod 000` is a real
- * mode a user can mean. Absence therefore needs a value outside the domain, not
- * the domain's floor. A sheet's item carries it, and so does the claim a profile
- * decodes from one (core/profiles.h profile_claim_t); it ends wherever a mode
- * is placed — the view's rows, export's copy and a capture's record take the
- * claim's floor (core/profiles.h profile_claim_mode: the filemode floor for a
- * blob, DIR_MODE_DEFAULT for a directory, and on a link, the one capture that
- * claims no mode, the record's don't-care) — so no row, record, entry or verdict
- * carries it. The header show prints and the capture lines add and update print
- * test it on the decoded claim, where a mode is claimed (cmds/show.c
- * show_print_blob, cmds/add.c add_print_capture, cmds/update.c update_profile),
- * and revert on the commit's, where a file claiming nothing takes its type's
- * floor (cmds/revert.c cmd_revert, step 14).
- */
-#define MODE_UNCLAIMED ((mode_t) -1)
 
 /**
  * A claim

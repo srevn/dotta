@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <unistd.h>
 
 #include "base/arena.h"
 #include "base/buffer.h"
@@ -22,6 +21,7 @@
 #include "infra/label.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
+#include "sys/stage.h"
 
 #define INITIAL_CAPACITY 16
 

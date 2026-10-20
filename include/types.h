@@ -2,18 +2,19 @@
  * types.h - The vocabulary every layer may assume
  *
  * A prelude, not a module: four opaque handles, base's error codes and transparent
- * containers, a managed path's kind and type, and what a look finds standing at
- * a path — not its two keys, which are strings and declare nothing (infra/path.h).
- * include/config.h is the second prelude — the config layout, read by core without
- * including utils/. base/args.h and base/hashmap.h re-declare the handles they
- * need instead of including this, staying standalone engines with no domain
- * dependency; every other base header includes it.
+ * containers, a managed path's kind and type, the mode a claim does not make
+ * and a directory's floor, and what a look finds standing at a path — not its
+ * two keys, which are strings and declare nothing (infra/path.h). include/config.h
+ * is the second prelude — the config layout, read by core without including utils/.
+ * base/args.h and base/hashmap.h re-declare the handles they need instead of
+ * including this, staying standalone engines with no domain dependency; every
+ * other base header includes it.
  *
  * Admission is by meaning, not by owner. A value a reader can interpret holding
  * nothing else stands here; a verdict one module computes stands with that module:
  * workspace_state_t and divergence_type_t in core/workspace.h, beside
  * workspace_displaced_t and workspace_fault_t. Reach bounds what meaning admits:
- * every type here is named by three headers or more, and the best candidate below
+ * everything here is named by three headers or more, and the best candidate below
  * — hashmap_t, output_color_t — by two besides its own.
  *
  * path_kind_t, path_type_t and fs_occupant_t cross layers besides: infra/pathspec
@@ -21,7 +22,10 @@
  * and policy.h, neither of which can hold it for the other, and mapped onto the
  * node it stands as by workspace.h; and the occupant sys/filesystem's look produces
  * is the node core/state keeps a record of, which core/workspace and core/deploy
- * hold against the next look.
+ * hold against the next look. The two modes cross modules: the sheet's item and
+ * the claim a profile decodes from it carry them (core/metadata.h metadata_item_t,
+ * core/profiles.h profile_claim_t), so a reader of the decoded claim reads them
+ * without the sheet's codec.
  *
  * <stdint.h> and <stdbool.h> have no user here: base/gitignore.h reaches uint8_t
  * and a dozen headers reach bool through this file. Not unused.
@@ -33,6 +37,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <sys/types.h>
 
 /**
  * Forward declarations
@@ -183,6 +188,45 @@ static inline const char *path_type_noun(path_type_t type) {
     return type == PATH_TYPE_DIRECTORY ? "directory" :
            type == PATH_TYPE_SYMLINK ? "symlink" : "file";
 }
+
+/**
+ * Default mode for a directory claim that names none
+ *
+ * Mirrors the umask default any newly-mkdir'd directory gets on Linux/ macOS/BSD
+ * (0755 = rwxr-xr-x) — the mode a chain of parents gets when nothing claims them.
+ *
+ * A value, never evidence: what a directory claim means is said by its kind and
+ * its "tracked" word (core/metadata.h), never by the bits it carries, so nothing
+ * compares a mode against this to read intent back out of it. Readers, each
+ * supplying the answer where a claim named none: the claim's floor, which the
+ * view's rows take (core/profiles.c profile_claim_mode), the layer's rung at a
+ * place a blob lost, which no claim names (core/manifest.c manifest_rung), deploy's
+ * creation of a rung no claim covers (core/deploy.c create_ancestor), and export's
+ * materialisation — each arm's root and every directory the copy completes
+ * (cmds/export.c export_collect_profile, export_collect_storage,
+ * export_collect_filesystem, complete_directories).
+ */
+#define DIR_MODE_DEFAULT 0755
+
+/**
+ * The mode a claim does not make
+ *
+ * Permission bits run 0000–0777 and 0000 is one of them: `chmod 000` is a real
+ * mode a user can mean. Absence therefore needs a value outside the domain, not
+ * the domain's floor. A sheet's item carries it (core/metadata.h metadata_item_t),
+ * and so does the claim a profile decodes from one (core/profiles.h
+ * profile_claim_t); it ends wherever a mode is placed — the view's rows, export's
+ * copy and a capture's record take the claim's floor (core/profiles.h
+ * profile_claim_mode: the filemode floor for a blob, DIR_MODE_DEFAULT for a
+ * directory, and on a link, the one capture that claims no mode, the record's
+ * don't-care) — so no row, record, entry or verdict carries it. The header show
+ * prints and the capture lines add and update print test it on the decoded claim,
+ * where a mode is claimed (cmds/show.c show_print_blob, cmds/add.c
+ * add_print_capture, cmds/update.c update_profile), and revert on the commit's,
+ * where a file claiming nothing takes its type's floor (cmds/revert.c cmd_revert,
+ * step 14).
+ */
+#define MODE_UNCLAIMED ((mode_t) -1)
 
 /**
  * Occupant — what stands at a path, as one look finds it

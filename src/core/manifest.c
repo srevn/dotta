@@ -52,7 +52,6 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
-#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/label.h"

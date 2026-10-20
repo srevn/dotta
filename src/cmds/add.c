@@ -23,7 +23,6 @@
 #include "cmds/completion.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
-#include "core/metadata.h"
 #include "core/policy.h"
 #include "core/profiles.h"
 #include "core/state.h"

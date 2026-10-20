@@ -101,7 +101,6 @@
 #include "base/string.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
-#include "core/metadata.h"
 #include "core/profiles.h"
 #include "infra/content.h"
 #include "infra/label.h"

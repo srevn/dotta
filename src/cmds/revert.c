@@ -21,7 +21,6 @@
 #include "base/refspec.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
-#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/content.h"

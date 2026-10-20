@@ -21,8 +21,8 @@ typedef struct {
     char **profiles;             /* Specific profiles (NULL = use state/config) */
     size_t profile_count;        /* Number of profiles */
     bool dry_run;                /* Preview only */
-    bool no_push;                /* Don't push (fetch and analyze only) */
-    bool no_pull;                /* Don't pull remote changes (push-only) */
+    bool no_push;                /* Pull only: the remote's branches stay as they are */
+    bool no_pull;                /* Push only: the local branches stay as they are */
     int verbosity;               /* dotta_verbosity_t (int for ARGS_FLAG_SET) */
     bool force;                  /* Force sync even with uncommitted changes */
     const char *diverged;        /* --diverged's word (NULL: the config's strategy) */

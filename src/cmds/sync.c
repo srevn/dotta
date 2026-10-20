@@ -2181,7 +2181,7 @@ static const args_opt_t sync_opts[] = {
     ARGS_FLAG(
         "no-push",
         cmd_sync_options_t,no_push,
-        "Fetch and analyze only; skip push"
+        "Pull only; skip push"
     ),
     ARGS_FLAG(
         "no-pull",

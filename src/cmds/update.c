@@ -1775,45 +1775,10 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         ctx, scope_enabled(scope), work, derive_rows, opts, &commits, &commit_count
     );
 
-    /* Write the record — for the commits that landed, error or no
-     *
-     * Captured files get their record written because UPDATE captures them FROM
-     * the filesystem (already at their target paths): what each capture committed,
-     * stamped as dotta's. The view itself is computed at every load and needs
-     * no update. A mid-sequence stop above changes nothing here: the landed commits
-     * are Git truth and the record follows them; the profiles that never committed
-     * have nothing to write.
-     *
-     * Non-fatal, and said in landed terms, in a block of its own above the run's
-     * line. */
-    error_t record_err = update_write_record(ctx, commits, commit_count);
-    if (record_err) {
-        /* The landed commits are Git truth and the record's write failed behind
-         * them, rolled back whole: the record is what it was. The next load
-         * confirms what it finds disk agrees with — a modified file's record
-         * heals there — and a file new to the record is apply's to adopt; a
-         * deletion's record, its node gone, is reclaimed by the next apply as
-         * every absent orphan is. A directory the commits re-captured keeps the
-         * ownership its record already held — apply earns none for a directory
-         * (cmds/add.c add_write_record) — which is the conservative side: an
-         * unowned directory is released at scope exit, never pruned. The store's
-         * refusal is said in its own words, and the remedy in landed terms —
-         * after a mid-sequence stop only some profiles committed, and the run's
-         * line below names what did. */
-        output_gap(out, OUTPUT_NORMAL);
-        output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
-        output_hint(
-            out, OUTPUT_NORMAL, "Run 'dotta apply' to adopt the files the commits added"
-        );
-    }
-
-    /* The post-update hook, over a run whose every commit landed: a stop fires
-     * none, the error below naming it */
-    if (!err) hook_fire_post(config, out, &hook_inv);
-
-    /* The run's one line, after the post-update hook as add's and remove's follow
-     * theirs: what it committed — whole, or before the stop the error below names
-     * — or that it committed nothing */
+    /* The run's one line, once the act is done and before the record phase, which
+     * may wait on the store's lock (core/state.h state_begin): what it committed
+     * — whole, or before the stop the error below names — or that it committed
+     * nothing */
     output_gap(out, OUTPUT_NORMAL);
     if (commit_count == 0) {
         /* Every profile committed nothing (the walk's race guard refused what
@@ -1843,6 +1808,42 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             );
         }
     }
+
+    /* Write the record — for the commits that landed, error or no
+     *
+     * Captured files get their record written because UPDATE captures them FROM
+     * the filesystem (already at their target paths): what each capture committed,
+     * stamped as dotta's. The view itself is computed at every load and needs
+     * no update. A mid-sequence stop above changes nothing here: the landed commits
+     * are Git truth and the record follows them; the profiles that never committed
+     * have nothing to write.
+     *
+     * Non-fatal, and said in landed terms, in a block of its own beneath the
+     * run's line. */
+    error_t record_err = update_write_record(ctx, commits, commit_count);
+    if (record_err) {
+        /* The landed commits are Git truth and the record's write failed behind
+         * them, rolled back whole: the record is what it was. The next load
+         * confirms what it finds disk agrees with — a modified file's record
+         * heals there — and a file new to the record is apply's to adopt; a
+         * deletion's record, its node gone, is reclaimed by the next apply as
+         * every absent orphan is. A directory the commits re-captured keeps the
+         * ownership its record already held — apply earns none for a directory
+         * (cmds/add.c add_write_record) — which is the conservative side: an
+         * unowned directory is released at scope exit, never pruned. The store's
+         * refusal is said in its own words, and the remedy in landed terms —
+         * after a mid-sequence stop only some profiles committed, and the run's
+         * line above names what did. */
+        output_gap(out, OUTPUT_NORMAL);
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
+        output_hint(
+            out, OUTPUT_NORMAL, "Run 'dotta apply' to adopt the files the commits added"
+        );
+    }
+
+    /* The post-update hook, last (utils/hooks.h hook_fire_post), over a run whose
+     * every commit landed: a stop fires none, the error below naming it */
+    if (!err) hook_fire_post(config, out, &hook_inv);
 
     return err;
 }

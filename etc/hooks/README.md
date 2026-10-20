@@ -54,7 +54,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 ### `post-apply`
 
-**When:** After applying profiles
+**When:** After applying profiles, once apply's report is printed
 **Use For:** Reloading services, restarting apps, sending notifications
 
 **Example Use Cases:**
@@ -103,7 +103,8 @@ decided what it takes, after its preview under `-n`
 
 ### `post-add`
 
-**When:** After adding files or directories to a profile
+**When:** After adding files or directories to a profile, once add's report is
+printed
 **Use For:** Publishing the profile, CI/CD triggers, team notifications
 
 **Example Use Cases:**
@@ -155,7 +156,8 @@ and before its question
 
 ### `post-remove`
 
-**When:** After removing paths from a profile or deleting a profile
+**When:** After removing paths from a profile or deleting a profile, once
+remove's report is printed — a deletion's push to its remote among it
 **Use For:** Cleanup, notifications, auditing
 
 **Example Use Cases:**
@@ -204,7 +206,8 @@ preview and its new-files question, before `-i`'s question
 
 ### `post-update`
 
-**When:** After committing filesystem changes back to profiles
+**When:** After committing filesystem changes back to profiles, once update's
+report is printed; a run stopped at a profile fires none
 **Use For:** Syncing changes, notifications, triggering deployments
 
 **Example Use Cases:**
@@ -314,7 +317,8 @@ before its question
 
 ### `post-revert`
 
-**When:** After reverting a file to a past commit
+**When:** After reverting a file to a past commit, once revert's report is
+printed
 **Use For:** Deploying the restored version, notifications, auditing
 
 **Example Use Cases:**
@@ -337,13 +341,13 @@ before its question
 ## When a hook fires
 
 Every hook-bearing command runs one order: it decides what it will do, shows
-it, fires its `pre-` hook, asks its question, acts, writes its record and fires
-its `post-` hook — add, remove, update and revert saying what they did after
-it, apply and sync as they act. Under `-n` the `pre-` hook fires told
-`DOTTA_DRY_RUN=1`, and no `post-` hook fires. So a `pre-` hook runs over a
-decided run: a run the command refused, or one with nothing to do, fires no
-hook, and a question the run owes but cannot ask — a destructive one off a
-terminal, without `--force` — refuses before the hook.
+it, fires its `pre-` hook, asks its question, acts, says what it did — the act,
+then any record it writes of it — and fires its `post-` hook last, once that
+report is printed. Under `-n` the `pre-` hook fires told `DOTTA_DRY_RUN=1`, and
+no `post-` hook fires. So a `pre-` hook runs over a decided run: a run the
+command refused, or one with nothing to do, fires no hook, and a question the
+run owes but cannot ask — a destructive one off a terminal, without `--force` —
+refuses before the hook.
 
 What a `pre-` hook changes meets what the command decided: add,
 `remove <path>` and revert read the profile before the hook, so a commit it

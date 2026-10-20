@@ -403,25 +403,36 @@ cleanup:
 }
 
 /**
- * Print the consent a removal recorded, beneath its success line
+ * Print what the record phase did, beneath the removal's success line: the consent
+ * it recorded, or its refusal
  *
- * The orders the record phase committed, one a copy, said as what the next apply
- * does with them in the ordinary case: deletes each — an edited copy it skips
- * instead, and it releases one displaced beneath a record's memory or a directory
- * holding what no apply removes, which that apply's preview names. Nothing ordered
- * says nothing: a default removal, or a record phase that refused, with its
- * warning, leaves the success line to stand alone.
+ * The orders the phase committed, one a copy, continue the success line, said
+ * as what the next apply does with them in the ordinary case: deletes each — an
+ * edited copy it skips instead, and it releases one displaced beneath a record's
+ * memory or a directory holding what no apply removes, which that apply's preview
+ * names. Nothing ordered says nothing: a default removal leaves the success line
+ * to stand alone.
  *
- * Readers: remove_paths and remove_profile — one printer, so the two routes say
- * one consent in one set of words.
+ * A refusal is a block of its own, in the store's own words, which name the step
+ * that refused. The phase is one transaction, so the refusal took every order
+ * with it (remove_write_record), and what else the phase owed, every later load
+ * re-derives: the next apply reclaims a gone copy's record as every absent
+ * orphan's, and every load names an enabled profile with no branch, with its
+ * remedy.
+ *
+ * Readers: remove_paths and remove_profile — one printer, the twin of
+ * remove_write_record, so the two routes say one phase in one set of words.
  */
-static void remove_print_orders(output_t *out, size_t ordered) {
-    if (ordered == 0) return;
-
-    output_info(
-        out, OUTPUT_NORMAL, "  %zu path%s will be deleted at the next 'dotta apply'",
-        ordered, ordered == 1 ? "" : "s"
-    );
+static void remove_print_record(output_t *out, error_t record_err, size_t ordered) {
+    if (record_err) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
+    } else if (ordered > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "  %zu path%s will be deleted at the next 'dotta apply'",
+            ordered, ordered == 1 ? "" : "s"
+        );
+    }
 }
 
 /**
@@ -789,7 +800,7 @@ static error_t remove_overlaps(
  * by status, which reads the copy's record as that profile's reassignment. What
  * remove does to every other copy is promised once before the act, by the question
  * (remove_ask_paths) or the dry run, and its consent said once after it, by the
- * receipt (remove_print_orders).
+ * receipt (remove_print_record).
  */
 static void remove_print_overlaps(
     output_t *out,
@@ -903,7 +914,7 @@ static output_answer_t remove_ask_paths(
     remove_format_counts(counts, sizeof(counts), files, dirs);
 
     /* The question, and beneath it the one promise remove makes the copies before
-     * the act, in the receipt's words (remove_print_orders): what the next apply
+     * the act, in the receipt's words (remove_print_record): what the next apply
      * does to them in the ordinary case — the paths left on disk, or under
      * --delete-files deleted */
     if (opts->delete_files) {
@@ -1204,25 +1215,8 @@ static error_t remove_paths(
      * then.
      */
 
-    /* The record phase (remove_write_record): the reclaim of a copy already gone,
-     * and the consent --delete-files gives. One phase, one sentence, whichever
-     * step refused, as add's, update's and apply's say it: the store's refusal
-     * in its own words, which name the step — the read, the lock, the view, an
-     * order, a retire or the commit. Non-fatal: the commit to Git stands, so
-     * the refusal is warned and the command goes on, and what the phase did not
-     * write the next apply decides, as every let-go. */
-    size_t ordered = 0;
-    err = remove_write_record(ctx, opts, claims, claim_count, &ordered);
-    if (err) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
-        err = NULL;
-    }
-
-    /* Execute post-remove hook */
-    hook_fire_post(config, out, &hook_inv);
-
-    /* Success, then the consent the record phase recorded (remove_print_orders) */
+    /* Success: what the commit took, said once it lands and before the record
+     * phase, which may wait on the store's lock (core/state.h state_begin) */
     char counts[64];
     remove_format_counts(counts, sizeof(counts), removed_files, removed_dirs);
     output_gap(out, OUTPUT_NORMAL);
@@ -1230,7 +1224,21 @@ static error_t remove_paths(
         out, OUTPUT_NORMAL, "Removed %s from profile '%s'",
         counts, opts->profile
     );
-    remove_print_orders(out, ordered);
+
+    /* The record phase (remove_write_record): the reclaim of a copy already gone,
+     * and the consent --delete-files gives. One phase, one sentence, whichever
+     * step refused, as add's, update's and apply's say it: the store's refusal
+     * in its own words, which name the step — the read, the lock, the view, an
+     * order, a retire or the commit. Non-fatal: the commit to Git stands, so
+     * the refusal is warned beneath the success line and the command goes on
+     * (remove_print_record), and what the phase did not write the next apply
+     * decides, as every let-go. */
+    size_t ordered = 0;
+    error_t record_err = remove_write_record(ctx, opts, claims, claim_count, &ordered);
+    remove_print_record(out, record_err, ordered);
+
+    /* The post-remove hook, last (utils/hooks.h hook_fire_post) */
+    hook_fire_post(config, out, &hook_inv);
 
 cleanup:
     /* The draft, whatever it held — a draft never committed changes nothing in
@@ -1471,23 +1479,30 @@ static error_t remove_profile(
     err = gitops_delete_branch(repo, opts->profile);
     if (err) goto cleanup;
 
+    /* Success message: every exit before the deletion is behind us (dry run,
+     * cancel, error) — with what it took, which a question asked before it said
+     * too, and nothing else on an unasked run says — said once the branch is
+     * gone and before the record phase, which may wait on the store's lock
+     * (core/state.h state_begin). */
+    output_gap(out, OUTPUT_NORMAL);
+    output_success(
+        out, OUTPUT_NORMAL, "Profile '%s' deleted (%s)", opts->profile, counts
+    );
+
     /* The record phase (remove_write_record): the enabled row and the record,
      * in one transaction, after the branch is gone — the view the phase builds
-     * is the one the deletion leaves. Its claims are the tolerant read's, so a
-     * sheet that would not load leaves its directory claims unreached, neither
-     * reclaimed nor ordered, the next apply's as every let-go (stated beside
-     * the read's warning). An ordered copy's blob still opens with the branch
-     * gone: the next apply's orphan compare reads it under the record's own
-     * binding, and subkey derivation needs only the profile name. Non-fatal:
-     * the branch is gone and stands, so the store's refusal is warned in its
-     * own words and the command goes on. */
+     * is the one the deletion leaves — and before the push, the store settled
+     * before the network is asked. Its claims are the tolerant read's, so a sheet
+     * that would not load leaves its directory claims unreached, neither reclaimed
+     * nor ordered, the next apply's as every let-go (stated beside the read's
+     * warning). An ordered copy's blob still opens with the branch gone: the
+     * next apply's orphan compare reads it under the record's own binding, and
+     * subkey derivation needs only the profile name. Non-fatal: the branch is
+     * gone and stands, so the store's refusal is warned in its own words beneath
+     * the success line and the command goes on (remove_print_record). */
     size_t ordered = 0;
-    err = remove_write_record(ctx, opts, claims, claim_count, &ordered);
-    if (err) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
-        err = NULL;
-    }
+    error_t record_err = remove_write_record(ctx, opts, claims, claim_count, &ordered);
+    remove_print_record(out, record_err, ordered);
 
     /* Push the deletion to the remote, unless the profile was never pushed there
      * (remote_name NULL, above): sync needs it, since other repositories learn
@@ -1531,18 +1546,9 @@ static error_t remove_profile(
     /* The prune itself happens on `apply` — see the Architectural note in
      * remove_paths. */
 
-    /* Execute post-remove hook */
+    /* The post-remove hook, last (utils/hooks.h hook_fire_post): the deletion's
+     * push among what the run said */
     hook_fire_post(config, out, &hook_inv);
-
-    /* Success message: every exit before the deletion is behind us (dry run,
-     * cancel, error) — with what it took, which a question asked before it said
-     * too, and nothing else on an unasked run says. Then the consent the record
-     * phase recorded (remove_print_orders). */
-    output_gap(out, OUTPUT_NORMAL);
-    output_success(
-        out, OUTPUT_NORMAL, "Profile '%s' deleted (%s)", opts->profile, counts
-    );
-    remove_print_orders(out, ordered);
 
 cleanup:
     /* The profile is freed once its count is read; here only a refusal before

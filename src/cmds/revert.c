@@ -1215,48 +1215,47 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     err = profile_commit(draft, commit_message(ctx->arena, config, &msg_ctx), NULL, NULL);
     if (err) goto cleanup;
 
-    /* Step 23: the record phase, at the place step 7 resolved — the restored
-     * claim's (revert_write_record). Non-fatal: the commit stands, so the store's
-     * refusal is warned in its own words. */
-    err = revert_write_record(ctx, profile, filesystem_path);
-    if (err) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
-        err = NULL;
-    }
-
-    /* Step 24: the post-revert hook, the commit landed and the record phase's
-     * transaction ended, so the hook meets the store this run leaves */
-    hook_fire_post(config, out, &hook_inv);
-
-    /* Step 25: Report. The revert moved the branch HEAD, and the next load's
-     * view carries the reverted blob: over a copy that stands, the record stays
-     * where apply last confirmed it, so the workspace reads the result as [stale]
-     * until apply deploys it; over one already gone, the reclaim above left no
-     * record, so it reads [undeployed]. A disabled profile's revert reaches no
-     * view at all. A block of its own, beneath the preview's patch, the question
-     * or a hook's lines. */
+    /* Step 23: the receipt, once the commit lands and before the record phase,
+     * which may wait on the store's lock (core/state.h state_begin). A block of
+     * its own, beneath the preview's patch, the question or the trace. */
     output_gap(out, OUTPUT_NORMAL);
     output_success(
         out, OUTPUT_NORMAL, "Reverted %s in profile '%s'", restored.storage_path,
         profile
     );
 
-    /* The one line after it differs: a profile this machine has not enabled has
-     * nothing to apply the revert to. */
-    if (!state_enabled(state, profile)) {
+    /* Step 24: the record phase, at the place step 7 resolved — the restored
+     * claim's (revert_write_record). Non-fatal: the commit stands, so the store's
+     * refusal is warned in its own words, a block beneath the receipt. */
+    error_t record_err = revert_write_record(ctx, profile, filesystem_path);
+    if (record_err) {
         output_gap(out, OUTPUT_NORMAL);
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
+    }
+
+    /* Step 25: the next step. The revert moved the branch HEAD, and the next
+     * load's view carries the reverted blob: over a copy that stands, the record
+     * stays where apply last confirmed it, so the workspace reads the result as
+     * [stale] until apply deploys it; over one already gone, the reclaim above
+     * left no record, so it reads [undeployed]. A disabled profile's revert reaches
+     * no view at all: a profile this machine has not enabled has nothing to apply
+     * the revert to. A block of its own. */
+    output_gap(out, OUTPUT_NORMAL);
+    if (state_enabled(state, profile)) {
+        output_info(
+            out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy changes to filesystem"
+        );
+    } else {
         output_info(
             out, OUTPUT_NORMAL, "Note: Profile '%s' is not enabled on this machine",
             profile
         );
-        goto cleanup;
     }
 
-    output_gap(out, OUTPUT_NORMAL);
-    output_info(
-        out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy changes to filesystem"
-    );
+    /* Step 26: the post-revert hook, last (utils/hooks.h hook_fire_post): the
+     * commit landed and the record phase's transaction ended, so the hook meets
+     * the store this run leaves */
+    hook_fire_post(config, out, &hook_inv);
 
 cleanup:
     buffer_deinit(&rebound);

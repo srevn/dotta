@@ -118,7 +118,7 @@ Hook scripts run before/after operations. Place executable scripts in the hooks 
 **Behavior:**
 - A pre-hook fires over a decided run: after the command's preview, before its question, under `-n` too; a run refused, or with nothing to do, fires none
 - Pre-hooks can abort operations by exiting with a non-zero status
-- Post-hooks run after the operation completes; a non-zero exit is warned, with the hook's output, and does not affect the operation
+- A post-hook fires last, once the command has said what it did; a non-zero exit is warned, with the hook's output, and does not affect the operation
 - A hook's output is shown beside its failure, and nowhere on success; under `-v` it is shown live, as the hook writes it
 
 **Environment variables passed to hooks:**

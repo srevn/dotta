@@ -1634,9 +1634,9 @@ static error_t add_commit(
  *
  * Postcondition, on every path: the transaction the dispatcher opened is finished
  * when this function returns — committed by state_save, or rolled back here.
- * The caller runs the post-add hook next, and a hook that asks the database must
- * not meet a lock this run has no further use for (cmds/apply commits before
- * its hook and cmds/update rolls back before its own, for this reason).
+ * The run ends in its post-add hook, and a hook that asks the database must not
+ * meet a lock this run has no further use for (cmds/apply commits before its
+ * hook and cmds/update rolls back before its own, for this reason).
  *
  * Non-Fatal Integration:
  *   Caller should treat a record write failure as a non-fatal warning: Git's
@@ -1839,11 +1839,11 @@ static error_t add_write_record(
     err = state_save(state);
 
 cleanup:
-    /* The phase finishes its own transaction, because the caller runs the post-add
-     * hook next and a hook that asks the database must not meet a lock this run
-     * has no further use for. state_rollback is a no-op once state_save has
-     * committed, and is also the one call that clears the handle's flag after
-     * SQLite rolled the transaction back itself.
+    /* The phase finishes its own transaction, because the run ends in its post-add
+     * hook and a hook that asks the database must not meet a lock this run has
+     * no further use for. state_rollback is a no-op once state_save has committed,
+     * and is also the one call that clears the handle's flag after SQLite rolled
+     * the transaction back itself.
      *
      * And it settles the rows the tail asks about this profile: STEP 1's where
      * the save landed, the ones this phase began with where it did not
@@ -2666,37 +2666,6 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
     }
 
-    /* Write the record - auto-enable new profiles, anchor for enabled ones
-     *
-     * Every path was captured from disk, so its record — what the capture committed
-     * — is written now rather than left for a later status to confirm: an ownership
-     * event whether or not the commit moved the branch, since the capture's stat
-     * is fresh either way. The view itself is computed at every load and needs
-     * no update.
-     *
-     * For NEW profiles: Auto-enable provides intuitive UX (creating via 'add'
-     * enables it). UX Decision: Creating a profile via 'add' should enable it
-     * automatically. This matches user expectations: "I just added a file, it
-     * should be active." For EXISTING profiles: Standard behavior (anchor only
-     * if already enabled).
-     *
-     * Both end in the same loop: one view build says which rows this profile
-     * won, and add's contribution is the ownership event.
-     *
-     * Non-fatal, and rendered in the tail with the counts: the phase's fate is
-     * its error and a warning above the ✓ lines would read as a refusal of the
-     * add, which a record failure is not. The error is therefore carried from
-     * here to the screen that renders it, and the region between holds no exit.
-     */
-    add_receipt_t receipt = { 0 };
-
-    error_t record_err = add_write_record(&walk, target, !profile_exists, &receipt);
-
-    /* Execute post-add hook. The record phase settled its own transaction before
-     * returning, so the hook meets the database this run leaves — committed or
-     * rolled back — and not a lock nothing will use again. */
-    hook_fire_post(config, out, &hook_inv);
-
     /* Show summary on success. The selection captured something — one that captured
      * nothing ended there — and both capture loops are total over their lists,
      * so there is always something to report here. */
@@ -2707,7 +2676,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * as the files were. One that landed names its files on the ✓ line and its
      * directories beneath them, or on a ✓ line of their own when they are all
      * it took. Whichever arm, the receipt is a block of its own, beneath the
-     * trace and a hook's lines. */
+     * trace. */
     output_gap(out, OUTPUT_NORMAL);
     if (!committed) {
         char counts[64];
@@ -2747,11 +2716,39 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * the pre-flight copied. */
     add_print_labels(&walk);
 
-    /* The branch is Git's fact and stands whatever the record did; the enabling
-     * is a row, which a failed phase can leave standing (a branch recreated over
-     * a leftover row) and a successful one cannot invent. So the second clause
-     * keys on membership — the handle's rows, as the phase settled them
-     * (add_receipt_t) — not on the fate. */
+    /* Write the record - auto-enable new profiles, anchor for enabled ones
+     *
+     * Every path was captured from disk, so its record — what the capture committed
+     * — is written now rather than left for a later status to confirm: an ownership
+     * event whether or not the commit moved the branch, since the capture's stat
+     * is fresh either way. The view itself is computed at every load and needs
+     * no update.
+     *
+     * For NEW profiles: Auto-enable provides intuitive UX (creating via 'add'
+     * enables it). UX Decision: Creating a profile via 'add' should enable it
+     * automatically. This matches user expectations: "I just added a file, it
+     * should be active." For EXISTING profiles: Standard behavior (anchor only
+     * if already enabled).
+     *
+     * Both end in the same loop: one view build says which rows this profile
+     * won, and add's contribution is the ownership event.
+     *
+     * Non-fatal, and said beneath the receipt above it: the phase's fate is its
+     * error, and a warning above the ✓ lines would read as a refusal of the add,
+     * which a record failure is not. The error is carried past the profile's
+     * line below — the receipt's last, which reads the rows the phase settled —
+     * to the record's own block, and the region between holds no exit.
+     */
+    add_receipt_t receipt = { 0 };
+
+    error_t record_err = add_write_record(&walk, target, !profile_exists, &receipt);
+
+    /* The record's line: the branch is Git's fact and stands whatever the record
+     * did; the enabling is a row, which a failed phase can leave standing (a
+     * branch recreated over a leftover row) and a successful one cannot invent.
+     * So the second clause keys on membership — the handle's rows, as the phase
+     * settled them (add_receipt_t) — not on the fate, and the line follows the
+     * phase. */
     if (!profile_exists) {
         output_success(
             out, OUTPUT_NORMAL,
@@ -2825,6 +2822,12 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     } else if (record_err) {
         output_hint(out, OUTPUT_NORMAL, "Re-run this add with --force to finish it");
     }
+
+    /* The post-add hook, last (utils/hooks.h hook_fire_post). The record phase
+     * settled its own transaction before returning, so the hook meets the database
+     * this run leaves — committed or rolled back — and not a lock nothing will
+     * use again. */
+    hook_fire_post(config, out, &hook_inv);
 
 cleanup:
     /* The profile's draft, whatever it held — a draft never committed changes

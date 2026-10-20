@@ -1534,25 +1534,24 @@ static error_t remove_profile(
          * unauthenticated paths still work, helper approve/reject become no-ops. */
         transfer_options_t del_opts = { .output = out, .url = remote_url };
         transfer_context_t *del_xfer = transfer_context_create(&del_opts);
-        err = gitops_delete_remote_branch(repo, remote_name, opts->profile, del_xfer);
+        error_t push_err = gitops_delete_remote_branch(
+            repo, remote_name, opts->profile, del_xfer
+        );
         transfer_context_free(del_xfer);
-        if (err) {
-            /* Non-fatal: the local branch is already deleted, so what failed is
-             * the sync's half alone — warned, and the operation stands. */
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to push deletion to remote: %s",
-                error_line(err)
-            );
-            output_info(
+        if (push_err) {
+            /* Non-fatal: the branch is gone here, as the success line above says,
+             * and what failed is the remote's half, which other machines learn
+             * the deletion from. Warned in its own words, which name the profile
+             * and the remote (sys/gitops.c gitops_delete_remote_branch), and
+             * the push by hand its remedy — through dotta git, which runs git
+             * on the store (cmds/git.h cmd_git), where a git typed in a shell
+             * acts on whatever repository the shell stands in. */
+            output_warning(out, OUTPUT_NORMAL, "%s", error_line(push_err));
+            output_hint(
                 out, OUTPUT_NORMAL,
-                "         The profile was deleted locally, but sync could fail."
-            );
-            output_info(
-                out, OUTPUT_NORMAL,
-                "         You can manually push the deletion with: git push %s :%s",
+                "Run 'dotta git push %s --delete %s' to push the deletion",
                 remote_name, opts->profile
             );
-            err = NULL;
         } else {
             output_info(out, OUTPUT_NORMAL, "Profile deletion pushed to remote");
         }

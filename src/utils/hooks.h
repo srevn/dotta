@@ -79,11 +79,12 @@ typedef struct {
  * runs and nothing is said; what the exec would refuse — no execute bit, no regular
  * file — is ignored with a notice naming why, so a guard that loses its execute
  * bit fails open, said by its notice; and a hooks directory whose names cannot
- * be looked up is said once, naming the directory. On failure, prints captured
- * hook output (if any) at OUTPUT_QUIET, the refusal's reason at every level,
- * and returns the refusal, which names its hook (Hook 'pre-<cmd>' …, or its path
- * where the process layer could not spawn it). Callers should goto-cleanup on
- * non-NULL return.
+ * be looked up is said once, naming the directory — each notice a block of its
+ * own. On failure, prints captured hook output (if any) at OUTPUT_QUIET, the
+ * refusal's reason at every level — a block of its own, the refusal directly
+ * beneath it — and returns the refusal, which names its hook (Hook 'pre-<cmd>'
+ * …, or its path where the process layer could not spawn it). Callers should
+ * goto-cleanup on non-NULL return.
  *
  * Callers fire it over a decided run: once the command has decided what it will
  * do and shown it, before the question it asks — a dry run's too, told so — so
@@ -142,8 +143,8 @@ error_t hook_fire_pre(
  * and runs the post-<cmd> hook where its file is executable, as hook_fire_pre
  * runs its own — a hooks directory whose names cannot be looked up said by the
  * pre-fire alone, which every post-fire follows. Failures never propagate: on
- * error, prints a warning and any captured hook output, then swallows the error.
- * Its environment is hook_fire_pre's.
+ * error, prints one block — a warning, and any captured hook output beneath it
+ * — then swallows the error. Its environment is hook_fire_pre's.
  */
 void hook_fire_post(
     const config_t *config,

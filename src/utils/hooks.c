@@ -212,7 +212,7 @@ static error_t hook_fire(
     error_t err = NULL;
 
     /* A hook that will not run is no refusal: its notice is a failed post-hook's
-     * register (hook_fire_post), beside a run that goes on */
+     * register (hook_fire_post), a block of its own beside a run that goes on */
     switch (hook_find(hook_path, frame, &reason)) {
         case HOOK_FOUND_ABSENT:
             goto cleanup;
@@ -221,6 +221,7 @@ static error_t hook_fire(
             /* Every name in the directory meets it: said once a run, by the
              * pre-fire every post-fire follows */
             if (phase == HOOK_PHASE_PRE) {
+                output_gap(out, OUTPUT_NORMAL);
                 output_warning(
                     out, OUTPUT_NORMAL, "Hooks in '%s' cannot be looked up: %s",
                     config->hooks_dir, reason
@@ -231,6 +232,7 @@ static error_t hook_fire(
         case HOOK_FOUND_IGNORED:
             /* The path named: hooks_dir is the config's to choose, and the name
              * alone is not something a reader can act on */
+            output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL, "Hook '%s' at '%s' was ignored: %s",
                 hook_name, hook_path, reason
@@ -273,22 +275,24 @@ cleanup:
 /**
  * A failed hook's captured output, at the level its caller's register asks: a
  * refusing pre-hook's is the refusal's reason, read at every level, and a failed
- * post-hook's goes with its warning
+ * post-hook's goes with its warning. A capture with bytes in it, in the block
+ * its caller opened.
  */
 static void hook_print_output(
     output_t *out, output_verbosity_t level, const process_result_t *result
 ) {
-    if (result && result->output && result->output_len > 0) {
-        /* The hook's bytes are a payload, written as they are — its colours among
-         * them, as git passes a hook's output on (base/output.h output_write) */
-        output_print(out, level, "Hook output:\n");
-        output_write(out, level, OUTPUT_COLOR_RESET, result->output, result->output_len);
-        output_endline(out, level);
-        /* The capture kept the hook's first bytes (sys/process.h): what it dropped
-         * is counted, never shown. */
-        if (result->output_dropped > 0) {
-            output_print(out, level, "... and %zu more bytes\n", result->output_dropped);
-        }
+    /* The hook's bytes are a payload, written as they are — its colours among
+     * them, as git passes a hook's output on (base/output.h output_write) — and
+     * its last line ended only where the payload left it open, as a patch's line
+     * is (cmds/diff.c print_diff_line_cb): a line the hook ended is ended once */
+    output_print(out, level, "Hook output:\n");
+    output_write(out, level, OUTPUT_COLOR_RESET, result->output, result->output_len);
+    if (result->output[result->output_len - 1] != '\n') output_endline(out, level);
+
+    /* The capture kept the hook's first bytes (sys/process.h): what it dropped
+     * is counted, never shown. */
+    if (result->output_dropped > 0) {
+        output_print(out, level, "... and %zu more bytes\n", result->output_dropped);
     }
 }
 
@@ -301,10 +305,14 @@ error_t hook_fire_pre(
     CHECK_NULL(inv);
 
     /* The refusal names its hook, pre-<command> (hook_fire), so the command says
-     * nothing over it */
+     * nothing over it. What the hook printed is the refusal's reason, a block
+     * of its own, and the refusal lands directly beneath it on stderr
+     * (base/output.h output_error); a hook that printed nothing leaves the refusal
+     * directly under the run. */
     process_result_t result = { 0 };
     error_t err = hook_fire(config, out, inv, HOOK_PHASE_PRE, &result);
-    if (err) {
+    if (err && result.output_len > 0) {
+        output_gap(out, OUTPUT_QUIET);
         hook_print_output(out, OUTPUT_QUIET, &result);
     }
     process_result_deinit(&result);
@@ -322,12 +330,14 @@ void hook_fire_post(
     if (inv->dry_run) return;
 
     /* A failure the run goes past, warned in its own words: they name the hook,
-     * post-<command> (hook_fire) */
+     * post-<command> (hook_fire). The warning opens a block of its own, and what
+     * the hook printed stands in it, beneath the warning. */
     process_result_t result = { 0 };
     error_t err = hook_fire(config, out, inv, HOOK_PHASE_POST, &result);
     if (err) {
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
-        hook_print_output(out, OUTPUT_NORMAL, &result);
+        if (result.output_len > 0) hook_print_output(out, OUTPUT_NORMAL, &result);
     }
     process_result_deinit(&result);
 }

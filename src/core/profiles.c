@@ -28,8 +28,10 @@
  * and the climb claims the way to a leaf off the disk; a restore asks the base
  * the same, puts its entry by id and writes its claim and its way into the copy;
  * dotta's own file is put beside the claims; the change test holds each document
- * against the one the draft opened; and the commit, where an edit moved either,
- * prunes the copy, saves it where its claims are no longer the base's and commits.
+ * against the one the draft opened, and the changes merge what each says moved
+ * into the explicit claims the commit adds, updates and removes; and the commit,
+ * where an edit moved either, prunes the copy, saves it where its claims are no
+ * longer the base's and commits.
  */
 
 #include "core/profiles.h"
@@ -1607,6 +1609,109 @@ error_t profile_changed(const profile_draft_t *draft, bool *out) {
     }
 
     return stage_changed(draft->stage, out);
+}
+
+error_t profile_changes(
+    const profile_draft_t *draft, arena_t *arena, profile_changes_t *out
+) {
+    CHECK_NULL(draft);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    /* What each document says moved, each list in byte order: the tree's entries
+     * (sys/stage.h stage_changes), and the sheet's keys, one list a kind
+     * (core/metadata.h metadata_changes) */
+    stage_changes_t tree;
+    error_t err = stage_changes(draft->stage, arena, &tree);
+    if (err) return err;
+    const string_array_t files = metadata_changes(
+        arena, draft->base->sheet, draft->sheet, PATH_KIND_FILE
+    );
+    const string_array_t dirs = metadata_changes(
+        arena, draft->base->sheet, draft->sheet, PATH_KIND_DIRECTORY
+    );
+
+    profile_changes_t changes;
+    string_array_init(&changes.added, arena, 0);
+    string_array_init(&changes.updated, arena, 0);
+    string_array_init(&changes.removed, arena, 0);
+
+    for (size_t e = 0, f = 0, d = 0;;) {
+        /* The byte-least name the three lists hold next, read where it falls,
+         * so each name comes once and nothing is sorted: the list's own string,
+         * in the arena, which stepping past leaves standing */
+        const char *name = e < tree.count ? tree.entries[e].path : NULL;
+        if (f < files.count && (!name || strcmp(files.entries[f], name) < 0)) {
+            name = files.entries[f];
+        }
+        if (d < dirs.count && (!name || strcmp(dirs.entries[d], name) < 0)) {
+            name = dirs.entries[d];
+        }
+        if (!name) break;
+
+        /* What moved at the name — the tree's entry, the FILE item, the directory
+         * item — each list stepped past it where it holds it */
+        const stage_change_t *entry = NULL;
+        if (e < tree.count && strcmp(tree.entries[e].path, name) == 0) {
+            entry = &tree.entries[e++];
+        }
+        const bool file_moved = f < files.count && strcmp(files.entries[f], name) == 0;
+        if (file_moved) f++;
+        const bool dir_moved = d < dirs.count && strcmp(dirs.entries[d], name) == 0;
+        if (dir_moved) d++;
+
+        /* dotta's own files claim nothing (infra/label.h label_prefixes) */
+        if (!label_prefixes(name)) continue;
+
+        /* The tracked claim at the name on each side, as each sheet holds it,
+         * and whether it moved: a derived claim's move is the way's, never named,
+         * so a name where only the way moved is passed by before the tree is
+         * asked */
+        const metadata_item_t *dir_before = metadata_find_item(
+            draft->base->sheet, PATH_KIND_DIRECTORY, name
+        );
+        const metadata_item_t *dir_after = metadata_find_item(
+            draft->sheet, PATH_KIND_DIRECTORY, name
+        );
+        const bool tracked_before = dir_before && dir_before->tracked;
+        const bool tracked_after = dir_after && dir_after->tracked;
+        const bool tracked_moved = dir_moved && (tracked_before || tracked_after);
+        if (!entry && !file_moved && !tracked_moved) continue;
+
+        /* The blob at the name on each side: the entry's two sides where the
+         * tree moved it, a blob of any mode as the walk reads one (profile_step);
+         * else the base's, which the commit holds there as it stands
+         * (profile_entry) */
+        bool blob_before;
+        bool blob_after;
+        if (entry) {
+            blob_before = entry->before == GIT_OBJECT_BLOB;
+            blob_after = entry->after == GIT_OBJECT_BLOB;
+        } else {
+            profile_held_t held;
+            err = profile_entry(draft->base, name, &held);
+            if (err) return err;
+            blob_before = held.kind == PROFILE_HELD_FILE;
+            blob_after = blob_before;
+        }
+
+        /* A move of what claims nothing — a FILE item no blob backs, a gitlink
+         * — is no explicit claim's */
+        if (!tracked_moved && !blob_before && !blob_after) continue;
+
+        /* The name, under its change: the base claims nothing explicit there,
+         * or the commit claims nothing, or both claim another thing */
+        if (!blob_before && !tracked_before) {
+            string_array_push(&changes.added, name);
+        } else if (!blob_after && !tracked_after) {
+            string_array_push(&changes.removed, name);
+        } else {
+            string_array_push(&changes.updated, name);
+        }
+    }
+
+    *out = changes;
+    return NULL;
 }
 
 /**

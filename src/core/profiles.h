@@ -638,7 +638,9 @@ typedef struct {
  * a file record, folding a failure to UNVERIFIED; the encryption policy's prior
  * — the blob the profile holds at the name in the tree its draft opened at, judged
  * by its own bytes, and none where no blob stands — at each capture (cmds/update.c
- * update_capture) and in add's decision pass (cmds/add.c cmd_add).
+ * update_capture) and in add's decision pass (cmds/add.c cmd_add); and a profile's
+ * changes, whether a blob stands at a name the sheet moved and the tree did not,
+ * where the base's is the commit's (profile_changes).
  *
  * @param profile Handle (must not be NULL); its sheet is never read
  * @param storage_path A validated storage path (must not be NULL)
@@ -683,7 +685,7 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * remove's directory offer, which offers a claim where no blob stands at its
  * name (cmds/remove.c remove_offer_directory); and a profile's draft, at each
  * rung of the way a restore brings back, where whatever the base holds keeps
- * the rung (profile_restore_file). A reader not on this list is a bug. Three
+ * the rung (profile_restore_file). A reader not on this list is a bug. Four
  * neighbours ask profile_entry instead, the tree alone: revert's read of the
  * head at the name it writes (cmds/revert.c cmd_revert, step 11), and of each
  * holder's head in its search (revert_select_profile, at the holder's own name
@@ -693,7 +695,8 @@ error_t profile_entry(profile_t *profile, const char *storage_path, profile_held
  * whether a blob still backs a file record, a subtree and a gitlink standing at
  * a name without making a file claim; and the encryption prior of update's captures
  * and of add's decision pass (cmds/update.c update_capture, cmds/add.c cmd_add),
- * a blob's bytes or none.
+ * a blob's bytes or none; and a profile's changes, whether a blob stands at a
+ * name the tree did not move (profile_changes).
  *
  * @param profile Handle (must not be NULL); its sheet is read only where the
  *                tree is silent
@@ -765,8 +768,9 @@ error_t profile_find(
  * sheet — it hands the draft what it captured from the disk or restores from a
  * commit, and the draft authors the claim — and the draft answers what the base
  * cannot: whether a name a writer chooses before reading it has room beside the
- * names chosen with it (profile_admit), and whether its edits move anything
- * (profile_changed). Every edit keeps the document's rules, stated here once:
+ * names chosen with it (profile_admit), whether its edits move anything
+ * (profile_changed), and which explicit claims they add, update and remove
+ * (profile_changes). Every edit keeps the document's rules, stated here once:
  *   - a write touches its own kind: a removal takes its claim — a file's the
  *     blob and the FILE item at its name, a directory's tracking — never the
  *     other kind's at the same name, so a directory claim a removed blob
@@ -1185,7 +1189,9 @@ error_t profile_put_machinery(
  * claim by claim (core/metadata.h metadata_same), then the tree entry by entry
  * (sys/stage.h stage_changed). A write of what already stands moves nothing, so
  * a writer asks it to learn whether there is anything to do before it shows what
- * it would do; nothing is written, a dry run's question too.
+ * it would do; nothing is written, a dry run's question too. Every move counts
+ * here, the way's to the claims included; which explicit claims moved is
+ * profile_changes'.
  *
  * Readers: cmds/revert.c cmd_revert, whose "already at target" it answers after
  * the restore; and profile_commit, its gate.
@@ -1197,6 +1203,49 @@ error_t profile_put_machinery(
  *         that changed beneath the draft
  */
 error_t profile_changed(const profile_draft_t *draft, bool *out);
+
+/**
+ * What a commit changes of its profile's explicit claims: each name in one list
+ * at most, each list in byte order
+ */
+typedef struct {
+    string_array_t added;     /* Names the base claims nothing at, and the commit does */
+    string_array_t updated;   /* Names both claim, saying another thing */
+    string_array_t removed;   /* Names the base claims, and the commit nothing at */
+} profile_changes_t;
+
+/**
+ * What the commit changes of the profile's explicit claims, name by name
+ *
+ * A name's explicit claim is what the two documents say of it, compared whole:
+ * the blob at the name — its id and filemode — with the FILE item that rides
+ * it, and the tracked directory claim at the name. A FILE item no blob backs
+ * and a gitlink claim nothing, and a derived claim is the way to the claims,
+ * never one, so none of their moves is named. A blob is one of any mode its tree
+ * spells, as the walk reads it. Compared as the documents spell it: a claim the
+ * tree contradicts is compared as the sheet holds it, and whether a walk shows
+ * it is the decode's. dotta's own files claim nothing (infra/label.h
+ * label_prefixes).
+ *
+ * Asked once every edit is in, before the commit, and exact there: the commit's
+ * prune takes derived claims alone and its save writes dotta's own file, so neither
+ * moves an explicit claim (profile_commit). Nothing is written, so a dry run
+ * may ask it. A commit whose explicit claims all stand moved only the way: every
+ * writer's edit moves an explicit claim or the way to one, dotta's own file riding
+ * a capture (profile_put_machinery).
+ *
+ * @param draft The draft, every edit in (must not be NULL)
+ * @param arena The arena the lists and their names live in (must not be NULL)
+ * @param out The changes (must not be NULL; written on success alone)
+ * @return Error or NULL on success: the tree's comparison's, which needs a store
+ *         that changed beneath the draft; or the base's, under "Cannot read '%s'
+ *         in profile '%s'"
+ */
+error_t profile_changes(
+    const profile_draft_t *draft,
+    arena_t *arena,
+    profile_changes_t *out
+);
 
 /**
  * The commit

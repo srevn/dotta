@@ -404,6 +404,8 @@ typedef struct {
  * (diff_generate.c git_diff_tree_to_index). Nothing is written, so a dry run
  * may ask it; an id put before its object is compared by the id alone.
  *
+ * Reader: core/profiles.c profile_changes, the tree's half of a commit's changes.
+ *
  * @param st Stage (must not be NULL)
  * @param arena The arena the entries and their names live in (must not be NULL)
  * @param out The entries (must not be NULL; written on success alone)

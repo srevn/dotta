@@ -374,6 +374,9 @@ bool metadata_same(const metadata_t *a, const metadata_t *b);
  * in key order in both sheets, so the answer is one merge of the two orders,
  * nothing sorted, each key once.
  *
+ * Reader: a profile's draft — the keys at which the sheet its commit carries
+ * left the one it opened (core/profiles.c profile_changes).
+ *
  * @param arena The arena the answer and its keys live in (must not be NULL)
  * @param a A sheet (must not be NULL)
  * @param b Another (must not be NULL)

@@ -174,6 +174,10 @@ static error_t pull_branch_ff(
  * the user asked for. `dotta sync -p work` fetches only `work`, not every enabled
  * profile. Precedence-adjacent work (the Manifest block) still uses the full
  * enabled set — different role, different accessor.
+ *
+ * Nothing here asks whether the remote stands: the fetch looks it up before any
+ * use and refuses it in Git's words, as every verb that takes a remote name does
+ * (sys/gitops.h gitops_resolve_default_remote).
  */
 static error_t sync_fetch_phase(
     const dotta_ctx_t *ctx,
@@ -188,16 +192,6 @@ static error_t sync_fetch_phase(
     git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
     const string_array_t *profiles = scope_profiles(scope);
-
-    /* Check if remote exists */
-    git_remote *remote = NULL;
-    int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc == GIT_ENOTFOUND) {
-        return error_create(ERR_NOT_FOUND, "No remote '%s' configured", remote_name);
-    } else if (rc < 0) {
-        return error_git(rc, "Cannot fetch from remote '%s'", remote_name);
-    }
-    git_remote_free(remote);
 
     /* The branches to ask for: the profiles the remote has been seen to hold —
      * a remote-tracking ref stands for each — so a profile only this machine

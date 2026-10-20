@@ -307,7 +307,7 @@ typedef enum {
  * opens "not looked at", the predicate its neighbours spell "locked", "cannot
  * be read" and "could not be verified". The four that name the squatter say
  * "beneath a squatted directory" (cmds/update.c cmd_update's four census lines,
- * cmds/diff.c get_status_message_from_item, cmds/sync.c cmd_sync's note,
+ * cmds/diff.c get_status_message_from_item, cmds/sync.c sync_guard's note,
  * cmds/status.c status_print_workspace's key for a displaced orphan), and where
  * the squatter is dotta's own copy the first two add its state in the squatter's
  * own words — "changed in Git", "changed in Git and on disk"; the Displaced paths
@@ -1208,7 +1208,7 @@ typedef struct workspace workspace_t;
  *   per tracked directory, and every place it could not look (UNSCANNED). Read
  *   by cmds/update.c update_partition (the new files, and the places listed by
  *   path), cmds/status.c status_print_workspace (New files, and Unverifiable)
- *   and cmds/sync.c cmd_sync (the clean-workspace guard). Declined for a second
+ *   and cmds/sync.c sync_guard (the clean-workspace guard). Declined for a second
  *   reason the orphan analysis has no equivalent of: auto_detect_new_files and
  *   --include-new are the user saying whether to look at all, so this one is a
  *   config read where the other is a per-command constant.

@@ -98,8 +98,9 @@ timeout = 30
 [security]
 
 # Confirm Destructive Operations
-# Prompt for confirmation before operations that modify/delete files
-# Examples: dotta apply (overwrites files), dotta clean (removes files)
+# Prompt for confirmation before operations that overwrite, delete or discard
+# Examples: dotta apply (overwrites files), dotta remove (deletes a profile),
+# dotta sync (a force push or a reset discards commits; asked once a run)
 # Default: true
 confirm_destructive = true
 

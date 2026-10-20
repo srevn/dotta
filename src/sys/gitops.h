@@ -861,9 +861,9 @@ error_t gitops_create_reference(
  * git reads one as broken (lib/git/refs/files-backend.c), never as missing. For
  * the readers that act on a reference's absence as an answer: sys/upstream.c
  * upstream_analyze_profile (no branch, no remote branch), cmds/sync.c
- * pull_branch_ff (nothing fetched to fast-forward to), infra/epoch.c epoch_resolve
- * (no local epoch), gitops_reference_commit, which reads the commit at the id,
- * and gitops_resolve_reference_oid, which refuses it.
+ * sync_fast_forward (nothing fetched to fast-forward to), infra/epoch.c
+ * epoch_resolve (no local epoch), gitops_reference_commit, which reads the commit
+ * at the id, and gitops_resolve_reference_oid, which refuses it.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (must not be NULL or empty)
@@ -993,7 +993,7 @@ error_t gitops_branch_refname(
  * rule where its own ref is built (gitops_branch_refname). A refspec joining
  * this name and the branch's fits DOTTA_REFSPEC_MAX by that constant's definition.
  *
- * Readers: cmds/sync.c pull_branch_ff and sync_fetch_phase, cmds/status.c
+ * Readers: cmds/sync.c sync_fast_forward and sync_fetch, cmds/status.c
  * status_print_remote, sys/upstream.c upstream_analyze_profile, and this file's
  * gitops_resolve_remote_branch_oid, gitops_fetch_branch and gitops_fetch_branches.
  *

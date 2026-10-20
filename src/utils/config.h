@@ -109,7 +109,7 @@ void config_child_env(const config_t *config, const char *repo_dir, string_array
 /**
  * The divergence strategies, by the word [sync] diverged_strategy and `sync
  * --diverged` take — the one spelling the config's read, the flag's parse
- * (config_parse_strategy), sync's receipts and hint, and completion share. Indexed
+ * (config_parse_strategy), sync's hint under warn, and completion share. Indexed
  * by the strategy each names, so a strategy's word is a lookup, never a search:
  * adding one is an enumerator of sync_strategy_t (include/config.h), a row here
  * and an arm in cmds/sync. `sync --help` restates the phrases, and a test holds

@@ -32,31 +32,84 @@
 #define LIST_LIMIT 20  /* Every capped list in this file trims here. */
 
 /**
- * Per-profile sync result
+ * The act the run carries out on a profile
  *
- * The profile's state against the remote, and the failure the run met for it. A
- * row fails by its error, whichever phase met it: said on the profile's line
- * where it is met — the analyze phase's read back by the push phase and the dry
- * run — and counted by sync_failure. A row with no error whose state is up-to-date
- * is one the run had nothing to do for, its line verbose's, counted at normal
- * by cmd_sync; every other row's line says what the run did with it.
+ * One verdict a row, decided once from what the analysis read and the run's options
+ * (sync_decide), and read by the preview, the question, the act and the receipt:
+ * none decides again, core/cleanup.h's stance. Each names one mechanism — a push
+ * and a force push the transfer's (sys/gitops.h), a pull the fast-forward
+ * (sync_fast_forward), a rebase, a merge and a reset sys/resolve's. A force push
+ * and a reset discard the other side's commits, and a run's are of one kind,
+ * its strategy's: ours force pushes, theirs resets. A person confirms them where
+ * the configuration asks (cmd_sync).
+ *
+ * None is a row with nothing to carry out: the sides agree, there is no local
+ * branch, warn leaves a divergence to the user, or the user's word withheld the
+ * act its state called for.
  */
-typedef struct {
-    const char *profile;           /* The scope's own name, borrowed */
-    upstream_state_t state;
-    size_t ahead;
-    size_t behind;
-    error_t error;                 /* The failure's cause, borrowed; NULL where the run met none */
-} profile_sync_result_t;
+typedef enum {
+    SYNC_VERDICT_NONE,          /* Nothing to carry out */
+    SYNC_VERDICT_PUSH,          /* The local commits onto the remote, or the branch it lacks */
+    SYNC_VERDICT_PULL,          /* The remote's commits, fast-forwarded */
+    SYNC_VERDICT_REBASE,        /* A divergence: the local commits onto the remote's, then pushed */
+    SYNC_VERDICT_MERGE,         /* A divergence: the remote's commits merged in, then pushed */
+    SYNC_VERDICT_FORCE_PUSH,    /* ours: the local branch over the remote's, the remote's commits discarded */
+    SYNC_VERDICT_RESET          /* theirs: the local branch to the remote's, the local commits discarded */
+} sync_verdict_t;
 
 /**
- * The results: one row per profile in the sync scope, in its order — a value of
- * the command arena, as its rows are
+ * Whose word withholds an act: the user's own, given before the run — each
+ * withholds the acts of its direction (sync_decide), said on the row's head beside
+ * the act (sync_print_head)
+ */
+typedef enum {
+    SYNC_REASON_NO_PUSH,        /* --no-push: every move to the remote */
+    SYNC_REASON_NO_PULL,        /* --no-pull: every move that takes the remote's commits */
+    SYNC_REASON_AUTO_PULL       /* auto_pull = false: the fast-forward */
+} sync_reason_t;
+
+/**
+ * What carrying a row's verdict out came to — read by the receipt
+ * (sync_print_receipt) and, through the row's error, by the run's failure
+ * (sync_failure)
+ */
+typedef enum {
+    SYNC_OUTCOME_NONE,          /* Not carried out: no act, or the run stopped before the row */
+    SYNC_OUTCOME_DONE,          /* The act carried out whole */
+    SYNC_OUTCOME_UP_TO_DATE,    /* A pull found the branch at the remote's head: another process moved it */
+    SYNC_OUTCOME_FAILED,        /* The act failed, its cause the row's error */
+    SYNC_OUTCOME_ROLLED_BACK,   /* A resolution undone: its verification or its push failed */
+    SYNC_OUTCOME_UNVERIFIED     /* A reset that moved the branch, then failed its verification */
+} sync_outcome_t;
+
+/**
+ * A profile in the run: what the analysis read of it, what the run decided, what
+ * the act did
+ *
+ * Each column is written once, by its phase: the analysis the upstream, the
+ * decision the verdict and what the user's word withholds, the act the outcome.
+ * A withheld act leaves its row as it stands, its verdict none — but a rebase
+ * or a merge under --no-push, which resolves all the same and withholds its push
+ * alone. The row's error is the failure the run met for it, whichever phase met
+ * it — said on the row's line, counted and named by sync_failure. A row whose
+ * analysis failed has no verdict, and every reader asks its error before its
+ * state: a failed analysis's zeroed state reads as up to date otherwise.
  */
 typedef struct {
-    profile_sync_result_t *profiles;
-    size_t profile_count;
-} sync_results_t;
+    const char *profile;        /* The scope's own name, borrowed */
+    upstream_info_t upstream;   /* The analysis's: the state, each side's commits */
+    sync_verdict_t verdict;     /* The act the run carries out */
+    sync_verdict_t withheld;    /* The act the user's word keeps from the row; NONE where none */
+    sync_reason_t reason;       /* Whose word, read beside an act withheld */
+    sync_outcome_t outcome;     /* What carrying the verdict out came to */
+    error_t error;              /* The failure's cause, borrowed; NULL where the run met none */
+} sync_row_t;
+
+/** The rows: one per profile in the sync scope, in its order — a value of the command arena */
+typedef struct {
+    sync_row_t *entries;
+    size_t count;
+} sync_rows_t;
 
 /**
  * What the workspace guard found (sync_guard): what a pull of the run's scope
@@ -69,10 +122,288 @@ typedef struct {
 } sync_guard_t;
 
 /**
+ * A verdict's word: the act a row's head says was withheld (sync_print_head),
+ * and the resolution a rollback follows (sync_resolve)
+ */
+static const char *sync_verdict_name(sync_verdict_t verdict) {
+    switch (verdict) {
+        case SYNC_VERDICT_PUSH:       return "push";
+        case SYNC_VERDICT_PULL:       return "pull";
+        case SYNC_VERDICT_REBASE:     return "rebase";
+        case SYNC_VERDICT_MERGE:      return "merge";
+        case SYNC_VERDICT_FORCE_PUSH: return "force push";
+        case SYNC_VERDICT_RESET:      return "reset";
+        case SYNC_VERDICT_NONE:       break;
+    }
+
+    CHECK_ARG(false, "a verdict that names no act");
+}
+
+/** A reason's word: the user's, as it was given — the flag, or the key's setting */
+static const char *sync_reason_name(sync_reason_t reason) {
+    switch (reason) {
+        case SYNC_REASON_NO_PUSH:   return "--no-push";
+        case SYNC_REASON_NO_PULL:   return "--no-pull";
+        case SYNC_REASON_AUTO_PULL: return "auto_pull = false";
+    }
+
+    CHECK_ARG(false, "a reason no enumerator names");
+}
+
+/**
+ * Fetch the scope's profiles from the remote
+ *
+ * Operates on the scope's profiles (scope_profiles): fetching is driven by what
+ * the user asked for. `dotta sync -p work` fetches only `work`, not every enabled
+ * profile. Precedence-adjacent work (the Manifest block) still uses the full
+ * enabled set — different role, different accessor.
+ *
+ * Nothing here asks whether the remote stands: the fetch looks it up before any
+ * use and refuses it in Git's words, as every verb that takes a remote name does
+ * (sys/gitops.h gitops_resolve_default_remote).
+ */
+static error_t sync_fetch(
+    const dotta_ctx_t *ctx,
+    const char *remote_name,
+    const scope_t *scope,
+    transfer_context_t *xfer
+) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(scope);
+
+    git_repository *repo = ctx->run.repo;
+    output_t *out = ctx->out;
+    const string_array_t *profiles = scope_profiles(scope);
+
+    /* The branches to ask for: the profiles the remote has been seen to hold —
+     * a remote-tracking ref stands for each — so a profile only this machine
+     * has (never pushed) is not asked for. Whether the ref stands is Git's answer
+     * or Git's error (gitops_reference_exists): a ref this run cannot read is
+     * not "never pushed", and read as that it left the profile out of the fetch
+     * without a word. */
+    string_array_t branch_names;
+    string_array_init(&branch_names, ctx->arena, 0);
+
+    for (size_t i = 0; i < profiles->count; i++) {
+        char remote_refname[DOTTA_REFNAME_MAX];
+        error_t err = gitops_remote_branch_refname(
+            remote_refname, sizeof(remote_refname), remote_name, profiles->entries[i]
+        );
+        if (err) return err;
+
+        bool tracked = false;
+        err = gitops_reference_exists(repo, remote_refname, &tracked);
+        if (err) return err;
+
+        if (tracked) {
+            string_array_push(&branch_names, profiles->entries[i]);
+        }
+    }
+
+    /* None the remote has been seen to hold: nothing is fetched, and nothing
+     * announces a fetch */
+    if (branch_names.count == 0) return NULL;
+
+    /* Ephemeral fetch progress — shown while fetching, cleared after. On TTY:
+     * transfer progress overwrites via \r, then line cleared entirely. On pipe:
+     * falls back to persistent line with newline. */
+    output_print(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
+    fflush(out->stream);
+
+    /* Perform batched fetch - single network operation for all branches */
+    error_t err = gitops_fetch_branches(repo, remote_name, &branch_names, xfer);
+
+    /* The announce line ends here. Progress drawn over it ended with its op
+     * (sys/transfer.h transfer_op_end), whichever way the op went, so what can
+     * stand is the announce alone — an up-to-date fetch draws nothing over it:
+     * cleared on a terminal, ended on a pipe. */
+    if (output_is_tty(out)) {
+        output_clear_line(out);
+    } else {
+        output_endline(out, OUTPUT_NORMAL);
+    }
+
+    /* The fetch's own error, which names the remote and the act: a refused
+     * credential in the words the transfer's callback set for what was offered
+     * (sys/transfer.c transfer_credentials_callback), any other failure — a ref
+     * write as well as a network — in libgit2's */
+    return err;
+}
+
+/**
+ * The rows: one per profile in the sync scope, in its order, each holding its
+ * branch's state against the remote
+ *
+ * The table is made here, in `arena`, as scope_profiles(scope) orders it — the
+ * profiles the user asked for, those the fetch asked the remote for and those
+ * it has never held alike. A row names its profile by the scope's own string. A
+ * profile the analysis cannot read fails in its own row, by its error, which
+ * the decision passes over and the preview and the receipt read back.
+ */
+static sync_rows_t sync_analyze(
+    arena_t *arena,
+    git_repository *repo,
+    const char *remote_name,
+    const scope_t *scope
+) {
+    CHECK_NULL(arena);
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(scope);
+
+    const string_array_t *profiles = scope_profiles(scope);
+    sync_rows_t rows = {
+        .entries = arena_calloc(arena, profiles->count, sizeof(*rows.entries)),
+        .count   = profiles->count,
+    };
+
+    for (size_t i = 0; i < rows.count; i++) {
+        sync_row_t *row = &rows.entries[i];
+
+        row->profile = profiles->entries[i];
+        row->error = upstream_analyze_profile(
+            repo, remote_name, row->profile, &row->upstream
+        );
+    }
+
+    return rows;
+}
+
+/**
+ * What a profile's state calls for under the strategy, before the user's word
+ * withholds any of it: the act read off the state alone, as cleanup_verdict reads
+ * an orphan's off the item
+ *
+ * ours and theirs act on a branch only behind or only ahead as well — ours force
+ * pushes over the remote's newer commits, theirs resets the local ones away, as
+ * the command's notes say (spec_sync) — and a branch the remote lacks is pushed
+ * whatever the strategy: there is nothing to reset to, and nothing to force over.
+ */
+static sync_verdict_t sync_verdict(upstream_state_t state, sync_strategy_t strategy) {
+    switch (state) {
+        case UPSTREAM_UP_TO_DATE:
+        case UPSTREAM_NO_LOCAL:
+            return SYNC_VERDICT_NONE;
+
+        case UPSTREAM_NO_REMOTE:
+            return SYNC_VERDICT_PUSH;
+
+        case UPSTREAM_LOCAL_AHEAD:
+            return strategy == SYNC_STRATEGY_THEIRS ? SYNC_VERDICT_RESET : SYNC_VERDICT_PUSH;
+
+        case UPSTREAM_REMOTE_AHEAD:
+            return strategy == SYNC_STRATEGY_OURS ? SYNC_VERDICT_FORCE_PUSH : SYNC_VERDICT_PULL;
+
+        case UPSTREAM_DIVERGED:
+            switch (strategy) {
+                case SYNC_STRATEGY_WARN:   return SYNC_VERDICT_NONE;
+                case SYNC_STRATEGY_REBASE: return SYNC_VERDICT_REBASE;
+                case SYNC_STRATEGY_MERGE:  return SYNC_VERDICT_MERGE;
+                case SYNC_STRATEGY_OURS:   return SYNC_VERDICT_FORCE_PUSH;
+                case SYNC_STRATEGY_THEIRS: return SYNC_VERDICT_RESET;
+            }
+            break;
+    }
+
+    CHECK_ARG(false, "an upstream state or a strategy no enumerator names");
+}
+
+/**
+ * Withhold the row's act whole: the row stays as the analysis read it, its head
+ * saying the act and whose word kept it
+ */
+static void sync_withhold(sync_row_t *row, sync_reason_t reason) {
+    row->withheld = row->verdict;
+    row->reason = reason;
+    row->verdict = SYNC_VERDICT_NONE;
+}
+
+/**
+ * Decide the run whole, before any profile acts: each row's verdict, and what
+ * the user's word withholds of it
+ *
+ * The strategy is --diverged's where given, else the configuration's, in the
+ * same words — judged by the parse, before the store opened and the pre-sync
+ * hook with it (sync_post_parse). Each word withholds the acts of its direction:
+ * --no-push every move to the remote, --no-pull every move that takes the remote's
+ * commits, and auto_pull = false the fast-forward, --no-pull's word read first.
+ * A row whose analysis failed is passed over.
+ *
+ * @param rows The analysis's rows (must not be NULL), each decided in place
+ * @param config The configuration: the strategy, and auto_pull (must not be NULL)
+ * @param opts The options: --diverged, --no-push and --no-pull (must not be NULL)
+ * @return The act the run discards commits by — the strategy's force push or
+ *         reset, where one stands unwithheld — or SYNC_VERDICT_NONE: what the
+ *         run's question is asked over (cmd_sync)
+ */
+static sync_verdict_t sync_decide(
+    sync_rows_t *rows,
+    const config_t *config,
+    const cmd_sync_options_t *opts
+) {
+    CHECK_NULL(rows);
+    CHECK_NULL(config);
+    CHECK_NULL(opts);
+
+    const sync_strategy_t strategy = opts->diverged
+        ? opts->diverged_strategy : config->diverged_strategy;
+    sync_verdict_t discarding = SYNC_VERDICT_NONE;
+
+    for (size_t i = 0; i < rows->count; i++) {
+        sync_row_t *row = &rows->entries[i];
+        if (row->error) continue;
+
+        row->verdict = sync_verdict(row->upstream.state, strategy);
+
+        switch (row->verdict) {
+            case SYNC_VERDICT_NONE:
+                break;
+
+            case SYNC_VERDICT_PUSH:
+            case SYNC_VERDICT_FORCE_PUSH:
+                if (opts->no_push) sync_withhold(row, SYNC_REASON_NO_PUSH);
+                break;
+
+            case SYNC_VERDICT_PULL:
+                if (opts->no_pull) {
+                    sync_withhold(row, SYNC_REASON_NO_PULL);
+                } else if (!config->auto_pull) {
+                    sync_withhold(row, SYNC_REASON_AUTO_PULL);
+                }
+                break;
+
+            case SYNC_VERDICT_RESET:
+                if (opts->no_pull) sync_withhold(row, SYNC_REASON_NO_PULL);
+                break;
+
+            case SYNC_VERDICT_REBASE:
+            case SYNC_VERDICT_MERGE:
+                /* A resolution takes the remote's commits, so --no-pull withholds
+                 * it whole; under --no-push it resolves all the same and its
+                 * push is withheld — the next sync's, the branch then only ahead */
+                if (opts->no_pull) {
+                    sync_withhold(row, SYNC_REASON_NO_PULL);
+                } else if (opts->no_push) {
+                    row->withheld = SYNC_VERDICT_PUSH;
+                    row->reason = SYNC_REASON_NO_PUSH;
+                }
+                break;
+        }
+
+        if (row->verdict == SYNC_VERDICT_FORCE_PUSH || row->verdict == SYNC_VERDICT_RESET) {
+            discarding = row->verdict;
+        }
+    }
+
+    return discarding;
+}
+
+/**
  * Fast-forward a branch to its remote-tracking ref, and nothing else; *updated
  * says whether it moved
  */
-static error_t pull_branch_ff(
+static error_t sync_fast_forward(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -168,776 +499,172 @@ static error_t pull_branch_ff(
 }
 
 /**
- * Phase 1: Fetch profiles in sync scope from remote
- *
- * Operates on the scope's profiles (scope_profiles): fetching is driven by what
- * the user asked for. `dotta sync -p work` fetches only `work`, not every enabled
- * profile. Precedence-adjacent work (the Manifest block) still uses the full
- * enabled set — different role, different accessor.
- *
- * Nothing here asks whether the remote stands: the fetch looks it up before any
- * use and refuses it in Git's words, as every verb that takes a remote name does
- * (sys/gitops.h gitops_resolve_default_remote).
- */
-static error_t sync_fetch_phase(
-    const dotta_ctx_t *ctx,
-    const char *remote_name,
-    const scope_t *scope,
-    transfer_context_t *xfer
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(scope);
-
-    git_repository *repo = ctx->run.repo;
-    output_t *out = ctx->out;
-    const string_array_t *profiles = scope_profiles(scope);
-
-    /* The branches to ask for: the profiles the remote has been seen to hold —
-     * a remote-tracking ref stands for each — so a profile only this machine
-     * has (never pushed) is not asked for. Whether the ref stands is Git's answer
-     * or Git's error (gitops_reference_exists): a ref this run cannot read is
-     * not "never pushed", and read as that it left the profile out of the fetch
-     * without a word. */
-    string_array_t branch_names;
-    string_array_init(&branch_names, ctx->arena, 0);
-
-    for (size_t i = 0; i < profiles->count; i++) {
-        char remote_refname[DOTTA_REFNAME_MAX];
-        error_t err = gitops_remote_branch_refname(
-            remote_refname, sizeof(remote_refname), remote_name, profiles->entries[i]
-        );
-        if (err) return err;
-
-        bool tracked = false;
-        err = gitops_reference_exists(repo, remote_refname, &tracked);
-        if (err) return err;
-
-        if (tracked) {
-            string_array_push(&branch_names, profiles->entries[i]);
-        }
-    }
-
-    /* None the remote has been seen to hold: nothing is fetched, and nothing
-     * announces a fetch */
-    if (branch_names.count == 0) return NULL;
-
-    /* Ephemeral fetch progress — shown while fetching, cleared after. On TTY:
-     * transfer progress overwrites via \r, then line cleared entirely. On pipe:
-     * falls back to persistent line with newline. */
-    output_print(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
-    fflush(out->stream);
-
-    /* Perform batched fetch - single network operation for all branches */
-    error_t err = gitops_fetch_branches(repo, remote_name, &branch_names, xfer);
-
-    /* The announce line ends here. Progress drawn over it ended with its op
-     * (sys/transfer.h transfer_op_end), whichever way the op went, so what can
-     * stand is the announce alone — an up-to-date fetch draws nothing over it:
-     * cleared on a terminal, ended on a pipe. */
-    if (output_is_tty(out)) {
-        output_clear_line(out);
-    } else {
-        output_endline(out, OUTPUT_NORMAL);
-    }
-
-    /* The fetch's own error, which names the remote and the act: a refused
-     * credential in the words the transfer's callback set for what was offered
-     * (sys/transfer.c transfer_credentials_callback), any other failure — a ref
-     * write as well as a network — in libgit2's */
-    return err;
-}
-
-/**
- * Phase 2: the results — one row per profile in the sync scope, in its order,
- * each seeded with its branch's state against the remote
- *
- * The table is made here, in `arena`, as scope_profiles(scope) orders it — the
- * profiles sync_fetch_phase fetched: analyze only what the user asked for. A
- * row names its profile by the scope's own string. A profile it cannot analyze
- * fails in its own row, by its error, and the push phase's skip line and the
- * dry run read that cause back; a later phase says its own failure where it
- * happens.
- */
-static sync_results_t sync_analyze_phase(
-    arena_t *arena,
-    git_repository *repo,
-    const char *remote_name,
-    const scope_t *scope
-) {
-    CHECK_NULL(arena);
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(scope);
-
-    const string_array_t *profiles = scope_profiles(scope);
-    sync_results_t results = {
-        .profiles      = arena_calloc(arena, profiles->count, sizeof(*results.profiles)),
-        .profile_count = profiles->count,
-    };
-
-    for (size_t i = 0; i < profiles->count; i++) {
-        profile_sync_result_t *result = &results.profiles[i];
-
-        result->profile = profiles->entries[i];
-
-        /* Analyze state */
-        upstream_info_t info;
-        error_t err = upstream_analyze_profile(
-            repo, remote_name, profiles->entries[i], &info
-        );
-
-        if (err) {
-            result->error = err;
-            continue;
-        }
-
-        result->state = info.state;
-        result->ahead = info.ahead;
-        result->behind = info.behind;
-    }
-
-    return results;
-}
-
-/**
- * Roll a resolution back to the head the branch stood at before it
- *
- * A rollback that succeeds is the profile's row. One that fails leaves the branch
- * where the resolution put it and ends the run, its error told once, by the run's
- * renderer.
+ * Roll a resolution back to the head the branch stood at before it: the row rolled
+ * back, or, where the rollback fails, the run's error — the branch left where
+ * the resolution put it, the row failed by the step that came before
  */
 static error_t sync_rollback(
     resolve_context_t *resolve,
-    const char *profile,
-    const char *failure_reason,
-    output_t *out
+    sync_row_t *row,
+    const char *failure
 ) {
     error_t err = resolve_rollback(resolve);
-    if (err) {
-        /* The error names the head, the one fact a repair starts from: whole,
-         * as git's own ref refusals spell an id (lib/git/refs/packed-backend.c,
-         * oid_to_hex), where an abbreviation could name two commits. */
-        char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
-        git_oid_tostr(oid_str, sizeof(oid_str), &resolve->saved_oid);
-        return error_wrap(
-            err, "Failed to roll back branch '%s' to %s, its head before the sync, "
-            "after the %s", profile, oid_str, failure_reason
-        );
-    }
+    row->outcome = err ? SYNC_OUTCOME_FAILED : SYNC_OUTCOME_ROLLED_BACK;
+    if (!err) return NULL;
 
-    output_info(out, OUTPUT_NORMAL, "    ↺ Rolled back to original state");
-
-    return NULL;
-}
-
-/**
- * Handle UPSTREAM_REMOTE_AHEAD: auto-pull (fast-forward) or warn
- */
-static void handle_remote_ahead(
-    git_repository *repo,
-    const char *remote_name,
-    profile_sync_result_t *result,
-    output_t *out,
-    bool auto_pull,
-    bool no_pull
-) {
-    if (!auto_pull) {
-        /* Just warn - don't auto-pull */
-        output_colored(
-            out, OUTPUT_NORMAL, upstream_state_color(result->state),
-            "  %s %s: remote has %zu new commit%s\n",
-            upstream_state_symbol(result->state),
-            result->profile, result->behind, result->behind == 1 ? "" : "s"
-        );
-
-        if (no_pull) {
-            output_hint(
-                out, OUTPUT_NORMAL,
-                "    Pull skipped (--no-pull)"
-            );
-        } else {
-            output_hint(
-                out, OUTPUT_NORMAL,
-                "    Enable 'auto_pull' for automatic pull during sync"
-            );
-        }
-        return;
-    }
-
-    /* Auto-pull when safe (fast-forward only) */
-    output_info(
-        out, OUTPUT_VERBOSE, "  Pulling %s (%zu commit%s behind)...",
-        result->profile, result->behind, result->behind == 1 ? "" : "s"
-    );
-
-    /* A pull that fails is the profile's row, its cause as it stands: the
-     * fast-forward names its act and its branch (pull_branch_ff) */
-    bool pulled = false;
-    error_t err = pull_branch_ff(repo, remote_name, result->profile, &pulled);
-    if (err) {
-        output_print(
-            out, OUTPUT_NORMAL,
-            "  {red}✗{reset} {red}%s{reset}: %s\n",
-            result->profile, error_line(err)
-        );
-        result->error = err;
-        return;
-    }
-
-    if (!pulled) {
-        /* Race: analyze saw REMOTE_AHEAD but FF found nothing new (we caught up
-         * between phases). Reclassify to reflect reality: the row is up to date,
-         * its line verbose's, and cmd_sync counts it with the others. */
-        result->state = UPSTREAM_UP_TO_DATE;
-        output_colored(
-            out, OUTPUT_VERBOSE, upstream_state_color(result->state),
-            "  %s %s: already up-to-date\n",
-            upstream_state_symbol(result->state), result->profile
-        );
-        return;
-    }
-
-    /* Pull succeeded. What the pull did to the view is reported by cmd_sync's
-     * manifest block, once, after every profile's Git work. */
-    output_print(
-        out, OUTPUT_NORMAL,
-        "  {green}✓{reset} {green}%s{reset}: pulled %zu commit%s\n",
-        result->profile, result->behind, result->behind == 1 ? "" : "s"
+    /* The error names the head, the one fact a repair starts from: whole, as
+     * git's own ref refusals spell an id (lib/git/refs/packed-backend.c,
+     * oid_to_hex), where an abbreviation could name two commits. */
+    char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
+    git_oid_tostr(oid_str, sizeof(oid_str), &resolve->saved_oid);
+    return error_wrap(
+        err, "Failed to roll back branch '%s' to %s, its head before the sync, "
+        "after the %s", row->profile, oid_str, failure
     );
 }
 
 /**
- * Resolve divergence via rebase or merge, then push
+ * Carry a rebase or a merge out: the resolution, its verification, then its push
+ * unless --no-push withheld it
  *
- * Unified handler for SYNC_STRATEGY_REBASE and SYNC_STRATEGY_MERGE (structurally
- * identical — only the strategy enum and log strings differ).
+ * A step that fails is the row's, its cause as it stands: each names its act
+ * and its branch (sys/resolve.h, sys/gitops.h). The resolution runs in memory
+ * and moves the branch alone, never HEAD, so one that fails leaves the branch
+ * where it stood; a verification or a push that fails after it rolls the branch
+ * back.
  *
- * Returns critical error only on rollback failure (caller must propagate). Every
- * other failure is the row's error, and returns NULL.
+ * @return The run's error where that rollback fails; NULL otherwise, every other
+ *         failure the row's
  */
-static error_t resolve_and_push_divergence(
+static error_t sync_resolve(
     git_repository *repo,
     const char *remote_name,
-    profile_sync_result_t *result,
-    output_t *out,
-    resolve_strategy_t strategy,
-    const char *strategy_name,
-    transfer_context_t *xfer,
-    bool no_push
+    sync_row_t *row,
+    transfer_context_t *xfer
 ) {
-    const char *past_desc = (strategy == RESOLVE_STRATEGY_REBASE)
-        ? "rebased onto remote" : "merged with remote";
-    const char *push_desc = (strategy == RESOLVE_STRATEGY_REBASE)
-        ? "rebased commits" : "merge commit";
-
-    output_info(
-        out, OUTPUT_NORMAL,
-        "    Resolving with '%s' strategy...",
-        strategy_name
-    );
-
-    /* Initialize divergence context (saves current state for rollback). A step
-     * that fails is a row of its own beneath the announce above, its cause as
-     * it stands: each names its act and its branch (sys/resolve.h, sys/gitops.h) */
+    /* The context keeps the head the branch stands at, the rollback's target */
     resolve_context_t resolve;
     error_t err = resolve_init(
-        &resolve, repo, remote_name, result->profile, strategy
+        &resolve, repo, remote_name, row->profile,
+        row->verdict == SYNC_VERDICT_REBASE ? RESOLVE_STRATEGY_REBASE : RESOLVE_STRATEGY_MERGE
     );
+    if (!err) err = resolve_execute(&resolve, NULL);
     if (err) {
-        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-        result->error = err;
+        row->error = err;
+        row->outcome = SYNC_OUTCOME_FAILED;
         return NULL;
     }
 
-    /* Perform in-memory resolution (never modifies HEAD) */
-    err = resolve_execute(&resolve, NULL);
-    if (err) {
-        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-        result->error = err;
-        return NULL;
-    }
-
-    /* Verify resolution */
-    size_t ahead = 0;
-    err = resolve_verify(&resolve, &ahead, NULL);
-    if (err) {
-        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-        result->error = err;
-
-        char reason[64];
-        snprintf(
-            reason, sizeof(reason), "%s verification failure", strategy_name
-        );
-        return sync_rollback(&resolve, result->profile, reason, out);
-    }
-
-    output_print(
-        out, OUTPUT_NORMAL,
-        "    {green}✓{reset} Successfully %s (%zu commit%s to push)\n",
-        past_desc, ahead, ahead == 1 ? "" : "s"
-    );
-
-    if (no_push) {
-        /* Resolved locally all the same: the next sync sees LOCAL_AHEAD */
-        output_info(out, OUTPUT_NORMAL, "    Push skipped (--no-push)");
-    } else {
-        /* Push resolved commits */
-        err = gitops_push_branch(repo, remote_name, result->profile, xfer);
-        if (err) {
-            output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-            result->error = err;
-
-            output_info(
-                out, OUTPUT_NORMAL,
-                "    ↺ Rolling back %s (push failed)...",
-                strategy_name
-            );
-            return sync_rollback(
-                &resolve, result->profile, "push failure", out
-            );
-        }
-
-        output_print(
-            out, OUTPUT_NORMAL,
-            "    {green}✓{reset} Pushed %s\n",
-            push_desc
-        );
-    }
-
-    return NULL;
-}
-
-/**
- * Handle SYNC_STRATEGY_OURS: force push local branch to remote
- */
-static void handle_diverged_ours(
-    git_repository *repo,
-    const char *remote_name,
-    profile_sync_result_t *result,
-    output_t *out,
-    bool confirm_destructive,
-    transfer_context_t *xfer,
-    bool no_push
-) {
-    output_info(
-        out, OUTPUT_NORMAL, "    Resolving with '%s' strategy (force push)...",
-        config_strategies[SYNC_STRATEGY_OURS].name
-    );
-
-    if (no_push) {
-        output_info(out, OUTPUT_NORMAL, "    Force push skipped (--no-push)");
-        return;
-    }
-
-    /* The user's confirmation for a destructive operation, where the configuration
-     * asks for one. Declined leaves the divergence standing, said once; unanswered
-     * — off a terminal, where a destructive question is never asked — is this
-     * profile's failure, its row naming the key that answers in advance, and
-     * nobody declined. */
-    if (confirm_destructive) {
-        switch (output_ask_destructive(
-            out, "Force push '%s' over the remote's commits?", result->profile
-            )) {
-            case OUTPUT_ANSWER_YES:
-                break;
-            case OUTPUT_ANSWER_NO:
-                output_info(out, OUTPUT_NORMAL, "    Operation cancelled by user");
-                return;
-            case OUTPUT_ANSWER_NONE: {
-                error_t err = error_create(
-                    ERR_VALIDATION, "Cannot force push '%s' without a confirmation, which "
-                    "only a terminal gives; confirm_destructive = false pushes without "
-                    "asking", result->profile
-                );
-                output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-                result->error = err;
-                return;
-            }
-        }
-    }
-
-    /* Force push local to remote (local branch stays unchanged) */
-    error_t err = gitops_force_push_branch(repo, remote_name, result->profile, xfer);
-    if (err) {
-        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-        result->error = err;
-        return;
-    }
-
-    output_print(
-        out, OUTPUT_NORMAL,
-        "    {green}✓{reset} Force pushed to remote (remote commits discarded)\n"
-    );
-}
-
-/**
- * Handle SYNC_STRATEGY_THEIRS: reset local branch to remote
- */
-static void handle_diverged_theirs(
-    git_repository *repo,
-    const char *remote_name,
-    profile_sync_result_t *result,
-    output_t *out,
-    bool confirm_destructive
-) {
-    output_info(
-        out, OUTPUT_NORMAL,
-        "    Resolving with '%s' strategy (reset to remote)...",
-        config_strategies[SYNC_STRATEGY_THEIRS].name
-    );
-
-    /* The user's confirmation, as the force push asks it (handle_diverged_ours) */
-    if (confirm_destructive) {
-        switch (output_ask_destructive(
-            out, "Reset '%s' to the remote, discarding its local commits?", result->profile
-            )) {
-            case OUTPUT_ANSWER_YES:
-                break;
-            case OUTPUT_ANSWER_NO:
-                output_info(out, OUTPUT_NORMAL, "    Operation cancelled by user");
-                return;
-            case OUTPUT_ANSWER_NONE: {
-                error_t err = error_create(
-                    ERR_VALIDATION, "Cannot reset '%s' to the remote without a "
-                    "confirmation, which only a terminal gives; confirm_destructive = false "
-                    "resets without asking", result->profile
-                );
-                output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-                result->error = err;
-                return;
-            }
-        }
-    }
-
-    /* Initialize divergence context (saves current state for rollback) */
-    resolve_context_t resolve;
-    error_t err = resolve_init(
-        &resolve, repo, remote_name, result->profile, RESOLVE_STRATEGY_THEIRS
-    );
-    if (err) {
-        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-        result->error = err;
-        return;
-    }
-
-    /* Resolve divergence (resets local branch to remote) */
-    err = resolve_execute(&resolve, NULL);
-    if (err) {
-        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-        result->error = err;
-        return;
-    }
-
-    /* Verify reset succeeded
-     *
-     * No rollback on failure — theirs strategy already reset the branch to the
-     * desired state. Rolling back would undo what the user requested.
-     */
     err = resolve_verify(&resolve, NULL, NULL);
     if (err) {
-        output_print(out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(err));
-        output_print(
-            out, OUTPUT_NORMAL,
-            "    {yellow}⚠{reset} Local branch was reset but verification failed\n"
+        row->error = err;
+
+        char failure[64];
+        snprintf(
+            failure, sizeof(failure), "%s verification failure",
+            sync_verdict_name(row->verdict)
         );
-        result->error = err;
+        return sync_rollback(&resolve, row, failure);
+    }
+
+    if (row->withheld != SYNC_VERDICT_PUSH) {
+        err = gitops_push_branch(repo, remote_name, row->profile, xfer);
+        if (err) {
+            row->error = err;
+            return sync_rollback(&resolve, row, "push failure");
+        }
+    }
+
+    row->outcome = SYNC_OUTCOME_DONE;
+    return NULL;
+}
+
+/**
+ * Carry a reset out: the local branch to the remote's head, its own commits
+ * discarded
+ *
+ * A step that fails before the branch moves leaves it where it stood. None after
+ * is rolled back: theirs already put the branch where the user asked, and rolling
+ * back would undo it — a verification that fails is said beside the branch it
+ * moved (SYNC_OUTCOME_UNVERIFIED).
+ */
+static void sync_reset(git_repository *repo, const char *remote_name, sync_row_t *row) {
+    resolve_context_t resolve;
+    error_t err = resolve_init(
+        &resolve, repo, remote_name, row->profile, RESOLVE_STRATEGY_THEIRS
+    );
+    if (!err) err = resolve_execute(&resolve, NULL);
+    if (err) {
+        row->error = err;
+        row->outcome = SYNC_OUTCOME_FAILED;
         return;
     }
 
-    output_print(
-        out, OUTPUT_NORMAL,
-        "    {green}✓{reset} Reset to remote (local commits discarded)\n"
-    );
+    row->error = resolve_verify(&resolve, NULL, NULL);
+    row->outcome = row->error ? SYNC_OUTCOME_UNVERIFIED : SYNC_OUTCOME_DONE;
 }
 
 /**
- * Handle UPSTREAM_DIVERGED: dispatch based on configured strategy
+ * Carry every verdict out, in the scope's order, printing nothing: what each
+ * act came to, and the failure it met, written on its row for the receipt
  *
- * Returns critical error only on rollback failure (from rebase/merge).
+ * Git only: every pull, rebase, merge and reset moves a branch head and nothing
+ * else, and what the acts did to the view is read off once, for every enabled
+ * profile, in cmd_sync's Manifest block. Each verdict is one mechanism, called
+ * as the decision named it: nothing here decides again.
+ *
+ * @return The run's error where a resolution's rollback failed — the rows after
+ *         it left as decided, their outcome none — or NULL: every other failure
+ *         is its row's
  */
-static error_t handle_diverged(
+static error_t sync_execute(
     git_repository *repo,
     const char *remote_name,
-    profile_sync_result_t *result,
-    output_t *out,
-    sync_strategy_t strategy,
-    transfer_context_t *xfer,
-    bool confirm_destructive,
-    bool no_push
-) {
-    output_print(
-        out, OUTPUT_NORMAL,
-        "  {yellow}⚠{reset} {red}%s{reset}: diverged (%zu local, %zu remote commits)\n",
-        result->profile, result->ahead, result->behind
-    );
-
-    switch (strategy) {
-        case SYNC_STRATEGY_WARN: {
-            /* The strategies that resolve, each in the phrase completion shows
-             * for it: the vocabulary's rows, read, not spelled again here. */
-            output_hint(
-                out, OUTPUT_NORMAL,
-                "    Use --diverged=<strategy> or set diverged_strategy in config:"
-            );
-            for (size_t s = 0; s < CONFIG_STRATEGY_COUNT; s++) {
-                if (s != SYNC_STRATEGY_WARN) {
-                    output_hintline(
-                        out, OUTPUT_NORMAL, "      %s: %s",
-                        config_strategies[s].name, config_strategies[s].summary
-                    );
-                }
-            }
-            return NULL;
-        }
-
-        case SYNC_STRATEGY_REBASE: {
-            return resolve_and_push_divergence(
-                repo, remote_name, result, out, RESOLVE_STRATEGY_REBASE,
-                config_strategies[strategy].name, xfer, no_push
-            );
-        }
-
-        case SYNC_STRATEGY_MERGE: {
-            return resolve_and_push_divergence(
-                repo, remote_name, result, out, RESOLVE_STRATEGY_MERGE,
-                config_strategies[strategy].name, xfer, no_push
-            );
-        }
-
-        case SYNC_STRATEGY_OURS: {
-            handle_diverged_ours(
-                repo, remote_name, result, out, confirm_destructive,
-                xfer, no_push
-            );
-            return NULL;
-        }
-
-        case SYNC_STRATEGY_THEIRS: {
-            handle_diverged_theirs(
-                repo, remote_name, result, out, confirm_destructive
-            );
-            return NULL;
-        }
-    }
-
-    CHECK_ARG(false, "a divergence strategy no enumerator names");
-}
-
-/**
- * Phase 3: Sync branches with remote (push/pull/divergence handling)
- *
- * Git only. Every pull, rebase, merge and reset moves a branch HEAD and nothing
- * else; what that did to the view is read off once, for every enabled profile,
- * in cmd_sync's manifest block after this loop returns.
- */
-static error_t sync_push_phase(
-    git_repository *repo,
-    const char *remote_name,
-    sync_results_t *results,
-    output_t *out,
-    bool ephemeral,
-    bool auto_pull,
-    bool no_pull,
-    bool no_push,
-    sync_strategy_t diverged_strategy,
-    transfer_context_t *xfer,
-    bool confirm_destructive
+    sync_rows_t *rows,
+    transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
-    CHECK_NULL(results);
-    CHECK_NULL(out);
+    CHECK_NULL(rows);
 
-    if (!ephemeral) {
-        output_section(out, OUTPUT_NORMAL, "Syncing with remote");
-    }
+    for (size_t i = 0; i < rows->count; i++) {
+        sync_row_t *row = &rows->entries[i];
 
-    for (size_t i = 0; i < results->profile_count; i++) {
-        profile_sync_result_t *result = &results->profiles[i];
+        switch (row->verdict) {
+            case SYNC_VERDICT_NONE:
+                break;
 
-        /* Skip rows that already failed in analyze phase. */
-        if (result->error) {
-            output_print(
-                out, OUTPUT_NORMAL,
-                "  {red}✗{reset} {red}%s{reset}: %s\n",
-                result->profile, error_line(result->error)
-            );
-            continue;
-        }
+            case SYNC_VERDICT_PUSH:
+                row->error = gitops_push_branch(repo, remote_name, row->profile, xfer);
+                row->outcome = row->error ? SYNC_OUTCOME_FAILED : SYNC_OUTCOME_DONE;
+                break;
 
-        /* Handle based on state */
-        switch (result->state) {
-            case UPSTREAM_UP_TO_DATE: {
-                /* Nothing to do, said at verbose: at normal cmd_sync counts these */
-                output_colored(
-                    out, OUTPUT_VERBOSE, upstream_state_color(result->state),
-                    "  %s %s: up-to-date\n",
-                    upstream_state_symbol(result->state), result->profile
-                );
+            case SYNC_VERDICT_FORCE_PUSH:
+                row->error = gitops_force_push_branch(repo, remote_name, row->profile, xfer);
+                row->outcome = row->error ? SYNC_OUTCOME_FAILED : SYNC_OUTCOME_DONE;
+                break;
+
+            case SYNC_VERDICT_PULL: {
+                /* The fast-forward answers whether it moved the branch: one that
+                 * finds it at the remote's head already met another process's
+                 * pull since the analysis, an outcome of its own */
+                bool moved = false;
+                row->error = sync_fast_forward(repo, remote_name, row->profile, &moved);
+                row->outcome = row->error ? SYNC_OUTCOME_FAILED
+                    : moved ? SYNC_OUTCOME_DONE : SYNC_OUTCOME_UP_TO_DATE;
                 break;
             }
 
-            case UPSTREAM_LOCAL_AHEAD: {
-                /* theirs: discard the local commits, reset to the remote — a
-                 * move a pull makes, so --no-pull withholds it and the profile
-                 * stays as it stands, neither reset nor pushed, as --no-push
-                 * withholds ours' force push */
-                if (diverged_strategy == SYNC_STRATEGY_THEIRS) {
-                    output_colored(
-                        out, OUTPUT_NORMAL, upstream_state_color(result->state),
-                        "  %s %s: %zu commit%s ahead of remote\n",
-                        upstream_state_symbol(result->state),
-                        result->profile, result->ahead, result->ahead == 1 ? "" : "s"
-                    );
-                    if (no_pull) {
-                        output_hint(
-                            out, OUTPUT_NORMAL,
-                            "    '%s' resolution skipped (--no-pull prevents "
-                            "incorporating remote changes)",
-                            config_strategies[SYNC_STRATEGY_THEIRS].name
-                        );
-                    } else {
-                        handle_diverged_theirs(
-                            repo, remote_name, result, out, confirm_destructive
-                        );
-                    }
-                    break;
-                }
-
-                if (no_push) {
-                    output_colored(
-                        out, OUTPUT_NORMAL, upstream_state_color(result->state),
-                        "  %s %s: %zu commit%s ahead (push skipped: --no-push)\n",
-                        upstream_state_symbol(result->state),
-                        result->profile, result->ahead, result->ahead == 1 ? "" : "s"
-                    );
-                    break;
-                }
-
-                /* Safe to push - local has new commits */
-                output_info(
-                    out, OUTPUT_VERBOSE, "  Pushing %s (%zu commit%s)...",
-                    result->profile, result->ahead, result->ahead == 1 ? "" : "s"
-                );
-
-                error_t err = gitops_push_branch(repo, remote_name, result->profile, xfer);
-                if (err) {
-                    output_print(
-                        out, OUTPUT_NORMAL,
-                        "  {red}✗{reset} {red}%s{reset}: %s\n",
-                        result->profile, error_line(err)
-                    );
-                    result->error = err;
-                } else {
-                    output_print(
-                        out, OUTPUT_NORMAL,
-                        "  {green}✓{reset} {green}%s{reset}: pushed %zu commit%s\n",
-                        result->profile, result->ahead, result->ahead == 1 ? "" : "s"
-                    );
-                }
+            case SYNC_VERDICT_REBASE:
+            case SYNC_VERDICT_MERGE: {
+                error_t err = sync_resolve(repo, remote_name, row, xfer);
+                if (err) return err;
                 break;
             }
 
-            case UPSTREAM_NO_REMOTE: {
-                if (no_push) {
-                    output_colored(
-                        out, OUTPUT_NORMAL, upstream_state_color(result->state),
-                        "  %s %s: local only (push skipped: --no-push)\n",
-                        upstream_state_symbol(result->state), result->profile
-                    );
-                    break;
-                }
-
-                /* Remote branch doesn't exist - create it */
-                output_info(
-                    out, OUTPUT_VERBOSE,
-                    "  Creating remote branch %s...",
-                    result->profile
-                );
-
-                error_t err = gitops_push_branch(repo, remote_name, result->profile, xfer);
-                if (err) {
-                    output_print(
-                        out, OUTPUT_NORMAL,
-                        "  {red}✗{reset} {red}%s{reset}: %s\n",
-                        result->profile, error_line(err)
-                    );
-                    result->error = err;
-                } else {
-                    output_print(
-                        out, OUTPUT_NORMAL,
-                        "  {green}✓{reset} {green}%s{reset}: created remote branch\n",
-                        result->profile
-                    );
-                }
+            case SYNC_VERDICT_RESET:
+                sync_reset(repo, remote_name, row);
                 break;
-            }
-
-            case UPSTREAM_REMOTE_AHEAD: {
-                /* ours: force push local, discard remote commits */
-                if (diverged_strategy == SYNC_STRATEGY_OURS) {
-
-                    output_colored(
-                        out, OUTPUT_NORMAL, upstream_state_color(result->state),
-                        "  %s %s: %zu remote commit%s ahead\n",
-                        upstream_state_symbol(result->state),
-                        result->profile, result->behind, result->behind == 1 ? "" : "s"
-                    );
-                    output_print(
-                        out, OUTPUT_NORMAL,
-                        "    {yellow}⚠{reset} Local is behind — "
-                        "force push will overwrite newer remote commits\n"
-                    );
-
-                    handle_diverged_ours(
-                        repo, remote_name, result, out, confirm_destructive, xfer, no_push
-                    );
-                    break;
-                }
-                handle_remote_ahead(
-                    repo, remote_name, result, out, auto_pull, no_pull
-                );
-                break;
-            }
-
-            case UPSTREAM_DIVERGED: {
-                /* --no-pull blocks strategies that incorporate remote changes */
-                if (no_pull && diverged_strategy != SYNC_STRATEGY_WARN &&
-                    diverged_strategy != SYNC_STRATEGY_OURS) {
-
-                    output_print(
-                        out, OUTPUT_NORMAL,
-                        "  {yellow}⚠{reset} {red}%s{reset}: diverged "
-                        "(%zu local, %zu remote commits)\n",
-                        result->profile, result->ahead, result->behind
-                    );
-                    output_hint(
-                        out, OUTPUT_NORMAL,
-                        "    '%s' resolution skipped (--no-pull prevents "
-                        "incorporating remote changes)",
-                        config_strategies[diverged_strategy].name
-                    );
-                    break;
-                }
-                error_t err = handle_diverged(
-                    repo, remote_name, result, out, diverged_strategy, xfer,
-                    confirm_destructive, no_push
-                );
-                if (err) {
-                    return err;  /* Critical rollback failure */
-                }
-                break;
-            }
-
-            case UPSTREAM_NO_LOCAL: {
-                output_colored(
-                    out, OUTPUT_NORMAL, upstream_state_color(result->state),
-                    "  %s %s: no local branch\n",
-                    upstream_state_symbol(result->state), result->profile
-                );
-                break;
-            }
         }
     }
 
@@ -945,109 +672,461 @@ static error_t sync_push_phase(
 }
 
 /**
- * Render dry-run analysis: per-profile state, then closing banner.
+ * Print a row's head: its glyph, its profile and its state in status's words
+ * (cmds/status.c status_print_remote), then what the user's word withheld of it
  *
- * Glyph and color flow from upstream_state_symbol / upstream_state_color so the
- * visual stays in lockstep with list/status as those maps evolve. Analyze-phase
- * failures use the failure's glyph (✗), not a state glyph.
+ * Every state takes the shared map's glyph and colour (sys/upstream.h), the line
+ * whole in it, but a divergence, which warns: its glyph yellow, its name red,
+ * the rest plain. Up to date is verbose's: at normal the run counts it
+ * (sync_print_up_to_date).
  */
-static void sync_render_dry_run(
-    const sync_results_t *results,
-    output_t *out
-) {
-    output_section(out, OUTPUT_NORMAL, "Dry run analysis");
+static void sync_print_head(output_t *out, const sync_row_t *row) {
+    const upstream_info_t *up = &row->upstream;
+    const output_verbosity_t level =
+        up->state == UPSTREAM_UP_TO_DATE ? OUTPUT_VERBOSE : OUTPUT_NORMAL;
+    const output_color_t color =
+        up->state == UPSTREAM_DIVERGED ? OUTPUT_COLOR_RESET : upstream_state_color(up->state);
+    const char *glyph = upstream_state_symbol(up->state);
 
-    for (size_t i = 0; i < results->profile_count; i++) {
-        const profile_sync_result_t *r = &results->profiles[i];
+    switch (up->state) {
+        case UPSTREAM_UP_TO_DATE:
+            output_colored(out, level, color, "  %s %s: up-to-date", glyph, row->profile);
+            break;
 
-        if (r->error) {
-            output_print(
-                out, OUTPUT_NORMAL, "  {red}✗{reset} %s: %s\n",
-                r->profile, error_line(r->error)
+        case UPSTREAM_LOCAL_AHEAD:
+            output_colored(
+                out, level, color, "  %s %s: %zu commit%s ahead",
+                glyph, row->profile, up->ahead, up->ahead == 1 ? "" : "s"
             );
-            continue;
+            break;
+
+        case UPSTREAM_REMOTE_AHEAD:
+            output_colored(
+                out, level, color, "  %s %s: %zu commit%s behind",
+                glyph, row->profile, up->behind, up->behind == 1 ? "" : "s"
+            );
+            break;
+
+        case UPSTREAM_DIVERGED:
+            output_print(
+                out, level, "  {yellow}⚠{reset} {red}%s{reset}: diverged (%zu ahead, %zu behind)",
+                row->profile, up->ahead, up->behind
+            );
+            break;
+
+        case UPSTREAM_NO_REMOTE:
+            output_colored(out, level, color, "  %s %s: local only", glyph, row->profile);
+            break;
+
+        case UPSTREAM_NO_LOCAL:
+            output_colored(out, level, color, "  %s %s: no local branch", glyph, row->profile);
+            break;
+    }
+
+    if (row->withheld != SYNC_VERDICT_NONE) {
+        output_colored(
+            out, level, color, ", %s skipped (%s)",
+            sync_verdict_name(row->withheld), sync_reason_name(row->reason)
+        );
+    }
+    output_endline(out, level);
+}
+
+/**
+ * Print a row the run does not act on, alike in both tenses: its failure, or
+ * its head — beneath a divergence warn leaves, the strategies that would resolve it
+ *
+ * Read by the preview and the receipt for a row with no verdict, and by the receipt
+ * for a push or a pull that failed: the act's cause stands on the row's one line,
+ * as an analysis's does.
+ */
+static void sync_print_row(output_t *out, const sync_row_t *row) {
+    if (row->error) {
+        output_print(
+            out, OUTPUT_NORMAL, "  {red}✗{reset} {red}%s{reset}: %s\n",
+            row->profile, error_line(row->error)
+        );
+        return;
+    }
+
+    sync_print_head(out, row);
+
+    /* warn's divergence: the strategies that resolve, each in the phrase completion
+     * shows for it — the vocabulary's rows, read, not spelled again here. A
+     * divergence whose resolution a word withheld says so on its head. */
+    if (row->upstream.state == UPSTREAM_DIVERGED && row->withheld == SYNC_VERDICT_NONE) {
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "    Use --diverged=<strategy> or set diverged_strategy in config:"
+        );
+        for (size_t s = 0; s < CONFIG_STRATEGY_COUNT; s++) {
+            if (s != SYNC_STRATEGY_WARN) {
+                output_hintline(
+                    out, OUTPUT_NORMAL, "      %s: %s",
+                    config_strategies[s].name, config_strategies[s].summary
+                );
+            }
         }
+    }
+}
 
-        const char *glyph = upstream_state_symbol(r->state);
-        output_color_t color = upstream_state_color(r->state);
+/**
+ * The rows the run has nothing to do for: no failure, and the two sides agree —
+ * each saying so at verbose alone (sync_print_head). Read by the preview's and
+ * the receipt's level, and counted at normal (sync_print_up_to_date).
+ */
+static size_t sync_up_to_date(const sync_rows_t *rows) {
+    size_t count = 0;
 
-        switch (r->state) {
-            case UPSTREAM_UP_TO_DATE:
+    for (size_t i = 0; i < rows->count; i++) {
+        const sync_row_t *row = &rows->entries[i];
+        if (!row->error && row->upstream.state == UPSTREAM_UP_TO_DATE) count++;
+    }
+
+    return count;
+}
+
+/**
+ * Print the preview: what the run will do, profile by profile in the scope's
+ * order — a dry run's block, or the question's preamble where one is asked
+ *
+ * The receipt's sibling (sync_print_receipt), in the future tense: a row the
+ * run does not act on is said by the printer both read (sync_print_row), so the
+ * two tenses cannot drift. A push and a pull are the row's one line; a resolution,
+ * a force push and a reset its head, then the act beneath it, with what it
+ * discards. The block opens at normal where a row speaks there, at verbose where
+ * every row is up to date.
+ */
+static void sync_print_preview(output_t *out, const sync_rows_t *rows) {
+    output_section(
+        out, sync_up_to_date(rows) < rows->count ? OUTPUT_NORMAL : OUTPUT_VERBOSE,
+        "Sync preview"
+    );
+
+    for (size_t i = 0; i < rows->count; i++) {
+        const sync_row_t *row = &rows->entries[i];
+        const upstream_info_t *up = &row->upstream;
+        const char *glyph = upstream_state_symbol(up->state);
+        const output_color_t color = upstream_state_color(up->state);
+
+        switch (row->verdict) {
+            case SYNC_VERDICT_NONE:
+                sync_print_row(out, row);
+                break;
+
+            case SYNC_VERDICT_PUSH:
+                if (up->state == UPSTREAM_NO_REMOTE) {
+                    output_colored(
+                        out, OUTPUT_NORMAL, color, "  %s %s: will create remote branch\n",
+                        glyph, row->profile
+                    );
+                } else {
+                    output_colored(
+                        out, OUTPUT_NORMAL, color, "  %s %s: will push %zu commit%s\n",
+                        glyph, row->profile, up->ahead, up->ahead == 1 ? "" : "s"
+                    );
+                }
+                break;
+
+            case SYNC_VERDICT_PULL:
                 output_colored(
-                    out, OUTPUT_NORMAL, color,
-                    "  %s %s: up-to-date\n",
-                    glyph, r->profile
+                    out, OUTPUT_NORMAL, color, "  %s %s: will pull %zu commit%s\n",
+                    glyph, row->profile, up->behind, up->behind == 1 ? "" : "s"
                 );
                 break;
-            case UPSTREAM_LOCAL_AHEAD:
-                output_colored(
-                    out, OUTPUT_NORMAL, color,
-                    "  %s %s: %zu commit%s to push\n",
-                    glyph, r->profile, r->ahead, r->ahead == 1 ? "" : "s"
+
+            case SYNC_VERDICT_REBASE:
+                sync_print_head(out, row);
+                output_info(
+                    out, OUTPUT_NORMAL, "    Will rebase onto remote%s",
+                    row->withheld == SYNC_VERDICT_PUSH ? "" : ", then push"
                 );
                 break;
-            case UPSTREAM_REMOTE_AHEAD:
-                output_colored(
-                    out, OUTPUT_NORMAL, color,
-                    "  %s %s: %zu commit%s to pull\n",
-                    glyph, r->profile, r->behind, r->behind == 1 ? "" : "s"
+
+            case SYNC_VERDICT_MERGE:
+                sync_print_head(out, row);
+                output_info(
+                    out, OUTPUT_NORMAL, "    Will merge with remote%s",
+                    row->withheld == SYNC_VERDICT_PUSH ? "" : ", then push"
                 );
                 break;
-            case UPSTREAM_DIVERGED:
-                output_colored(
-                    out, OUTPUT_NORMAL, color,
-                    "  %s %s: diverged (%zu local, %zu remote)\n",
-                    glyph, r->profile, r->ahead, r->behind
+
+            case SYNC_VERDICT_FORCE_PUSH:
+                sync_print_head(out, row);
+                output_info(
+                    out, OUTPUT_NORMAL, "    Will force push, discarding the remote's %zu commit%s",
+                    up->behind, up->behind == 1 ? "" : "s"
                 );
                 break;
-            case UPSTREAM_NO_REMOTE:
-                output_colored(
-                    out, OUTPUT_NORMAL, color,
-                    "  %s %s: local only (no remote branch)\n",
-                    glyph, r->profile
-                );
-                break;
-            case UPSTREAM_NO_LOCAL:
-                output_colored(
-                    out, OUTPUT_NORMAL, color,
-                    "  %s %s: no local branch\n",
-                    glyph, r->profile
+
+            case SYNC_VERDICT_RESET:
+                sync_print_head(out, row);
+                output_info(
+                    out, OUTPUT_NORMAL, "    Will reset to remote, discarding %zu local commit%s",
+                    up->ahead, up->ahead == 1 ? "" : "s"
                 );
                 break;
         }
     }
+}
 
-    output_gap(out, OUTPUT_NORMAL);
-    output_info(out, OUTPUT_NORMAL, "Dry run: no changes made");
+/**
+ * Print what an act carried out whole did, in the preview's words in the past
+ * tense (sync_print_preview): a push's and a pull's row line, or a resolution's,
+ * a force push's and a reset's head with the act beneath it
+ */
+static void sync_print_done(output_t *out, const sync_row_t *row) {
+    const upstream_info_t *up = &row->upstream;
+
+    switch (row->verdict) {
+        case SYNC_VERDICT_NONE:
+            break;
+
+        case SYNC_VERDICT_PUSH:
+            if (up->state == UPSTREAM_NO_REMOTE) {
+                output_print(
+                    out, OUTPUT_NORMAL,
+                    "  {green}✓{reset} {green}%s{reset}: created remote branch\n", row->profile
+                );
+            } else {
+                output_print(
+                    out, OUTPUT_NORMAL, "  {green}✓{reset} {green}%s{reset}: pushed %zu commit%s\n",
+                    row->profile, up->ahead, up->ahead == 1 ? "" : "s"
+                );
+            }
+            break;
+
+        case SYNC_VERDICT_PULL:
+            output_print(
+                out, OUTPUT_NORMAL, "  {green}✓{reset} {green}%s{reset}: pulled %zu commit%s\n",
+                row->profile, up->behind, up->behind == 1 ? "" : "s"
+            );
+            break;
+
+        case SYNC_VERDICT_REBASE:
+            sync_print_head(out, row);
+            output_print(out, OUTPUT_NORMAL, "    {green}✓{reset} Rebased onto remote\n");
+            if (row->withheld != SYNC_VERDICT_PUSH) {
+                output_print(out, OUTPUT_NORMAL, "    {green}✓{reset} Pushed rebased commits\n");
+            }
+            break;
+
+        case SYNC_VERDICT_MERGE:
+            sync_print_head(out, row);
+            output_print(out, OUTPUT_NORMAL, "    {green}✓{reset} Merged with remote\n");
+            if (row->withheld != SYNC_VERDICT_PUSH) {
+                output_print(out, OUTPUT_NORMAL, "    {green}✓{reset} Pushed merge commit\n");
+            }
+            break;
+
+        case SYNC_VERDICT_FORCE_PUSH:
+            sync_print_head(out, row);
+            output_print(
+                out, OUTPUT_NORMAL,
+                "    {green}✓{reset} Force pushed, the remote's %zu commit%s discarded\n",
+                up->behind, up->behind == 1 ? "" : "s"
+            );
+            break;
+
+        case SYNC_VERDICT_RESET:
+            sync_print_head(out, row);
+            output_print(
+                out, OUTPUT_NORMAL,
+                "    {green}✓{reset} Reset to remote, %zu local commit%s discarded\n",
+                up->ahead, up->ahead == 1 ? "" : "s"
+            );
+            break;
+    }
+}
+
+/**
+ * Print the receipt: what each act came to, profile by profile in the scope's
+ * order, once every act is done
+ *
+ * The preview's sibling (sync_print_preview), in the past tense: a row the run
+ * does not act on is said as the preview says it (sync_print_row), and an act
+ * carried out whole in the preview's words (sync_print_done). A push's and a
+ * pull's failure is the row's one line, as a failed row's is; any other act's
+ * stands beneath its head, then where it left the branch. A row the run stopped
+ * before says nothing: the run's error, a rollback that failed above it, is what
+ * is said. The block opens at normal where a row speaks there, at verbose where
+ * every row is up to date.
+ */
+static void sync_print_receipt(output_t *out, const sync_rows_t *rows) {
+    output_section(
+        out, sync_up_to_date(rows) < rows->count ? OUTPUT_NORMAL : OUTPUT_VERBOSE,
+        "Syncing with remote"
+    );
+
+    for (size_t i = 0; i < rows->count; i++) {
+        const sync_row_t *row = &rows->entries[i];
+
+        switch (row->outcome) {
+            case SYNC_OUTCOME_NONE:
+                if (row->verdict == SYNC_VERDICT_NONE) sync_print_row(out, row);
+                break;
+
+            case SYNC_OUTCOME_DONE:
+                sync_print_done(out, row);
+                break;
+
+            case SYNC_OUTCOME_UP_TO_DATE:
+                /* What the pull found, not what it did: counted nowhere else */
+                output_colored(
+                    out, OUTPUT_NORMAL, upstream_state_color(UPSTREAM_UP_TO_DATE),
+                    "  %s %s: already up-to-date\n",
+                    upstream_state_symbol(UPSTREAM_UP_TO_DATE), row->profile
+                );
+                break;
+
+            case SYNC_OUTCOME_FAILED:
+            case SYNC_OUTCOME_ROLLED_BACK:
+            case SYNC_OUTCOME_UNVERIFIED:
+                if (row->verdict == SYNC_VERDICT_PUSH || row->verdict == SYNC_VERDICT_PULL) {
+                    sync_print_row(out, row);
+                    break;
+                }
+                sync_print_head(out, row);
+                output_print(
+                    out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(row->error)
+                );
+                if (row->outcome == SYNC_OUTCOME_ROLLED_BACK) {
+                    output_info(out, OUTPUT_NORMAL, "    ↺ Rolled back to original state");
+                } else if (row->outcome == SYNC_OUTCOME_UNVERIFIED) {
+                    output_print(
+                        out, OUTPUT_NORMAL,
+                        "    {yellow}⚠{reset} Local branch was reset but verification failed\n"
+                    );
+                }
+                break;
+        }
+    }
+}
+
+/**
+ * Print what the Git phase left unsaid, once beneath it: at normal, the profiles
+ * it had nothing to do for, whose own lines are verbose's (sync_up_to_date) — a
+ * block of its own, beneath the run's last Git-phase block: the dry run's preview,
+ * or the receipt
+ */
+static void sync_print_up_to_date(output_t *out, const sync_rows_t *rows) {
+    const size_t count = sync_up_to_date(rows);
+
+    if (count > 0 && !output_is_verbose(out)) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_info(
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s already up-to-date",
+            count, count == 1 ? "" : "s"
+        );
+    }
+}
+
+/**
+ * The profiles the run's discarding act is for, each quoted, joined as a sentence
+ * lists them — 'q', 'q' and 'r', 'p', 'q' and 'r' — in `arena`: the subject of
+ * the run's question (sync_ask) and of its two refusals (sync_refusal)
+ */
+static const char *sync_discarded(arena_t *arena, const sync_rows_t *rows, sync_verdict_t act) {
+    string_array_t profiles;
+    string_array_init(&profiles, arena, 0);
+
+    for (size_t i = 0; i < rows->count; i++) {
+        if (rows->entries[i].verdict == act) {
+            string_array_pushf(&profiles, "'%s'", rows->entries[i].profile);
+        }
+    }
+
+    /* ", " between two names, " and " before the last, as apply joins its
+     * question's parts */
+    const char *joined = profiles.entries[0];
+    for (size_t i = 1; i < profiles.count; i++) {
+        joined = arena_str_format(
+            arena, "%s%s%s", joined, i + 1 == profiles.count ? " and " : ", ",
+            profiles.entries[i]
+        );
+    }
+
+    return joined;
+}
+
+/**
+ * Ask the run's one question: whether its discarding act may go ahead
+ *
+ * Asked beneath the preview, before any profile acts, of a person at a terminal
+ * (base/output.h output_ask_destructive). It names the act and its profiles, so
+ * a configured quiet, which prints no preview, still reads what it is asked;
+ * what each discards is the preview's.
+ */
+static output_answer_t sync_ask(
+    output_t *out,
+    arena_t *arena,
+    const sync_rows_t *rows,
+    sync_verdict_t act
+) {
+    const char *profiles = sync_discarded(arena, rows, act);
+
+    if (act == SYNC_VERDICT_RESET) {
+        return output_ask_destructive(
+            out, "Reset %s to the remote, discarding the local commits?", profiles
+        );
+    }
+    return output_ask_destructive(out, "Force push %s over the remote's commits?", profiles);
+}
+
+/**
+ * The run's refusal for want of the confirmation its discarding act owes
+ *
+ * One frame for two causes, `why` the cause none came: "which only a terminal
+ * gives" at the decision, off a terminal, and "and none was read" once asked.
+ * Read alone on stderr, it names the act and its profiles itself, and the key
+ * that answers in advance in its own words.
+ */
+static error_t sync_refusal(
+    arena_t *arena,
+    const sync_rows_t *rows,
+    sync_verdict_t act,
+    const char *why
+) {
+    const char *profiles = sync_discarded(arena, rows, act);
+
+    if (act == SYNC_VERDICT_RESET) {
+        return error_create(
+            ERR_VALIDATION, "Cannot reset %s to the remote without a confirmation, %s; "
+            "confirm_destructive = false resets without asking", profiles, why
+        );
+    }
+    return error_create(
+        ERR_VALIDATION, "Cannot force push %s without a confirmation, %s; "
+        "confirm_destructive = false pushes without asking", profiles, why
+    );
 }
 
 /**
  * The run's failure, if it had one — the answer cmd_sync returns.
  *
  * A profile the run tried to reconcile and could not (a row with an error —
- * whatever the phase: analyze, pull, resolve, push) is a broken promise, and
- * only the return value carries that to the caller. The reason was printed on
- * the profile's own row — on stdout, so a redirected sync's report never reads
- * as a clean success — but a shell reads none of it.
+ * whatever the phase: the analysis, or the act: a pull, a resolution, a push, a
+ * reset) is a broken promise, and only the return value carries that to the caller.
+ * The reason was printed on the profile's own row — on stdout, so a redirected
+ * sync's report never reads as a clean success — but a shell reads none of it.
  *
- * A profile the run deliberately left alone is not a failure: the caller asked
- * for that (--no-push, --no-pull), the configured strategy did ('warn' on a
- * divergence), or the user declined the prompt. Its own row is its whole report,
- * and `dotta sync && dotta apply` keeps working for everyone who syncs under
- * 'warn'.
+ * A profile the run deliberately left alone is not a failure: the caller's word
+ * withheld its act (--no-push, --no-pull, auto_pull = false), or the configured
+ * strategy did ('warn' on a divergence). Its own row is its whole report, and
+ * `dotta sync && dotta apply` keeps working for everyone who syncs under 'warn'.
  *
- * Pure, and deliberately so: the per-profile errors stay in the rows of `results`
- * that borrow them and are never rethrown, since each was already said where it
- * happened. The message carries what no row says — how much of the run the failures
- * were — and names their profiles in the scope's order: the one line a configured
+ * Pure, and deliberately so: the per-profile errors stay in the rows that borrow
+ * them and are never rethrown, since each was already said where it happened.
+ * The message carries what no row says — how much of the run the failures were
+ * — and names their profiles in the scope's order: the one line a configured
  * quiet, which says no row, reads which failed by.
  */
-static error_t sync_failure(arena_t *arena, const sync_results_t *results) {
+static error_t sync_failure(arena_t *arena, const sync_rows_t *rows) {
     string_array_t failed;
     string_array_init(&failed, arena, 0);
-    for (size_t i = 0; i < results->profile_count; i++) {
-        if (results->profiles[i].error) {
-            string_array_push(&failed, results->profiles[i].profile);
+    for (size_t i = 0; i < rows->count; i++) {
+        if (rows->entries[i].error) {
+            string_array_push(&failed, rows->entries[i].profile);
         }
     }
 
@@ -1058,8 +1137,8 @@ static error_t sync_failure(arena_t *arena, const sync_results_t *results) {
      * arena the caller lent. */
     return error_create(
         ERR_GIT, "%zu of %zu profile%s failed to sync (%s)",
-        failed.count, results->profile_count,
-        results->profile_count == 1 ? "" : "s",
+        failed.count, rows->count,
+        rows->count == 1 ? "" : "s",
         string_array_join(arena, &failed, ", ")
     );
 }
@@ -1645,12 +1724,6 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
 
-    /* The divergence strategy: the config's, unless --diverged overrides it in
-     * the same words — judged by the parse, before the store opened and the
-     * pre-sync hook with it (sync_post_parse). */
-    sync_strategy_t diverged_strategy = opts->diverged
-        ? opts->diverged_strategy : config->diverged_strategy;
-
     /* Build operation scope
      *
      *   scope_enabled  — the persistent enabled set, the CLI filter's bound and
@@ -1710,9 +1783,10 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* The pre-sync hook, over the run the guard decided — strict_mode's refusal
      * fired none — and before the consent the guard owes; a dry run's too, told
-     * so (DOTTA_DRY_RUN=1). sync decides twice: what to pull and push is the
-     * Git phase's, after the fetch that follows the hook, and a diverged profile's
-     * ours or theirs question is asked there, profile by profile. */
+     * so (DOTTA_DRY_RUN=1). It gates the network, so sync decides twice: what
+     * to pull and push is the Git phase's, after the fetch that follows the hook,
+     * and the one question a force push or a reset owes is asked there, beneath
+     * the preview and before any profile acts. */
     err = hook_fire_pre(config, out, &hook_inv);
     if (err) goto cleanup;
 
@@ -1728,7 +1802,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         if (answer != OUTPUT_ANSWER_YES) {
             output_gap(out, OUTPUT_NORMAL);
             if (answer == OUTPUT_ANSWER_NO) {
-                output_info(out, OUTPUT_NORMAL, "Sync cancelled");
+                output_info(out, OUTPUT_NORMAL, "Cancelled");
             }
             if (guard.conflicts > 0) {
                 /* The status Conflicts header's remedies, a kind both sides moved
@@ -1774,82 +1848,81 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     };
     xfer = transfer_context_create(&xfer_opts);
 
-    /* Determine auto_pull setting: CLI --no-pull overrides config */
-    bool auto_pull = opts->no_pull ? false : config->auto_pull;
-
     /* Reconcile the repository epoch with the remote. Placed before the fetch
-     * phase so the divergence's census cannot see pulled remote ciphertext. */
+     * so the divergence's census cannot see pulled remote ciphertext. */
     sync_reconcile_epoch(ctx, remote_name, xfer, opts);
 
-    /* Phase 1: Fetch profiles in sync scope from remote */
-    err = sync_fetch_phase(ctx, remote_name, scope, xfer);
+    err = sync_fetch(ctx, remote_name, scope, xfer);
     if (err) goto cleanup;
 
-    /* Phase 2: Analyze branch states */
-    sync_results_t results = sync_analyze_phase(ctx->arena, repo, remote_name, scope);
+    /* The run, decided whole before any profile acts: each profile's state against
+     * the remote, then its verdict and what the user's word withholds of it —
+     * read by the preview, the question, the act and the receipt, none of which
+     * decides again. The decision answers the one fact the gate reads: the act
+     * the run discards commits by, a force push or a reset, where one stands. */
+    sync_rows_t rows = sync_analyze(ctx->arena, repo, remote_name, scope);
+    const sync_verdict_t discarding = sync_decide(&rows, config, opts);
 
-    /* Dry run: display analysis and exit without executing push/pull. The answer
-     * still stands — a profile the analysis could not read is a question the
-     * dry run failed to answer, not a profile it found no work for. */
-    if (opts->dry_run) {
-        sync_render_dry_run(&results, out);
-        err = sync_failure(ctx->arena, &results);
+    /* The confirmation that act owes, where the configuration asks one and the
+     * run is no dry run, is a person's at a terminal (base/output.h
+     * output_ask_destructive): off one the run is refused here, at the decision,
+     * before the preview, and nothing acts. sync's --force is the guard's, and
+     * answers nothing here. */
+    const bool asks = config->confirm_destructive && !opts->dry_run &&
+        discarding != SYNC_VERDICT_NONE;
+    if (asks && !isatty(STDIN_FILENO)) {
+        err = sync_refusal(ctx->arena, &rows, discarding, "which only a terminal gives");
         goto cleanup;
     }
 
-    /* Phase 3: Sync with remote (push/pull/divergence handling)
-     *
-     * Git only — no state is written in this phase, so the write lock is never
-     * held across network IO. Nothing catches up afterwards either: the view is
-     * computed, and the block that follows only reports what the phase did to it.
-     *
-     * When all profiles are up-to-date and not in verbose mode, the sync section
-     * is ephemeral — shown as progress during execution, cleared after. This
-     * avoids noise when there's nothing actionable to report. */
-    bool no_push = opts->no_push;
-    bool all_quiet = true;
-    for (size_t i = 0; i < results.profile_count; i++) {
-        const profile_sync_result_t *r = &results.profiles[i];
-        if (r->error || r->state != UPSTREAM_UP_TO_DATE) {
-            all_quiet = false;
-            break;
+    /* The preview: a dry run's block, or the question's preamble where one is
+     * asked; a run that asks nothing previews nothing it then does at once, and
+     * its receipt says what it did */
+    if (opts->dry_run || asks) sync_print_preview(out, &rows);
+
+    /* A dry run ends here, its preview shown, and nothing pulled or pushed: the
+     * fetch moved the remote-tracking refs alone. The answer still stands — a
+     * profile the analysis could not read is a question the dry run failed to
+     * answer, not a profile it found no work for. */
+    if (opts->dry_run) {
+        sync_print_up_to_date(out, &rows);
+        output_gap(out, OUTPUT_NORMAL);
+        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was pulled or pushed");
+        err = sync_failure(ctx->arena, &rows);
+        goto cleanup;
+    }
+
+    /* The question, beneath the preview and before any profile acts. Declined
+     * is the user's word: the whole run cancelled, and no failure. Unanswered —
+     * the terminal's input ended — nobody declined, and the run is refused, naming
+     * the key that answers in advance. */
+    if (asks) {
+        switch (sync_ask(out, ctx->arena, &rows, discarding)) {
+            case OUTPUT_ANSWER_YES:
+                break;
+            case OUTPUT_ANSWER_NO:
+                output_gap(out, OUTPUT_NORMAL);
+                output_info(out, OUTPUT_NORMAL, "Cancelled");
+                goto cleanup;  /* err is NULL: a cancel is not a failure */
+            case OUTPUT_ANSWER_NONE:
+                err = sync_refusal(ctx->arena, &rows, discarding, "and none was read");
+                goto cleanup;
         }
     }
-    bool sync_ephemeral = !output_is_verbose(out) && all_quiet;
 
-    if (sync_ephemeral) {
-        output_print(out, OUTPUT_NORMAL, "Syncing with remote...");
-        fflush(out->stream);
-    }
+    /* The act: every verdict carried out, and nothing said. Git only — no state
+     * is written, so the write lock is never held across network IO. Nothing
+     * catches up afterwards either: the view is computed, and the block that
+     * follows only reports what the act did to it. */
+    err = sync_execute(repo, remote_name, &rows, xfer);
 
-    err = sync_push_phase(
-        repo, remote_name, &results, out, sync_ephemeral, auto_pull, opts->no_pull,
-        no_push, diverged_strategy, xfer, config->confirm_destructive
-    );
-
-    if (sync_ephemeral) {
-        output_clear_line(out);
-    }
-
+    /* The receipt, once every act is done — a run a failed rollback stopped says
+     * the rows it reached, then ends in that error — and what the Git phase left
+     * unsaid, said once beneath it: the profiles it had nothing to do for, and
+     * at verbose the wire, Git's tally of what the lines above say moved */
+    sync_print_receipt(out, &rows);
+    sync_print_up_to_date(out, &rows);
     if (err) goto cleanup;
-
-    /* What the Git phase left unsaid, said once beneath it: at normal the profiles
-     * it had nothing to do for, whose own lines are verbose's (sync_push_phase)
-     * — counted after the clear, which would take a line printed before it —
-     * and at verbose the wire, Git's tally of what the lines above say moved.
-     * Every other profile's line said what the run did with it. */
-    size_t up_to_date = 0;
-    for (size_t i = 0; i < results.profile_count; i++) {
-        const profile_sync_result_t *r = &results.profiles[i];
-        if (!r->error && r->state == UPSTREAM_UP_TO_DATE) up_to_date++;
-    }
-    if (up_to_date > 0 && !output_is_verbose(out)) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s already up-to-date",
-            up_to_date, up_to_date == 1 ? "" : "s"
-        );
-    }
     transfer_summarize(xfer, out, OUTPUT_VERBOSE);
 
     /* Manifest block — the view after the Git phase, diffed against the view
@@ -2077,21 +2150,21 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         }
     }
 
-    /* Post-sync fires once the receipt is done — the Git phase's lines, the
-     * manifest block and its hint; a failed build was warned above and is not a
-     * reason to skip it. Nor is a profile that failed: the pushes and pulls that
-     * did land are real, and the hook's subject is the world sync leaves behind,
-     * not what sync returns. */
+    /* Post-sync fires once the report is done — the receipt, the manifest block
+     * and its hint; a failed build was warned above and is not a reason to skip
+     * it. Nor is a profile that failed: the pushes and pulls that did land are
+     * real, and the hook's subject is the world sync leaves behind, not what
+     * sync returns. */
     hook_fire_post(config, out, &hook_inv);
 
-    /* The receipt is printed; the return value is what the caller reads. */
-    err = sync_failure(ctx->arena, &results);
+    /* The report is printed; the return value is what the caller reads. */
+    err = sync_failure(ctx->arena, &rows);
 
 cleanup:
     /* The one handle the run holds: the transfer, whose close commits the
      * credential decision (sys/transfer.h). state is borrowed from the dispatcher
      * and sync opens no transaction of its own (the flush scopes its own; nothing
-     * else writes), and the results are the command arena's. */
+     * else writes), and the rows are the command arena's. */
     transfer_context_free(xfer);
 
     return err;

@@ -32,9 +32,17 @@ typedef struct {
 /**
  * Sync command implementation
  *
- * Synchronizes local repository with remote repository. Fetches from remote,
- * analyzes branch states, and pushes/pulls as needed. Handles divergence resolution
- * using configured strategy.
+ * The run, in its order: the workspace guard — none under --force — then the
+ * pre-sync hook and the guard's question; the epoch, the fetch and each profile's
+ * state against the remote; then the run decided whole, a verdict a profile from
+ * its state, the divergence strategy and the user's word (--no-push, --no-pull,
+ * auto_pull), and one question where a force push or a reset discards commits
+ * and the configuration asks one — beneath the preview, before any profile acts;
+ * then the acts, their receipt, the Manifest block, and post-sync.
+ *
+ * A dry run speaks for the Git phase alone: what each verdict would do, and its
+ * end. The view a pull would leave is unknown without the pull, so the standing
+ * view's health and the apply hint are status's and the live run's.
  *
  * Requires workspace to be clean (no uncommitted changes) unless --force is used.
  * Run 'update' command first to commit local changes to profile branches.

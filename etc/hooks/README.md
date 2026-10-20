@@ -254,8 +254,10 @@ before its question and the fetch
 **Fire ordering:** Pre-sync fires once sync has checked the workspace — a
 `strict_mode` refusal fires none — and before the question it asks over
 uncommitted changes, so it can fire over a sync the user then declines, with
-no post-sync after it. Network or push failures may suppress post-sync too —
-the same operational asymmetry every hook pair carries.
+no post-sync after it. It fires before the fetch as well, so a run whose force
+push or reset is declined after the fetch, or refused there off a terminal, has
+fired it with no post-sync after it. Network or push failures may suppress
+post-sync too — the same operational asymmetry every hook pair carries.
 
 ### `post-sync`
 
@@ -351,10 +353,11 @@ update reads the profile after it and builds on the hook's commit;
 
 sync decides twice: it checks the workspace before `pre-sync` and asks its
 question after it, and decides what to pull and push after the fetch that
-follows the hook — a diverged profile's `ours` or `theirs` question is asked
-there, profile by profile. The enabled-set writers (`profile enable`,
-`disable`, `reorder`, `interactive`, `clone`) and dotta's own files (`ignore`,
-`bootstrap --edit`) fire none.
+follows the hook — a run that force pushes or resets asks once there, beneath
+what it will do and before any profile acts, and off a terminal is refused
+there. The enabled-set writers (`profile enable`, `disable`, `reorder`,
+`interactive`, `clone`) and dotta's own files (`ignore`, `bootstrap --edit`)
+fire none.
 
 ## Hook Configuration
 

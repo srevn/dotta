@@ -1100,7 +1100,7 @@ static void manifest_mark_interior(
  * one
  *
  * Under another label, necessarily: one label holds no such pair, the stage
- * refusing a name beneath a blob of its own tree (sys/stage.c admit_tree_path),
+ * refusing a name beneath a blob of its own tree (sys/stage.c stage_admit_path),
  * so a contribution whose explicit claims keep to one label is not climbed at
  * all. Each explicit claim climbs the contribution's own explicit claims for
  * the nearest blob above it, so a nested pair names its inner blob too; a blob

@@ -22,6 +22,7 @@
 #include <git2.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "base/error.h"
 #include "base/heap.h"
@@ -150,17 +151,50 @@ git_index *stage_index(stage_t *st) {
 }
 
 /**
- * Can anything at all be named at this path — the shape, and no blob above it?
+ * Git's type for what a mode word says stands at a name: a gitlink's is a commit,
+ * a directory's a tree, and every other mode's a blob
+ *
+ * libgit2's own reading of a tree entry, whole (lib/libgit2/src/libgit2/tree.c
+ * git_tree_entry_type: S_ISGITLINK, then S_ISDIR), asked of the mode an index
+ * entry holds, which is its tree's own word where the index was seeded from one
+ * (index.c read_tree_cb) — so a blob of whatever permission bits a hand's tree
+ * spells is the blob the profile's walk reads there (core/profiles.c profile_step).
+ *
+ * Reader: the noun a refusal names an entry in a name's way by (stage_mode_noun).
+ */
+static git_object_t stage_mode_type(uint32_t mode) {
+    switch (mode & S_IFMT) {
+        case GIT_FILEMODE_COMMIT: return GIT_OBJECT_COMMIT;
+        case GIT_FILEMODE_TREE:   return GIT_OBJECT_TREE;
+        default:                  return GIT_OBJECT_BLOB;
+    }
+}
+
+/**
+ * What a refusal calls an entry in a name's way: a gitlink a submodule, as Git's
+ * own add names one with a path inside it (lib/git/submodule.c
+ * die_path_inside_submodule) and revert one at its name (cmds/revert.c cmd_revert),
+ * and every blob a file
+ *
+ * Readers: stage_admit_path, an entry above the name; stage_admit_subtree, one
+ * at it.
+ */
+static const char *stage_mode_noun(uint32_t mode) {
+    return stage_mode_type(mode) == GIT_OBJECT_COMMIT ? "submodule" : "file";
+}
+
+/**
+ * Can anything at all be named at this path — the shape, and no entry above it?
  *
  * The identical beginning of both sides of the rule, a blob's and a subtree's:
  * what libgit2 would refuse later with a worse message, and then a proper prefix
- * that names an entry, which puts the path inside a file. Neither answer depends
- * on what is being put there.
+ * that names an entry, which puts the path inside a file or a submodule. Neither
+ * answer depends on what is being put there.
  *
  * The scratch is this function's, NUL-terminated at each slash in turn; the
  * sentence prints from `path`, which is whole throughout.
  */
-static error_t admit_tree_path(git_index *index, const char *path) {
+static error_t stage_admit_path(git_index *index, const char *path) {
     size_t len = strlen(path);
     if (len == 0 || path[0] == '/' || path[len - 1] == '/' || strstr(path, "//")) {
         return error_create(
@@ -173,15 +207,17 @@ static error_t admit_tree_path(git_index *index, const char *path) {
     char *scratch = heap_alloc(len + 1);
     memcpy(scratch, path, len + 1);
 
-    /* A file where a directory is needed: a proper prefix naming an entry. */
+    /* A file or a submodule where a directory is needed: a proper prefix naming
+     * an entry, by its own noun */
     for (char *slash = strchr(scratch, '/'); slash; slash = strchr(slash + 1, '/')) {
         *slash = '\0';
-        if (git_index_get_bypath(index, scratch, 0)) {
+        const git_index_entry *above = git_index_get_bypath(index, scratch, 0);
+        if (above) {
             int prefix_len = (int) (slash - scratch);
             free(scratch);
             return error_create(
-                ERR_CONFLICT, "Cannot stage '%s': '%.*s' is a file in this tree",
-                path, prefix_len, path
+                ERR_CONFLICT, "Cannot stage '%s': '%.*s' is a %s in this tree",
+                path, prefix_len, path, stage_mode_noun(above->mode)
             );
         }
         *slash = '/';
@@ -211,7 +247,7 @@ static error_t admit_tree_path(git_index *index, const char *path) {
  * as one — here, because nothing later can: error_wrap keeps its cause's code,
  * and error_git is always ERR_GIT.
  */
-static error_t put_entry(git_index *index, const git_index_entry *entry) {
+static error_t stage_put_entry(git_index *index, const git_index_entry *entry) {
     const char *path = entry->path;
 
     if (entry->mode != GIT_FILEMODE_BLOB &&
@@ -224,7 +260,7 @@ static error_t put_entry(git_index *index, const git_index_entry *entry) {
         );
     }
 
-    error_t err = admit_tree_path(index, path);
+    error_t err = stage_admit_path(index, path);
     if (err) return err;
 
     /* A directory where the file goes: any entry beneath the path. The index is
@@ -299,27 +335,29 @@ error_t stage_admit_blob(stage_admission_t *adm, const char *path) {
 
     /* Recorded as a blob under the null id. The mode is the put's caller's word,
      * and a caller asking about a path it has not read yet has no mode to offer
-     * — nor needs one: libgit2 validates a path with mode 0 (put_entry). */
+     * — nor needs one: libgit2 validates a path with mode 0 (stage_put_entry). */
     git_index_entry entry;
     memset(&entry, 0, sizeof(entry));
     entry.mode = GIT_FILEMODE_BLOB;
     entry.path = path;
 
-    return put_entry(adm->index, &entry);
+    return stage_put_entry(adm->index, &entry);
 }
 
 error_t stage_admit_subtree(const stage_admission_t *adm, const char *path) {
     CHECK_NULL(adm);
     CHECK_NULL(path);
-    error_t err = admit_tree_path(adm->index, path);
+    error_t err = stage_admit_path(adm->index, path);
     if (err) return err;
 
-    /* A file at the path itself: a blob and a subtree cannot both stand there,
-     * and nothing beneath it could be committed either. Entries beneath the path
-     * are the subtree already standing, and need no asking. */
-    if (git_index_get_bypath(adm->index, path, 0)) {
+    /* An entry at the path itself, a blob or a gitlink: it and a subtree cannot
+     * both stand there, and nothing beneath it could be committed either. Entries
+     * beneath the path are the subtree already standing, and need no asking. */
+    const git_index_entry *entry = git_index_get_bypath(adm->index, path, 0);
+    if (entry) {
         return error_create(
-            ERR_CONFLICT, "Cannot stage '%s': it is a file in this tree", path
+            ERR_CONFLICT, "Cannot stage '%s': it is a %s in this tree", path,
+            stage_mode_noun(entry->mode)
         );
     }
 
@@ -343,18 +381,18 @@ error_t stage_put(
 
     /* The entry first, under the null id: every refusal the put has — the mode,
      * the shape, both collisions, Git's own name rule — is met before a byte is
-     * written (put_entry). The index is ownerless, so libgit2 asks for no object
-     * behind it (index.c index_insert), as it asks for none behind an
+     * written (stage_put_entry). The index is ownerless, so libgit2 asks for no
+     * object behind it (index.c index_insert), as it asks for none behind an
      * admission's. */
     git_index_entry entry;
     memset(&entry, 0, sizeof(entry));
     entry.mode = (uint32_t) mode;
     entry.path = path;
-    error_t err = put_entry(st->index, &entry);
+    error_t err = stage_put_entry(st->index, &entry);
     if (err) return err;
 
     /* Then the blob, written once — the one hash of the bytes — and the entry
-     * pointed at it through the same add (put_entry), which meets the answers
+     * pointed at it through the same add (stage_put_entry), which meets the answers
      * it met. A write that fails leaves the entry at the null id (the header). */
     git_oid blob;
     int rc = git_blob_create_from_buffer(
@@ -388,7 +426,7 @@ error_t stage_put_blob(
     entry.path = path;
     git_oid_cpy(&entry.id, blob);
 
-    return put_entry(st->index, &entry);
+    return stage_put_entry(st->index, &entry);
 }
 
 error_t stage_remove(stage_t *st, const char *path) {

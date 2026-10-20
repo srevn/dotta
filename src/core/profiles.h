@@ -588,10 +588,10 @@ error_t profile_needs_target(profile_t *profile, bool *needs_target);
  * saying which; DIRECTORY is a subtree, or a directory claim the sheet alone
  * holds (a tracked directory with nothing beneath it, an ancestor chain the tree
  * no longer has); SUBMODULE is a gitlink, which dotta never writes (sys/stage.c
- * put_entry refuses the mode) — a verb that acts on one name refuses it by its
- * noun, while a file captured from the disk at its name takes its place, as Git's
- * own add does (profile_capture_file); NOTHING is neither document holding the
- * name.
+ * stage_put_entry refuses the mode) — a verb that acts on one name refuses it
+ * by its noun, while a file captured from the disk at its name takes its place,
+ * as Git's own add does (profile_capture_file); NOTHING is neither document holding
+ * the name.
  */
 typedef enum {
     PROFILE_HELD_NOTHING,       /* neither document holds the name */

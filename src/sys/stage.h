@@ -202,11 +202,12 @@ error_t stage_admission_create(const stage_t *st, stage_admission_t **out);
  * so a writer can find out before it reads a file's bytes:
  *   - the tree-path shape, which libgit2 would reject later with a worse message
  *     (ERR_INVALID_ARG);
- *   - a proper prefix that names an entry — a file where a directory is needed;
+ *   - a proper prefix that names an entry — a file, or a submodule, where a
+ *     directory is needed;
  *   - an entry beneath the path — a directory where the file goes;
  *   - a name Git will not hold at all — `.git` as a component, in every spelling
  *     libgit2 protects — which is libgit2's own rule, asked through the add the
- *     put makes (sys/stage.c put_entry).
+ *     put makes (sys/stage.c stage_put_entry).
  * The last three are ERR_CONFLICT: a verdict about the name, which a caller that
  * walks skips (add's walk reads it, through core/profiles.h profile_admit) and
  * a caller that was named refuses. An entry at the path itself is the upsert
@@ -233,11 +234,12 @@ error_t stage_admit_blob(stage_admission_t *adm, const char *path);
  *
  * The other half of the index's file/directory rule, for the caller that has no
  * put to make: dotta's empty directories live in the sheet alone (core/metadata.h),
- * so a profile can claim a directory the tree holds no entry for. A blob at the
- * path, or at any proper prefix of it — the ref's own or one admitted since —
- * leaves no room for entries beneath it, nor for a claim about the directory
- * itself. Entries beneath the path are the subtree already standing, and are
- * admitted.
+ * so a profile can claim a directory the tree holds no entry for. An entry at
+ * the path, or at any proper prefix of it — a blob, the ref's own or one admitted
+ * since, or a gitlink the ref holds — leaves no room for entries beneath it,
+ * nor for a claim about the directory itself, and the refusal names it a file
+ * or a submodule. Entries beneath the path are the subtree already standing,
+ * and are admitted.
  *
  * Nothing is recorded, which is what the const says: the tree holds no directory
  * claim, so a subtree admitted here moves no answer this admission gives. A blob

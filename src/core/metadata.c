@@ -1013,8 +1013,9 @@ cleanup:
  * commit's tree alike — through the tree's own repository. A tree without the
  * sheet — no .dotta, or a .dotta directory without the file — holds an empty
  * sheet: the absence's arm is the one producer of that answer, so no reader folds
- * a not-found into a sheet of its own, and a file at .dotta is never read as
- * the absence. Every failure meets one tail, which names the profile over it.
+ * a not-found into a sheet of its own, and a file or a submodule at .dotta is
+ * never read as the absence. Every failure meets one tail, which names the profile
+ * over it.
  */
 error_t metadata_load_from_tree(
     const git_tree *tree,
@@ -1041,13 +1042,19 @@ error_t metadata_load_from_tree(
     if (rc == GIT_ENOTFOUND) {
         /* One rung can stand in the way, the sheet's directory, so it alone is
          * asked: absent, or a tree without the file, is the absence; a blob, a
-         * link or a gitlink there is no sheet a reader may read as empty. */
+         * link or a gitlink there is no sheet a reader may read as empty, and
+         * is named as the stage names an entry in a name's way, a gitlink a
+         * submodule and every blob a file (sys/stage.c stage_mode_noun) */
         const git_tree_entry *dir = git_tree_entry_byname(tree, METADATA_DIR);
-        if (!dir || git_tree_entry_type(dir) == GIT_OBJECT_TREE) {
+        const git_object_t type = dir ? git_tree_entry_type(dir) : GIT_OBJECT_INVALID;
+        if (type == GIT_OBJECT_INVALID || type == GIT_OBJECT_TREE) {
             *out = metadata_create(arena);
             return NULL;
         }
-        err = error_create(ERR_CONFLICT, "'%s' is a file in this tree", METADATA_DIR);
+        err = error_create(
+            ERR_CONFLICT, "'%s' is a %s in this tree", METADATA_DIR,
+            type == GIT_OBJECT_COMMIT ? "submodule" : "file"
+        );
     } else if (rc < 0) {
         err = error_git(rc, "Cannot read '%s'", METADATA_FILE_PATH);
     }
@@ -1065,9 +1072,10 @@ error_t metadata_load_from_tree(
     gitops_blob_view_close(&view);
     git_tree_entry_free(entry);             /* NULL-safe, and NULL unless rc == 0 */
 
-    /* Each step names its own — the file at .dotta, the entry, the blob, the
-     * byte the parse stopped at — and none the profile, which this loader alone
-     * was handed: said once, over whichever refused, so no caller says it again */
+    /* Each step names its own — the file or the submodule at .dotta, the entry,
+     * the blob, the byte the parse stopped at — and none the profile, which this
+     * loader alone was handed: said once, over whichever refused, so no caller
+     * says it again */
     return error_wrap(err, "Failed to load metadata for profile '%s'", profile);
 }
 

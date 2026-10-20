@@ -536,11 +536,11 @@ error_t metadata_capture_directory(
  * without the file. The absent entry is a settled answer (nothing claimed), not
  * a failure to look, and this loader is its one producer: a reader receives a
  * sheet on every success and never folds a not-found into one of its own. Every
- * error is real — a lookup that failed, a file at .dotta, which Git's lookup
- * reads as nothing there (lib/libgit2/src/libgit2/tree.c git_tree_entry_bypath),
- * an unreadable blob, a document the parser refuses (a version mismatch, a
- * duplicated claim) — and a reader that folds one into an empty sheet is reading
- * a corrupt sheet as "no claims".
+ * error is real — a lookup that failed, a file or a submodule at .dotta, which
+ * Git's lookup reads as nothing there (lib/libgit2/src/libgit2/tree.c
+ * git_tree_entry_bypath), an unreadable blob, a document the parser refuses (a
+ * version mismatch, a duplicated claim) — and a reader that folds one into an
+ * empty sheet is reading a corrupt sheet as "no claims".
  *
  * The view holds to that without exception: the profile's walk reads the sheet
  * of the tree it walks, strictly for the view, and one that will not load fails

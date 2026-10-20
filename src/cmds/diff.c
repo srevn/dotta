@@ -442,6 +442,11 @@ static void present_diffs_for_direction(
     *diff_count = 0;
     *unverified = 0;
 
+    /* The comparison opens a block of its own: a name-only listing is one, paid
+     * by its first name, and each entry of the full form one more, asking its
+     * own below */
+    output_gap(out, OUTPUT_NORMAL);
+
     for (size_t i = 0; i < diverged.count; i++) {
         const workspace_item_t *item = diverged.entries[i];
 
@@ -461,7 +466,7 @@ static void present_diffs_for_direction(
         /* Filter 4: Profile filter (CLI filtering) */
         if (!scope_accepts_profile(scope, item->profile)) continue;
 
-        /* Each entry is a block; a name-only listing has none */
+        /* Each entry is a block; a name-only listing's names are one */
         if (!opts->name_only) {
             output_gap(out, OUTPUT_NORMAL);
         }
@@ -478,13 +483,15 @@ static void present_diffs_for_direction(
 }
 
 /**
- * Print commit header with metadata
+ * Print commit header with metadata, a block of its own
  */
 static void print_commit_header(
     output_t *out,
     const git_commit *commit,
     const char *profile
 ) {
+    output_gap(out, OUTPUT_NORMAL);
+
     char oid_str[8];
     git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(commit));
 
@@ -532,8 +539,6 @@ static void print_commit_header(
         output_print(out, OUTPUT_NORMAL, "    %.*s\n", (int) len, line);
         line += len + (line[len] == '\n');
     }
-
-    output_gap(out, OUTPUT_NORMAL);
 }
 
 /**
@@ -663,6 +668,11 @@ static error_t compare_tree_files_to_filesystem(
     CHECK_NULL(diff_count);
 
     *diff_count = 0;
+
+    /* The comparison opens a block of its own: a name-only listing is one, paid
+     * by its first name, and each entry of the full form one more, asking its
+     * own below */
+    output_gap(out, OUTPUT_NORMAL);
 
     manifest_rows_t rows = manifest_rows(view);
     for (size_t i = 0; i < rows.count; i++) {
@@ -835,6 +845,10 @@ static bool validate_filter_paths(
 ) {
     if (!path_filter) return true;
 
+    /* The answers are one block, whichever entries earn one: one boundary above
+     * them all, paid by the first to print */
+    output_gap(out, OUTPUT_NORMAL);
+
     manifest_rows_t rows = manifest_rows(view);
     size_t covered = 0;     /* Entries reaching a file row */
     size_t unmatched = 0;   /* Entries reaching nothing, each warned */
@@ -975,14 +989,13 @@ static error_t diff_commit_to_workspace(
             out, OUTPUT_NORMAL, "Note: comparing commit against profile '%s' only "
             "(commit-to-workspace compares one profile at a time)", name
         );
-        output_gap(out, OUTPUT_NORMAL);
     }
 
+    output_gap(out, OUTPUT_NORMAL);
     output_print(
         out, OUTPUT_NORMAL, "{bold}diff --dotta %s..workspace{reset}\n",
         oid_str
     );
-    output_gap(out, OUTPUT_NORMAL);
 
     print_commit_header(out, commit, name);
 
@@ -1028,6 +1041,7 @@ static error_t diff_commit_to_workspace(
     /* Under a filter the comparison passed over every row outside it, so an empty
      * one claims the scope, in the workspace arm's words; else the whole */
     if (diff_count == 0 && !opts->name_only) {
+        output_gap(out, OUTPUT_NORMAL);
         if (path_filter) {
             output_info(out, OUTPUT_NORMAL, "No differences in scope");
         } else {
@@ -1173,11 +1187,11 @@ static error_t diff_commits(
     git_oid_tostr(oid1_str, sizeof(oid1_str), git_commit_id(commit1));
     git_oid_tostr(oid2_str, sizeof(oid2_str), git_commit_id(commit2));
 
+    output_gap(out, OUTPUT_NORMAL);
     output_print(
         out, OUTPUT_NORMAL, "{bold}diff --dotta %s..%s{reset}\n",
         oid1_str, oid2_str
     );
-    output_gap(out, OUTPUT_NORMAL);
 
     /* Print second commit header (the "new" one) */
     print_commit_header(out, commit2, profile);
@@ -1214,6 +1228,9 @@ static error_t diff_commits(
     err = gitops_diff_trees(repo, tree1, tree2, &diff_opts, &diff);
     if (err) goto cleanup;
 
+    /* The range's body, a block beneath the header: the names, or the statistics
+     * above the patch */
+    output_gap(out, OUTPUT_NORMAL);
     if (opts->name_only) {
         /* Name-only: each changed path, cyan, as the patch's file header colours
          * it — written here as the datum it is, never libgit2's name-only line,

@@ -72,7 +72,8 @@ typedef struct {
  * Behavior:
  *   - Progress: "[N/M] Running profile/.bootstrap..." is emitted via `out` before
  *     each script; "✓ Complete" (or "Would execute" in dry-run) on success; "✗
- *     Failed: <reason>" on error.
+ *     Failed: <reason>" on error. The rows are one block, its boundary asked
+ *     above the first, so no caller asks it.
  *   - Dry-run: reads each script's content and validates its shebang in memory.
  *     No /tmp writes, no process spawns.
  *   - Live run: extracts the script to a tight-scoped temp file and execs it

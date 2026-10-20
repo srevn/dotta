@@ -425,7 +425,8 @@ void output_endline(output_t *ctx, output_verbosity_t min_level);
  * Every block opens with its boundary and no block closes with one. output_section,
  * output_list_render and the two questions ask theirs inside, so a call site
  * places one only above a block the layer does not recognise as one — a verdict
- * line, a warning, a hint, a row of its own.
+ * line, a warning, a hint, a row of its own. A function that prints such a block
+ * asks it first, as the layer's own blocks do, so no caller asks it for one.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level

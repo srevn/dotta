@@ -202,6 +202,9 @@ bootstrap_receipt_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) 
     string_array_init(&failed, frame, 0);
     bootstrap_receipt_t receipt = { 0 };
 
+    /* The rows are a block of their own, beneath the caller's listing: one boundary
+     * above them, which no caller asks for */
+    output_gap(out, OUTPUT_NORMAL);
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->entries[i];
 

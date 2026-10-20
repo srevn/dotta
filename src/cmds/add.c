@@ -1246,6 +1246,10 @@ static void add_print_capture(
 static void add_print_enable(
     output_t *out, const char *profile, const char *target, const manifest_t *view
 ) {
+    /* A block of its own on both screens, apart from what stood above it — the
+     * preview's counts, the record's warning — which is not its fact */
+    output_gap(out, OUTPUT_NORMAL);
+
     if (target) {
         output_hint(
             out, OUTPUT_NORMAL,
@@ -1401,7 +1405,6 @@ static void add_print_preview(const add_walk_t *walk, const char *target, bool p
             walk->profile
         );
     }
-    output_gap(out, OUTPUT_NORMAL);
 
     /* The one remedy a preview can name: no row holds the profile and this add
      * does not create it, so enable comes next — the tail's question, asked before
@@ -1410,7 +1413,6 @@ static void add_print_preview(const add_walk_t *walk, const char *target, bool p
      * none. */
     if (profile_exists && !state_enabled(walk->ctx->run.state, walk->profile)) {
         add_print_enable(out, walk->profile, target, walk->view);
-        output_gap(out, OUTPUT_NORMAL);
     }
 }
 
@@ -2465,6 +2467,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (err) goto cleanup;
 
     if (opts->dry_run) {
+        output_gap(out, OUTPUT_NORMAL);
         output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
         goto cleanup;                                    /* err is NULL */
     }

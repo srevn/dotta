@@ -545,7 +545,6 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     bootstrap_found.entries[i], BOOTSTRAP_SCRIPT_NAME
                 );
             }
-            output_gap(out, OUTPUT_NORMAL);
 
             /* Determine if we should run bootstrap */
             if (opts->bootstrap_mode == CLONE_BOOTSTRAP_FORCE) {
@@ -565,6 +564,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     case OUTPUT_ANSWER_NO:
                         break;
                     case OUTPUT_ANSWER_NONE:
+                        output_gap(out, OUTPUT_NORMAL);
                         output_info(
                             out, OUTPUT_NORMAL, "Bootstrap scripts not run: no answer "
                             "was read; 'dotta bootstrap' runs them"
@@ -579,7 +579,6 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * the consent is asked only where one was found, so run_bootstrap implies
      * one */
     if (run_bootstrap) {
-        output_gap(out, OUTPUT_NORMAL);
         bootstrap_spec_t spec = {
             .config        = config,
             .repo          = repo,

@@ -211,7 +211,6 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
 
     /* Success */
     output_success(out, OUTPUT_NORMAL, "Initialized dotta repository in %s", path);
-    output_gap(out, OUTPUT_NORMAL);
 
     /* A repository outside the configured location is one no later command will
      * find: every one of them resolves that location and stops there, so the
@@ -219,6 +218,7 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
      * configured location, the repository this run just created standing
      * elsewhere. */
     if (elsewhere) {
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(
             out, OUTPUT_NORMAL, "dotta looks for its repository at %s", elsewhere
         );
@@ -227,11 +227,11 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
         output_hintline(
             out, OUTPUT_NORMAL, "  or set repo_dir under [core] in the config file"
         );
-        output_gap(out, OUTPUT_NORMAL);
     }
 
     /* The one step a new store needs: a capture, whose files are already in place,
      * so no apply follows it on this machine */
+    output_gap(out, OUTPUT_NORMAL);
     output_hintline(out, OUTPUT_NORMAL, "Next steps:");
     output_hintline(out, OUTPUT_NORMAL, "  Create profile: dotta add --profile global ~/.bashrc");
 

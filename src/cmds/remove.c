@@ -847,7 +847,6 @@ static void remove_print_overlaps(
             break;
         }
     }
-    output_gap(out, OUTPUT_NORMAL);
 }
 
 /**
@@ -1044,6 +1043,7 @@ static error_t remove_paths(
         claim_count = kept;
 
         if (claim_count == 0) {
+            output_gap(out, OUTPUT_NORMAL);
             output_info(out, OUTPUT_NORMAL, "Nothing removed");
             goto cleanup;
         }
@@ -1053,6 +1053,7 @@ static error_t remove_paths(
      * as the question makes it (remove_ask_paths) */
     if (opts->dry_run) {
         size_t dry_files = 0, dry_dirs = 0;
+        output_gap(out, OUTPUT_NORMAL);
         output_print(
             out, OUTPUT_NORMAL, "Would remove from profile '%s':\n",
             opts->profile
@@ -1110,6 +1111,7 @@ static error_t remove_paths(
         case OUTPUT_ANSWER_YES:
             break;
         case OUTPUT_ANSWER_NO:
+            output_gap(out, OUTPUT_NORMAL);
             output_print(out, OUTPUT_NORMAL, "Cancelled\n");
             goto cleanup;  /* err is NULL, will return success */
         case OUTPUT_ANSWER_NONE:
@@ -1142,6 +1144,8 @@ static error_t remove_paths(
     size_t removed_path_count = 0;
     hashmap_t *listed = hashmap_borrow(ctx->arena, claim_count);
 
+    /* Each removal traced at verbose, the trace a block of its own */
+    output_gap(out, OUTPUT_VERBOSE);
     for (size_t i = 0; i < claim_count; i++) {
         const remove_claim_t *claim = &claims[i];
 
@@ -1199,6 +1203,7 @@ static error_t remove_paths(
     size_t ordered = 0;
     err = remove_write_record(ctx, opts, claims, claim_count, &ordered);
     if (err) {
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
         err = NULL;
     }
@@ -1209,6 +1214,7 @@ static error_t remove_paths(
     /* Success, then the consent the record phase recorded (remove_print_orders) */
     char counts[64];
     remove_format_counts(counts, sizeof(counts), removed_files, removed_dirs);
+    output_gap(out, OUTPUT_NORMAL);
     output_success(
         out, OUTPUT_NORMAL, "Removed %s from profile '%s'",
         counts, opts->profile

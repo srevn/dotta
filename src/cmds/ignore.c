@@ -730,9 +730,11 @@ static error_t ignore_test(
             output_info(
                 out, OUTPUT_NORMAL, "Enabled profiles with a branch: %zu", asker_count
             );
-            output_gap(out, OUTPUT_NORMAL);
         }
     }
+
+    /* The turns are a block of their own, beneath either preamble or none */
+    output_gap(out, OUTPUT_NORMAL);
 
     /* The kind the argument gives: a path's, one reading for every asker, so
      * one observation and no asker to name it — the loop reads it and asks nothing

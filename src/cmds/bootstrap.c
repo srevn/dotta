@@ -295,7 +295,6 @@ static error_t bootstrap_run(
             found.entries[i], BOOTSTRAP_SCRIPT_NAME
         );
     }
-    output_gap(out, OUTPUT_NORMAL);
 
     /* Prompt for confirmation unless --yes or --dry-run. Declined is the user's
      * word, and no failure; unanswered, nobody declined, and the run did not do
@@ -305,6 +304,7 @@ static error_t bootstrap_run(
             case OUTPUT_ANSWER_YES:
                 break;
             case OUTPUT_ANSWER_NO:
+                output_gap(out, OUTPUT_NORMAL);
                 output_info(out, OUTPUT_NORMAL, "Bootstrap cancelled.");
                 return NULL;
             case OUTPUT_ANSWER_NONE:

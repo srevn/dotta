@@ -1057,8 +1057,9 @@ static error_t materialize_entries(
 }
 
 /**
- * Print the --dry-run plan: header plus one line per file entry and per directory
- * claim (slash-marked; scaffolding directories are not listed).
+ * Print the --dry-run plan, a block of its own: header plus one line per file
+ * entry and per directory claim (slash-marked; scaffolding directories are not
+ * listed).
  *
  * The root is not a line of it: the header names the destination, and the root
  * is the destination. Everything listed is relative to it.
@@ -1071,6 +1072,7 @@ static void print_dry_run(
     const char *profile,
     const char *commit_suffix
 ) {
+    output_gap(out, OUTPUT_NORMAL);
     output_print(
         out, OUTPUT_NORMAL,
         "Would export %s to {cyan}%s{reset} "
@@ -1347,6 +1349,7 @@ error_t cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     err = materialize_entries(ctx, opts->profile, &list);
     if (err) goto cleanup;
 
+    output_gap(out, OUTPUT_NORMAL);
     output_print(
         out, OUTPUT_NORMAL,
         "Exported %s to {cyan}%s{reset} (from {magenta}%s{reset}%s)\n",

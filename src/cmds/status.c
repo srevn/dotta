@@ -1452,7 +1452,9 @@ static void status_print_remote(
     }
     if (err) {
         /* A remote the resolver could not choose, or one it could not read: the
-         * section's question has no answer, and says so where it would stand */
+         * section's question has no answer, and says so where it would stand, a
+         * block as the section is */
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(
             out, OUTPUT_NORMAL, "Cannot tell remote sync status: %s", error_line(err)
         );
@@ -1467,6 +1469,7 @@ static void status_print_remote(
         /* Explicit request: show ALL local profiles (lightweight, no ref resolution) */
         err = gitops_list_branches(repo, ctx->arena, &all_local);
         if (err) {
+            output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL, "Cannot list every profile for remote sync status: %s",
                 error_line(err)
@@ -1522,7 +1525,9 @@ static void status_print_remote(
 
         if (err) {
             /* Non-fatal: warn and continue with status display. The fetch's failure
-             * names its act and the remote (sys/gitops.h). */
+             * names its act and the remote (sys/gitops.h), a block of its own
+             * beneath the preamble it resolved. */
+            output_gap(out, OUTPUT_VERBOSE);
             output_warning(out, OUTPUT_VERBOSE, "%s", error_line(err));
         }
 

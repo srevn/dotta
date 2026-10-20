@@ -1378,7 +1378,9 @@ static void add_print_preview(const add_walk_t *walk, const char *target, bool p
 
     /* The receipt's block in the future tense, arm for arm but one: whether the
      * commit moves anything is the bytes' to say, so a preview counts what it
-     * would capture and "Nothing changed" is the run's alone. */
+     * would capture and "Nothing changed" is the run's alone. A block of its
+     * own, beneath the trace above it and the walk's warnings. */
+    output_gap(out, OUTPUT_NORMAL);
     if (walk->files.count > 0) {
         output_info(
             out, OUTPUT_NORMAL, "Would add %zu file%s to profile '%s'",
@@ -2361,6 +2363,7 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * one takes nothing; the dispatcher's rollback ends a transaction nothing
      * wrote in. */
     if (walk.files.count == 0 && walk.directories.count == 0) {
+        output_gap(out, OUTPUT_NORMAL);
         output_info(out, OUTPUT_NORMAL, "Nothing new to add to profile '%s'", opts->profile);
         goto cleanup;                                    /* err is NULL */
     }
@@ -2471,6 +2474,10 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
         goto cleanup;                                    /* err is NULL */
     }
+
+    /* The captures' trace at verbose, a block of its own beneath the decision's
+     * lines and whatever the pre-add hook wrote (utils/hooks.h) */
+    output_gap(out, OUTPUT_VERBOSE);
 
     /* Capture directory metadata for every directory this command listed.
      *
@@ -2699,7 +2706,9 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * standing, both kinds in one phrase: the directories were captured as surely
      * as the files were. One that landed names its files on the ✓ line and its
      * directories beneath them, or on a ✓ line of their own when they are all
-     * it took. */
+     * it took. Whichever arm, the receipt is a block of its own, beneath the
+     * trace and a hook's lines. */
+    output_gap(out, OUTPUT_NORMAL);
     if (!committed) {
         char counts[64];
         output_format_counts(

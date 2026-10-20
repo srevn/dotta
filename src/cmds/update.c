@@ -1382,8 +1382,12 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * names paths is the named re-derivation itself, so its two DERIVED lines
      * say what was skipped and name no remedy: what came of the climb beneath
      * the user's squatter at a rung is the run's own outcome to say — its receipt,
-     * or, at a lost blob's place, the line below the leaves' gather. */
+     * or, at a lost blob's place, the line below the leaves' gather. The lines
+     * are one block: one boundary above them, asked here and paid by whichever
+     * of them is the first to print — a block that says nothing leaves the debt
+     * standing for the next one (base/output.h). */
     const size_t *refused = partition.refused;
+    output_gap(out, OUTPUT_NORMAL);
 
     if (refused[WORKSPACE_ROUTE_DISPLACED_TRACKED] > 0) {
         output_info(
@@ -1637,6 +1641,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * name no remedy in a named run, and moving the squatter aside is the
          * one there is */
         if (refused_leaves > 0) {
+            output_gap(out, OUTPUT_NORMAL);
             output_info(
                 out, OUTPUT_NORMAL,
                 "%zu path%s not re-derived: a profile needs the squatted directory — "
@@ -1650,6 +1655,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * re-derive: whether a chain moved is the walk's to discover, so the named
      * run proceeds on the slice alone and the summary says what came of it */
     if (partition.accepted.count == 0 && derive_rows.count == 0) {
+        output_gap(out, OUTPUT_NORMAL);
         if (opts->only_new) {
             output_info(out, OUTPUT_NORMAL, "No new files to add");
         } else if (opts->include_new) {
@@ -1697,6 +1703,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 work.count -= partition.new_files.count;
                 break;
             case OUTPUT_ANSWER_NONE:
+                output_gap(out, OUTPUT_NORMAL);
                 output_info(
                     out, OUTPUT_NORMAL, "%zu new file%s not added: no answer was "
                     "read; --include-new adds %s", partition.new_files.count,
@@ -1743,6 +1750,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             case OUTPUT_ANSWER_YES:
                 break;
             case OUTPUT_ANSWER_NO:
+                output_gap(out, OUTPUT_NORMAL);
                 output_info(out, OUTPUT_NORMAL, "Cancelled");
                 return NULL;
             case OUTPUT_ANSWER_NONE:

@@ -65,6 +65,8 @@ static error_t key_set(const dotta_ctx_t *ctx) {
     error_t err = keymgr_set(keymgr);
     if (err) return err;
 
+    /* The receipt, a block of its own beneath the notice the prompt followed */
+    output_gap(out, OUTPUT_NORMAL);
     if (config->session_timeout == 0) {
         output_success(
             out, OUTPUT_NORMAL,

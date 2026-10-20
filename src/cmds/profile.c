@@ -181,6 +181,7 @@ static error_t profile_list(
             repo, ctx->arena, &remote_name, &remote_url
         );
         if (remote_err) {
+            output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL, "Could not detect remote: %s",
                 error_line(remote_err)
@@ -203,6 +204,7 @@ static error_t profile_list(
                 repo, remote_name, xfer, ctx->arena, &remote_branches
             );
             if (remote_err) {
+                output_gap(out, OUTPUT_NORMAL);
                 output_warning(out, OUTPUT_NORMAL, "%s", error_line(remote_err));
             } else if (remote_branches.count > 0) {
                 /* Filter out branches that already exist locally */
@@ -548,6 +550,7 @@ static error_t profile_enable(
             for (size_t j = 0; j < unbound.count; j++) {
                 if (strcmp(unbound.entries[j].profile, name) != 0) continue;
 
+                output_gap(out, OUTPUT_NORMAL);
                 output_warning(
                     out, OUTPUT_NORMAL,
                     "Profile '%s' holds custom/ paths and needs a target here", name
@@ -567,6 +570,7 @@ static error_t profile_enable(
         err = gitops_branch_exists(repo, name, &exists);
         if (err) return err;
         if (!exists) {
+            output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL, "Profile '%s' doesn't exist locally", name
             );
@@ -596,6 +600,7 @@ static error_t profile_enable(
         profile_free(profile);
         if (err) return err;
         if (needs_target && !target) {
+            output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL,
                 "Profile '%s' holds custom/ paths and needs a target here", name
@@ -613,6 +618,7 @@ static error_t profile_enable(
     /* Each skip said once: a refused profile by its warning above, an enabled
      * one by this count, its own line being verbose's */
     if (already_enabled > 0) {
+        output_gap(out, OUTPUT_NORMAL);
         output_info(
             out, OUTPUT_NORMAL, "%zu profile%s already enabled",
             already_enabled, already_enabled == 1 ? "" : "s"
@@ -684,6 +690,7 @@ static error_t profile_enable(
     err = state_save(state);
     if (err) return err;
 
+    output_gap(out, OUTPUT_NORMAL);
     for (size_t i = 0; i < to_enable_validated.count; i++) {
         const char *name = to_enable_validated.entries[i];
         if (retarget && strcmp(name, retarget) == 0) {
@@ -818,6 +825,7 @@ static error_t profile_disable(
     /* The skip said once: a named profile that was not enabled, by this count,
      * its own line being verbose's */
     if (not_enabled > 0) {
+        output_gap(out, OUTPUT_NORMAL);
         output_info(
             out, OUTPUT_NORMAL, "%zu profile%s not enabled",
             not_enabled, not_enabled == 1 ? "" : "s"
@@ -867,6 +875,7 @@ static error_t profile_disable(
     size_t record_count = 0;
     err = manifest_build(repo, state, ctx->arena, &after);
     if (err) {
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
     } else {
         err = state_records(state, ctx->arena, &records, &record_count);
@@ -879,6 +888,7 @@ static error_t profile_disable(
     err = state_save(state);
     if (err) return err;
 
+    output_gap(out, OUTPUT_NORMAL);
     for (size_t i = 0; i < to_disable_validated.count; i++) {
         const char *name = to_disable_validated.entries[i];
         output_success(out, OUTPUT_NORMAL, "Disabled %s", name);

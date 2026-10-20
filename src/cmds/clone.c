@@ -187,8 +187,10 @@ static error_t initialize_state(
     if (err) return err;
 
     /* The names enabled, when there are any: a run that enabled nothing said
-     * why per profile above, and has no list to print. */
+     * why per profile above, and has no list to print. The state is a phase of
+     * its own, its receipt a block apart from the fetch's. */
     if (profiles->count > 0) {
+        output_gap(out, OUTPUT_NORMAL);
         output_success(
             out, OUTPUT_NORMAL, "Initialized enabled profiles: %s",
             string_array_join(arena, profiles, ", ")
@@ -225,6 +227,9 @@ static void rollback_clone_dir(
         err = fs_remove_dir(path);
     }
 
+    /* Either outcome a block of its own, beneath what the clone said before it
+     * failed */
+    output_gap(ctx->out, OUTPUT_NORMAL);
     if (err) {
         output_warning(
             ctx->out, OUTPUT_NORMAL, "Failed to remove partial clone at %s: %s",
@@ -357,6 +362,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
          * the remote, and never an init here, which mints one the remote's would
          * not reconcile with, or refuses over the ciphertext this clone just
          * fetched. */
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(
             out, OUTPUT_NORMAL,
             "%s; encryption operations fail until a valid epoch is fetched",
@@ -486,6 +492,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         profile_free(profile);
         if (err) goto cleanup;
         if (needs_target) {
+            output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL,
                 "Profile '%s' holds custom/ paths and needs a target here; "
@@ -613,6 +620,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * next `dotta status` would answer "No dotta repository found... Run 'dotta
      * init'" about the repository this run just cloned. */
     if (elsewhere) {
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(
             out, OUTPUT_NORMAL, "dotta looks for its repository at %s", elsewhere
         );

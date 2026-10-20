@@ -209,7 +209,8 @@ error_t cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     err = ignore_seed_baseline(repo);
     if (err) goto cleanup;
 
-    /* Success */
+    /* Success, a block of its own beneath the epoch's repair */
+    output_gap(out, OUTPUT_NORMAL);
     output_success(out, OUTPUT_NORMAL, "Initialized dotta repository in %s", path);
 
     /* A repository outside the configured location is one no later command will

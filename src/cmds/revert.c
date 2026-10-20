@@ -999,6 +999,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     err = profile_changed(draft, &changed);
     if (err) goto cleanup;
     if (!changed) {
+        output_gap(out, OUTPUT_NORMAL);
         output_info(
             out, OUTPUT_NORMAL, "File '%s' is already at target state (no changes)",
             restored.storage_path
@@ -1114,7 +1115,9 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         );
         if (err) {
             /* Non-fatal: the revert itself doesn't need decryption (copies blobs).
-             * Show warning and continue to confirmation — user decides. */
+             * Show warning and continue to confirmation — user decides. The warning
+             * stands in for the section, a block as the section is. */
+            output_gap(out, OUTPUT_NORMAL);
             output_warning(
                 out, OUTPUT_NORMAL, "Could not show diff preview: %s",
                 error_line(err)
@@ -1157,6 +1160,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
             case OUTPUT_ANSWER_YES:
                 break;
             case OUTPUT_ANSWER_NO:
+                output_gap(out, OUTPUT_NORMAL);
                 output_info(out, OUTPUT_NORMAL, "Cancelled");
                 goto cleanup;  /* err is NULL here: a cancel is not a failure */
             case OUTPUT_ANSWER_NONE:
@@ -1216,6 +1220,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * refusal is warned in its own words. */
     err = revert_write_record(ctx, profile, filesystem_path);
     if (err) {
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
         err = NULL;
     }
@@ -1229,7 +1234,9 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * where apply last confirmed it, so the workspace reads the result as [stale]
      * until apply deploys it; over one already gone, the reclaim above left no
      * record, so it reads [undeployed]. A disabled profile's revert reaches no
-     * view at all. */
+     * view at all. A block of its own, beneath the preview's patch, the question
+     * or a hook's lines. */
+    output_gap(out, OUTPUT_NORMAL);
     output_success(
         out, OUTPUT_NORMAL, "Reverted %s in profile '%s'", restored.storage_path,
         profile

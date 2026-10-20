@@ -1354,9 +1354,11 @@ static error_t diff_workspace(
         );
 
         if (upstream_count == 0 && !opts->name_only) {
+            output_gap(out, OUTPUT_NORMAL);
             output_info(out, OUTPUT_NORMAL, "No upstream differences");
         }
         if (unverified > 0 && !opts->name_only) {
+            output_gap(out, OUTPUT_NORMAL);
             output_info(
                 out, OUTPUT_NORMAL, "%zu file%s could not be verified",
                 unverified, unverified == 1 ? "" : "s"
@@ -1374,9 +1376,11 @@ static error_t diff_workspace(
         );
 
         if (downstream_count == 0 && !opts->name_only) {
+            output_gap(out, OUTPUT_NORMAL);
             output_info(out, OUTPUT_NORMAL, "No downstream differences");
         }
         if (unverified > 0 && !opts->name_only) {
+            output_gap(out, OUTPUT_NORMAL);
             output_info(
                 out, OUTPUT_NORMAL, "%zu file%s could not be verified",
                 unverified, unverified == 1 ? "" : "s"
@@ -1397,6 +1401,7 @@ static error_t diff_workspace(
          * in scope presented — else the repository (cmd_apply). Downstream,
          * update's, which names no whole to qualify. */
         if (total_diff_count == 0 && !opts->name_only) {
+            output_gap(out, OUTPUT_NORMAL);
             if (opts->direction == DIFF_UPSTREAM) {
                 if (scope_filters_profiles(scope) || scope_filters_paths(scope)) {
                     output_info(out, OUTPUT_NORMAL, "No differences in scope");
@@ -1411,6 +1416,7 @@ static error_t diff_workspace(
             }
         }
         if (unverified > 0 && !opts->name_only) {
+            output_gap(out, OUTPUT_NORMAL);
             output_info(
                 out, OUTPUT_NORMAL, "%zu file%s could not be verified",
                 unverified, unverified == 1 ? "" : "s"

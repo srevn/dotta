@@ -1151,6 +1151,7 @@ static error_t sync_failure(arena_t *arena, const sync_rows_t *rows) {
  * — plaintext profiles still sync.
  */
 static void sync_print_epoch_conflict(output_t *out) {
+    output_gap(out, OUTPUT_NORMAL);
     output_warning(
         out, OUTPUT_NORMAL,
         "Repository epoch conflict: the local epoch differs from the remote's; "
@@ -1185,6 +1186,7 @@ static void sync_print_epoch_conflict(output_t *out) {
  * arrives here.
  */
 static void sync_print_epoch_damaged(output_t *out, const char *remote_name) {
+    output_gap(out, OUTPUT_NORMAL);
     output_warning(
         out, OUTPUT_NORMAL,
         "Repository epoch left alone: '%s' cannot be read and this repository "
@@ -1237,12 +1239,18 @@ static void sync_reconcile_epoch(
          * epoch_resolve) — so no absence was proved and the verdict is the one
          * a found ciphertext gets: no git op. Sync is the only place either is
          * ever reported, so the line says what it knows and the error the rest. */
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(
             out, OUTPUT_NORMAL, "Repository epoch left alone: %s", error_line(err)
         );
         return;
     }
 
+    /* The outcome is a block of its own at the level it speaks at: a verbose
+     * line, under the one boundary asked here for every arm, or a warning or a
+     * printer, each asking its own. At normal no verbose debt is owed, so a silent
+     * outcome leaves the report as it found it. */
+    output_gap(out, OUTPUT_VERBOSE);
     switch (decision) {
         case EPOCH_RECONCILE_UNREACHABLE:
             /* The authoritative "remote unreachable" error comes from the fetch
@@ -1285,6 +1293,7 @@ static void sync_reconcile_epoch(
              * libgit2's reason (infra/epoch.c epoch_push): printed whole */
             err = epoch_push(repo, remote_name, xfer);
             if (err) {
+                output_gap(out, OUTPUT_NORMAL);
                 output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
                 return;  /* best-effort; retried next sync */
             }
@@ -1333,6 +1342,7 @@ static void sync_reconcile_epoch(
                 /* Every failure of the fetch names its act and leaves the local
                  * ref standing — one it could not adopt was judged before it
                  * was installed — so each is printed whole, as clone prints it */
+                output_gap(out, OUTPUT_NORMAL);
                 output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
                 return;  /* best-effort */
             }
@@ -1835,7 +1845,8 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             goto cleanup;  /* err is NULL for a decline: a cancel, not an error */
         }
 
-        /* Confirmed: proceed */
+        /* Confirmed: proceed, a verbose line of its own beneath the question */
+        output_gap(out, OUTPUT_VERBOSE);
         output_info(out, OUTPUT_VERBOSE, "Proceeding with uncommitted changes");
     }
 

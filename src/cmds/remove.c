@@ -932,6 +932,9 @@ static output_answer_t remove_ask_paths(
 static void remove_print_deletion(
     output_t *out, const cmd_remove_options_t *opts, const char *counts
 ) {
+    /* A block of its own in either tense, beneath the warnings above it */
+    output_gap(out, OUTPUT_NORMAL);
+
     if (opts->dry_run) {
         output_print(
             out, OUTPUT_NORMAL, "Would delete profile '%s' (%s)\n",
@@ -946,7 +949,6 @@ static void remove_print_deletion(
             output_print(out, OUTPUT_NORMAL, "(Deployed paths would stay on disk)\n");
         }
     } else {
-        output_gap(out, OUTPUT_NORMAL);
         output_warning(
             out, OUTPUT_NORMAL, "This will delete profile '%s' (%s)",
             opts->profile, counts
@@ -1001,6 +1003,7 @@ static error_t remove_paths(
      * a claim in silence either, an absent section reading as "no overlap". */
     err = remove_overlaps(ctx, claims, claim_count, opts->profile, &overlaps);
     if (err) {
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(
             out, OUTPUT_NORMAL, "Could not read the other profiles' claims: %s",
             error_line(err)
@@ -1307,6 +1310,7 @@ static error_t remove_profile(
      * removes, pruned once empty where dotta created it */
     err = profile_load_sheet(profile);
     if (err) {
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(
             out, OUTPUT_NORMAL, "%s; its hooks are handed its files alone",
             error_line(err)
@@ -1467,14 +1471,17 @@ static error_t remove_profile(
     size_t ordered = 0;
     err = remove_write_record(ctx, opts, claims, claim_count, &ordered);
     if (err) {
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
         err = NULL;
     }
 
     /* Push the deletion to the remote, unless the profile was never pushed there
      * (remote_name NULL, above): sync needs it, since other repositories learn
-     * the branch is gone only from there. */
+     * the branch is gone only from there. The push is a block of its own: its
+     * announce, then its outcome. */
     if (remote_name) {
+        output_gap(out, OUTPUT_NORMAL);
         output_info(
             out, OUTPUT_NORMAL, "Pushing profile deletion to remote '%s'...",
             remote_name
@@ -1518,6 +1525,7 @@ static error_t remove_profile(
      * cancel, error) — with what it took, which a question asked before it said
      * too, and nothing else on an unasked run says. Then the consent the record
      * phase recorded (remove_print_orders). */
+    output_gap(out, OUTPUT_NORMAL);
     output_success(
         out, OUTPUT_NORMAL, "Profile '%s' deleted (%s)", opts->profile, counts
     );

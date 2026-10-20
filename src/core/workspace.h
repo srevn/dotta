@@ -958,7 +958,9 @@ static inline divergence_type_t workspace_claims_moved(
  * Readers: the apply hint of cmds/sync.c cmd_sync and of cmds/profile.c
  * profile_enable and profile_disable, each off the view after its change and
  * worded true of every arm above — apply's aim, no outcome. A reader not on this
- * list is a bug.
+ * list is a bug. cmds/update.c cmd_update says the same sentence beside a refused
+ * record phase, on its own ground and asking nothing here: each capture or deletion
+ * the phase did not record is this work by construction, so the words stay one.
  *
  * @param view The view the record is held against (must not be NULL)
  * @param records The record, as core/state.h state_records reads it (NULL when

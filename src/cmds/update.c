@@ -1825,26 +1825,32 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * are Git truth and the record follows them; the profiles that never committed
      * have nothing to write.
      *
-     * Non-fatal, and said in landed terms, in a block of its own beneath the
-     * run's line. */
+     * Non-fatal, and said in a block of its own beneath the run's line, which
+     * names what landed. */
     error_t record_err = update_write_record(ctx, commits, commit_count);
     if (record_err) {
         /* The landed commits are Git truth and the record's write failed behind
-         * them, rolled back whole: the record is what it was. The next load
-         * confirms what it finds disk agrees with — a modified file's record
-         * heals there — and a file new to the record is apply's to adopt; a
-         * deletion's record, its node gone, is reclaimed by the next apply as
-         * every absent orphan is. A directory the commits re-captured keeps the
+         * them, rolled back whole: the record is what it was. A refused phase
+         * owed a write — a commit of the way alone owes none (update_write_record)
+         * — and each capture or deletion it did not record leaves the record
+         * owing apply work against the view, by construction (core/workspace.h
+         * workspace_pending): a modified or re-stored file a stale record, which
+         * the next load confirms where disk agrees; a new one a row no owned
+         * record vouches for, which apply adopts; a re-captured directory a claim
+         * the record did not reconcile; a deletion an absent orphan, which the
+         * next apply reclaims. A directory the commits re-captured keeps the
          * ownership its record already held — apply earns none for a directory
          * (cmds/add.c add_write_record) — which is the conservative side: an
          * unowned directory is released at scope exit, never pruned. The store's
-         * refusal is said in its own words, and the remedy in landed terms —
-         * after a mid-sequence stop only some profiles committed, and the run's
-         * line above names what did. */
+         * refusal is said in its own words, and the remedy in the sentence every
+         * reader of that work says, true of every arm above — after a mid-sequence
+         * stop only some profiles committed, and the run's line above names what
+         * did. */
         output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
         output_hint(
-            out, OUTPUT_NORMAL, "Run 'dotta apply' to adopt the files the commits added"
+            out, OUTPUT_NORMAL,
+            "Run 'dotta apply' to bring the workspace in line with the enabled profiles"
         );
     }
 

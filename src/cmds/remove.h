@@ -71,7 +71,8 @@ typedef struct {
  * Executes hooks; never touches deployed files. Writes the record only for what
  * its commit knows: the reclaim of a claim it took whose node is gone, the orders,
  * a deletion's enabled row — non-fatal: Git stands even when the record write
- * fails.
+ * fails, and the run says what the refusal loses that no later load re-derives,
+ * the consent --delete-files gives.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

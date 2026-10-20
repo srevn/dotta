@@ -658,6 +658,11 @@ static bool revert_reclaims(
  * (cmds/remove.c remove_owes) — and again under it, which decides (core/state.h
  * state_begin).
  *
+ * Refused, the record stands, and the reclaim is what no later load re-derives:
+ * cmd_revert says beneath its receipt how the restored claim reads until an apply
+ * deploys it, where the profile is enabled — in a disabled one the record is an
+ * orphan, which the next apply reclaims.
+ *
  * @param ctx Dispatch context (must not be NULL)
  * @param profile The reverted profile (must not be NULL)
  * @param filesystem_path The restored claim's place here, or NULL where this
@@ -1226,11 +1231,27 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* Step 24: the record phase, at the place step 7 resolved — the restored
      * claim's (revert_write_record). Non-fatal: the commit stands, so the store's
-     * refusal is warned in its own words, a block beneath the receipt. */
+     * refusal is warned in its own words, a block beneath the receipt. What it
+     * loses, no later load re-derives: the reclaim, so the gone node's record
+     * stays, and the next load reads the restored claim's absence as the user's
+     * deletion (core/workspace.c classify_absent), which an update would commit,
+     * undoing the revert. Said where the profile is enabled, in the ordinary
+     * case's words: the restored claim standing at its place over a record of
+     * its kind. Under another profile's row, or over a record of another kind,
+     * the place reads [undeployed] instead, apply's to land; in a disabled profile
+     * the record is an orphan the next apply reclaims, and nothing reads it wrong
+     * unless an enable comes first (stated). */
     error_t record_err = revert_write_record(ctx, profile, filesystem_path);
     if (record_err) {
         output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
+        if (state_enabled(state, profile)) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Until it is deployed, '%s' reads as deleted, and an update would "
+                "undo the revert", restored.storage_path
+            );
+        }
     }
 
     /* Step 25: the next step. The revert moved the branch HEAD, and the next

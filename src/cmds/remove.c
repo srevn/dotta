@@ -404,7 +404,7 @@ cleanup:
 
 /**
  * Print what the record phase did, beneath the removal's success line: the consent
- * it recorded, or its refusal
+ * it recorded, or its refusal and what the refusal loses
  *
  * The orders the phase committed, one a copy, continue the success line, said
  * as what the next apply does with them in the ordinary case: deletes each — an
@@ -415,18 +415,32 @@ cleanup:
  *
  * A refusal is a block of its own, in the store's own words, which name the step
  * that refused. The phase is one transaction, so the refusal took every order
- * with it (remove_write_record), and what else the phase owed, every later load
- * re-derives: the next apply reclaims a gone copy's record as every absent
- * orphan's, and every load names an enabled profile with no branch, with its
- * remedy.
+ * with it (remove_write_record), and of what else the phase owed, every later
+ * load re-derives its share: the next apply reclaims a gone copy's record as
+ * every absent orphan's, and every load names an enabled profile with no branch,
+ * with its remedy. The consent --delete-files gives is the one thing no load
+ * re-derives, so where the flag was given the block says it lapsed: the question's
+ * promise negated, in its words and for the ordinary case as they are — a directory
+ * dotta owns that the next apply empties is pruned with or without the flag
+ * (core/workspace.c workspace_analyze_orphans). It names no count and no path:
+ * which copies the phase orders is decided under its lock, which a refusal may
+ * never have taken.
  *
  * Readers: remove_paths and remove_profile — one printer, the twin of
  * remove_write_record, so the two routes say one phase in one set of words.
  */
-static void remove_print_record(output_t *out, error_t record_err, size_t ordered) {
+static void remove_print_record(
+    output_t *out, const cmd_remove_options_t *opts, error_t record_err, size_t ordered
+) {
     if (record_err) {
         output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
+        if (opts->delete_files) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Deployed paths will not be deleted at the next 'dotta apply'"
+            );
+        }
     } else if (ordered > 0) {
         output_info(
             out, OUTPUT_NORMAL, "  %zu path%s will be deleted at the next 'dotta apply'",
@@ -1230,12 +1244,12 @@ static error_t remove_paths(
      * step refused, as add's, update's and apply's say it: the store's refusal
      * in its own words, which name the step — the read, the lock, the view, an
      * order, a retire or the commit. Non-fatal: the commit to Git stands, so
-     * the refusal is warned beneath the success line and the command goes on
-     * (remove_print_record), and what the phase did not write the next apply
-     * decides, as every let-go. */
+     * the refusal is warned beneath the success line, with the consent that lapsed
+     * with it, and the command goes on (remove_print_record); what the phase
+     * did not write the next apply decides, as every let-go. */
     size_t ordered = 0;
     error_t record_err = remove_write_record(ctx, opts, claims, claim_count, &ordered);
-    remove_print_record(out, record_err, ordered);
+    remove_print_record(out, opts, record_err, ordered);
 
     /* The post-remove hook, last (utils/hooks.h hook_fire_post) */
     hook_fire_post(config, out, &hook_inv);
@@ -1499,10 +1513,11 @@ static error_t remove_profile(
      * next apply's orphan compare reads it under the record's own binding, and
      * subkey derivation needs only the profile name. Non-fatal: the branch is
      * gone and stands, so the store's refusal is warned in its own words beneath
-     * the success line and the command goes on (remove_print_record). */
+     * the success line, with the consent that lapsed with it, and the command
+     * goes on (remove_print_record). */
     size_t ordered = 0;
     error_t record_err = remove_write_record(ctx, opts, claims, claim_count, &ordered);
-    remove_print_record(out, record_err, ordered);
+    remove_print_record(out, opts, record_err, ordered);
 
     /* Push the deletion to the remote, unless the profile was never pushed there
      * (remote_name NULL, above): sync needs it, since other repositories learn

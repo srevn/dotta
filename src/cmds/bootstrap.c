@@ -275,10 +275,10 @@ static error_t bootstrap_run(
         /* The set searched, as the line selected it */
         output_info(
             out, OUTPUT_NORMAL, opts->profile_count > 0
-                ? "No bootstrap scripts found in the named profiles."
+                ? "No bootstrap scripts found in the named profiles"
                 : opts->all_profiles
-                ? "No bootstrap scripts found in any profile."
-                : "No bootstrap scripts found in enabled profiles."
+                ? "No bootstrap scripts found in any profile"
+                : "No bootstrap scripts found in enabled profiles"
         );
         output_gap(out, OUTPUT_NORMAL);
         output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
@@ -347,7 +347,7 @@ static error_t bootstrap_run(
 
     if (!opts->dry_run) {
         output_gap(out, OUTPUT_NORMAL);
-        output_success(out, OUTPUT_NORMAL, "Bootstrap complete!");
+        output_success(out, OUTPUT_NORMAL, "Bootstrap complete");
     }
 
     return NULL;

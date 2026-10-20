@@ -12,6 +12,10 @@
  * number as printf writes it. A string handed to output any other way — a list's
  * title, tags and rows — is a datum whole. Bytes as they are reach the stream
  * through output_write alone: a payload the user asked to see verbatim.
+ *
+ * A line closes as a message does (base/error.h "Messages"), with no period and
+ * no exclamation mark: a question keeps its question mark, and a progress line
+ * git's "done." (sys/transfer.h transfer_op_end).
  */
 
 #ifndef DOTTA_OUTPUT_H

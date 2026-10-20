@@ -1234,11 +1234,11 @@ static void update_print_preview(output_t *out, const update_partition_t *partit
         output_gap(out, OUTPUT_NORMAL);
         output_info(
             out, OUTPUT_NORMAL, "These files will be encrypted on the next commit, "
-            "per auto_encrypt in your config's [encryption] section."
+            "per auto_encrypt in your config's [encryption] section"
         );
         output_info(
             out, OUTPUT_NORMAL, "To keep a file as plaintext, "
-            "narrow the pattern that matches it before this commit."
+            "narrow the pattern that matches it before this commit"
         );
     }
 }

@@ -134,7 +134,7 @@ static error_t key_clear(const dotta_ctx_t *ctx) {
         out, OUTPUT_VERBOSE,
         "Cache location: ~/.cache/dotta/session-<epoch>\n"
         "You will be prompted for your passphrase on the next "
-        "operation that requires encryption or decryption.\n"
+        "operation that requires encryption or decryption\n"
     );
 
     return NULL;

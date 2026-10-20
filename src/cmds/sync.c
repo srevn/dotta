@@ -1670,7 +1670,7 @@ static error_t sync_guard(const dotta_ctx_t *ctx, const scope_t *scope, sync_gua
          * of conflicts alone has none, update refusing every one */
         if (blocking_count > conflict_count) {
             output_info(
-                out, OUTPUT_NORMAL, "Syncing before 'update' may lead to conflicts."
+                out, OUTPUT_NORMAL, "Syncing before 'update' may lead to conflicts"
             );
         }
     } else {
@@ -2068,7 +2068,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             }
             output_info(
                 out, OUTPUT_NORMAL,
-                "  Their profile has no deployment target here, so nothing lands them."
+                "  Their profile has no deployment target here, so nothing lands them"
             );
             output_info(
                 out, OUTPUT_NORMAL,
@@ -2101,7 +2101,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  The same profile names each of these places otherwise; "
-                "'dotta status -v' pairs them."
+                "'dotta status -v' pairs them"
             );
             output_info(
                 out, OUTPUT_NORMAL,
@@ -2135,7 +2135,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  Another claim of the same profile leaves each no room, so nothing "
-                "lands them."
+                "lands them"
             );
             output_info(
                 out, OUTPUT_NORMAL,

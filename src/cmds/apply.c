@@ -761,7 +761,7 @@ static void apply_print_reassignments(
     }
     output_info(
         out, OUTPUT_NORMAL,
-        "  These paths will now be managed by a different profile."
+        "  These paths will now be managed by a different profile"
     );
 }
 
@@ -1723,7 +1723,7 @@ static void apply_print_cleanup_preview(
             output_print(out, OUTPUT_NORMAL, " {dim}(from %s){reset}\n", item->profile);
         }
 
-        output_info(out, OUTPUT_NORMAL, "  Nothing on disk was touched.");
+        output_info(out, OUTPUT_NORMAL, "  Nothing on disk was touched");
     }
 }
 
@@ -2375,7 +2375,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
             output_info(
                 out, OUTPUT_NORMAL,
-                "  Their profile has no deployment target here, so nothing lands them."
+                "  Their profile has no deployment target here, so nothing lands them"
             );
             output_info(
                 out, OUTPUT_NORMAL,
@@ -2412,7 +2412,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  The same profile names each of these places otherwise; "
-                "'dotta status -v' pairs them."
+                "'dotta status -v' pairs them"
             );
             output_info(
                 out, OUTPUT_NORMAL,
@@ -2450,7 +2450,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  Another claim of the same profile leaves each no room, so nothing "
-                "lands them."
+                "lands them"
             );
             output_info(
                 out, OUTPUT_NORMAL,
@@ -2482,7 +2482,7 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
             output_info(
                 out, OUTPUT_NORMAL,
-                "  Enabled, but Git holds no branch for them, so they contribute nothing."
+                "  Enabled, but Git holds no branch for them, so they contribute nothing"
             );
             output_info(
                 out, OUTPUT_NORMAL,

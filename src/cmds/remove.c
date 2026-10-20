@@ -827,7 +827,7 @@ static void remove_print_overlaps(
     output_gap(out, OUTPUT_NORMAL);
     output_info(
         out, OUTPUT_NORMAL,
-        "These paths will be removed only from profile '%s'.",
+        "These paths will be removed only from profile '%s'",
         current_profile
     );
 
@@ -838,11 +838,11 @@ static void remove_print_overlaps(
         if (overlaps->entries[i].provided) {
             output_warning(
                 out, OUTPUT_NORMAL,
-                "Some paths are provided by another enabled profile."
+                "Some paths are provided by another enabled profile"
             );
             output_info(
                 out, OUTPUT_NORMAL,
-                "Those paths will remain on the filesystem."
+                "Those paths will remain on the filesystem"
             );
             break;
         }

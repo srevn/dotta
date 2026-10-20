@@ -1269,7 +1269,7 @@ output_answer_t output_ask_destructive(output_t *ctx, const char *fmt, ...) {
 
     line_t line;
     output_start(&line, ctx, stderr);
-    output_appendf(&line, "{bold;yellow}Warning:{reset} This is a destructive operation!\n");
+    output_appendf(&line, "{bold;yellow}Warning:{reset} This is a destructive operation\n");
     output_put(&line);
 
     va_list args;

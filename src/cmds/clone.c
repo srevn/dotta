@@ -600,7 +600,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     /* Success - print messages before cleanup */
     output_gap(out, OUTPUT_NORMAL);
-    output_success(out, OUTPUT_NORMAL, "Dotta repository cloned successfully!");
+    output_success(out, OUTPUT_NORMAL, "Dotta repository cloned successfully");
 
     /* Non-fatal — the clone itself succeeded, and the exit code is the clone's.
      * What the clone may not claim is that the bootstrap finished: a script that
@@ -612,7 +612,7 @@ error_t cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 out, OUTPUT_NORMAL, "Bootstrap stopped at profile '%s'", bootstrap.stopped
             );
         } else {
-            output_success(out, OUTPUT_NORMAL, "Bootstrap complete!");
+            output_success(out, OUTPUT_NORMAL, "Bootstrap complete");
         }
     }
 

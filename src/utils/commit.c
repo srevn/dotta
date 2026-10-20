@@ -68,34 +68,32 @@ static void commit_time(time_t now, const char *format, char *buf, size_t size) 
 }
 
 /**
- * Get action name in present tense
+ * The action's name, as {action} renders it
  *
  * Every action, and no default arm: -Wswitch names this function and its past
- * tense the day a sixth action lands, where a default would have rendered the
+ * tense the day a fifth action lands, where a default would have rendered the
  * new one "Unknown" into a commit nobody re-reads. What falls past the switch
  * is a value no enumerator names, which only a cast can produce, and it dies
  * rather than name itself "Unknown" there (base/error.h CHECK_ARG).
  */
-const char *commit_action_name(commit_action_t action) {
+static const char *commit_action_name(commit_action_t action) {
     switch (action) {
         case COMMIT_ACTION_ADD:    return "Add";
         case COMMIT_ACTION_UPDATE: return "Update";
         case COMMIT_ACTION_REMOVE: return "Remove";
-        case COMMIT_ACTION_SYNC:   return "Sync";
         case COMMIT_ACTION_REVERT: return "Revert";
     }
     CHECK_ARG(false, "a commit action no enumerator names");
 }
 
 /**
- * Get action name in past tense
+ * The action's name in the past tense, as {action_past} renders it
  */
-const char *commit_action_name_past(commit_action_t action) {
+static const char *commit_action_name_past(commit_action_t action) {
     switch (action) {
         case COMMIT_ACTION_ADD:    return "Added";
         case COMMIT_ACTION_UPDATE: return "Updated";
         case COMMIT_ACTION_REMOVE: return "Removed";
-        case COMMIT_ACTION_SYNC:   return "Synced";
         case COMMIT_ACTION_REVERT: return "Reverted";
     }
     CHECK_ARG(false, "a commit action no enumerator names");

@@ -11,14 +11,16 @@
 #include <types.h>
 
 /**
- * Action types for commit messages
+ * The action a commit's title names: its writer's
+ *
+ * One for each command that commits through the template; every other commit
+ * dotta makes — ignore's, bootstrap's, the epoch's — words its own message.
  */
 typedef enum {
-    COMMIT_ACTION_ADD,      /* Adding new files to profile */
-    COMMIT_ACTION_UPDATE,   /* Updating existing files */
-    COMMIT_ACTION_REMOVE,   /* Removing files from profile */
-    COMMIT_ACTION_SYNC,     /* Syncing from filesystem */
-    COMMIT_ACTION_REVERT    /* Reverting files to previous state */
+    COMMIT_ACTION_ADD,      /* cmds/add.c */
+    COMMIT_ACTION_UPDATE,   /* cmds/update.c */
+    COMMIT_ACTION_REMOVE,   /* cmds/remove.c */
+    COMMIT_ACTION_REVERT    /* cmds/revert.c */
 } commit_action_t;
 
 /**
@@ -60,8 +62,8 @@ typedef struct {
  *   {host}          - System hostname
  *   {user}          - The invoker's username (the human behind sudo)
  *   {profile}       - Profile name
- *   {action}        - Action (Add, Update, Remove, Sync, Revert)
- *   {action_past}   - Past tense (Added, Updated, Removed, Synced, Reverted)
+ *   {action}        - Action (Add, Update, Remove, Revert)
+ *   {action_past}   - Past tense (Added, Updated, Removed, Reverted)
  *   {count}         - Number of paths, both kinds
  *   {date}          - Local date (YYYY-MM-DD)
  *   {datetime}      - Local timestamp with timezone (ISO 8601)
@@ -85,21 +87,5 @@ typedef struct {
 const char *commit_message(
     arena_t *arena, const config_t *config, const commit_message_context_t *ctx
 );
-
-/**
- * Get action name in present tense
- *
- * @param action Action type
- * @return Static string ("Add", "Update", "Remove", "Sync", "Revert")
- */
-const char *commit_action_name(commit_action_t action);
-
-/**
- * Get action name in past tense
- *
- * @param action Action type
- * @return Static string ("Added", "Updated", "Removed", "Synced", "Reverted")
- */
-const char *commit_action_name_past(commit_action_t action);
 
 #endif /* DOTTA_COMMIT_H */

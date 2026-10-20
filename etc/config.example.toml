@@ -242,8 +242,8 @@ diverged_strategy = "warn"
 #   {host}          - System hostname (from gethostname())
 #   {user}          - The invoker's username (the human behind sudo)
 #   {profile}       - Profile name
-#   {action}        - Action (Add, Update, Remove, Sync, Revert)
-#   {action_past}   - Past tense (Added, Updated, Removed, Synced, Reverted)
+#   {action}        - Action (Add, Update, Remove, Revert)
+#   {action_past}   - Past tense (Added, Updated, Removed, Reverted)
 #   {count}         - Number of paths, both kinds
 #   {date}          - Local date (YYYY-MM-DD)
 #   {datetime}      - Local timestamp with timezone (ISO 8601 format)

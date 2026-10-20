@@ -1033,9 +1033,9 @@ static error_t update_execute(
  * the summary's one line at the end of the run, not the preview's.
  *
  * @param out Output context (must not be NULL)
- * @param partition The partition, whose fates are read (must not be NULL; a named
- *                  run whose rows all held still has none to preview — its filter
- *                  context printed ahead of the census)
+ * @param partition The partition, whose fates are read (must not be NULL; one
+ *                  that accepted nothing has nothing to preview, every fate being
+ *                  an accepted item's)
  */
 static void update_print_preview(output_t *out, const update_partition_t *partition) {
     CHECK_NULL(out);
@@ -1327,7 +1327,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (err) return err;
 
     /* The run's filter context, ahead of everything the filter says against it:
-     * the verbose "Excluded" log, the census, the nothing-exit and the preview.
+     * the verbose "Excluded" log, the census, the preview and the nothing-exit.
      * Verbose, as the log it heads is: at NORMAL it would say back the flags
      * the user typed, the nothing-exit naming the two modes in its own words */
     if (opts->only_new) {
@@ -1656,23 +1656,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
     }
 
-    /* Check if we have anything to update — or, on a named run, any chains to
-     * re-derive: whether a chain moved is the walk's to discover, so the named
-     * run proceeds on the slice alone and the summary says what came of it */
-    if (partition.accepted.count == 0 && derive_rows.count == 0) {
-        output_gap(out, OUTPUT_NORMAL);
-        if (opts->only_new) {
-            output_info(out, OUTPUT_NORMAL, "No new files to add");
-        } else if (opts->include_new) {
-            output_info(out, OUTPUT_NORMAL, "No modified or new files/directories to update");
-        } else {
-            output_info(out, OUTPUT_NORMAL, "No modified files or directories to update");
-        }
-        return NULL;
-    }
-
-    /* Preview: what this run will do, grouped by the fates the partition
-     * answered */
+    /* Preview: what this run will do, grouped by the fates the partition answered,
+     * and nothing where it accepted nothing */
     update_print_preview(out, &partition);
 
     /* The run's work: the accepted items — less the new files, where the user
@@ -1685,8 +1670,8 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * asked beneath the preview that lists what it narrows and before the hook,
      * and binding no dry run, which executes nothing. Declining keeps the rest
      * of the run — the preview named the new files separately, and the receipt
-     * reports what actually happens. What is left is asked the nothing-exit's
-     * own question, so a named run whose only accepted items were new files still
+     * reports what actually happens — and the nothing-exit below asks what is
+     * left, so a named run whose only accepted items were new files still
      * re-derives the chains it named. */
     if (!opts->dry_run && partition.new_files.count > 0 && config->confirm_new_files &&
         !opts->include_new && !opts->only_new) {
@@ -1718,16 +1703,25 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 work.count -= partition.new_files.count;
                 break;
         }
+    }
 
-        /* Nothing left: the new files were the run's whole work, and they were
-         * left out — a run with nothing to do, which fires no hook */
-        if (work.count == 0 && derive_rows.count == 0) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "No modified files remaining after skipping new files"
-            );
-            return NULL;
+    /* Anything to update — or, on a named run, any chains to re-derive: whether
+     * a chain moved is the walk's to discover, so the named run proceeds on the
+     * slice alone and the summary says what came of it. Asked once the work is
+     * decided, so a run the question emptied — its new files the whole of it,
+     * left out — ends in the same verdict as one that accepted nothing, in the
+     * words of the mode it ran in (the question is asked under neither flag),
+     * and fires no hook */
+    if (work.count == 0 && derive_rows.count == 0) {
+        output_gap(out, OUTPUT_NORMAL);
+        if (opts->only_new) {
+            output_info(out, OUTPUT_NORMAL, "No new files to add");
+        } else if (opts->include_new) {
+            output_info(out, OUTPUT_NORMAL, "No modified or new files/directories to update");
+        } else {
+            output_info(out, OUTPUT_NORMAL, "No modified files or directories to update");
         }
+        return NULL;
     }
 
     /* The pre-update hook, over the decided run — the nothing-exit and the

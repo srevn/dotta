@@ -1033,7 +1033,7 @@ static error_t remove_paths(
                     claims[kept++] = claims[i];
                     break;
                 case OUTPUT_ANSWER_NO:
-                    output_info(out, OUTPUT_VERBOSE, "Skipped: %s", claims[i].storage_path);
+                    output_info(out, OUTPUT_VERBOSE, "Kept: %s", claims[i].storage_path);
                     break;
                 case OUTPUT_ANSWER_NONE:
                     err = error_create(
@@ -1115,7 +1115,7 @@ static error_t remove_paths(
             break;
         case OUTPUT_ANSWER_NO:
             output_gap(out, OUTPUT_NORMAL);
-            output_print(out, OUTPUT_NORMAL, "Cancelled\n");
+            output_info(out, OUTPUT_NORMAL, "Cancelled");
             goto cleanup;  /* err is NULL, will return success */
         case OUTPUT_ANSWER_NONE:
             err = error_create(
@@ -1440,7 +1440,7 @@ static error_t remove_profile(
                 break;
             case OUTPUT_ANSWER_NO:
                 output_gap(out, OUTPUT_NORMAL);
-                output_print(out, OUTPUT_NORMAL, "Cancelled\n");
+                output_info(out, OUTPUT_NORMAL, "Cancelled");
                 goto cleanup;  /* err is NULL, will return success */
             case OUTPUT_ANSWER_NONE:
                 err = error_create(

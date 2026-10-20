@@ -305,7 +305,7 @@ static error_t bootstrap_run(
                 break;
             case OUTPUT_ANSWER_NO:
                 output_gap(out, OUTPUT_NORMAL);
-                output_info(out, OUTPUT_NORMAL, "Bootstrap cancelled.");
+                output_info(out, OUTPUT_NORMAL, "Cancelled");
                 return NULL;
             case OUTPUT_ANSWER_NONE:
                 return error_create(

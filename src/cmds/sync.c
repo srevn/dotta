@@ -1037,24 +1037,30 @@ static void sync_render_dry_run(
  * 'warn'.
  *
  * Pure, and deliberately so: the per-profile errors stay in the rows of `results`
- * that borrow them and are never rethrown, since each was already rendered where
- * it happened. The message carries the one fact no row says — how much of the
- * run the failures were.
+ * that borrow them and are never rethrown, since each was already said where it
+ * happened. The message carries what no row says — how much of the run the failures
+ * were — and names their profiles in the scope's order: the one line a configured
+ * quiet, which says no row, reads which failed by.
  */
-static error_t sync_failure(const sync_results_t *results) {
-    size_t failed = 0;
+static error_t sync_failure(arena_t *arena, const sync_results_t *results) {
+    string_array_t failed;
+    string_array_init(&failed, arena, 0);
     for (size_t i = 0; i < results->profile_count; i++) {
-        if (results->profiles[i].error) failed++;
+        if (results->profiles[i].error) {
+            string_array_push(&failed, results->profiles[i].profile);
+        }
     }
 
-    if (failed == 0) return NULL;
+    if (failed.count == 0) return NULL;
 
     /* The plural agrees with the total, which is the noun it qualifies: "1 of 2
-     * profiles failed", "1 of 1 profile failed". */
+     * profiles failed", "1 of 1 profile failed". The names are joined in the
+     * arena the caller lent. */
     return error_create(
-        ERR_GIT, "%zu of %zu profile%s failed to sync",
-        failed, results->profile_count,
-        results->profile_count == 1 ? "" : "s"
+        ERR_GIT, "%zu of %zu profile%s failed to sync (%s)",
+        failed.count, results->profile_count,
+        results->profile_count == 1 ? "" : "s",
+        string_array_join(arena, &failed, ", ")
     );
 }
 
@@ -1787,7 +1793,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * dry run failed to answer, not a profile it found no work for. */
     if (opts->dry_run) {
         sync_render_dry_run(&results, out);
-        err = sync_failure(&results);
+        err = sync_failure(ctx->arena, &results);
         goto cleanup;
     }
 
@@ -2079,7 +2085,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     hook_fire_post(config, out, &hook_inv);
 
     /* The receipt is printed; the return value is what the caller reads. */
-    err = sync_failure(&results);
+    err = sync_failure(ctx->arena, &results);
 
 cleanup:
     /* The one handle the run holds: the transfer, whose close commits the

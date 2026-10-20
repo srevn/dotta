@@ -759,7 +759,9 @@ static error_t update_profile(
  * workspace_analyze_orphans).
  *
  * Algorithm:
- *   1. No commit landed: nothing to write, and no lock taken to write it
+ *   1. No landed commit captured or deleted — none landed, or each re-derived
+ *      the way alone, whose rungs are the next apply's (above): nothing to write,
+ *      and no lock taken to write it
  *   2. Begin write transaction on caller's handle
  *   3. Build the post-commit view once, under the lock; one lookup per committed
  *      path, and the record read under the same lock, once per commit that deleted
@@ -800,8 +802,13 @@ static error_t update_write_record(
 ) {
     CHECK_NULL(ctx);
 
-    /* Nothing landed: nothing to write, and no lock to take for it */
-    if (commit_count == 0) return NULL;
+    /* No landed commit captured or deleted — none landed, or each re-derived
+     * the way alone: nothing to write, and no lock to take for it */
+    size_t owed = 0;
+    for (size_t c = 0; c < commit_count; c++) {
+        owed += commits[c].captured_count + commits[c].deleted_count;
+    }
+    if (owed == 0) return NULL;
 
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;

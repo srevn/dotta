@@ -405,8 +405,9 @@ prints without bound fills it while it runs.
 
 Under `-v` (`--verbose`, or `verbosity = "verbose"` in `[output]`) a
 hook's stdout and stderr are dotta's own instead: what it prints
-reaches the terminal as it prints it, between dotta's own lines, and
-nothing is kept — a failing hook's output stands where it wrote it.
+reaches the terminal as it prints it, beneath a line naming the hook
+(`Running hook 'post-add'...`), and nothing is kept — a failing hook's
+output stands where it wrote it.
 
 This matters for long-running `post-*` scripts (webhook callouts,
 desktop notifications, notification daemons). If you want visible

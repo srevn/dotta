@@ -107,8 +107,8 @@ typedef struct {
  * layer could not make; a hook writing without bound fills that directory while
  * it runs; and what a hook prints stands there until the file's last close. Under
  * -v the hook's stdout and stderr are dotta's own instead, live as it writes
- * them (sys/process.h PROCESS_OUTPUT_INHERIT), and nothing is kept: a failing
- * hook's output stands where the hook wrote it.
+ * them beneath a line naming the hook (sys/process.h PROCESS_OUTPUT_INHERIT),
+ * and nothing is kept: a failing hook's output stands where the hook wrote it.
  *
  * The hook runs in dotta's process group, as git's do (sys/process.h): the terminal
  * is its as dotta's — a line written to /dev/tty, an answer read from it — and

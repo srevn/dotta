@@ -189,7 +189,8 @@ static error_t hook_failure(
  * why, git's advice (lib/git/hook.c find_hook); and a hooks directory whose names
  * cannot be looked up is said by the pre-fire alone, which every post-fire follows.
  * A runnable hook runs through the unified process primitive under the invocation's
- * environment (hook_env), its outcome its failure (hook_failure). The run's result
+ * environment (hook_env), its outcome its failure (hook_failure), and under -v
+ * beneath a line naming it, its output live on dotta's streams. The run's result
  * is the caller's, its stdout/stderr read from the file they went into whatever
  * the outcome, so the caller prints it beside a failure (hook_print_output) and
  * disposes it on every path.
@@ -199,10 +200,10 @@ static error_t hook_fire(
     hook_phase_t phase, process_result_t *out_result
 ) {
     /* The hook's name, its path and the spawn's environment, in a frame of the
-     * call's own: the name and the path read by the lookup below, its notice
-     * and the child's exec, the environment by the child at its exec, all dropped
-     * with the frame once the hook has run. The directory is the one the
-     * configuration settled (utils/config.h). */
+     * call's own: the name and the path read by the lookup below, its notice,
+     * its -v line and the child's exec, the environment by the child at its exec,
+     * all dropped with the frame once the hook has run. The directory is the
+     * one the configuration settled (utils/config.h). */
     arena_t *frame = arena_create(0);
     const char *hook_name = arena_str_format(
         frame, "%s-%s", phase == HOOK_PHASE_PRE ? "pre" : "post", hook_word(inv->cmd)
@@ -261,6 +262,15 @@ static error_t hook_fire(
         .work_dir_fallback = NULL,
         .timeout_seconds   = config->hook_timeout,
     };
+
+    /* Under -v the hook writes dotta's own streams, a writer the report cannot
+     * see, so the block its lines stand in is opened by a line of dotta's naming
+     * it, as bootstrap's row names its script — landed above the hook's first
+     * byte, the primitive flushing every stream before its fork (sys/process.h).
+     * The level is the condition: the line prints exactly where the policy is
+     * INHERIT. */
+    output_gap(out, OUTPUT_VERBOSE);
+    output_info(out, OUTPUT_VERBOSE, "Running hook '%s'...", hook_name);
 
     /* The primitive's own refusals — a pipe, a fork, a wait — name the hook by
      * its path, the program they were handed */

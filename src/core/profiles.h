@@ -787,9 +787,9 @@ error_t profile_find(
  *     sys/stage's half (sys/stage.h stage_put, stage_put_blob, stage_admit_blob).
  *     A claim the base holds contradicted is never in the way, so writing again
  *     the blob that contradicts it carries it; nor is a derived claim, which
- *     what anchors it refuses on its own, and the prune takes where nothing does.
- *     A directory admitted is a claim the commit carries from its admission, so
- *     a blob chosen above it later meets it as it meets one the base holds;
+ *     what stands beneath it refuses on its own, and the prune takes where nothing
+ *     does. A directory admitted is a claim the commit carries from its admission,
+ *     so a blob chosen above it later meets it as it meets one the base holds;
  *   - the ancestors: a derived claim exists iff something tracked stands beneath
  *     it, and four edits keep that — the climb, which claims the way to a leaf
  *     from the disk, each rung where its own name resolves
@@ -1069,17 +1069,15 @@ error_t profile_capture_directory(
  *     and drives no commit;
  *   - anything else retires every derived claim the profile holds at that place,
  *     under each name a root of the profile's strictly above it gives the place,
- *     each key appended to `retired`: the disk answers about a place, and a profile
+ *     each counted in `retired`: the disk answers about a place, and a profile
  *     bound after its first captures derives one place under two names
  *     (core/manifest.h manifest_lookup_claim's note);
  *   - no answer — an unbound custom/ name, nothing there, nothing this host could
  *     see, an owner it cannot name — leaves the rung as it is: no answer is not
  *     an answer of "no".
- * The two outs are shaped by what a writer can do with them: a claim authored
- * has no consequence beyond the sheet, so its count is the whole report, while
- * a claim retired leaves the view by the commit, and a writer's message names
- * it by its key (cmds/update.c update_profile) — one key a name, so two keys
- * can place one path.
+ * Both outs are counts: a derived claim is the way to the claims, never one, so
+ * no message names it (profile_changes, utils/commit.h), and a count is the whole
+ * of what a writer says of either.
  *
  * Total and idempotent: nothing refuses the climb and no rung stops it, and each
  * climb decides every rung it passes, so a rung two leaves share is decided at
@@ -1101,16 +1099,15 @@ error_t profile_capture_directory(
  *                     meets with a name it composed or validated (must not be NULL)
  * @param captured Count of rungs whose claim the climb authored or changed, added
  *                 to (must not be NULL)
- * @param retired Keys the climb retired, every name of each place it retired
- *                at, appended as copies in the array's arena (must not be NULL;
- *                given its arena by string_array_init)
+ * @param retired Count of derived claims the climb retired, every name of each
+ *                place it retired at, added to (must not be NULL)
  */
 void profile_capture_ancestors(
     profile_draft_t *draft,
     const mount_table_t *mounts,
     const char *storage_path,
     size_t *captured,
-    string_array_t *retired
+    size_t *retired
 );
 
 /**
@@ -1233,6 +1230,10 @@ typedef struct {
  * may ask it. A commit whose explicit claims all stand moved only the way: every
  * writer's edit moves an explicit claim or the way to one, dotta's own file riding
  * a capture (profile_put_machinery).
+ *
+ * Readers: cmds/add.c add_commit, cmds/update.c update_profile, cmds/remove.c
+ * remove_paths and cmds/revert.c cmd_revert, each composing its message
+ * (utils/commit.h commit_message). A reader not on this list is a bug.
  *
  * @param draft The draft, every edit in (must not be NULL)
  * @param arena The arena the lists and their names live in (must not be NULL)

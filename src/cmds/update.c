@@ -136,14 +136,14 @@ static error_t update_capture(
  *
  * Filled by the walk that does the work — one edit per item on the profile's
  * draft: the capture for a file, the claim capture for a directory, the removal
- * for a deletion — and read back by the commit message, the run's line and the
- * record phase (update_write_record), so each follows the commit and nothing
- * else: an item the walk skipped (a directory the race guard refused) lands in
- * no list, is not named, and gets no record write. Whether the commit landed at
- * all is the commit's own answer (core/profiles.h profile_commit) — a walk whose
- * edits leave both documents as the draft opened them lands none, whatever its
- * lists hold — and the executor hands on only the bookkeeping of a commit that
- * landed (update_execute).
+ * for a deletion — and read back by the run's line and the record phase
+ * (update_write_record), so each follows the commit and nothing else: an item
+ * the walk skipped (a directory the race guard refused) lands in no list and
+ * gets no record write. The message is the draft's, never these lists
+ * (update_profile). Whether the commit landed at all is the commit's own answer
+ * (core/profiles.h profile_commit) — a walk whose edits leave both documents as
+ * the draft opened them lands none, whatever its lists hold — and the executor
+ * hands on only the bookkeeping of a commit that landed (update_execute).
  *
  * A capture is kept as the record of what it committed — the node the capture
  * held to, the blob the commit holds at the name, the triple its bytes were read
@@ -154,10 +154,9 @@ static error_t update_capture(
  * (workspace lifetime) and the command arena's (the claim's, which the capture
  * answers there). A deletion is kept as the item it took, the workspace's, which
  * the command arena holds past the record phase: its path is where the phase
- * reclaims the record of the node already gone, and its name what the message
- * names. What the climb drops, the walk names in the message and counts at -v,
- * and what the prune takes it counts (update_profile); the record of each is
- * the next apply's to decide.
+ * reclaims the record of the node already gone. What the climb retires and what
+ * the prune takes, the walk counts at -v (update_profile); the record of each
+ * is the next apply's to decide.
  *
  * Memory: every member is the command arena's, and nothing frees a commit.
  */
@@ -452,8 +451,8 @@ static error_t update_profile(
          * contradicted stands again once the blob is gone (core/profiles.h
          * profile_remove). The row said the profile holds it, so one the commit
          * lacks — another writer's commit since the load — is the model's error
-         * and stops the run, never a no-op. Then the bookkeeping, so the message
-         * names it and the record phase reclaims it */
+         * and stops the run, never a no-op. Then the bookkeeping, so the record
+         * phase reclaims it */
         if (item->state == WORKSPACE_STATE_DELETED) {
             error_t err = profile_remove(draft, item->item_kind, item->storage_path);
             if (err) return err;
@@ -625,12 +624,10 @@ static error_t update_profile(
      * retires: a leaf beneath a squatted rung was refused at the filter (the
      * route's displaced arms), whichever profile's claim the squatter displaced,
      * so a chain that reaches here holds directories at every claimed rung. Its
-     * two outs: the claims it authored or refreshed, and the ones it retired,
-     * by key — each counted for the lines below, and a retired one named in the
-     * message, the record of each the next apply's to decide. */
+     * two outs count the claims it authored or refreshed and the ones it retired,
+     * for the lines below, the record of each the next apply's to decide. */
     size_t ancestors_captured = 0;
-    string_array_t ancestors_retired;
-    string_array_init(&ancestors_retired, ctx->arena, 0);
+    size_t ancestors_retired = 0;
     for (size_t i = 0; i < commit->captured_count; i++) {
         profile_capture_ancestors(
             draft, ctx->run.mounts, commit->captured[i].storage_path, &ancestors_captured,
@@ -655,48 +652,32 @@ static error_t update_profile(
 
     if (ancestors_captured > 0) {
         output_info(
-            out, OUTPUT_VERBOSE, "  Captured %zu ancestor director%s",
-            ancestors_captured, ancestors_captured == 1 ? "y" : "ies"
+            out, OUTPUT_VERBOSE, "  Captured %zu ancestor claim%s",
+            ancestors_captured, ancestors_captured == 1 ? "" : "s"
         );
     }
-    if (ancestors_retired.count > 0) {
+    if (ancestors_retired > 0) {
         output_info(
-            out, OUTPUT_VERBOSE, "  Dropped %zu ancestor claim%s",
-            ancestors_retired.count, ancestors_retired.count == 1 ? "" : "s"
+            out, OUTPUT_VERBOSE, "  Retired %zu ancestor claim%s",
+            ancestors_retired, ancestors_retired == 1 ? "" : "s"
         );
     }
 
-    /* Build array of storage paths for commit message: what the commit captured
-     * and what it let go — the bookkeeping, so an item the walk skipped is not
-     * named. Both kinds, a captured directory claim being a path the commit took
-     * as surely as a blob is (utils/commit.h). A retired claim is named with
-     * them (it leaves the view by this commit); an authored one only rides, as
-     * what the commit's prune takes does, so a derivation that only refreshed
-     * names nothing and the message's path list says so. */
-    size_t named_count = commit->captured_count + commit->deleted_count + ancestors_retired.count;
-    const char **storage_paths = arena_calloc(
-        ctx->arena, named_count, sizeof(*storage_paths)
-    );
+    /* What the commit changes of the profile's claims, read off the draft as
+     * the walk and both climbs left it (core/profiles.h profile_changes): the
+     * message names that, never the bookkeeping, which is the record's and the
+     * run line's */
+    profile_changes_t changes;
+    error_t err = profile_changes(draft, ctx->arena, &changes);
+    if (err) return err;
 
-    size_t named = 0;
-    for (size_t i = 0; i < commit->captured_count; i++) {
-        storage_paths[named++] = commit->captured[i].storage_path;
-    }
-    for (size_t i = 0; i < commit->deleted_count; i++) {
-        storage_paths[named++] = commit->deleted[i]->storage_path;
-    }
-    for (size_t i = 0; i < ancestors_retired.count; i++) {
-        storage_paths[named++] = ancestors_retired.entries[i];
-    }
-
-    /* Build commit message context */
-    commit_message_context_t msg_ctx = {
-        .action        = COMMIT_ACTION_UPDATE,
-        .profile       = profile,
-        .paths         = storage_paths,
-        .path_count    = named_count,
-        .custom_msg    = opts->message,
-        .target_commit = NULL
+    const commit_message_context_t msg_ctx = {
+        .action     = COMMIT_ACTION_UPDATE,
+        .profile    = profile,
+        .added      = changes.added,
+        .updated    = changes.updated,
+        .removed    = changes.removed,
+        .custom_msg = opts->message,
     };
 
     /* The commit, where an edit moved either document: a capture, a deletion,
@@ -710,7 +691,7 @@ static error_t update_profile(
      * holds, which a hook rewriting a file between the decision and the capture
      * makes */
     size_t pruned = 0;
-    error_t err = profile_commit(
+    err = profile_commit(
         draft, commit_message(ctx->arena, ctx->config, &msg_ctx), &commit->committed, &pruned
     );
     if (err) return err;
@@ -1385,7 +1366,7 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * verb — the split apply prints from the fate-borne ancestry: DISPLACED_TRACKED
      * beneath the user's squatter a plan holds, which --force replaces;
      * DISPLACED_DERIVED beneath the user's squatter at a rung, which the named
-     * re-derivation drops; DISPLACED_STALE and DISPLACED_CONFLICT beneath dotta's
+     * re-derivation retires; DISPLACED_STALE and DISPLACED_CONFLICT beneath dotta's
      * own copy Git moved past, said in the squatter's own words, which apply
      * replaces unasked and under --force. And the retyped pair arrives split
      * from the route by the claim that holds the offender (KIND on a row a plan

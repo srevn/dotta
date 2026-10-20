@@ -902,7 +902,7 @@ static error_t add_refuse_excluded(
  * makes one, and the replace retires the record it wrote through the link with
  * the rows' (cmds/apply.c apply_write_record); a disabled profile's own rung
  * off the chain is admitted, and the capture is displaced at the profile's enable,
- * where status names the rung and `dotta update <dir>` drops it; an enabled
+ * where status names the rung and `dotta update <dir>` retires it; an enabled
  * profile's sheet that will not load refuses an add with a link above it, as it
  * refuses the verbs that build the view; and the reading is by spelling, so a
  * case fold or a second spelling of a claimed link or of dotta's node escapes
@@ -1066,7 +1066,7 @@ static error_t add_refuse_ancestry(
 
         /* A directory a profile only passes through: another profile's rung, or
          * one of the capturing profile's own off the chain, which its climb never
-         * meets — the named update drops it, as status says of the squatter */
+         * meets — the named update retires it, as status says of the squatter */
         return error_create(
             ERR_INVALID_ARG, "'%s' would be read through the link at '%s', where "
             "profile '%s' passes through a directory; dotta update %s re-derives "
@@ -1512,12 +1512,13 @@ static error_t add_capture(const add_walk_t *walk, add_path_t *path) {
 /**
  * Commit the profile's draft
  *
- * The message names both kinds this commit carries — the message's unit is the
- * path (utils/commit.h), and a commit that claimed a directory and no file has
- * a path to name and no file — so the walk goes in, not one of its lists.
+ * The message names what the commit changes of the profile's claims, read off
+ * the draft once every edit is in (core/profiles.h profile_changes) — never the
+ * walk's lists, which hold every path this add captured, a re-capture of what
+ * the profile already holds among them.
  *
- * @param walk The selection, both lists, the arena the names live in, and the
- *             profile's draft, every capture on it (must not be NULL)
+ * @param walk The selection: the profile's draft, every edit in, and the context
+ *             the message is built in (must not be NULL)
  * @param opts Command options
  * @param out_committed Whether a commit was made: false where no edit moved either
  *                      document, so a re-add of what the profile already holds
@@ -1536,34 +1537,19 @@ static error_t add_commit(
     CHECK_NULL(out_committed);
     CHECK_NULL(out_pruned);
 
-    /* The names this commit takes, borrowed from the claims the walk listed them
-     * under: every listed path has one (add_list). Both kinds, in the order every
-     * other reader of the two takes them. The message reads them once and the
-     * arena outlives the call, so nothing is copied. */
-    const ptr_array_t *listed[] = { &walk->files, &walk->directories };
-    size_t count = walk->files.count + walk->directories.count;
+    profile_changes_t changes;
+    error_t err = profile_changes(walk->draft, walk->ctx->arena, &changes);
+    if (err) return err;
 
-    const char **paths = arena_calloc(walk->ctx->arena, count, sizeof(*paths));
-
-    size_t named = 0;
-    for (size_t b = 0; b < sizeof(listed) / sizeof(listed[0]); b++) {
-        for (size_t i = 0; i < listed[b]->count; i++) {
-            const add_path_t *path = listed[b]->entries[i];
-            paths[named++] = path->claim.storage_path;
-        }
-    }
-
-    /* Build commit message context */
-    commit_message_context_t msg_ctx = {
-        .action        = COMMIT_ACTION_ADD,
-        .profile       = opts->profile,
-        .paths         = paths,
-        .path_count    = count,
-        .custom_msg    = opts->message,
-        .target_commit = NULL
+    const commit_message_context_t msg_ctx = {
+        .action     = COMMIT_ACTION_ADD,
+        .profile    = opts->profile,
+        .added      = changes.added,
+        .updated    = changes.updated,
+        .removed    = changes.removed,
+        .custom_msg = opts->message,
     };
 
-    /* Create commit */
     return profile_commit(
         walk->draft, commit_message(walk->ctx->arena, walk->ctx->config, &msg_ctx),
         out_committed, out_pruned
@@ -1703,7 +1689,7 @@ static error_t add_write_record(
 
     /* A profile no row holds has nothing for a capture to win — a target the
      * run brought stays unbound, enable's business when the user gets there —
-     * and what its commit let go, a rung its climb dropped or a derivation its
+     * and what its commit let go, a rung its climb retired or a derivation its
      * prune took, is the next apply's, decided with the landings it may stand
      * in the way of (core/workspace.c workspace_analyze_orphans): nothing to
      * write */
@@ -2591,14 +2577,13 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * over both lists: a directory the walk listed has a chain of its own, and
      * an empty one has no file beneath it to carry that chain. Scope-blind by
      * design, as the pass that reads it is — an exclusion names a path, never
-     * the way to it. Its two outs: the claims it authored or refreshed, and the
-     * ones it retired, by key, each counted for the lines below — a retired claim
-     * leaves the view by this commit, and its record is the next apply's to decide
+     * the way to it. Its two outs count the claims it authored or refreshed and
+     * the ones it retired, for the lines below — a retired claim leaves the view
+     * by this commit, and its record is the next apply's to decide
      * (core/workspace.c workspace_analyze_orphans).
      */
     size_t ancestors_captured = 0;
-    string_array_t ancestors_retired;
-    string_array_init(&ancestors_retired, ctx->arena, 0);
+    size_t ancestors_retired = 0;
     const ptr_array_t *chains[] = { &walk.files, &walk.directories };
     for (size_t b = 0; b < sizeof(chains) / sizeof(chains[0]); b++) {
         for (size_t i = 0; i < chains[b]->count; i++) {
@@ -2612,14 +2597,14 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
     if (ancestors_captured > 0) {
         output_info(
-            out, OUTPUT_VERBOSE, "Captured %zu ancestor director%s",
-            ancestors_captured, ancestors_captured == 1 ? "y" : "ies"
+            out, OUTPUT_VERBOSE, "Captured %zu ancestor claim%s",
+            ancestors_captured, ancestors_captured == 1 ? "" : "s"
         );
     }
-    if (ancestors_retired.count > 0) {
+    if (ancestors_retired > 0) {
         output_info(
-            out, OUTPUT_VERBOSE, "Dropped %zu ancestor claim%s",
-            ancestors_retired.count, ancestors_retired.count == 1 ? "" : "s"
+            out, OUTPUT_VERBOSE, "Retired %zu ancestor claim%s",
+            ancestors_retired, ancestors_retired == 1 ? "" : "s"
         );
     }
 

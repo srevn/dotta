@@ -1161,7 +1161,7 @@ typedef enum {
  *     derived rung           dotta only passes through: neither planned nor named,
  *                            so no flag lifts it and no decision pends. One verb
  *                            — the named re-derivation whose chain meets the
- *                            squatter drops the claim ('dotta update <dir>',
+ *                            squatter retires the claim ('dotta update <dir>',
  *                            core/profiles.h profile_capture_ancestors). The
  *                            two arms partition what was one by the row's class:
  *                            a deployed item is a view row's (the join), so the

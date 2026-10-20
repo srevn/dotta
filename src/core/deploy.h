@@ -483,7 +483,7 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  * having moved past it (promoted, deploy_plan_build), unasked where the copy is
  * untouched. An ancestor claim the user's own squatter holds is never planned,
  * so no scope and no flag helps: the consent-preserving cure is the named
- * re-derivation ('dotta update <dir>'), which drops a claim the disk contradicts
+ * re-derivation ('dotta update <dir>'), which retires a claim the disk contradicts
  * and leaves the arrangement the user's. A squatter nothing claims is the landing
  * check's find past the rung: by hand is all there is. A record that alone
  * remembers a directory there is no claim on a planned row at all (the reach

@@ -897,7 +897,7 @@ static bool node_is_replaced(const deploy_preflight_t *verdicts, const char *pat
  *                 — the load's own note of it, lent with the path — because the
  *                 remedies part ways there: a wider scope plans a tracked row,
  *                 and a rung dotta's own copy squats, the view having moved past
- *                 it (promoted, deploy_plan_build); the named re-derivation drops
+ *                 it (promoted, deploy_plan_build); the named re-derivation retires
  *                 an ancestor claim the user's own squatter holds
  *
  * The claimant is written in the no-fate arm alone — a row beneath a skipped

@@ -1168,18 +1168,6 @@ static error_t remove_paths(
      * never among them), so neither of the removal's refusals can fire. */
     size_t removed_files = 0, removed_dirs = 0;
 
-    /* The names this commit lets go, borrowed from the claims (arena), each once:
-     * both kinds, since the message's unit is the path and a directory claim is
-     * a path the commit gives up as surely as a blob is (utils/commit.h) — so a
-     * blob and the directory claim at its own name are one name, listed and counted
-     * once. The message reads them once and the arena outlives the call, so nothing
-     * is copied. */
-    const char **removed_paths = arena_calloc(
-        ctx->arena, claim_count, sizeof(*removed_paths)
-    );
-    size_t removed_path_count = 0;
-    hashmap_t *listed = hashmap_borrow(ctx->arena, claim_count);
-
     /* Each removal traced at verbose, the trace a block of its own */
     output_gap(out, OUTPUT_VERBOSE);
     for (size_t i = 0; i < claim_count; i++) {
@@ -1190,27 +1178,32 @@ static error_t remove_paths(
         if (claim->kind == PATH_KIND_DIRECTORY) removed_dirs++;
         else removed_files++;
 
-        if (hashmap_add(listed, claim->storage_path, NULL)) {
-            removed_paths[removed_path_count++] = claim->storage_path;
-        }
         output_info(
             out, OUTPUT_VERBOSE, "Removed: %s%s",
             claim->storage_path, path_kind_suffix(claim->kind)
         );
     }
 
+    /* What the commit changes of the profile's claims, read off the draft once
+     * every removal is in (core/profiles.h profile_changes): the message names
+     * that, never the claims taken — a blob and the directory claim at its own
+     * name are two claims to the receipt and one name to the message */
+    profile_changes_t changes;
+    err = profile_changes(draft, ctx->arena, &changes);
+    if (err) goto cleanup;
+
     /* One atomic commit: the file claims leave the tree, and the sheet follows
      * in the same tree write where its claims moved — pruned first of the derived
      * claims the removals left nothing tracked beneath, counted in `pruned`
      * (core/profiles.h profile_commit). All-or-nothing: any failure up to here
      * leaves every ref where it was. */
-    commit_message_context_t msg_ctx = {
-        .action        = COMMIT_ACTION_REMOVE,
-        .profile       = opts->profile,
-        .paths         = removed_paths,
-        .path_count    = removed_path_count,
-        .custom_msg    = opts->message,
-        .target_commit = NULL
+    const commit_message_context_t msg_ctx = {
+        .action     = COMMIT_ACTION_REMOVE,
+        .profile    = opts->profile,
+        .added      = changes.added,
+        .updated    = changes.updated,
+        .removed    = changes.removed,
+        .custom_msg = opts->message,
     };
     size_t pruned = 0;
     err = profile_commit(draft, commit_message(ctx->arena, config, &msg_ctx), NULL, &pruned);

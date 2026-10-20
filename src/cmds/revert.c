@@ -1198,23 +1198,28 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     }
 
     /* The commit, its message built as every writer's is (utils/commit.h): the
-     * user's own where one was given, else the template's over one path — the
-     * name the restore wrote, borrowed for the call — and the commit restored
-     * from, whole. It prunes a derived claim nothing stands beneath any longer
-     * — imported redundancy alone, since a restore makes no claim redundant, so
-     * the revert counts none — and the record of a rung it pruned is the next
-     * load's to decide, as of every claim a commit lets go (core/profiles.h
-     * profile_draft_t). */
+     * user's own where one was given, else the template's over what the restore
+     * changes of the profile's claims (core/profiles.h profile_changes) — the
+     * file at the name it wrote, never the way it stood on — and the commit
+     * restored from, whole. It prunes a derived claim nothing stands beneath
+     * any longer — imported redundancy alone, since a restore makes no claim
+     * redundant, so the revert counts none — and the record of a rung it pruned
+     * is the next load's to decide, as of every claim a commit lets go
+     * (core/profiles.h profile_draft_t). */
+    profile_changes_t changes;
+    err = profile_changes(draft, ctx->arena, &changes);
+    if (err) goto cleanup;
+
     char target_hex[GIT_OID_SHA1_HEXSIZE + 1];
     git_oid_tostr(target_hex, sizeof(target_hex), git_commit_id(target_commit));
-    const char *paths[] = { restored.storage_path };
-    commit_message_context_t msg_ctx = {
+    const commit_message_context_t msg_ctx = {
         .action        = COMMIT_ACTION_REVERT,
         .profile       = profile,
-        .paths         = paths,
-        .path_count    = 1,
+        .added         = changes.added,
+        .updated       = changes.updated,
+        .removed       = changes.removed,
         .custom_msg    = opts->message,
-        .target_commit = target_hex
+        .target_commit = target_hex,
     };
     err = profile_commit(draft, commit_message(ctx->arena, config, &msg_ctx), NULL, NULL);
     if (err) goto cleanup;

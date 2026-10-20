@@ -19,7 +19,7 @@
 /* Maximum length for hostname */
 #define MAX_HOSTNAME 256
 
-/* Maximum paths to show in detail before truncating */
+/* The names a heading shows before its tail counts the rest */
 #define MAX_PATHS_DETAIL 5
 
 /**
@@ -118,40 +118,60 @@ static const char *commit_spelled(arena_t *arena, const char *name) {
 }
 
 /**
- * The path list as bullet points with truncation, appended to `text`
+ * {paths}: each change under its heading — Added, Updated, Removed, in that order
+ * — or, where the commit changes no explicit claim, the one line that says so
  *
- * Both kinds, as the caller handed them over (utils/commit.h): the list says
- * "paths" of what it truncates and of what it has none of, because a commit that
- * claimed a directory and no file has a path to name and no file. Each path is
- * spelled where it enters the list (commit_spelled); the bullets and the newlines
- * between them are the list's own.
+ * A heading stands over a list that names something, and nowhere else. Each name
+ * is spelled where it enters (commit_spelled); the headings, the bullets and
+ * the newlines between them are the rendering's own.
+ *
+ * @param arena The arena a spelled name lives in (must not be NULL)
+ * @param ctx The commit's changes (must not be NULL)
+ * @param out The rendering (must not be NULL; cleared, then written, its bytes
+ *            the caller's to free)
  */
 static void commit_paths(
-    arena_t *arena, buffer_t *text, const char *const *paths, size_t count
+    arena_t *arena, const commit_message_context_t *ctx, buffer_t *out
 ) {
-    if (count == 0 || !paths) {
-        buffer_append_string(text, "  (no paths)");
-        return;
-    }
+    const struct {
+        const char *heading;
+        const string_array_t *names;
+    } changes[] = {
+        { "Added:",   &ctx->added   },
+        { "Updated:", &ctx->updated },
+        { "Removed:", &ctx->removed },
+    };
 
-    /* Show up to MAX_PATHS_DETAIL paths */
-    size_t show_count = count < MAX_PATHS_DETAIL ? count : MAX_PATHS_DETAIL;
+    *out = (buffer_t){ 0 };
 
-    for (size_t i = 0; i < show_count; i++) {
-        buffer_append_string(text, "  - ");
-        buffer_append_string(text, commit_spelled(arena, paths[i]));
-        if (i < show_count - 1 || count > MAX_PATHS_DETAIL) {
-            buffer_append_string(text, "\n");
+    for (size_t c = 0; c < sizeof(changes) / sizeof(changes[0]); c++) {
+        const string_array_t *names = changes[c].names;
+        if (names->count == 0) continue;
+
+        /* One commit's changes are one block: a heading stands beneath the list
+         * before it, no blank line between */
+        if (out->size > 0) buffer_append_string(out, "\n");
+        buffer_append_string(out, changes[c].heading);
+
+        /* Five names a heading, and a tail counting the rest beneath them: a
+         * long change hides no other */
+        size_t shown = names->count < MAX_PATHS_DETAIL ? names->count : MAX_PATHS_DETAIL;
+        for (size_t i = 0; i < shown; i++) {
+            buffer_append_string(out, "\n  - ");
+            buffer_append_string(out, commit_spelled(arena, names->entries[i]));
+        }
+
+        size_t rest = names->count - shown;
+        if (rest > 0) {
+            buffer_appendf(out, "\n  ... and %zu more path%s", rest, rest == 1 ? "" : "s");
         }
     }
 
-    /* Add truncation notice if needed */
-    if (count > MAX_PATHS_DETAIL) {
-        buffer_appendf(
-            text, "  ... and %zu more path%s",
-            count - MAX_PATHS_DETAIL, (count - MAX_PATHS_DETAIL) == 1 ? "" : "s"
-        );
-    }
+    /* No heading stood: the commit changes no explicit claim, so its edits moved
+     * only the way to the claims — every writer's edit moves a claim or its way
+     * (core/profiles.h profile_changes) — and the line in the headings' place
+     * says so */
+    if (out->size == 0) buffer_append_string(out, "Only ancestor claims changed");
 }
 
 /**
@@ -242,16 +262,19 @@ const char *commit_message(
     /* The values this message is made of, resolved once for both templates: the
      * clock read once, so every time the message names is one instant's. The
      * count is rendered here and not in the reader, which is what keeps it the
-     * length of the list beside it under any template that names either. */
+     * three lists' summed length under any template that names it beside them. */
     const time_t now = time(NULL);
     char hostname[MAX_HOSTNAME], date[16], datetime[64], count[32];
     commit_hostname(hostname, sizeof(hostname));
     commit_time(now, "%Y-%m-%d", date, sizeof(date));
     commit_time(now, "%Y-%m-%d %H:%M:%S %z", datetime, sizeof(datetime));
-    snprintf(count, sizeof(count), "%zu", ctx->path_count);
+    snprintf(
+        count, sizeof(count), "%zu",
+        ctx->added.count + ctx->updated.count + ctx->removed.count
+    );
 
     buffer_t paths = BUFFER_INIT;
-    commit_paths(arena, &paths, ctx->paths, ctx->path_count);
+    commit_paths(arena, ctx, &paths);
 
     /* {user} is the invoker's (sys/identity): under sudo the user who typed the
      * command, not the root that $USER names there — "unknown" for a uid with

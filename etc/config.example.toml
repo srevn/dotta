@@ -244,15 +244,18 @@ diverged_strategy = "warn"
 #   {profile}       - Profile name
 #   {action}        - Action (Add, Update, Remove, Revert)
 #   {action_past}   - Past tense (Added, Updated, Removed, Reverted)
-#   {count}         - Number of paths, both kinds
+#   {count}         - Number of claims the commit adds, updates or removes
 #   {date}          - Local date (YYYY-MM-DD)
 #   {datetime}      - Local timestamp with timezone (ISO 8601 format)
-#   {paths}         - Formatted path list (bullet points, max 5 shown)
+#   {paths}         - Each change under its heading (Added, Updated, Removed),
+#                     at most five names a heading; one line where none
 #   {target_commit} - Target commit SHA (for revert operations, empty otherwise)
 #
-# A commit names paths and not files: one commit carries both the files it
-# captured and the directories it tracks, so {count} counts both and {paths}
-# lists both, as storage paths (home/.bashrc, root/etc/hosts, custom/…).
+# A commit names what it changed: each file, and each directory the profile
+# tracks, whose claim it adds, updates or removes, under its change's heading,
+# as storage paths (home/.bashrc, root/etc/hosts, custom/…) — and {count}
+# counts them. The directories dotta derives above them are never named: a
+# commit that changed only those says so in one line in the headings' place.
 #
 # Default Templates (you can customize these):
 # --------------------------------------------
@@ -275,8 +278,8 @@ title = "{host}: {action} {profile}"
 #
 #   Added:
 #     - home/.bashrc
-#     - home/.vimrc
 #     - home/.tmux.conf
+#     - home/.vimrc
 body = """
 Date: {datetime}
 User: {user}
@@ -284,7 +287,6 @@ Host: {host}
 Profile: {profile}
 Paths: {count}
 
-{action_past}:
 {paths}
 """
 
@@ -301,9 +303,10 @@ Paths: {count}
 # Output:
 #   Add darwin
 #
+#   Added:
 #     - home/.bashrc
-#     - home/.vimrc
 #     - home/.tmux.conf
+#     - home/.vimrc
 #
 #
 # Detailed Format:
@@ -318,7 +321,6 @@ Paths: {count}
 # Host: {host}
 # Count: {count} path(s)
 #
-# Paths:
 # {paths}
 # """
 #
@@ -332,10 +334,10 @@ Paths: {count}
 #   Host: macbook-pro
 #   Count: 3 path(s)
 #
-#   Paths:
+#   Added:
 #     - home/.bashrc
-#     - home/.vimrc
 #     - home/.tmux.conf
+#     - home/.vimrc
 #
 #
 # Git Conventional Commits:
@@ -347,9 +349,10 @@ Paths: {count}
 # Output:
 #   feat(darwin): Add 3 config path(s)
 #
+#   Added:
 #     - home/.bashrc
-#     - home/.vimrc
 #     - home/.tmux.conf
+#     - home/.vimrc
 #
 #
 # Revert-Aware Format:
@@ -360,7 +363,6 @@ Paths: {count}
 # Profile: {profile}
 # Action: {action}
 # Target: {target_commit}
-# Paths:
 # {paths}
 #
 # Timestamp: {datetime}
@@ -372,7 +374,7 @@ Paths: {count}
 #   Profile: global
 #   Action: Revert
 #   Target: 94d98791ced8cd927813ccf085714e7e1a3c5085
-#   Paths:
+#   Updated:
 #     - home/.bashrc
 #
 #   Timestamp: 2025-10-10 22:40:05 +0300
@@ -383,10 +385,10 @@ Paths: {count}
 #   Profile: darwin
 #   Action: Add
 #   Target:
-#   Paths:
+#   Added:
 #     - home/.bashrc
-#     - home/.vimrc
 #     - home/.tmux.conf
+#     - home/.vimrc
 #
 #   Timestamp: 2025-01-09 14:23:45 +0200
 #

@@ -3880,7 +3880,7 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
      * the copy can commit: file ↔ symlink on a file row. Every other occupant
      * is no verb's default, and a directory row's splits by the claim that holds
      * the path: a tracked row is the plan's (--force replaces the squatter), a
-     * derived rung is never planned (the named re-derivation drops the claim).
+     * derived rung is never planned (the named re-derivation retires the claim).
      * A deployed item is a view row's (the join), so the row holds; a file row's
      * tracked field is a don't-care, so the kind gates the read. */
     if ((divergence & DIVERGENCE_TYPE) &&

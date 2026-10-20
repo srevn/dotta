@@ -7,7 +7,6 @@
 #ifndef DOTTA_COMMIT_H
 #define DOTTA_COMMIT_H
 
-#include <stddef.h>
 #include <types.h>
 
 /**
@@ -26,27 +25,24 @@ typedef enum {
 /**
  * What a message names
  *
- * The unit is the path, not the file. One commit carries two documents — the
- * tree, which holds a blob at every path that has bytes, and the sheet, which
- * holds the directories a tree cannot (core/metadata.h) — so a caller that named
- * its blobs alone left the message saying "(no paths)" over a commit that claimed
- * a directory, and counted a mixed one at its files.
- *
- * `paths` is what this commit is about, in the caller's own order and both kinds:
- * the paths it took, and, for a verb that lets paths go, the ones it let go
- * (cmds/remove.c, cmds/update.c). A claim is named as the profile spells it —
- * the storage path, so a name read out of a log is the key the tree and the sheet
- * hold and the key `remove` takes back, but for a byte no terminal may be handed,
- * which the message spells (commit_message) — and a claim no verb named is none
- * of the commit's, an ancestor the derivation authored included. `path_count`
- * is the length of `paths` and the one number {count} renders: no template can
- * make the list and the count disagree. Both borrowed for the call.
+ * The commit, never its command's arguments: each name whose explicit claim the
+ * commit adds, updates or removes — the blob at the name with the item that rides
+ * it, the directory the profile tracks there — under its change's heading, as
+ * the draft answers it (core/profiles.h profile_changes, whose three lists these
+ * are). A derived claim is the way to the claims and never one, so no message
+ * names it, and a commit that moved only the way says so in one line where the
+ * headings would stand. A name is the profile's spelling of it — the storage
+ * path, the key the tree and the sheet hold and `remove` takes back — but for a
+ * byte no terminal may be handed, which the message spells (commit_message).
+ * {count} is the three lists' summed length, the one number {paths} cannot disagree
+ * with. The lists are borrowed for the call, and a zeroed one names nothing.
  */
 typedef struct {
     commit_action_t action;     /* Action being performed */
     const char *profile;        /* Profile name (required) */
-    const char *const *paths;   /* The paths the commit names, both kinds */
-    size_t path_count;          /* How many, and what {count} renders */
+    string_array_t added;       /* Names whose claim the commit adds */
+    string_array_t updated;     /* Names whose claim it updates */
+    string_array_t removed;     /* Names whose claim it removes */
     const char *custom_msg;     /* Custom message from -m flag (NULL or empty = use template) */
     const char *target_commit;  /* Target commit SHA (revert alone, NULL otherwise) */
 } commit_message_context_t;
@@ -64,10 +60,11 @@ typedef struct {
  *   {profile}       - Profile name
  *   {action}        - Action (Add, Update, Remove, Revert)
  *   {action_past}   - Past tense (Added, Updated, Removed, Reverted)
- *   {count}         - Number of paths, both kinds
+ *   {count}         - Number of claims the commit adds, updates or removes
  *   {date}          - Local date (YYYY-MM-DD)
  *   {datetime}      - Local timestamp with timezone (ISO 8601)
- *   {paths}         - Formatted path list (bullet points, at most five)
+ *   {paths}         - Each change under its heading (Added, Updated, Removed),
+ *                     at most five names a heading; one line where none
  *   {target_commit} - Target commit SHA (for revert operations, empty otherwise)
  *
  * A variable the table has no row for is left as the template spelled it, braces
@@ -81,7 +78,7 @@ typedef struct {
  *
  * @param arena Arena the message lives in (must not be NULL)
  * @param config Configuration holding the two templates (must not be NULL)
- * @param ctx Context with action, profile, paths (must not be NULL)
+ * @param ctx The action, the profile and what the commit changes (must not be NULL)
  * @return The message, the arena's; never NULL
  */
 const char *commit_message(

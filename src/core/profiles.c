@@ -1092,12 +1092,12 @@ error_t profile_remove(profile_draft_t *draft, path_kind_t kind, const char *sto
  *
  * The copy is the state: a claim this commit removed, or one a blob's put took
  * the place of, answers nothing, and nothing beside the sheet says so. A derived
- * claim is not asked — what anchors it refuses on its own, a tracked claim here
- * or an entry the tree's half finds, and the prune takes one nothing anchors —
- * nor is one a blob in the base stands at or above, a claim void before the commit
- * and void after it, whatever this commit writes above it. Named by the byte-least
- * such claim — the copy's key order — so a commit's claims say one sentence
- * whatever order its writer made them in.
+ * claim is not asked — what stands beneath it refuses on its own, a tracked claim
+ * here or an entry the tree's half finds, and the prune takes one nothing stands
+ * beneath — nor is one a blob in the base stands at or above, a claim void before
+ * the commit and void after it, whatever this commit writes above it. Named by
+ * the byte-least such claim — the copy's key order — so a commit's claims say
+ * one sentence whatever order its writer made them in.
  *
  * Readers: profile_admit, of a blob a writer chooses before it reads it; and
  * profile_capture_file and profile_restore_file, each before its put.
@@ -1316,11 +1316,11 @@ error_t profile_capture_directory(
  * @param mounts The table the rung's name resolves through
  * @param rung The rung's name
  * @param captured Incremented where the rung's claim moved
- * @param retired Receives each name whose claim goes
+ * @param retired Incremented for each name whose claim goes
  */
 static void profile_capture_rung(
     profile_draft_t *draft, const mount_table_t *mounts, const char *rung,
-    size_t *captured, string_array_t *retired
+    size_t *captured, size_t *retired
 ) {
     /* The directory claim at the rung, the one a derivation may touch, and only
      * a derived one: a tracked claim is the walk's own word about a directory
@@ -1365,11 +1365,12 @@ static void profile_capture_rung(
      * no directory at this place and every claim that says it does has just been
      * contradicted by the disk. The case that matters is a symlink the user put
      * there after the first capture: writing through it is what they asked for,
-     * and dropping the claims is what lets dotta — the row leaves the view with
-     * them, and the caller retires the record that named the path (the two halves
-     * core/workspace reads to call a directory displaced). A symlink that was
-     * there at capture time never authored a claim to drop; this is the same
-     * consent, one command later.
+     * and retiring the claims is what lets dotta — the row leaves the view with
+     * them, so after the commit nothing requires a directory there, and the record
+     * that named the path is the next apply's to decide, as of every claim a
+     * commit lets go (core/workspace.c workspace_analyze_orphans). A symlink
+     * that was there at capture time never authored a claim to retire; this is
+     * the same consent, one command later.
      *
      * The answer is about the place, and a profile can derive one place under
      * more than one name: one bound after its first captures derives a chain
@@ -1400,7 +1401,7 @@ static void profile_capture_rung(
             );
             if (claim && !claim->tracked) {
                 metadata_remove_item(draft->sheet, PATH_KIND_DIRECTORY, name);
-                string_array_push(retired, name);
+                (*retired)++;
             }
         }
         return;
@@ -1425,7 +1426,7 @@ static void profile_capture_rung(
 
 void profile_capture_ancestors(
     profile_draft_t *draft, const mount_table_t *mounts, const char *storage_path,
-    size_t *captured, string_array_t *retired
+    size_t *captured, size_t *retired
 ) {
     CHECK_NULL(draft);
     CHECK_NULL(mounts);
@@ -1443,8 +1444,7 @@ void profile_capture_ancestors(
      * all: each separator truncates it in place and is restored before the next
      * one extends past it. The scan reads the caller's string, which is never
      * written, so the cut is an offset into it. The copy is the draft's arena's,
-     * as each rung's place is; what keeps a rung — the copy's item, the retired
-     * array — copies it. */
+     * as each rung's place is; what keeps a rung, the copy's item, copies it. */
     char *rung = arena_strdup(draft->arena, storage_path);
 
     for (const char *sep = first; sep; sep = strchr(sep + 1, '/')) {
@@ -1719,10 +1719,11 @@ error_t profile_changes(
  *
  * The sheet's half of the tracked set. An empty directory is named by its own
  * claim and by nothing else, so a tracked claim is the one thing beneath a
- * derivation that no index can name. A derivation anchors nothing — it survives
- * by being anchored itself, and letting one anchor another would hold a doomed
- * chain alive a rung per command. The word that decides the prune's subject decides
- * this too, so the two readings cannot drift: they are one field.
+ * derivation that no index can name. Nothing derived keeps another standing — a
+ * derivation survives by what stands beneath it, and letting one keep another
+ * would hold a doomed chain alive a rung per command. The word that decides the
+ * prune's subject decides this too, so the two readings cannot drift: they are
+ * one field.
  *
  * Strictly beneath, at a component boundary: a claim AT the key is the key, and
  * one above it is the ancestry every path has — so the claims asked are one slice
@@ -1762,21 +1763,22 @@ static bool profile_tracked_beneath(const profile_draft_t *draft, const char *ke
  *   a tree can hold and is the sole authority for those — deliberately not the
  *   sheet's items, which are sparse by design (a symlink carries an item only
  *   where its owner is one absence would misstate), so a directory whose only
- *   tracked content is an item-less symlink is anchored by the index and survives.
- *   What no index can name is an empty directory, and only a tracked claim names
- *   one — a derivation cannot anchor, since it survives solely by being anchored
- *   itself and would otherwise hold a doomed chain alive one command per rung.
+ *   tracked content is an item-less symlink has the index's entry beneath it
+ *   and survives. What no index can name is an empty directory, and only a tracked
+ *   claim names one — a derivation keeps nothing standing, since it survives
+ *   solely by what stands beneath it and would otherwise hold a doomed chain
+ *   alive one command per rung.
  *
- * Anchoring is judged against the stage's index past every edit — the tree the
- * commit will record — so the prune sees the commit's exact tracked set and lands
- * in the same commit as the removals that left a derivation nothing beneath it.
- * Such a derivation has no role in any downstream pipeline: the view would claim
- * it as an [ancestor] row over an emptied subtree, and divergence detection has
- * nothing to compare against — typically the tail of an ancestry whose leaf has
- * just gone (`dotta add ~/dir/f.conf`, then `dotta remove` of that file). One
- * forward pass decides each derivation where it meets it and removes it there:
- * a decision reads the index and the tracked claims alone, and the prune moves
- * neither, so a removal changes no later decision.
+ * What stands beneath is judged against the stage's index past every edit — the
+ * tree the commit will record — so the prune sees the commit's exact tracked
+ * set and lands in the same commit as the removals that left a derivation nothing
+ * beneath it. Such a derivation has no role in any downstream pipeline: the view
+ * would claim it as an [ancestor] row over an emptied subtree, and divergence
+ * detection has nothing to compare against — typically the tail of an ancestry
+ * whose leaf has just gone (`dotta add ~/dir/f.conf`, then `dotta remove` of
+ * that file). One forward pass decides each derivation where it meets it and
+ * removes it there: a decision reads the index and the tracked claims alone,
+ * and the prune moves neither, so a removal changes no later decision.
  *
  * The count is of the paths the commit lets go that the writer did not name: a
  * claim the base tracked is derived here only where a writer's removal took its
@@ -1811,10 +1813,10 @@ static error_t profile_prune_ancestors(profile_draft_t *draft, size_t *out_prune
 
         /* Half of what stands beneath: any path under the directory that a tree
          * can hold. The sheet's items are not the universe there — a symlink
-         * tracked without elevation carries no item, yet still anchors its parent
-         * — so the index is the authority. It is sorted, so one prefix probe
-         * answers, the prefix spelled into the draft's arena; a failed look must
-         * not prune. */
+         * tracked without elevation carries no item, yet still stands beneath
+         * its parent — so the index is the authority. It is sorted, so one prefix
+         * probe answers, the prefix spelled into the draft's arena; a failed
+         * look must not prune. */
         int rc = git_index_find_prefix(
             NULL, index, arena_str_format(draft->arena, "%s/", dir->key)
         );
@@ -1822,8 +1824,8 @@ static error_t profile_prune_ancestors(profile_draft_t *draft, size_t *out_prune
             return error_git(rc, "Cannot search the tree beneath '%s'", dir->key);
         }
 
-        /* And the other half: the one path a tree cannot hold. Anchored by either,
-         * the derivation stands, and the cursor moves past it. */
+        /* And the other half: the one path a tree cannot hold. With either beneath
+         * it, the derivation stands, and the cursor moves past it. */
         if (rc == 0 || profile_tracked_beneath(draft, dir->key)) {
             d++;
             continue;

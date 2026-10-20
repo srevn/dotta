@@ -254,7 +254,6 @@ config_t *config_create_default(arena_t *arena) {
         "Profile: {profile}\n"
         "Paths: {count}\n"
         "\n"
-        "{action_past}:\n"
         "{paths}";
 
     /* [sync] defaults */

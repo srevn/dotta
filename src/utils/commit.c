@@ -191,9 +191,9 @@ static void commit_substitute(
 ) {
     CHECK_NULL(template);
 
-    /* Process template character by character. Three cases, each leaving the
-     * loop at its own line: what is not a variable, what is shaped like one and
-     * cannot be read, and the name the table answers for. */
+    /* Process template character by character. Two cases, each leaving the loop
+     * at its own line: what is not a variable, and what is shaped like one, whose
+     * name the table answers for or does not. */
     const char *p = template;
     while (*p) {
         /* Where this variable would end. A brace nothing closes opens nothing:
@@ -206,24 +206,14 @@ static void commit_substitute(
             continue;
         }
 
-        /* A name too long for the scratch is no name: the braced run stands as
-         * the template spelled it, and the reader resumes past it. */
-        size_t var_len = (size_t) (end - p - 1);
-        char var_name[64];
-
-        if (var_len >= sizeof(var_name)) {
-            buffer_append(text, p, (size_t) (end - p) + 1);
-            p = end + 1;
-            continue;
-        }
-
-        memcpy(var_name, p + 1, var_len);
-        var_name[var_len] = '\0';
-
-        /* Substitute variable: the table's row, or no row at all */
+        /* Substitute variable: the table's row for the whole name between the
+         * braces, read where the template spells it — or no row at all */
+        const char *name = p + 1;
+        size_t name_len = (size_t) (end - name);
         const char *value = NULL;
         for (size_t i = 0; i < var_count; i++) {
-            if (strcmp(var_name, vars[i].name) == 0) {
+            if (strlen(vars[i].name) == name_len &&
+                memcmp(vars[i].name, name, name_len) == 0) {
                 value = vars[i].value;
                 break;
             }
@@ -232,8 +222,8 @@ static void commit_substitute(
         if (value) {
             buffer_append_string(text, value);
         } else {
-            /* Unknown variable - keep as-is */
-            buffer_appendf(text, "{%s}", var_name);
+            /* Unknown variable - keep as-is, braces and all */
+            buffer_append(text, p, (size_t) (end - p) + 1);
         }
 
         p = end + 1;

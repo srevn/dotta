@@ -172,8 +172,8 @@ static error_t pull_branch_ff(
  *
  * Operates on the scope's profiles (scope_profiles): fetching is driven by what
  * the user asked for. `dotta sync -p work` fetches only `work`, not every enabled
- * profile. Precedence-adjacent work (push phase) still uses the full enabled
- * set — different role, different accessor.
+ * profile. Precedence-adjacent work (the Manifest block) still uses the full
+ * enabled set — different role, different accessor.
  */
 static error_t sync_fetch_phase(
     const dotta_ctx_t *ctx,
@@ -199,16 +199,6 @@ static error_t sync_fetch_phase(
     }
     git_remote_free(remote);
 
-    /* Ephemeral fetch progress — shown while fetching, cleared after. On TTY:
-     * transfer progress overwrites via \r, then line cleared entirely. On pipe:
-     * falls back to persistent line with newline. */
-    bool ephemeral = output_is_tty(out);
-    output_print(
-        out, OUTPUT_NORMAL, "Fetching from '%s'...",
-        remote_name
-    );
-    fflush(out->stream);
-
     /* The branches to ask for: the profiles the remote has been seen to hold —
      * a remote-tracking ref stands for each — so a profile only this machine
      * has (never pushed) is not asked for. Whether the ref stands is Git's answer
@@ -218,49 +208,40 @@ static error_t sync_fetch_phase(
     string_array_t branch_names;
     string_array_init(&branch_names, ctx->arena, 0);
 
-    error_t err = NULL;
     for (size_t i = 0; i < profiles->count; i++) {
         char remote_refname[DOTTA_REFNAME_MAX];
-        err = gitops_remote_branch_refname(
+        error_t err = gitops_remote_branch_refname(
             remote_refname, sizeof(remote_refname), remote_name, profiles->entries[i]
         );
-        if (err) break;
+        if (err) return err;
 
         bool tracked = false;
         err = gitops_reference_exists(repo, remote_refname, &tracked);
-        if (err) break;
+        if (err) return err;
 
         if (tracked) {
             string_array_push(&branch_names, profiles->entries[i]);
         }
     }
-    if (err) {
-        if (ephemeral) {
-            output_clear_line(out);
-        } else {
-            output_endline(out, OUTPUT_NORMAL);
-        }
-        return err;
-    }
 
-    /* Skip fetch entirely if no profiles have remote tracking refs */
-    if (branch_names.count == 0) {
-        if (ephemeral) {
-            output_clear_line(out);
-        } else {
-            output_endline(out, OUTPUT_NORMAL);
-        }
-        return NULL;
-    }
+    /* None the remote has been seen to hold: nothing is fetched, and nothing
+     * announces a fetch */
+    if (branch_names.count == 0) return NULL;
+
+    /* Ephemeral fetch progress — shown while fetching, cleared after. On TTY:
+     * transfer progress overwrites via \r, then line cleared entirely. On pipe:
+     * falls back to persistent line with newline. */
+    output_print(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
+    fflush(out->stream);
 
     /* Perform batched fetch - single network operation for all branches */
-    err = gitops_fetch_branches(repo, remote_name, &branch_names, xfer);
+    error_t err = gitops_fetch_branches(repo, remote_name, &branch_names, xfer);
 
     /* The announce line ends here. Progress drawn over it ended with its op
      * (sys/transfer.h transfer_op_end), whichever way the op went, so what can
      * stand is the announce alone — an up-to-date fetch draws nothing over it:
      * cleared on a terminal, ended on a pipe. */
-    if (ephemeral) {
+    if (output_is_tty(out)) {
         output_clear_line(out);
     } else {
         output_endline(out, OUTPUT_NORMAL);

@@ -208,11 +208,13 @@ bootstrap_receipt_t bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) 
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->entries[i];
 
-        /* The progress line lands ahead of the script's output: the primitive
+        /* The progress line, in the run's verb: a dry run checks the script and
+         * runs nothing. It lands ahead of a live script's output: the primitive
          * flushes every stream before its fork (sys/process.h) */
         output_print(
-            out, OUTPUT_NORMAL, "[%zu/%zu] Running %s/%s...\n",
-            i + 1, profiles->count, profile, BOOTSTRAP_SCRIPT_NAME
+            out, OUTPUT_NORMAL, "[%zu/%zu] %s %s/%s...\n",
+            i + 1, profiles->count, spec->dry_run ? "Checking" : "Running",
+            profile, BOOTSTRAP_SCRIPT_NAME
         );
 
         error_t step_err = spec->dry_run

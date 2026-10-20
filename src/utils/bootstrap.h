@@ -37,7 +37,7 @@
  *                  caller's listing, every one of which has a .bootstrap script
  *                  (sys/bootstrap.h bootstrap_exists) — the set the caller showed
  *                  before asking to run it.
- *   dry_run        True: validate each script's shebang in memory
+ *   dry_run        True: check each script — its shebang validated in memory —
  *                  and report "would execute". No /tmp write, no process spawn,
  *                  no side effects.
  *   stop_on_error  True: stop at the first failure, the receipt naming the
@@ -70,10 +70,10 @@ typedef struct {
  * Run the .bootstrap script of each profile in spec->profiles, in order.
  *
  * Behavior:
- *   - Progress: "[N/M] Running profile/.bootstrap..." is emitted via `out` before
- *     each script; "✓ Complete" (or "Would execute" in dry-run) on success; "✗
- *     Failed: <reason>" on error. The rows are one block, its boundary asked
- *     above the first, so no caller asks it.
+ *   - Progress: "[N/M] Running profile/.bootstrap..." — "Checking" in dry-run —
+ *     is emitted via `out` before each script; "✓ Complete" (or "Would execute"
+ *     in dry-run) on success; "✗ profile/.bootstrap: <reason>" on error. The
+ *     rows are one block, its boundary asked above the first, so no caller asks it.
  *   - Dry-run: reads each script's content and validates its shebang in memory.
  *     No /tmp writes, no process spawns.
  *   - Live run: extracts the script to a tight-scoped temp file and execs it

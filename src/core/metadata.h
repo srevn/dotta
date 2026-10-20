@@ -353,13 +353,40 @@ const metadata_item_t *metadata_find_item(
  * it opened, as sys/stage compares the trees (sys/stage.h stage_changed,
  * stage_commit) — its change test, and its save's gate, so a sheet no claim of
  * which moved keeps the bytes it has, a hand's spelling included (core/profiles.c
- * profile_changed, profile_commit).
+ * profile_changed, profile_commit). The keys at which two sheets differ are
+ * metadata_changes', which asks each pair of claims what this asks, so the two
+ * cannot part.
  *
  * @param a A sheet (must not be NULL)
  * @param b Another (must not be NULL)
  * @return true where the two hold the same claims
  */
 bool metadata_same(const metadata_t *a, const metadata_t *b);
+
+/**
+ * The keys at which two sheets' claims of `kind` differ, in key order: copies,
+ * in `arena`
+ *
+ * A key one sheet holds a claim of `kind` at and the other does not, or both
+ * hold one at saying another thing — every field, absence included, as
+ * metadata_same compares them, claim by claim — so the two cannot part: two sheets
+ * say the same thing exactly where neither kind answers a key. Each kind stands
+ * in key order in both sheets, so the answer is one merge of the two orders,
+ * nothing sorted, each key once.
+ *
+ * @param arena The arena the answer and its keys live in (must not be NULL)
+ * @param a A sheet (must not be NULL)
+ * @param b Another (must not be NULL)
+ * @param kind Which kind's claims
+ * @return The keys, in key order; none where the two hold the same claims of
+ *         the kind
+ */
+string_array_t metadata_changes(
+    arena_t *arena,
+    const metadata_t *a,
+    const metadata_t *b,
+    path_kind_t kind
+);
 
 /**
  * Remove the item of `kind` at `key`

@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 
 #include "base/arena.h"
+#include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/heap.h"
@@ -200,8 +201,9 @@ metadata_t *metadata_clone(arena_t *arena, const metadata_t *metadata) {
  * lower bits, an owner, a group — so the tree's entry cannot stand in for this
  * comparison.
  *
- * Readers: metadata_same, claim by claim, the two sheets in step; and
- * metadata_write_item, a claim against the one standing at its key.
+ * Readers: metadata_same, claim by claim, the two sheets in step; metadata_changes,
+ * at each key both sheets hold a claim of its kind at; and metadata_write_item,
+ * a claim against the one standing at its key.
  *
  * @param a First claim (must not be NULL)
  * @param b Second claim (must not be NULL)
@@ -357,6 +359,56 @@ bool metadata_same(const metadata_t *a, const metadata_t *b) {
     }
 
     return true;
+}
+
+/**
+ * The keys at which two sheets' claims of one kind differ
+ *
+ * The kind's two orders merged, as the serializer merges a sheet's two kinds
+ * (metadata_to_json): a key one sheet holds alone differs, and one both hold
+ * differs where its two claims do.
+ */
+string_array_t metadata_changes(
+    arena_t *arena,
+    const metadata_t *a,
+    const metadata_t *b,
+    path_kind_t kind
+) {
+    CHECK_NULL(arena);
+    CHECK_NULL(a);
+    CHECK_NULL(b);
+
+    /* Each sheet's claims of the kind, in key order */
+    const metadata_claims_t *in_a = kind == PATH_KIND_DIRECTORY
+        ? &a->directories : &a->files;
+    const metadata_claims_t *in_b = kind == PATH_KIND_DIRECTORY
+        ? &b->directories : &b->files;
+
+    string_array_t keys;
+    string_array_init(&keys, arena, 0);
+
+    for (size_t i = 0, j = 0; i < in_a->count || j < in_b->count;) {
+        /* The byte-least key either sheet holds next: one past its last claim
+         * holds none, which follows every key */
+        const int order = i == in_a->count ? 1 : j == in_b->count ? -1 :
+            strcmp(in_a->entries[i]->key, in_b->entries[j]->key);
+
+        /* Held by one sheet alone, or by both saying another thing; a key both
+         * hold steps both */
+        if (order < 0) {
+            string_array_push(&keys, in_a->entries[i++]->key);
+        } else if (order > 0) {
+            string_array_push(&keys, in_b->entries[j++]->key);
+        } else {
+            if (!metadata_same_claim(in_a->entries[i], in_b->entries[j])) {
+                string_array_push(&keys, in_a->entries[i]->key);
+            }
+            i++;
+            j++;
+        }
+    }
+
+    return keys;
 }
 
 /**

@@ -24,6 +24,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "base/arena.h"
 #include "base/error.h"
 #include "base/heap.h"
 #include "sys/gitops.h"
@@ -155,12 +156,15 @@ git_index *stage_index(stage_t *st) {
  * a directory's a tree, and every other mode's a blob
  *
  * libgit2's own reading of a tree entry, whole (lib/libgit2/src/libgit2/tree.c
- * git_tree_entry_type: S_ISGITLINK, then S_ISDIR), asked of the mode an index
- * entry holds, which is its tree's own word where the index was seeded from one
- * (index.c read_tree_cb) — so a blob of whatever permission bits a hand's tree
- * spells is the blob the profile's walk reads there (core/profiles.c profile_step).
+ * git_tree_entry_type: S_ISGITLINK, then S_ISDIR), asked of a mode the stage
+ * meets as a tree spelled it — an index entry's, where the index was seeded from
+ * one (index.c read_tree_cb), and a delta's side, which the comparison hands on
+ * from either (iterator.c tree_iterator_set_current) — so a blob of whatever
+ * permission bits a hand's tree spells is the blob the profile's walk reads there
+ * (core/profiles.c profile_step).
  *
- * Reader: the noun a refusal names an entry in a name's way by (stage_mode_noun).
+ * Readers: the noun a refusal names an entry in a name's way by (stage_mode_noun),
+ * and what stood on a delta's side (stage_side_type).
  */
 static git_object_t stage_mode_type(uint32_t mode) {
     switch (mode & S_IFMT) {
@@ -446,24 +450,94 @@ error_t stage_remove(stage_t *st, const char *path) {
     return NULL;
 }
 
+/**
+ * The index against the tree the open read, a type change one delta
+ *
+ * Readers: stage_changed, whether any entry moved; stage_changes, each one —
+ * one comparison for both questions, so the bool and the list cannot part.
+ */
+static error_t stage_diff(const stage_t *st, git_diff **out) {
+    /* A type change — a blob become a link, a gitlink a blob — one delta at its
+     * name, where libgit2 would split it into a removal and an addition
+     * (lib/libgit2/src/libgit2/diff_generate.c maybe_modified) */
+    git_diff_options opts;
+    git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
+    opts.flags |= GIT_DIFF_INCLUDE_TYPECHANGE;
+
+    /* libgit2 diffs the two through iterators, an entry unmodified where its id
+     * and its mode agree, and writes no object — an id whose object is not written
+     * yet is compared by the id alone */
+    int rc = git_diff_tree_to_index(out, st->repo, st->tree, st->index, &opts);
+    if (rc < 0) {
+        return error_git(rc, "Failed to compare the tree of '%s'", st->refname);
+    }
+
+    return NULL;
+}
+
 error_t stage_changed(const stage_t *st, bool *out) {
     CHECK_NULL(st);
     CHECK_NULL(out);
 
     /* The index against the tree the open read, stage_commit's question asked
-     * without its write: libgit2 diffs the two through iterators, an entry
-     * unmodified where its id and its mode agree, and writes no object — an id
-     * whose object is not written yet is compared by the id alone */
+     * without its write (stage_diff) */
     git_diff *diff = NULL;
-    int rc = git_diff_tree_to_index(&diff, st->repo, st->tree, st->index, NULL);
-    if (rc < 0) {
-        return error_git(rc, "Failed to compare the tree of '%s'", st->refname);
-    }
+    error_t err = stage_diff(st, &diff);
+    if (err) return err;
 
     /* An unmodified entry is no delta, so any delta is a move */
     *out = git_diff_num_deltas(diff) > 0;
     git_diff_free(diff);
 
+    return NULL;
+}
+
+/**
+ * What stood on one side of a delta: Git's type for its mode (stage_mode_type),
+ * or GIT_OBJECT_INVALID where nothing stands — an addition's first side, a
+ * removal's second
+ *
+ * Absence is read off libgit2's own word for it, the flag that a file exists on
+ * the side (include/git2/diff.h GIT_DIFF_FLAG_EXISTS), never off the mode 0 a
+ * zeroed delta leaves such a side at (lib/libgit2/src/libgit2/diff_generate.c
+ * diff_delta__alloc): a hand's tree can spell 0 (tree.c parse_mode), which the
+ * walk reads as a blob.
+ *
+ * Reader: stage_changes, each delta's two sides.
+ */
+static git_object_t stage_side_type(const git_diff_file *side) {
+    return side->flags & GIT_DIFF_FLAG_EXISTS
+        ? stage_mode_type(side->mode) : GIT_OBJECT_INVALID;
+}
+
+error_t stage_changes(const stage_t *st, arena_t *arena, stage_changes_t *out) {
+    CHECK_NULL(st);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    /* The comparison stage_changed asks, its deltas read rather than counted
+     * (stage_diff) */
+    git_diff *diff = NULL;
+    error_t err = stage_diff(st, &diff);
+    if (err) return err;
+
+    /* Each delta kept, in the order the comparison made them: its name, one string
+     * for both sides since no rename is asked (diff_generate.c diff_delta__alloc),
+     * copied out of the diff that goes, and what stood on each side. The room
+     * is made at once, and an arena's answer is never NULL, for no delta either */
+    const size_t count = git_diff_num_deltas(diff);
+    stage_change_t *entries = arena_calloc(arena, count, sizeof(*entries));
+    for (size_t i = 0; i < count; i++) {
+        const git_diff_delta *delta = git_diff_get_delta(diff, i);
+        entries[i] = (stage_change_t){
+            .path = arena_strdup(arena, delta->new_file.path),
+            .before = stage_side_type(&delta->old_file),
+            .after = stage_side_type(&delta->new_file),
+        };
+    }
+    git_diff_free(diff);
+
+    *out = (stage_changes_t){ .entries = entries, .count = count };
     return NULL;
 }
 

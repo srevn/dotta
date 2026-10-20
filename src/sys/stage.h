@@ -350,7 +350,9 @@ error_t stage_remove(stage_t *st, const char *path);
  * leave the database as it found it, and an id put before its object is written
  * is compared by the id alone. An entry put back as the tree holds it moves
  * nothing; an orphan's stage is compared against the empty tree. About 0.1 µs
- * an entry.
+ * an entry. The comparison is stage_changes' too, which keeps the entries, so
+ * the two cannot part; that it reads a type change as one entry moves no answer
+ * here.
  *
  * Reader: core/profiles.c profile_changed, the sheet's comparison beside it.
  *
@@ -360,6 +362,55 @@ error_t stage_remove(stage_t *st, const char *path);
  *         needs a store that changed beneath the stage
  */
 error_t stage_changed(const stage_t *st, bool *out);
+
+/**
+ * One entry the puts and removals moved: its name, and what stood at it on either
+ * side
+ *
+ * A side is Git's type for what stands at the name there: GIT_OBJECT_BLOB for a
+ * blob of any mode its tree spells — bytes, an executable, a link — and
+ * GIT_OBJECT_COMMIT for a gitlink; GIT_OBJECT_INVALID where nothing stands. Never
+ * a tree: the comparison descends into every one.
+ */
+typedef struct {
+    const char *path;       /* The entry's name */
+    git_object_t before;    /* What stood at it in the tree the stage opened at */
+    git_object_t after;     /* What stands at it in the tree the commit would record */
+} stage_change_t;
+
+/**
+ * The entries the puts and removals moved, in path order: stage_changes' answer
+ */
+typedef struct {
+    const stage_change_t *entries;
+    size_t count;
+} stage_changes_t;
+
+/**
+ * The entries the puts and removals so far move, each with what stood at it on
+ * either side
+ *
+ * stage_changed's comparison with its entries kept, so the list and the bool
+ * cannot part. A type change — a blob become a link, a gitlink a blob — is one
+ * entry, where libgit2 would split it in two
+ * (lib/libgit2/src/libgit2/diff_generate.c maybe_modified,
+ * GIT_DIFF_INCLUDE_TYPECHANGE). A side is read as libgit2 reads a tree entry's
+ * type (tree.c git_tree_entry_type), off the mode the comparison hands on as
+ * the tree spelled it (iterator.c tree_iterator_set_current), so a blob a hand's
+ * tree spells 100664 is a blob as the profile's walk reads it. In path order,
+ * byte by byte as strcmp reads it: the index is ownerless, so case-sensitive,
+ * and the comparison walks it and the tree — a tree as Git writes one, its names
+ * sorted — in that order, re-sorting only an ignore-case index's deltas
+ * (diff_generate.c git_diff_tree_to_index). Nothing is written, so a dry run
+ * may ask it; an id put before its object is compared by the id alone.
+ *
+ * @param st Stage (must not be NULL)
+ * @param arena The arena the entries and their names live in (must not be NULL)
+ * @param out The entries (must not be NULL; written on success alone)
+ * @return Error or NULL on success: a tree the comparison could not read, which
+ *         needs a store that changed beneath the stage
+ */
+error_t stage_changes(const stage_t *st, arena_t *arena, stage_changes_t *out);
 
 /**
  * The tree, and — when it differs from the opened one — one commit

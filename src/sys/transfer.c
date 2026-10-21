@@ -33,20 +33,6 @@ typedef enum {
 } credential_state_t;
 
 /**
- * Outcome of the most recent op within a transfer session (file-local).
- *
- * What the credential state machine advances on (transfer_op_end). No caller
- * reads it: a failure says whose refusal it was in its own words, the credential
- * callback's among them (transfer_credentials_callback).
- */
-typedef enum {
-    TRANSFER_OUTCOME_NONE = 0,     /* No op has completed in this session. */
-    TRANSFER_OUTCOME_OK,           /* Op succeeded. */
-    TRANSFER_OUTCOME_AUTH_FAILED,  /* Op failed with an authentication error. */
-    TRANSFER_OUTCOME_OTHER_FAILURE /* Op failed for a non-auth reason. */
-} transfer_outcome_t;
-
-/**
  * Transfer context.
  *
  * Owns the full lifecycle of a network session against one remote:
@@ -55,10 +41,10 @@ typedef enum {
  *   - Credential identity (URL, cached username/password)
  *   - Credential state machine (acquisition → validation / rejection)
  *
- * Per-op counters (op_attempts, last_outcome, op scratch) are reset by
- * transfer_op_begin and classified/folded by transfer_op_end. The cached
- * credentials are filled at most once per session by the first successful helper
- * fill (cache-once identity pinning).
+ * Per-op counters (op_attempts, op scratch) are reset by transfer_op_begin;
+ * transfer_op_end folds the scratch and advances the credential state machine
+ * on the op's return code. The cached credentials are filled at most once per
+ * session by the first successful helper fill (cache-once identity pinning).
  */
 struct transfer_context_s {
     output_t *output;               /* Borrowed. */
@@ -85,7 +71,6 @@ struct transfer_context_s {
 
     /* Session state machine */
     credential_state_t credential_state;
-    transfer_outcome_t last_outcome;
     int op_attempts;                /* Per-op anti-loop counter. */
 
     /* Transport classification (cached from `url` at create time). True for file://
@@ -132,25 +117,6 @@ static bool url_is_local(const char *url) {
 
     /* No scheme, no SCP-style marker → filesystem path. */
     return true;
-}
-
-/**
- * Map a libgit2 return code to a transfer outcome class.
- *
- * GIT_EAUTH is libgit2's auth-failure code: the credential callback returns it
- * when it gives up (transfer_credentials_callback), and libgit2 where a remote
- * asks for credentials no callback could give (transports/http.c handle_auth,
- * transports/ssh_libssh2.c request_creds). We treat it as definitive.
- *
- * A run that exhausts libgit2's own replay budget is GIT_ERROR — "the exact cause
- * is unclear", in its words (transports/http.c http_stream_read) — and classifies
- * as OTHER_FAILURE, as do the auth failures some TLS and SSH paths surface as
- * other errors: their credentials stay pending, neither approved nor rejected.
- */
-static transfer_outcome_t classify_outcome(int rc) {
-    if (rc == 0) return TRANSFER_OUTCOME_OK;
-    if (rc == GIT_EAUTH) return TRANSFER_OUTCOME_AUTH_FAILED;
-    return TRANSFER_OUTCOME_OTHER_FAILURE;
 }
 
 /**
@@ -265,13 +231,12 @@ void transfer_context_free(transfer_context_t *ctx) {
 void transfer_op_begin(transfer_context_t *xfer, git_direction direction) {
     if (!xfer) return;
     xfer->op_attempts = 0;
-    xfer->last_outcome = TRANSFER_OUTCOME_NONE;
     xfer->op.direction = direction;
     xfer->op.wire = (transfer_wire_t){ 0 };
 }
 
 /**
- * End an op — end its progress line, fold stats, classify outcome, advance state
+ * End an op — end its progress line, fold stats, advance the credential state
  * machine.
  */
 void transfer_op_end(transfer_context_t *xfer, int rc) {
@@ -294,8 +259,6 @@ void transfer_op_end(transfer_context_t *xfer, int rc) {
         xfer->progress_active = false;
     }
 
-    xfer->last_outcome = classify_outcome(rc);
-
     /* Fold what the op moved into its direction's. An op that failed folds nothing,
      * and one that moved nothing — connect+ls (list_remote_branches), an up-to-date
      * fetch — adds nothing. */
@@ -315,18 +278,20 @@ void transfer_op_end(transfer_context_t *xfer, int rc) {
         return;
     }
 
-    switch (xfer->last_outcome) {
-        case TRANSFER_OUTCOME_OK:
-            xfer->credential_state = CRED_STATE_VALIDATED;
-            break;
-        case TRANSFER_OUTCOME_AUTH_FAILED:
-            xfer->credential_state = CRED_STATE_REJECTED;
-            break;
-        case TRANSFER_OUTCOME_OTHER_FAILURE:
-        case TRANSFER_OUTCOME_NONE:
-            /* Non-auth failure: session identity is still pending; a subsequent
-             * op may validate or invalidate it. */
-            break;
+    /* The helper's pair, judged by the op it served. An op that succeeded validates
+     * it. GIT_EAUTH, libgit2's auth-failure code, rejects it definitively: the
+     * credential callback returns it when it gives up
+     * (transfer_credentials_callback), and libgit2 where a remote asks for
+     * credentials no callback could give (transports/http.c handle_auth,
+     * transports/ssh_libssh2.c request_creds). Any other failure leaves the
+     * identity pending, for a later op to validate or reject: a network hiccup,
+     * a run that exhausts libgit2's own replay budget — GIT_ERROR, "the exact
+     * cause is unclear" in its words (transports/http.c http_stream_read) — and
+     * the auth failures some TLS and SSH paths surface as other errors. */
+    if (rc == 0) {
+        xfer->credential_state = CRED_STATE_VALIDATED;
+    } else if (rc == GIT_EAUTH) {
+        xfer->credential_state = CRED_STATE_REJECTED;
     }
 }
 

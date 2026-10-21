@@ -87,9 +87,9 @@ void transfer_context_free(transfer_context_t *ctx);
 /**
  * Begin an op on this transfer session.
  *
- * Resets per-op scratch (anti-loop attempts, last_outcome, the op's wire). Records
- * the direction so transfer_op_end() knows which side of transfer_stats_t to
- * fold into on success.
+ * Resets per-op scratch (anti-loop attempts, the op's wire). Records the direction
+ * so transfer_op_end() knows which side of transfer_stats_t to fold into on
+ * success.
  *
  * Pair with transfer_op_end() around each libgit2 network call (git_clone,
  * git_remote_fetch, git_remote_push, git_remote_connect).
@@ -109,12 +109,12 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
  * succeeded and a bare newline for one that failed. So no line outlives its op,
  * and a caller that announced the op on that line finds only its announce left.
  *
- * Classifies `rc` into last_outcome and advances the credential state machine:
+ * Advances the credential state machine on `rc`:
  *
  *   NOT_ACQUIRED  + anything     → NOT_ACQUIRED   (no helper fill happened)
- *   ACQUIRED      + OK           → VALIDATED      (terminal)
- *   ACQUIRED      + AUTH_FAILED  → REJECTED       (terminal)
- *   ACQUIRED      + OTHER        → ACQUIRED       (network hiccup, etc.)
+ *   ACQUIRED      + 0            → VALIDATED      (terminal)
+ *   ACQUIRED      + GIT_EAUTH    → REJECTED       (terminal)
+ *   ACQUIRED      + any other    → ACQUIRED       (network hiccup, etc.)
  *   VALIDATED     + anything     → VALIDATED      (terminal-absorbing)
  *   REJECTED      + anything     → REJECTED       (terminal-absorbing)
  *

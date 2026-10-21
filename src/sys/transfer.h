@@ -26,25 +26,28 @@
 typedef struct transfer_context_s transfer_context_t;
 
 /**
- * Cumulative transfer metrics for a session.
+ * What moved on the wire, one way
+ */
+typedef struct {
+    size_t objects;             /* Objects received or sent */
+    size_t bytes;               /* Their bytes; 0 where the transport counts none (a local push) */
+} transfer_wire_t;
+
+/**
+ * Cumulative transfer metrics for a session: what it received and what it sent.
  *
- * Aggregated across every op that actually transferred data. Fetches of zero
- * objects (up-to-date) and connect-only ops (remote_ls) are not counted — the
- * intent is "what moved", not "how many syscalls".
+ * Every op that succeeded folds what it moved into its direction's at its end
+ * (transfer_op_end): a fetch into received, a push into sent. A failed op folds
+ * nothing, and an op that moved nothing — an up-to-date fetch, a connect that
+ * lists the remote's heads — adds nothing: the intent is "what moved", not "how
+ * many syscalls".
  *
  * Fed by the libgit2 progress callbacks TTY-independently, so metrics are accurate
  * on pipes and logs, not just interactive terminals. Access via transfer_stats().
  */
 typedef struct {
-    /* Fetch direction */
-    size_t fetch_ops;           /* Fetch ops that received data. */
-    size_t objects_received;    /* Cumulative objects received. */
-    size_t bytes_received;      /* Cumulative bytes received. */
-
-    /* Push direction */
-    size_t push_ops;            /* Push ops that sent data. */
-    size_t objects_sent;        /* Cumulative objects sent. */
-    size_t bytes_sent;          /* Cumulative bytes sent. */
+    transfer_wire_t received;   /* Every fetch's */
+    transfer_wire_t sent;       /* Every push's */
 } transfer_stats_t;
 
 /**
@@ -81,7 +84,7 @@ void transfer_context_free(transfer_context_t *ctx);
 /**
  * Begin an op on this transfer session.
  *
- * Resets per-op scratch (anti-loop attempts, last_outcome, stats scratch). Records
+ * Resets per-op scratch (anti-loop attempts, last_outcome, the op's wire). Records
  * the direction so transfer_op_end() knows which side of transfer_stats_t to
  * fold into on success.
  *
@@ -122,15 +125,15 @@ void transfer_op_end(transfer_context_t *xfer, int rc);
 /**
  * Return the cumulative transfer stats for this session.
  *
- * Read-only view. Updated by transfer_op_end when an op completes successfully
- * with data transferred.
+ * Read-only view. Updated by transfer_op_end, each op that succeeds folding in
+ * what it moved.
  *
  * NULL-safe (returns NULL).
  */
 const transfer_stats_t *transfer_stats(const transfer_context_t *xfer);
 
 /**
- * Emit a one-line summary of the session's transfer activity.
+ * Emit a summary of the session's transfer activity, a line a direction.
  *
  * Writes "Fetched N objects (SIZE)" and/or "Pushed N objects (SIZE)" to `out`
  * at the given verbosity level. Silent when:

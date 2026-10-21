@@ -75,8 +75,7 @@ struct transfer_context_s {
      * into `stats` by transfer_op_end on success. Reset by transfer_op_begin. */
     struct {
         git_direction direction;    /* Op direction (fetch/push). */
-        size_t last_count;          /* Last received_objects or current. */
-        size_t last_bytes;          /* Last received_bytes or bytes. */
+        transfer_wire_t wire;       /* What it moved: the callbacks' latest counts. */
     } op;
 
     /* Credential session identity */
@@ -269,8 +268,7 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction) {
     xfer->op_attempts = 0;
     xfer->last_outcome = TRANSFER_OUTCOME_NONE;
     xfer->op.direction = direction;
-    xfer->op.last_count = 0;
-    xfer->op.last_bytes = 0;
+    xfer->op.wire = (transfer_wire_t){ 0 };
 }
 
 /**
@@ -299,19 +297,16 @@ void transfer_op_end(transfer_context_t *xfer, int rc) {
 
     xfer->last_outcome = classify_outcome(rc);
 
-    /* Fold per-op values into cumulative stats. Only count ops that actually
-     * transferred data — connect+ls (list_remote_branches) and up-to-date fetches
-     * would otherwise pollute the summary. */
-    if (rc == 0 &&
-        (xfer->op.last_count > 0 || xfer->op.last_bytes > 0)) {
+    /* Fold what the op moved into its direction's. An op that failed folds nothing,
+     * and one that moved nothing — connect+ls (list_remote_branches), an up-to-date
+     * fetch — adds nothing. */
+    if (rc == 0) {
         if (xfer->op.direction == GIT_DIRECTION_PUSH) {
-            xfer->stats.push_ops++;
-            xfer->stats.objects_sent += xfer->op.last_count;
-            xfer->stats.bytes_sent += xfer->op.last_bytes;
+            xfer->stats.sent.objects += xfer->op.wire.objects;
+            xfer->stats.sent.bytes += xfer->op.wire.bytes;
         } else {
-            xfer->stats.fetch_ops++;
-            xfer->stats.objects_received += xfer->op.last_count;
-            xfer->stats.bytes_received += xfer->op.last_bytes;
+            xfer->stats.received.objects += xfer->op.wire.objects;
+            xfer->stats.received.bytes += xfer->op.wire.bytes;
         }
     }
 
@@ -344,7 +339,37 @@ const transfer_stats_t *transfer_stats(const transfer_context_t *xfer) {
 }
 
 /**
- * Emit a one-line summary of the session's transfer activity.
+ * Print one direction's line of the summary, "<verb> N objects (SIZE)" — none
+ * where it moved nothing
+ */
+static void transfer_print_wire(
+    output_t *out,
+    output_verbosity_t level,
+    const char *verb,
+    transfer_wire_t wire
+) {
+    if (wire.objects == 0) return;
+
+    /* A local push counts no bytes (see push callback): the "(SIZE)" suffix is
+     * suppressed rather than reporting a bogus value */
+    if (wire.bytes == 0) {
+        output_info(
+            out, level, "%s %zu object%s",
+            verb, wire.objects, wire.objects == 1 ? "" : "s"
+        );
+        return;
+    }
+
+    char bytes_str[32];
+    output_format_size(wire.bytes, bytes_str, sizeof(bytes_str));
+    output_info(
+        out, level, "%s %zu object%s (%s)",
+        verb, wire.objects, wire.objects == 1 ? "" : "s", bytes_str
+    );
+}
+
+/**
+ * Emit a summary of the session's transfer activity, a line a direction.
  *
  * Silent on failed sessions (errors already carry the narrative) and on sessions
  * with no data transferred (nothing to report).
@@ -361,46 +386,8 @@ void transfer_summarize(
         return;
     }
 
-    const transfer_stats_t *s = &xfer->stats;
-    char bytes_str[32];
-
-    if (s->objects_received > 0) {
-        if (s->bytes_received > 0) {
-            output_format_size(s->bytes_received, bytes_str, sizeof(bytes_str));
-            output_info(
-                out, level, "Fetched %zu object%s (%s)",
-                s->objects_received,
-                s->objects_received == 1 ? "" : "s",
-                bytes_str
-            );
-        } else {
-            output_info(
-                out, level, "Fetched %zu object%s",
-                s->objects_received,
-                s->objects_received == 1 ? "" : "s"
-            );
-        }
-    }
-
-    if (s->objects_sent > 0) {
-        /* Local transports leave bytes_sent at zero (see push callback). Suppress
-         * the "(SIZE)" suffix rather than reporting a bogus value. */
-        if (s->bytes_sent > 0) {
-            output_format_size(s->bytes_sent, bytes_str, sizeof(bytes_str));
-            output_info(
-                out, level, "Pushed %zu object%s (%s)",
-                s->objects_sent,
-                s->objects_sent == 1 ? "" : "s",
-                bytes_str
-            );
-        } else {
-            output_info(
-                out, level, "Pushed %zu object%s",
-                s->objects_sent,
-                s->objects_sent == 1 ? "" : "s"
-            );
-        }
-    }
+    transfer_print_wire(out, level, "Fetched", xfer->stats.received);
+    transfer_print_wire(out, level, "Pushed", xfer->stats.sent);
 }
 
 /**
@@ -585,8 +572,10 @@ int transfer_progress_callback(
 
     /* Record latest values for the stats fold at op_end. TTY-independent: running
      * in a pipe or over a log must still produce correct totals. */
-    ctx->op.last_count = stats->received_objects;
-    ctx->op.last_bytes = stats->received_bytes;
+    ctx->op.wire = (transfer_wire_t){
+        .objects = stats->received_objects,
+        .bytes = stats->received_bytes,
+    };
 
     /* Skip progress if no output context or below NORMAL verbosity */
     if (!ctx->output || ctx->output->verbosity < OUTPUT_NORMAL) {
@@ -646,8 +635,10 @@ int transfer_push_progress_callback(
      * local transports libgit2 does not populate `bytes` meaningfully (no wire
      * to count) — treat it as absent rather than fold garbage into the session
      * total. */
-    ctx->op.last_count = current;
-    ctx->op.last_bytes = ctx->local_transport ? 0 : bytes;
+    ctx->op.wire = (transfer_wire_t){
+        .objects = current,
+        .bytes = ctx->local_transport ? 0 : bytes,
+    };
 
     /* Skip progress if no output context or below NORMAL verbosity */
     if (!ctx->output || ctx->output->verbosity < OUTPUT_NORMAL) {

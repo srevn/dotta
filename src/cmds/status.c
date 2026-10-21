@@ -1567,8 +1567,8 @@ static void status_print_remote(
         }
 
         /* The state's face comes from the shared map — its glyph, its colour
-         * and its phrase, read as sync's rows read it (cmds/sync.c
-         * sync_print_head); only the frame and the per-state counter are
+         * and its phrase, read as sync's rows read it (cmds/sync.c sync_print_lead,
+         * sync_print_state); only the frame and the per-state counter are
          * status's. */
         const char *symbol = upstream_state_symbol(info.state);
         output_color_t color = upstream_state_color(info.state);

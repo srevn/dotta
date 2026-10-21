@@ -59,8 +59,8 @@ typedef enum {
 
 /**
  * Whose word withholds an act: the user's own, given before the run — each
- * withholds the acts of its direction (sync_decide), said on the row's head beside
- * the act (sync_print_head)
+ * withholds the acts of its direction (sync_decide), said on the row beside the
+ * act (sync_print_withheld)
  */
 typedef enum {
     SYNC_REASON_NO_PUSH,        /* --no-push: every move to the remote */
@@ -70,8 +70,8 @@ typedef enum {
 
 /**
  * What carrying a row's verdict out came to — read by the receipt
- * (sync_print_receipt) and, through the row's error, by the run's failure
- * (sync_failure)
+ * (sync_print_receipt) and the glyph its rows lead with (sync_print_lead), and,
+ * through the row's error, by the run's failure (sync_failure)
  */
 typedef enum {
     SYNC_OUTCOME_NONE,          /* Not carried out: no act, or the run stopped before the row */
@@ -122,8 +122,8 @@ typedef struct {
 } sync_guard_t;
 
 /**
- * A verdict's word: the act a row's head says was withheld (sync_print_head),
- * and the resolution a rollback's refusal names (sync_rollback)
+ * A verdict's word: the act a row says was withheld (sync_print_withheld), and
+ * the resolution a rollback's refusal names (sync_rollback)
  */
 static const char *sync_verdict_name(sync_verdict_t verdict) {
     switch (verdict) {
@@ -287,7 +287,7 @@ static sync_verdict_t sync_verdict(upstream_state_t state, sync_strategy_t strat
 }
 
 /**
- * Withhold the row's act whole: the row stays as the analysis read it, its head
+ * Withhold the row's act whole: the row stays as the analysis read it, its line
  * saying the act and whose word kept it
  */
 static void sync_withhold(sync_row_t *row, sync_reason_t reason) {
@@ -645,235 +645,243 @@ static error_t sync_execute(
 }
 
 /**
- * Print a row's head: its glyph, its profile and its state's phrase, then what
- * the user's word withheld of it
+ * Print a row's lead: its glyph, then its profile — the words every row of the
+ * table sets before its clause
  *
- * The state's face is sys/upstream.h's whole — its glyph, its colour and its
- * phrase, read as status's rows read it (cmds/status.c status_print_remote) —
- * and the line is whole in the colour. Up to date is verbose's: at normal the
- * run counts it (sync_print_up_to_date).
+ * The glyph is read off the row alone, alike in both tenses: ✗ where the row
+ * holds an error — exactly the rows the run's failure counts (sync_failure) — ✓
+ * where an act was carried out whole, and otherwise the state the row stands
+ * in, sys/upstream.h's face for it, read as status's rows read it (cmds/status.c
+ * status_print_remote). The glyph alone carries the row's colour; the profile
+ * is cyan, as every screen spells one.
  */
-static void sync_print_head(output_t *out, const sync_row_t *row) {
-    const upstream_info_t *up = &row->upstream;
-    const output_verbosity_t level =
-        up->state == UPSTREAM_UP_TO_DATE ? OUTPUT_VERBOSE : OUTPUT_NORMAL;
-    const output_color_t color = upstream_state_color(up->state);
-    const char *glyph = upstream_state_symbol(up->state);
-
-    char phrase[UPSTREAM_PHRASE_MAX];
-    upstream_state_phrase(up, phrase, sizeof(phrase));
-
-    output_colored(out, level, color, "  %s %s: %s", glyph, row->profile, phrase);
-    if (row->withheld != SYNC_VERDICT_NONE) {
+static void sync_print_lead(output_t *out, const sync_row_t *row) {
+    if (row->error) {
+        output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "  ✗");
+    } else if (row->outcome == SYNC_OUTCOME_DONE) {
+        output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN, "  ✓");
+    } else {
+        /* Where it stands: as the analysis read it, or up to date where the pull
+         * found it so, another process's pull before it */
+        const upstream_state_t state = row->outcome == SYNC_OUTCOME_UP_TO_DATE
+            ? UPSTREAM_UP_TO_DATE : row->upstream.state;
         output_colored(
-            out, level, color, ", %s skipped (%s)",
-            sync_verdict_name(row->withheld), sync_reason_name(row->reason)
+            out, OUTPUT_NORMAL, upstream_state_color(state), "  %s",
+            upstream_state_symbol(state)
         );
     }
-    output_endline(out, level);
+    output_print(out, OUTPUT_NORMAL, " {cyan}%s{reset}: ", row->profile);
 }
 
 /**
- * Print a row the run does not act on, alike in both tenses: its failure, or
- * its head — beneath a divergence warn leaves, the strategies that would resolve it
+ * Print where a row no act moved stands, alike in both tenses: its state's phrase
+ * (sys/upstream.h upstream_state_phrase), or the analysis's failure where it
+ * read none
  *
- * Read by the preview and the receipt for a row with no verdict, and by the receipt
- * for a push or a pull that failed: the act's cause stands on the row's one line,
- * as an analysis's does.
+ * The clause of a row the run does not act on, in the preview and the receipt
+ * alike, so the two tenses cannot drift — and of a row the run stopped before,
+ * a rollback that failed above it: nothing moved it, and the run's error says
+ * why it went unreached.
  */
-static void sync_print_row(output_t *out, const sync_row_t *row) {
+static void sync_print_state(output_t *out, const sync_row_t *row) {
     if (row->error) {
-        output_print(
-            out, OUTPUT_NORMAL, "  {red}✗{reset} {red}%s{reset}: %s\n",
-            row->profile, error_line(row->error)
-        );
+        output_print(out, OUTPUT_NORMAL, "%s", error_line(row->error));
         return;
     }
 
-    sync_print_head(out, row);
+    char phrase[UPSTREAM_PHRASE_MAX];
+    upstream_state_phrase(&row->upstream, phrase, sizeof(phrase));
+    output_print(out, OUTPUT_NORMAL, "%s", phrase);
+}
 
-    /* warn's divergence: the strategies that resolve, each in the phrase completion
-     * shows for it — the vocabulary's rows, read, not spelled again here. A
-     * divergence whose resolution a word withheld says so on its head. */
-    if (row->upstream.state == UPSTREAM_DIVERGED && row->withheld == SYNC_VERDICT_NONE) {
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "    Use --diverged=<strategy> or set diverged_strategy in config:"
-        );
-        for (size_t s = 0; s < CONFIG_STRATEGY_COUNT; s++) {
-            if (s != SYNC_STRATEGY_WARN) {
-                output_hintline(
-                    out, OUTPUT_NORMAL, "      %s: %s",
-                    config_strategies[s].name, config_strategies[s].summary
-                );
+/**
+ * Print what the user's word withheld of the row's act, after its clause: the
+ * act, and whose word kept it (sync_decide) — nothing on a failed row, whose
+ * clause is its cause alone
+ */
+static void sync_print_withheld(output_t *out, const sync_row_t *row) {
+    if (row->error || row->withheld == SYNC_VERDICT_NONE) return;
+
+    output_print(
+        out, OUTPUT_NORMAL, ", %s skipped (%s)",
+        sync_verdict_name(row->withheld), sync_reason_name(row->reason)
+    );
+}
+
+/**
+ * Print the remedies the rows call for, closing the table: one line a family,
+ * said once however many rows call for it
+ *
+ * One family: a divergence warn leaves — no failure, no act, and no word of the
+ * user's that withheld one; under any other strategy a divergence has its act,
+ * or its row says the word that kept it. The line names the flag and the key,
+ * and the strategies that resolve by their words (utils/config.h
+ * config_strategies), warn left out; what each does is --help's and completion's.
+ */
+static void sync_print_remedies(output_t *out, const sync_rows_t *rows) {
+    for (size_t i = 0; i < rows->count; i++) {
+        const sync_row_t *row = &rows->entries[i];
+
+        if (!row->error && row->upstream.state == UPSTREAM_DIVERGED &&
+            row->verdict == SYNC_VERDICT_NONE && row->withheld == SYNC_VERDICT_NONE) {
+            output_print(
+                out, OUTPUT_NORMAL,
+                "  Use --diverged=<strategy> or set diverged_strategy in config: "
+            );
+
+            /* Every strategy but warn's, in the vocabulary's order: ", " between
+             * two, " or " before the last */
+            size_t left = CONFIG_STRATEGY_COUNT - 1;
+            const char *sep = "";
+            for (size_t s = 0; s < CONFIG_STRATEGY_COUNT; s++) {
+                if (s == SYNC_STRATEGY_WARN) continue;
+
+                output_print(out, OUTPUT_NORMAL, "%s%s", sep, config_strategies[s].name);
+                left--;
+                sep = left == 1 ? " or " : ", ";
             }
+            output_endline(out, OUTPUT_NORMAL);
+            return;
         }
     }
 }
 
 /**
- * The rows the run has nothing to do for: no failure, and the two sides agree —
- * each saying so at verbose alone (sync_print_head). Read by the preview's and
- * the receipt's level, and counted at normal (sync_print_up_to_date).
- */
-static size_t sync_up_to_date(const sync_rows_t *rows) {
-    size_t count = 0;
-
-    for (size_t i = 0; i < rows->count; i++) {
-        const sync_row_t *row = &rows->entries[i];
-        if (!row->error && row->upstream.state == UPSTREAM_UP_TO_DATE) count++;
-    }
-
-    return count;
-}
-
-/**
  * Print the preview: what the run will do, profile by profile in the scope's
- * order — a dry run's block, or the question's preamble where one is asked
+ * order, titled by the remote — a dry run's block, or the question's preamble
+ * where one is asked
  *
- * The receipt's sibling (sync_print_receipt), in the future tense: a row the
- * run does not act on is said by the printer both read (sync_print_row), so the
- * two tenses cannot drift. A push and a pull are the row's one line; a resolution,
- * a force push and a reset its head, then the act beneath it, with what it
- * discards. The block opens at normal where a row speaks there, at verbose where
- * every row is up to date.
+ * The receipt's sibling (sync_print_receipt), in the future tense, each row in
+ * the line both print: its lead, its clause, what the user's word withheld. A
+ * row the run does not act on says where it stands, as the receipt says it
+ * (sync_print_state); one it acts on, the act and what it discards. The remedies
+ * its rows call for close it (sync_print_remedies).
  */
-static void sync_print_preview(output_t *out, const sync_rows_t *rows) {
-    output_section(
-        out, sync_up_to_date(rows) < rows->count ? OUTPUT_NORMAL : OUTPUT_VERBOSE,
-        "Sync preview"
-    );
+static void sync_print_preview(
+    output_t *out,
+    const char *remote_name,
+    const sync_rows_t *rows
+) {
+    output_section(out, OUTPUT_NORMAL, "Sync preview for '{cyan}%s{reset}'", remote_name);
 
     for (size_t i = 0; i < rows->count; i++) {
         const sync_row_t *row = &rows->entries[i];
         const upstream_info_t *up = &row->upstream;
-        const char *glyph = upstream_state_symbol(up->state);
-        const output_color_t color = upstream_state_color(up->state);
 
+        sync_print_lead(out, row);
         switch (row->verdict) {
             case SYNC_VERDICT_NONE:
-                sync_print_row(out, row);
+                sync_print_state(out, row);
                 break;
 
             case SYNC_VERDICT_PUSH:
                 if (up->state == UPSTREAM_NO_REMOTE) {
-                    output_colored(
-                        out, OUTPUT_NORMAL, color, "  %s %s: will create remote branch\n",
-                        glyph, row->profile
+                    output_print(
+                        out, OUTPUT_NORMAL, "will create remote branch"
                     );
                 } else {
-                    output_colored(
-                        out, OUTPUT_NORMAL, color, "  %s %s: will push %zu commit%s\n",
-                        glyph, row->profile, up->ahead, up->ahead == 1 ? "" : "s"
+                    output_print(
+                        out, OUTPUT_NORMAL, "will push %zu commit%s",
+                        up->ahead, up->ahead == 1 ? "" : "s"
                     );
                 }
                 break;
 
             case SYNC_VERDICT_PULL:
-                output_colored(
-                    out, OUTPUT_NORMAL, color, "  %s %s: will pull %zu commit%s\n",
-                    glyph, row->profile, up->behind, up->behind == 1 ? "" : "s"
+                output_print(
+                    out, OUTPUT_NORMAL, "will pull %zu commit%s",
+                    up->behind, up->behind == 1 ? "" : "s"
                 );
                 break;
 
             case SYNC_VERDICT_REBASE:
-                sync_print_head(out, row);
-                output_info(
-                    out, OUTPUT_NORMAL, "    Will rebase onto remote%s",
+                output_print(
+                    out, OUTPUT_NORMAL, "will rebase onto the remote%s",
                     row->withheld == SYNC_VERDICT_PUSH ? "" : ", then push"
                 );
                 break;
 
             case SYNC_VERDICT_MERGE:
-                sync_print_head(out, row);
-                output_info(
-                    out, OUTPUT_NORMAL, "    Will merge with remote%s",
+                output_print(
+                    out, OUTPUT_NORMAL, "will merge the remote%s",
                     row->withheld == SYNC_VERDICT_PUSH ? "" : ", then push"
                 );
                 break;
 
             case SYNC_VERDICT_FORCE_PUSH:
-                sync_print_head(out, row);
-                output_info(
-                    out, OUTPUT_NORMAL, "    Will force push, discarding the remote's %zu commit%s",
+                output_print(
+                    out, OUTPUT_NORMAL, "will force push, discarding the remote's %zu commit%s",
                     up->behind, up->behind == 1 ? "" : "s"
                 );
                 break;
 
             case SYNC_VERDICT_RESET:
-                sync_print_head(out, row);
-                output_info(
-                    out, OUTPUT_NORMAL, "    Will reset to remote, discarding %zu local commit%s",
+                output_print(
+                    out, OUTPUT_NORMAL, "will reset to the remote, discarding %zu local commit%s",
                     up->ahead, up->ahead == 1 ? "" : "s"
                 );
                 break;
         }
+        sync_print_withheld(out, row);
+        output_endline(out, OUTPUT_NORMAL);
     }
+
+    sync_print_remedies(out, rows);
 }
 
 /**
- * Print what an act carried out whole did, in the preview's words in the past
- * tense (sync_print_preview): a push's and a pull's row line, or a resolution's,
- * a force push's and a reset's head with the act beneath it
+ * Print what an act carried out whole did: the preview's act in the past tense
+ * (sync_print_preview), with what it discarded
  */
 static void sync_print_done(output_t *out, const sync_row_t *row) {
     const upstream_info_t *up = &row->upstream;
 
     switch (row->verdict) {
         case SYNC_VERDICT_NONE:
-            break;
+            break;  /* A row carried out has its act */
 
         case SYNC_VERDICT_PUSH:
             if (up->state == UPSTREAM_NO_REMOTE) {
-                output_print(
-                    out, OUTPUT_NORMAL,
-                    "  {green}✓{reset} {green}%s{reset}: created remote branch\n", row->profile
-                );
+                output_print(out, OUTPUT_NORMAL, "created remote branch");
             } else {
                 output_print(
-                    out, OUTPUT_NORMAL, "  {green}✓{reset} {green}%s{reset}: pushed %zu commit%s\n",
-                    row->profile, up->ahead, up->ahead == 1 ? "" : "s"
+                    out, OUTPUT_NORMAL, "pushed %zu commit%s",
+                    up->ahead, up->ahead == 1 ? "" : "s"
                 );
             }
             break;
 
         case SYNC_VERDICT_PULL:
             output_print(
-                out, OUTPUT_NORMAL, "  {green}✓{reset} {green}%s{reset}: pulled %zu commit%s\n",
-                row->profile, up->behind, up->behind == 1 ? "" : "s"
+                out, OUTPUT_NORMAL, "pulled %zu commit%s",
+                up->behind, up->behind == 1 ? "" : "s"
             );
             break;
 
         case SYNC_VERDICT_REBASE:
-            sync_print_head(out, row);
-            output_print(out, OUTPUT_NORMAL, "    {green}✓{reset} Rebased onto remote\n");
-            if (row->withheld != SYNC_VERDICT_PUSH) {
-                output_print(out, OUTPUT_NORMAL, "    {green}✓{reset} Pushed rebased commits\n");
-            }
+            output_print(
+                out, OUTPUT_NORMAL, "rebased onto the remote%s",
+                row->withheld == SYNC_VERDICT_PUSH ? "" : ", then pushed"
+            );
             break;
 
         case SYNC_VERDICT_MERGE:
-            sync_print_head(out, row);
-            output_print(out, OUTPUT_NORMAL, "    {green}✓{reset} Merged with remote\n");
-            if (row->withheld != SYNC_VERDICT_PUSH) {
-                output_print(out, OUTPUT_NORMAL, "    {green}✓{reset} Pushed merge commit\n");
-            }
+            output_print(
+                out, OUTPUT_NORMAL, "merged the remote%s",
+                row->withheld == SYNC_VERDICT_PUSH ? "" : ", then pushed"
+            );
             break;
 
         case SYNC_VERDICT_FORCE_PUSH:
-            sync_print_head(out, row);
             output_print(
-                out, OUTPUT_NORMAL,
-                "    {green}✓{reset} Force pushed, the remote's %zu commit%s discarded\n",
+                out, OUTPUT_NORMAL, "force pushed, discarding the remote's %zu commit%s",
                 up->behind, up->behind == 1 ? "" : "s"
             );
             break;
 
         case SYNC_VERDICT_RESET:
-            sync_print_head(out, row);
             output_print(
-                out, OUTPUT_NORMAL,
-                "    {green}✓{reset} Reset to remote, %zu local commit%s discarded\n",
+                out, OUTPUT_NORMAL, "reset to the remote, discarding %zu local commit%s",
                 up->ahead, up->ahead == 1 ? "" : "s"
             );
             break;
@@ -882,29 +890,31 @@ static void sync_print_done(output_t *out, const sync_row_t *row) {
 
 /**
  * Print the receipt: what each act came to, profile by profile in the scope's
- * order, once every act is done
+ * order, titled by the remote, once every act is done
  *
- * The preview's sibling (sync_print_preview), in the past tense: a row the run
- * does not act on is said as the preview says it (sync_print_row), and an act
- * carried out whole in the preview's words (sync_print_done). A push's and a
- * pull's failure is the row's one line, as a failed row's is; any other act's
- * stands beneath its head, then where it left the branch. A row the run stopped
- * before says nothing: the run's error, a rollback that failed above it, is what
- * is said. The block opens at normal where a row speaks there, at verbose where
- * every row is up to date.
+ * The preview's sibling (sync_print_preview), in the past tense, each row in
+ * the line both print: its lead, its clause, what the user's word withheld. An
+ * act carried out whole is said in the preview's words (sync_print_done); a row
+ * no act moved where it stands, as the preview says it (sync_print_state) — a
+ * row the run stopped before among them, the run's error beneath saying why;
+ * and a failure by its cause, beside where it left the branch. The remedies its
+ * rows call for close it (sync_print_remedies).
  */
-static void sync_print_receipt(output_t *out, const sync_rows_t *rows) {
-    output_section(
-        out, sync_up_to_date(rows) < rows->count ? OUTPUT_NORMAL : OUTPUT_VERBOSE,
-        "Syncing with remote"
-    );
+static void sync_print_receipt(
+    output_t *out,
+    const char *remote_name,
+    const sync_rows_t *rows
+) {
+    output_section(out, OUTPUT_NORMAL, "Sync with '{cyan}%s{reset}'", remote_name);
 
     for (size_t i = 0; i < rows->count; i++) {
         const sync_row_t *row = &rows->entries[i];
 
+        sync_print_lead(out, row);
         switch (row->outcome) {
             case SYNC_OUTCOME_NONE:
-                if (row->verdict == SYNC_VERDICT_NONE) sync_print_row(out, row);
+                /* No act, or the run stopped before the row: nothing moved it */
+                sync_print_state(out, row);
                 break;
 
             case SYNC_OUTCOME_DONE:
@@ -912,54 +922,32 @@ static void sync_print_receipt(output_t *out, const sync_rows_t *rows) {
                 break;
 
             case SYNC_OUTCOME_UP_TO_DATE:
-                /* What the pull found, not what it did: counted nowhere else */
-                output_colored(
-                    out, OUTPUT_NORMAL, upstream_state_color(UPSTREAM_UP_TO_DATE),
-                    "  %s %s: already up-to-date\n",
-                    upstream_state_symbol(UPSTREAM_UP_TO_DATE), row->profile
-                );
+                /* What the pull found, not what it did */
+                output_print(out, OUTPUT_NORMAL, "already up-to-date");
                 break;
 
             case SYNC_OUTCOME_FAILED:
+                output_print(out, OUTPUT_NORMAL, "%s", error_line(row->error));
+                break;
+
             case SYNC_OUTCOME_ROLLED_BACK:
+                output_print(out, OUTPUT_NORMAL, "%s, rolled back", error_line(row->error));
+                break;
+
             case SYNC_OUTCOME_UNVERIFIED:
-                if (row->verdict == SYNC_VERDICT_PUSH || row->verdict == SYNC_VERDICT_PULL) {
-                    sync_print_row(out, row);
-                    break;
-                }
-                sync_print_head(out, row);
+                /* The branch moved and stays where the reset put it, so the act
+                 * comes first: what failed is the verification after it */
                 output_print(
-                    out, OUTPUT_NORMAL, "    {red}✗{reset} %s\n", error_line(row->error)
+                    out, OUTPUT_NORMAL, "reset to the remote, unverified: %s",
+                    error_line(row->error)
                 );
-                if (row->outcome == SYNC_OUTCOME_ROLLED_BACK) {
-                    output_info(out, OUTPUT_NORMAL, "    ↺ Rolled back to original state");
-                } else if (row->outcome == SYNC_OUTCOME_UNVERIFIED) {
-                    output_print(
-                        out, OUTPUT_NORMAL,
-                        "    {yellow}⚠{reset} Local branch was reset but verification failed\n"
-                    );
-                }
                 break;
         }
+        sync_print_withheld(out, row);
+        output_endline(out, OUTPUT_NORMAL);
     }
-}
 
-/**
- * Print what the Git phase left unsaid, once beneath it: at normal, the profiles
- * it had nothing to do for, whose own lines are verbose's (sync_up_to_date) — a
- * block of its own, beneath the run's last Git-phase block: the dry run's preview,
- * or the receipt
- */
-static void sync_print_up_to_date(output_t *out, const sync_rows_t *rows) {
-    const size_t count = sync_up_to_date(rows);
-
-    if (count > 0 && !output_is_verbose(out)) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_info(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s already up-to-date",
-            count, count == 1 ? "" : "s"
-        );
-    }
+    sync_print_remedies(out, rows);
 }
 
 /**
@@ -1830,14 +1818,13 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     /* The preview: a dry run's block, or the question's preamble where one is
      * asked; a run that asks nothing previews nothing it then does at once, and
      * its receipt says what it did */
-    if (opts->dry_run || asks) sync_print_preview(out, &rows);
+    if (opts->dry_run || asks) sync_print_preview(out, remote_name, &rows);
 
     /* A dry run ends here, its preview shown, and nothing pulled or pushed: the
      * fetch moved the remote-tracking refs alone. The answer still stands — a
      * profile the analysis could not read is a question the dry run failed to
      * answer, not a profile it found no work for. */
     if (opts->dry_run) {
-        sync_print_up_to_date(out, &rows);
         output_gap(out, OUTPUT_NORMAL);
         output_info(out, OUTPUT_NORMAL, "Dry run: nothing was pulled or pushed");
         err = sync_failure(ctx->arena, &rows);
@@ -1868,12 +1855,11 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * follows only reports what the act did to it. */
     err = sync_execute(repo, remote_name, &rows, xfer);
 
-    /* The receipt, once every act is done — a run a failed rollback stopped says
-     * the rows it reached, then ends in that error — and what the Git phase left
-     * unsaid, said once beneath it: the profiles it had nothing to do for, and
-     * at verbose the wire, Git's tally of what the lines above say moved */
-    sync_print_receipt(out, &rows);
-    sync_print_up_to_date(out, &rows);
+    /* The receipt, once every act is done, a row for every profile — a run a
+     * failed rollback stopped among them, which then ends in that error — and
+     * at verbose the wire beneath it, Git's tally of what the lines above say
+     * moved */
+    sync_print_receipt(out, remote_name, &rows);
     if (err) goto cleanup;
     transfer_summarize(xfer, out, OUTPUT_VERBOSE);
 
@@ -1952,7 +1938,7 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
              * run empties, which apply prunes, Git never asked of a directory.
              * A departure with no record has no filesystem effect and asks nothing
              * of the user, so it is not counted. */
-            output_print(out, OUTPUT_NORMAL, "  %s:", s->profile);
+            output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}:", s->profile);
             const char *sep = " ";
             if (s->added > 0) {
                 output_print(out, OUTPUT_NORMAL, "%s%zu added", sep, s->added);

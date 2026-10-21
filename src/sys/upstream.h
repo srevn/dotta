@@ -74,8 +74,8 @@ error_t upstream_analyze_profile(
  * and its phrase (upstream_state_phrase). Centralizing the map keeps every display
  * path in agreement on what each state looks like.
  *
- * Readers: cmds/status.c status_print_remote; cmds/sync.c sync_print_head,
- * sync_print_preview and sync_print_receipt; cmds/list.c print_upstream_state.
+ * Readers: cmds/status.c status_print_remote; cmds/sync.c sync_print_lead;
+ * cmds/list.c print_upstream_state.
  */
 const char *upstream_state_symbol(upstream_state_t state);
 
@@ -110,7 +110,7 @@ output_color_t upstream_state_color(upstream_state_t state);
  * word for it: up-to-date, ahead, behind, diverged, no remote branch, no local
  * branch.
  *
- * Readers: cmds/status.c status_print_remote, cmds/sync.c sync_print_head.
+ * Readers: cmds/status.c status_print_remote, cmds/sync.c sync_print_state.
  *
  * @param info The state and its counts (must not be NULL)
  * @param buffer Output buffer for the phrase (must not be NULL)

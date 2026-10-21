@@ -123,7 +123,7 @@ typedef struct {
 
 /**
  * A verdict's word: the act a row's head says was withheld (sync_print_head),
- * and the resolution a rollback follows (sync_resolve)
+ * and the resolution a rollback's refusal names (sync_rollback)
  */
 static const char *sync_verdict_name(sync_verdict_t verdict) {
     switch (verdict) {
@@ -476,14 +476,15 @@ static error_t sync_fast_forward(
 }
 
 /**
- * Roll a resolution back to the head the branch stood at before it: the row rolled
- * back, or, where the rollback fails, the run's error — the branch left where
- * the resolution put it, the row failed by the step that came before
+ * Roll a resolution back to the head the branch stood at before it, after its
+ * `step` — "verification" or "push" — failed: the row rolled back, or, where
+ * the rollback fails, the run's error, naming the step — the branch left where
+ * the resolution put it, the row failed by that step
  */
 static error_t sync_rollback(
     resolve_context_t *resolve,
     sync_row_t *row,
-    const char *failure
+    const char *step
 ) {
     error_t err = resolve_rollback(resolve);
     row->outcome = err ? SYNC_OUTCOME_FAILED : SYNC_OUTCOME_ROLLED_BACK;
@@ -491,12 +492,13 @@ static error_t sync_rollback(
 
     /* The error names the head, the one fact a repair starts from: whole, as
      * git's own ref refusals spell an id (lib/git/refs/packed-backend.c,
-     * oid_to_hex), where an abbreviation could name two commits. */
+     * oid_to_hex), where an abbreviation could name two commits. The branch is
+     * its cause's to name (sys/gitops.c gitops_update_branch_reference). */
     char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
     git_oid_tostr(oid_str, sizeof(oid_str), &resolve->saved_oid);
     return error_wrap(
-        err, "Failed to roll back branch '%s' to %s, its head before the sync, "
-        "after the %s", row->profile, oid_str, failure
+        err, "Cannot roll back to %s, the branch's head before the %s, "
+        "after the %s failed", oid_str, sync_verdict_name(row->verdict), step
     );
 }
 
@@ -535,20 +537,14 @@ static error_t sync_resolve(
     err = resolve_verify(&resolve, NULL, NULL);
     if (err) {
         row->error = err;
-
-        char failure[64];
-        snprintf(
-            failure, sizeof(failure), "%s verification failure",
-            sync_verdict_name(row->verdict)
-        );
-        return sync_rollback(&resolve, row, failure);
+        return sync_rollback(&resolve, row, "verification");
     }
 
     if (row->withheld != SYNC_VERDICT_PUSH) {
         err = gitops_push_branch(repo, remote_name, row->profile, xfer);
         if (err) {
             row->error = err;
-            return sync_rollback(&resolve, row, "push failure");
+            return sync_rollback(&resolve, row, "push");
         }
     }
 

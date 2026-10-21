@@ -649,57 +649,25 @@ static error_t sync_execute(
 }
 
 /**
- * Print a row's head: its glyph, its profile and its state in status's words
- * (cmds/status.c status_print_remote), then what the user's word withheld of it
+ * Print a row's head: its glyph, its profile and its state's phrase, then what
+ * the user's word withheld of it
  *
- * Every state takes the shared map's glyph and colour (sys/upstream.h), the line
- * whole in it, but a divergence, which warns: its glyph yellow, its name red,
- * the rest plain. Up to date is verbose's: at normal the run counts it
- * (sync_print_up_to_date).
+ * The state's face is sys/upstream.h's whole — its glyph, its colour and its
+ * phrase, read as status's rows read it (cmds/status.c status_print_remote) —
+ * and the line is whole in the colour. Up to date is verbose's: at normal the
+ * run counts it (sync_print_up_to_date).
  */
 static void sync_print_head(output_t *out, const sync_row_t *row) {
     const upstream_info_t *up = &row->upstream;
     const output_verbosity_t level =
         up->state == UPSTREAM_UP_TO_DATE ? OUTPUT_VERBOSE : OUTPUT_NORMAL;
-    const output_color_t color =
-        up->state == UPSTREAM_DIVERGED ? OUTPUT_COLOR_RESET : upstream_state_color(up->state);
+    const output_color_t color = upstream_state_color(up->state);
     const char *glyph = upstream_state_symbol(up->state);
 
-    switch (up->state) {
-        case UPSTREAM_UP_TO_DATE:
-            output_colored(out, level, color, "  %s %s: up-to-date", glyph, row->profile);
-            break;
+    char phrase[UPSTREAM_PHRASE_MAX];
+    upstream_state_phrase(up, phrase, sizeof(phrase));
 
-        case UPSTREAM_LOCAL_AHEAD:
-            output_colored(
-                out, level, color, "  %s %s: %zu commit%s ahead",
-                glyph, row->profile, up->ahead, up->ahead == 1 ? "" : "s"
-            );
-            break;
-
-        case UPSTREAM_REMOTE_AHEAD:
-            output_colored(
-                out, level, color, "  %s %s: %zu commit%s behind",
-                glyph, row->profile, up->behind, up->behind == 1 ? "" : "s"
-            );
-            break;
-
-        case UPSTREAM_DIVERGED:
-            output_print(
-                out, level, "  {yellow}⚠{reset} {red}%s{reset}: diverged (%zu ahead, %zu behind)",
-                row->profile, up->ahead, up->behind
-            );
-            break;
-
-        case UPSTREAM_NO_REMOTE:
-            output_colored(out, level, color, "  %s %s: local only", glyph, row->profile);
-            break;
-
-        case UPSTREAM_NO_LOCAL:
-            output_colored(out, level, color, "  %s %s: no local branch", glyph, row->profile);
-            break;
-    }
-
+    output_colored(out, level, color, "  %s %s: %s", glyph, row->profile, phrase);
     if (row->withheld != SYNC_VERDICT_NONE) {
         output_colored(
             out, level, color, ", %s skipped (%s)",

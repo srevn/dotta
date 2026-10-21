@@ -1,8 +1,11 @@
 /**
- * upstream.h - Remote profile tracking and metadata
+ * upstream.h - A branch against its remote
  *
- * Provides lightweight remote profile information for display in list/status.
- * Designed for minimal network overhead - fetches only refs, not full objects.
+ * Read off the remote-tracking refs the last fetch left, and nothing here contacts
+ * the remote: a branch's state against its remote (upstream_analyze_profile)
+ * and the face every screen gives that state — its glyph, its colour and its
+ * phrase — then the remote's branches made local (upstream_discover_branches,
+ * upstream_ensure_tracking_branch).
  */
 
 #ifndef DOTTA_UPSTREAM_H
@@ -65,27 +68,59 @@ error_t upstream_analyze_profile(
 );
 
 /**
- * Get compact symbol for upstream state
+ * A state's glyph: "=", "↑", "↓", "↕", "•" or "?"
  *
- * Returns symbols like "=", "↑", "↓", "↕" for display
+ * One of the three faces of a state, beside its colour (upstream_state_color)
+ * and its phrase (upstream_state_phrase). Centralizing the map keeps every display
+ * path in agreement on what each state looks like.
+ *
+ * Readers: cmds/status.c status_print_remote; cmds/sync.c sync_print_head,
+ * sync_print_preview and sync_print_receipt; cmds/list.c print_upstream_state.
  */
 const char *upstream_state_symbol(upstream_state_t state);
 
 /**
- * Get display color for an upstream state.
+ * A state's colour
  *
- * Sibling to upstream_state_symbol — pure function of state, no policy:
+ * Sibling to upstream_state_symbol, read where it is — pure function of state,
+ * no policy:
  *   UP_TO_DATE   → GREEN
  *   LOCAL_AHEAD  → YELLOW   (we have local changes to push)
  *   REMOTE_AHEAD → YELLOW   (remote has changes to pull)
  *   DIVERGED     → RED      (manual resolution required)
  *   NO_REMOTE    → CYAN     (informational, not an issue)
  *   NO_LOCAL     → DIM      (no local branch to compare)
- *
- * Centralizing the map keeps every display path in agreement on what each state
- * looks like.
  */
 output_color_t upstream_state_color(upstream_state_t state);
+
+#define UPSTREAM_PHRASE_MAX 72 /* "diverged (%zu ahead, %zu behind)" at a size_t's widest, and NUL */
+
+/**
+ * A state's words, with the commits it counts
+ *
+ * "up-to-date", "1 commit ahead", "2 commits behind", "diverged (1 ahead, 2
+ * behind)", "no remote branch", "no local branch": the phrase, not its frame —
+ * each reader sets the glyph and the colour beside it (upstream_state_symbol,
+ * upstream_state_color) and the frame its screen gives a state, so status's rows
+ * and sync's say a state alike.
+ *
+ * The words on screen: a state named alone, without its counts — status's Sync
+ * summary counting the branches in each state (cmds/status.c status_print_remote),
+ * list's legend keying its badges (cmds/list.c list_profiles) — takes the phrase's
+ * word for it: up-to-date, ahead, behind, diverged, no remote branch, no local
+ * branch.
+ *
+ * Readers: cmds/status.c status_print_remote, cmds/sync.c sync_print_head.
+ *
+ * @param info The state and its counts (must not be NULL)
+ * @param buffer Output buffer for the phrase (must not be NULL)
+ * @param buffer_size Size of output buffer: UPSTREAM_PHRASE_MAX
+ */
+void upstream_state_phrase(
+    const upstream_info_t *info,
+    char *buffer,
+    size_t buffer_size
+);
 
 /**
  * Discover remote branches that don't exist locally

@@ -1566,55 +1566,22 @@ static void status_print_remote(
             continue;
         }
 
-        /* Format display based on state. Color comes from the shared map; only
-         * the descriptive text and the per-state counter are caller-specific. */
+        /* The state's face comes from the shared map — its glyph, its colour
+         * and its phrase, read as sync's rows read it (cmds/sync.c
+         * sync_print_head); only the frame and the per-state counter are
+         * status's. */
         const char *symbol = upstream_state_symbol(info.state);
         output_color_t color = upstream_state_color(info.state);
-        char status_str[128];
+        char phrase[UPSTREAM_PHRASE_MAX];
+        upstream_state_phrase(&info, phrase, sizeof(phrase));
 
         switch (info.state) {
-            case UPSTREAM_UP_TO_DATE:
-                snprintf(
-                    status_str, sizeof(status_str), "%s up-to-date",
-                    symbol
-                );
-                up_to_date++;
-                break;
-            case UPSTREAM_LOCAL_AHEAD:
-                snprintf(
-                    status_str, sizeof(status_str), "%s %zu ahead",
-                    symbol, info.ahead
-                );
-                ahead++;
-                break;
-            case UPSTREAM_REMOTE_AHEAD:
-                snprintf(
-                    status_str, sizeof(status_str), "%s %zu behind",
-                    symbol, info.behind
-                );
-                behind++;
-                break;
-            case UPSTREAM_DIVERGED:
-                snprintf(
-                    status_str, sizeof(status_str), "%s diverged (%zu ahead, %zu behind)",
-                    symbol, info.ahead, info.behind
-                );
-                diverged++;
-                break;
-            case UPSTREAM_NO_REMOTE:
-                snprintf(
-                    status_str, sizeof(status_str), "%s no remote",
-                    symbol
-                );
-                no_remote++;
-                break;
-            case UPSTREAM_NO_LOCAL:
-                snprintf(
-                    status_str, sizeof(status_str), "%s no local branch",
-                    symbol
-                );
-                no_local++;
-                break;
+            case UPSTREAM_UP_TO_DATE:   up_to_date++; break;
+            case UPSTREAM_LOCAL_AHEAD:  ahead++; break;
+            case UPSTREAM_REMOTE_AHEAD: behind++; break;
+            case UPSTREAM_DIVERGED:     diverged++; break;
+            case UPSTREAM_NO_REMOTE:    no_remote++; break;
+            case UPSTREAM_NO_LOCAL:     no_local++; break;
         }
 
         /* Display with colors */
@@ -1633,7 +1600,7 @@ static void status_print_remote(
 
             /* Status line — always shown regardless of commit loading */
             output_print(out, OUTPUT_VERBOSE, "  Status:         ");
-            output_colored(out, OUTPUT_VERBOSE, color, "%s\n", status_str);
+            output_colored(out, OUTPUT_VERBOSE, color, "%s %s\n", symbol, phrase);
 
             if (!err) {
                 const git_oid *local_oid = git_commit_id(local_commit);
@@ -1684,7 +1651,7 @@ static void status_print_remote(
         } else {
             /* Compact mode: single line matching enabled profiles format */
             output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
-            output_print(out, OUTPUT_NORMAL, "  {dim}(%s){reset}\n", status_str);
+            output_print(out, OUTPUT_NORMAL, "  {dim}(%s %s){reset}\n", symbol, phrase);
         }
     }
 
@@ -1704,7 +1671,7 @@ static void status_print_remote(
         output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} diverged\n", diverged);
     }
     if (no_remote > 0) {
-        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote\n", no_remote);
+        output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote branch\n", no_remote);
     }
     if (no_local > 0) {
         output_print(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no local branch\n", no_local);

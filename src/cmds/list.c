@@ -386,7 +386,7 @@ static error_t list_profiles(
         output_print(
             out, OUTPUT_NORMAL,
             "  {red}[↕n+m]{reset} diverged  "
-            " {cyan}[•]{reset}  no remote\n"
+            " {cyan}[•]{reset}  no remote branch\n"
         );
     }
 

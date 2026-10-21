@@ -1,10 +1,11 @@
 /**
- * upstream.c - Remote profile tracking and metadata implementation
+ * upstream.c - A branch against its remote
  */
 
 #include "sys/upstream.h"
 
 #include <git2.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "base/arena.h"
@@ -77,7 +78,8 @@ error_t upstream_analyze_profile(
     );
     if (rc < 0) {
         return error_git(
-            rc, "Cannot count the commits between '%s' and '%s'", local_refname, remote_refname
+            rc, "Cannot count the commits between '%s' and '%s'",
+            local_refname, remote_refname
         );
     }
 
@@ -98,7 +100,7 @@ error_t upstream_analyze_profile(
 }
 
 /**
- * Get compact symbol for upstream state
+ * A state's glyph
  */
 const char *upstream_state_symbol(upstream_state_t state) {
     switch (state) {
@@ -109,11 +111,12 @@ const char *upstream_state_symbol(upstream_state_t state) {
         case UPSTREAM_NO_REMOTE:    return "•";
         case UPSTREAM_NO_LOCAL:     return "?";
     }
+
     CHECK_ARG(false, "an upstream state no enumerator names");
 }
 
 /**
- * Get display color for upstream state
+ * A state's colour
  */
 output_color_t upstream_state_color(upstream_state_t state) {
     switch (state) {
@@ -124,6 +127,54 @@ output_color_t upstream_state_color(upstream_state_t state) {
         case UPSTREAM_NO_REMOTE:    return OUTPUT_COLOR_CYAN;
         case UPSTREAM_NO_LOCAL:     return OUTPUT_COLOR_DIM;
     }
+
+    CHECK_ARG(false, "an upstream state no enumerator names");
+}
+
+/**
+ * A state's words, with the commits it counts
+ */
+void upstream_state_phrase(
+    const upstream_info_t *info, char *buffer, size_t buffer_size
+) {
+    CHECK_NULL(info);
+    CHECK_NULL(buffer);
+
+    switch (info->state) {
+        case UPSTREAM_UP_TO_DATE:
+            snprintf(buffer, buffer_size, "up-to-date");
+            return;
+
+        case UPSTREAM_LOCAL_AHEAD:
+            snprintf(
+                buffer, buffer_size, "%zu commit%s ahead",
+                info->ahead, info->ahead == 1 ? "" : "s"
+            );
+            return;
+
+        case UPSTREAM_REMOTE_AHEAD:
+            snprintf(
+                buffer, buffer_size, "%zu commit%s behind",
+                info->behind, info->behind == 1 ? "" : "s"
+            );
+            return;
+
+        case UPSTREAM_DIVERGED:
+            snprintf(
+                buffer, buffer_size, "diverged (%zu ahead, %zu behind)",
+                info->ahead, info->behind
+            );
+            return;
+
+        case UPSTREAM_NO_REMOTE:
+            snprintf(buffer, buffer_size, "no remote branch");
+            return;
+
+        case UPSTREAM_NO_LOCAL:
+            snprintf(buffer, buffer_size, "no local branch");
+            return;
+    }
+
     CHECK_ARG(false, "an upstream state no enumerator names");
 }
 
@@ -131,10 +182,7 @@ output_color_t upstream_state_color(upstream_state_t state) {
  * Discover remote branches that don't exist locally
  */
 error_t upstream_discover_branches(
-    git_repository *repo,
-    const char *remote_name,
-    arena_t *arena,
-    string_array_t *out
+    git_repository *repo, const char *remote_name, arena_t *arena, string_array_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -167,9 +215,7 @@ error_t upstream_discover_branches(
  * Make a remote branch local, or leave the local one where it stands
  */
 error_t upstream_ensure_tracking_branch(
-    git_repository *repo,
-    const char *remote_name,
-    const char *branch_name
+    git_repository *repo, const char *remote_name, const char *branch_name
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);

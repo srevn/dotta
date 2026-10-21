@@ -138,7 +138,8 @@ transfer_stats_t transfer_stats(const transfer_context_t *xfer);
  * ops that succeeded between the two readings, each direction's
  *
  * Readers: cmds/sync.c sync_execute (a row's act), sync_fetch, and
- * sync_reconcile_epoch (the epoch's establish and adopt).
+ * sync_reconcile_epoch (the epoch's establish and adopt); cmds/profile.c
+ * profile_fetch (its one fetch).
  *
  * NULL-safe, as transfer_stats is.
  */
@@ -157,8 +158,8 @@ transfer_stats_t transfer_stats_since(
  * of zero leave the size unsaid rather than say a size of nothing: the transport
  * counted none (transfer_wire_t, a local push).
  *
- * Readers: sys/transfer.c transfer_print_wire, the summary's line a direction;
- * cmds/sync.c sync_print_wire, beside the line that says an op.
+ * Readers: cmds/sync.c sync_print_wire, beside the line that says an op;
+ * cmds/profile.c profile_fetch, beside the line that says its fetch.
  *
  * @param wire What moved, one way
  * @param buffer Output buffer for the phrase (must not be NULL)
@@ -168,24 +169,6 @@ void transfer_wire_phrase(
     transfer_wire_t wire,
     char *buffer,
     size_t buffer_size
-);
-
-/**
- * Emit a summary of the session's transfer activity, a line a direction.
- *
- * Writes "Fetched <phrase>" and/or "Pushed <phrase>" (transfer_wire_phrase) to
- * `out` at the given verbosity level. Silent when:
- *   - `xfer` or `out` is NULL,
- *   - the session's last op failed (the error message already carries the
- *     narrative; a summary would be misleading),
- *   - no direction saw any data (nothing interesting to report).
- *
- * Reader: cmds/profile.c profile_fetch, beneath its rows.
- */
-void transfer_summarize(
-    const transfer_context_t *xfer,
-    output_t *out,
-    output_verbosity_t level
 );
 
 /**

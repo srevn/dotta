@@ -35,10 +35,9 @@ typedef enum {
 /**
  * Outcome of the most recent op within a transfer session (file-local).
  *
- * What the credential state machine advances on (transfer_op_end) and what keeps
- * a failed session's summary silent (transfer_summarize). No caller reads it: a
- * failure says whose refusal it was in its own words, the credential callback's
- * among them (transfer_credentials_callback).
+ * What the credential state machine advances on (transfer_op_end). No caller
+ * reads it: a failure says whose refusal it was in its own words, the credential
+ * callback's among them (transfer_credentials_callback).
  */
 typedef enum {
     TRANSFER_OUTCOME_NONE = 0,     /* No op has completed in this session. */
@@ -380,45 +379,6 @@ void transfer_wire_phrase(transfer_wire_t wire, char *buffer, size_t buffer_size
         buffer, buffer_size, "%zu object%s, %s",
         wire.objects, wire.objects == 1 ? "" : "s", bytes_str
     );
-}
-
-/**
- * Print one direction's line of the summary, "<verb> <its phrase>" — none where
- * it moved nothing
- */
-static void transfer_print_wire(
-    output_t *out,
-    output_verbosity_t level,
-    const char *verb,
-    transfer_wire_t wire
-) {
-    if (wire.objects == 0) return;
-
-    char phrase[TRANSFER_PHRASE_MAX];
-    transfer_wire_phrase(wire, phrase, sizeof(phrase));
-    output_info(out, level, "%s %s", verb, phrase);
-}
-
-/**
- * Emit a summary of the session's transfer activity, a line a direction.
- *
- * Silent on failed sessions (errors already carry the narrative) and on sessions
- * with no data transferred (nothing to report).
- */
-void transfer_summarize(
-    const transfer_context_t *xfer,
-    output_t *out,
-    output_verbosity_t level
-) {
-    if (!xfer || !out) return;
-
-    if (xfer->last_outcome == TRANSFER_OUTCOME_AUTH_FAILED ||
-        xfer->last_outcome == TRANSFER_OUTCOME_OTHER_FAILURE) {
-        return;
-    }
-
-    transfer_print_wire(out, level, "Fetched", xfer->stats.received);
-    transfer_print_wire(out, level, "Pushed", xfer->stats.sent);
 }
 
 /**

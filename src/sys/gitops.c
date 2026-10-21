@@ -849,59 +849,6 @@ error_t gitops_fetch_remote(
     return err;
 }
 
-error_t gitops_fetch_branch(
-    git_repository *repo, const char *remote_name, const char *branch_name,
-    transfer_context_t *xfer
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(xfer);
-
-    /* The refspec's halves, the branch's ref and the remote-tracking ref it lands
-     * at, each spelled where every one is; two built names fit the refspec's
-     * buffer by its definition (DOTTA_REFSPEC_MAX) */
-    char refname[DOTTA_REFNAME_MAX];
-    error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
-    if (err) return err;
-
-    char tracking[DOTTA_REFNAME_MAX];
-    err = gitops_remote_branch_refname(
-        tracking, sizeof(tracking), remote_name, branch_name
-    );
-    if (err) return err;
-
-    char refspec[DOTTA_REFSPEC_MAX];
-    err = gitops_build_refname(refspec, sizeof(refspec), "%s:%s", refname, tracking);
-    if (err) return err;
-
-    git_remote *remote = NULL;
-    int rc = git_remote_lookup(&remote, repo, remote_name);
-    if (rc < 0) {
-        return error_git(rc, "Cannot fetch '%s' from remote '%s'", branch_name, remote_name);
-    }
-
-    git_fetch_options fetch_opts;
-    git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
-    transfer_configure_callbacks(
-        &fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
-    );
-
-    char *refspecs[] = { refspec };
-    git_strarray refs = { refspecs, 1 };
-
-    transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
-    rc = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
-    transfer_op_end(xfer, rc);
-
-    /* The sentence before the free (gitops_fetch_remote) */
-    err = rc < 0
-        ? error_git(rc, "Cannot fetch '%s' from remote '%s'", branch_name, remote_name)
-        : NULL;
-    git_remote_free(remote);
-    return err;
-}
-
 error_t gitops_fetch_branches(
     git_repository *repo, const char *remote_name, const string_array_t *branches,
     transfer_context_t *xfer
@@ -926,8 +873,10 @@ error_t gitops_fetch_branches(
 
     error_t err = NULL;
     for (size_t i = 0; i < branches->count; i++) {
-        /* Each refspec's halves, as one branch's are (gitops_fetch_branch):
-         * refs/heads/<branch>:refs/remotes/<remote>/<branch> */
+        /* Each refspec's halves, the branch's ref and the remote-tracking ref
+         * it lands at — refs/heads/<branch>:refs/remotes/<remote>/<branch> —
+         * each spelled where every one is; two built names fit the refspec's
+         * buffer by its definition (DOTTA_REFSPEC_MAX) */
         char refname[DOTTA_REFNAME_MAX];
         err = gitops_branch_refname(refname, sizeof(refname), branches->entries[i]);
         if (err) goto cleanup;

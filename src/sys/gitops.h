@@ -655,22 +655,6 @@ error_t gitops_fetch_remote(
 );
 
 /**
- * Fetch branch from remote
- *
- * @param repo Repository (must not be NULL)
- * @param remote_name Remote name (e.g., "origin") (must not be NULL)
- * @param branch_name Branch name (must not be NULL)
- * @param xfer Transfer context for credentials and progress (must not be NULL)
- * @return Error or NULL on success
- */
-error_t gitops_fetch_branch(
-    git_repository *repo,
-    const char *remote_name,
-    const char *branch_name,
-    transfer_context_t *xfer
-);
-
-/**
  * Fetch multiple branches from remote in a single operation
  *
  * Performs a batched fetch of multiple branches, significantly reducing network
@@ -680,9 +664,10 @@ error_t gitops_fetch_branch(
  * (lib/libgit2/src/libgit2/fetch.c filter_wants, remote.c update_one_tip), and
  * what the remote held is read off the remote-tracking refs afterwards.
  *
- * Readers, each asking for branches the remote may never have held: cmds/sync.c
- * sync_fetch (every profile in the run's scope), cmds/status.c status_print_remote
- * (every profile it lists).
+ * Readers: cmds/sync.c sync_fetch (every profile in the run's scope) and
+ * cmds/status.c status_print_remote (every profile it lists), each asking for
+ * branches the remote may never have held; cmds/profile.c profile_fetch (the
+ * profiles the remote was just listed as holding, gitops_list_remote_branches).
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)
@@ -1003,7 +988,7 @@ error_t gitops_branch_refname(
  *
  * Readers: cmds/sync.c sync_fast_forward, cmds/status.c status_print_remote,
  * sys/upstream.c upstream_analyze_profile, and this file's
- * gitops_resolve_remote_branch_oid, gitops_fetch_branch and gitops_fetch_branches.
+ * gitops_resolve_remote_branch_oid and gitops_fetch_branches.
  *
  * @param buffer Output buffer for the reference name (must not be NULL)
  * @param buffer_size Size of output buffer: DOTTA_REFNAME_MAX

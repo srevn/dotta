@@ -75,7 +75,7 @@ error_t upstream_analyze_profile(
  * path in agreement on what each state looks like.
  *
  * Readers: cmds/status.c status_print_remote; cmds/sync.c sync_print_lead;
- * cmds/list.c print_upstream_state.
+ * cmds/profile.c profile_fetch; cmds/list.c print_upstream_state.
  */
 const char *upstream_state_symbol(upstream_state_t state);
 
@@ -101,8 +101,8 @@ output_color_t upstream_state_color(upstream_state_t state);
  * "up-to-date", "1 commit ahead", "2 commits behind", "diverged (1 ahead, 2
  * behind)", "no remote branch", "no local branch": the phrase, not its frame —
  * each reader sets the glyph and the colour beside it (upstream_state_symbol,
- * upstream_state_color) and the frame its screen gives a state, so status's rows
- * and sync's say a state alike.
+ * upstream_state_color) and the frame its screen gives a state, so the rows of
+ * status, sync and profile fetch say a state alike.
  *
  * The words on screen: a state named alone, without its counts — status's Sync
  * summary counting the branches in each state (cmds/status.c status_print_remote),
@@ -110,7 +110,8 @@ output_color_t upstream_state_color(upstream_state_t state);
  * word for it: up-to-date, ahead, behind, diverged, no remote branch, no local
  * branch.
  *
- * Readers: cmds/status.c status_print_remote, cmds/sync.c sync_print_state.
+ * Readers: cmds/status.c status_print_remote, cmds/sync.c sync_print_state,
+ * cmds/profile.c profile_fetch.
  *
  * @param info The state and its counts (must not be NULL)
  * @param buffer Output buffer for the phrase (must not be NULL)
@@ -161,13 +162,17 @@ error_t upstream_discover_branches(
  *
  * A local branch of the name exists after the call. One already here is left as
  * it is: a fetch moves the remote-tracking ref and never the local branch — merging
- * the two is sync's, through sys/resolve — so the fetch sites ask nothing first
- * and print one word, "Fetched". One absent is created at the remote's commit.
+ * the two is sync's, through sys/resolve. One absent is created at the remote's
+ * commit.
  *
  * Refuses with ERR_CONFLICT, naming both branches, when the local ref namespace
  * cannot hold the name beside one already there (`gitops_branch_blocker`) — the
  * one failure here that is about the two names rather than the wire, and the
  * one the ref write would otherwise report in libgit2's own words.
+ *
+ * Readers: cmds/clone.c land_profiles, every profile the clone chose — a name
+ * given twice is here at its second; cmds/profile.c profile_fetch, a profile
+ * its analysis found no local branch for (upstream_analyze_profile).
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin")

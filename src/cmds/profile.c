@@ -35,10 +35,7 @@
  *
  * Shows enabled vs available profiles with clear visual distinction.
  */
-static error_t profile_list(
-    const dotta_ctx_t *ctx,
-    const cmd_profile_options_t *opts
-) {
+static error_t profile_list(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -238,12 +235,15 @@ cleanup:
 /**
  * Profile fetch subcommand
  *
- * Downloads profiles without enabling them.
+ * Brings profiles from the remote without enabling them: what the remote holds,
+ * asked once; one fetch of the selection; and each profile made local where no
+ * branch of its name stands here. The report is one table titled by the remote,
+ * a row a profile in the selection's order, in the grammar of sync's receipt
+ * (cmds/sync.c sync_print_receipt): its local branch created, or where the one
+ * already here stands against the remote's the fetch brought, or why neither
+ * could be said.
  */
-static error_t profile_fetch(
-    const dotta_ctx_t *ctx,
-    const cmd_profile_options_t *opts
-) {
+static error_t profile_fetch(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -255,10 +255,6 @@ static error_t profile_fetch(
     const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
     error_t err = NULL;
-
-    /* Counters for summary (not cleaned up) */
-    size_t fetched_count = 0;
-    size_t failed_count = 0;
 
     /* Detect remote (name + URL — URL feeds the credential helper). Its refusal
      * says which absence it met, none or several, and stands alone. */
@@ -273,27 +269,42 @@ static error_t profile_fetch(
     };
     xfer = transfer_context_create(&xfer_opts);
 
-    output_section(out, OUTPUT_NORMAL, "Fetching profiles");
-
     /* What the remote holds, asked once: every profile --all fetches, and the
-     * pre-flight the names the line gives are held to */
+     * pre-flight the names the line gives are held to. Asked unannounced: the
+     * announce waits for the fetch it says, so a refusal here or below stands
+     * alone on the report. */
     string_array_t remote_branches;
-    err = gitops_list_remote_branches(
-        repo, remote_name, xfer, ctx->arena, &remote_branches
-    );
+    err = gitops_list_remote_branches(repo, remote_name, xfer, ctx->arena, &remote_branches);
     if (err) goto cleanup;
 
-    /* Every name the remote does not hold, refused together before anything is
-     * fetched: a fetch of named branches is whole or nothing, as git's is. The
-     * names the remote does hold are in hand, and the refusal says them: what
-     * the remote holds is the rest of the fact. */
-    if (!opts->all_profiles) {
+    /* The selection, in the order it is fetched and reported: every profile the
+     * remote holds under --all, else the ones the line names (profile_post_parse),
+     * each once — a name given twice is decided once, as enable and disable take
+     * it. Every name the remote does not hold is refused together before anything
+     * is fetched: a fetch of named branches is whole or nothing, as git's is.
+     * The names the remote does hold are in hand, and the refusal says them:
+     * what the remote holds is the rest of the fact. */
+    string_array_t selection;
+    if (opts->all_profiles) {
+        if (remote_branches.count == 0) {
+            err = error_create(ERR_NOT_FOUND, "Remote '%s' holds no profiles", remote_name);
+            goto cleanup;
+        }
+        selection = remote_branches;
+    } else {
         string_array_t missing;
+        string_array_init(&selection, ctx->arena, opts->profile_count);
         string_array_init(&missing, ctx->arena, 0);
         for (size_t i = 0; i < opts->profile_count; i++) {
-            if (!string_array_contains(&remote_branches, opts->profiles[i])) {
-                string_array_push(&missing, opts->profiles[i]);
+            const char *name = opts->profiles[i];
+            if (string_array_contains(&selection, name) ||
+                string_array_contains(&missing, name)) {
+                continue;
             }
+
+            string_array_push(
+                string_array_contains(&remote_branches, name) ? &selection : &missing, name
+            );
         }
         if (missing.count > 0) {
             err = error_create(
@@ -309,93 +320,109 @@ static error_t profile_fetch(
         }
     }
 
-    /* The selection, one loop: every profile the remote holds under --all, else
-     * the ones the line names (profile_post_parse) */
-    char **selection = opts->all_profiles ? remote_branches.entries : opts->profiles;
-    size_t selection_count = opts->all_profiles
-        ? remote_branches.count : opts->profile_count;
-    for (size_t i = 0; i < selection_count; i++) {
-        const char *profile = selection[i];
+    /* One fetch brings the selection, as sync's brings its scope (cmds/sync.c
+     * sync_fetch): one negotiation and one pack for every profile, so what can
+     * still fail profile by profile is the profile's own, below. Announced while
+     * it runs — on a terminal the transfer's progress draws over the line and
+     * both are cleared, on a pipe the announce stands, ended here — and its failure
+     * is the run's, naming the act and the remote. */
+    output_print(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
+    fflush(out->stream);
+
+    const transfer_stats_t mark = transfer_stats(xfer);
+    err = gitops_fetch_branches(repo, remote_name, &selection, xfer);
+
+    if (output_is_tty(out)) {
+        output_clear_line(out);
+    } else {
+        output_endline(out, OUTPUT_NORMAL);
+    }
+    if (err) goto cleanup;
+
+    /* At verbose, the fetch done and what it moved: one op and one pack, so one
+     * wire, never a profile's (lib/libgit2/include/git2/indexer.h
+     * git_indexer_progress) — dim beside the line, and nothing where nothing
+     * moved */
+    const transfer_wire_t received = transfer_stats_since(xfer, mark).received;
+    output_print(out, OUTPUT_VERBOSE, "{green}✓{reset} Fetched from '%s'", remote_name);
+    if (received.objects > 0) {
+        char phrase[TRANSFER_PHRASE_MAX];
+        transfer_wire_phrase(received, phrase, sizeof(phrase));
+        output_print(out, OUTPUT_VERBOSE, " {dim}(%s){reset}", phrase);
+    }
+    output_endline(out, OUTPUT_VERBOSE);
+
+    /* The table, titled by the remote: a row a profile, in the selection's order,
+     * in the grammar and the glyphs of sync's (cmds/sync.c sync_print_lead) */
+    output_section(out, OUTPUT_NORMAL, "Fetch from '{cyan}%s{reset}'", remote_name);
+
+    size_t failed = 0;
+    for (size_t i = 0; i < selection.count; i++) {
+        const char *profile = selection.entries[i];
+
+        /* Where the profile stands against the remote's branch the fetch brought,
+         * read as sync's and status's rows read it (sys/upstream.h
+         * upstream_analyze_profile). One with no local branch is made local at
+         * the remote's commit, the one act a fetch takes on a profile; a branch
+         * already here is left where it stands — the fetch moved its
+         * remote-tracking ref, and merging the two is sync's. */
+        upstream_info_t upstream;
+        error_t row_err = upstream_analyze_profile(repo, remote_name, profile, &upstream);
+        if (!row_err && upstream.state == UPSTREAM_NO_LOCAL) {
+            row_err = upstream_ensure_tracking_branch(repo, remote_name, profile);
+        }
 
         /* A profile that fails is named and counted, its error dropped — at most
          * one per profile. The row is one the run's refusal counts, so it prints
          * at every level, naming its profile (base/output.h OUTPUT_QUIET). */
-        error_t fetch_err = gitops_fetch_branch(repo, remote_name, profile, xfer);
-        if (fetch_err) {
+        if (row_err) {
             output_print(
-                out, OUTPUT_QUIET, "  {red}✗{reset} %s: %s\n",
-                profile, error_line(fetch_err)
+                out, OUTPUT_QUIET, "  {red}✗{reset} {cyan}%s{reset}: %s\n",
+                profile, error_line(row_err)
             );
-            failed_count++;
+            failed++;
             continue;
         }
 
-        /* The local branch: created at the remote's commit, or already here and
-         * left where it stands (the fetch moved the remote ref; sync moves the
-         * branch) */
-        fetch_err = upstream_ensure_tracking_branch(repo, remote_name, profile);
-        if (fetch_err) {
+        /* Made local: the act carried out */
+        if (upstream.state == UPSTREAM_NO_LOCAL) {
             output_print(
-                out, OUTPUT_QUIET, "  {red}✗{reset} %s: %s\n",
-                profile, error_line(fetch_err)
+                out, OUTPUT_NORMAL, "  {green}✓{reset} {cyan}%s{reset}: created local branch\n",
+                profile
             );
-            failed_count++;
-        } else {
-            fetched_count++;
-            output_print(
-                out, OUTPUT_VERBOSE, "  {green}✓{reset} Fetched %s\n", profile
-            );
+            continue;
         }
+
+        /* Otherwise where the branch here stands: its state's glyph in its colour,
+         * and its phrase (sys/upstream.h) */
+        char phrase[UPSTREAM_PHRASE_MAX];
+        upstream_state_phrase(&upstream, phrase, sizeof(phrase));
+        output_colored(
+            out, OUTPUT_NORMAL, upstream_state_color(upstream.state), "  %s",
+            upstream_state_symbol(upstream.state)
+        );
+        output_print(out, OUTPUT_NORMAL, " {cyan}%s{reset}: %s\n", profile, phrase);
+    }
+
+    /* The run's failure. A profile the fetch brought and the run could not make
+     * local, or could not read, is a broken promise whether or not the others
+     * landed: the reason was printed beside the profile it belongs to, but only
+     * the return value reaches the caller, and no flag here licenses swallowing
+     * it. The plural agrees with the total, which is the noun it qualifies: "1
+     * of 2 profiles failed", "1 of 1 profile failed". */
+    if (failed > 0) {
+        err = error_create(
+            ERR_GIT, "%zu of %zu profile%s failed to fetch",
+            failed, selection.count, selection.count == 1 ? "" : "s"
+        );
     }
 
 cleanup:
-    /* Session-level wire stats (silent on failed sessions or no data). Emit before
-     * freeing xfer so stats are still live. */
-    transfer_summarize(xfer, out, OUTPUT_NORMAL);
-
-    /* Cleanup all resources */
+    /* The one handle the run holds: the transfer, whose close commits the
+     * credential decision (sys/transfer.h) */
     transfer_context_free(xfer);
 
-    /* If there's an error, return it now */
-    if (err) return err;
-
-    /* Summary (only shown on success) */
-    output_gap(out, OUTPUT_NORMAL);
-    if (fetched_count > 0) {
-        output_success(
-            out, OUTPUT_NORMAL, "Fetched %zu profile%s",
-            fetched_count, fetched_count == 1 ? "" : "s"
-        );
-    }
-    if (failed_count > 0) {
-        output_print(
-            out, OUTPUT_NORMAL,
-            "{red}✗{reset} Failed to fetch %zu profile%s\n",
-            failed_count, failed_count == 1 ? "" : "s"
-        );
-    }
-
-    /* The run's failure. A branch the fetch tried and could not get is a broken
-     * promise whether or not the others landed: the reason was printed beside
-     * the branch it belongs to and the count above is the receipt, but only the
-     * return value reaches the caller, and no flag here licenses swallowing it. */
-    if (failed_count > 0) {
-        /* The plural agrees with the total, which is the noun it qualifies: "1
-         * of 2 profiles failed", "1 of 1 profile failed". */
-        size_t attempted = fetched_count + failed_count;
-        return error_create(
-            ERR_GIT, "%zu of %zu profile%s failed to fetch",
-            failed_count, attempted, attempted == 1 ? "" : "s"
-        );
-    }
-
-    if (fetched_count == 0) {
-        return error_create(
-            ERR_GIT, "No profiles available to fetch"
-        );
-    }
-
-    return NULL;
+    return err;
 }
 
 /**

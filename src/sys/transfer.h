@@ -132,11 +132,33 @@ void transfer_op_end(transfer_context_t *xfer, int rc);
  */
 const transfer_stats_t *transfer_stats(const transfer_context_t *xfer);
 
+#define TRANSFER_PHRASE_MAX 64 /* "%zu objects, " at a size_t's widest, a size output_format_size writes, and NUL */
+
+/**
+ * A wire's words: its objects, and their size where the transport counted one
+ *
+ * "1 object", "8 objects, 687 B": the phrase, not its frame — each reader sets
+ * the frame its line gives a wire, and says nothing where nothing moved. Bytes
+ * of zero leave the size unsaid rather than say a size of nothing: the transport
+ * counted none (transfer_wire_t, a local push).
+ *
+ * Readers: sys/transfer.c transfer_print_wire, the summary's line a direction.
+ *
+ * @param wire What moved, one way
+ * @param buffer Output buffer for the phrase (must not be NULL)
+ * @param buffer_size Size of output buffer: TRANSFER_PHRASE_MAX
+ */
+void transfer_wire_phrase(
+    transfer_wire_t wire,
+    char *buffer,
+    size_t buffer_size
+);
+
 /**
  * Emit a summary of the session's transfer activity, a line a direction.
  *
- * Writes "Fetched N objects (SIZE)" and/or "Pushed N objects (SIZE)" to `out`
- * at the given verbosity level. Silent when:
+ * Writes "Fetched <phrase>" and/or "Pushed <phrase>" (transfer_wire_phrase) to
+ * `out` at the given verbosity level. Silent when:
  *   - `xfer` or `out` is NULL,
  *   - the session's last op failed (the error message already carries the
  *     narrative; a summary would be misleading),

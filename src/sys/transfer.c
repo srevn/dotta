@@ -102,9 +102,9 @@ struct transfer_context_s {
  *
  * libgit2's local transport synthesizes push progress from packfile creation
  * and does not populate the `bytes` parameter reliably. We use this classification
- * to suppress byte accounting for local sessions so the summary line does not
- * report nonsense (observed: 131038.9 GiB for an 8-object push against a file://
- * remote).
+ * to suppress byte accounting for local sessions so a wire's phrase never says
+ * a size the transport did not count (transfer_wire_phrase; observed: 131038.9
+ * GiB for an 8-object push against a file:// remote).
  *
  * Why this is not credential_url_parse:
  *   The credential parser deliberately rejects URLs that have no credential
@@ -339,8 +339,32 @@ const transfer_stats_t *transfer_stats(const transfer_context_t *xfer) {
 }
 
 /**
- * Print one direction's line of the summary, "<verb> N objects (SIZE)" — none
- * where it moved nothing
+ * A wire's words: its objects, and their size where the transport counted one
+ */
+void transfer_wire_phrase(transfer_wire_t wire, char *buffer, size_t buffer_size) {
+    CHECK_NULL(buffer);
+
+    /* A transport that counted no bytes — a local push (see push callback) —
+     * leaves the size unsaid, never a size of nothing */
+    if (wire.bytes == 0) {
+        snprintf(
+            buffer, buffer_size, "%zu object%s",
+            wire.objects, wire.objects == 1 ? "" : "s"
+        );
+        return;
+    }
+
+    char bytes_str[32];
+    output_format_size(wire.bytes, bytes_str, sizeof(bytes_str));
+    snprintf(
+        buffer, buffer_size, "%zu object%s, %s",
+        wire.objects, wire.objects == 1 ? "" : "s", bytes_str
+    );
+}
+
+/**
+ * Print one direction's line of the summary, "<verb> <its phrase>" — none where
+ * it moved nothing
  */
 static void transfer_print_wire(
     output_t *out,
@@ -350,22 +374,9 @@ static void transfer_print_wire(
 ) {
     if (wire.objects == 0) return;
 
-    /* A local push counts no bytes (see push callback): the "(SIZE)" suffix is
-     * suppressed rather than reporting a bogus value */
-    if (wire.bytes == 0) {
-        output_info(
-            out, level, "%s %zu object%s",
-            verb, wire.objects, wire.objects == 1 ? "" : "s"
-        );
-        return;
-    }
-
-    char bytes_str[32];
-    output_format_size(wire.bytes, bytes_str, sizeof(bytes_str));
-    output_info(
-        out, level, "%s %zu object%s (%s)",
-        verb, wire.objects, wire.objects == 1 ? "" : "s", bytes_str
-    );
+    char phrase[TRANSFER_PHRASE_MAX];
+    transfer_wire_phrase(wire, phrase, sizeof(phrase));
+    output_info(out, level, "%s %s", verb, phrase);
 }
 
 /**

@@ -2,7 +2,8 @@
  * transfer.h - Unified transfer context for network operations
  *
  * Provides an opaque context for Git network operations (clone, fetch, push,
- * delete) that encapsulates credential session identity and progress reporting.
+ * delete) that encapsulates credential session identity, progress reporting,
+ * and what its ops moved on the wire.
  *
  * Design principles:
  * - Single context per command-level network session (one remote, N ops)
@@ -40,10 +41,12 @@ typedef struct {
  * (transfer_op_end): a fetch into received, a push into sent. A failed op folds
  * nothing, and an op that moved nothing — an up-to-date fetch, a connect that
  * lists the remote's heads — adds nothing: the intent is "what moved", not "how
- * many syscalls".
+ * many syscalls". The fold is the counters' one writer and only adds, so the
+ * difference of two readings is what the ops between them moved.
  *
  * Fed by the libgit2 progress callbacks TTY-independently, so metrics are accurate
- * on pipes and logs, not just interactive terminals. Access via transfer_stats().
+ * on pipes and logs, not just interactive terminals. Read by value
+ * (transfer_stats), and over an interval (transfer_stats_since).
  */
 typedef struct {
     transfer_wire_t received;   /* Every fetch's */
@@ -123,14 +126,26 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
 void transfer_op_end(transfer_context_t *xfer, int rc);
 
 /**
- * Return the cumulative transfer stats for this session.
+ * What the session has moved so far: its stats, by value — the mark an interval
+ * is measured from (transfer_stats_since)
  *
- * Read-only view. Updated by transfer_op_end, each op that succeeds folding in
- * what it moved.
- *
- * NULL-safe (returns NULL).
+ * NULL-safe (zero for NULL).
  */
-const transfer_stats_t *transfer_stats(const transfer_context_t *xfer);
+transfer_stats_t transfer_stats(const transfer_context_t *xfer);
+
+/**
+ * What the session moved since `mark`, a reading transfer_stats gave of it: the
+ * ops that succeeded between the two readings, each direction's
+ *
+ * Readers: cmds/sync.c sync_execute (a row's act), sync_fetch, and
+ * sync_reconcile_epoch (the epoch's establish and adopt).
+ *
+ * NULL-safe, as transfer_stats is.
+ */
+transfer_stats_t transfer_stats_since(
+    const transfer_context_t *xfer,
+    transfer_stats_t mark
+);
 
 #define TRANSFER_PHRASE_MAX 64 /* "%zu objects, " at a size_t's widest, a size output_format_size writes, and NUL */
 
@@ -142,7 +157,8 @@ const transfer_stats_t *transfer_stats(const transfer_context_t *xfer);
  * of zero leave the size unsaid rather than say a size of nothing: the transport
  * counted none (transfer_wire_t, a local push).
  *
- * Readers: sys/transfer.c transfer_print_wire, the summary's line a direction.
+ * Readers: sys/transfer.c transfer_print_wire, the summary's line a direction;
+ * cmds/sync.c sync_print_wire, beside the line that says an op.
  *
  * @param wire What moved, one way
  * @param buffer Output buffer for the phrase (must not be NULL)
@@ -164,8 +180,7 @@ void transfer_wire_phrase(
  *     narrative; a summary would be misleading),
  *   - no direction saw any data (nothing interesting to report).
  *
- * Intended to be called by commands near their existing end-of-run summary so
- * users see what moved on the wire.
+ * Reader: cmds/profile.c profile_fetch, beneath its rows.
  */
 void transfer_summarize(
     const transfer_context_t *xfer,

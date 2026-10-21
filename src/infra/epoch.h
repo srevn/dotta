@@ -194,7 +194,8 @@ error_t epoch_load(git_repository *repo, kdf_epoch_t *out);
  * init` has populated it locally). Idempotent: an already-up-to-date push completes
  * cleanly. Surfaces network and auth failures as regular Git errors.
  *
- * Called once per `dotta sync` after profile pushes complete, so the `dotta init`
+ * Called by `dotta sync` where the remote holds no epoch, before the fetch and
+ * every profile's push (cmds/sync.c sync_reconcile_epoch), so the `dotta init`
  * → `dotta remote add` → `dotta sync` workflow ships the epoch to the remote
  * without requiring manual `git push refs/dotta/...`.
  *

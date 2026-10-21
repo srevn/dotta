@@ -87,13 +87,14 @@ typedef enum {
  * the act did
  *
  * Each column is written once, by its phase: the analysis the upstream, the
- * decision the verdict and what the user's word withholds, the act the outcome.
- * A withheld act leaves its row as it stands, its verdict none — but a rebase
- * or a merge under --no-push, which resolves all the same and withholds its push
- * alone. The row's error is the failure the run met for it, whichever phase met
- * it — said on the row's line, counted and named by sync_failure. A row whose
- * analysis failed has no verdict, and every reader asks its error before its
- * state: a failed analysis's zeroed state reads as up to date otherwise.
+ * decision the verdict and what the user's word withholds, the act the outcome
+ * and what it sent. A withheld act leaves its row as it stands, its verdict none
+ * — but a rebase or a merge under --no-push, which resolves all the same and
+ * withholds its push alone. The row's error is the failure the run met for it,
+ * whichever phase met it — said on the row's line, counted and named by
+ * sync_failure. A row whose analysis failed has no verdict, and every reader
+ * asks its error before its state: a failed analysis's zeroed state reads as up
+ * to date otherwise.
  */
 typedef struct {
     const char *profile;        /* The scope's own name, borrowed */
@@ -102,6 +103,7 @@ typedef struct {
     sync_verdict_t withheld;    /* The act the user's word keeps from the row; NONE where none */
     sync_reason_t reason;       /* Whose word, read beside an act withheld */
     sync_outcome_t outcome;     /* What carrying the verdict out came to */
+    transfer_wire_t sent;       /* What the act sent: its push's, none where no push landed */
     error_t error;              /* The failure's cause, borrowed; NULL where the run met none */
 } sync_row_t;
 
@@ -151,7 +153,22 @@ static const char *sync_reason_name(sync_reason_t reason) {
 }
 
 /**
- * Fetch the scope's profiles from the remote
+ * Print what an op moved, the last part of the line that says the op — the fetch's,
+ * the epoch's establish and adopt, a row's act: dim, at verbose, the wire's phrase
+ * (sys/transfer.h transfer_wire_phrase) in parentheses, and nothing where nothing
+ * moved
+ */
+static void sync_print_wire(output_t *out, transfer_wire_t wire) {
+    if (wire.objects == 0) return;
+
+    char phrase[TRANSFER_PHRASE_MAX];
+    transfer_wire_phrase(wire, phrase, sizeof(phrase));
+    output_print(out, OUTPUT_VERBOSE, " {dim}(%s){reset}", phrase);
+}
+
+/**
+ * Fetch the scope's profiles from the remote: announced while the fetch runs,
+ * and at verbose said once it lands, with what it moved
  *
  * Operates on the scope's profiles (scope_profiles): fetching is driven by what
  * the user asked for. `dotta sync -p work` fetches only `work`, not every enabled
@@ -187,6 +204,7 @@ static error_t sync_fetch(
     fflush(out->stream);
 
     /* Perform batched fetch - single network operation for all branches */
+    const transfer_stats_t mark = transfer_stats(xfer);
     error_t err = gitops_fetch_branches(
         ctx->run.repo, remote_name, scope_profiles(scope), xfer
     );
@@ -205,7 +223,16 @@ static error_t sync_fetch(
      * credential in the words the transfer's callback set for what was offered
      * (sys/transfer.c transfer_credentials_callback), any other failure — a ref
      * write as well as a network — in libgit2's */
-    return err;
+    if (err) return err;
+
+    /* At verbose, the fetch done and what it moved: one op and one pack, so one
+     * wire, never a profile's (lib/libgit2/include/git2/indexer.h
+     * git_indexer_progress) */
+    output_print(out, OUTPUT_VERBOSE, "{green}✓{reset} Fetched from '%s'", remote_name);
+    sync_print_wire(out, transfer_stats_since(xfer, mark).received);
+    output_endline(out, OUTPUT_VERBOSE);
+
+    return NULL;
 }
 
 /**
@@ -579,7 +606,8 @@ static void sync_reset(git_repository *repo, const char *remote_name, sync_row_t
 
 /**
  * Carry every verdict out, in the scope's order, printing nothing: what each
- * act came to, and the failure it met, written on its row for the receipt
+ * act came to, the failure it met and what it sent, written on its row for the
+ * receipt
  *
  * Git only: every pull, rebase, merge and reset moves a branch head and nothing
  * else, and what the acts did to the view is read off once, for every enabled
@@ -602,6 +630,10 @@ static error_t sync_execute(
 
     for (size_t i = 0; i < rows->count; i++) {
         sync_row_t *row = &rows->entries[i];
+
+        /* What the act sent is what the session sent across it: a push's, where
+         * one landed — a pull and a reset move a branch here and send nothing */
+        const transfer_stats_t mark = transfer_stats(xfer);
 
         switch (row->verdict) {
             case SYNC_VERDICT_NONE:
@@ -630,6 +662,8 @@ static error_t sync_execute(
 
             case SYNC_VERDICT_REBASE:
             case SYNC_VERDICT_MERGE: {
+                /* A rollback that fails stops the run, and the row sent nothing:
+                 * its push failed, or none ran */
                 error_t err = sync_resolve(repo, remote_name, row, xfer);
                 if (err) return err;
                 break;
@@ -639,6 +673,8 @@ static error_t sync_execute(
                 sync_reset(repo, remote_name, row);
                 break;
         }
+
+        row->sent = transfer_stats_since(xfer, mark).sent;
     }
 
     return NULL;
@@ -893,12 +929,13 @@ static void sync_print_done(output_t *out, const sync_row_t *row) {
  * order, titled by the remote, once every act is done
  *
  * The preview's sibling (sync_print_preview), in the past tense, each row in
- * the line both print: its lead, its clause, what the user's word withheld. An
- * act carried out whole is said in the preview's words (sync_print_done); a row
- * no act moved where it stands, as the preview says it (sync_print_state) — a
- * row the run stopped before among them, the run's error beneath saying why;
- * and a failure by its cause, beside where it left the branch. The remedies its
- * rows call for close it (sync_print_remedies).
+ * the line both print — its lead, its clause, what the user's word withheld —
+ * and at verbose what its act sent (sync_print_wire). An act carried out whole
+ * is said in the preview's words (sync_print_done); a row no act moved where it
+ * stands, as the preview says it (sync_print_state) — a row the run stopped before
+ * among them, the run's error beneath saying why; and a failure by its cause,
+ * beside where it left the branch. The remedies its rows call for close it
+ * (sync_print_remedies).
  */
 static void sync_print_receipt(
     output_t *out,
@@ -944,6 +981,7 @@ static void sync_print_receipt(
                 break;
         }
         sync_print_withheld(out, row);
+        sync_print_wire(out, row->sent);
         output_endline(out, OUTPUT_NORMAL);
     }
 
@@ -1220,16 +1258,19 @@ static void sync_reconcile_epoch(
             }
             /* The push's failure names its act, the ref and the remote, then
              * libgit2's reason (infra/epoch.c epoch_push): printed whole */
+            const transfer_stats_t mark = transfer_stats(xfer);
             err = epoch_push(repo, remote_name, xfer);
             if (err) {
                 output_gap(out, OUTPUT_NORMAL);
                 output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
                 return;  /* best-effort; retried next sync */
             }
-            output_success(
+            output_print(
                 out, OUTPUT_VERBOSE,
-                "Established repository epoch on remote"
+                "{green}✓{reset} Established repository epoch on remote"
             );
+            sync_print_wire(out, transfer_stats_since(xfer, mark).sent);
+            output_endline(out, OUTPUT_VERBOSE);
             return;
         }
 
@@ -1266,6 +1307,7 @@ static void sync_reconcile_epoch(
             }
 
             kdf_epoch_t fetched;
+            const transfer_stats_t mark = transfer_stats(xfer);
             err = epoch_fetch(repo, remote_name, xfer, &fetched);
             if (err) {
                 /* Every failure of the fetch names its act and leaves the local
@@ -1275,9 +1317,18 @@ static void sync_reconcile_epoch(
                 output_warning(out, OUTPUT_NORMAL, "%s", error_line(err));
                 return;  /* best-effort */
             }
-            output_success(
-                out, OUTPUT_VERBOSE, "Adopted repository epoch from remote"
+
+            /* What the probe and the download moved — over a local remote every
+             * object of the remote's this store lacks, the epoch's among them:
+             * libgit2's local transport packs every advertised ref, never the
+             * wants alone (lib/libgit2/src/libgit2/transports/local.c
+             * local_download_pack) */
+            output_print(
+                out, OUTPUT_VERBOSE,
+                "{green}✓{reset} Adopted repository epoch from remote"
             );
+            sync_print_wire(out, transfer_stats_since(xfer, mark).received);
+            output_endline(out, OUTPUT_VERBOSE);
 
             /* The run's crypto handles were bound to the epoch at dispatch; the
              * fetch moved that authority mid-command, so re-bind — the same duty
@@ -1779,8 +1830,9 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         output_info(out, OUTPUT_VERBOSE, "Proceeding with uncommitted changes");
     }
 
-    /* Create transfer context for progress reporting. URL was resolved alongside
-     * the remote name above; it feeds the credential helper here */
+    /* Create transfer context for progress reporting and what each op moved.
+     * URL was resolved alongside the remote name above; it feeds the credential
+     * helper here */
     transfer_options_t xfer_opts = {
         .output             = out,
         .url                = remote_url,
@@ -1856,12 +1908,9 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     err = sync_execute(repo, remote_name, &rows, xfer);
 
     /* The receipt, once every act is done, a row for every profile — a run a
-     * failed rollback stopped among them, which then ends in that error — and
-     * at verbose the wire beneath it, Git's tally of what the lines above say
-     * moved */
+     * failed rollback stopped among them, which then ends in that error */
     sync_print_receipt(out, remote_name, &rows);
     if (err) goto cleanup;
-    transfer_summarize(xfer, out, OUTPUT_VERBOSE);
 
     /* Manifest block — the view after the Git phase, diffed against the view
      * before it. A true delta in both modes: a local external commit that predates

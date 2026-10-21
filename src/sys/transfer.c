@@ -332,10 +332,30 @@ void transfer_op_end(transfer_context_t *xfer, int rc) {
 }
 
 /**
- * Return read-only view of cumulative session stats.
+ * What the session has moved so far, by value
  */
-const transfer_stats_t *transfer_stats(const transfer_context_t *xfer) {
-    return xfer ? &xfer->stats : NULL;
+transfer_stats_t transfer_stats(const transfer_context_t *xfer) {
+    return xfer ? xfer->stats : (transfer_stats_t){ 0 };
+}
+
+/**
+ * What the session moved since `mark`
+ */
+transfer_stats_t transfer_stats_since(const transfer_context_t *xfer, transfer_stats_t mark) {
+    const transfer_stats_t now = transfer_stats(xfer);
+
+    /* The fold only adds (transfer_op_end), so no reading of a session stands
+     * below an earlier one: each difference is what the ops between them moved */
+    return (transfer_stats_t){
+        .received = {
+            .objects = now.received.objects - mark.received.objects,
+            .bytes   = now.received.bytes - mark.received.bytes,
+        },
+        .sent = {
+            .objects = now.sent.objects - mark.sent.objects,
+            .bytes   = now.sent.bytes - mark.sent.bytes,
+        },
+    };
 }
 
 /**

@@ -674,7 +674,15 @@ error_t gitops_fetch_branch(
  * Fetch multiple branches from remote in a single operation
  *
  * Performs a batched fetch of multiple branches, significantly reducing network
- * overhead compared to fetching each branch individually.
+ * overhead compared to fetching each branch individually. A branch the remote
+ * lacks is not an error of the fetch: its refspec matches no head the remote
+ * advertises, so nothing is wanted for it and no ref is written
+ * (lib/libgit2/src/libgit2/fetch.c filter_wants, remote.c update_one_tip), and
+ * what the remote held is read off the remote-tracking refs afterwards.
+ *
+ * Readers, each asking for branches the remote may never have held: cmds/sync.c
+ * sync_fetch (every profile in the run's scope), cmds/status.c status_print_remote
+ * (every profile it lists).
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)
@@ -993,8 +1001,8 @@ error_t gitops_branch_refname(
  * rule where its own ref is built (gitops_branch_refname). A refspec joining
  * this name and the branch's fits DOTTA_REFSPEC_MAX by that constant's definition.
  *
- * Readers: cmds/sync.c sync_fast_forward and sync_fetch, cmds/status.c
- * status_print_remote, sys/upstream.c upstream_analyze_profile, and this file's
+ * Readers: cmds/sync.c sync_fast_forward, cmds/status.c status_print_remote,
+ * sys/upstream.c upstream_analyze_profile, and this file's
  * gitops_resolve_remote_branch_oid, gitops_fetch_branch and gitops_fetch_branches.
  *
  * @param buffer Output buffer for the reference name (must not be NULL)

@@ -158,6 +158,12 @@ static const char *sync_reason_name(sync_reason_t reason) {
  * profile. Precedence-adjacent work (the Manifest block) still uses the full
  * enabled set — different role, different accessor.
  *
+ * Each is asked for whether or not the remote has been seen to hold it: the
+ * analysis reads a profile through its remote-tracking ref (sys/upstream.h
+ * upstream_analyze_profile), so one the remote holds and no fetch here ever asked
+ * for would read as never pushed — and one the remote does not hold costs the
+ * fetch nothing (sys/gitops.h gitops_fetch_branches).
+ *
  * Nothing here asks whether the remote stands: the fetch looks it up before any
  * use and refuses it in Git's words, as every verb that takes a remote name does
  * (sys/gitops.h gitops_resolve_default_remote).
@@ -172,38 +178,7 @@ static error_t sync_fetch(
     CHECK_NULL(remote_name);
     CHECK_NULL(scope);
 
-    git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
-    const string_array_t *profiles = scope_profiles(scope);
-
-    /* The branches to ask for: the profiles the remote has been seen to hold —
-     * a remote-tracking ref stands for each — so a profile only this machine
-     * has (never pushed) is not asked for. Whether the ref stands is Git's answer
-     * or Git's error (gitops_reference_exists): a ref this run cannot read is
-     * not "never pushed", and read as that it left the profile out of the fetch
-     * without a word. */
-    string_array_t branch_names;
-    string_array_init(&branch_names, ctx->arena, 0);
-
-    for (size_t i = 0; i < profiles->count; i++) {
-        char remote_refname[DOTTA_REFNAME_MAX];
-        error_t err = gitops_remote_branch_refname(
-            remote_refname, sizeof(remote_refname), remote_name, profiles->entries[i]
-        );
-        if (err) return err;
-
-        bool tracked = false;
-        err = gitops_reference_exists(repo, remote_refname, &tracked);
-        if (err) return err;
-
-        if (tracked) {
-            string_array_push(&branch_names, profiles->entries[i]);
-        }
-    }
-
-    /* None the remote has been seen to hold: nothing is fetched, and nothing
-     * announces a fetch */
-    if (branch_names.count == 0) return NULL;
 
     /* Ephemeral fetch progress — shown while fetching, cleared after. On TTY:
      * transfer progress overwrites via \r, then line cleared entirely. On pipe:
@@ -212,7 +187,9 @@ static error_t sync_fetch(
     fflush(out->stream);
 
     /* Perform batched fetch - single network operation for all branches */
-    error_t err = gitops_fetch_branches(repo, remote_name, &branch_names, xfer);
+    error_t err = gitops_fetch_branches(
+        ctx->run.repo, remote_name, scope_profiles(scope), xfer
+    );
 
     /* The announce line ends here. Progress drawn over it ended with its op
      * (sys/transfer.h transfer_op_end), whichever way the op went, so what can
@@ -236,10 +213,10 @@ static error_t sync_fetch(
  * branch's state against the remote
  *
  * The table is made here, in `arena`, as scope_profiles(scope) orders it — the
- * profiles the user asked for, those the fetch asked the remote for and those
- * it has never held alike. A row names its profile by the scope's own string. A
- * profile the analysis cannot read fails in its own row, by its error, which
- * the decision passes over and the preview and the receipt read back.
+ * profiles the user asked for, each one the fetch asked the remote for, held
+ * there or not. A row names its profile by the scope's own string. A profile
+ * the analysis cannot read fails in its own row, by its error, which the decision
+ * passes over and the preview and the receipt read back.
  */
 static sync_rows_t sync_analyze(
     arena_t *arena,

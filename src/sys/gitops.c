@@ -96,6 +96,26 @@ error_t gitops_get_signature(git_signature **out, git_repository *repo) {
     return NULL;
 }
 
+/*
+ * The ident of every reflog line libgit2 signs itself — a fetch's, a push's, a
+ * reference write handed no signature — set where gitops opens or creates the
+ * handle: the signature dotta's commits carry (gitops_get_signature), which libgit2
+ * reads ahead of user.name and user.email and their "unknown", for those lines
+ * alone (lib/libgit2/src/libgit2/refs.c refs_configured_ident, its one reader).
+ * Unchecked, as gitops_init's knobs are: a signature that cannot be made, or a
+ * copy libgit2 cannot allocate, leaves libgit2's own chain standing, which changes
+ * no answer dotta gives — `git log -g` alone shows a line's ident — and a commit
+ * asks for its own signature and refuses with the reason. A configuration a run
+ * changes after the open names its later commits, not its lines.
+ */
+static void gitops_set_ident(git_repository *repo) {
+    git_signature *sig = NULL;
+    if (gitops_get_signature(&sig, repo)) return;
+
+    (void) git_repository_set_ident(repo, sig->name, sig->email);
+    git_signature_free(sig);
+}
+
 /**
  * Repository operations
  *
@@ -162,6 +182,7 @@ error_t gitops_open_repository(git_repository **out, const char *path) {
     }
     if (rc < 0) return error_git(rc, "The repository at '%s' would not open", path);
 
+    gitops_set_ident(*out);
     return NULL;
 }
 
@@ -176,6 +197,7 @@ error_t gitops_init_repository(git_repository **out, const char *path) {
     int rc = git_repository_init_ext(out, path, &opts);
     if (rc < 0) return error_git(rc, "Cannot create a repository at '%s'", path);
 
+    gitops_set_ident(*out);
     return NULL;
 }
 

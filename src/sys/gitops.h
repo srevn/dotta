@@ -78,16 +78,20 @@ error_t gitops_init(void);
 void gitops_shutdown(void);
 
 /**
- * Build a commit signature with fallback for missing git config.
+ * The signature a commit dotta writes carries, stamped now
  *
- * Tries git_signature_default first (reads user.name / user.email from .gitconfig);
- * on failure (common on fresh machines before dotfiles are deployed) falls back
- * to "$USER@$HOSTNAME" via getenv / gethostname, defaulting to "dotta@localhost"
- * when even those are unavailable.
+ * user.name and user.email as the repository's configuration names them
+ * (git_signature_default: its own file, the user's, the system's); where it lacks
+ * either — a fresh machine before its dotfiles are deployed — the invoker at
+ * this host (sys/identity.h), `<invoker> <invoker@host>`, "dotta" for an invoker
+ * with no name and "localhost" for a host gethostname cannot name.
  *
- * Used by every dotta path that creates a commit object — the stage's commit
- * (sys/stage), the merge commit and the rebase. Caller frees the returned signature
- * via `git_signature_free`.
+ * Readers: every writer of a commit object — the stage's commit (sys/stage.c
+ * stage_commit), the merge commit (gitops_create_merge_commit) and the rebase
+ * (gitops_rebase_inmemory_safe) — and the handle's open and create, which hand
+ * it to libgit2 as the ident of the reflog lines it signs itself
+ * (gitops_open_repository, gitops_init_repository). Caller frees the returned
+ * signature via `git_signature_free`.
  *
  * @param out  Output signature (caller frees with git_signature_free)
  * @param repo Repository (must not be NULL)
@@ -117,6 +121,10 @@ error_t gitops_get_signature(git_signature **out, git_repository *repo);
  *                    repository libgit2 would not open whose .git or HEAD stands,
  *                    and a look at either that could not answer.
  *
+ * The handle opened signs the reflog lines libgit2 writes itself — a fetch's, a
+ * push's, a reference write handed no signature — with the signature dotta's
+ * commits carry (gitops_get_signature), so a line names whom a commit here names.
+ *
  * @param out Repository handle (must not be NULL)
  * @param path Repository path (must not be NULL)
  * @return Error or NULL on success
@@ -142,6 +150,8 @@ error_t gitops_open_repository(git_repository **out, const char *path);
  * words, and stops every commit too — libgit2 reads HEAD at each ref write to
  * decide whether the HEAD reflog gets the entry, and fails on what it finds,
  * naming the file — while every read runs; the file is the hand's to put back.
+ *
+ * The handle signs its reflog lines as an opened one does (gitops_open_repository).
  *
  * @param out Repository handle (must not be NULL)
  * @param path Repository path (must not be NULL)

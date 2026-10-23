@@ -19,7 +19,6 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/scope.h"
-#include "core/state.h"
 #include "core/workspace.h"
 #include "infra/compare.h"
 #include "infra/content.h"

@@ -36,6 +36,7 @@
 #include <git2.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -512,19 +513,21 @@ error_t epoch_fetch(
 
     /* Install, and only now: the one mutation this function makes, and its last
      * step. The write is forced — the local ref is replaced wholesale by the
-     * remote's — which is safe because the only caller that reaches a *divergent*
-     * local epoch, `cmd_sync`'s adopt path, gates the fetch on the key-free census
-     * proving no reachable ciphertext (any commit, any branch) is keyed by the
-     * epoch being replaced. Clone reaches a missing (not divergent) local epoch,
-     * so there is nothing to overwrite. Deliberate epoch rotation remains
-     * unsupported end-to-end: a re-minted epoch cannot even be published (the
-     * push is non-force), and a clone whose ciphertext the old epoch keys lands
-     * on CONFLICT, not adopt. NULL ref_out: libgit2 frees the handle it makes. */
-    rc = git_reference_create(NULL, repo, EPOCH_REF, &advertised, 1, NULL);
-    if (rc < 0) {
-        return error_git(
-            rc, "Failed to point '%s' at the epoch fetched from '%s'", EPOCH_REF, remote_name
-        );
+     * remote's, the one ref write dotta makes from no read of what stands
+     * (sys/gitops.h gitops_write_reference) — which is safe because the only
+     * caller that reaches a *divergent* local epoch, `cmd_sync`'s adopt path,
+     * gates the fetch on the key-free census proving no reachable ciphertext
+     * (any commit, any branch) is keyed by the epoch being replaced. Clone reaches
+     * a missing (not divergent) local epoch, so there is nothing to overwrite.
+     * Deliberate epoch rotation remains unsupported end-to-end: a re-minted epoch
+     * cannot even be published (the push is non-force), and a clone whose
+     * ciphertext the old epoch keys lands on CONFLICT, not adopt. The write's
+     * failure names the ref, and the act and the remote are this call's to say. */
+    char reflog_msg[DOTTA_MESSAGE_MAX];
+    snprintf(reflog_msg, sizeof(reflog_msg), "epoch: Fetched from %s", remote_name);
+    err = gitops_write_reference(repo, EPOCH_REF, &advertised, NULL, reflog_msg);
+    if (err) {
+        return error_wrap(err, "Cannot adopt the epoch remote '%s' advertises", remote_name);
     }
 
     /* Hand over exactly what the validation proved, and only once the ref carries

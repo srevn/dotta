@@ -166,9 +166,11 @@ error_t upstream_discover_branches(
  * commit.
  *
  * Refuses with ERR_CONFLICT, naming both branches, when the local ref namespace
- * cannot hold the name beside one already there (`gitops_branch_blocker`) — the
- * one failure here that is about the two names rather than the wire, and the
- * one the ref write would otherwise report in libgit2's own words.
+ * cannot hold the name beside one already there (`gitops_branch_blocker`) — a
+ * failure about the two names rather than the wire, which the ref write would
+ * otherwise report in libgit2's own words — and with ERR_CONFLICT in the writer's
+ * words where a branch of the name was made since the look: the create is written
+ * only where the name is still free (sys/gitops.h gitops_write_reference).
  *
  * Readers: cmds/clone.c land_profiles, every profile the clone chose — a name
  * given twice is here at its second; cmds/profile.c profile_fetch, a profile

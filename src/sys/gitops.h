@@ -836,9 +836,13 @@ error_t gitops_resolve_default_remote(
  *
  * `refname` comes to name `target` only where it still stands as `expected` says
  * — git's update-ref <ref> <new> [<old>]:
- *   - an id: the head it must still name — the stage's commit;
- *   - Git's null id: nothing, the name free — the stage's root;
- *   - NULL: whatever stands, a forced write.
+ *   - an id: the head it must still name — the stage's commit, sync's resolutions
+ *     and their rollback, its fast-forward;
+ *   - Git's null id: nothing, the name free — the stage's root, a tracking branch's
+ *     create;
+ *   - NULL: whatever stands — the epoch's install alone, the one write from no
+ *     read, licensed by the census that found nothing the replaced epoch keys
+ *     (infra/epoch.h epoch_fetch).
  * libgit2 compares under the reference's own lock, and asks Git's namespace
  * whatever the compare says (lib/libgit2/src/libgit2/refdb_fs.c
  * refdb_fs_backend__write: reference_path_available, then cmp_old_ref), so a
@@ -864,7 +868,10 @@ error_t gitops_resolve_default_remote(
  * (gitops_open_repository), HEAD's log taking it too where HEAD names the reference
  * written (refdb_fs.c maybe_append_head); its clock is the write's.
  *
- * Readers: sys/stage.c stage_commit.
+ * Readers: sys/stage.c stage_commit; sys/resolve.c resolve_rebase_inmemory,
+ * resolve_merge_trees, resolve_theirs and resolve_rollback; cmds/sync.c
+ * sync_fast_forward; sys/upstream.c upstream_ensure_tracking_branch; infra/epoch.c
+ * epoch_fetch.
  *
  * @param repo Repository (must not be NULL)
  * @param refname Full reference name (must not be NULL)
@@ -886,26 +893,6 @@ error_t gitops_write_reference(
     const git_oid *target,
     const git_oid *expected,
     const char *reflog_msg
-);
-
-/**
- * Create reference
- *
- * Without `force` the name must be free, and that is decided on a fresh read of
- * the store (gitops_reference_find says why): a packed ref of the name refuses
- * the create, and a packed-refs that will not parse refuses it too.
- *
- * @param repo Repository (must not be NULL)
- * @param name Reference name (e.g., "refs/heads/mybranch") (must not be NULL)
- * @param oid Target OID (must not be NULL)
- * @param force Overwrite if exists
- * @return Error or NULL on success
- */
-error_t gitops_create_reference(
-    git_repository *repo,
-    const char *name,
-    const git_oid *oid,
-    bool force
 );
 
 /**
@@ -949,23 +936,6 @@ error_t gitops_reference_oid(
 error_t gitops_resolve_reference_oid(
     git_repository *repo,
     const char *ref_name,
-    git_oid *out
-);
-
-/**
- * Resolve a branch's head to its id
- *
- * gitops_resolve_reference_oid of `refs/heads/<branch_name>`, the name through
- * the branch rule (gitops_branch_refname) on the way.
- *
- * @param repo Repository (must not be NULL)
- * @param branch_name Branch name without refs/heads/ prefix (must not be NULL)
- * @param out Target OID (must not be NULL)
- * @return Error or NULL on success (ERR_NOT_FOUND if branch missing)
- */
-error_t gitops_resolve_branch_oid(
-    git_repository *repo,
-    const char *branch_name,
     git_oid *out
 );
 
@@ -1242,24 +1212,6 @@ error_t gitops_rebase_inmemory_safe(
     const git_oid *branch_oid,
     const git_oid *onto_oid,
     git_oid *out_oid
-);
-
-/**
- * Update branch reference to new commit
- *
- * Updates a branch reference without modifying HEAD. Thread-safe with reflog.
- *
- * @param repo Repository (must not be NULL)
- * @param branch_name Branch name (must not be NULL)
- * @param new_oid New commit OID (must not be NULL)
- * @param reflog_msg Reflog message (must not be NULL)
- * @return Error or NULL on success
- */
-error_t gitops_update_branch_reference(
-    git_repository *repo,
-    const char *branch_name,
-    const git_oid *new_oid,
-    const char *reflog_msg
 );
 
 #endif /* DOTTA_GITOPS_H */

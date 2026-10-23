@@ -435,19 +435,12 @@ static error_t sync_fast_forward(
     );
     if (err) return err;
 
-    /* The branch that moves, read through a symbolic one to the ref it names:
-     * its target is what the fast-forward compares and sets. Its absence is no
-     * answer here — the caller asks of a branch it holds — so the lookup's failure
-     * is the failure. */
-    git_reference *branch = NULL;
-    int rc = git_reference_lookup(&branch, repo, local_refname);
-    if (rc < 0) return error_git(rc, "Cannot fast-forward '%s'", branch_name);
-
-    git_reference *local_ref = NULL;
-    rc = git_reference_resolve(&local_ref, branch);
-    git_reference_free(branch);
-    if (rc < 0) return error_git(rc, "Cannot fast-forward '%s'", branch_name);
-    const git_oid *local_oid = git_reference_target(local_ref);
+    /* The head the branch names, read through a symbolic one: what the fast-forward
+     * decides from, and writes over. Its absence is no answer here — the caller
+     * asks of a branch it holds — so it is refused. */
+    git_oid local_oid;
+    err = gitops_resolve_reference_oid(repo, local_refname, &local_oid);
+    if (err) return err;
 
     /* The remote-tracking head, or its absence proven (sys/gitops.h
      * gitops_reference_oid): nothing fetched for the branch is nothing to do,
@@ -455,14 +448,10 @@ static error_t sync_fast_forward(
      * branch that is not there. */
     git_oid remote_oid;
     err = gitops_reference_oid(repo, remote_refname, &remote_oid);
-    if (err || git_oid_is_zero(&remote_oid)) {
-        git_reference_free(local_ref);
-        return err;
-    }
+    if (err || git_oid_is_zero(&remote_oid)) return err;
 
     /* Check if branches are at the same commit (up-to-date) */
-    if (git_oid_equal(local_oid, &remote_oid)) {
-        git_reference_free(local_ref);
+    if (git_oid_equal(&local_oid, &remote_oid)) {
         /* Already up-to-date, nothing to do */
         return NULL;
     }
@@ -470,15 +459,11 @@ static error_t sync_fast_forward(
     /* Check if fast-forward is possible by checking if local is ancestor of remote.
      * A graph question about the two commits, independent of HEAD: the store
      * checks nothing out, and the branch being moved is never the current one. */
-    rc = git_graph_descendant_of(repo, &remote_oid, local_oid);
-    if (rc < 0) {
-        git_reference_free(local_ref);
-        return error_git(rc, "Cannot fast-forward '%s'", branch_name);
-    }
+    int rc = git_graph_descendant_of(repo, &remote_oid, &local_oid);
+    if (rc < 0) return error_git(rc, "Cannot fast-forward '%s'", branch_name);
 
     if (rc == 0) {
         /* local is NOT an ancestor of remote - cannot fast-forward */
-        git_reference_free(local_ref);
         return error_create(
             ERR_CONFLICT, "Cannot fast-forward '%s' - branches have diverged",
             branch_name
@@ -487,18 +472,14 @@ static error_t sync_fast_forward(
 
     /* rc == 1 means local IS an ancestor of remote - can fast-forward */
 
-    /* Perform fast-forward */
-    git_reference *updated_ref = NULL;
-    rc = git_reference_set_target(
-        &updated_ref, local_ref, &remote_oid, "sync: Fast-forward pull"
+    /* The fast-forward, only from the head read above: one another writer moved
+     * or deleted since refuses it (sys/gitops.h gitops_write_reference) */
+    err = gitops_write_reference(
+        repo, local_refname, &remote_oid, &local_oid, "sync: Fast-forward pull"
     );
-    git_reference_free(local_ref);
+    if (err) return err;
 
-    if (rc < 0) return error_git(rc, "Cannot fast-forward '%s'", branch_name);
-
-    git_reference_free(updated_ref);
     *updated = true;
-
     return NULL;
 }
 
@@ -520,7 +501,7 @@ static error_t sync_rollback(
     /* The error names the head, the one fact a repair starts from: whole, as
      * git's own ref refusals spell an id (lib/git/refs/packed-backend.c,
      * oid_to_hex), where an abbreviation could name two commits. The branch is
-     * its cause's to name (sys/gitops.c gitops_update_branch_reference). */
+     * its cause's to name (sys/gitops.h gitops_write_reference). */
     char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
     git_oid_tostr(oid_str, sizeof(oid_str), &resolve->saved_oid);
     return error_wrap(
@@ -536,8 +517,10 @@ static error_t sync_rollback(
  * A step that fails is the row's, its cause as it stands: each names its act
  * and its branch (sys/resolve.h, sys/gitops.h). The resolution runs in memory
  * and moves the branch alone, never HEAD, so one that fails leaves the branch
- * where it stood; a verification or a push that fails after it rolls the branch
- * back.
+ * where it stood — a commit another writer landed meanwhile refuses it; a
+ * verification or a push that fails after it rolls the branch back, from the
+ * head the resolution left, and a branch another writer moved since refuses the
+ * rollback, which stops the run naming the head.
  *
  * @return The run's error where that rollback fails; NULL otherwise, every other
  *         failure the row's
@@ -548,13 +531,14 @@ static error_t sync_resolve(
     sync_row_t *row,
     transfer_context_t *xfer
 ) {
-    /* The context keeps the head the branch stands at, the rollback's target */
+    /* The context keeps the head the branch stands at — every write's expectation,
+     * the rollback's target — and the head the resolution leaves */
     resolve_context_t resolve;
     error_t err = resolve_init(
         &resolve, repo, remote_name, row->profile,
         row->verdict == SYNC_VERDICT_REBASE ? RESOLVE_STRATEGY_REBASE : RESOLVE_STRATEGY_MERGE
     );
-    if (!err) err = resolve_execute(&resolve, NULL);
+    if (!err) err = resolve_execute(&resolve);
     if (err) {
         row->error = err;
         row->outcome = SYNC_OUTCOME_FAILED;
@@ -593,7 +577,7 @@ static void sync_reset(git_repository *repo, const char *remote_name, sync_row_t
     error_t err = resolve_init(
         &resolve, repo, remote_name, row->profile, RESOLVE_STRATEGY_THEIRS
     );
-    if (!err) err = resolve_execute(&resolve, NULL);
+    if (!err) err = resolve_execute(&resolve);
     if (err) {
         row->error = err;
         row->outcome = SYNC_OUTCOME_FAILED;

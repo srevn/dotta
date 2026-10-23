@@ -254,12 +254,21 @@ error_t upstream_ensure_tracking_branch(
     );
     if (err) return err;
 
-    /* Create local branch pointing to the same commit */
+    /* The local branch at the same commit, created only where the name is still
+     * free — one made since the look above refuses (sys/gitops.h
+     * gitops_write_reference) — under git's line for a branch made from another */
     char local_refname[DOTTA_REFNAME_MAX];
     err = gitops_branch_refname(
         local_refname, sizeof(local_refname), branch_name
     );
     if (err) return err;
 
-    return gitops_create_reference(repo, local_refname, &target_oid, false);
+    char reflog_msg[DOTTA_MESSAGE_MAX];
+    snprintf(
+        reflog_msg, sizeof(reflog_msg), "branch: Created from %s/%s", remote_name,
+        branch_name
+    );
+
+    const git_oid none = GIT_OID_SHA1_ZERO;
+    return gitops_write_reference(repo, local_refname, &target_oid, &none, reflog_msg);
 }

@@ -237,10 +237,11 @@ error_t epoch_push(
  * (base/error.h error_git) — so cmds/sync.c sync_reconcile_epoch prints each
  * whole and reads no code.
  *
- * The install is a force: whatever the local ref held is replaced wholesale.
- * Whether that is safe is the caller's to decide, not this boundary's —
- * `cmd_sync`'s adopt path gates it on the ciphertext census, `cmd_clone` reaches
- * a repository that has no epoch at all.
+ * The install is a force: whatever the local ref held is replaced wholesale,
+ * the one ref write dotta makes from no read of what stands (sys/gitops.h
+ * gitops_write_reference). Whether that is safe is the caller's to decide, not
+ * this boundary's — `cmd_sync`'s adopt path gates it on the ciphertext census,
+ * `cmd_clone` reaches a repository that has no epoch at all.
  *
  * On success the validated epoch is copied to `*out` when requested — the boundary
  * hands over exactly what it proved, so the adopting caller (`cmd_sync`, which

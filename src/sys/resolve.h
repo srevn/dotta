@@ -5,8 +5,16 @@
  * provides a clean abstraction over merge/rebase operations that never modifies
  * HEAD, maintaining dotta's architectural principle.
  *
- * All operations are designed to be atomic: either the entire operation succeeds
- * and the branch is updated, or it fails and the branch remains unchanged.
+ * A resolution writes the branch only from the head it was computed from — the
+ * one resolve_init read — and a rollback only from the head the resolution left,
+ * each under the branch's own lock (sys/gitops.h gitops_write_reference): a commit
+ * another writer lands on the branch meanwhile, or its deletion, refuses the
+ * write, and the branch stays as that writer left it. Either the resolution lands
+ * whole and the branch names its result, or nothing is written.
+ *
+ * What the compare reads is resolve_init's head, not the head the caller's analysis
+ * decided from: a commit landed between the two is in what a rebase or a merge
+ * resolves, and in what a reset to the remote discards.
  */
 
 #ifndef DOTTA_RESOLVE_H
@@ -14,6 +22,8 @@
 
 #include <git2.h>
 #include <types.h>
+
+#include "sys/gitops.h"
 
 /**
  * Divergence resolution strategies
@@ -28,21 +38,27 @@ typedef enum {
 /**
  * Divergence resolution context
  *
- * Encapsulates all information needed for divergence resolution. The saved_oid
- * is used for rollback if resolution fails.
+ * The branch's two heads: the one resolve_init read, every resolution's expectation
+ * and the rollback's target, and the one the resolution left, the rollback's
+ * expectation — Git's null id until a resolution lands.
  */
 typedef struct {
-    git_repository *repo;           /* Repository handle (must not be NULL) */
-    const char *remote_name;        /* Remote name (e.g., "origin") */
-    const char *branch_name;        /* Branch name to resolve */
-    resolve_strategy_t strategy;    /* Resolution strategy */
-    git_oid saved_oid;              /* Original branch OID (for rollback) */
+    git_repository *repo;             /* Repository handle (must not be NULL) */
+    const char *remote_name;          /* Remote name (e.g., "origin") */
+    const char *branch_name;          /* Branch name to resolve */
+    resolve_strategy_t strategy;      /* Resolution strategy */
+    char refname[DOTTA_REFNAME_MAX];  /* The branch's reference, every write's */
+    git_oid saved_oid;                /* The head resolve_init read */
+    git_oid resolved_oid;             /* The head the resolution left; the null id before one */
 } resolve_context_t;
 
 /**
  * Initialize divergence context
  *
- * Prepares a context for divergence resolution by saving the current branch state.
+ * The branch's reference, through the branch rule (sys/gitops.h
+ * gitops_branch_refname), and the head it names, read through a symbolic one:
+ * the head every resolution is computed from and written over. A branch that is
+ * absent is refused (ERR_NOT_FOUND). No resolution has landed yet.
  *
  * @param ctx Context to initialize (must not be NULL)
  * @param repo Repository (must not be NULL)
@@ -63,25 +79,25 @@ error_t resolve_init(
  * Resolve branch divergence using specified strategy
  *
  * Performs merge or rebase WITHOUT modifying HEAD. Uses in-memory operations
- * and only updates the branch reference upon successful completion.
+ * and writes the branch once, upon successful completion, only from the head
+ * resolve_init read: one another writer moved or deleted since is refused
+ * (ERR_CONFLICT for a move, Git's words for a deletion), the branch as it left
+ * it. The head the resolution left is ctx->resolved_oid.
  *
  * The context must be initialized with resolve_init() first.
  *
  * @param ctx Divergence context (must not be NULL, must be initialized)
- * @param out_oid Final commit OID after resolution (can be NULL if not needed)
  * @return Error or NULL on success
  */
-error_t resolve_execute(
-    resolve_context_t *ctx,
-    git_oid *out_oid
-);
+error_t resolve_execute(resolve_context_t *ctx);
 
 /**
  * Rollback divergence resolution to saved state
  *
- * Resets the branch to the OID saved in the context (saved during init). This
- * is used when resolution succeeds but subsequent operations fail (e.g., push
- * fails after rebase).
+ * Writes the branch back to the head resolve_init read, only from the head the
+ * resolution left: one another writer moved since is refused (ERR_CONFLICT),
+ * and so is a rollback no resolution came before. This is used when resolution
+ * succeeds but subsequent operations fail (e.g., push fails after rebase).
  *
  * @param ctx Divergence context (must not be NULL)
  * @return Error or NULL on success

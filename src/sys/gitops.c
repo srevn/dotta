@@ -1303,30 +1303,6 @@ error_t gitops_write_reference(
     return NULL;
 }
 
-error_t gitops_create_reference(
-    git_repository *repo, const char *name, const git_oid *oid,
-    bool force
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(name);
-    CHECK_NULL(oid);
-
-    /* A create that must not overwrite decides the name free, and libgit2 asks
-     * its cached parse of packed-refs — one a refused parse left empty would
-     * find every packed name free, and the loose ref written would stand over a
-     * packed branch. So the decision reads a database that has read nothing. */
-    error_t err = force ? NULL : gitops_reopen_refdb(repo);
-    if (err) return err;
-
-    git_reference *ref = NULL;
-    int rc = git_reference_create(&ref, repo, name, oid, force, NULL);
-    if (rc < 0) return error_git(rc, "Cannot write reference '%s'", name);
-
-    git_reference_free(ref);
-
-    return NULL;
-}
-
 error_t gitops_reference_oid(
     git_repository *repo, const char *ref_name, git_oid *out
 ) {
@@ -1387,22 +1363,6 @@ error_t gitops_resolve_reference_oid(
     }
 
     return NULL;
-}
-
-error_t gitops_resolve_branch_oid(
-    git_repository *repo, const char *branch_name, git_oid *out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(out);
-
-    char refname[DOTTA_REFNAME_MAX];
-    error_t err = gitops_branch_refname(
-        refname, sizeof(refname), branch_name
-    );
-    if (err) return err;
-
-    return gitops_resolve_reference_oid(repo, refname, out);
 }
 
 error_t gitops_resolve_remote_branch_oid(
@@ -1788,41 +1748,6 @@ error_t gitops_rebase_inmemory_safe(
 
     /* Return the final commit OID */
     git_oid_cpy(out_oid, &commit_oid);
-    return NULL;
-}
-
-/**
- * Update branch reference to new commit
- */
-error_t gitops_update_branch_reference(
-    git_repository *repo, const char *branch_name, const git_oid *new_oid,
-    const char *reflog_msg
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(new_oid);
-    CHECK_NULL(reflog_msg);
-
-    /* Build reference name */
-    char refname[DOTTA_REFNAME_MAX];
-    error_t err = gitops_branch_refname(refname, sizeof(refname), branch_name);
-    if (err) return err;
-
-    /* Lookup existing reference */
-    git_reference *ref = NULL;
-    int rc = git_reference_lookup(&ref, repo, refname);
-    if (rc < 0) return error_git(rc, "Cannot update branch '%s'", branch_name);
-
-    /* Update reference to new OID with reflog message This is an atomic operation
-     * that updates the branch without touching HEAD
-     */
-    git_reference *new_ref = NULL;
-    rc = git_reference_set_target(&new_ref, ref, new_oid, reflog_msg);
-    git_reference_free(ref);
-
-    if (rc < 0) return error_git(rc, "Cannot update branch '%s'", branch_name);
-
-    git_reference_free(new_ref);
     return NULL;
 }
 

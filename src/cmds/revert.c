@@ -23,6 +23,7 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "infra/commit.h"
 #include "infra/content.h"
 #include "infra/mount.h"
 #include "infra/path.h"
@@ -30,7 +31,6 @@
 #include "sys/gitops.h"
 #include "sys/identity.h"
 #include "sys/revision.h"
-#include "utils/commit.h"
 #include "utils/hooks.h"
 
 /**
@@ -1197,7 +1197,7 @@ error_t cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         }
     }
 
-    /* The commit, its message built as every writer's is (utils/commit.h): the
+    /* The commit, its message built as every writer's is (infra/commit.h): the
      * user's own where one was given, else the template's over what the restore
      * changes of the profile's claims (core/profiles.h profile_changes) — the
      * file at the name it wrote, never the way it stood on — and the commit

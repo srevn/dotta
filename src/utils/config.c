@@ -247,7 +247,7 @@ config_t *config_create_default(arena_t *arena) {
 
     /* [commit] defaults. The target line names the commit a revert restores from,
      * and every other action's body leaves it out: its one variable renders empty
-     * there (utils/commit.h) */
+     * there (infra/commit.h) */
     config->commit_title = "{host}: {action} {profile}";
     config->commit_body =
         "Date: {datetime}\n"

@@ -1,8 +1,9 @@
 /**
- * commit.c - Commit message template builder implementation
+ * commit.c - A commit's words: the action that made it, and the message its
+ * templates render
  */
 
-#include "utils/commit.h"
+#include "infra/commit.h"
 
 #include <config.h>
 #include <stdio.h>
@@ -27,7 +28,7 @@
  *
  * The values a message is made of are resolved once and read by both templates,
  * so a title and a body cannot disagree about one of them, and the header's list
- * of variables is one row each (utils/commit.h) — a row being where the name
+ * of variables is one row each (infra/commit.h) — a row being where the name
  * and the value are written beside each other, which is what makes a transposition
  * among ten same-typed strings a thing that cannot be written rather than a thing
  * that compiles.
@@ -295,7 +296,7 @@ const char *commit_message(
     const char *user = identity()->name;
 
     /* The names the machine and the user gave are spelled where they enter
-     * (utils/commit.h); the rest are this function's own text */
+     * (infra/commit.h); the rest are this function's own text */
     const template_t vars[] = {
         { "host",          commit_spelled(arena, hostname)                },
         { "user",          commit_spelled(arena, user ? user : "unknown") },

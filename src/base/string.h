@@ -301,7 +301,7 @@ const char *str_shell_quote(arena_t *arena, const char *word);
  * a whole character or a whole escape.
  *
  * Readers: base/output.c output_datum (every %s and %c a format carries) and
- * output_list_render (a row's tags, measured); utils/commit.c commit_spelled
+ * output_list_render (a row's tags, measured); infra/commit.c commit_spelled
  * (every name a commit message's template inserts); cmds/interactive.c
  * interactive_datum (the editor's rows).
  *

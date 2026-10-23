@@ -27,6 +27,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "core/workspace.h"
+#include "infra/commit.h"
 #include "infra/content.h"
 #include "infra/label.h"
 #include "infra/mount.h"
@@ -34,7 +35,6 @@
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
-#include "utils/commit.h"
 #include "utils/hooks.h"
 
 /**

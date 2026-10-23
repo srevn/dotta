@@ -1076,7 +1076,7 @@ error_t profile_capture_directory(
  *     see, an owner it cannot name — leaves the rung as it is: no answer is not
  *     an answer of "no".
  * Both outs are counts: a derived claim is the way to the claims, never one, so
- * no message names it (profile_changes, utils/commit.h), and a count is the whole
+ * no message names it (profile_changes, infra/commit.h), and a count is the whole
  * of what a writer says of either.
  *
  * Total and idempotent: nothing refuses the climb and no rung stops it, and each
@@ -1233,7 +1233,7 @@ typedef struct {
  *
  * Readers: cmds/add.c add_commit, cmds/update.c update_profile, cmds/remove.c
  * remove_paths and cmds/revert.c cmd_revert, each composing its message
- * (utils/commit.h commit_message). A reader not on this list is a bug.
+ * (infra/commit.h commit_message). A reader not on this list is a bug.
  *
  * @param draft The draft, every edit in (must not be NULL)
  * @param arena The arena the lists and their names live in (must not be NULL)

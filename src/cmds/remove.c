@@ -23,13 +23,13 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "infra/commit.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
-#include "utils/commit.h"
 #include "utils/hooks.h"
 
 /**

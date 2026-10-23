@@ -1,7 +1,10 @@
 /**
- * commit.h - Commit message template builder
+ * commit.h - A commit's words: the action that made it, and the message its
+ * templates render
  *
- * Builds structured commit messages for dotfile operations with metadata.
+ * Layer: infra/. It reads base/, sys/identity for the invoker's name and the
+ * configuration's type for its two templates (include/config.h), so every layer
+ * that writes a commit's words may read it.
  */
 
 #ifndef DOTTA_COMMIT_H

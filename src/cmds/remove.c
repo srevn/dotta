@@ -10,7 +10,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "base/arena.h"
@@ -24,8 +23,6 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "core/workspace.h"
-#include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/filesystem.h"
@@ -195,86 +192,53 @@ static string_array_t remove_hook_paths(
 }
 
 /**
- * Whether a record is a copy of a claim the removal took, on this machine
+ * Whether the removal reaches a record: this profile's, at a place this machine
+ * puts a claim the removal took
  *
- * By the record's binding: it names the profile, under a name the removal took
- * (`taken`, keyed by name: the claims the arguments took, or every claim a deletion
- * takes) — wherever it stands, so a target re-bound since still finds the copy
- * its old binding placed. And this machine's: a custom/ copy wherever it stands,
- * the target the user's to re-bind, and a home/ or root/ copy only where its
- * claim stands here now, as the resolver placed it — one at another path is another
- * HOME's, another machine's in effect, which no consent given here reaches
- * (core/workspace.h workspace_label_relocation). A HOME spelled two ways is two
- * HOMEs to it: the label rule reads no disk, so a home/ record at the other
- * spelling is not reached, and the next apply releases it (stated).
+ * The place, the rule update's and revert's reclaims read (cmds/update.c
+ * update_write_record, cmds/revert.c revert_reclaims): the record at it, whichever
+ * of the profile's names it was bound under — another of its names at the place
+ * is the same profile's node. A claim placed nowhere here (an unbound custom/
+ * one) reaches none, and neither does a record at another place — an earlier
+ * binding's, another HOME's, another spelling of this one: its node gone, each
+ * is an absent orphan the next apply reclaims.
  *
  * Asked of the record before the lock and under it (remove_owes,
  * remove_write_record).
  *
  * @param profile The removing profile (must not be NULL)
- * @param taken The claims the removal took, by name (remove_claim_t values)
+ * @param places Where this machine puts the claims the removal took
  * @param record A record (must not be NULL)
- * @return Whether the removal reaches the copy the record describes
+ * @return Whether the removal reaches the record
  */
 static bool remove_reaches(
-    const char *profile, const hashmap_t *taken, const state_record_t *record
+    const char *profile, const hashmap_t *places, const state_record_t *record
 ) {
-    if (strcmp(record->profile, profile) != 0) return false;
-
-    const remove_claim_t *claim = hashmap_get(taken, record->storage_path);
-    if (!claim) return false;
-
-    return workspace_label_relocation(label_of(record->storage_path)) ==
-           WORKSPACE_RELOCATION_BOUND ||
-           str_equal(claim->filesystem_path, record->filesystem_path);
-}
-
-/**
- * Whether --delete-files orders a reached copy pruned
- *
- * The user's word, on a copy the ladder can carry it out over (core/workspace.h
- * workspace_measurable: a directory, or a file dotta confirmed) — and on a
- * deletion, which names the profile and none of its paths, only a copy dotta
- * created: the ownership gate the ladder reads behind the order, read here since
- * a deletion names nothing ahead of it.
- *
- * Asked of the record before the lock and under it (remove_owes,
- * remove_write_record).
- *
- * @param opts The options: the flag and the route (must not be NULL)
- * @param record A record the removal reaches (must not be NULL)
- * @return Whether the phase orders the copy pruned
- */
-static bool remove_orders(const cmd_remove_options_t *opts, const state_record_t *record) {
-    return opts->delete_files && (!opts->delete_profile || record->deployed_at > 0) &&
-           workspace_measurable(record);
+    return strcmp(record->profile, profile) == 0 &&
+           hashmap_has(places, record->filesystem_path);
 }
 
 /**
  * Whether the record phase owes a write, as the record stands before the lock
  *
- * A deletion's row, and the flag's consent, wherever the profile is enabled:
- * another process can record a copy of a claim the removal took while it works
- * — an apply deploying it, a status observing it — and the consent reaches that
- * copy too (tests/test-remove.sh, "a removal waiting on an apply's lock orders
- * the path the apply deploys"). Else a reached copy owes one where its node is
- * gone or the flag orders it: read on the READ handle, empty where the database
+ * A deletion's row, wherever the profile is enabled. Else a reached record owes
+ * one where its node is gone: read on the READ handle, empty where the database
  * does not exist, which grows none. The view is not asked, so a path a row still
  * stands at owes the lock and nothing under it. A read that fails owes the lock:
  * the read here decides only whether to take it, and the read under the lock
  * says why where it fails again, so this one's error is dropped.
  *
  * @param ctx Dispatch context: the store, and the arena the read lands in
- * @param opts The options: the profile, the route, the flag (must not be NULL)
- * @param taken The claims the removal took, by name
+ * @param opts The options: the profile and the route (must not be NULL)
+ * @param places Where this machine puts the claims the removal took
  * @return Whether to take the lock
  */
 static bool remove_owes(
-    const dotta_ctx_t *ctx, const cmd_remove_options_t *opts, const hashmap_t *taken
+    const dotta_ctx_t *ctx, const cmd_remove_options_t *opts, const hashmap_t *places
 ) {
     state_t *state = ctx->run.state;
 
-    if ((opts->delete_profile || opts->delete_files) && state_enabled(state, opts->profile)) {
+    if (opts->delete_profile && state_enabled(state, opts->profile)) {
         return true;
     }
 
@@ -285,9 +249,8 @@ static bool remove_owes(
     for (size_t i = 0; i < record_count; i++) {
         const state_record_t *record = &records[i];
 
-        if (remove_reaches(opts->profile, taken, record) &&
-            (fs_lstat_occupant(record->filesystem_path, NULL) == FS_OCCUPANT_NONE ||
-            remove_orders(opts, record))) {
+        if (remove_reaches(opts->profile, places, record) &&
+            fs_lstat_occupant(record->filesystem_path, NULL) == FS_OCCUPANT_NONE) {
             return true;
         }
     }
@@ -300,54 +263,50 @@ static bool remove_owes(
  *
  * A removal moves the view and nothing on disk: the copies its commit let go
  * are the next apply's, decided with the landings they may stand in the way of
- * (core/workspace.c workspace_analyze_orphans). This writes the facts no load
- * can derive, over each copy it reaches (remove_reaches) at a path where no row
- * stands after it:
- *   - a node already gone: the record retires, Git now agreeing with the disk,
- *     so a claim that returns there starts from its first look (core/state.h
- *     state_retire) — the reclaim;
- *   - the consent --delete-files gives: an order on the copy (remove_orders);
- * and a deletion's enabled row, dropped. A row standing at a reached copy's path
- * keeps its record as that row's history, whose landing acknowledges or replaces
- * it — another profile's, or another of this profile's names. A copy whose node
- * stands keeps its record unordered under the default, for the next apply: should
- * the user remove the node and a pull re-add the claim before that apply, the
- * re-add reads as the user's deletion (core/workspace.c classify_absent, stated).
+ * (core/workspace.c workspace_analyze_orphans). This writes the fact no load
+ * can derive, over each record it reaches (remove_reaches) at a path where no
+ * row stands after it: a node already gone, whose record retires — Git now agreeing
+ * with the disk, so a claim that returns there starts from its first look
+ * (core/state.h state_retire) — the reclaim; and a deletion's enabled row, dropped.
+ * A row standing at a reached record's path keeps it as that row's history, whose
+ * landing acknowledges or replaces it — another profile's, or another of this
+ * profile's names. A copy whose node stands keeps its record for the next apply:
+ * should the user remove the node and a pull re-add the claim before that apply,
+ * the re-add reads as the user's deletion (core/workspace.c classify_absent,
+ * stated).
  *
  * Decided under the lock from the record read there (core/state.h state_begin);
  * the lock taken only where a write may be owed (remove_owes).
  *
  * @param ctx Dispatch context (must not be NULL)
- * @param opts The options: the profile, the route, the flag (must not be NULL)
+ * @param opts The options: the profile and the route (must not be NULL)
  * @param claims The claims the removal took — a deletion's, every claim the profile
  *        held (must not be NULL where claim_count > 0)
  * @param claim_count How many
- * @param ordered The orders the phase committed: 0 where it refused, the rollback
- *        taking them back (must not be NULL)
  * @return Error or NULL on success; the transaction is ended either way
  */
 static error_t remove_write_record(
     const dotta_ctx_t *ctx,
     const cmd_remove_options_t *opts,
     const remove_claim_t *claims,
-    size_t claim_count,
-    size_t *ordered
+    size_t claim_count
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
-    CHECK_NULL(ordered);
 
     state_t *state = ctx->run.state;
-    *ordered = 0;
 
-    /* The claims the removal took, by name: the first claim at a name places
-     * it, a blob and the directory claim at its own name standing at one path */
-    hashmap_t *taken = hashmap_borrow(ctx->arena, claim_count);
+    /* Where this machine puts the claims the removal took: two at one place — a
+     * blob and the directory claim at its own name, or two names one binding
+     * places together — are one key, and a claim placed nowhere here is none */
+    hashmap_t *places = hashmap_borrow(ctx->arena, claim_count);
     for (size_t i = 0; i < claim_count; i++) {
-        hashmap_add(taken, claims[i].storage_path, (void *) &claims[i]);
+        if (claims[i].filesystem_path) {
+            hashmap_add(places, claims[i].filesystem_path, NULL);
+        }
     }
 
-    if (!remove_owes(ctx, opts, taken)) return NULL;
+    if (!remove_owes(ctx, opts, places)) return NULL;
 
     /* The lock, and everything below decided under it: the enabled row a deletion
      * drops, then the record and the view the removal leaves, as the lock holds
@@ -369,24 +328,17 @@ static error_t remove_write_record(
     err = manifest_build(ctx->run.repo, state, ctx->arena, &after);
     if (err) goto cleanup;
 
-    /* The phase's one moment: every order it places carries it */
-    time_t now = time(NULL);
-
     for (size_t i = 0; i < record_count; i++) {
         const state_record_t *record = &records[i];
         const char *path = record->filesystem_path;
 
-        if (!remove_reaches(opts->profile, taken, record) || manifest_lookup(after, path)) {
+        if (!remove_reaches(opts->profile, places, record) || manifest_lookup(after, path)) {
             continue;
         }
 
         if (fs_lstat_occupant(path, NULL) == FS_OCCUPANT_NONE) {
             err = state_retire(state, path);
             if (err) goto cleanup;
-        } else if (remove_orders(opts, record)) {
-            err = state_order_prune(state, path, now);
-            if (err) goto cleanup;
-            (*ordered)++;
         }
     }
 
@@ -394,59 +346,10 @@ static error_t remove_write_record(
 
 cleanup:
     /* The transaction ends here either way: a refused one is rolled back, and a
-     * committed one has already ended (state_rollback finds none to end). A refusal
-     * took every order with it. */
+     * committed one has already ended (state_rollback finds none to end) */
     state_rollback(state);
-    if (err) *ordered = 0;
 
     return err;
-}
-
-/**
- * Print what the record phase did, beneath the removal's success line: the consent
- * it recorded, or its refusal and what the refusal loses
- *
- * The orders the phase committed, one a copy, continue the success line, said
- * as what the next apply does with them in the ordinary case: deletes each — an
- * edited copy it skips instead, and it releases one displaced beneath a record's
- * memory or a directory holding what no apply removes, which that apply's preview
- * names. Nothing ordered says nothing: a default removal leaves the success line
- * to stand alone.
- *
- * A refusal is a block of its own, in the store's own words, which name the step
- * that refused. The phase is one transaction, so the refusal took every order
- * with it (remove_write_record), and of what else the phase owed, every later
- * load re-derives its share: the next apply reclaims a gone copy's record as
- * every absent orphan's, and every load names an enabled profile with no branch,
- * with its remedy. The consent --delete-files gives is the one thing no load
- * re-derives, so where the flag was given the block says it lapsed: the question's
- * promise negated, in its words and for the ordinary case as they are — a directory
- * dotta owns that the next apply empties is pruned with or without the flag
- * (core/workspace.c workspace_analyze_orphans). It names no count and no path:
- * which copies the phase orders is decided under its lock, which a refusal may
- * never have taken.
- *
- * Readers: remove_paths and remove_profile — one printer, the twin of
- * remove_write_record, so the two routes say one phase in one set of words.
- */
-static void remove_print_record(
-    output_t *out, const cmd_remove_options_t *opts, error_t record_err, size_t ordered
-) {
-    if (record_err) {
-        output_gap(out, OUTPUT_NORMAL);
-        output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
-        if (opts->delete_files) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Deployed paths will not be deleted at the next 'dotta apply'"
-            );
-        }
-    } else if (ordered > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "  %zu path%s will be deleted at the next 'dotta apply'",
-            ordered, ordered == 1 ? "" : "s"
-        );
-    }
 }
 
 /**
@@ -720,10 +623,10 @@ static bool remove_provided(
  * set, no view built for it (remove_provided): another enabled profile's claim
  * at the path keeps it in the view once the removal is done — the row standing
  * there now, or the one taking the place this profile's held — so the removal
- * neither prunes nor releases the copy there, whatever the flag. Its one limit,
- * stated: an enabled claimant beneath a third profile's blob, whose place the
- * removed claim held, stands nowhere once that blob stands again, and the path
- * goes with the blob's landing.
+ * neither prunes nor releases the copy there. Its one limit, stated: an enabled
+ * claimant beneath a third profile's blob, whose place the removed claim held,
+ * stands nowhere once that blob stands again, and the path goes with the blob's
+ * landing.
  *
  * Cost: one view per other local profile — a tree walk and a sheet load each —
  * then one lookup per removed path per profile. Everything the section holds is
@@ -808,13 +711,12 @@ static error_t remove_overlaps(
  * One line per shared path: the path, then each other profile and — where its
  * name for the place differs from the removed claim's — the name it holds it
  * under, since under two bindings one path wears two names. The closing lines
- * say what is true of the shared paths whatever the flag: the removal takes them
- * from this profile alone, and where another enabled profile claims one, its
- * copy stays on the filesystem — said once, here, before the act, and after it
- * by status, which reads the copy's record as that profile's reassignment. What
- * remove does to every other copy is promised once before the act, by the question
- * (remove_ask_paths) or the dry run, and its consent said once after it, by the
- * receipt (remove_print_record).
+ * say what is true of the shared paths: the removal takes them from this profile
+ * alone, and where another enabled profile claims one, its copy stays on the
+ * filesystem — said once, here, before the act, and after it by status, which
+ * reads the copy's record as that profile's reassignment. What remove does to
+ * every other copy is promised once before the act, by the question
+ * (remove_ask_paths) or the dry run.
  */
 static void remove_print_overlaps(
     output_t *out,
@@ -928,16 +830,8 @@ static output_answer_t remove_ask_paths(
     remove_format_counts(counts, sizeof(counts), files, dirs);
 
     /* The question, and beneath it the one promise remove makes the copies before
-     * the act, in the receipt's words (remove_print_record): what the next apply
-     * does to them in the ordinary case — the paths left on disk, or under
-     * --delete-files deleted */
-    if (opts->delete_files) {
-        return output_ask(
-            out, false, "Remove %s from profile '%s'?\n"
-            "(Deployed paths will be deleted at the next 'dotta apply')",
-            counts, opts->profile
-        );
-    }
+     * the act: what the next apply does to them in the ordinary case, the paths
+     * left on disk */
     return output_ask(
         out, false, "Remove %s from profile '%s'?\n"
         "(Deployed paths stay on disk)", counts, opts->profile
@@ -951,8 +845,8 @@ static output_answer_t remove_ask_paths(
  * preamble of. `counts` is the profile-holdings phrase from the count family
  * (output_format_counts, or its "counts unavailable" stand-in), and the promise
  * is the one a removal of paths makes (remove_ask_paths). Where no question is
- * asked, nothing previews the deletion: the receipt says what it took and the
- * consent it recorded (remove_profile, its one reader).
+ * asked, nothing previews the deletion: the receipt says what it took
+ * (remove_profile, its one reader).
  */
 static void remove_print_deletion(
     output_t *out, const cmd_remove_options_t *opts, const char *counts
@@ -965,27 +859,13 @@ static void remove_print_deletion(
             out, OUTPUT_NORMAL, "Would delete profile '%s' (%s)\n",
             opts->profile, counts
         );
-        if (opts->delete_files) {
-            output_print(
-                out, OUTPUT_NORMAL,
-                "(Deployed paths would be deleted at the next 'dotta apply')\n"
-            );
-        } else {
-            output_print(out, OUTPUT_NORMAL, "(Deployed paths would stay on disk)\n");
-        }
+        output_print(out, OUTPUT_NORMAL, "(Deployed paths would stay on disk)\n");
     } else {
         output_warning(
             out, OUTPUT_NORMAL, "This will delete profile '%s' (%s)",
             opts->profile, counts
         );
-        if (opts->delete_files) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "         Deployed paths will be deleted at the next 'dotta apply'"
-            );
-        } else {
-            output_info(out, OUTPUT_NORMAL, "         Deployed paths stay on disk");
-        }
+        output_info(out, OUTPUT_NORMAL, "         Deployed paths stay on disk");
     }
 }
 
@@ -1105,14 +985,7 @@ static error_t remove_paths(
             "Total: %s would be removed from profile\n",
             counts
         );
-        if (opts->delete_files) {
-            output_print(
-                out, OUTPUT_NORMAL,
-                "(Deployed paths would be deleted at the next 'dotta apply')\n"
-            );
-        } else {
-            output_print(out, OUTPUT_NORMAL, "(Deployed paths would stay on disk)\n");
-        }
+        output_print(out, OUTPUT_NORMAL, "(Deployed paths would stay on disk)\n");
     }
 
     /* The pre-remove hook, over the decided removal — a dry run's too, told so
@@ -1232,17 +1105,19 @@ static error_t remove_paths(
         counts, opts->profile
     );
 
-    /* The record phase (remove_write_record): the reclaim of a copy already gone,
-     * and the consent --delete-files gives. One phase, one sentence, whichever
-     * step refused, as add's, update's and apply's say it: the store's refusal
-     * in its own words, which name the step — the read, the lock, the view, an
-     * order, a retire or the commit. Non-fatal: the commit to Git stands, so
-     * the refusal is warned beneath the success line, with the consent that lapsed
-     * with it, and the command goes on (remove_print_record); what the phase
-     * did not write the next apply decides, as every let-go. */
-    size_t ordered = 0;
-    error_t record_err = remove_write_record(ctx, opts, claims, claim_count, &ordered);
-    remove_print_record(out, opts, record_err, ordered);
+    /* The record phase (remove_write_record): the reclaim of a copy already gone.
+     * One phase, one sentence, whichever step refused, as add's, update's and
+     * apply's say it: the store's refusal in its own words, which name the step
+     * — the read, the lock, the view, a retire or the commit. Non-fatal: the
+     * commit to Git stands, so the refusal is warned in a block beneath the success
+     * line, and the command goes on; what the phase did not write the next apply
+     * decides, as every let-go — a gone copy's record it reclaims as every absent
+     * orphan's. */
+    error_t record_err = remove_write_record(ctx, opts, claims, claim_count);
+    if (record_err) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
+    }
 
     /* The post-remove hook, last (utils/hooks.h hook_fire_post) */
     hook_fire_post(config, out, &hook_inv);
@@ -1328,9 +1203,9 @@ static error_t remove_profile(
     /* What the tolerant read lost, said where it was read, so the dry run says
      * it too: the directory claims the hooks are not handed, and the count below,
      * in the loader's line, which names the profile. The record phase loses them
-     * too, unsaid (stated): a record of one is neither reclaimed nor ordered,
-     * the next apply's as every let-go — released where it holds what no apply
-     * removes, pruned once empty where dotta created it */
+     * too, unsaid (stated): a record of one is never reclaimed, the next apply's
+     * as every let-go — released where it holds what no apply removes, pruned
+     * once empty where dotta created it */
     err = profile_load_sheet(profile);
     if (err) {
         output_gap(out, OUTPUT_NORMAL);
@@ -1500,17 +1375,18 @@ static error_t remove_profile(
      * in one transaction, after the branch is gone — the view the phase builds
      * is the one the deletion leaves — and before the push, the store settled
      * before the network is asked. Its claims are the tolerant read's, so a sheet
-     * that would not load leaves its directory claims unreached, neither reclaimed
-     * nor ordered, the next apply's as every let-go (stated beside the read's
-     * warning). An ordered copy's blob still opens with the branch gone: the
-     * next apply's orphan compare reads it under the record's own binding, and
-     * subkey derivation needs only the profile name. Non-fatal: the branch is
-     * gone and stands, so the store's refusal is warned in its own words beneath
-     * the success line, with the consent that lapsed with it, and the command
-     * goes on (remove_print_record). */
-    size_t ordered = 0;
-    error_t record_err = remove_write_record(ctx, opts, claims, claim_count, &ordered);
-    remove_print_record(out, opts, record_err, ordered);
+     * that would not load leaves its directory claims unreached, never reclaimed,
+     * the next apply's as every let-go (stated beside the read's warning).
+     * Non-fatal: the branch is gone and stands, so the store's refusal is warned
+     * in its own words, a block beneath the success line, and the command goes
+     * on; of what the phase owed, every later load re-derives its share — the
+     * next apply reclaims a gone copy's record as every absent orphan's, and
+     * every load names an enabled profile with no branch, with its remedy. */
+    error_t record_err = remove_write_record(ctx, opts, claims, claim_count);
+    if (record_err) {
+        output_gap(out, OUTPUT_NORMAL);
+        output_warning(out, OUTPUT_NORMAL, "%s", error_line(record_err));
+    }
 
     /* Push the deletion to the remote, unless the profile was never pushed there
      * (remote_name NULL, above): sync needs it, since other repositories learn
@@ -1740,11 +1616,6 @@ static const args_opt_t remove_opts[] = {
         "Delete the entire profile branch"
     ),
     ARGS_FLAG(
-        "delete-files",
-        cmd_remove_options_t,delete_files,
-        "Delete the deployed paths at the next apply"
-    ),
-    ARGS_FLAG(
         "n dry-run",
         cmd_remove_options_t,dry_run,
         "Preview without committing or deleting"
@@ -1786,27 +1657,20 @@ const args_command_t spec_remove = {
         "   or: %s remove [options] --profile <name> <path>...",
     .description =
         "Untrack paths — files and tracked directories — from a profile,\n"
-        "optionally deleting the deployed paths at the next apply, or\n"
-        "delete the profile branch outright.\n",
+        "or delete the profile branch outright.\n",
     .notes       =
         "Operation Modes:\n"
         "  (default)           Remove paths from the profile branch. The\n"
         "                      deployed paths stay on disk.\n"
-        "  --delete-files      Same as default, but the next '%s apply'\n"
-        "                      deletes the deployed paths.\n"
         "  --delete-profile    Delete the entire profile branch. No paths\n"
-        "                      may be given; with --delete-files the next\n"
-        "                      apply deletes the deployed paths as well.\n",
+        "                      may be given.\n",
     .examples    =
         "  %s remove global ~/.bashrc                  # Untrack, keep on disk\n"
         "  %s remove darwin ~/.config/nvim -n          # Preview removal\n"
-        "  %s remove darwin ~/.config/nvim --delete-files  # Remove on apply\n"
-        "  %s remove staging --delete-profile          # Delete whole profile\n"
-        "  %s remove staging --delete-profile --delete-files  # ...and its copies\n",
+        "  %s remove staging --delete-profile          # Delete whole profile\n",
     .epilogue    =
         "See also:\n"
-        "  %s profile disable <name>  # Stop deploying without deleting\n"
-        "  %s apply                   # Carry out --delete-files\n",
+        "  %s profile disable <name>  # Stop deploying without deleting\n",
     .opts_size   = sizeof(cmd_remove_options_t),
     .opts        = remove_opts,
     .post_parse  = remove_post_parse,

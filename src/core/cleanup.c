@@ -230,14 +230,12 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
     if (item->displaced != WORKSPACE_DISPLACED_NONE) {
         /* A squatter stands above the path: dotta's copy went with the real
          * directory, and nothing at the path was looked at — not dotta's to remove,
-         * --force included, and a prune order on the path does not outrank it
-         * (deferred intent never destroys what dotta cannot vouch is its copy).
-         * The path stays, the record retires: the same letting-go as a retyped
-         * path, one level up. Terminal on purpose — a skip would prune on the
-         * NEXT run, once the squatted path's own record has gone, released or
-         * pruned in this one, and no witness of the squat remains — and no run
-         * retires that record without this orphan: the plan reaches the one only
-         * with the other (cleanup_plan_build). */
+         * --force included. The path stays, the record retires: the same letting-go
+         * as a retyped path, one level up. Terminal on purpose — a skip would
+         * prune on the NEXT run, once the squatted path's own record has gone,
+         * released or pruned in this one, and no witness of the squat remains —
+         * and no run retires that record without this orphan: the plan reaches
+         * the one only with the other (cleanup_plan_build). */
         return CLEANUP_RELEASED;
     }
 

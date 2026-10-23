@@ -2314,16 +2314,16 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* What the load owes the record — its observations, a directory's or a file's
      * in the place of a record whose node the look found gone among them, its
-     * confirmations, the voids of orders the view took back (core/workspace.h
-     * workspace_flush). A run's land in its dispatch transaction, which the
-     * checkpoint below commits with the rest of the present, and each owed item
-     * holds the record its write made from the flush's end — so no loop below
-     * meets a record of another kind under a clean item: the acknowledgement
-     * owns no directory the user created where dotta's file was, and a fix learns
-     * onto the observation. A preview holds none, so the flush takes and commits
-     * a scoped one of its own once it owes anything, exactly as it does for status,
-     * diff, sync and update (state_locked, in core/state.h), and one refused
-     * publishes nothing: every item holds what the load read.
+     * confirmations (core/workspace.h workspace_flush). A run's land in its
+     * dispatch transaction, which the checkpoint below commits with the rest of
+     * the present, and each owed item holds the record its write made from the
+     * flush's end — so no loop below meets a record of another kind under a clean
+     * item: the acknowledgement owns no directory the user created where dotta's
+     * file was, and a fix learns onto the observation. A preview holds none, so
+     * the flush takes and commits a scoped one of its own once it owes anything,
+     * exactly as it does for status, diff, sync and update (state_locked, in
+     * core/state.h), and one refused publishes nothing: every item holds what
+     * the load read.
      *
      * The failure goes with the transaction. A run's flush writes into the one
      * the run will commit, so a failure there poisons everything it has left to
@@ -3055,15 +3055,15 @@ error_t cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * Taken back only where the store stands as the checkpoint left it. The plan
      * is the load's, and the lock was let go to say the present, so a writer
-     * there — a profile disabled, an order placed, another apply's present —
-     * would have the run deploy and prune for a store that is gone; the resume
-     * refuses it before anything executes (state_resume). Any commit refuses
-     * it, a learning's as much as a move, since the store cannot tell the two
-     * apart; a status there owes only what this load could not record — a stat
-     * taken in a second still open — or what the disk has done since, so the
-     * refusal is rare, and costs a run that executes nothing. It says so in the
-     * engines' words, never the dry run's "applied": the present the checkpoint
-     * committed and said above it stands.
+     * there — a profile disabled, another apply's present — would have the run
+     * deploy and prune for a store that is gone; the resume refuses it before
+     * anything executes (state_resume). Any commit refuses it, a learning's as
+     * much as a move, since the store cannot tell the two apart; a status there
+     * owes only what this load could not record — a stat taken in a second still
+     * open — or what the disk has done since, so the refusal is rare, and costs
+     * a run that executes nothing. It says so in the engines' words, never the
+     * dry run's "applied": the present the checkpoint committed and said above
+     * it stands.
      *
      * A preview resumes none. It executes nothing, its prompt is gated above,
      * and the transaction it would hold across the exit below is one close_run

@@ -52,7 +52,7 @@
  * the integers. The id is a signed 32-bit field: a value at or above 0x80000000
  * is stored as 0, which no admission would take. */
 #define STATE_APPLICATION_ID "0x646f7474"
-#define STATE_SCHEMA_VERSION "30"
+#define STATE_SCHEMA_VERSION "31"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -69,15 +69,14 @@ typedef enum {
 
     /* The record's verbs */
     STATEMENT_WRITE,           /* INSERT OR REPLACE path_records (the record, whole) */
-    STATEMENT_RETIRE,          /* DELETE FROM path_records (the record, and the order it carries) */
-    STATEMENT_ORDER_PRUNE,     /* UPDATE path_records SET ordered_at (the order, stamped) */
+    STATEMENT_RETIRE,          /* DELETE FROM path_records (the record) */
 } statement_t;
 
 /* The statements' arity, for the handle's array and the two walks over it. A
  * macro, not an enumerator, for the reason LABEL_COUNT is one (infra/label.h):
  * the type holds no sentinel, so every statement_t subscripts the array in range
  * and state_sql's switch is total over the type as it stands. */
-#define STATEMENT_COUNT (STATEMENT_ORDER_PRUNE + 1)
+#define STATEMENT_COUNT (STATEMENT_RETIRE + 1)
 
 /**
  * One read of the enabled_profiles table, whole: its rows in position order,
@@ -314,14 +313,6 @@ static error_t state_initialize(sqlite3 *db) {
          * KEY, and the node's kind a column of it. No foreign key in either
          * direction: nothing is a parent, nothing cascades.
          *
-         * The one deferred intent is the record's own column (ordered_at): remove
-         * --delete-files ordered the deployed copy at this path pruned at the
-         * next apply, at that moment, and 0 is no order. It lives only while
-         * its path is out of the view: born after the fallback short-circuit
-         * (the post-commit view lacks the path), ended by every write of the
-         * record whole — the flush's when the path re-enters, an ownership event's
-         * — and gone with the row.
-         *
          * Held by the schema:
          *   - the node is a regular file, a link or a directory
          *     (state_kind_to_text's three texts): the executable bit is no kind,
@@ -383,7 +374,6 @@ static error_t state_initialize(sqlite3 *db) {
         "    stat_ino   INTEGER NOT NULL DEFAULT 0,"
         "    "
         "    deployed_at INTEGER NOT NULL DEFAULT 0 CHECK(deployed_at >= 0),"
-        "    ordered_at  INTEGER NOT NULL DEFAULT 0 CHECK(ordered_at >= 0),"
         "    "
         "    CHECK ((kind = 'symlink') = (mode IS NULL)),"
         "    CHECK (kind != 'directory' OR blob_oid IS NULL),"
@@ -545,10 +535,8 @@ static const char *state_sql(statement_t statement) {
 
         /* Write: the record, whole. Every column is the record's, bound as the
          * caller built it, and OR REPLACE writes them over whatever stood at
-         * the path: a column this statement does not name takes its default, so
-         * nothing of the record before the write survives it — the order least
-         * of all, which no record written whole carries (state_write). A column
-         * that must survive a write cannot live beside these.
+         * the path, so nothing of the record before the write survives it: a
+         * column that must survive a write cannot live beside these.
          *
          * Bind order (numbered placeholders):
          *   ?1 filesystem_path  ?2 storage_path  ?3 profile  ?4 kind
@@ -563,16 +551,9 @@ static const char *state_sql(statement_t statement) {
                 " blob_oid, stat_mtime, stat_size, stat_ino, deployed_at) "
                 "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12);";
 
-        /* Retire: the record goes, and the order it carries with it. Nothing
-         * cascades — there is no parent. */
+        /* Retire: the record goes. Nothing cascades — there is no parent. */
         case STATEMENT_RETIRE:
             return "DELETE FROM path_records WHERE filesystem_path = ?1;";
-
-        /* Order prune: the one deferred intent (remove --delete-files), stamped
-         * on the record. A missing record matches nothing — the documented no-op
-         * — and a repeated order re-stamps: the order standing is the latest. */
-        case STATEMENT_ORDER_PRUNE:
-            return "UPDATE path_records SET ordered_at = ?2 WHERE filesystem_path = ?1;";
     }
 
     CHECK_ARG(false, "a statement no enumerator names");
@@ -1521,12 +1502,12 @@ error_t state_records(
     /* Empty state (no DB file) — return empty results */
     if (!state->db) return NULL;
 
-    /* The one read (13 columns: the key, the binding, the kind, the claim, the
-     * blob and its stat, the lifecycle), and the table's size in a 14th: the
+    /* The one read (12 columns: the key, the binding, the kind, the claim, the
+     * blob and its stat, the lifecycle), and the table's size in a 13th: the
      * first row sizes the allocation */
     const char *sql =
         "SELECT filesystem_path, storage_path, profile, kind, mode, owner, \"group\", "
-        "blob_oid, stat_mtime, stat_size, stat_ino, deployed_at, ordered_at, "
+        "blob_oid, stat_mtime, stat_size, stat_ino, deployed_at, "
         "(SELECT count(*) FROM path_records) "
         "FROM path_records ORDER BY filesystem_path;";
 
@@ -1540,7 +1521,7 @@ error_t state_records(
     }
 
     rc = sqlite3_step(stmt);
-    size_t record_count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 13) : 0;
+    size_t record_count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 12) : 0;
 
     /* Allocate array */
     state_record_t *records = NULL;
@@ -1557,7 +1538,7 @@ error_t state_records(
          *   4-6:   the claim (mode, owner, group)
          *   7-10:  the content's blob and stat (blob_oid, stat_mtime, stat_size,
          *          stat_ino)
-         *   11-12: the lifecycle (deployed_at, ordered_at) */
+         *   11:    the lifecycle (deployed_at) */
         state_record_t *record = &records[i];
 
         /* Every column read whole, or the read fails. The four text columns the
@@ -1600,7 +1581,6 @@ error_t state_records(
             .ino = (uint64_t) sqlite3_column_int64(stmt, 10),
         };
         record->deployed_at = (time_t) sqlite3_column_int64(stmt, 11);
-        record->ordered_at = (time_t) sqlite3_column_int64(stmt, 12);
 
         i++;
         rc = sqlite3_step(stmt);
@@ -1708,9 +1688,8 @@ error_t state_write(state_t *state, const state_record_t *record) {
 /**
  * Retire a managed path's record
  *
- * DELETE of the record, and with it the order it carries (see the SQL comment
- * on STATEMENT_RETIRE and the header contract); a missing record matches nothing
- * and is success.
+ * DELETE of the record (see the SQL comment on STATEMENT_RETIRE and the header
+ * contract); a missing record matches nothing and is success.
  */
 error_t state_retire(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
@@ -1726,37 +1705,6 @@ error_t state_retire(state_t *state, const char *filesystem_path) {
         return error_create(
             ERR_STATE_INVALID, "Cannot remove '%s' from the store's database: %s",
             filesystem_path, sqlite3_errmsg(state->db)
-        );
-    }
-
-    return NULL;
-}
-
-/**
- * Order a managed path's deployed copy pruned
- *
- * UPDATE of the record's order (see the SQL comment on STATEMENT_ORDER_PRUNE
- * and the header contract); a missing record matches nothing and is success.
- */
-error_t state_order_prune(state_t *state, const char *filesystem_path, time_t now) {
-    CHECK_NULL(state);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(state->db);
-
-    if (now <= 0) {
-        return error_create(ERR_INVALID_ARG, "Order timestamp must be > 0");
-    }
-
-    sqlite3_stmt *stmt = state_statement(state, STATEMENT_ORDER_PRUNE);
-
-    /* 1. the record's key  2. the order's moment */
-    int rc = sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
-    if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt, 2, (sqlite3_int64) now);
-    if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
-    if (rc != SQLITE_DONE) {
-        return error_create(
-            ERR_STATE_INVALID, "Cannot schedule '%s' for removal in the store's "
-            "database: %s", filesystem_path, sqlite3_errmsg(state->db)
         );
     }
 

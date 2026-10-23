@@ -14,12 +14,11 @@
  * and paired with it by path. It is dotta's own and nothing repairs it either:
  * the analyses read it as the base of every three-way question, and its writers
  * here (the flush, workspace_anchor, workspace_learn, workspace_learn_mode) write
- * it only on disk's word — a live look there, or the run's own write — all but
- * the flush's void, which clears an order on the view's word: the path is back
- * in the view. Each writes a record whole and publishes it: the item at the path
- * holds the record the store holds, and the one it held before is never written.
- * A record whose path the view lacks is an orphan, and the orphan analysis asks
- * Git — the only authority that knows — why it is one.
+ * it only on disk's word — a live look there, or the run's own write. Each writes
+ * a record whole and publishes it: the item at the path holds the record the
+ * store holds, and the one it held before is never written. A record whose path
+ * the view lacks is an orphan, and the orphan analysis asks Git — the only
+ * authority that knows — why it is one.
  *
  * Each path the join holds is an item (core/workspace.h workspace_item_t): one
  * per active path and one per record the view lacks, made at the partition with
@@ -1448,13 +1447,12 @@ static void workspace_analyze_file(
  *
  * Precondition: the record carries a confirmed blob, and the look found the
  * record's own kind standing. Its one caller, workspace_measure, compares only
- * a file whose record confirmed one — a copy dotta owns, one the user ordered
- * pruned against it, an overridden one, or dotta's node above a row — and leaves
- * the rest unmeasured; and each of its own callers measures a look of the record's
- * kind alone — the orphan analysis releases another node before any measure
- * (workspace_analyze_orphans), and the join measures a node only where its own
- * kind stands (workspace_obstructs) — so the copy measured here is always of
- * its record's kind.
+ * a file whose record confirmed one — a copy dotta owns, an overridden one, or
+ * dotta's node above a row — and leaves the rest unmeasured; and each of its
+ * own callers measures a look of the record's kind alone — the orphan analysis
+ * releases another node before any measure (workspace_analyze_orphans), and the
+ * join measures a node only where its own kind stands (workspace_obstructs) —
+ * so the copy measured here is always of its record's kind.
  *
  * Architecture:
  * - Uses the record alone (kind, blob_oid, stat, mode, owner, group)
@@ -2056,15 +2054,14 @@ static void workspace_index_entries(workspace_t *ws) {
  * a sealed view squatter's base (stated); over a pipe it reads a line of its
  * input as the passphrase (crypto/keymgr.h).
  *
- * Readers: the orphan analysis's three arms that keep the copy dotta's — position
- * beneath a blob, the user's prune order, and the owned tail, a file Git backs
- * or a directory, which Git is not asked of (workspace_analyze_orphans) — and
- * the join's look at dotta's node above a row, whose class every path beneath
- * it reads (workspace_look_orphan). A fact, not a verdict: cleanup's still skips
- * a prunable copy for a divergence or a reason of its own, and an overridden
- * copy's and a node's is the consent their landing asks (core/deploy.h
- * deploy_clearance) — a directory's status's alone, its landing reading what it
- * holds afresh.
+ * Readers: the orphan analysis's two arms that keep the copy dotta's — position
+ * beneath a blob, and the owned tail, a file Git backs or a directory, which
+ * Git is not asked of (workspace_analyze_orphans) — and the join's look at dotta's
+ * node above a row, whose class every path beneath it reads
+ * (workspace_look_orphan). A fact, not a verdict: cleanup's still skips a prunable
+ * copy for a divergence or a reason of its own, and an overridden copy's and a
+ * node's is the consent their landing asks (core/deploy.h deploy_clearance) — a
+ * directory's status's alone, its landing reading what it holds afresh.
  *
  * @param ws Workspace (provides the run's content reader)
  * @param item The orphan's item, beneath no squatter and not absent: an occupant
@@ -2161,8 +2158,8 @@ static bool workspace_transient(const char *entry, void *ctx) {
  * pass, which reads the ladder's verdicts on what lies in them.
  *
  * Per orphan, in order — the ancestry, presence, the occupant's kind, the entry,
- * position, above a row and beneath a blob, the prune order, the ownership gate,
- * then a file's Git authority, and the relocation read:
+ * position, above a row and beneath a blob, the ownership gate, then a file's
+ * Git authority, and the relocation read:
  *   - the ancestry: a squatter above the copy — a directory row of the view, a
  *     directory record the looker found squatted, or a link over a record beneath
  *     it — means no look was taken at all, and the record is released with nothing
@@ -2177,11 +2174,10 @@ static bool workspace_transient(const char *entry, void *ctx) {
  *     same sentence as LOST below, and the node in its place is one dotta has
  *     no record of (core/workspace.h workspace_type_occupant: a record of another
  *     kind describes another node), never dotta's to remove, --force included.
- *     Released, tagged [type]. Decided ahead of the entry, position, the prune
- *     order and the gate, because no entry stands for a copy that is no longer
- *     there, nor is one in a landing's way, an order to prune it is moot, and
- *     no tree needs asking. An occupant that could not be stat'd is not taken
- *     for another node — it may be dotta's own, unreachable;
+ *     Released, tagged [type]. Decided ahead of the entry, position and the gate,
+ *     because no entry stands for a copy that is no longer there, nor is one in
+ *     a landing's way, and no tree needs asking. An occupant that could not be
+ *     stat'd is not taken for another node — it may be dotta's own, unreachable;
  *   - the entry: a row of the view standing on the record's very entry under
  *     another spelling of its path — whoever's — makes the record a stale key
  *     of an active path, RELEASED, so the one copy is never pruned as the old
@@ -2189,37 +2185,28 @@ static bool workspace_transient(const char *entry, void *ctx) {
  *     two ways, a name the volume folds; apply adopts the row under its spelling
  *     and retires the key. Asked ahead of every arm that would remove the copy,
  *     a landing's among them: its reason is a fact about the entry, which outranks
- *     every reason about the record or about Git — an order to prune the copy
- *     lives only while its path is out of the view (core/state.h), and the view
- *     holds this one under another spelling. Written whole, nothing measured,
+ *     every reason about the record or about Git. Written whole, nothing measured,
  *     over a node the join measured before the index it reads was built;
  *   - position: dotta's own node above a row (workspace_obstructs) — the record's
  *     own file or link standing where the view's rows beneath it need a directory
  *     — is OBSTRUCTING: the landing's, replaced by the first row beneath that
- *     lands (core/deploy.h), whatever an order, the gate or Git would say: an
- *     order the landing carries out, an observed node as an owned one (any record
- *     of dotta's: the bytes are Git's where it confirmed them, --force's where
- *     it did not), a node Git let go in the way all the same. The join measured
- *     it and noted it a squatter of every path beneath it (workspace_look_orphan).
- *     Behind the entry, whose stale key names no node of its own; ahead of the
- *     scope exit's reasons, which position outranks;
+ *     lands (core/deploy.h), whatever the gate or Git would say: an observed
+ *     node as an owned one (any record of dotta's: the bytes are Git's where it
+ *     confirmed them, --force's where it did not), a node Git let go in the way
+ *     all the same. The join measured it and noted it a squatter of every path
+ *     beneath it (workspace_look_orphan). Behind the entry, whose stale key names
+ *     no node of its own; ahead of the scope exit's reasons, which position
+ *     outranks;
  *   - position beneath a blob: a copy beneath a standing blob (core/manifest.h
  *     manifest_blob_above) — a file or link row, whose landing needs everything
  *     beneath its path gone — is OVERRIDDEN: that landing's, cleared with it
- *     (core/deploy.h deploy_clearance), whatever its profile claims, an order,
- *     the gate or Git would say, and measured as every copy a landing may remove
- *     is. A claim its profile holds that stands nowhere stands beneath a blob
- *     by the view's own rule (core/manifest.h), so it asks no arm of its own.
- *     Never beside the node's arm: a node has rows beneath it, and no row stands
- *     beneath a standing blob. The place, not the look: a copy whose look failed
- *     is overridden all the same, and its landing never removes it;
- *   - the prune order (remove --delete-files): the user chose the fate of the
- *     deployed copy, and Git is not asked. Honoured only with a reference to
- *     measure the copy against — a directory (what is left in it decides) or a
- *     file with a confirmed blob (workspace_measurable), the rule an order is
- *     born under (cmds/remove.c remove_orders): nothing could tell a clean copy
- *     dotta never confirmed from an edited one, so no order is born there, and
- *     one that stood all the same would fall through to the gate;
+ *     (core/deploy.h deploy_clearance), whatever its profile claims, the gate
+ *     or Git would say, and measured as every copy a landing may remove is. A
+ *     claim its profile holds that stands nowhere stands beneath a blob by the
+ *     view's own rule (core/manifest.h), so it asks no arm of its own. Never
+ *     beside the node's arm: a node has rows beneath it, and no row stands beneath
+ *     a standing blob. The place, not the look: a copy whose look failed is
+ *     overridden all the same, and its landing never removes it;
  *   - the ownership gate: a record dotta never owned — observed, or confirmed
  *     but never deployed — names a path the user put there before it was active.
  *     Released: the copy is left alone, the record retires, and no tree is asked
@@ -2367,12 +2354,10 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * copy left behind — released, and the path stays for the row standing
          * on it; what becomes of that row is apply's adoption, which reads its
          * own gates (cmds/apply.c). Its reason is a fact about the entry, never
-         * about the record or Git, so it outranks both: an order to prune the
-         * copy lives only while its path is out of the view (core/state.h), and
-         * the view holds this one; a landing would replace the very node the
-         * row stands on; the gate would release on a reason of its own; and Git's
-         * answer would only choose between a prune and a skip the entry has already
-         * ruled out.
+         * about the record or Git, so it outranks both: a landing would replace
+         * the very node the row stands on; the gate would release on a reason
+         * of its own; and Git's answer would only choose between a prune and a
+         * skip the entry has already ruled out.
          *
          * By the entry and never by a name compare: a volume that folds case or
          * normalization stands one entry at two strings, and cleanup was measured
@@ -2396,11 +2381,10 @@ static void workspace_analyze_orphans(workspace_t *ws) {
         /* Position, ahead of every reason a scope exit gives: dotta's own node
          * above a row (workspace_obstructs). The view's rows beneath need a
          * directory there, so its place is their landing's — replaced by the
-         * first of them that lands (core/deploy.h) — whatever an order, the gate
-         * or Git would say: an order the landing carries out, an observed node
-         * as an owned one, a node Git let go in the way all the same. The join
-         * measured it and noted it a squatter of every path beneath it
-         * (workspace_look_orphan). */
+         * first of them that lands (core/deploy.h) — whatever the gate or Git
+         * would say: an observed node as an owned one, a node Git let go in the
+         * way all the same. The join measured it and noted it a squatter of every
+         * path beneath it (workspace_look_orphan). */
         if (workspace_obstructs(ws, item)) {
             item->state = WORKSPACE_STATE_OBSTRUCTING;
             continue;
@@ -2412,46 +2396,21 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * that landing's, cleared with it — unasked where it is dotta's copy as
          * dotta confirmed it, under --force where it is not, never where it could
          * not be looked at (core/deploy.h deploy_clearance) — whatever its profile
-         * claims, an order, the gate or Git would say: a claim the blob leaves
-         * no room, a claim gone, an observed copy as an owned one, a copy Git
-         * let go in the way all the same, and an order the landing carries out,
-         * so a prune-ordered copy beneath a blob waits for that blob's landing,
-         * which a run that does not reach the blob's row leaves for a later one
-         * (stated). A claim its profile holds that stands nowhere stands beneath
-         * a blob by the view's own rule (core/manifest.h), so it asks no arm of
-         * its own. Measured, as every copy a landing may remove is
-         * (workspace_measure): its line says what changed or could not be read,
-         * and the landing's consent reads the same bits. */
+         * claims, the gate or Git would say: a claim the blob leaves no room, a
+         * claim gone, an observed copy as an owned one, a copy Git let go in
+         * the way all the same. A claim its profile holds that stands nowhere
+         * stands beneath a blob by the view's own rule (core/manifest.h), so it
+         * asks no arm of its own. Measured, as every copy a landing may remove
+         * is (workspace_measure): its line says what changed or could not be
+         * read, and the landing's consent reads the same bits. */
         if (manifest_blob_above(ws->manifest, item->filesystem_path)) {
             item->state = WORKSPACE_STATE_OVERRIDDEN;
             workspace_measure(ws, item);
             continue;
         }
 
-        /* The user ordered the copy pruned — remove --delete-files over a copy
-         * of a claim the removal named, or on a deletion one dotta created, the
-         * births an order has (cmds/remove.c remove_orders); Git is not asked.
-         * Read ahead of the ownership gate below by design: a named path must
-         * go whether dotta deployed it or only ever found it — and behind the
-         * guard above, so the copy is one no row stands on. Divergence still
-         * protects an edited copy — cleanup's skip reasons read the same bits.
-         *
-         * Only where the copy can be measured at all (core/workspace.h
-         * workspace_measurable): a directory by what is left in it, a file against
-         * a confirmed blob — the rule an order is born under, read again where
-         * it is honoured. The schema CHECK (state.c: ownership implies
-         * confirmation) guarantees an owned file record its blob, so for files
-         * this discriminates only when deployed_at == 0 — a record dotta never
-         * deployed, which no order is born on unconfirmed. */
-        if (record->ordered_at > 0 && workspace_measurable(record)) {
-            workspace_measure(ws, item);
-            continue;
-        }
-
         /* The ownership gate: dotta never put this here. Released — the copy is
-         * left alone and the record retires. A prune order with no copy to measure
-         * would land here too, should one stand: none is born there, nothing
-         * telling a clean copy from an edited one. */
+         * left alone and the record retires. */
         if (record->deployed_at == 0) {
             item->state = WORKSPACE_STATE_RELEASED;
             continue;
@@ -2876,20 +2835,19 @@ static workspace_fault_t workspace_scan(
              * analysis said as a derived row — and offering it would tell a second,
              * contradicting story about one path. The record holds it: dotta
              * managed the path and has not let go — an orphan for cleanup to
-             * prune or release, or a path `remove --delete-files` has ordered
-             * deleted and still remembers — never a discovery, and a discovery
-             * again only once the record is retired; no row stands at the child
-             * here, so a record at its spelling is an orphan's. And either of
-             * the two under another spelling of the same entry: a row or a record
-             * standing on the very file this frame joined its way to — a link
-             * no binding names, a root two profiles spell two ways, a name the
-             * volume folds — is active or remembered however it is spelled, and
-             * offering it would commit one file twice or promise a commit of a
-             * copy cleanup is about to prune. All three are the load's own facts,
-             * built before the scan runs (workspace_partition,
-             * workspace_index_entries), so status, sync and update read one answer
-             * whatever else each ran. The identity probe is paid only for a child
-             * neither string claimed — the offers. */
+             * prune or release — never a discovery, and a discovery again only
+             * once the record is retired; no row stands at the child here, so a
+             * record at its spelling is an orphan's. And either of the two under
+             * another spelling of the same entry: a row or a record standing on
+             * the very file this frame joined its way to — a link no binding
+             * names, a root two profiles spell two ways, a name the volume folds
+             * — is active or remembered however it is spelled, and offering it
+             * would commit one file twice or promise a commit of a copy cleanup
+             * is about to prune. All three are the load's own facts, built before
+             * the scan runs (workspace_partition, workspace_index_entries), so
+             * status, sync and update read one answer whatever else each ran.
+             * The identity probe is paid only for a child neither string claimed
+             * — the offers. */
             continue;
         }
 
@@ -4343,18 +4301,15 @@ bool workspace_item_tags(
  * distilled where its comparison stood (workspace_item_t's stat); the mode
  * (DIVERGENCE_MODE) and the owner and group (DIVERGENCE_OWNERSHIP) are the row's
  * claim. Every other column is the one it is written onto — the node and the
- * binding that record was read under, the stamp — and the order none: the item
- * is active, so the view has taken the path back (the void). The node needs no
- * word of the row's: a learning of the content is written onto a record of the
- * row's kind, since a record of another kind gives way to the row's first
- * observation before anything is learned onto it (workspace_flush), so the blob
- * is confirmed as the node that record already names. A file row's blob is Git's
- * and never zero, so a learning of the content always confirms one.
+ * binding that record was read under, the stamp. The node needs no word of the
+ * row's: a learning of the content is written onto a record of the row's kind,
+ * since a record of another kind gives way to the row's first observation before
+ * anything is learned onto it (workspace_flush), so the blob is confirmed as
+ * the node that record already names. A file row's blob is Git's and never zero,
+ * so a learning of the content always confirms one.
  *
- * Three callers, which would otherwise drift apart: workspace_flush, over what
- * the analyses noted; workspace_learn, over the claims apply's fix set; and
- * workspace_learn_mode, over none — the record whole, its order void — before
- * it sets the mode a run left.
+ * Two callers, which would otherwise drift apart: workspace_flush, over what
+ * the analyses noted, and workspace_learn, over the claims apply's fix set.
  */
 static state_record_t workspace_learning(
     state_record_t onto,
@@ -4374,7 +4329,6 @@ static state_record_t workspace_learning(
         onto.owner = row->owner;
         onto.group = row->group;
     }
-    onto.ordered_at = 0;
 
     return onto;
 }
@@ -4462,9 +4416,9 @@ error_t workspace_learn_mode(
     CHECK_NULL(item->record);
 
     /* The record the learning writes, built before the statement: the item's
-     * own, its order void as every learning's, and the mode the run left on it */
+     * own, with the mode the run left on it */
     state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
-    *record = workspace_learning(*item->record, item, DIVERGENCE_NONE);
+    *record = *item->record;
     record->mode = mode;
 
     error_t err = state_write(ws->state, record);
@@ -4544,26 +4498,18 @@ error_t workspace_flush(workspace_t *ws) {
              * from (core/workspace.h workspace_stale), or the next readable load's
              * (workspace_analyze_file). */
             onto = workspace_observation(item->row);
-        } else if (record && (item->confirmation != DIVERGENCE_NONE || record->ordered_at > 0)) {
+        } else if (record && item->confirmation != DIVERGENCE_NONE) {
             /* The record the load read, where the analyses noted an axis it lacks
-             * (the item's confirmation), or where it stands on an order: an order
-             * lives only while its path is out of the view, so one whose path
-             * the view has is void — the removal it answered was reverted (a
-             * revert, a sync pulling the path back, an enable providing it),
-             * verified or not. Left standing, it would outlive the removal and
-             * prune the copy at the next scope exit instead of the probe releasing
-             * it; voided — the write carries no order — a later discovered
-             * departure executes as a release, which is the stated policy for
-             * every discovered departure. */
+             * (the item's confirmation) */
             onto = *record;
         } else {
-            /* Nothing is owed: a record the load learned nothing new of, standing
-             * on no order — a gone node's record the verdict reads among them —
-             * or no record and no node of the row's to observe. A confirmation
-             * rides the observation: a content confirmation is noted only where
-             * the row's kind stands (the ladder's first rung, and the stat's),
-             * and a claim is learned only onto a record of the row's kind
-             * (workspace_claims_moved), so a path skipped here owes none. */
+            /* Nothing is owed: a record the load learned nothing new of — a gone
+             * node's record the verdict reads among them — or no record and no
+             * node of the row's to observe. A confirmation rides the observation:
+             * a content confirmation is noted only where the row's kind stands
+             * (the ladder's first rung, and the stat's), and a claim is learned
+             * only onto a record of the row's kind (workspace_claims_moved), so
+             * a path skipped here owes none. */
             continue;
         }
 
@@ -4582,8 +4528,7 @@ error_t workspace_flush(workspace_t *ws) {
      *    transaction, or one taken only where the store still stands as the
      *    handle's admission left it (state_resume). The view and the record read
      *    the load decided from are then the store the writes land on, so each
-     *    is blind, and a commit since — an order placed after the view was built,
-     *    which the view never answered, a record moved after it was read — refuses
+     *    is blind, and a commit since — a record moved after it was read — refuses
      *    the flush rather than meet a write decided without it. Taken here, once
      *    something is owed, so a load that owes nothing never waits on another
      *    writer's lock; a load over a store never written owes nothing — its

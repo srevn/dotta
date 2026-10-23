@@ -33,9 +33,8 @@ typedef struct {
     char **paths;               /* Paths to remove (can be NULL for --delete-profile) */
     size_t path_count;          /* Number of paths */
 
-    /* Operation modes */
+    /* Operation mode */
     bool delete_profile;        /* Delete entire profile branch */
-    bool delete_files;          /* The deployed paths deleted at the next apply */
 
     /* Safety flags */
     bool dry_run;               /* Show what would be removed without doing it */
@@ -62,17 +61,13 @@ typedef struct {
  *
  * This command modifies the Git repository and nothing on disk: the deployed
  * copies of what it removes are the next apply's to settle, decided with the
- * landings they may stand in the way of. With delete_files=true, this machine's
- * copies of the claims it removes are ordered pruned — those the next apply can
- * measure, and on a deletion those dotta created. The order is this machine's
- * own, a column of its record; another machine meets the commit at its next sync
- * and settles its own copies at its next apply.
+ * landings they may stand in the way of; another machine meets the commit at
+ * its next sync and settles its own copies at its next apply.
  *
  * Executes hooks; never touches deployed files. Writes the record only for what
- * its commit knows: the reclaim of a claim it took whose node is gone, the orders,
- * a deletion's enabled row — non-fatal: Git stands even when the record write
- * fails, and the run says what the refusal loses that no later load re-derives,
- * the consent --delete-files gives.
+ * its commit knows: the reclaim of a claim it took whose node is gone, and a
+ * deletion's enabled row — non-fatal: Git stands even when the record write fails,
+ * every later load re-deriving its share.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

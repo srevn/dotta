@@ -1433,9 +1433,9 @@ typedef struct {
  *   - every other claim of `before` under P whose path `after` lacks, with a
  *     record at the path: orphaned. What apply does there is the orphan analysis's
  *     (core/workspace.c workspace_analyze_orphans): a copy beneath a blob `after`
- *     stands is that blob's landing's, and otherwise the record's order, its
- *     ownership and — a file's Git, a directory's what is left in it — say whether
- *     apply prunes the copy or releases it
+ *     stands is that blob's landing's, and otherwise the record's ownership and
+ *     — a file's Git, a directory's what is left in it — say whether apply prunes
+ *     the copy or releases it
  *   Overlap semantics, by where the claim standing over A's at path X is
  *   (core/manifest.c manifest_layer): at X, B gets added or updated for X and A
  *   reassigned; beneath X, A's blob there having lost its place to the claims

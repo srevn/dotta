@@ -1301,11 +1301,11 @@ error_t cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     );
     if (err) return err;
 
-    /* What the load owes the record — its observations, its confirmations, the
-     * voids of orders the view took back (core/workspace.h workspace_flush) —
-     * the confirmations seeding the fast path for subsequent status/apply/update
-     * calls. The flush keeps the failure of the transaction it takes, so update
-     * proceeds on what the load read whatever the flush met.
+    /* What the load owes the record — its observations, its confirmations
+     * (core/workspace.h workspace_flush) — the confirmations seeding the fast
+     * path for subsequent status/apply/update calls. The flush keeps the failure
+     * of the transaction it takes, so update proceeds on what the load read
+     * whatever the flush met.
      *
      * Files actually updated by this command get their record written separately
      * inside update_write_record(); this flush covers the clean files the analysis

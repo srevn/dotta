@@ -286,12 +286,11 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *   (the item's displaced class)                     taken: a squatter stands
  *                                                    above the path and whatever
  *                                                    is there is not dotta's to
- *                                                    remove, --force and a prune
- *                                                    order included. Terminal
- *                                                    on purpose: a skip would
- *                                                    prune on the NEXT run, once
- *                                                    the squatted path's own
- *                                                    record has gone, released
+ *                                                    remove, --force included.
+ *                                                    Terminal on purpose: a skip
+ *                                                    would prune on the NEXT
+ *                                                    run, once the squatted path's
+ *                                                    own record has gone, released
  *                                                    or pruned in this one, and
  *                                                    no witness of the squat
  *                                                    remains — and no run retires

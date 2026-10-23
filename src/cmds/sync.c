@@ -1381,11 +1381,11 @@ static error_t sync_guard(const dotta_ctx_t *ctx, const scope_t *scope, sync_gua
     );
     if (err) return err;
 
-    /* What the load owes the record — its observations, its confirmations, the
-     * voids of orders the view took back (core/workspace.h workspace_flush) —
-     * the confirmations seeding the fast path for subsequent status/apply calls.
-     * The flush keeps the failure of the transaction it takes, so sync's workspace
-     * validation reads what the load read whatever the flush met. */
+    /* What the load owes the record — its observations, its confirmations
+     * (core/workspace.h workspace_flush) — the confirmations seeding the fast
+     * path for subsequent status/apply calls. The flush keeps the failure of
+     * the transaction it takes, so sync's workspace validation reads what the
+     * load read whatever the flush met. */
     err = workspace_flush(ws);
     if (err) return err;
 
@@ -1982,11 +1982,10 @@ error_t cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
              * each counted released all the same (stated): a copy already gone,
              * reclaimed; dotta's node above a row the view after stands, which
              * the landing beneath it replaces; a copy beneath a blob it stands,
-             * which that blob's landing clears; a copy the user ordered pruned,
-             * where it can be measured; and a directory dotta created that the
-             * run empties, which apply prunes, Git never asked of a directory.
-             * A departure with no record has no filesystem effect and asks nothing
-             * of the user, so it is not counted. */
+             * which that blob's landing clears; and a directory dotta created
+             * that the run empties, which apply prunes, Git never asked of a
+             * directory. A departure with no record has no filesystem effect
+             * and asks nothing of the user, so it is not counted. */
             output_print(out, OUTPUT_NORMAL, "  {cyan}%s{reset}:", s->profile);
             const char *sep = " ";
             if (s->added > 0) {

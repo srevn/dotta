@@ -37,11 +37,10 @@
  *   add and update what their captures committed, where the post-commit view
  *   they build with manifest_build says the claim stands; update, remove and
  *   revert the reclaim, the record of a node already gone retiring at a claim
- *   their commit changed; remove the orders --delete-files gives. add, remove
- *   and revert load no workspace, and nothing reads update's after its record
- *   write, so there is no snapshot for the write to desync. profile enable /
- *   disable write only the enabled set, sync writes nothing, and completion reads
- *   the dispatcher's view alone.
+ *   their commit changed. add, remove and revert load no workspace, and nothing
+ *   reads update's after its record write, so there is no snapshot for the write
+ *   to desync. profile enable / disable write only the enabled set, sync writes
+ *   nothing, and completion reads the dispatcher's view alone.
  *
  *   The workspace's products (rows, records, verdicts) are read through the
  *   workspace; the run's resources (the repository, the content cache) are read
@@ -56,11 +55,11 @@
  *   (dev, ino) the load's own look at that path found, for the two verbs that
  *   act on an entry through a string and could otherwise act on a spelling the
  *   load knows the entry by another name of — cleanup's unlink (an orphan whose
- *   entry a row stands on is a stale key, whatever its order, its owner or Git's
- *   answer: released, never pruned) and the scan's offer (a child whose entry a
- *   row or a record stands on is no discovery). An entry is a name in a directory;
- *   a key is one spelling of it, and a filesystem can reach one entry through
- *   as many spellings as there are links above it, folds it performs on the name,
+ *   entry a row stands on is a stale key, whatever its owner or Git's answer:
+ *   released, never pruned) and the scan's offer (a child whose entry a row or
+ *   a record stands on is no discovery). An entry is a name in a directory; a
+ *   key is one spelling of it, and a filesystem can reach one entry through as
+ *   many spellings as there are links above it, folds it performs on the name,
  *   and roots the table spells two ways (infra/mount.h).
  *
  *   The scan's roots read identity for a third reason of their own — one walk
@@ -390,9 +389,7 @@ typedef enum {
  *
  * The rule of workspace_relocation_t, read once: home/ and root/ are SHARED,
  * custom/ is BOUND. Readers: core/workspace.c workspace_analyze_orphans (the
- * relocation read), cmds/remove.c remove_reaches (the copies --delete-files
- * reaches, a SHARED one only where its claim stands here now). A reader not on
- * this list is a bug.
+ * relocation read). A reader not on this list is a bug.
  */
 static inline workspace_relocation_t workspace_label_relocation(label_t label) {
     switch (label) {
@@ -813,29 +810,14 @@ static inline bool workspace_reassigned(
  * Readers: core/workspace.c workspace_analyze_file (the bytes' base: the fast
  * path's stat and the second question), workspace_analyze_directory (whether
  * dotta's own squatter is the copy it confirmed) and workspace_measure (a file
- * compared only against one); workspace_measurable below (whether a file's order
- * has what to measure the copy against); workspace_stale below (whether the bytes
- * are asked at all); workspace_untouched below (whether a measured copy is the
- * one dotta confirmed); cmds/add.c add_refuse_ancestry (whether only --force
- * replaces dotta's own link above a capture, the half of workspace_untouched no
- * measure is needed for). A reader not on this list is a bug.
+ * compared only against one); workspace_stale below (whether the bytes are asked
+ * at all); workspace_untouched below (whether a measured copy is the one dotta
+ * confirmed); cmds/add.c add_refuse_ancestry (whether only --force replaces dotta's
+ * own link above a capture, the half of workspace_untouched no measure is needed
+ * for). A reader not on this list is a bug.
  */
 static inline const state_record_t *workspace_base(const state_record_t *record) {
     return record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;
-}
-
-/**
- * Measurable: the record holds what the copy at its path is measured against —
- * a directory, which what is left in it decides, or a file whose blob dotta
- * confirmed
- *
- * The one condition under which a prune order is honoured (core/workspace.c
- * workspace_analyze_orphans) and so the one under which it is born (cmds/remove.c
- * remove_orders): a file dotta never confirmed could not be told clean from edited.
- * Readers: those two. A reader not on this list is a bug.
- */
-static inline bool workspace_measurable(const state_record_t *record) {
-    return record->kind == FS_OCCUPANT_DIRECTORY || workspace_base(record) != NULL;
 }
 
 /**
@@ -1792,7 +1774,7 @@ bool workspace_item_tags(
 
 /**
  * The record of a row's first observation: its key, binding, kind and claim —
- * no content, never owned, no order
+ * no content, never owned
  *
  * What dotta writes of a path it has seen standing as its row's own kind and
  * holds nothing of — no record, or one of a node the look found gone: the row
@@ -1948,7 +1930,7 @@ error_t workspace_learn_mode(
  * Write what the load owes the record
  *
  * One write per owed active item — its record whole, as the load learned it
- * (core/state.h state_write) — made of three things the load established:
+ * (core/state.h state_write) — made of two things the load established:
  *
  *   The observation — a path whose look found its row's own kind standing, either
  *   kind of row, where dotta holds no record of that node: presence of that kind,
@@ -1990,12 +1972,6 @@ error_t workspace_learn_mode(
  *   since a claim opens nothing: the record follows every agreement, so the user's
  *   next move on that axis reads as the user's.
  *
- *   The void — every order a record the load read carries, where the view has
- *   the path again: the order's view end (core/state.h's lifetime rule), here
- *   because the view is. No record written whole carries an order, so an owed
- *   item's write voids its order whatever else it learned, and a record whose
- *   order is all the load owes is written for the void alone.
- *
  * Nothing is owed from beneath a squatter, because nothing there is looked at
  * (workspace_displaced_t): a confirmation taken through one would advance the
  * record's blob to the row's on the strength of the squatter's target, and the
@@ -2023,8 +1999,7 @@ error_t workspace_learn_mode(
  * state_resume): the view was built from what the admission read, and the record
  * read after it, so the writes land on the store the load decided from, or not
  * at all — a commit since, a learning's as much as a move, refuses the flush
- * whole. So each write is blind and none can undo another writer's: an order
- * placed after the view was built, which the view never answered, or a record
+ * whole. So each write is blind and none can undo another writer's: a record
  * moved after it was read. A load that owes nothing, the common one, takes no
  * lock and writes nothing. The lock is a boundary of the row cache that reads
  * the enabled rows again (core/state.h state_begin), so a reader after the flush

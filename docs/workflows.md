@@ -226,9 +226,6 @@ After a pull, `sync` lists what it did to each profile's files — added, update
 # Remove a file from a profile
 dotta remove global ~/.bashrc
 
-# ...and its deployed copy, at the next apply
-dotta remove global ~/.bashrc --delete-files
-
 # Remove a directory
 dotta remove global ~/.config/nvim
 
@@ -239,4 +236,4 @@ dotta remove test --delete-profile
 dotta remove global ~/.bashrc --dry-run
 ```
 
-Removing changes only the profile in Git; nothing on disk changes until the next `dotta apply`. By default, that apply leaves the deployed paths where they are and stops managing them. With `--delete-files`, it deletes them instead, unless you have edited them since, and `remove` reports how many it marked. A path another enabled profile still provides stays, deployed from that profile.
+Removing changes only the profile in Git; nothing on disk changes until the next `dotta apply`. That apply leaves the deployed paths where they are and stops managing them. A path another enabled profile still provides stays, deployed from that profile.

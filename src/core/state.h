@@ -3,14 +3,10 @@
  *
  * Persists what dotta cannot recompute: which profiles the user enabled here
  * (and in what order, with what targets), and the record of what dotta did to
- * each managed path — the one deferred intent, the prune order the user gave
- * for it, a column of it. Each carrier has a one-sentence lifetime rule:
+ * each managed path — never an intent. Each carrier has a one-sentence lifetime
+ * rule:
  *   - the enabled set lives until the user changes it;
- *   - a record lives from first observation to explicit retire;
- *   - an order lives while its path is out of the view: a column of its record,
- *     it goes with the row (a retire; apply executing it is one), an ownership
- *     event writes it away, and the flush voids it where the view holds the path
- *     again.
+ *   - a record lives from first observation to explicit retire.
  * Everything else — what should stand at a path, from whom — is computed from
  * Git at every load (core/manifest.h) and never stored.
  *
@@ -37,8 +33,7 @@
  *     schema it holds
  *   - enabled_profiles: User's profile management
  *   - path_records: The record — what dotta last reconciled each managed path
- *     against, and what it confirmed there (both kinds, one row per path), the
- *     prune order among its columns
+ *     against, and what it confirmed there (both kinds, one row per path)
  *
  * Design principles:
  * - Binary format (fast, compact)
@@ -197,7 +192,7 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  * reconciled against (core/workspace.h workspace_observation), add's and update's
  * from what their capture committed (cmds/add.c add_path_t, cmds/update.c
  * update_commit_t), a learning from the record the load read (core/workspace.c
- * workspace_learning).
+ * workspace_learning, workspace_learn_mode).
  *   - the binding (profile, storage_path): the row the record follows — who
  *     deployed what — and the pair its blob was confirmed under. The row's at
  *     the first observation — a gone node's record's replacement among them —
@@ -238,14 +233,9 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     NULL, and every other node's is permission bits, 0000–0777; an owner and
  *     a group are names, whole and never empty, NULL where the claim names none
  *     (each schema-enforced).
- *   - the lifecycle (deployed_at, ordered_at): the two acts the record remembers,
- *     each a moment or 0 (schema-enforced). deployed_at advances to now on every
- *     ownership event and a learning keeps it, 0 = dotta never put this here.
- *     ordered_at is when remove --delete-files ordered the copy pruned
- *     (state_order_prune, which re-stamps), 0 = no order standing: no record
- *     written whole carries one (state_write) — an ownership event writes it
- *     away, the flush's learning voids it where the view holds the path again —
- *     and it goes with the row.
+ *   - the lifecycle (deployed_at): the one act the record remembers, a moment
+ *     or 0 (schema-enforced). It advances to now on every ownership event and a
+ *     learning keeps it, 0 = dotta never put this here.
  *
  * Invariants:
  *   - blob_oid is non-zero iff dotta has at some point confirmed disk content
@@ -303,7 +293,6 @@ typedef struct state_record {
 
     /* The lifecycle */
     time_t deployed_at;       /* Last ownership event (advances; 0 = never owned) */
-    time_t ordered_at;        /* When remove --delete-files ordered the copy pruned (0 = no order standing) */
 } state_record_t;
 
 /**
@@ -818,11 +807,12 @@ const char *state_target(
  *     read before the lock and under it), and core/manifest.c manifest_diff
  *     (whether a departed claim leaves an orphan, handed the array by cmds/sync.c
  *     cmd_sync): by path, through state_find_record, which rests on strcmp order
- *   - cmds/remove.c remove_owes and remove_write_record (every record the removal
- *     reaches by its binding, before the lock and under it) and core/workspace.c
- *     workspace_pending (every record against a view, with no workspace and no
- *     disk, handed the array by cmds/sync.c cmd_sync and cmds/profile.c
- *     profile_enable and profile_disable): walks, key order unread
+ *   - cmds/remove.c remove_owes and remove_write_record (every record, for the
+ *     ones the removal reaches at this machine's places, before the lock and
+ *     under it) and core/workspace.c workspace_pending (every record against a
+ *     view, with no workspace and no disk, handed the array by cmds/sync.c cmd_sync
+ *     and cmds/profile.c profile_enable and profile_disable): walks, key order
+ *     unread
  *
  * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
  *
@@ -868,15 +858,13 @@ const state_record_t *state_find_record(
  * Write a record whole
  *
  * Every column the record carries, over whatever stood at its key — one INSERT
- * OR REPLACE — so nothing of the record before the write survives it: the prune
- * order among it, which no record written whole carries, since an order lives
- * only while its path is out of the view and every record written is an active
- * path's. The store asks nothing of the record beyond what the schema holds (its
- * CHECKs, key_spelling): what the record says is its builder's, each rule kept
- * where the record is built (state_record_t). And the write is blind, decided
- * against the store it lands in: under a lock the writer holds while it reads
- * what it decides from — the run's, taken at dispatch (apply, add), or one taken
- * for the phase (update's record phase: its own captures, and the view it builds
+ * OR REPLACE — so nothing of the record before the write survives it. The store
+ * asks nothing of the record beyond what the schema holds (its CHECKs,
+ * key_spelling): what the record says is its builder's, each rule kept where
+ * the record is built (state_record_t). And the write is blind, decided against
+ * the store it lands in: under a lock the writer holds while it reads what it
+ * decides from — the run's, taken at dispatch (apply, add), or one taken for
+ * the phase (update's record phase: its own captures, and the view it builds
  * under the lock) — or under a lock taken only where the store still stands as
  * the caller's reads left it (state_resume: a read command's flush, apply's record
  * phase).
@@ -907,13 +895,12 @@ error_t state_write(state_t *state, const state_record_t *record);
 /**
  * Retire a managed path's record
  *
- * The record goes — DELETE by filesystem_path — and with it the order it carries,
- * a column of the row that cannot outlive it. Whatever ended the record — a prune,
- * a reclaim, an absence, a let-go, a deletion committed — and whatever stands
- * at the path, the path is forgotten: a claim that later returns to it starts
- * from its first look, as at a path dotta never saw. So the write is blind: whoever
- * ends the record has asked what it needed first — apply its verdict, a reclaim
- * its look.
+ * The record goes — DELETE by filesystem_path. Whatever ended the record — a
+ * prune, a reclaim, an absence, a let-go, a deletion committed — and whatever
+ * stands at the path, the path is forgotten: a claim that later returns to it
+ * starts from its first look, as at a path dotta never saw. So the write is blind:
+ * whoever ends the record has asked what it needed first — apply its verdict, a
+ * reclaim its look.
  *
  * A missing record is success, the DELETE matching nothing. Readers: apply's
  * record phase, for every orphan it settles (cmds/apply.c apply_write_record);
@@ -927,46 +914,5 @@ error_t state_write(state_t *state, const state_record_t *record);
  * @return Error or NULL on success (not found is OK)
  */
 error_t state_retire(state_t *state, const char *filesystem_path);
-
-/**
- * Order a managed path's deployed copy pruned
- *
- * Stamps the record's order (ordered_at = now): remove --delete-files chose the
- * fate of a copy its commit let go — this machine's copy of a claim the removal
- * took, on a deletion only one dotta created, and only where the copy can be
- * measured (cmds/remove.c remove_orders) — and apply is to prune it where the
- * orphan analysis reaches the order (core/workspace.c workspace_analyze_orphans).
- * The arms it asks before the order decide first, position among them (below):
- * a copy beneath a squatter is released unlooked-at, one already gone reclaimed,
- * another node in its place released, and so is a key a row stands on under another
- * spelling, the path being in the view. The order is honoured only where the
- * copy can be measured — a directory by what is left in it, a file against the
- * blob dotta confirmed (core/workspace.h workspace_measurable) — the condition
- * it is born under, so a file dotta never confirmed is never ordered: dotta owns
- * no file it did not confirm (state_record_t). Cleanup's skip reasons still protect
- * a modified one. A missing record is a no-op success: the UPDATE matches no
- * row, since nothing was ever observed at the path. At birth an ordered path is
- * out of the view by construction — the record phase orders only a path the view
- * after the removal lacks (cmds/remove.c remove_write_record), on either route.
- * A repeated order re-stamps: the order standing is the latest.
- *
- * An order lives only while its path is out of the view. Read in exactly one
- * place — the workspace's orphan analysis, behind position: a copy above a row
- * or beneath a standing blob is that landing's, the order carried out by the
- * landing and unasked where the copy is untouched — and ended by every record
- * written whole (state_write): the flush's, where the path has re-entered the
- * view, and an ownership event's; and gone with its record (a retire; apply
- * executing the prune is one). So a view that holds the path for a moment ends
- * it: a profile enabled and disabled again, with a load between, leaves the copy
- * to the next apply's release, the user's to remove by hand — stated, not guarded,
- * the bytes being Git's.
- *
- * @param state State (must not be NULL, must have active transaction)
- * @param filesystem_path Path whose deployed copy is to be pruned (must not be
- *                        NULL)
- * @param now The order's moment (must be > 0)
- * @return Error or NULL on success (no record is OK)
- */
-error_t state_order_prune(state_t *state, const char *filesystem_path, time_t now);
 
 #endif /* DOTTA_STATE_H */

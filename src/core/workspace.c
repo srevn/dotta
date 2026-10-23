@@ -808,6 +808,12 @@ static workspace_squatted_t *workspace_look(workspace_t *ws, workspace_item_t *i
  * update would commit the removal of the claim that returned. The screens list
  * it under the update they offer, and a plain apply lands the file again.
  *
+ * Why nothing stands is no fact of the path (stated): a user's rm, a bound target
+ * moved, renamed or unmounted, a link on the way removed or replaced — each empties
+ * the path alike, and update commits each as the user's deletion; at the place's
+ * return its files are strangers, and an add of them puts the claims back. A
+ * look that fails is no absence, whatever the mount (workspace_look).
+ *
  * The record still answers "has dotta seen this path" for an ancestor claim —
  * the ownership gate reads it. Only a claim that asserts the path may read that
  * answer as intent.

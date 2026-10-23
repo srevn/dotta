@@ -5,7 +5,6 @@
 #include "cmds/update.h"
 
 #include <config.h>
-#include <errno.h>
 #include <git2.h>
 #include <limits.h>
 #include <stdio.h>
@@ -138,12 +137,12 @@ static error_t update_capture(
  * draft: the capture for a file, the claim capture for a directory, the removal
  * for a deletion — and read back by the run's line and the record phase
  * (update_write_record), so each follows the commit and nothing else: an item
- * the walk skipped (a directory the race guard refused) lands in no list and
- * gets no record write. The message is the draft's, never these lists
- * (update_profile). Whether the commit landed at all is the commit's own answer
- * (core/profiles.h profile_commit) — a walk whose edits leave both documents as
- * the draft opened them lands none, whatever its lists hold — and the executor
- * hands on only the bookkeeping of a commit that landed (update_execute).
+ * the walk skipped (a path the race guard refused) lands in no list and gets no
+ * record write. The message is the draft's, never these lists (update_profile).
+ * Whether the commit landed at all is the commit's own answer (core/profiles.h
+ * profile_commit) — a walk whose edits leave both documents as the draft opened
+ * them lands none, whatever its lists hold — and the executor hands on only the
+ * bookkeeping of a commit that landed (update_execute).
  *
  * A capture is kept as the record of what it committed — the node the capture
  * held to, the blob the commit holds at the name, the triple its bytes were read
@@ -383,15 +382,16 @@ static void update_partition(
 /**
  * Update a single profile with workspace items
  *
- * One walk, one edit per item on the profile's draft, each filling the commit's
- * bookkeeping beside it: a deletion takes its claim by its kind, a file's capture
- * becomes its entry and its claim, a directory's its claim. The chain rides the
- * capture: after the walk, every captured leaf's ancestry is re-derived on the
- * same commit — the content now comes from this machine, and so does its way —
- * and a named run hands in the profile's in-scope rows the load could look along,
- * each a leaf whose chain is climbed whether or not anything about it diverged.
- * The walk ends with the commit, which prunes what nothing stands on any longer
- * and saves the sheet where a claim moved.
+ * One walk, one edit per item on the profile's draft, each made where the walk
+ * finds what the load found and each filling the commit's bookkeeping beside
+ * it: a deletion takes its claim by its kind, a file's capture becomes its entry
+ * and its claim, a directory's its claim; a path changed since the preview is
+ * skipped and said. The chain rides the capture: after the walk, every captured
+ * leaf's ancestry is re-derived on the same commit — the content now comes from
+ * this machine, and so does its way — and a named run hands in the profile's
+ * in-scope rows the load could look along, each a leaf whose chain is climbed
+ * whether or not anything about it diverged. The walk ends with the commit, which
+ * prunes what nothing stands on any longer and saves the sheet where a claim moved.
  *
  * Success means committed or untouched, and the bookkeeping says which
  * (commit->committed, the commit's own answer): a walk whose edits moved nothing
@@ -444,10 +444,31 @@ static error_t update_profile(
     for (size_t i = 0; i < items.count; i++) {
         const workspace_item_t *item = items.entries[i];
 
-        /* A deletion, of either kind, ahead of both arms — the directory arm's
-         * look never meets a path the user removed. It takes the claim of the
-         * item's kind, a file's blob and FILE item or a directory's tracking —
-         * a deleted row is a tracked one (core/workspace.c classify_absent) —
+        /* The race guard. A deletion and a directory's claim are edits of the
+         * load's look — nothing stood there, a directory stood there — where a
+         * file's capture reads the path itself and refuses another kind
+         * (update_capture). So the walk looks again at those two and edits only
+         * where it finds what the load found: anything else — a node standing
+         * again, a directory gone or of another kind, a look that now fails —
+         * is a change since the preview (a hook, -i's question, an editor racing
+         * the run), skipped and said, and the next load reads what stands there.
+         * An lstat, never a stat: a link in a directory's place is another kind,
+         * so no target's attributes reach the claim, which is captured off this
+         * look. What changes after it, the commit cannot see (stated): one edit's
+         * window, where the load's look alone would leave the run's. */
+        struct stat st;
+        if ((item->state == WORKSPACE_STATE_DELETED || item->item_kind == PATH_KIND_DIRECTORY) &&
+            fs_lstat_occupant(item->filesystem_path, &st) != item->occupant) {
+            output_warning(
+                out, OUTPUT_NORMAL, "Skipping '%s%s': changed on disk since the preview",
+                item->filesystem_path, path_kind_suffix(item->item_kind)
+            );
+            continue;
+        }
+
+        /* A deletion, of either kind, ahead of both arms: it takes the claim of
+         * the item's kind, a file's blob and FILE item or a directory's tracking
+         * — a deleted row is a tracked one (core/workspace.c classify_absent) —
          * never the other kind's at the name, so a directory claim the blob
          * contradicted stands again once the blob is gone (core/profiles.h
          * profile_remove). The row said the profile holds it, so one the commit
@@ -535,44 +556,20 @@ static error_t update_profile(
             }
 
             case PATH_KIND_DIRECTORY: {
-                /* lstat + S_ISDIR: the race guard. The filter refused load-time
-                 * [type] and [unverified]; this refuses a change since load — a
-                 * path that vanished, or a tracked directory replaced by a symlink,
-                 * which would stat() as its target and launder the target's
-                 * attributes into metadata. Skip; the next load classifies what
-                 * now stands there. */
-                struct stat dir_stat;
-                if (fs_lstat(item->filesystem_path, &dir_stat) != 0) {
-                    output_warning(
-                        out, OUTPUT_VERBOSE,
-                        "Failed to stat directory '%s': %s",
-                        item->filesystem_path, strerror(errno)
-                    );
-                    continue;
-                }
-                if (!S_ISDIR(dir_stat.st_mode)) {
-                    output_warning(
-                        out, OUTPUT_NORMAL,
-                        "Skipping '%s': tracked as directory but type changed on disk",
-                        item->filesystem_path
-                    );
-                    continue;
-                }
-
-                /* The claim, refreshed off the look and written tracked: a derived
-                 * claim is asked nothing of a look (core/workspace.c
-                 * workspace_analyze_directory), so every directory this arm meets
-                 * is one the profile tracks. Its one refusal — an owner or a
-                 * group this host cannot name — is non-fatal, and said at the
-                 * verbosity its sibling above is said at: the claim standing on
-                 * the directory is left exactly as it is, and the commit as it
-                 * was — absence of a capture is not knowledge that the claim is
-                 * wrong — so the sheet quietly keeps saying something this run
-                 * could not confirm. The error is dropped once said, one per
-                 * such directory */
+                /* The claim, refreshed off the race guard's look and written
+                 * tracked: a derived claim is asked nothing of a look
+                 * (core/workspace.c workspace_analyze_directory), so every
+                 * directory this arm meets is one the profile tracks. Its one
+                 * refusal — an owner or a group this host cannot name — is
+                 * non-fatal, and said at the verbosity the guard's skip is said
+                 * at: the claim standing on the directory is left exactly as it
+                 * is, and the commit as it was — absence of a capture is not
+                 * knowledge that the claim is wrong — so the sheet quietly keeps
+                 * saying something this run could not confirm. The error is dropped
+                 * once said, one per such directory */
                 profile_claim_t claim;
                 error_t err = profile_capture_directory(
-                    draft, item->storage_path, &dir_stat, ctx->arena, &claim
+                    draft, item->storage_path, &st, ctx->arena, &claim
                 );
                 if (err) {
                     output_warning(
@@ -728,8 +725,8 @@ static error_t update_profile(
  * directory the same way — the ownership the orphan gate asks for on scope exit
  * — with no stat triple, a directory having no content to confirm.
  *
- * A deletion the commit took reconciled Git to the absence its load found, so
- * the record of the gone node — this profile's, as the lock holds it — retires
+ * A deletion the commit took reconciled Git to the absence its walk found again,
+ * so the record of the gone node — this profile's, as the lock holds it — retires
  * where no row stands at its path after the commit, the reclaim: a claim that
  * returns there starts from its first look, where the record would read its absence
  * as the user's deletion again (core/workspace.c classify_absent). A row standing
@@ -825,11 +822,11 @@ static error_t update_write_record(
             if (err) goto cleanup;
         }
 
-        /* What the commit reconciled to the absence its load found: each deletion's
-         * record — a gone node's — retires where no row stands at its path after
-         * the commit (the header doc). The record is read here, under the phase's
-         * lock, and only for a commit that deleted: an update that only captured
-         * reads none. */
+        /* What the commit reconciled to the absence its walk found again: each
+         * deletion's record — a gone node's — retires where no row stands at
+         * its path after the commit (the header doc). The record is read here,
+         * under the phase's lock, and only for a commit that deleted: an update
+         * that only captured reads none. */
         if (commit->deleted_count == 0) continue;
 
         state_record_t *records = NULL;

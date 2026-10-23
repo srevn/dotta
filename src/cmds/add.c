@@ -2486,8 +2486,8 @@ error_t cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         const char *storage_path = path->claim.storage_path;
 
         /* Stat directory to capture mode (and ownership if root/custom). lstat
-         * + S_ISDIR: the race guard update's capture arm has. The walk classified
-         * with lstat, so anything else standing here changed since. */
+         * + S_ISDIR: the walk's look, taken again — the walk classified with
+         * lstat, so anything else standing here changed since. */
         struct stat dir_stat;
         if (fs_lstat(path->filesystem_path, &dir_stat) != 0) {
             err = error_errno(

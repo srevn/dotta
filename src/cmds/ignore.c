@@ -269,9 +269,9 @@ static error_t ignore_edit(
 
     /* The ref's stage, opened before the editor: the read the session decides
      * from is its tree, so a commit another writer makes to the ref while the
-     * editor is open refuses this session's commit where it was overwritten
-     * (sys/stage.h stage_commit); a deletion meanwhile is the stage's own rule,
-     * the ref recreated with the edit */
+     * editor is open, or its deletion, refuses this session's commit rather than
+     * being written over (sys/stage.h stage_commit), and the edit is kept in
+     * the file the refusal names */
     stage_t *stage = NULL;
     error_t err = stage_open(repo, dottaignore->refname, &stage);
     if (err) return err;

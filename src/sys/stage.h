@@ -5,14 +5,14 @@
  * the parent the commit will have, and its tree seeds a private index. Put and
  * remove entries. Commit: the index is written as a tree; a tree equal to the
  * opened one is not committed (no writer wants an empty commit, so none can make
- * one); otherwise one commit with the opened head as its parent, and the ref
- * moved only if it still is that head — libgit2 refuses the move when another
- * writer got there first. Four spellings of this answer lived in the tree before
- * (a temp worktree, an index primitive, a recursive treebuilder, the epoch's
- * own mint), and every one looked the parent up at commit time, so a tree built
- * from one head could be committed on top of another and discard its change;
- * only one of the four declined an empty commit. Both properties are the stage's,
- * once.
+ * one); otherwise one commit with the opened head as its parent, written apart
+ * from its ref, and the ref written only from that head — under the ref's own
+ * lock, which refuses the write where another writer got there first. Four
+ * spellings of this answer lived in the tree before (a temp worktree, an index
+ * primitive, a recursive treebuilder, the epoch's own mint), and every one looked
+ * the parent up at commit time, so a tree built from one head could be committed
+ * on top of another and discard its change; only one of the four declined an
+ * empty commit. Both properties are the stage's, once.
  *
  * A writer says what it expects of the ref, and the open refuses the other state:
  * stage_open wants the ref (a profile the view listed, the branch a command
@@ -22,11 +22,10 @@
  * — Git's own, which every repository answers for without holding it — so every
  * reader of the opened tree sees a tree, and a ref that does not exist yet reads
  * as one with nothing in it. The expectation is checked once more where it matters,
- * at the commit: a head that moved, or a ref that appeared where the open found
- * none, reads as ERR_CONFLICT and nothing is committed. A ref deleted between
- * open and commit is recreated at the commit; that one is not guarded — the other
- * actor's delete and this writer's commit are two intents, and the commit's is
- * the one with content.
+ * at the commit's write: a head that moved, or a ref that appeared where the
+ * open found none, reads as ERR_CONFLICT; a head deleted since is refused in
+ * Git's words; and nothing is committed. A deletion is another writer's act as
+ * a commit is, and the stage writes over neither.
  *
  * A put never removes another path. libgit2's index REPLACES on a file/directory
  * collision — `git_index_add` of `a/x` over blob `a` drops `a` — so the stage
@@ -72,14 +71,14 @@
  * the stage still describes the tree it opened on, so a second commit is refused
  * by the head check — a writer with more to write opens another.
  *
- * Layer: sys/. The module knows libgit2 and sys/gitops' signature, nothing of
- * mounts, content or dotta's vocabulary. Called by the commands that write a
- * branch's machinery (bootstrap, ignore), by a profile's draft — every claim
- * writer's: add's, remove's, revert's and update's (core/profiles.h
- * profile_draft_t) — by core/metadata's sheet writer, by core/ignore — a
- * .dottaignore put onto the stage its edit opened, and the machine's baseline
- * seeded on a stage of its own — and by infra/epoch's mint; a profile's draft
- * alone creates an admission, for add.
+ * Layer: sys/. The module knows libgit2 and sys/gitops' signature, its object
+ * writer and its ref writer, nothing of mounts, content or dotta's vocabulary.
+ * Called by the commands that write a branch's machinery (bootstrap, ignore),
+ * by a profile's draft — every claim writer's: add's, remove's, revert's and
+ * update's (core/profiles.h profile_draft_t) — by core/metadata's sheet writer,
+ * by core/ignore — a .dottaignore put onto the stage its edit opened, and the
+ * machine's baseline seeded on a stage of its own — and by infra/epoch's mint;
+ * a profile's draft alone creates an admission, for add.
  */
 
 #ifndef DOTTA_STAGE_H
@@ -119,8 +118,8 @@ error_t stage_open(git_repository *repo, const char *refname, stage_t **out);
  * A ref that is present is refused (ERR_EXISTS): the writer expected to create
  * it. One that cannot be read is an error in Git's words, and so is a packed-refs
  * that will not parse: the absence is proven on a fresh read of the store
- * (sys/gitops.h gitops_reference_find), and the root commit decides the name
- * free on that reading. `refname` is copied.
+ * (sys/gitops.h gitops_reference_find), and the root commit's write decides the
+ * name free again, under the ref's lock (stage_commit). `refname` is copied.
  *
  * @param repo Repository (must not be NULL; borrowed for the stage's lifetime)
  * @param refname Full reference name (must not be NULL)
@@ -419,9 +418,13 @@ error_t stage_changes(const stage_t *st, arena_t *arena, stage_changes_t *out);
  *
  * The index is written as a tree. A tree equal to the opened one is not committed:
  * nothing moves, `*out_committed` is false. Otherwise one commit with the opened
- * head as its parent (a root for an orphan's stage) and the ref moved to it,
- * only if the ref still is what the open read: a head that moved, or a ref that
- * appeared, reads as ERR_CONFLICT naming the ref, and nothing is committed.
+ * head as its parent (a root for an orphan's stage), written apart from the ref,
+ * then the ref written to it only from what the open read (sys/gitops.h
+ * gitops_write_reference): a head that moved, or a ref that appeared, reads as
+ * ERR_CONFLICT naming the ref; a head deleted since, and every other refusal of
+ * the write, in Git's words; each says nothing was committed, and the object
+ * stays loose. The reflog line is git's for a commit: "commit: <summary>", a
+ * root's "commit (initial): <summary>".
  *
  * @param st Stage (must not be NULL)
  * @param message Commit message (must not be NULL)

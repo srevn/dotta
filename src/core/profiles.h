@@ -1256,14 +1256,14 @@ error_t profile_changes(
  * record, counted where a count is asked — every derivation it takes but a claim
  * the base tracked, whose removal the writer names; the sheet saved where its
  * claims are no longer the base's; then one commit (sys/stage.h stage_commit: a
- * tree equal to the opened one is none, and a head another writer moved since
- * the open is refused ERR_CONFLICT). One commit a draft. Whether it landed is
- * answered as sys/stage answers it: false where the gate stops it, and past the
- * gate the tree write's own answer — true where an edit the gate saw stands past
- * the prune, since it moved a content entry or a claim and a sheet whose claims
- * moved spells other bytes, and false where the prune took back the only edits
- * the gate saw: a climb's rungs nothing tracked stands beneath, authored and
- * pruned in one draft.
+ * tree equal to the opened one is none, a head another writer moved since the
+ * open is refused ERR_CONFLICT, and one deleted since in Git's words). One commit
+ * a draft. Whether it landed is answered as sys/stage answers it: false where
+ * the gate stops it, and past the gate the tree write's own answer — true where
+ * an edit the gate saw stands past the prune, since it moved a content entry or
+ * a claim and a sheet whose claims moved spells other bytes, and false where
+ * the prune took back the only edits the gate saw: a climb's rungs nothing tracked
+ * stands beneath, authored and pruned in one draft.
  *
  * Readers: cmds/add.c add_commit and cmds/update.c update_profile, which count
  * the prune and read whether the commit landed, so a capture that put back what

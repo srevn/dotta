@@ -183,11 +183,9 @@ void gitops_close_repository(git_repository *repo);
  * the failure as one line has said which (cmds/sync.c sync_reconcile_epoch, over
  * infra/epoch.c epoch_resolve's read of the local epoch).
  *
- * A miss leaves the handle on that fresh reference database, so a create-only
- * write that follows a proven absence finds the name free on the store as the
- * proof read it (sys/stage.c stage_orphan's root commit, gitops_create_reference
- * without force). A reference or an iterator held from before keeps the database
- * it came from — libgit2 counts it — so nothing a caller holds is freed under it.
+ * A miss leaves the handle on that fresh reference database. A reference or an
+ * iterator held from before keeps the database it came from — libgit2 counts it
+ * — so nothing a caller holds is freed under it.
  *
  * One corner stays open: under `core.precomposeunicode` the lookup reads a name
  * in decomposed Unicode as its composed form and the listing does not, so in a
@@ -367,10 +365,9 @@ error_t gitops_delete_branch(git_repository *repo, const char *name);
  * branch names a commit — Git writes nothing else to one (lib/git/refs.c
  * ref_transaction_update refuses a "non-commit object") and dotta writes nothing
  * else anywhere — so a reference that stands at a tree, a blob or a tag is refused,
- * naming what it found. A tag is not peeled: the stage commits on a branch only
- * from the target libgit2 reads there (commit.c validate_tree_and_parents), and
- * a head read through a tag is one no commit can be made on. NULL is the
- * reference's absence, proven.
+ * naming what it found. A tag is not peeled: the stage writes a branch only from
+ * the id it read there (gitops_write_reference), so a head read through a tag
+ * is one no commit could be written on. NULL is the reference's absence, proven.
  *
  * The one way a reference becomes a head. Readers: gitops_reference_tree, and
  * the readers of a tree through it (its header); gitops_load_reference_commit,
@@ -835,6 +832,63 @@ error_t gitops_resolve_default_remote(
 );
 
 /**
+ * Write a reference, only from the state its writer read
+ *
+ * `refname` comes to name `target` only where it still stands as `expected` says
+ * — git's update-ref <ref> <new> [<old>]:
+ *   - an id: the head it must still name — the stage's commit;
+ *   - Git's null id: nothing, the name free — the stage's root;
+ *   - NULL: whatever stands, a forced write.
+ * libgit2 compares under the reference's own lock, and asks Git's namespace
+ * whatever the compare says (lib/libgit2/src/libgit2/refdb_fs.c
+ * refdb_fs_backend__write: reference_path_available, then cmp_old_ref), so a
+ * reference another writer moved, deleted or made since its writer read it —
+ * another dotta, `dotta git`, git — is refused, and so is a name Git's namespace
+ * cannot hold beside another. Refused, nothing is written.
+ *
+ * A symbolic chain is walked to the name it ends at, a name nothing stands at
+ * included, as git's update-ref writes through one: the compare is the end's,
+ * and the symbolic references stand as they were. Five links at most, as many
+ * as libgit2 follows resolving a name (refdb.c git_refdb_resolve).
+ *
+ * A create decides on what the store does not hold, so it reads a reference
+ * database that has read nothing yet (gitops_reference_find says why). Its decision
+ * is the compare's lookup, under the lock, as git's update-ref takes a zero <old>:
+ * a sorted packed-refs whose records are out of order hides a name from that
+ * lookup as from git's (lib/git/refs/packed-backend.c), and every reader ahead
+ * of a create proves the name absent first (gitops_reference_find), which refuses
+ * such a file — so only a file damaged between that proof and the write has a
+ * loose reference written over a packed one.
+ *
+ * The reflog line is `reflog_msg`, under the handle's ident
+ * (gitops_open_repository), HEAD's log taking it too where HEAD names the reference
+ * written (refdb_fs.c maybe_append_head); its clock is the write's.
+ *
+ * Readers: sys/stage.c stage_commit.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param refname Full reference name (must not be NULL)
+ * @param target The id the reference is to name (must not be NULL; an object
+ *               the repository holds)
+ * @param expected What the writer read: an id, Git's null id, or NULL (above)
+ * @param reflog_msg The reflog line (must not be NULL: every write says why)
+ * @return NULL; ERR_CONFLICT "Reference '<refname>' was changed by another writer
+ *         since this command read it" where the compare refuses, and nowhere
+ *         else; every other failure Git's, in Git's words — a head deleted since
+ *         ("reference '<name>' not found"), a lock another writer holds, a name
+ *         the namespace refuses, a HEAD libgit2 cannot read, a store a fresh
+ *         read refuses; a chain link the reference rule refuses, in its words
+ *         (gitops_build_refname); and a chain past the bound, ERR_GIT
+ */
+error_t gitops_write_reference(
+    git_repository *repo,
+    const char *refname,
+    const git_oid *target,
+    const git_oid *expected,
+    const char *reflog_msg
+);
+
+/**
  * Create reference
  *
  * Without `force` the name must be free, and that is decided on a fresh read of
@@ -1106,6 +1160,47 @@ error_t gitops_merge_trees_safe(
     const git_oid *our_oid,
     const git_oid *their_oid,
     git_index **out_index
+);
+
+/**
+ * Write a commit object, moving no reference
+ *
+ * git_commit_create_buffer's whole contract — the author, the committer, the
+ * message's encoding, the message, the tree and the parents, each written as
+ * handed, so a writer replaying another's commit keeps its author and its encoding
+ * — and, where `action` names one, one header after the committer's lines: the
+ * action that made the commit, in the word its writer names it by. libgit2 writes
+ * a header only through a writer that moves no reference
+ * (lib/libgit2/src/libgit2/commit.c git_commit_create_with_signature). With no
+ * action the object is the one git_commit_create writes from the same inputs,
+ * byte for byte.
+ *
+ * The reference is its writer's to write, from the state it read
+ * (gitops_write_reference). Readers: sys/stage.c stage_commit, with no action.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param author The author (must not be NULL)
+ * @param committer The committer (must not be NULL)
+ * @param message_encoding The message's encoding (NULL: none, UTF-8)
+ * @param message The message (must not be NULL)
+ * @param tree The tree (must not be NULL; the repository's)
+ * @param parent_count How many parents (0: a root)
+ * @param parents The parents, in order (must not be NULL where parent_count > 0)
+ * @param action The word the action's header carries (NULL: no header)
+ * @param out The commit's id (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t gitops_create_commit(
+    git_repository *repo,
+    const git_signature *author,
+    const git_signature *committer,
+    const char *message_encoding,
+    const char *message,
+    const git_tree *tree,
+    size_t parent_count,
+    const git_commit *parents[],
+    const char *action,
+    git_oid *out
 );
 
 /**

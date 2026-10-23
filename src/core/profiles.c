@@ -1887,8 +1887,8 @@ error_t profile_commit(
 
     /* One commit, the tree and the sheet in one tree write, whether it landed
      * the write's own answer: none where the tree is the one the stage opened,
-     * and a head another writer moved since the open is refused (sys/stage.h
-     * stage_commit) */
+     * and a head another writer moved or deleted since the open is refused
+     * (sys/stage.h stage_commit) */
     return stage_commit(draft->stage, message, out_committed);
 }
 

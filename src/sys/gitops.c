@@ -26,6 +26,9 @@
 #include "sys/identity.h"
 #include "sys/transfer.h"
 
+#define GITOPS_ACTION_FIELD "dotta"   /* the key of a commit's action header: this file's alone */
+#define GITOPS_SYMREF_DEPTH 5         /* the links a write follows: refdb.c DEFAULT_NESTING_LEVEL */
+
 error_t gitops_init(void) {
     /* The one git failure error_git cannot read: git_error_last answers out of
      * a thread-local the runtime sets up, and an init that failed leaves the
@@ -1217,6 +1220,89 @@ error_t gitops_resolve_default_remote(
 /**
  * Reference operations
  */
+
+/*
+ * The name a write to `refname` lands at, into `out` (DOTTA_REFNAME_MAX): the
+ * reference itself, or the end of the symbolic chain it starts — a name nothing
+ * stands at included, which the write creates, as git's update-ref writes through
+ * a symbolic reference that names nothing (lib/git/refs.c refs_resolve_ref_unsafe).
+ * Walked by hand: libgit2's resolution answers GIT_ENOTFOUND for a chain that
+ * ends at nothing (refs.c git_reference_lookup_resolved), where its own commit
+ * writes at that end (git_reference__update_terminal). A symbolic reference is
+ * never packed — a packed-refs record holds an id — so a lookup's miss is the
+ * chain's end whatever search steered it: nothing is decided on it but where to
+ * write, and the compare under the lock reads the same store.
+ */
+static error_t gitops_reference_terminal(
+    git_repository *repo, const char *refname, char *out
+) {
+    error_t err = gitops_build_refname(out, DOTTA_REFNAME_MAX, "%s", refname);
+    if (err) return err;
+
+    /* Each name of the chain looked up in turn, as many links followed as libgit2
+     * follows resolving a name (refdb.c git_refdb_resolve) */
+    for (int depth = 0; depth <= GITOPS_SYMREF_DEPTH; depth++) {
+        git_reference *ref = NULL;
+        int rc = git_reference_lookup(&ref, repo, out);
+        if (rc == GIT_ENOTFOUND) return NULL;
+        if (rc < 0) return error_git(rc, "Cannot read reference '%s'", out);
+
+        /* A direct reference ends the chain; a symbolic one names the next link,
+         * refused rather than truncated where the buffer cannot hold it */
+        const char *link = git_reference_symbolic_target(ref);
+        if (!link) {
+            git_reference_free(ref);
+            return NULL;
+        }
+        err = gitops_build_refname(out, DOTTA_REFNAME_MAX, "%s", link);
+        git_reference_free(ref);
+        if (err) return err;
+    }
+
+    return error_create(
+        ERR_GIT, "Reference '%s' is a symbolic chain more than %d links deep", refname,
+        GITOPS_SYMREF_DEPTH
+    );
+}
+
+error_t gitops_write_reference(
+    git_repository *repo, const char *refname, const git_oid *target,
+    const git_oid *expected, const char *reflog_msg
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(refname);
+    CHECK_NULL(target);
+    CHECK_NULL(reflog_msg);
+
+    /* A create decides on what the store does not hold, so it reads a database
+     * that has read nothing yet (gitops_reopen_refdb): the namespace scan and
+     * an unsorted packed-refs' lookup read the cache of its parse, which a parse
+     * an earlier read refused leaves empty — every packed name free in it */
+    error_t err = expected && git_oid_is_zero(expected) ? gitops_reopen_refdb(repo) : NULL;
+    if (err) return err;
+
+    char terminal[DOTTA_REFNAME_MAX];
+    err = gitops_reference_terminal(repo, refname, terminal);
+    if (err) return err;
+
+    /* Forced, so the compare decides: libgit2's own existence check, outside
+     * the lock, would refuse every name that stands. The compare runs under the
+     * terminal's lock, and Git's namespace is asked whatever it says (refdb_fs.c
+     * refdb_fs_backend__write: reference_path_available, then cmp_old_ref). */
+    int rc = git_reference_create_matching(
+        NULL, repo, terminal, target, 1, expected, reflog_msg
+    );
+    if (rc == GIT_EMODIFIED) {
+        return error_create(
+            ERR_CONFLICT, "Reference '%s' was changed by another writer since this "
+            "command read it", refname
+        );
+    }
+    if (rc < 0) return error_git(rc, "Cannot write reference '%s'", refname);
+
+    return NULL;
+}
+
 error_t gitops_create_reference(
     git_repository *repo, const char *name, const git_oid *oid,
     bool force
@@ -1506,6 +1592,40 @@ error_t gitops_merge_trees_safe(
 
     *out_index = index;
     return NULL;
+}
+
+/**
+ * Write a commit object, moving no reference
+ */
+error_t gitops_create_commit(
+    git_repository *repo, const git_signature *author, const git_signature *committer,
+    const char *message_encoding, const char *message, const git_tree *tree,
+    size_t parent_count, const git_commit *parents[], const char *action, git_oid *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(author);
+    CHECK_NULL(committer);
+    CHECK_NULL(message);
+    CHECK_NULL(tree);
+    CHECK_ARG(parents != NULL || parent_count == 0, "parents cannot be NULL with a count");
+    CHECK_NULL(out);
+
+    /* The bytes git_commit_create writes from the same inputs, then the action's
+     * header after the committer's lines and the encoding's: libgit2 writes a
+     * header through this writer alone, which moves no reference (commit.c
+     * git_commit_create_with_signature). With no action the bytes are written
+     * as they were made. */
+    git_buf buf = GIT_BUF_INIT;
+    int rc = git_commit_create_buffer(
+        &buf, repo, author, committer, message_encoding, message, tree, parent_count,
+        parents
+    );
+    if (rc == 0) {
+        rc = git_commit_create_with_signature(out, repo, buf.ptr, action, GITOPS_ACTION_FIELD);
+    }
+    git_buf_dispose(&buf);
+
+    return rc < 0 ? error_git(rc, "Cannot write the commit") : NULL;
 }
 
 /**

@@ -1,20 +1,18 @@
 /**
  * stage.c - One ref's next tree, staged in memory: implementation
  *
- * See stage.h. The stage composes four primitives: the ref read once to its head,
+ * See stage.h. The stage composes five primitives: the ref read once to its head,
  * its absence proven (sys/gitops.h gitops_load_reference_commit,
  * gitops_reference_exists), an ownerless index seeded from the head's tree
  * (git_index_new + git_index_read_tree — never git_repository_index, the
  * checked-out branch's staging area), the tree written straight to the ODB
  * (git_index_write_tree_to — never git_index_write, which wants a backing file),
- * and git_commit_create with `update_ref`, which reads the ref's current head
- * and refuses unless it is the first parent handed in — for a root commit, unless
- * the ref is still absent (commit.c) — then moves the ref under its lock against
- * the value it just read (refdb_fs.c). That check is the last inch of the
- * atomicity, and libgit2 is the right owner of it: the stage classifies its two
- * refusals (GIT_EMODIFIED for a head that moved or a ref that appeared before
- * the commit looked, GIT_EEXISTS for one that appeared between the look and the
- * lock) and states the rest.
+ * gitops' one writer of a commit object, which moves no ref (gitops_create_commit),
+ * and gitops' one writer of a ref, from the head the open read — from nothing
+ * for an orphan's stage (gitops_write_reference). That write's compare, under
+ * the ref's own lock, is the last inch of the atomicity, and it is still libgit2's:
+ * the stage owns no lock, and says every refusal of the write as the writer's
+ * one fact with its own clause.
  */
 
 #include "sys/stage.h"
@@ -108,9 +106,9 @@ error_t stage_open(git_repository *repo, const char *refname, stage_t **out) {
     /* The head, the parent-to-be: the commit the ref names, read as every head
      * is (sys/gitops.h gitops_reference_commit) — the ref's absence proven and
      * refused, a packed-refs that will not parse its own failure, and a ref at
-     * anything but a commit refused, a tag never peeled: libgit2 moves the ref
-     * only from the target it reads there (commit.c validate_tree_and_parents),
-     * so the parent must be that target. */
+     * anything but a commit refused, a tag never peeled: the commit writes the
+     * ref only from the id the open read there (gitops_write_reference), so the
+     * parent must be that id. */
     git_commit *parent = NULL;
     error_t err = gitops_load_reference_commit(repo, refname, &parent);
     if (err) return err;
@@ -124,11 +122,10 @@ error_t stage_orphan(git_repository *repo, const char *refname, stage_t **out) {
     CHECK_NULL(out);
     *out = NULL;
 
-    /* Absent, and proven so: the proof leaves the handle on a reference database
-     * that read packed-refs whole, and the root commit's create-only write decides
-     * the name free on that reading — a cache emptied by an earlier refused parse
-     * would let it stand a loose ref over a packed branch (sys/gitops.h
-     * gitops_reference_find). */
+    /* Absent, and proven so (sys/gitops.h gitops_reference_find): a name that
+     * stands, and a packed-refs that will not parse, are refused before any put.
+     * The root commit's write decides the name free again, under the ref's lock
+     * (gitops_write_reference). */
     bool exists = false;
     error_t err = gitops_reference_exists(repo, refname, &exists);
     if (err) return err;
@@ -573,26 +570,52 @@ error_t stage_commit(stage_t *st, const char *message, bool *out_committed) {
         return err;
     }
 
-    /* The parent is the head the open read, and libgit2 moves the ref only if
-     * that is still its head — for a root commit, only if the ref is still
-     * absent. */
+    /* The object: the tree, and the head the open read as its one parent — none
+     * for an orphan's stage — written apart from the ref, which is written below */
     const git_commit *parents[] = { st->parent };
     git_oid commit_oid;
-    rc = git_commit_create(
-        &commit_oid, st->repo, st->refname, sig, sig, NULL, message, tree,
-        st->parent ? 1 : 0, parents
+    err = gitops_create_commit(
+        st->repo, sig, sig, NULL, message, tree, st->parent ? 1 : 0, parents, NULL,
+        &commit_oid
     );
     git_signature_free(sig);
     git_tree_free(tree);
+    if (err) return error_wrap(err, "Failed to commit to '%s'", st->refname);
 
-    if (rc == GIT_EMODIFIED || rc == GIT_EEXISTS) {
-        return error_create(
-            ERR_CONFLICT, "Reference '%s' was changed by another writer since this "
-            "command read it; nothing was committed", st->refname
-        );
-    }
+    /* The line git writes for a commit, off the commit just written: libgit2's
+     * summary rule, never a second spelling of it (refs.c
+     * git_reference__update_for_commit), and a summary it cannot allocate its
+     * failure */
+    git_commit *commit = NULL;
+    rc = git_commit_lookup(&commit, st->repo, &commit_oid);
+    const char *summary = rc == 0 ? git_commit_summary(commit) : NULL;
+    if (rc == 0 && !summary) rc = -1;
     if (rc < 0) {
-        return error_git(rc, "Failed to commit to '%s'", st->refname);
+        git_commit_free(commit);
+        return error_git(rc, "Failed to read the commit written for '%s'", st->refname);
+    }
+    char *reflog_msg = heap_str_format(
+        "commit%s: %s", st->parent ? "" : " (initial)", summary
+    );
+    git_commit_free(commit);
+
+    /* The ref, from the head the open read — from nothing for an orphan's stage:
+     * a head another writer moved or deleted since, or a ref one made, refuses
+     * under the ref's lock (sys/gitops.h gitops_write_reference) */
+    const git_oid none = GIT_OID_SHA1_ZERO;
+    err = gitops_write_reference(
+        st->repo, st->refname, &commit_oid,
+        st->parent ? git_commit_id(st->parent) : &none, reflog_msg
+    );
+    free(reflog_msg);
+
+    /* Refused, the object stays loose (the header) and nothing was committed:
+     * the clause every refusal of the write carries, re-minted over the writer's
+     * one fact (base/error.h "Messages") */
+    if (err) {
+        return error_create(
+            error_code(err), "%s; nothing was committed", error_message(err)
+        );
     }
 
     if (out_committed) {

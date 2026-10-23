@@ -83,9 +83,9 @@ static error_t bootstrap_edit(
 
     /* The profile's stage, opened before the editor: the read the session decides
      * from is its tree, so a commit another writer makes to the branch while
-     * the editor is open refuses this session's commit where it was overwritten
-     * (sys/stage.h stage_commit); a deletion meanwhile is the stage's own rule,
-     * the branch recreated with the edit */
+     * the editor is open, or its deletion, refuses this session's commit rather
+     * than being written over (sys/stage.h stage_commit), and the edit is kept
+     * in the file the refusal names */
     char refname[DOTTA_REFNAME_MAX];
     error_t err = gitops_branch_refname(refname, sizeof(refname), profile);
     if (err) return err;

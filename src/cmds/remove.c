@@ -409,12 +409,17 @@ static bool remove_contradicted(
  * the name outright, the hooks are handed it where there is no path to hand over,
  * and the overlap analysis and the record read the NULL as the fact it is.
  *
+ * Every argument takes a claim or refuses the removal, naming itself — in the
+ * reader's words where it is no spelling of a path, else as not found — whatever
+ * --force says: the flag answers the questions a removal asks, never an absence.
+ * So the claims taken are never none, the arguments never being none
+ * (remove_post_parse).
+ *
  * @param ctx Dispatch context (must not be NULL). ctx->run.mounts covers HOME,
  *            ROOT, and every enabled profile's binding.
  * @param profile The base of the caller's draft: the profile at the head the
  *                commit will have as its parent (must not be NULL)
- * @param opts The options: the profile's name, the arguments, --force (must not
- *             be NULL)
+ * @param opts The options: the profile's name and the arguments (must not be NULL)
  * @param out The claims the arguments took, in ctx->arena (must not be NULL)
  * @param out_count How many (must not be NULL)
  * @return Error or NULL on success
@@ -453,16 +458,7 @@ static error_t remove_resolve(
     for (size_t i = 0; i < opts->path_count; i++) {
         path_input_t arg;
         err = path_input_resolve(opts->paths[i], ctx->arena, &arg);
-        if (err) {
-            if (!opts->force) return err;
-            /* With --force, skip this path: its error is dropped, one per refused
-             * argument */
-            output_warning(
-                ctx->out, OUTPUT_VERBOSE, "Skipping invalid path '%s': %s",
-                opts->paths[i], error_line(err)
-            );
-            continue;
-        }
+        if (err) return err;
 
         /* The sum type, read at the use site and read once: a storage argument
          * keys against the claims' names and a path against where they stand,
@@ -523,31 +519,17 @@ static error_t remove_resolve(
         }
 
         if (matches_found == 0) {
-            if (!opts->force) {
-                return error_create(
-                    ERR_NOT_FOUND, "Path '%s' not found in profile '%s'",
-                    opts->paths[i], opts->profile
-                );
-            }
-            /* With --force, warn and skip */
-            output_warning(
-                ctx->out, OUTPUT_VERBOSE, "Path '%s' not found in profile, skipping",
-                opts->paths[i]
+            return error_create(
+                ERR_NOT_FOUND, "Path '%s' not found in profile '%s'",
+                opts->paths[i], opts->profile
             );
         }
     }
 
-    /* Compact to the taken claims. */
+    /* Compact to the taken claims: one at least, every argument having taken one */
     size_t taken_count = 0;
     for (size_t j = 0; j < claim_count; j++) {
         if (taken[j]) claims[taken_count++] = claims[j];
-    }
-
-    /* Check if the arguments took any claims */
-    if (taken_count == 0) {
-        return error_create(
-            ERR_NOT_FOUND, "No paths found to remove from profile '%s'", opts->profile
-        );
     }
 
     /* The claims are the command arena's, as the universe they were cut from */
@@ -1151,21 +1133,15 @@ static error_t remove_profile(
     const char *remote_url = NULL;
 
     /* Is the profile here? Git's answer or Git's error: an unreadable ref is
-     * not an absence, and --force must not read one as "already gone". */
+     * not an absence. One that is not here is refused whatever --force says:
+     * the flag answers the questions a deletion asks — the warnings below and
+     * the confirmation they preface — and an absence is none of them. */
     bool exists = false;
     err = gitops_branch_exists(repo, opts->profile, &exists);
     if (err) goto cleanup;
     if (!exists) {
-        if (!opts->force) {
-            err = error_create(ERR_NOT_FOUND, "Profile '%s' does not exist", opts->profile);
-            goto cleanup;
-        }
-        /* With --force, just warn and exit */
-        output_warning(
-            out, OUTPUT_VERBOSE, "Profile '%s' does not exist",
-            opts->profile
-        );
-        goto cleanup;  /* err is NULL, will return success */
+        err = error_create(ERR_NOT_FOUND, "Profile '%s' does not exist", opts->profile);
+        goto cleanup;
     }
 
     /* SAFETY: Prevent deletion of last remaining profile */

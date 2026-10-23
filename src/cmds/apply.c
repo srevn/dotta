@@ -59,7 +59,7 @@ static const char *apply_fault_label(workspace_fault_t fault) {
  * the node's own, and a row's beside the copy it names.
  */
 static const char *apply_consent_label(const workspace_item_t *orphan) {
-    if (orphan->divergence & DIVERGENCE_UNVERIFIED) {
+    if (orphan->fault != WORKSPACE_FAULT_NONE) {
         return apply_fault_label(orphan->fault);
     }
 
@@ -1815,9 +1815,9 @@ static void apply_print_cleanup_skips(
         "  Use --force to prune them anyway (discards what stands there)"
     );
 
-    /* A row's fault is the read its label names: UNVERIFIED ranks first
-     * (cleanup_skip_reason), and only an UNVERIFIED item carries a fault
-     * (workspace_fault_t) */
+    /* A row's fault is the read its label names: a fault ranks first
+     * (cleanup_skip_reason), so a skipped file that carries one is labelled by
+     * it (apply_fault_label) */
     for (size_t i = 0; !identity()->privileged && i < verdicts->skipped_files.count; i++) {
         if (verdicts->skipped_files.entries[i]->fault == WORKSPACE_FAULT_UNREADABLE) {
             output_info(out, OUTPUT_NORMAL, "  Run under sudo to prune them");

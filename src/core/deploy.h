@@ -343,9 +343,9 @@ static inline deploy_clearance_t deploy_clearance(const workspace_item_t *item) 
  *                so they do not reach the exit code.
  *   incapacity   dotta could not act — PERMISSION, FOREIGN, ANCESTOR,
  *                OCCUPIED, UNREADABLE, OWNERSHIP. No flag lifts them (the posture
- *                cleanup takes towards a released file and a directory's
- *                UNVERIFIED); the run planned the row and did not deliver it,
- *                so the exit code says so. Three of them are the invoker's refusals
+ *                cleanup takes towards a released file and a directory a look
+ *                failed at); the run planned the row and did not deliver it, so
+ *                the exit code says so. Three of them are the invoker's refusals
  *                and root's to lift — PERMISSION, FOREIGN, OWNERSHIP — and a
  *                run that holds none closes its skips by naming it (apply's sudo
  *                line); one that holds root meets none of them, save a PERMISSION
@@ -1128,9 +1128,9 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  *   may remove — a stranger's, one it could not look at, a directory it could
  *   not read or empty — skips the row whatever --force says (OCCUPIED, UNREADABLE,
  *   PERMISSION), the stop named and nothing removed. A row the workspace could
- *   not settle (DIVERGENCE_UNVERIFIED — an unexaminable occupant, or a look at
- *   its content that failed) is skipped as UNREADABLE when the landing had nothing
- *   to say: no verdict can say what the run will find there.
+ *   not settle (a fault — an unexaminable occupant, or a look at its content
+ *   that failed) is skipped as UNREADABLE when the landing had nothing to say:
+ *   no verdict can say what the run will find there.
  * - Content — the workspace's divergence verdict, the only authority for a fact
  *   no lstat can settle. Skipped unless --force (CONTENT; STALE without CONTENT
  *   never skips: disk still holds the blob dotta deployed, so the overwrite loses

@@ -578,10 +578,10 @@ static void workspace_add_untracked(
  * The look is the scan's own where it answered, and the kind follows it: a
  * directory where the walk could not look beneath one, a file otherwise — an
  * entry whose look failed included, its occupant UNKNOWN and its stat none. The
- * divergence is DIVERGENCE_UNVERIFIED and the fault the failed look's class
- * (workspace.h workspace_fault_t), never NONE and never LOCKED: the scan reads
- * no content. The strings are copied out of the walk's scratch, the profile is
- * the view's, as for an untracked item (workspace_add_untracked).
+ * fault is the failed look's class (workspace.h workspace_fault_t), never NONE
+ * and never LOCKED: the scan reads no content. The strings are copied out of
+ * the walk's scratch, the profile is the view's, as for an untracked item
+ * (workspace_add_untracked).
  *
  * @param ws Workspace context (must not be NULL)
  * @param filesystem_path The path where the walk stopped (must not be NULL)
@@ -613,7 +613,6 @@ static void workspace_add_unscanned(
         .item_kind = occupant == FS_OCCUPANT_DIRECTORY ? PATH_KIND_DIRECTORY : PATH_KIND_FILE,
         .occupant = occupant,
         .state = WORKSPACE_STATE_UNSCANNED,
-        .divergence = DIVERGENCE_UNVERIFIED,
         .fault = fault,
     };
     if (st) item->st = *st;
@@ -1009,10 +1008,10 @@ static error_t workspace_compare_base(
  * committing boundary — policy.h names them — projected onto the row at build),
  * so the audit costs one pattern match and inflates nothing. The filesystem is
  * not one of its operands, so every arm carries it — it survives absence and
- * rides beside TYPE and UNVERIFIED alike. A symlink row can never carry it: the
- * predicate answers only for content-bearing kinds (policy.h owns the rationale),
- * so a link whose path matches a pattern is not a violation the capture could
- * never resolve.
+ * rides beside TYPE and a failed look alike. A symlink row can never carry it:
+ * the predicate answers only for content-bearing kinds (policy.h owns the
+ * rationale), so a link whose path matches a pattern is not a violation the capture
+ * could never resolve.
  *
  * @param ws Workspace (must not be NULL)
  * @param item The row's item, its record paired at the partition (must not be
@@ -1078,17 +1077,16 @@ static void workspace_analyze_file(
          * assume the path is there and record the uncertainty, rather than failing
          * the load and taking every other managed path down with one unreadable
          * one. The content phase honours the same policy for the look it makes:
-         * a blob it cannot load, decrypt, or compare is the UNVERIFIED item at
-         * the call, never out of the load.
+         * a blob it cannot load, decrypt, or compare is the item's fault at the
+         * call, never out of the load.
          *
          * DEPLOYED is the load-bearing half — absence must never be inferred
          * from a failure to look, or update commits a deletion that never happened.
-         * UNVERIFIED keeps consumers conservative: apply plans the row and skips
+         * The fault keeps consumers conservative: apply plans the row and skips
          * it rather than write on a guess — the exit code says so — and cleanup's
-         * UNVERIFIED skip blocks removal.
+         * skip (CLEANUP_SKIP_UNVERIFIED) blocks removal.
          *
          * Returns here because every phase below needs a valid stat. */
-        item->divergence |= DIVERGENCE_UNVERIFIED;
         item->fault = workspace_code_fault(error_errno_code(item->lstat_errno));
         return;
     }
@@ -1265,13 +1263,12 @@ static void workspace_analyze_file(
              * missing blob) and the same word. The path is there (the lstat said
              * so); only the look at its content failed, and a failed look is
              * never fatal to the load. Written onto the item here, the unstattable
-             * arm's shape: UNVERIFIED beside the blob bit, the stat valid so
-             * the mode checks below could run, but every consumer reads UNVERIFIED
+             * arm's shape: the fault beside the blob bit, the stat valid so the
+             * mode checks below could run, but every consumer reads the fault
              * first and accumulated path bits would change nothing; the orphan
              * analysis answers a failed look this way, and one policy beats two.
              * The two gates below read EQUAL and DIFFERENT, so returning here
              * skips only what they would have skipped themselves. */
-            item->divergence |= DIVERGENCE_UNVERIFIED;
             item->fault = workspace_error_fault(err);
             return;
         }
@@ -1643,7 +1640,7 @@ typedef enum {
  *               WORKSPACE_STATE_RELEASED — left on disk, record retires
  *   UNVERIFIED  a lookup or a load failed. LOST would retire the record and
  *               BACKED would prune the copy, so neither is guessed: the caller
- *               marks the orphan DIVERGENCE_UNVERIFIED, skipped until Git answers
+ *               writes the orphan's fault UNVERIFIED, skipped until Git answers
  *               or --force (core/cleanup.h cleanup_verdict)
  *
  * No failure is raised: each one says only that the probe could not answer, which
@@ -2039,13 +2036,13 @@ static void workspace_index_entries(workspace_t *ws) {
  * — only whether it can be: one dotta cannot stat or cannot read is unverified,
  * as an unstattable file is, until the user can say what is in it.
  *
- * Each arm answers one question and only that one — whose refusal, if any — and
- * the tail answers the other for all three: a copy dotta could not measure reads
- * unverified, whoever refused. The compare's error is classed at the call, the
- * producer still handing it back for the caller to decide what a failure to look
- * means (workspace_compare_orphan). The fault is NONE on every item handed in:
- * the one arm of the orphan analysis that writes one leaves the copy unmeasured
- * and never prunable.
+ * Each arm answers one question and only that one — whose refusal, if any — in
+ * the item's fault, the whole of what a copy dotta could not measure carries,
+ * whoever refused. The compare's error is classed at the call, the producer still
+ * handing it back for the caller to decide what a failure to look means
+ * (workspace_compare_orphan). The fault is NONE on every item handed in: the
+ * one arm of the orphan analysis that writes one leaves the copy unmeasured and
+ * never prunable.
  *
  * A sealed file is read where its stat moved and its length did not, or where
  * no stat was ever recorded — no learning reaches an orphan, so the read recurs
@@ -2085,10 +2082,6 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
          * none — a copy dotta only observed, under a claim still held — has nothing
          * to be measured against, and stays unmeasured. */
         item->fault = workspace_error_fault(workspace_compare_orphan(ws, item));
-    }
-
-    if (item->fault != WORKSPACE_FAULT_NONE) {
-        item->divergence = DIVERGENCE_UNVERIFIED;
     }
 }
 
@@ -2220,7 +2213,7 @@ static bool workspace_transient(const char *entry, void *ctx) {
  *     retire the record and BACKED would remove the copy and neither is a guess
  *     to make — until --force, which lifts every skip a file carries
  *     (core/cleanup.h cleanup_verdict), and so removes a copy LOST would have
- *     released. Skipped and not measured: no reader shows a bit beside UNVERIFIED,
+ *     released. Skipped and not measured: no reader shows a bit beside a fault,
  *     so a compare would only give the item a second reason for the one fate it
  *     already has. The probe raises nothing, so a lookup it could not make is
  *     this orphan's skip and never the load's — the rule the file analysis takes
@@ -2241,26 +2234,27 @@ static bool workspace_transient(const char *entry, void *ctx) {
  * one holding nothing but orphans the ladder left a scope exit's, and OS metadata,
  * stays ORPHANED, prunable where a run removes them all, which is cleanup's to
  * say (core/cleanup.h cleanup_preflight); one readable at the measure and not
- * at the readdir is UNVERIFIED, skipped as one the measure could not read.
+ * at the readdir carries the fault UNVERIFIED, skipped as one the measure could
+ * not read.
  *
  * Divergence for a file the analysis measures — a prunable copy or an overridden
  * one, and a node, which the join measured before it — is disk against what dotta
  * last confirmed there, the record (workspace_compare_orphan); one whose record
  * confirmed nothing is left unmeasured. A directory's verdict is what is left
  * in it, so there is nothing to measure, only whether it can be read: a directory
- * dotta cannot stat, read or search — the path, or a component above it — is
- * UNVERIFIED, the bit an unstattable file carries, and skipped until the user
- * can say what is in it. That is one fs_eaccess per present directory orphan
- * (read and search: the readdir lstat's an entry named like OS metadata to see
- * that it is a file), the measure's (workspace_measure); the readdir is the second
- * pass's, and what is left once a run has acted is cleanup's.
+ * dotta cannot stat, read or search — the path, or a component above it — carries
+ * a fault, as an unstattable file does, and is skipped until the user can say
+ * what is in it. That is one fs_eaccess per present directory orphan (read and
+ * search: the readdir lstat's an entry named like OS metadata to see that it is
+ * a file), the measure's (workspace_measure); the readdir is the second pass's,
+ * and what is left once a run has acted is cleanup's.
  *
  * This enables status to predict apply behavior (cleanup_verdict reads the same
- * item, and cleanup_skip_reason maps the same bits to the skip):
+ * item, and cleanup_skip_reason maps the same fault and bits to the skip):
  * - DIVERGENCE_NONE -> Clean orphan, apply will prune
  * - DIVERGENCE_CONTENT -> Modified, apply will skip
  * - DIVERGENCE_MODE/OWNERSHIP -> The claim changed, apply will skip
- * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
+ * - a fault -> Cannot verify, apply will skip
  * - WORKSPACE_STATE_RELEASED -> Git let go of a file, dotta never deployed it,
  *   a row of the view stands on this very entry under another spelling of its
  *   path, (with DIVERGENCE_TYPE) another kind of path stands there, or it is a
@@ -2297,7 +2291,7 @@ static void workspace_analyze_orphans(workspace_t *ws) {
     /* The walk cannot fail: a folded error is not the walk's — the probe's failures
      * are the orphan's skip, the head's kept for the pass on its profile's entry
      * and a subtree's on the way to one name that row's alone, and the measure's
-     * are its bit, dropped at the call that raised it; none is carried out of
+     * are its fault, dropped at the call that raised it; none is carried out of
      * the walk. */
     for (size_t i = 0; i < ws->orphan_count; i++) {
         workspace_item_t *item = ws->orphans[i];
@@ -2316,10 +2310,10 @@ static void workspace_analyze_orphans(workspace_t *ws) {
          * One rule for every orphan, whatever its kind: FS_OCCUPANT_NONE is the
          * orphan already removed by hand (or a component above it no longer a
          * directory) — a reclaim; FS_OCCUPANT_UNKNOWN (EACCES, EIO, ELOOP, …)
-         * is assumed present but leaves no usable stat, so a file's divergence
-         * cannot be computed and becomes UNVERIFIED in the measure
+         * is assumed present but leaves no usable stat, so nothing of it can be
+         * measured, and the measure says whose refusal that was, the item's fault
          * (workspace_measure):
-         * - Status shows [orphaned, unverified] (user visibility)
+         * - Status shows [orphaned] beside the fault's word (user visibility)
          * - Apply skips removal (can't verify what we can't stat)
          *
          * Absent: ORPHANED with no divergence — a reclaim whatever Git says. */
@@ -2429,11 +2423,10 @@ static void workspace_analyze_orphans(workspace_t *ws) {
                      * and neither LOST nor BACKED is a guess to make: it stays,
                      * and cleanup skips it (CLEANUP_SKIP_UNVERIFIED) until --force.
                      * Not measured, unlike a backed copy below: no reader shows
-                     * a bit beside UNVERIFIED, so a compare would only give the
+                     * a bit beside a fault, so a compare would only give the
                      * item a second reason for the fate it already has. Its class
                      * is UNVERIFIED whatever went wrong: the probe meets Git
                      * alone, never a key or a permission. */
-                    item->divergence = DIVERGENCE_UNVERIFIED;
                     item->fault = WORKSPACE_FAULT_UNVERIFIED;
                     continue;
 
@@ -2505,7 +2498,7 @@ static void workspace_analyze_orphans(workspace_t *ws) {
         const char *path = item->filesystem_path;
 
         if (item->item_kind != PATH_KIND_DIRECTORY || item->state != WORKSPACE_STATE_ORPHANED ||
-            item->occupant != FS_OCCUPANT_DIRECTORY || (item->divergence & DIVERGENCE_UNVERIFIED)) {
+            item->occupant != FS_OCCUPANT_DIRECTORY || item->fault != WORKSPACE_FAULT_NONE) {
             continue;
         }
 
@@ -2530,7 +2523,6 @@ static void workspace_analyze_orphans(workspace_t *ws) {
                 /* Readable at the measure and not now — the world moved: nothing
                  * can be said of what is left in it, so it is skipped as one
                  * the measure could not read, never released */
-                item->divergence = DIVERGENCE_UNVERIFIED;
                 item->fault = WORKSPACE_FAULT_UNVERIFIED;
                 break;
 
@@ -3038,7 +3030,7 @@ static error_t workspace_analyze_untracked(
  *
  * Detects, for a directory row:
  * - DELETED state: Directory removed from filesystem
- * - DIVERGENCE_UNVERIFIED: Directory could not be stat'd (inaccessible)
+ * - A fault: Directory could not be stat'd (inaccessible)
  * - DIVERGENCE_TYPE, DIVERGENCE_STALE: Something other than a directory stands
  *   at the path — the user's (TYPE), or dotta's own node, the record's kind
  *   standing, which Git moved past: untouched (STALE), or edited since or never
@@ -3120,7 +3112,6 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
         /* Inaccessible, not absent: record the uncertainty rather than dropping
          * the row, which left status reporting a clean workspace for a path it
          * had just failed to read. Same three-way policy as the file rows. */
-        item->divergence = DIVERGENCE_UNVERIFIED;
         item->fault = workspace_code_fault(error_errno_code(item->lstat_errno));
         return;
     }
@@ -3820,8 +3811,8 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
         case WORKSPACE_DISPLACED_NONE:     break;
     }
 
-    /* A bit the analysis could not settle outranks the ones it could */
-    if (divergence & DIVERGENCE_UNVERIFIED) return WORKSPACE_ROUTE_UNVERIFIABLE;
+    /* A look that failed outranks every bit a look settled */
+    if (item->fault != WORKSPACE_FAULT_NONE) return WORKSPACE_ROUTE_UNVERIFIABLE;
 
     /* Git's side that disk did not follow — the bytes or the kind Git moved past
      * what dotta last reconciled (STALE), a claim it moved past the record's or
@@ -4059,7 +4050,7 @@ bool workspace_item_tags(
              * it never carries one. Conservative handling downstream (update
              * refuses it, apply skips it at preflight, cleanup skips the
              * orphan). */
-            if (item->divergence & DIVERGENCE_UNVERIFIED) {
+            if (item->fault != WORKSPACE_FAULT_NONE) {
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     switch (item->fault) {
                         case WORKSPACE_FAULT_LOCKED:
@@ -4153,7 +4144,7 @@ bool workspace_item_tags(
                 }
                 *color_out = OUTPUT_COLOR_MAGENTA;
 
-            } else if (item->divergence & DIVERGENCE_UNVERIFIED) {
+            } else if (item->fault != WORKSPACE_FAULT_NONE) {
                 /* The failed look, worded by whose remedy it is (workspace_fault_t)
                  * — the deployed arm's switch, so one item has one name in both.
                  * Conservative: an orphan's skip (CLEANUP_SKIP_UNVERIFIED, ranked

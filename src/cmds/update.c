@@ -210,10 +210,11 @@ typedef struct {
  * twice, nothing falls through. The UNVERIFIABLE arm keeps a second index beside
  * it, for the same reason the first one exists: one route, three ways out
  * (workspace_fault_t), and the census prints a line per class. Σ faults[f] ==
- * refused[UNVERIFIABLE], and faults[NONE] is zero by the fold's invariant.
- * CAPTURE's slot stays zero (that arm is accepted) and CLEAN's (the diverged
- * items hold no clean row); REASSIGNED's counts a reassignment the census has
- * no line for — apply acknowledges it, the filter only declines it.
+ * refused[UNVERIFIABLE], and faults[NONE] is zero by construction: the route is
+ * UNVERIFIABLE exactly where the fault is not NONE. CAPTURE's slot stays zero
+ * (that arm is accepted) and CLEAN's (the diverged items hold no clean row);
+ * REASSIGNED's counts a reassignment the census has no line for — apply
+ * acknowledges it, the filter only declines it.
  */
 typedef struct {
     workspace_items_t accepted;              /* The run's work */

@@ -197,10 +197,11 @@ static inline size_t cleanup_plan_item_count(const cleanup_plan_t *plan) {
 /**
  * Why a present orphaned file is skipped rather than pruned
  *
- * Pure in the item's divergence bits and its relocation class. Values are listed
- * in precedence order — cleanup_skip_reason answers the first that applies. Files
- * only: a directory's skip is cleanup_verdict's (the workspace could not verify
- * it) or its remainder's (cleanup_preflight_t), and needs no table.
+ * Pure in the item's fault, its divergence bits and its relocation class. Values
+ * are listed in precedence order — cleanup_skip_reason answers the first that
+ * applies. Files only: a directory's skip is cleanup_verdict's (the workspace
+ * could not verify it) or its remainder's (cleanup_preflight_t), and needs no
+ * table.
  */
 typedef enum {
     CLEANUP_SKIP_NONE = 0,       /* Not skipped — nothing stands in the way of the prune */
@@ -211,19 +212,19 @@ typedef enum {
 } cleanup_skip_reason_t;
 
 /**
- * Map an orphaned file's divergence to the reason it is skipped
+ * Map an orphaned file's fault and divergence to the reason it is skipped
  *
  * First match wins:
- *   DIVERGENCE_UNVERIFIED          UNVERIFIED   — a bit the workspace could
- *                                  not settle outranks the ones it could: Git
- *                                  could not vouch for the path, the content
- *                                  compare failed (no key in reach, a blob a
- *                                  held key refuses, an unsupported cipher version,
- *                                  blob corruption, I/O), or the file is present
- *                                  but unstattable (EACCES, EIO). Which of the
- *                                  three refusals it was is the item's fault
- *                                  (core/workspace.h); this table does not read
- *                                  it, and status ranks its tag — [locked],
+ *   a fault                        UNVERIFIED   — a look that failed outranks
+ *                                  every bit a look settled: Git could not vouch
+ *                                  for the path, the content compare failed (no
+ *                                  key in reach, a blob a held key refuses, an
+ *                                  unsupported cipher version, blob corruption,
+ *                                  I/O), or the file is present but unstattable
+ *                                  (EACCES, EIO). Which of the three refusals
+ *                                  it was is the fault's class (core/workspace.h
+ *                                  workspace_fault_t); this table asks it against
+ *                                  NONE alone, and status ranks its tag — [locked],
  *                                  [unreadable] or [unverified] — the same way,
  *                                  so one item has one name in both places.
  *   a shared relocation            RELOCATED    — the item's claim moved to
@@ -278,7 +279,7 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  * same while an orphan beneath it stays (stated). A reader not on this list is
  * a bug. Status's keys read the tags instead: a key speaks for every line carrying
  * them, a verdict for one item. In the order the tests are taken — the occupant,
- * the state, the divergence bits:
+ * the state, the fault and the divergence bits:
  *
  *   occupant NONE                         ABSENT     record retires, no effect
  *   state RELEASED                        RELEASED   left alone, record retires
@@ -327,8 +328,7 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    and prunes as before, its
  *                                                    preview naming the move
  *   a file with a cleanup_skip_reason     SKIPPED    unless --force
- *   a directory with DIVERGENCE_UNVERIFIED
- *                                         SKIPPED    --force included: no flag
+ *   a directory a look failed at          SKIPPED    --force included: no flag
  *                                                    makes an unstattable or
  *                                                    unreadable directory one
  *                                                    the run can see into, and
@@ -368,7 +368,7 @@ typedef enum {
  *
  * @param item Orphaned or released item, either kind (must not be NULL)
  * @param force --force: lifts a file's skip reasons and the relocation skip (either
- *        kind), never a release and never a directory's UNVERIFIED
+ *        kind), never a release and never a directory a look failed at
  * @return The verdict (see cleanup_verdict_t)
  */
 cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
@@ -497,8 +497,8 @@ typedef struct {
  *        orphans beneath a directory, for its remainder)
  * @param plan Cleanup plan (must not be NULL)
  * @param force --force: prune what would be skipped too; never a released file,
- *        never a directory's UNVERIFIED (cleanup_verdict), never a refusal (root
- *        is not a flag)
+ *        never a directory a look failed at (cleanup_verdict), never a refusal
+ *        (root is not a flag)
  * @return The verdicts
  */
 cleanup_preflight_t *cleanup_preflight(
@@ -583,8 +583,8 @@ typedef struct {
  * the same table from its side:
  *
  *   never attempted: dotta could not     deploy   exit ≠ 0  the incapacity skips
- *                                        cleanup  exit 0    a directory's UNVERIFIED
- *                                                           (cleanup_verdict);
+ *                                        cleanup  exit 0    a directory a look failed
+ *                                                           at (cleanup_verdict);
  *                                                           a parent that denies
  *                                                           the run (refused_*)
  *   attempted: the world moved           deploy   exit ≠ 0  failed — EEXIST, EISDIR,

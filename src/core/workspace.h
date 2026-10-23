@@ -136,11 +136,12 @@ typedef enum {
  *
  * The bits divide in two, by what their operands are:
  *
- * The path bits — CONTENT, MODE, OWNERSHIP, TYPE, STALE, CLAIM_MOVED, UNVERIFIED
- * — measure the active path against the view: what stands on disk versus the
- * row (STALE and CLAIM_MOVED through the record: the pair and the claim dotta
- * last reconciled, versus the row's), UNVERIFIED when the measurement itself
- * could not run. No path bit survives absence — properties of what is not there
+ * The path bits — CONTENT, MODE, OWNERSHIP, TYPE, STALE, CLAIM_MOVED — measure
+ * the active path against the view: what stands on disk versus the row (STALE
+ * and CLAIM_MOVED through the record: the pair and the claim dotta last reconciled,
+ * versus the row's). They are what a measure found, so one that could not run
+ * leaves none of them: why it could not is the item's fault (workspace_fault_t),
+ * never a bit. No path bit survives absence — properties of what is not there
  * cannot be compared.
  *
  * The blob bit — ENCRYPTION, alone — measures the blob Git holds against the
@@ -202,9 +203,8 @@ typedef enum {
     DIVERGENCE_OWNERSHIP   = 1 << 2,  /* Owner or group is not the claim's */
     DIVERGENCE_ENCRYPTION  = 1 << 3,  /* Blob stored plaintext where the auto-encrypt policy claims the path */
     DIVERGENCE_TYPE        = 1 << 4,  /* Type changed (file/symlink/dir) */
-    DIVERGENCE_UNVERIFIED  = 1 << 5,  /* The look failed; (workspace_fault_t) */
-    DIVERGENCE_STALE       = 1 << 6,  /* Git moved past what dotta last saw: its kind, or bytes it confirmed */
-    DIVERGENCE_CLAIM_MOVED = 1 << 7   /* A claim Git's to bring: not the record's, or unresolvable here */
+    DIVERGENCE_STALE       = 1 << 5,  /* Git moved past what dotta last saw: its kind, or bytes it confirmed */
+    DIVERGENCE_CLAIM_MOVED = 1 << 6   /* A claim Git's to bring: not the record's, or unresolvable here */
 } divergence_type_t;
 
 /**
@@ -402,14 +402,15 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
 }
 
 /**
- * Why a look failed — the class of DIVERGENCE_UNVERIFIED, by whose remedy it is
+ * Why a look failed, by whose remedy it is — NONE where none did
  *
- * The bit answers the verb question: no verb resolves this item — apply skips
- * it, update refuses it, cleanup skips the orphan — and every engine reads it.
- * It does not answer the user's question, what do I do, and the things that can
- * make it have three different answers to that: a missing key, a permission,
- * and a list of one-offs no key or privilege settles. One remedy over all three
- * is how a locked path came to be told to fix its permissions.
+ * One field, two questions. Against NONE it answers the verb's: no verb resolves
+ * an item a look failed at — apply skips it, update refuses it, cleanup skips
+ * the orphan — and every engine asks it so. Its class answers the user's, what
+ * do I do, and the things that can make a look fail have three different answers
+ * to that: a missing key, a permission, and a list of one-offs no key or privilege
+ * settles. One remedy over all three is how a locked path came to be told to
+ * fix its permissions.
  *
  * The fault is that partition, read off the root error's code at the one moment
  * an analysis holds it — crypto/keymgr.h's "The codes" is the producer's half
@@ -439,21 +440,29 @@ static inline workspace_relocation_t workspace_label_relocation(label_t label) {
  * list of paths and their state, and every block in cmds/ closes by naming a
  * remedy in its own fixed words, never by quoting a line another layer wrote.
  *
- * One invariant, established at every fold and trusted downstream: `fault !=
- * NONE` iff the item carries DIVERGENCE_UNVERIFIED. Only DEPLOYED (both kinds),
- * ORPHANED, OVERRIDDEN and OBSTRUCTING items can carry one, and UNSCANNED always
- * does — RELEASED is born of answers, never of a failed look (the record's
- * ownership, Git's, a look that found another kind, the entry's compare, which
- * a look that failed leaves unasked, and which writes its release whole over a
- * node the join measured, and what a directory holds, read only where its measure
- * found it readable), and UNDEPLOYED, DELETED and UNTRACKED of looks that answered.
- * And only a file row can be LOCKED: a directory seals no content, so every fault
- * it can carry comes from an errno, and the scan reads no content at all.
+ * Only DEPLOYED (both kinds), ORPHANED, OVERRIDDEN and OBSTRUCTING items can
+ * carry one, and UNSCANNED always does — RELEASED is born of answers, never of
+ * a failed look (the record's ownership, Git's, a look that found another kind,
+ * the entry's compare, which a look that failed leaves unasked, and which writes
+ * its release whole over a node the join measured, and what a directory holds,
+ * read only where its measure found it readable), and UNDEPLOYED, DELETED and
+ * UNTRACKED of looks that answered. And only a file row can be LOCKED: a directory
+ * seals no content, so every fault it can carry comes from an errno, and the
+ * scan reads no content at all.
  *
- * Readers: workspace_item_tags (the tag — [locked] / [unreadable] / [unverified],
- * the same word on every arm), status's two keys — Unverifiable's and Issues' —
- * update's census, apply's preflight rows and the closers under them, diff's
- * status line. The engines read the bit and never the fault: one verb, three words.
+ * Readers — the engines, which ask it against NONE: workspace_item_route (the
+ * UNVERIFIABLE arm), workspace_untouched, the orphan analysis's directory pass
+ * (core/workspace.c workspace_analyze_orphans), core/cleanup.c cleanup_skip_reason
+ * and cleanup_verdict, core/deploy.c deploy_needs_work and deploy_preflight;
+ * and the screens: workspace_item_tags (the tag — [locked] / [unreadable] /
+ * [unverified], the same word on every arm), cmds/status.c status_print_workspace
+ * (the status line, Unverifiable's key and Issues'), cmds/update.c update_partition
+ * and cmd_update's census, cmds/apply.c apply_fault_label, apply_consent_label
+ * and the sudo and key closers of apply_print_deploy_skips and
+ * apply_print_cleanup_skips, and cmds/diff.c's filter, status line, colour and
+ * count (should_show_item_for_direction, get_status_message_from_item,
+ * show_file_diff_from_workspace, present_diffs_for_direction). A reader not on
+ * this list is a bug.
  */
 typedef enum {
     WORKSPACE_FAULT_NONE = 0,     /* The look succeeded */
@@ -507,18 +516,18 @@ typedef enum {
  * rule did not, or has not yet — the partition makes every item so, a look nobody
  * took — and assumes present either way (absence is never inferred from a failure
  * to look, and never from a look not taken). What it means is said beside it:
- * DIVERGENCE_UNVERIFIED where a look failed, a displaced class where none was
- * taken, and on a released record neither — letting a copy go needs no measurement.
- * No reader is lent an orphan the load did not analyze, whatever its look: the
- * diverged items (workspace_diverged) and workspace_find lend an orphan only
- * where the load analyzed the orphans. Presence is therefore `occupant !=
- * FS_OCCUPANT_NONE` — the workspace's rule, and cleanup's; deploy judges by the
- * stricter one (deploy_occupant_present: UNKNOWN is not present, since deploy
- * judges nothing it could not see), and a new consumer picks one of the two and
- * says which. The divergence bits are the verdict over that look (DIVERGENCE_TYPE:
- * the occupant is not the row's or the record's kind); every consumer that once
- * re-probed the path to learn its type reads this field instead, so status, deploy
- * and cleanup cannot see three different occupants at one path. And where a look
+ * the fault where a look failed, a displaced class where none was taken, and on
+ * a released record neither — letting a copy go needs no measurement. No reader
+ * is lent an orphan the load did not analyze, whatever its look: the diverged
+ * items (workspace_diverged) and workspace_find lend an orphan only where the
+ * load analyzed the orphans. Presence is therefore `occupant != FS_OCCUPANT_NONE`
+ * — the workspace's rule, and cleanup's; deploy judges by the stricter one
+ * (deploy_occupant_present: UNKNOWN is not present, since deploy judges nothing
+ * it could not see), and a new consumer picks one of the two and says which.
+ * The divergence bits are the verdict over that look (DIVERGENCE_TYPE: the occupant
+ * is not the row's or the record's kind); every consumer that once re-probed
+ * the path to learn its type reads this field instead, so status, deploy and
+ * cleanup cannot see three different occupants at one path. And where a look
  * failed outright, whose remedy that is: the fault (workspace_fault_t), NONE on
  * every item the analysis could verify.
  *
@@ -592,7 +601,7 @@ typedef struct {
     /* The verdict — its kind's analysis's */
     workspace_state_t state;             /* Where the item exists (deployed/undeployed/etc.) */
     divergence_type_t divergence;        /* What's wrong with it (bit flags, can combine) */
-    workspace_fault_t fault;             /* Whose remedy the failed look is; NONE unless UNVERIFIED */
+    workspace_fault_t fault;             /* Whose remedy the failed look is; NONE where none failed */
     workspace_relocation_t relocation;   /* The rule of a relocated claim's namespace, or NONE */
     state_stat_t stat;                   /* What stands behind disk being the row's content; UNSET elsewhere */
 
@@ -825,16 +834,16 @@ static inline const state_record_t *workspace_base(const state_record_t *record)
  *
  * A measured copy against what dotta last confirmed at its path (core/workspace.c
  * workspace_measure): the record carries a confirmed blob (workspace_base above),
- * and the measure found nothing off it but the claim — a mode, an owner, which
- * is a claim and never an edit (core/deploy.h deploy_content_conflicts). Any
- * other bit touches it: the bytes, a read that failed, and one this test does
- * not name. So dotta's copy as it confirmed it, which holds no bytes Git lacks,
- * goes unasked where a landing needs its place; any other — edited, never
- * confirmed, unread — only under --force. The view squatter's own test, read
- * there off the base's compare alone (core/workspace.c
- * workspace_analyze_directory). Asked of a measured copy alone: dotta's node
- * above a row, which the join measures, and a file or link beneath a standing
- * blob, which the orphan analysis does.
+ * the measure read the copy — no fault — and found nothing off it but the claim
+ * — a mode, an owner, which is a claim and never an edit (core/deploy.h
+ * deploy_content_conflicts). Any other bit touches it, the bytes and one this
+ * test does not name, and so does a read that failed. So dotta's copy as it
+ * confirmed it, which holds no bytes Git lacks, goes unasked where a landing
+ * needs its place; any other — edited, never confirmed, unread — only under
+ * --force. The view squatter's own test, read there off the base's compare alone
+ * (core/workspace.c workspace_analyze_directory). Asked of a measured copy alone:
+ * dotta's node above a row, which the join measures, and a file or link beneath
+ * a standing blob, which the orphan analysis does.
  *
  * Readers: core/workspace.c workspace_look_orphan (the class of dotta's node
  * above a row), core/deploy.h deploy_clearance (a landing's consent to remove a
@@ -842,7 +851,7 @@ static inline const state_record_t *workspace_base(const state_record_t *record)
  * A reader not on this list is a bug.
  */
 static inline bool workspace_untouched(const workspace_item_t *item) {
-    return workspace_base(item->record) &&
+    return workspace_base(item->record) && item->fault == WORKSPACE_FAULT_NONE &&
            (item->divergence & ~(DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) == DIVERGENCE_NONE;
 }
 
@@ -1044,7 +1053,7 @@ typedef enum {
     WORKSPACE_ROUTE_DISPLACED_DERIVED,  /* … an ancestor claim holds ('dotta update <dir>') */
     WORKSPACE_ROUTE_DISPLACED_STALE,    /* … dotta's own copy Git moved past, untouched (apply) */
     WORKSPACE_ROUTE_DISPLACED_CONFLICT, /* … that copy, edited since or never confirmed (apply --force) */
-    WORKSPACE_ROUTE_UNVERIFIABLE,       /* DIVERGENCE_UNVERIFIED — dotta could not look */
+    WORKSPACE_ROUTE_UNVERIFIABLE,       /* A fault — dotta could not look */
     WORKSPACE_ROUTE_CONFLICT,           /* (STALE ∨ CLAIM_MOVED) ∧ (CONTENT ∨ TYPE) — both moved */
     WORKSPACE_ROUTE_STALE,              /* STALE ∨ CLAIM_MOVED alone — Git moved, disk did not */
     WORKSPACE_ROUTE_KIND,               /* TYPE alone the copy cannot commit, a row a plan can hold */
@@ -1061,8 +1070,9 @@ typedef enum {
 /**
  * Decide which verb's work a deployed item is, from the item alone
  *
- * Pure in the fields the load wrote once — the displaced class, divergence, kind,
- * occupant, reassignment. No syscall, no options; first match wins:
+ * Pure in the fields the load wrote once — the displaced class, the fault,
+ * divergence, kind, occupant, reassignment. No syscall, no options; first match
+ * wins:
  *
  *   displaced, TRACKED       DISPLACED_TRACKED — the user's squatter a tracked
  *                            row claims stands above the path, so nothing there
@@ -1088,19 +1098,19 @@ typedef enum {
  *                            RECORD stands on no deployed item (the reach rule,
  *                            workspace_displaced_t), so the four view classes
  *                            are the whole test.
- *   DIVERGENCE_UNVERIFIED    UNVERIFIABLE — a bit the analysis could not
- *                            settle outranks the ones it could (the precedence
- *                            cleanup_skip_reason gives orphans): the path could
- *                            not be read (EACCES, ELOOP, EIO — both kinds), or
- *                            its content could not be loaded, decrypted, or
- *                            compared. update's copy would fail on the same errno;
- *                            apply plans the row and skips it rather than write
- *                            what it cannot read, and says so through the exit
- *                            code — and an ENCRYPTION bit beside it changes nothing
- *                            the user can act on while the path cannot be read.
- *                            Which of the three refusals it was, and what settles
- *                            it, is the item's fault (workspace_fault_t); the
- *                            route does not read it — one verb, three words.
+ *   a fault                  UNVERIFIABLE — a look that failed outranks every
+ *                            bit a look settled (the precedence cleanup_skip_reason
+ *                            gives orphans): the path could not be read (EACCES,
+ *                            ELOOP, EIO — both kinds), or its content could not
+ *                            be loaded, decrypted, or compared. update's copy
+ *                            would fail on the same errno; apply plans the row
+ *                            and skips it rather than write what it cannot read,
+ *                            and says so through the exit code — and an ENCRYPTION
+ *                            bit beside it changes nothing the user can act on
+ *                            while the path cannot be read. Which of the three
+ *                            refusals it was, and what settles it, is the fault's
+ *                            class (workspace_fault_t); the route asks it against
+ *                            NONE alone — one verb, three words.
  *   (STALE ∨ CLAIM_MOVED)    CONFLICT — both sides moved since dotta last
  *     ∧ (CONTENT ∨ TYPE)     reconciled: the edit is real — of the bytes, or of
  *                            the kind (TYPE beside STALE, the frame across kinds)

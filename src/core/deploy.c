@@ -37,9 +37,9 @@
  * absence, so the two missing states answer from state alone.
  *
  * Kind-agnostic: directory analysis tags only MODE / OWNERSHIP / CLAIM_MOVED /
- * TYPE / STALE / UNVERIFIED, so the DEPLOYED arm's test already covers every
- * directory verdict — no kind-specific arm. A file row can carry ENCRYPTION beside
- * any of those; the arm masks it either way.
+ * TYPE / STALE, or writes a fault, so the DEPLOYED arm's test already covers
+ * every directory verdict — no kind-specific arm. A file row can carry ENCRYPTION
+ * beside any of those; the arm masks it either way.
  *
  * The planner hands in the active items, so the six states an orphan or a scan
  * item takes never reach this: their arms name the owner that does handle them,
@@ -94,10 +94,13 @@ static bool deploy_needs_work(const workspace_item_t *item) {
              * has no path bit: nothing there was looked at (core/workspace.h
              * workspace_displaced_t). Planned, it is written fresh beneath a
              * squatter this run replaces, or refused by its ancestry — and either
-             * fate is preflight's to name (check_ancestry). Left out of the plan
-             * it would fall to the clean bucket, which adoption reads, and adopting
+             * fate is preflight's to name (check_ancestry). So is a row whose
+             * look failed, its fault the only thing it carries: planned, preflight
+             * skips it (DEPLOY_SKIP_UNREADABLE). Left out of the plan either
+             * would fall to the clean bucket, which adoption reads, and adopting
              * a path nobody looked at would take ownership of a stranger's file. */
             return item->displaced != WORKSPACE_DISPLACED_NONE ||
+                   item->fault != WORKSPACE_FAULT_NONE ||
                    (item->divergence & ~DIVERGENCE_ENCRYPTION) != DIVERGENCE_NONE;
 
         case WORKSPACE_STATE_ORPHANED:
@@ -1490,17 +1493,17 @@ error_t deploy_preflight(
                 }
             }
 
-            /* A row the workspace could not settle is no verdict — the UNVERIFIED
-             * bit, not its unstattable symptom. The bit has two producers: the
-             * path could not be lstat'd (occupant UNKNOWN, which no rung above
-             * judges — UNKNOWN is not present), or the look at a file row's content
+            /* A row the workspace could not settle is no verdict — the fault,
+             * not its unstattable symptom. The fault has two producers: the path
+             * could not be lstat'd (occupant UNKNOWN, which no rung above judges
+             * — UNKNOWN is not present), or the look at a file row's content
              * failed with the row's own kind standing — a blob that could not
              * be loaded, decrypted or compared, an open the file refused — which
              * the content rung cannot catch either: a failed look accumulates
              * no content verdict. (A kind mismatch makes no content look to fail:
              * it is judged off the lstat before any read, and TYPE takes it above.)
              * A directory row's one producer is the unstattable path, but the
-             * rung reads the fact, not its encoding. Nothing can say what the
+             * rung reads the fault, not the occupant. Nothing can say what the
              * run will find there, or that the write's own read will fare better,
              * and nothing is written on a guess. The ancestry that refused an
              * lstat is what refuses the write, and the landing has just named
@@ -1508,7 +1511,7 @@ error_t deploy_preflight(
              * its own account only when the landing had nothing to say — a failure
              * the run would otherwise have met mid-run, after siblings already
              * wrote. */
-            if (skip.reason == DEPLOY_SKIP_NONE && (item->divergence & DIVERGENCE_UNVERIFIED)) {
+            if (skip.reason == DEPLOY_SKIP_NONE && item->fault != WORKSPACE_FAULT_NONE) {
                 skip.reason = DEPLOY_SKIP_UNREADABLE;
             }
         }

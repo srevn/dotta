@@ -52,11 +52,11 @@
  * the function returns, and what a failure means is the caller's. This module
  * cannot know whether an unreadable path annotates a row or sinks the command,
  * and the tree answers it four ways: core/workspace.c workspace_analyze_file
- * and workspace_analyze_orphans mark the path (DIVERGENCE_UNVERIFIED and a fault
- * class, never fatal to the load); the second question the first of them asks —
- * ours against the base — reads a failure as "not at base", the conservative
- * answer; cmds/diff.c show_file_diff_from_workspace says it in the row's block
- * and goes on; compare_tree_files_to_filesystem fails the run.
+ * and workspace_analyze_orphans mark the path (the item's fault, never fatal to
+ * the load); the second question the first of them asks — ours against the base
+ * — reads a failure as "not at base", the conservative answer; cmds/diff.c
+ * show_file_diff_from_workspace says it in the row's block and goes on;
+ * compare_tree_files_to_filesystem fails the run.
  *
  * One verdict in the tree is reached from no look at all: core/workspace.h
  * workspace_compare_confirmed judges a row against a pair dotta already found

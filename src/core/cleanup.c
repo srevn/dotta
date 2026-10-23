@@ -144,7 +144,7 @@ cleanup_plan_t *cleanup_plan_build(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Map an orphaned file's divergence to the reason it is skipped
+ * Map an orphaned file's fault and divergence to the reason it is skipped
  *
  * The table and its rationale are in cleanup.h — kept in one place, where a caller
  * reading the enum finds them.
@@ -152,8 +152,8 @@ cleanup_plan_t *cleanup_plan_build(
 cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
     divergence_type_t divergence = item->divergence;
 
-    /* DIVERGENCE_UNVERIFIED: Verification failed */
-    if (divergence & DIVERGENCE_UNVERIFIED) {
+    /* A fault: the look failed, so no bit below was settled */
+    if (item->fault != WORKSPACE_FAULT_NONE) {
         return CLEANUP_SKIP_UNVERIFIED;
     }
 
@@ -188,8 +188,8 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
      *   workspace_analyze_orphans) — and left out, so it would block
      * Unknown flags: block removal until explicitly handled above. */
     static const divergence_type_t known_flags = DIVERGENCE_CONTENT |
-        DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_UNVERIFIED |
-        DIVERGENCE_ENCRYPTION | DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED;
+        DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_ENCRYPTION |
+        DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED;
 
     return (divergence & ~known_flags) ? CLEANUP_SKIP_UNVERIFIED
                                        : CLEANUP_SKIP_NONE;
@@ -200,7 +200,7 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
  *
  * The table and its rationale are in cleanup.h. Every input is a fact the workspace
  * established once at load and left on the item — its occupant, state, displaced
- * class and divergence bits: no syscall.
+ * class, fault and divergence bits: no syscall.
  */
 cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
     if (item->occupant == FS_OCCUPANT_NONE) {
@@ -252,8 +252,7 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
         /* A directory the workspace could not stat or read is skipped whatever
          * --force says; otherwise what is left in it once this run has acted
          * finishes the verdict (cleanup_preflight). */
-        return (item->divergence & DIVERGENCE_UNVERIFIED) ? CLEANUP_SKIPPED
-                                                          : CLEANUP_PRUNABLE;
+        return item->fault != WORKSPACE_FAULT_NONE ? CLEANUP_SKIPPED : CLEANUP_PRUNABLE;
     }
 
     return (!force && cleanup_skip_reason(item) != CLEANUP_SKIP_NONE)

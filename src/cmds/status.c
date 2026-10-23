@@ -689,12 +689,12 @@ static void status_print_workspace(
      * hides the row reads Clean over the copy); and what apply settles in the
      * record alone, nothing on disk changing — a pure reassignment, a release,
      * a reclaim. A scope is Clean iff the line counts none. Invalid is reserved
-     * for what the analysis could not establish: an item carrying
-     * DIVERGENCE_UNVERIFIED (an unreadable path, a comparison that could not
-     * run, a Git probe that did not answer) is one no verb resolves by default
-     * — apply skips it and the user must look. Anything else counted is Dirty:
-     * work that touches the disk or waits on the user, not an invalid workspace.
-     * With no filter every item is in scope and none is hidden. */
+     * for what the analysis could not establish: an item carrying a fault (an
+     * unreadable path, a comparison that could not run, a Git probe that did
+     * not answer) is one no verb resolves by default — apply skips it and the
+     * user must look. Anything else counted is Dirty: work that touches the disk
+     * or waits on the user, not an invalid workspace. With no filter every item
+     * is in scope and none is hidden. */
     const workspace_items_t *counted[] = {
         &conflicts, &squatted, &displaced, &unverifiable, &uncommitted, &undeployed,
         &new_files, &orphaned,
@@ -704,7 +704,7 @@ static void status_print_workspace(
     for (size_t b = 0; b < sizeof(counted) / sizeof(counted[0]); b++) {
         shown += counted[b]->count;
         for (size_t i = 0; i < counted[b]->count; i++) {
-            if (counted[b]->entries[i]->divergence & DIVERGENCE_UNVERIFIED) {
+            if (counted[b]->entries[i]->fault != WORKSPACE_FAULT_NONE) {
                 unverified++;
             }
         }
@@ -1210,7 +1210,7 @@ static void status_print_workspace(
                     /* The tags' ladder past absence and a squatter, which the
                      * section switch lists apart (section 11): the failed look
                      * or the bits, and the relocation beside them */
-                    if (item->divergence & DIVERGENCE_UNVERIFIED) {
+                    if (item->fault != WORKSPACE_FAULT_NONE) {
                         /* Worded by whose remedy the failed look is, so the hint
                          * and its tag say the same thing (workspace_fault_t). A
                          * directory shares [unreadable] and [unverified], and
@@ -1260,7 +1260,7 @@ static void status_print_workspace(
                      * cleanup's would be a prune — save a claim, which is never
                      * an edit, and the bare key, which says what the node is in
                      * the way of */
-                    if (item->divergence & DIVERGENCE_UNVERIFIED) {
+                    if (item->fault != WORKSPACE_FAULT_NONE) {
                         switch (item->fault) {
                             case WORKSPACE_FAULT_LOCKED:
                                 hint = config->encryption_enabled

@@ -64,14 +64,14 @@ static bool should_show_item_for_direction(
          * (apply acknowledges reassignment). TYPE rides along — replacing the
          * occupant is apply's (--force for the kinds the copy cannot commit),
          * and status's Conflicts remedy sends the user here to compare, so hiding
-         * it answered that remedy with silence. UNVERIFIED is shown too: a look
-         * that failed is a difference nobody has ruled out, and hiding it reported
-         * the tree in sync over a file the user had just edited. A row beneath
-         * a squatter is shown on the same ground and carries no bit to be shown
-         * by: nothing there was looked at (core/workspace.h workspace_displaced_t),
-         * apply writes it fresh once the squatter is replaced, and the status
-         * line says so. ENCRYPTION alone stays out: how Git stores the blob is
-         * no difference between Git and disk, and apply deploying it changes
+         * it answered that remedy with silence. A failed look is shown too, its
+         * fault a difference nobody has ruled out: hiding it reported the tree
+         * in sync over a file the user had just edited. A row beneath a squatter
+         * is shown on the same ground and carries no bit to be shown by: nothing
+         * there was looked at (core/workspace.h workspace_displaced_t), apply
+         * writes it fresh once the squatter is replaced, and the status line
+         * says so. ENCRYPTION alone stays out: how Git stores the blob is no
+         * difference between Git and disk, and apply deploying it changes
          * nothing. */
         if (item->state == WORKSPACE_STATE_UNDEPLOYED ||
             item->state == WORKSPACE_STATE_DELETED) {
@@ -79,9 +79,9 @@ static bool should_show_item_for_direction(
         }
         if (item->state != WORKSPACE_STATE_DEPLOYED) return false;
         return item->displaced != WORKSPACE_DISPLACED_NONE ||
+               item->fault != WORKSPACE_FAULT_NONE ||
                (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE |
-               DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_TYPE |
-               DIVERGENCE_UNVERIFIED)) ||
+               DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_TYPE)) ||
                workspace_reassigned(item->row, item->record, item->occupant);
     }
 
@@ -160,24 +160,25 @@ static const char *get_status_message_from_item(
      * Ranked where the route ranks it, above every settled bit, and worded by
      * whose remedy the failure is (workspace_fault_t) — the three words status
      * tags the same row with. */
-    if (item->divergence & DIVERGENCE_UNVERIFIED) {
-        switch (item->fault) {
-            case WORKSPACE_FAULT_LOCKED:
-                return direction == DIFF_UPSTREAM
-                        ? "locked (apply skips it)"
-                        : "locked (update skips it)";
+    switch (item->fault) {
+        case WORKSPACE_FAULT_LOCKED:
+            return direction == DIFF_UPSTREAM
+                    ? "locked (apply skips it)"
+                    : "locked (update skips it)";
 
-            case WORKSPACE_FAULT_UNREADABLE:
-                return direction == DIFF_UPSTREAM
-                        ? "cannot be read (apply skips it)"
-                        : "cannot be read (update skips it)";
+        case WORKSPACE_FAULT_UNREADABLE:
+            return direction == DIFF_UPSTREAM
+                    ? "cannot be read (apply skips it)"
+                    : "cannot be read (update skips it)";
 
-            case WORKSPACE_FAULT_NONE:
-            case WORKSPACE_FAULT_UNVERIFIED:
-                return direction == DIFF_UPSTREAM
-                        ? "could not be verified (apply skips it)"
-                        : "could not be verified (update skips it)";
-        }
+        case WORKSPACE_FAULT_UNVERIFIED:
+            return direction == DIFF_UPSTREAM
+                    ? "could not be verified (apply skips it)"
+                    : "could not be verified (update skips it)";
+
+        case WORKSPACE_FAULT_NONE:
+            /* Every look stood: the sentences below are theirs */
+            break;
     }
 
     /* Both sides moved — the route's CONFLICT: the user's bytes or kind beside
@@ -311,7 +312,7 @@ static void show_file_diff_from_workspace(
         status_color = OUTPUT_COLOR_RED;
     } else if (item->displaced != WORKSPACE_DISPLACED_NONE) {
         status_color = OUTPUT_COLOR_YELLOW;  /* nothing here was looked at */
-    } else if (item->divergence & DIVERGENCE_UNVERIFIED) {
+    } else if (item->fault != WORKSPACE_FAULT_NONE) {
         status_color = OUTPUT_COLOR_MAGENTA; /* status's colour for the failed look */
     } else if (item->divergence & DIVERGENCE_TYPE) {
         status_color = OUTPUT_COLOR_RED;
@@ -332,7 +333,7 @@ static void show_file_diff_from_workspace(
      * fail the way the look did. */
     if (item->state == WORKSPACE_STATE_DELETED ||
         item->state == WORKSPACE_STATE_UNDEPLOYED ||
-        (item->divergence & DIVERGENCE_UNVERIFIED)) {
+        item->fault != WORKSPACE_FAULT_NONE) {
         return;
     }
 
@@ -475,7 +476,7 @@ static void present_diffs_for_direction(
 
         (*diff_count)++;
 
-        if (item->divergence & DIVERGENCE_UNVERIFIED) {
+        if (item->fault != WORKSPACE_FAULT_NONE) {
             (*unverified)++;
         }
     }
